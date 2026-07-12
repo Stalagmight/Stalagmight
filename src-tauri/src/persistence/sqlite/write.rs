@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::params;
 
-use crate::models::Project;
+use crate::models::{MarkerDirection, MarkerType, Project};
 
 use super::{Database, SCHEMA_VERSION};
 
@@ -39,6 +39,7 @@ impl Database {
             DELETE FROM station_offsets;
             DELETE FROM station_comments;
             DELETE FROM loop_closures;
+            DELETE FROM markers;
             DELETE FROM imported_file_hashes;
             DELETE FROM imported_section_hashes;
             DELETE FROM collab_state;
@@ -46,22 +47,29 @@ impl Database {
             ",
         )?;
 
-        // Save project metadata (including next_closure_id for monotonic ID persistence)
+        // Save project metadata (including monotonic ID counters)
         let next_closure_id_i64 = i64::try_from(project.next_closure_id).map_err(|_| {
             anyhow::anyhow!(
                 "next_closure_id {} exceeds i64 range",
                 project.next_closure_id
             )
         })?;
+        let next_marker_id_i64 = i64::try_from(project.next_marker_id).map_err(|_| {
+            anyhow::anyhow!(
+                "next_marker_id {} exceeds i64 range",
+                project.next_marker_id
+            )
+        })?;
         tx.execute(
-            "INSERT INTO project (id, name, location, created_at, modified_at, schema_version, next_closure_id) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO project (id, name, location, created_at, modified_at, schema_version, next_closure_id, next_marker_id) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 project.name,
                 project.location,
                 project.created_at.to_rfc3339(),
                 project.modified_at.to_rfc3339(),
                 SCHEMA_VERSION,
-                next_closure_id_i64
+                next_closure_id_i64,
+                next_marker_id_i64
             ],
         )?;
 
@@ -300,6 +308,50 @@ impl Database {
                     closure_id_i64,
                     lc.strategy.as_str(),
                     i32::from(lc.is_aligned)
+                ],
+            )?;
+        }
+
+        // Build a shot-UUID lookup so markers are tied to their host shot by the
+        // stable UUID rather than the positionally-reconstructed in-memory ID.
+        let shot_uuid_map: std::collections::HashMap<(u32, u32), &str> = project
+            .sections
+            .iter()
+            .flat_map(|s| {
+                s.shots.iter().filter_map(move |shot| {
+                    shot.uuid.as_deref().map(|uuid| ((s.id, shot.id), uuid))
+                })
+            })
+            .collect();
+
+        // Save markers
+        for marker in &project.markers {
+            let marker_id_i64 = i64::try_from(marker.id)
+                .map_err(|_| anyhow::anyhow!("Marker ID {} exceeds i64 range", marker.id))?;
+            let marker_type_str = match marker.marker_type {
+                MarkerType::Ndm => "Ndm",
+                MarkerType::Arrow => "Arrow",
+            };
+            let direction_str = marker.direction.as_ref().map(|d| match d {
+                MarkerDirection::TowardStart => "TowardStart",
+                MarkerDirection::TowardEnd => "TowardEnd",
+            });
+            let shot_uuid = shot_uuid_map
+                .get(&(marker.section_id, marker.shot_id))
+                .copied();
+            tx.execute(
+                "INSERT INTO markers (id, section_id, shot_id, shot_uuid, position, marker_type, color, text, direction) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    marker_id_i64,
+                    marker.section_id,
+                    marker.shot_id,
+                    shot_uuid,
+                    f64::from(marker.position),
+                    marker_type_str,
+                    marker.color,
+                    marker.text,
+                    direction_str,
                 ],
             )?;
         }

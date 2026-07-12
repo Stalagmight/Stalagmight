@@ -570,5 +570,8 @@ impl Project {
         // Remove zero datums referencing this section
         self.zero_datums
             .retain(|zd| zd.station_ref.section_id != section_id);
+
+        // Remove markers attached to shots in this section
+        self.markers.retain(|m| m.section_id != section_id);
     }
 }

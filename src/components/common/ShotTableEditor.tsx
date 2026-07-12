@@ -1,8 +1,8 @@
-import { useState, useRef, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useState, useRef, useCallback, Fragment, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
-import type { Shot } from '../../types/project';
+import type { Shot, Marker, MarkerType, MarkerDirection } from '../../types/project';
 import { defaultConfig } from '../../types/config';
 import { useProjectStore } from '../../store/projectStore';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -10,6 +10,17 @@ import { hasAzimuthDiscrepancy, hasPitchDiscrepancy, validateEditableShot } from
 import { applyAzimuthEdit, getAzimuthAverage } from '../../utils/shotTable';
 import { HelpTooltip } from './HelpTooltip';
 import { useLongPress } from '../../hooks';
+
+const MARKER_COLORS: string[] = ['#ff6b6b', '#ff9f43', '#ffcb77', '#4ecdc4', '#54a0ff'];
+const DEFAULT_MARKER_COLOR = '#ff6b6b';
+
+interface MarkerFormState {
+  type: MarkerType;
+  color: string;
+  text: string;
+  position: number;
+  direction: MarkerDirection | null;
+}
 
 /**
  * Editable shot type - extends Shot with editing state flags.
@@ -69,6 +80,10 @@ export interface ShotTableEditorProps {
   onRowSelect?: (index: number) => void;
   /** Set of shot indices whose geometry fields should be disabled (frozen shots) */
   frozenShotIndices?: Set<number>;
+  /** Section ID -- when provided, enables the marker column */
+  sectionId?: number;
+  /** Markers belonging to this section, used to pre-fill the marker form */
+  markers?: Marker[];
 }
 
 /**
@@ -183,9 +198,115 @@ export function ShotTableEditor({
   selectedRowIndex,
   onRowSelect,
   frozenShotIndices,
+  sectionId,
+  markers,
 }: ShotTableEditorProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
+
+  const { addMarker, updateMarker, deleteMarker } = useProjectStore();
+  const [openMarkerForShotIdx, setOpenMarkerForShotIdx] = useState<number | null>(null);
+  const [markerForm, setMarkerForm] = useState<MarkerFormState>({
+    type: 'Arrow',
+    color: DEFAULT_MARKER_COLOR,
+    text: '',
+    position: 50,
+    direction: 'TowardEnd',
+  });
+  const [markerCustomColorInput, setMarkerCustomColorInput] = useState('');
+  const [markerSaving, setMarkerSaving] = useState(false);
+  const [markerSaveError, setMarkerSaveError] = useState<string | null>(null);
+
+  const showMarkers = sectionId !== undefined;
+
+  function getMarkerForShot(shotId: number): Marker | undefined {
+    return markers?.find((m) => m.shot_id === shotId);
+  }
+
+  function handleMarkerButtonClick(actualIndex: number, shot: EditableShot) {
+    if (openMarkerForShotIdx === actualIndex) {
+      setOpenMarkerForShotIdx(null);
+      return;
+    }
+    const existing = getMarkerForShot(shot.id);
+    setMarkerForm(
+      existing
+        ? {
+            type: existing.marker_type,
+            color: existing.color,
+            text: existing.text,
+            position: Math.round(existing.position),
+            direction: existing.direction ?? null,
+          }
+        : { type: 'Arrow', color: DEFAULT_MARKER_COLOR, text: '', position: 50, direction: 'TowardEnd' }
+    );
+    if (existing) {
+      setMarkerCustomColorInput(MARKER_COLORS.includes(existing.color) ? '' : existing.color);
+    } else {
+      setMarkerCustomColorInput('');
+    }
+    setOpenMarkerForShotIdx(actualIndex);
+  }
+
+  async function handleSaveMarker(shot: EditableShot) {
+    if (sectionId === undefined || markerSaving) return;
+    setMarkerSaving(true);
+    setMarkerSaveError(null);
+    try {
+      const existing = getMarkerForShot(shot.id);
+      let result;
+      if (existing) {
+        result = await updateMarker(existing.id, {
+          position: markerForm.position,
+          marker_type: markerForm.type,
+          color: markerForm.color,
+          text: markerForm.text,
+          direction: markerForm.direction,
+        });
+      } else {
+        result = await addMarker(
+          sectionId,
+          shot.id,
+          markerForm.position,
+          markerForm.type,
+          markerForm.color,
+          markerForm.text,
+          markerForm.direction,
+        );
+      }
+      if (result.success) {
+        setOpenMarkerForShotIdx(null);
+      } else {
+        setMarkerSaveError(result.error ?? 'save failed');
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setMarkerSaveError(msg);
+      console.error('Failed to save marker:', e);
+    } finally {
+      setMarkerSaving(false);
+    }
+  }
+
+  async function handleDeleteMarker(markerId: bigint) {
+    if (markerSaving) return;
+    setMarkerSaving(true);
+    setMarkerSaveError(null);
+    try {
+      const result = await deleteMarker(markerId);
+      if (result.success) {
+        setOpenMarkerForShotIdx(null);
+      } else {
+        setMarkerSaveError(result.error ?? 'delete failed');
+      }
+    } catch (e) {
+      setMarkerSaveError(e instanceof Error ? e.message : String(e));
+      console.error('Failed to delete marker:', e);
+    } finally {
+      setMarkerSaving(false);
+    }
+  }
+
   // When no explicit thresholds are passed, prefer the OPEN project's per-project
   // validation thresholds (#57) so the inline preview matches the Warnings panel
   // (which the backend computes from project.validation). Fall back to the user's
@@ -465,6 +586,11 @@ export function ShotTableEditor({
               <th className="text-right" style={{ width: '50px' }}>{t('shotTable.columns.upShort')}</th>
               <th className="text-right" style={{ width: '50px' }}>{t('shotTable.columns.downShort')}</th>
               <th className="text-left" style={{ width: '100px' }}>{t('shotTable.columns.comment')}</th>
+              {showMarkers && (
+                <th className="text-center" style={{ width: '30px' }} title="markers">
+                  <span className="text-text-secondary" style={{ fontSize: '12px' }}>&#9679;</span>
+                </th>
+              )}
               <th className="text-center" style={{ width: '30px' }} title={t('shotTable.columns.warnings')}></th>
               <th style={{ width: '30px' }}></th>
             </tr>
@@ -485,8 +611,8 @@ export function ShotTableEditor({
               } ${shot.isNew && !hasErrors ? 'bg-success-5' : ''} ${shot.is_reference ? 'opacity-50' : ''}`;
 
               return (
+                <Fragment key={shot.tempId ?? shot.id}>
                 <tr
-                  key={shot.tempId ?? shot.id}
                   className={rowClassName}
                   onClick={() => handleRowClick(visibleIdx)}
                   onContextMenu={(e) => handleContextMenu(e, visibleIdx)}
@@ -808,6 +934,65 @@ export function ShotTableEditor({
                     />
                   </td>
 
+                  {/* Marker button */}
+                  {showMarkers && (() => {
+                    const existingMarker = getMarkerForShot(shot.id);
+                    const isOpen = openMarkerForShotIdx === actualIndex;
+                    const isUnsaved = shot.tempId !== undefined;
+                    return (
+                      <td className="p-0 text-center">
+                        {!readOnly && (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); if (!isUnsaved) handleMarkerButtonClick(actualIndex, shot); }}
+                            title={isUnsaved ? 'save shot before adding a marker' : existingMarker ? 'edit marker' : 'add marker'}
+                            disabled={isUnsaved}
+                            style={{
+                              width: 22,
+                              height: 22,
+                              borderRadius: 4,
+                              border: isOpen
+                                ? '1.5px solid var(--cc-accent, #4ecdc4)'
+                                : existingMarker
+                                  ? 'none'
+                                  : '1.5px solid var(--cc-border, #0f3460)',
+                              background: isOpen ? 'rgba(78,205,196,.12)' : 'transparent',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: 0,
+                            }}
+                          >
+                            {existingMarker ? (
+                              <span
+                                style={{
+                                  width: 10,
+                                  height: 10,
+                                  borderRadius: '50%',
+                                  background: existingMarker.color,
+                                  display: 'block',
+                                  border: '1.5px solid rgba(255,255,255,.25)',
+                                }}
+                              />
+                            ) : (
+                              <span
+                                style={{
+                                  width: 10,
+                                  height: 10,
+                                  borderRadius: '50%',
+                                  display: 'block',
+                                  border: `1.5px solid ${isOpen ? 'var(--cc-accent, #4ecdc4)' : 'var(--cc-text-secondary, #a0a0a0)'}`,
+                                  opacity: isOpen ? 1 : 0.5,
+                                }}
+                              />
+                            )}
+                          </button>
+                        )}
+                      </td>
+                    );
+                  })()}
+
                   {/* Warnings */}
                   <td className="p-0 text-center">
                     {(hasErrors || warnings.length > 0) && (
@@ -843,11 +1028,295 @@ export function ShotTableEditor({
                     )}
                   </td>
                 </tr>
+                {/* Inline marker form -- expands below the shot row */}
+                {showMarkers && openMarkerForShotIdx === actualIndex && (() => {
+                  const existingMarker = getMarkerForShot(shot.id);
+                  const totalCols = 12 + (showMarkers ? 1 : 0);
+                  return (
+                    <tr key={`marker-form-${shot.id}`}>
+                      <td colSpan={totalCols} style={{ padding: 0, background: 'var(--cc-panel, #16213e)', borderTop: '1px solid var(--cc-accent, #4ecdc4)', borderBottom: '1px solid var(--cc-border, #0f3460)' }}>
+                        <div style={{ padding: '10px 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          {/* Type */}
+                          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                            <div>
+                              <div style={{ fontSize: 10, color: 'var(--cc-text-secondary)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>type</div>
+                              <div style={{ display: 'flex', gap: 5 }}>
+                                {(['Arrow', 'Ndm'] as MarkerType[]).map((t2) => (
+                                  <button
+                                    key={t2}
+                                    type="button"
+                                    onClick={() => setMarkerForm((f) => ({ ...f, type: t2, direction: t2 === 'Arrow' ? (f.direction ?? 'TowardEnd') : null }))}
+                                    style={{
+                                      fontFamily: 'var(--font-sans)',
+                                      fontSize: 11,
+                                      padding: '4px 12px',
+                                      borderRadius: 20,
+                                      border: markerForm.type === t2 ? '1.5px solid var(--cc-accent, #4ecdc4)' : '1.5px solid var(--cc-border, #0f3460)',
+                                      background: markerForm.type === t2 ? 'rgba(78,205,196,.15)' : 'transparent',
+                                      color: markerForm.type === t2 ? 'var(--cc-accent, #4ecdc4)' : 'var(--cc-text-secondary)',
+                                      cursor: 'pointer',
+                                      fontWeight: markerForm.type === t2 ? 500 : 400,
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    {t2 === 'Ndm' ? 'NDM' : 'Arrow'}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            {/* Label */}
+                            <div style={{ flex: 1, minWidth: 90 }}>
+                              <div style={{ fontSize: 10, color: 'var(--cc-text-secondary)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>label</div>
+                              <input
+                                type="text"
+                                value={markerForm.text}
+                                onChange={(e) => setMarkerForm((f) => ({ ...f, text: e.target.value }))}
+                                placeholder="optional text…"
+                                style={{
+                                  background: 'var(--cc-background, #1a1a2e)',
+                                  border: '1px solid var(--cc-border, #0f3460)',
+                                  borderRadius: 4,
+                                  color: 'var(--cc-text-primary)',
+                                  fontFamily: 'inherit',
+                                  fontSize: 11,
+                                  padding: '4px 8px',
+                                  width: '100%',
+                                  boxSizing: 'border-box' as const,
+                                  outline: 'none',
+                                }}
+                              />
+                            </div>
+                          </div>
+                          {/* Direction (Arrow only) -- directly under Type */}
+                          {markerForm.type === 'Arrow' && (
+                            <div>
+                              <div style={{ fontSize: 10, color: 'var(--cc-text-secondary)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>direction</div>
+                              <div style={{ display: 'flex', gap: 5 }}>
+                                {(['TowardStart', 'TowardEnd'] as MarkerDirection[]).map((d) => (
+                                  <button
+                                    key={d}
+                                    type="button"
+                                    onClick={() => setMarkerForm((f) => ({ ...f, direction: d }))}
+                                    style={{
+                                      fontFamily: 'var(--font-sans)',
+                                      fontSize: 11,
+                                      padding: '4px 12px',
+                                      borderRadius: 20,
+                                      border: markerForm.direction === d ? '1.5px solid var(--cc-accent, #4ecdc4)' : '1.5px solid var(--cc-border, #0f3460)',
+                                      background: markerForm.direction === d ? 'rgba(78,205,196,.15)' : 'transparent',
+                                      color: markerForm.direction === d ? 'var(--cc-accent, #4ecdc4)' : 'var(--cc-text-secondary)',
+                                      cursor: 'pointer',
+                                      fontWeight: markerForm.direction === d ? 500 : 400,
+                                    }}
+                                  >
+                                    {d === 'TowardStart' ? 'toward start' : 'toward end'}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {/* Color */}
+                          <div>
+                            <div style={{ fontSize: 10, color: 'var(--cc-text-secondary)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>color</div>
+                            <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+                              {MARKER_COLORS.map((c) => (
+                                <button
+                                  key={c}
+                                  type="button"
+                                  onClick={() => { setMarkerForm((f) => ({ ...f, color: c })); setMarkerCustomColorInput(''); }}
+                                  style={{
+                                    width: 18,
+                                    height: 18,
+                                    borderRadius: '50%',
+                                    background: c,
+                                    border: markerForm.color === c ? '2px solid #fff' : '2px solid transparent',
+                                    outline: markerForm.color === c ? '1.5px solid rgba(255,255,255,.4)' : 'none',
+                                    outlineOffset: 1,
+                                    cursor: 'pointer',
+                                    padding: 0,
+                                    flexShrink: 0,
+                                  }}
+                                  title={c}
+                                />
+                              ))}
+                              {/* Custom color button */}
+                              {(() => {
+                                const isCustom = !MARKER_COLORS.includes(markerForm.color);
+                                return (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (!isCustom) {
+                                          const init = MARKER_COLORS[0] ?? '#ff6b6b';
+                                          setMarkerCustomColorInput(init);
+                                          setMarkerForm((f) => ({ ...f, color: init }));
+                                        }
+                                      }}
+                                      style={{
+                                        fontSize: 10,
+                                        padding: '2px 6px',
+                                        borderRadius: 4,
+                                        border: isCustom ? '1.5px solid var(--cc-accent, #4ecdc4)' : '1px solid var(--cc-border, #0f3460)',
+                                        background: isCustom ? 'rgba(78,205,196,.15)' : 'transparent',
+                                        color: isCustom ? 'var(--cc-accent, #4ecdc4)' : 'var(--cc-text-secondary)',
+                                        cursor: 'pointer',
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                      Custom
+                                    </button>
+                                    {isCustom && (
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                        <input
+                                          type="color"
+                                          value={/^#[0-9a-fA-F]{6}$/.test(markerForm.color) ? markerForm.color : '#000000'}
+                                          onChange={(e) => {
+                                            setMarkerCustomColorInput(e.target.value);
+                                            setMarkerForm((f) => ({ ...f, color: e.target.value }));
+                                          }}
+                                          style={{
+                                            width: 28,
+                                            height: 28,
+                                            cursor: 'pointer',
+                                            border: '1px solid var(--cc-border, #0f3460)',
+                                            borderRadius: 4,
+                                            padding: 2,
+                                            background: 'none',
+                                            flexShrink: 0,
+                                          }}
+                                        />
+                                        <input
+                                          type="text"
+                                          value={markerCustomColorInput}
+                                          onChange={(e) => {
+                                            const val = e.target.value;
+                                            setMarkerCustomColorInput(val);
+                                            if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+                                              setMarkerForm((f) => ({ ...f, color: val }));
+                                            }
+                                          }}
+                                          placeholder="#rrggbb"
+                                          maxLength={7}
+                                          style={{
+                                            fontFamily: 'monospace',
+                                            fontSize: 11,
+                                            width: 68,
+                                            padding: '2px 6px',
+                                            background: 'var(--cc-background, #1a1a2e)',
+                                            border: /^#[0-9a-fA-F]{6}$/.test(markerCustomColorInput)
+                                              ? `1px solid ${markerCustomColorInput}`
+                                              : '1px solid var(--cc-border, #0f3460)',
+                                            borderRadius: 4,
+                                            color: 'var(--cc-text, #e0e0e0)',
+                                          }}
+                                        />
+                                      </div>
+                                    )}
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                          {/* Position slider */}
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
+                              <div style={{ fontSize: 10, color: 'var(--cc-text-secondary)', textTransform: 'uppercase', letterSpacing: '.06em' }}>position along shot</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  value={markerForm.position}
+                                  onChange={(e) => {
+                                    const v = Math.max(0, Math.min(100, Math.round(Number(e.target.value))));
+                                    if (!isNaN(v)) setMarkerForm((f) => ({ ...f, position: v }));
+                                  }}
+                                  style={{
+                                    fontFamily: 'monospace',
+                                    fontSize: 11,
+                                    width: 38,
+                                    padding: '1px 4px',
+                                    background: 'var(--cc-background, #1a1a2e)',
+                                    border: '1px solid var(--cc-border, #0f3460)',
+                                    borderRadius: 3,
+                                    color: markerForm.color,
+                                    textAlign: 'right',
+                                  }}
+                                />
+                                <span style={{ fontSize: 11, color: markerForm.color }}>%</span>
+                              </div>
+                            </div>
+                            {/* Custom visual slider */}
+                            <div style={{ position: 'relative', height: 20, display: 'flex', alignItems: 'center' }}>
+                              <div style={{ position: 'absolute', left: 0, right: 0, height: 4, background: 'var(--cc-border, #0f3460)', borderRadius: 2 }} />
+                              <div style={{ position: 'absolute', left: 0, width: `${markerForm.position}%`, height: 4, background: markerForm.color, borderRadius: 2 }} />
+                              <div style={{
+                                position: 'absolute',
+                                left: `${markerForm.position}%`,
+                                transform: `translateX(calc(-50% + ${(0.5 - markerForm.position / 100) * 12}px))`,
+                                width: 12,
+                                height: 12,
+                                borderRadius: '50%',
+                                background: markerForm.color,
+                                boxShadow: '0 1px 3px rgba(0,0,0,.4)',
+                                pointerEvents: 'none',
+                              }} />
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={markerForm.position}
+                                onChange={(e) => setMarkerForm((f) => ({ ...f, position: Number(e.target.value) }))}
+                                style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0, cursor: 'pointer', margin: 0 }}
+                              />
+                            </div>
+                          </div>
+                          {/* Actions */}
+                          {markerSaveError && (
+                            <p style={{ margin: '2px 0 4px', fontSize: 11, color: 'var(--cc-error, #ff6b6b)' }}>
+                              {markerSaveError}
+                            </p>
+                          )}
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, paddingTop: 4, borderTop: '1px solid var(--cc-border, #0f3460)', marginTop: 2 }}>
+                            {existingMarker && (
+                              <button
+                                type="button"
+                                disabled={markerSaving}
+                                onClick={() => void handleDeleteMarker(existingMarker.id)}
+                                style={{ fontFamily: 'inherit', fontSize: 11, padding: '5px 11px', background: 'transparent', border: '1px solid rgba(255,107,107,.4)', borderRadius: 4, color: 'var(--cc-error, #ff6b6b)', cursor: 'pointer' }}
+                              >
+                                remove
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => { setOpenMarkerForShotIdx(null); setMarkerSaveError(null); }}
+                              style={{ fontFamily: 'inherit', fontSize: 11, padding: '5px 11px', background: 'transparent', border: '1px solid var(--cc-border, #0f3460)', borderRadius: 4, color: 'var(--cc-text-secondary)', cursor: 'pointer' }}
+                            >
+                              cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={markerSaving}
+                              onClick={() => void handleSaveMarker(shot)}
+                              style={{ fontFamily: 'inherit', fontSize: 11, padding: '5px 12px', background: 'var(--cc-accent, #4ecdc4)', border: 'none', borderRadius: 4, color: 'var(--cc-accent-on, #1a1a2e)', fontWeight: 500, cursor: 'pointer' }}
+                            >
+                              {existingMarker ? 'update' : 'add marker'}
+                            </button>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })()}
+                </Fragment>
               );
             })}
             {visibleShots.length === 0 && (
               <tr>
-                <td colSpan={12} className="p-0 text-center text-text-secondary">
+                <td colSpan={showMarkers ? 13 : 12} className="p-0 text-center text-text-secondary">
                   <span className="px-2 py-4 inline-block">
                     {readOnly ? t('shotTable.empty') : t('shotTable.emptyWithAction')}
                   </span>

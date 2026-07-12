@@ -3,6 +3,7 @@ mod collab;
 mod command_comment;
 mod command_delete_split;
 mod command_import;
+mod command_marker;
 mod command_move;
 mod command_query;
 mod command_section;

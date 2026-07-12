@@ -439,6 +439,10 @@ export default function EditSectionDialog() {
             }}
             {...(frozenShotIndices ? { frozenShotIndices } : {})}
             maxHeight="16rem"
+            {...(sectionId !== undefined ? {
+              sectionId,
+              markers: (project?.markers ?? []).filter((m) => m.section_id === sectionId),
+            } : {})}
           />
         </div>
 

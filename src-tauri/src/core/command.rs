@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use crate::models::{
-    shot_display_position, ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates,
-    ShotData, ShotId, ShotUpdates, StationRef, SurveyDirection,
+    shot_display_position, ClosureStrategy, Coordinates, GpsCoordinates, MarkerDirection,
+    MarkerType, MarkerUpdates, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates,
+    StationRef, SurveyDirection,
 };
 
 /// Identifies either a station or a shot as a comment holder
@@ -176,6 +177,24 @@ pub enum Command {
         /// Whether to archive (rename) the original files
         archive_originals: bool,
     },
+    // Marker commands
+    AddMarker {
+        section_id: SectionId,
+        shot_id: ShotId,
+        position: f32,
+        marker_type: MarkerType,
+        color: String,
+        text: String,
+        direction: Option<MarkerDirection>,
+    },
+    UpdateMarker {
+        marker_id: u64,
+        updates: MarkerUpdates,
+    },
+    DeleteMarker {
+        marker_id: u64,
+    },
+
     /// Apply a collaborator's reconciled `.tml` changes into the project
     /// (single undoable operation via snapshot pair).
     ApplyCollabChanges,
@@ -228,6 +247,9 @@ pub struct CommandResult {
     /// Path the project was saved to (for SaveProject command)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub saved_path: Option<String>,
+    /// ID of the created marker (for AddMarker command)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marker_id: Option<u64>,
 }
 
 /// Result of an explicit "repair project integrity" action. `fixed` and
@@ -290,6 +312,7 @@ impl CommandResult {
             section_ids: Vec::new(),
             shot_id: None,
             saved_path: None,
+            marker_id: None,
         }
     }
 
@@ -302,6 +325,7 @@ impl CommandResult {
             section_ids: Vec::new(),
             shot_id: None,
             saved_path: None,
+            marker_id: None,
         }
     }
 
@@ -332,6 +356,12 @@ impl CommandResult {
     /// Attach the saved file path to this result.
     pub fn with_path(mut self, path: String) -> Self {
         self.saved_path = Some(path);
+        self
+    }
+
+    /// Attach a created marker ID to this result.
+    pub fn with_marker_id(mut self, marker_id: u64) -> Self {
+        self.marker_id = Some(marker_id);
         self
     }
 
@@ -472,6 +502,13 @@ impl Command {
                     output_name
                 )
             }
+            Command::AddMarker {
+                section_id,
+                shot_id,
+                ..
+            } => format!("Add marker on section {section_id}, shot {shot_id}"),
+            Command::UpdateMarker { marker_id, .. } => format!("Update marker #{marker_id}"),
+            Command::DeleteMarker { marker_id } => format!("Delete marker #{marker_id}"),
             Command::ApplyCollabChanges => "Apply collaborator changes".to_string(),
             Command::RepairIntegrity => "Repair integrity".to_string(),
             Command::UpdateProjectSettings => "Update project settings".to_string(),
@@ -509,6 +546,7 @@ mod tests {
         assert!(success.section_ids.is_empty());
         assert!(success.shot_id.is_none());
         assert!(success.saved_path.is_none());
+        assert!(success.marker_id.is_none());
 
         let with_path = CommandResult::success().with_path("/tmp/test.stalx".to_string());
         assert!(with_path.success);
@@ -593,6 +631,7 @@ mod tests {
         let station_a = StationRef::new(1, 0);
         let station_b = StationRef::new(1, 1);
         let gps = GpsCoordinates::new(10.0, 20.0, 5.0).unwrap();
+        use crate::models::{MarkerType, MarkerUpdates};
 
         let cases = vec![
             (
@@ -802,6 +841,26 @@ mod tests {
                 },
                 "Merge 2 projects into 'Merged'",
             ),
+            (
+                Command::AddMarker {
+                    section_id: 3,
+                    shot_id: 2,
+                    position: 0.5,
+                    marker_type: MarkerType::Ndm,
+                    color: "white".to_string(),
+                    text: String::new(),
+                    direction: None,
+                },
+                "Add marker on section 3, shot 2",
+            ),
+            (
+                Command::UpdateMarker {
+                    marker_id: 7,
+                    updates: MarkerUpdates::default(),
+                },
+                "Update marker #7",
+            ),
+            (Command::DeleteMarker { marker_id: 7 }, "Delete marker #7"),
         ];
 
         for (command, expected) in cases {

@@ -32,8 +32,9 @@ use serde_bytes::ByteBuf;
 
 use crate::core::loading::{DisplaySettings, LoadProjectFullResult};
 use crate::models::{
-    ClosureRef, FrozenShotRef, GpsCoordinates, LoopClosureWire, ProjectStats, ProjectWarning,
-    SectionId, ShotId, StationMergeWire, StationRef, SurveyDirection, ZeroDatumWire,
+    ClosureRef, FrozenShotRef, GpsCoordinates, LoopClosureWire, Marker, ProjectStats,
+    ProjectWarning, SectionId, ShotId, StationMergeWire, StationRef, SurveyDirection,
+    ZeroDatumWire,
 };
 
 /// f32 sentinel encoding `None` for nullable numeric fields. `f32::NAN`
@@ -126,6 +127,8 @@ pub struct ProjectHeaderBinary {
     pub file_path: Option<String>,
     pub next_section_id: SectionId,
     pub next_closure_id: u64,
+    pub next_marker_id: u64,
+    pub markers: Vec<Marker>,
     /// Section metadata in declaration order. `shot_offset` and `shot_count`
     /// index into the per-shot binary arrays.
     pub sections: Vec<SectionHeaderBinary>,
@@ -348,6 +351,8 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
             .map(|p| p.to_string_lossy().into_owned()),
         next_section_id: project.next_section_id,
         next_closure_id: project.next_closure_id,
+        next_marker_id: project.next_marker_id,
+        markers: project.markers,
         sections: sections_meta,
         station_merges,
         zero_datums,

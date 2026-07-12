@@ -294,6 +294,7 @@ export default function DataTable({ sections }: DataTableProps) {
     hoveredStation,
     showToast,
     triggerResolveWarning,
+    setPendingMarkerOpen,
   } = useUIStore(useShallow((s) => ({
     selection: s.selection,
     setSelection: s.setSelection,
@@ -313,6 +314,7 @@ export default function DataTable({ sections }: DataTableProps) {
     setHoveredStation: s.setHoveredStation,
     hoveredStation: s.hoveredStation,
     showToast: s.showToast,
+    setPendingMarkerOpen: s.setPendingMarkerOpen,
   })));
 
   // Create a map of shot warnings for quick lookup
@@ -1141,6 +1143,8 @@ export default function DataTable({ sections }: DataTableProps) {
     [selectedSection, triggerPanToShot]
   );
 
+  const projectMarkers = useProjectStore((s) => s.project?.markers);
+
   const shotColumns = useMemo(
     () =>
       buildShotColumns({
@@ -1158,11 +1162,17 @@ export default function DataTable({ sections }: DataTableProps) {
           // section-focus / fullscreen) so the resolve view is actually shown.
           triggerResolveWarning(selectedSectionId, shotId);
         },
+        ...(projectMarkers !== undefined && { markers: projectMarkers }),
+        onMarkerColumnClick: (shot: Shot) => {
+          if (!selectedSection) return;
+          selectShotRow(shot);
+          setPendingMarkerOpen({ sectionId: selectedSection.id, shotId: shot.id });
+        },
       }),
     // getShotWarnings reads shotWarningsMap (derived from `warnings`); rebuild when
     // warnings change so frozen/warning icons stay current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [t, precision, selectedSectionId, editingBlocked, isShotFrozen, warnings, shotIndexAt, handleToggleReference, triggerResolveWarning]
+    [t, precision, selectedSectionId, editingBlocked, isShotFrozen, warnings, shotIndexAt, handleToggleReference, triggerResolveWarning, projectMarkers, selectedSection, selectShotRow, setPendingMarkerOpen]
   );
 
   // Localized grid chrome; rowNoun makes the context menus speak in shots

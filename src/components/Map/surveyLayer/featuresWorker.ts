@@ -14,7 +14,7 @@ import {
   type DepthRange,
   type SurveyFeatureSets,
 } from './features';
-import type { LoopClosure } from '../../../types/project';
+import type { LoopClosure, Marker } from '../../../types/project';
 import type { SurveyData } from '../../../types/survey-data';
 import type { GpsOrigin, DecimalPrecision } from '../../../types/config';
 import type { MapThemeColors } from '../../../utils/themeColors';
@@ -22,6 +22,7 @@ import type { MapThemeColors } from '../../../utils/themeColors';
 interface BuildArgs {
   surveyData: SurveyData;
   loopClosures: LoopClosure[] | undefined;
+  markers: Marker[] | undefined;
   gpsOrigin: GpsOrigin | null;
   showDepthGradient: boolean;
   depthRange: DepthRange;
@@ -65,6 +66,7 @@ self.onmessage = (e: MessageEvent<IncomingMessage>) => {
       msg.args.themeColors,
       msg.args.precision,
       msg.args.options,
+      msg.args.markers,
     );
     const out: OutgoingMessage = { kind: 'result', requestId: msg.requestId, features };
     self.postMessage(out);

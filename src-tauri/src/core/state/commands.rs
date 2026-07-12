@@ -73,7 +73,10 @@ impl AppState {
             | Batch { .. }
             | ApplyCollabChanges
             | RepairIntegrity
-            | UpdateProjectSettings => false,
+            | UpdateProjectSettings
+            | AddMarker { .. }
+            | UpdateMarker { .. }
+            | DeleteMarker { .. } => false,
         }
     }
 
@@ -138,6 +141,9 @@ impl AppState {
             // Unmerge removes connectivity (can strand a section) but adds no
             // dangling reference.
             UnmergeStations { .. } | UnmergeStationPair { .. } => UNMERGE,
+
+            // Markers are pure metadata: no geometry, no cross-references, no connectivity.
+            AddMarker { .. } | UpdateMarker { .. } | DeleteMarker { .. } => INERT,
 
             // Everything else shifts geometry but keeps refs valid and connectivity
             // intact, so it needs only the reconcile. UpdateShot belongs here too: a
@@ -579,6 +585,27 @@ impl AppState {
                 output_name.clone(),
                 *archive_originals,
             ),
+            Command::AddMarker {
+                section_id,
+                shot_id,
+                position,
+                marker_type,
+                color,
+                text,
+                direction,
+            } => self.add_marker(
+                *section_id,
+                *shot_id,
+                *position,
+                marker_type.clone(),
+                color.clone(),
+                text.clone(),
+                direction.clone(),
+            ),
+            Command::UpdateMarker { marker_id, updates } => {
+                self.update_marker(*marker_id, updates.clone())
+            }
+            Command::DeleteMarker { marker_id } => self.delete_marker(*marker_id),
             Command::ApplyCollabChanges => self.apply_collab_changes(),
             // Never routed here: repair is applied via `repair_project_integrity`,
             // which records its own snapshot-pair undo entry. Present only for match
@@ -814,6 +841,30 @@ mod integrity_capability_tests {
 
         // INERT (no geometry, no refs).
         assert_eq!(caps(&Command::CloseProject), (false, false, false));
+        // Markers are INERT: no geometry, no cross-refs, no connectivity.
+        assert_eq!(
+            caps(&Command::AddMarker {
+                section_id: 1,
+                shot_id: 0,
+                position: 50.0,
+                marker_type: crate::models::MarkerType::Ndm,
+                color: "white".to_string(),
+                text: String::new(),
+                direction: None,
+            }),
+            (false, false, false)
+        );
+        assert_eq!(
+            caps(&Command::UpdateMarker {
+                marker_id: 1,
+                updates: crate::models::MarkerUpdates::default(),
+            }),
+            (false, false, false)
+        );
+        assert_eq!(
+            caps(&Command::DeleteMarker { marker_id: 1 }),
+            (false, false, false)
+        );
         assert_eq!(
             caps(&Command::SaveProject {
                 path: None,

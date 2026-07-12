@@ -26,6 +26,7 @@ export type FeatureSourceKind =
   | 'survey-station-labels'
   | 'survey-section-labels'
   | 'survey-loop-closures'
+  | 'survey-markers'
   | 'survey-ghost-shots'
   | 'survey-ghost-stations'
   | 'survey-ghost-merge'
@@ -47,6 +48,7 @@ const EMPTY_COUNTS = (): FeatureCountSnapshot => ({
     'survey-station-labels': 0,
     'survey-section-labels': 0,
     'survey-loop-closures': 0,
+    'survey-markers': 0,
     'survey-ghost-shots': 0,
     'survey-ghost-stations': 0,
     'survey-ghost-merge': 0,
@@ -60,6 +62,7 @@ const EMPTY_COUNTS = (): FeatureCountSnapshot => ({
     'survey-station-labels': 0,
     'survey-section-labels': 0,
     'survey-loop-closures': 0,
+    'survey-markers': 0,
     'survey-ghost-shots': 0,
     'survey-ghost-stations': 0,
     'survey-ghost-merge': 0,
@@ -220,10 +223,11 @@ export function estimateFeatureBytes(kind: FeatureSourceKind): number {
     case 'survey-ghost-stations':
     case 'survey-ghost-merge':
     case 'survey-section-labels':
+    case 'survey-markers':
       // Point feature + ~7 properties (label string included)
       return 320;
     case 'global-survey':
-      // Mixed — assume average of line + point shapes
+      // Mixed -- assume average of line + point shapes
       return 320;
   }
 }

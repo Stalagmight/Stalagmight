@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::Command;
 use crate::models::{
-    GpsCoordinates, LoopClosure, SectionData, SectionId, ShotData, ShotId, StationRef,
+    GpsCoordinates, LoopClosure, Marker, SectionData, SectionId, ShotData, ShotId, StationRef,
 };
 
 /// Default maximum number of undo entries to keep in memory
@@ -135,6 +135,9 @@ pub enum UndoData {
         closure: LoopClosure,
     },
 
+    /// Marker info for undoing AddMarker / UpdateMarker / DeleteMarker
+    MarkerInfo { marker: Marker },
+
     /// Zero datum info for restoring previous GPS and section offsets
     ZeroDatumInfo {
         station_ref: StationRef,
@@ -201,6 +204,7 @@ impl UndoData {
             UndoData::MergeInfo { .. } => "MergeInfo",
             UndoData::UnmergeInfo { .. } => "UnmergeInfo",
             UndoData::ClosureInfo { .. } => "ClosureInfo",
+            UndoData::MarkerInfo { .. } => "MarkerInfo",
             UndoData::ZeroDatumInfo { .. } => "ZeroDatumInfo",
             UndoData::SegmentMoveInfo { .. } => "SegmentMoveInfo",
             UndoData::StationMoveInfo { .. } => "StationMoveInfo",

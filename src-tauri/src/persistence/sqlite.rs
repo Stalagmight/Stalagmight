@@ -40,7 +40,21 @@ use std::path::Path;
 /// most recent accepted edit; #193 guardrail-7 push-start comparison). Added in
 /// BOTH `init_schema` and `migrate_schema` (a conditional `ALTER` for existing v9
 /// tables, mirroring the shot-uuid pattern); carried forward by the fence.
-const SCHEMA_VERSION: i32 = 11;
+///
+/// v11 adds the `speleo_link.last_verify_at` nullable column (RFC-3339 UTC of
+/// the last verification; `#193`). Added in both `init_schema` and
+/// `migrate_schema` (conditional `ALTER`); carried forward by the fence.
+///
+/// v12 adds the `markers` table (survey markers placed along shots) and the
+/// `next_marker_id` column on `project` (monotonic ID counter). Both appear in
+/// `init_schema` and `migrate_schema`.
+///
+/// v13 adds `shot_uuid TEXT` to `markers` so markers survive shot deletions.
+/// Shot IDs are reconstructed positionally on every load, so they cannot serve
+/// as stable foreign keys; the shot UUID is the only identity that persists.
+/// New markers always write `shot_uuid`; on load, UUID takes priority over the
+/// stored `shot_id` (legacy markers without a UUID fall back to `shot_id`).
+const SCHEMA_VERSION: i32 = 13;
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///

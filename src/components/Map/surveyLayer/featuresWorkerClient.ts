@@ -19,7 +19,7 @@ import {
   type DepthRange,
   type SurveyFeatureSets,
 } from './features';
-import type { LoopClosure } from '../../../types/project';
+import type { LoopClosure, Marker } from '../../../types/project';
 import type { SurveyData } from '../../../types/survey-data';
 import type { GpsOrigin, DecimalPrecision } from '../../../types/config';
 import type { MapThemeColors } from '../../../utils/themeColors';
@@ -31,6 +31,7 @@ interface BuildArgs {
    *  large block per array (vs the legacy ~75k JS objects). */
   surveyData: SurveyData;
   loopClosures: LoopClosure[] | undefined;
+  markers: Marker[] | undefined;
   gpsOrigin: GpsOrigin | null;
   showDepthGradient: boolean;
   depthRange: DepthRange;
@@ -107,6 +108,7 @@ export function buildSurveyFeaturesAsync(args: BuildArgs): Promise<SurveyFeature
       args.themeColors,
       args.precision,
       args.options,
+      args.markers,
     );
     recordPerfTiming('buildFeatures (inline fallback)', performance.now() - t0);
     return Promise.resolve(features);

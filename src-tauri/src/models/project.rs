@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    ClosureStrategy, CollabState, GpsBounds, LoopClosure, Section, SectionData, SectionId,
-    SectionUpdates, ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire,
-    StationRef, ZeroDatum,
+    ClosureStrategy, CollabState, GpsBounds, LoopClosure, Marker, Section,
+    SectionData, SectionId, SectionUpdates, ShotData, ShotId, StationAnchor, StationKey,
+    StationMerge, StationMergeWire, StationRef, ZeroDatum,
 };
 use super::{LoopClosureWire, ZeroDatumWire};
 
@@ -238,6 +238,12 @@ pub struct Project {
     #[serde(default)]
     #[ts(type = "Array<LoopClosure>")]
     pub loop_closures: Vec<LoopClosure>,
+    /// Survey markers placed along shots.
+    #[serde(default)]
+    pub markers: Vec<Marker>,
+    /// Monotonic counter for marker IDs. Never reused, even after deletions.
+    #[serde(default)]
+    pub next_marker_id: u64,
     /// File path if saved (None for new unsaved projects)
     #[ts(type = "string | null")]
     pub file_path: Option<PathBuf>,
@@ -498,7 +504,7 @@ impl Serialize for ProjectIpc<'_> {
         // Field set + order MUST stay in lockstep with the generated Project.ts
         // (16 ts-exported fields). Adding a ts-exported field to `Project`
         // requires adding it here too, or it silently drops off the IPC payload.
-        let mut st = serializer.serialize_struct("Project", 16)?;
+        let mut st = serializer.serialize_struct("Project", 18)?;
         st.serialize_field("name", &p.name)?;
         st.serialize_field("location", &p.location)?;
         st.serialize_field("created_at", &p.created_at)?;
@@ -507,6 +513,8 @@ impl Serialize for ProjectIpc<'_> {
         st.serialize_field("station_merges", &station_merges)?;
         st.serialize_field("zero_datums", &zero_datums)?;
         st.serialize_field("loop_closures", &loop_closures)?;
+        st.serialize_field("markers", &p.markers)?;
+        st.serialize_field("next_marker_id", &p.next_marker_id)?;
         st.serialize_field("file_path", &p.file_path)?;
         st.serialize_field("next_section_id", &p.next_section_id)?;
         st.serialize_field("section_offsets", &p.section_offsets)?;
@@ -543,6 +551,8 @@ impl Project {
             station_merges: Vec::new(),
             zero_datums: Vec::new(),
             loop_closures: Vec::new(),
+            markers: Vec::new(),
+            next_marker_id: 1,
             file_path: None,
             next_section_id: 0,
             section_offsets: HashMap::new(),

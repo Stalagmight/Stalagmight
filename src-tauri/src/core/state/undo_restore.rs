@@ -110,6 +110,27 @@ impl AppState {
                 offset,
             } => self.move_station(*station_ref, *offset),
             Command::Batch { commands } => self.execute_batch(commands.clone(), false),
+            Command::AddMarker {
+                section_id,
+                shot_id,
+                position,
+                marker_type,
+                color,
+                text,
+                direction,
+            } => self.add_marker(
+                *section_id,
+                *shot_id,
+                *position,
+                marker_type.clone(),
+                color.clone(),
+                text.clone(),
+                direction.clone(),
+            ),
+            Command::UpdateMarker { marker_id, updates } => {
+                self.update_marker(*marker_id, updates.clone())
+            }
+            Command::DeleteMarker { marker_id } => self.delete_marker(*marker_id),
             _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
         }
     }

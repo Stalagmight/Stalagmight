@@ -1346,6 +1346,10 @@ pub fn run() {
             commands::station::check_merge_connectivity,
             commands::station::create_loop_closure,
             commands::station::remove_loop_closure,
+            // Marker commands
+            commands::marker::add_marker,
+            commands::marker::update_marker,
+            commands::marker::delete_marker,
             // Undo/Redo
             commands::history::undo,
             commands::history::redo,

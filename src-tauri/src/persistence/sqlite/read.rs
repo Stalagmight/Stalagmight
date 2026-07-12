@@ -4,8 +4,9 @@ use rusqlite::OptionalExtension;
 use std::collections::HashMap;
 
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot, StationKey,
-    StationMerge, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
+    ClosureStrategy, GpsCoordinates, LoopClosure, Marker, MarkerDirection, MarkerType, Project,
+    Section, SectionData, Shot, StationKey, StationMerge, SurveyDirection, ZeroDatum,
+    FEATURE_ID_STRIDE,
 };
 
 use super::Database;
@@ -245,6 +246,27 @@ impl Database {
 
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc);
         let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at)?.with_timezone(&Utc);
+
+        // Read next_marker_id if the column exists (added in schema v12)
+        let has_next_marker_id_col: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('project') WHERE name='next_marker_id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        let persisted_next_marker_id: Option<u64> = if has_next_marker_id_col {
+            self.conn
+                .query_row("SELECT next_marker_id FROM project LIMIT 1", [], |row| {
+                    Ok(row.get::<_, i64>(0).unwrap_or(1).max(1) as u64)
+                })
+                .ok()
+        } else {
+            None
+        };
 
         // Load sections
         let mut sections: Vec<Section> = Vec::new();
@@ -528,6 +550,21 @@ impl Database {
         // Load loop closures
         let loop_closures = self.load_loop_closures()?;
 
+        // Build UUID → current shot_id map so load_markers can resolve stable refs.
+        // Shot IDs are positionally reconstructed on every load, so the UUID is the
+        // only identity that survives shot deletions (see write.rs: shot_uuid).
+        let uuid_to_shot_id: HashMap<String, u32> = sections
+            .iter()
+            .flat_map(|s| {
+                s.shots
+                    .iter()
+                    .filter_map(|shot| shot.uuid.as_ref().map(|uuid| (uuid.clone(), shot.id)))
+            })
+            .collect();
+
+        // Load markers
+        let markers = self.load_markers(&uuid_to_shot_id)?;
+
         // Load imported file hashes
         let imported_file_hashes = self.load_imported_file_hashes()?;
 
@@ -540,6 +577,13 @@ impl Database {
         let next_closure_id = match persisted_next_closure_id {
             Some(persisted) => persisted.max(max_existing + 1),
             None => max_existing + 1,
+        };
+
+        // Derive next_marker_id: use persisted value if available, otherwise fall back to max(existing) + 1.
+        let max_existing_marker = markers.iter().map(|m| m.id).max().unwrap_or(0);
+        let next_marker_id = match persisted_next_marker_id {
+            Some(persisted) => persisted.max(max_existing_marker + 1),
+            None => max_existing_marker + 1,
         };
 
         // Load station comments
@@ -597,6 +641,8 @@ impl Database {
             station_merges,
             zero_datums,
             loop_closures,
+            markers,
+            next_marker_id,
             section_offsets,
             station_offsets,
             station_comments,
@@ -721,6 +767,85 @@ impl Database {
         }
 
         Ok(closures)
+    }
+
+    /// Load survey markers from database
+    fn load_markers(&self, uuid_to_shot_id: &HashMap<String, u32>) -> Result<Vec<Marker>> {
+        let mut markers = Vec::new();
+
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='markers'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !table_exists {
+            return Ok(markers);
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, section_id, shot_id, shot_uuid, position, marker_type, color, text, direction \
+             FROM markers",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, u32>(1)?,
+                row.get::<_, u32>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, f64>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(8)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (
+                id_i64,
+                section_id,
+                stored_shot_id,
+                shot_uuid,
+                position,
+                marker_type_str,
+                color,
+                text,
+                direction_str,
+            ) = row?;
+            // Prefer UUID-resolved shot_id (stable across shot deletions) over
+            // the stored positional shot_id (legacy markers or files without UUIDs).
+            let shot_id = shot_uuid
+                .as_deref()
+                .and_then(|uuid| uuid_to_shot_id.get(uuid).copied())
+                .unwrap_or(stored_shot_id);
+            let marker_type = match marker_type_str.as_str() {
+                "Arrow" => MarkerType::Arrow,
+                _ => MarkerType::Ndm,
+            };
+            let direction = direction_str.as_deref().and_then(|s| match s {
+                "TowardStart" => Some(MarkerDirection::TowardStart),
+                "TowardEnd" => Some(MarkerDirection::TowardEnd),
+                _ => None,
+            });
+            markers.push(Marker {
+                id: id_i64.max(0) as u64,
+                section_id,
+                shot_id,
+                position: position as f32,
+                marker_type,
+                color,
+                text,
+                direction,
+            });
+        }
+
+        Ok(markers)
     }
 
     /// Load station offsets from database

@@ -1,5 +1,9 @@
 import type { GpsOrigin, DecimalPrecision } from '../../../types/config';
-import type { LoopClosure, StationRef } from '../../../types/project';
+import type {
+  LoopClosure,
+  Marker,
+  StationRef,
+} from '../../../types/project';
 import {
   type SurveyData,
   type SectionMetadata,
@@ -65,6 +69,7 @@ export interface SurveyFeatureSets {
   sectionLabelFeatures: GeoJSON.Feature[];
   stationLabelFeatures: GeoJSON.Feature[];
   loopClosureFeatures: GeoJSON.Feature[];
+  markerFeatures: GeoJSON.Feature[];
 }
 
 export function normalizeDepthRange(depthRange: DepthRange): DepthRange {
@@ -170,7 +175,8 @@ export function buildSurveyFeatures(
   depthRange: DepthRange,
   themeColors: MapThemeColors,
   precision?: DecimalPrecision,
-  options: BuildSurveyFeaturesOptions = {}
+  options: BuildSurveyFeaturesOptions = {},
+  markers?: Marker[],
 ): SurveyFeatureSets {
   const buildLabels = options.buildLabels ?? true;
   // Issue-severity coloring (#22). `sevShot`/`sevStation` are aligned to the
@@ -199,6 +205,13 @@ export function buildSurveyFeatures(
   const sectionLabelFeatures: GeoJSON.Feature[] = [];
   const stationLabelFeatures: GeoJSON.Feature[] = [];
   const loopClosureFeatures: GeoJSON.Feature[] = [];
+  const markerFeatures: GeoJSON.Feature[] = [];
+
+  // Shot coord lookup for marker position interpolation: "sectionId:shotId" → from/to XYZ.
+  // Populated during the shot loop below and consumed when building marker features.
+  const shotCoordLookup = markers && markers.length > 0
+    ? new Map<string, { from: { x: number; y: number; z: number }; to: { x: number; y: number; z: number } }>()
+    : null;
 
   // (sectionId, stationIndex) → global station index. Built once,
   // O(stationCount). Replaces the legacy `stationsBySection` sort.
@@ -294,6 +307,10 @@ export function buildSurveyFeatures(
         isReference,
       };
       if (shotCommentColor) shotProps.commentColor = shotCommentColor;
+
+      if (shotCoordLookup) {
+        shotCoordLookup.set(`${section.id}:${shotId}`, { from: fromXYZ, to: toXYZ });
+      }
 
       shotFeatures.push({
         type: 'Feature',
@@ -563,6 +580,33 @@ export function buildSurveyFeatures(
     }
   }
 
+  // ─── Markers ──────────────────────────────────────────────────
+  if (markers && markers.length > 0 && shotCoordLookup) {
+    for (const marker of markers) {
+      const coords = shotCoordLookup.get(`${marker.section_id}:${marker.shot_id}`);
+      if (!coords) continue;
+      const t = marker.position / 100;
+      const x = coords.from.x + (coords.to.x - coords.from.x) * t;
+      const y = coords.from.y + (coords.to.y - coords.from.y) * t;
+      markerFeatures.push({
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: metersToMapCoords(x, y, gpsOrigin),
+        },
+        properties: {
+          markerId: Number(marker.id),
+          sectionId: marker.section_id,
+          shotId: marker.shot_id,
+          color: marker.color,
+          markerType: marker.marker_type,
+          text: marker.text,
+          direction: marker.direction ?? null,
+        },
+      });
+    }
+  }
+
   return {
     shotFeatures,
     shotGradientFeatures,
@@ -571,6 +615,7 @@ export function buildSurveyFeatures(
     sectionLabelFeatures,
     stationLabelFeatures,
     loopClosureFeatures,
+    markerFeatures,
   };
 }
 

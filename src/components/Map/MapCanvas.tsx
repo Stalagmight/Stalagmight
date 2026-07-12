@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, memo, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
-import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
+import type { SectionId, ShotId, StationRef, DistanceField, Marker } from '../../types/project';
 import type { GasReachField } from '../../types/ipc.generated';
 import type { BatchCommand, ProjectWarning } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
@@ -44,6 +44,17 @@ import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { setSource } from '../../utils/telemetry';
 import { debugLog } from '../../utils/debugLog';
+
+// Merge preview marker (from the detail-panel slider) with the project's persisted
+// markers. The preview replaces any existing marker for the same shot so the map
+// shows live position updates while the form is open.
+function effectiveMarkers(base: Marker[] | undefined, preview: Marker | null): Marker[] | undefined {
+  if (!preview) return base;
+  const filtered = (base ?? []).filter(
+    (m) => !(m.section_id === preview.section_id && m.shot_id === preview.shot_id)
+  );
+  return [...filtered, preview];
+}
 
 // Tools that support temporary panning overrides (Ctrl+drag or middle-drag)
 const CTRL_PAN_TOOLS = ['select', 'zoom', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment', 'comment', 'move_comment'];
@@ -274,6 +285,8 @@ function MapCanvas() {
 
   const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, warnings, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
   const logMapInteractions = config?.debug?.map?.log_hit_detection ?? false;
+
+  const previewMarker = useUIStore((s) => s.previewMarker);
 
   // Geometry display mode (measured vs read-only closure-adjusted).
   const geometryMode = useUIStore((s) => s.geometryMode);
@@ -1000,6 +1013,11 @@ function MapCanvas() {
     },
     onHiddenShotClick: () => {
       showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden');
+    },
+    onMarkerClick: (sectionId: number, shotId: number) => {
+      const store = useUIStore.getState();
+      store.setSelection({ type: 'shot', sectionId, shotId });
+      store.setPendingMarkerOpen({ sectionId, shotId });
     },
   }), [baseToolCallbacks, showToast]);
 
@@ -1834,8 +1852,8 @@ function MapCanvas() {
         activeStations,
         // Closure overlays are drawn from the active coordinates, so an adjusted
         // (closed) loop collapses to a zero-length, invisible line, while a loop
-        // that wasn't closed — an ineligible/deferred closure, or a component whose
-        // solve fell back to measured — stays visible. Pass closures in both modes
+        // that wasn't closed -- an ineligible/deferred closure, or a component whose
+        // solve fell back to measured -- stays visible. Pass closures in both modes
         // rather than hiding them wholesale, so the adjusted view doesn't look
         // resolved when some loops are still open.
         project.loop_closures,
@@ -1844,10 +1862,11 @@ function MapCanvas() {
         depthRange,
         precision,
         effectiveIssueSeverity,
-        severityWarnings
+        severityWarnings,
+        effectiveMarkers(project.markers, previewMarker),
       );
     }
-  }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, effectiveIssueSeverity, severityWarnings]);
+  }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, effectiveIssueSeverity, severityWarnings, previewMarker]);
 
   // (The Warnings-tab auto-highlight is now derived via `effectiveIssueSeverity`
   // above — no snapshot/restore effect needed, so nothing to lose on leave/unmount.)

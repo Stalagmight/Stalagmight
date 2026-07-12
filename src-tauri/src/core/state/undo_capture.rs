@@ -369,6 +369,31 @@ impl AppState {
             // which captures before+after snapshots and pushes directly.
             Command::Batch { .. } => UndoData::None,
 
+            // AddMarker: finalized after execution (we don't know the new ID yet)
+            Command::AddMarker { .. } => UndoData::None,
+
+            // UpdateMarker: capture old marker state so undo can restore it
+            Command::UpdateMarker { marker_id, .. } => {
+                if let Some(marker) = project.markers.iter().find(|m| m.id == *marker_id) {
+                    UndoData::MarkerInfo {
+                        marker: marker.clone(),
+                    }
+                } else {
+                    UndoData::None
+                }
+            }
+
+            // DeleteMarker: capture the marker before deletion so undo can restore it
+            Command::DeleteMarker { marker_id } => {
+                if let Some(marker) = project.markers.iter().find(|m| m.id == *marker_id) {
+                    UndoData::MarkerInfo {
+                        marker: marker.clone(),
+                    }
+                } else {
+                    UndoData::None
+                }
+            }
+
             // Non-undoable commands
             _ => UndoData::None,
         }
@@ -385,6 +410,19 @@ impl AppState {
         };
 
         match cmd {
+            Command::AddMarker { .. } => {
+                // Capture the just-created marker (the last one in the vec, since
+                // add_marker appends) so undo can delete by ID and redo can restore
+                // the exact same marker without re-assigning a different ID.
+                if let Some(marker) = project.markers.last() {
+                    UndoData::MarkerInfo {
+                        marker: marker.clone(),
+                    }
+                } else {
+                    undo_data
+                }
+            }
+
             Command::CreateSection { .. } => {
                 // Capture full snapshot of the just-created section (the last one)
                 // so that redo can restore it with its original ID instead of

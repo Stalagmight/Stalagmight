@@ -44,9 +44,11 @@ use stalagmight_lib::models::placement_suggest::{
 use stalagmight_lib::models::{
     AlongLineResult, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate,
     CollabState, ConnectivityResult, Coordinates, CylRole, Cylinder, DeleteShotImpact,
+<<<<<<< HEAD
     DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
     ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement,
-    ImportSectionConfig, LoopClosureWire, PathShot, PlanMode, Project, ProjectMetadata,
+    ImportSectionConfig, LoopClosureWire, Marker, MarkerDirection, MarkerType, MarkerUpdates,
+    PathShot, PlanMode, Project, ProjectMetadata,
     ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RulerEndpoint, Section, SectionData,
     SectionRelationships, SectionStats, SectionUpdates, Shot, ShotBaselineEntry, ShotData,
     ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef, SurveyDirection,
@@ -167,6 +169,11 @@ fn main() {
     export::<ProjectWarning>(&out_dir);
     export::<FrozenShotRef>(&out_dir);
     export::<ProjectState>(&out_dir);
+    // Markers (#256)
+    export::<Marker>(&out_dir);
+    export::<MarkerType>(&out_dir);
+    export::<MarkerDirection>(&out_dir);
+    export::<MarkerUpdates>(&out_dir);
 
     // Placement suggestions
     export::<MatchDirection>(&out_dir);
@@ -404,6 +411,10 @@ fn main() {
         "ProjectWarning",
         "FrozenShotRef",
         "ProjectState",
+        "Marker",
+        "MarkerType",
+        "MarkerDirection",
+        "MarkerUpdates",
         "MatchDirection",
         "SuggestionConfidence",
         "PlacementSuggestion",

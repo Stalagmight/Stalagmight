@@ -4,7 +4,8 @@ use tracing::{debug, error, info, trace};
 
 use crate::models::{
     gps_to_local, ClosurePreview, ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure,
-    SectionId, StationMerge, StationRef, ZeroDatum,
+    Marker, MarkerDirection, MarkerType, MarkerUpdates, SectionId, ShotId, StationMerge,
+    StationRef, ZeroDatum,
 };
 
 use super::Project;
@@ -906,6 +907,94 @@ impl Project {
         self.zero_datums.first()
     }
 
+    /// Add a new marker on a shot.
+    pub fn add_marker(
+        &mut self,
+        section_id: SectionId,
+        shot_id: ShotId,
+        position: f32,
+        marker_type: MarkerType,
+        color: String,
+        text: String,
+        direction: Option<MarkerDirection>,
+    ) -> Result<Marker, String> {
+        validate_marker_color(&color)?;
+        validate_marker_position(position)?;
+        let section = self
+            .get_section(section_id)
+            .ok_or_else(|| format!("Section {section_id} not found"))?;
+        if !section.shots.iter().any(|s| s.id == shot_id) {
+            return Err(format!("Shot {shot_id} not found in section {section_id}"));
+        }
+        let id = self.next_marker_id;
+        self.next_marker_id += 1;
+        let marker = Marker {
+            id,
+            section_id,
+            shot_id,
+            position,
+            marker_type,
+            color,
+            text,
+            direction,
+        };
+        self.markers.push(marker.clone());
+        self.touch();
+        debug!(marker_id = id, section_id, shot_id, "Marker added");
+        Ok(marker)
+    }
+
+    /// Update an existing marker by ID, applying only the fields set in `updates`.
+    pub fn update_marker(
+        &mut self,
+        marker_id: u64,
+        updates: MarkerUpdates,
+    ) -> Result<Marker, String> {
+        if let Some(ref color) = updates.color {
+            validate_marker_color(color)?;
+        }
+        if let Some(pos) = updates.position {
+            validate_marker_position(pos)?;
+        }
+        let marker = self
+            .markers
+            .iter_mut()
+            .find(|m| m.id == marker_id)
+            .ok_or_else(|| format!("Marker #{marker_id} not found"))?;
+        if let Some(pos) = updates.position {
+            marker.position = pos;
+        }
+        if let Some(mt) = updates.marker_type {
+            marker.marker_type = mt;
+        }
+        if let Some(color) = updates.color {
+            marker.color = color;
+        }
+        if let Some(text) = updates.text {
+            marker.text = text;
+        }
+        if let Some(dir) = updates.direction {
+            marker.direction = dir;
+        }
+        let updated = marker.clone();
+        self.touch();
+        debug!(marker_id, "Marker updated");
+        Ok(updated)
+    }
+
+    /// Remove a marker by ID, returning the removed marker.
+    pub fn delete_marker(&mut self, marker_id: u64) -> Result<Marker, String> {
+        let pos = self
+            .markers
+            .iter()
+            .position(|m| m.id == marker_id)
+            .ok_or_else(|| format!("Marker #{marker_id} not found"))?;
+        let marker = self.markers.remove(pos);
+        self.touch();
+        debug!(marker_id, "Marker deleted");
+        Ok(marker)
+    }
+
     /// After a geometry-changing shot edit in `edited_section_id`, realign the
     /// merge group's section offsets so that anchored stations (zero datums,
     /// merge points to pinned sections) remain at their correct positions.
@@ -1014,4 +1103,29 @@ impl Project {
             }
         }
     }
+}
+
+/// Reject colors that are not a valid `#rrggbb` hex string.
+///
+/// Only hex colors are accepted on the IPC boundary to prevent CSS injection
+/// (a `url(...)` value would be valid CSS and trigger an outbound request when
+/// placed in an inline `style` attribute, since the Tauri CSP is `null`).
+fn validate_marker_color(color: &str) -> Result<(), String> {
+    let bytes = color.as_bytes();
+    if bytes.len() == 7 && bytes[0] == b'#' && bytes[1..].iter().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+    Err(format!(
+        "Invalid marker color '{color}': must be a 6-digit hex color (#rrggbb)"
+    ))
+}
+
+/// Reject positions outside [0.0, 100.0] or non-finite values.
+fn validate_marker_position(position: f32) -> Result<(), String> {
+    if position.is_finite() && (0.0..=100.0).contains(&position) {
+        return Ok(());
+    }
+    Err(format!(
+        "Invalid marker position {position}: must be a finite number in [0.0, 100.0]"
+    ))
 }

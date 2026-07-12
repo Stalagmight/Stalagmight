@@ -1090,6 +1090,8 @@ impl Project {
             self.station_merges
                 .retain(|m| m.station_a != rk && m.station_b != rk);
         }
+        self.markers
+            .retain(|m| !(m.section_id == section_id && m.shot_id == shot_id));
         self.merge_adjacency_cache.clear();
 
         // Pre-resolve replacement closure targets to keys (the drain below can't

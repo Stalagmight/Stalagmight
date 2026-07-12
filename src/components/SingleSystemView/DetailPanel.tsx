@@ -13,7 +13,7 @@ import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, C
 import { DetailLink } from '../common/DetailLink';
 import { EntityBlob } from '../common/EntityBlob';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
+import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure, Marker, MarkerType, MarkerDirection } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
@@ -172,7 +172,7 @@ function DetailsContent({ selection, project, stations }: DetailsContentProps) {
     const shot = section?.shots.find((s) => s.id === selection.shotId);
 
     if (section && shot) {
-      return <ShotDetail section={section} shot={shot} stations={stations} />;
+      return <ShotDetail key={`${section.id}-${shot.id}`} section={section} shot={shot} stations={stations} />;
     }
   }
 
@@ -941,6 +941,498 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
   return (Math.asin(clamped) * 180) / Math.PI;
 }
 
+const MARKER_COLORS_DETAIL = ['#ff6b6b', '#ff9f43', '#ffcb77', '#4ecdc4', '#54a0ff'];
+
+interface MarkerFormState {
+  type: MarkerType;
+  color: string;
+  text: string;
+  position: number;
+  direction: MarkerDirection | null;
+}
+
+function makePreviewMarker(
+  sectionId: number,
+  shotId: number,
+  form: MarkerFormState
+): Marker {
+  return {
+    id: 0 as unknown as bigint,
+    section_id: sectionId,
+    shot_id: shotId,
+    position: form.position,
+    marker_type: form.type,
+    color: form.color,
+    text: form.text,
+    direction: form.direction,
+  };
+}
+
+function ShotMarkerPanel({ section, shot }: { section: Section; shot: Shot }) {
+  const { addMarker, updateMarker, deleteMarker } = useProjectStore();
+  const markers = useProjectStore((s) => s.project?.markers);
+  const { setPreviewMarker, pendingMarkerOpen, setPendingMarkerOpen } = useUIStore(
+    useShallow((s) => ({
+      setPreviewMarker: s.setPreviewMarker,
+      pendingMarkerOpen: s.pendingMarkerOpen,
+      setPendingMarkerOpen: s.setPendingMarkerOpen,
+    }))
+  );
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+
+  const existing = useMemo(
+    () => markers?.find((m) => m.section_id === section.id && m.shot_id === shot.id) ?? null,
+    [markers, section.id, shot.id]
+  );
+
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState<MarkerFormState>({
+    type: 'Arrow',
+    color: MARKER_COLORS_DETAIL[0] ?? '#ff6b6b',
+    text: '',
+    position: 50,
+    direction: 'TowardEnd',
+  });
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [customColorInput, setCustomColorInput] = useState('');
+
+  // Clear preview when the panel closes, shot changes, or component unmounts.
+  useEffect(() => {
+    if (!open) {
+      setPreviewMarker(null);
+      return;
+    }
+    setPreviewMarker(makePreviewMarker(section.id, shot.id, form));
+    return () => { setPreviewMarker(null); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, section.id, shot.id]);
+
+  // Sync preview whenever form values change (slider drag = live map update).
+  useEffect(() => {
+    if (!open) return;
+    setPreviewMarker(makePreviewMarker(section.id, shot.id, form));
+  }, [open, form, section.id, shot.id, setPreviewMarker]);
+
+  // Consume the pendingMarkerOpen signal (set when user clicks the marker column
+  // in the data table or a marker on the map). Auto-open the form for this shot.
+  useEffect(() => {
+    if (!pendingMarkerOpen) return;
+    if (pendingMarkerOpen.sectionId !== section.id || pendingMarkerOpen.shotId !== shot.id) return;
+    setPendingMarkerOpen(null);
+    if (!open && !geometryReadOnly) {
+      if (existing) {
+        const isCustom = !MARKER_COLORS_DETAIL.includes(existing.color);
+        setCustomColorInput(isCustom ? existing.color : '');
+        setForm({
+          type: existing.marker_type,
+          color: existing.color,
+          text: existing.text,
+          position: Math.round(existing.position),
+          direction: existing.direction ?? null,
+        });
+      } else {
+        setCustomColorInput('');
+        setForm({ type: 'Arrow', color: MARKER_COLORS_DETAIL[0] ?? '#ff6b6b', text: '', position: 50, direction: 'TowardEnd' });
+      }
+      setOpen(true);
+    }
+  }, [pendingMarkerOpen, section.id, shot.id, open, geometryReadOnly, existing, setPendingMarkerOpen]);
+
+  // When the panel opens, seed the form from the existing marker (if any).
+  function handleToggleOpen() {
+    if (!open) {
+      if (existing) {
+        const isCustom = !MARKER_COLORS_DETAIL.includes(existing.color);
+        setCustomColorInput(isCustom ? existing.color : '');
+        setForm({
+          type: existing.marker_type,
+          color: existing.color,
+          text: existing.text,
+          position: Math.round(existing.position),
+          direction: existing.direction ?? null,
+        });
+      } else {
+        setCustomColorInput('');
+        setForm({ type: 'Arrow', color: MARKER_COLORS_DETAIL[0] ?? '#ff6b6b', text: '', position: 50, direction: 'TowardEnd' });
+      }
+    }
+    setOpen((v) => !v);
+  }
+
+  async function handleSave() {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      let result;
+      if (existing) {
+        result = await updateMarker(existing.id, {
+          position: form.position,
+          marker_type: form.type,
+          color: form.color,
+          text: form.text,
+          direction: form.direction,
+        });
+      } else {
+        result = await addMarker(section.id, shot.id, form.position, form.type, form.color, form.text, form.direction);
+      }
+      if (result.success) {
+        setOpen(false);
+      } else {
+        setSaveError(result.error ?? 'save failed');
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setSaveError(msg);
+      console.error('Failed to save marker:', e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleRemove() {
+    if (!existing || saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const result = await deleteMarker(existing.id);
+      if (result.success) {
+        setOpen(false);
+      } else {
+        setSaveError(result.error ?? 'delete failed');
+      }
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+      console.error('Failed to delete marker:', e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const isCustomColor = !MARKER_COLORS_DETAIL.includes(form.color);
+
+  function handleCustomColorChange(val: string) {
+    setCustomColorInput(val);
+    if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+      setForm((f) => ({ ...f, color: val }));
+    }
+  }
+
+  const pill = (
+    label: string,
+    active: boolean,
+    onClick: () => void
+  ) => (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        fontFamily: 'inherit',
+        fontSize: 11,
+        padding: '3px 10px',
+        borderRadius: 4,
+        border: active ? '1.5px solid var(--cc-accent, #4ecdc4)' : '1px solid var(--cc-border, #0f3460)',
+        background: active ? 'rgba(78,205,196,.12)' : 'transparent',
+        color: active ? 'var(--cc-accent, #4ecdc4)' : 'var(--cc-text-secondary)',
+        cursor: 'pointer',
+      }}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="pt-2 border-t border-border">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span className="text-sm text-text-secondary">Marker</span>
+        {!geometryReadOnly && (
+          <button
+            type="button"
+            onClick={handleToggleOpen}
+            style={{
+              fontFamily: 'inherit',
+              fontSize: 11,
+              padding: '2px 8px',
+              borderRadius: 4,
+              border: open
+                ? '1.5px solid var(--cc-accent, #4ecdc4)'
+                : '1px solid var(--cc-border, #0f3460)',
+              background: open ? 'rgba(78,205,196,.12)' : 'transparent',
+              color: open ? 'var(--cc-accent, #4ecdc4)' : 'var(--cc-text-secondary)',
+              cursor: 'pointer',
+            }}
+          >
+            {open ? 'cancel' : existing ? 'edit' : '+ add'}
+          </button>
+        )}
+      </div>
+
+      {!open && existing && (
+        <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              background: existing.color,
+              display: 'inline-block',
+              flexShrink: 0,
+            }}
+          />
+          <span className="text-sm">
+            {existing.marker_type === 'Arrow' ? 'Arrow' : 'NDM'}
+            {existing.text ? ` — ${existing.text}` : ''}
+            {' '}@ {Math.round(existing.position)}%
+          </span>
+        </div>
+      )}
+      {!open && !existing && (
+        <p className="text-sm text-text-secondary mt-1">none</p>
+      )}
+
+      {open && (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {/* Type */}
+          <div>
+            <span style={{ fontSize: 11, color: 'var(--cc-text-secondary)', display: 'block', marginBottom: 4 }}>Type</span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {pill('Arrow', form.type === 'Arrow', () => setForm((f) => ({ ...f, type: 'Arrow', direction: f.direction ?? 'TowardEnd' })))}
+              {pill('NDM', form.type === 'Ndm', () => setForm((f) => ({ ...f, type: 'Ndm', direction: null })))}
+            </div>
+          </div>
+
+          {/* Direction (Arrow only) -- directly under Type */}
+          {form.type === 'Arrow' && (
+            <div>
+              <span style={{ fontSize: 11, color: 'var(--cc-text-secondary)', display: 'block', marginBottom: 4 }}>Direction</span>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {pill('toward start', form.direction === 'TowardStart', () => setForm((f) => ({ ...f, direction: 'TowardStart' })))}
+                {pill('toward end', form.direction === 'TowardEnd', () => setForm((f) => ({ ...f, direction: 'TowardEnd' })))}
+              </div>
+            </div>
+          )}
+
+          {/* Color */}
+          <div>
+            <span style={{ fontSize: 11, color: 'var(--cc-text-secondary)', display: 'block', marginBottom: 4 }}>Color</span>
+            <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+              {MARKER_COLORS_DETAIL.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => { setForm((f) => ({ ...f, color: c })); setCustomColorInput(''); }}
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: '50%',
+                    background: c,
+                    border: form.color === c ? '2px solid white' : '2px solid transparent',
+                    outline: form.color === c ? `2px solid ${c}` : 'none',
+                    cursor: 'pointer',
+                    padding: 0,
+                    boxSizing: 'border-box',
+                    flexShrink: 0,
+                  }}
+                />
+              ))}
+              {/* Custom color */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isCustomColor) {
+                    const init = MARKER_COLORS_DETAIL[0] ?? '#ff6b6b';
+                    setCustomColorInput(init);
+                    setForm((f) => ({ ...f, color: init }));
+                  }
+                }}
+                style={{
+                  fontSize: 10,
+                  padding: '2px 6px',
+                  borderRadius: 4,
+                  border: isCustomColor ? '1.5px solid var(--cc-accent, #4ecdc4)' : '1px solid var(--cc-border, #0f3460)',
+                  background: isCustomColor ? 'rgba(78,205,196,.12)' : 'transparent',
+                  color: isCustomColor ? 'var(--cc-accent, #4ecdc4)' : 'var(--cc-text-secondary)',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                Custom
+              </button>
+              {isCustomColor && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <input
+                    type="color"
+                    value={/^#[0-9a-fA-F]{6}$/.test(form.color) ? form.color : '#000000'}
+                    onChange={(e) => {
+                      setCustomColorInput(e.target.value);
+                      setForm((f) => ({ ...f, color: e.target.value }));
+                    }}
+                    style={{
+                      width: 28,
+                      height: 28,
+                      cursor: 'pointer',
+                      border: '1px solid var(--cc-border, #0f3460)',
+                      borderRadius: 4,
+                      padding: 2,
+                      background: 'none',
+                      flexShrink: 0,
+                    }}
+                  />
+                  <input
+                    type="text"
+                    value={customColorInput}
+                    onChange={(e) => handleCustomColorChange(e.target.value)}
+                    placeholder="#rrggbb"
+                    maxLength={7}
+                    style={{
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      width: 68,
+                      padding: '2px 6px',
+                      background: 'var(--cc-background, #0a0a1a)',
+                      border: /^#[0-9a-fA-F]{6}$/.test(customColorInput)
+                        ? `1px solid ${customColorInput}`
+                        : '1px solid var(--cc-border, #0f3460)',
+                      borderRadius: 4,
+                      color: 'var(--cc-text, #e0e0e0)',
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Label */}
+          <div>
+            <span style={{ fontSize: 11, color: 'var(--cc-text-secondary)', display: 'block', marginBottom: 4 }}>Label</span>
+            <input
+              type="text"
+              value={form.text}
+              onChange={(e) => setForm((f) => ({ ...f, text: e.target.value }))}
+              placeholder="optional"
+              style={{
+                fontFamily: 'inherit',
+                fontSize: 12,
+                width: '100%',
+                padding: '4px 8px',
+                background: 'var(--cc-background, #0a0a1a)',
+                border: '1px solid var(--cc-border, #0f3460)',
+                borderRadius: 4,
+                color: 'var(--cc-text, #e0e0e0)',
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
+
+          {/* Position slider */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: 'var(--cc-text-secondary)' }}>Position</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={form.position}
+                  onChange={(e) => {
+                    const v = Math.max(0, Math.min(100, Math.round(Number(e.target.value))));
+                    if (!isNaN(v)) setForm((f) => ({ ...f, position: v }));
+                  }}
+                  style={{
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    width: 38,
+                    padding: '1px 4px',
+                    background: 'var(--cc-background, #0a0a1a)',
+                    border: '1px solid var(--cc-border, #0f3460)',
+                    borderRadius: 3,
+                    color: 'var(--cc-accent, #4ecdc4)',
+                    textAlign: 'right',
+                  }}
+                />
+                <span style={{ fontSize: 11, color: 'var(--cc-accent, #4ecdc4)' }}>%</span>
+              </div>
+            </div>
+            {/* Custom slider: visual track + invisible native input layered on top */}
+            <div style={{ position: 'relative', height: 20, display: 'flex', alignItems: 'center' }}>
+              <div style={{ position: 'absolute', left: 0, right: 0, height: 4, background: 'var(--cc-border, #0f3460)', borderRadius: 2 }} />
+              <div style={{ position: 'absolute', left: 0, width: `${form.position}%`, height: 4, background: 'var(--cc-accent, #4ecdc4)', borderRadius: 2 }} />
+              <div style={{
+                position: 'absolute',
+                left: `${form.position}%`,
+                transform: `translateX(calc(-50% + ${(0.5 - form.position / 100) * 12}px))`,
+                width: 12,
+                height: 12,
+                borderRadius: '50%',
+                background: 'var(--cc-accent, #4ecdc4)',
+                boxShadow: '0 1px 3px rgba(0,0,0,.4)',
+                pointerEvents: 'none',
+              }} />
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={form.position}
+                onChange={(e) => setForm((f) => ({ ...f, position: Number(e.target.value) }))}
+                style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0, cursor: 'pointer', margin: 0 }}
+              />
+            </div>
+          </div>
+
+          {/* Error */}
+          {saveError && (
+            <div style={{ fontSize: 11, color: 'var(--cc-error, #ff6b6b)', wordBreak: 'break-word' }}>
+              {saveError}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+            {existing && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void handleRemove()}
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 11,
+                  padding: '4px 10px',
+                  borderRadius: 4,
+                  border: '1px solid rgba(255,107,107,.4)',
+                  background: 'transparent',
+                  color: 'var(--cc-error, #ff6b6b)',
+                  cursor: 'pointer',
+                }}
+              >
+                remove
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void handleSave()}
+              style={{
+                fontFamily: 'inherit',
+                fontSize: 11,
+                padding: '4px 12px',
+                borderRadius: 4,
+                border: 'none',
+                background: 'var(--cc-accent, #4ecdc4)',
+                color: 'var(--cc-accent-on, #1a1a2e)',
+                fontWeight: 500,
+                cursor: 'pointer',
+              }}
+            >
+              {saving ? '...' : existing ? 'update' : 'add marker'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { t } = useTranslation();
   const { setShotReference } = useProjectStore();
@@ -1138,6 +1630,8 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
               <p className="text-sm mt-1">{shot.comment}</p>
             </div>
           )}
+
+          <ShotMarkerPanel section={section} shot={shot} />
         </div>
       </Panel>
 

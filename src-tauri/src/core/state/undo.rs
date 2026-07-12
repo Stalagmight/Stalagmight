@@ -418,6 +418,60 @@ impl AppState {
                 }
             }
 
+            UndoData::MarkerInfo { marker } => {
+                match &entry.command {
+                    Command::AddMarker { .. } => {
+                        // Undo add by removing the marker.
+                        match self.project.lock() {
+                            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                                Some(project) => {
+                                    project.markers.retain(|m| m.id != marker.id);
+                                    project.touch();
+                                    CommandResult::success()
+                                }
+                                None => CommandResult::failure("No project open".to_string()),
+                            },
+                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                        }
+                    }
+                    Command::UpdateMarker { .. } => {
+                        // Undo update by restoring the captured old state.
+                        match self.project.lock() {
+                            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                                Some(project) => {
+                                    if let Some(m) =
+                                        project.markers.iter_mut().find(|m| m.id == marker.id)
+                                    {
+                                        *m = marker.clone();
+                                    }
+                                    project.touch();
+                                    CommandResult::success()
+                                }
+                                None => CommandResult::failure("No project open".to_string()),
+                            },
+                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                        }
+                    }
+                    Command::DeleteMarker { .. } => {
+                        // Undo delete by restoring the captured marker.
+                        match self.project.lock() {
+                            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                                Some(project) => {
+                                    project.next_marker_id =
+                                        project.next_marker_id.max(marker.id + 1);
+                                    project.markers.push(marker.clone());
+                                    project.touch();
+                                    CommandResult::success()
+                                }
+                                None => CommandResult::failure("No project open".to_string()),
+                            },
+                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                        }
+                    }
+                    _ => CommandResult::failure("Unsupported marker undo command".to_string()),
+                }
+            }
+
             UndoData::None => CommandResult::failure("This command cannot be undone".to_string()),
         };
 
@@ -694,6 +748,32 @@ impl AppState {
                     _ => CommandResult::failure("Unsupported closure redo command".to_string()),
                 }
             }
+            UndoData::MarkerInfo { marker } => {
+                match &entry.command {
+                    Command::AddMarker { .. } => {
+                        // Redo add by restoring the captured marker with original ID.
+                        match self.project.lock() {
+                            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                                Some(project) => {
+                                    project.next_marker_id =
+                                        project.next_marker_id.max(marker.id + 1);
+                                    project.markers.push(marker.clone());
+                                    project.touch();
+                                    CommandResult::success().with_marker_id(marker.id)
+                                }
+                                None => CommandResult::failure("No project open".to_string()),
+                            },
+                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                        }
+                    }
+                    Command::UpdateMarker { .. } | Command::DeleteMarker { .. } => {
+                        // Redo update/delete by re-executing (marker_id is stable).
+                        self.execute_without_undo(entry.command.clone())
+                    }
+                    _ => CommandResult::failure("Unsupported marker redo command".to_string()),
+                }
+            }
+
             _ => {
                 // Re-execute the original command for other undo data types
                 self.execute_without_undo(entry.command.clone())

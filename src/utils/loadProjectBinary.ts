@@ -26,6 +26,7 @@ import type { StationRef } from '../types/ipc/StationRef';
 import type { ClosureRef } from '../types/ipc/ClosureRef';
 import type { GpsCoordinates } from '../types/ipc/GpsCoordinates';
 import type { LoopClosure } from '../types/ipc/LoopClosure';
+import type { Marker } from '../types/ipc/Marker';
 import type { StationMerge } from '../types/ipc/StationMerge';
 import type { ZeroDatum } from '../types/ipc/ZeroDatum';
 import type { ProjectStats } from '../types/ipc/ProjectStats';
@@ -101,6 +102,8 @@ interface ProjectHeaderBinary {
   file_path: string | null;
   next_section_id: number;
   next_closure_id: bigint | number;
+  next_marker_id: bigint | number;
+  markers: Marker[];
   sections: SectionHeaderBinary[];
   station_merges: StationMerge[];
   zero_datums: ZeroDatum[];
@@ -300,6 +303,8 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
     imported_file_hashes: env.project_header.imported_file_hashes,
     imported_section_hashes: env.project_header.imported_section_hashes,
     next_closure_id: BigInt(env.project_header.next_closure_id as unknown as number | bigint),
+    markers: env.project_header.markers,
+    next_marker_id: BigInt(env.project_header.next_marker_id as unknown as number | bigint),
     collab: env.project_header.collab,
     validation: env.project_header.validation,
   };

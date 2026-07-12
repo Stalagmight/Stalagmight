@@ -8,9 +8,9 @@
  * Rust `update_shot` permits them on frozen shots). The whole view is read-only in
  * the closure-adjusted geometry mode (`geometryReadOnly`).
  */
-import type { ReactNode } from 'react';
+import type { ReactNode, MouseEvent as ReactMouseEvent } from 'react';
 import type { TFunction } from 'i18next';
-import type { Shot } from '../../types/project';
+import type { Shot, Marker } from '../../types/project';
 import type { GridColumn } from '../common/SpreadsheetGrid/types';
 import { AlertCircleIcon, AlertTriangleIcon, DotIcon, LockIcon } from '../common/icons';
 import { circularMeanDegrees } from '../../utils/angles';
@@ -47,6 +47,10 @@ export interface ShotColumnContext {
   /** Open the Warnings tab and start resolving the given shot's issue (the
    *  warning indicator becomes a button when the shot has unresolved warnings). */
   onResolveWarning?: (shotId: number) => void;
+  /** Markers for all shots in the project (used to show the marker indicator column). */
+  markers?: Marker[];
+  /** Called when the user clicks the marker indicator cell; triggers auto-open of the marker form. */
+  onMarkerColumnClick?: (shot: Shot) => void;
 }
 
 const fixed = (precision: number) => (value: unknown): string =>
@@ -314,6 +318,59 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       editable: true,
       isEditable: editableUnlessFrozenGeometry('comment'), // not locked on frozen
       parse: (raw) => (raw.trim() === '' ? null : raw), // empty/whitespace clears to null
+    },
+    {
+      key: 'marker',
+      header: '●', // filled circle glyph
+      width: 32,
+      align: 'center',
+      getValue: () => '',
+      render: (row) => {
+        const marker = ctx.markers?.find(
+          (m) => m.section_id === ctx.sectionId && m.shot_id === row.id
+        );
+        const handleClick = (e: ReactMouseEvent) => {
+          e.stopPropagation();
+          if (!geometryReadOnly) ctx.onMarkerColumnClick?.(row);
+        };
+        if (!marker) {
+          return (
+            <span
+              role={geometryReadOnly ? undefined : 'button'}
+              tabIndex={geometryReadOnly ? undefined : -1}
+              onClick={handleClick}
+              style={{
+                fontSize: 10,
+                color: 'var(--cc-text-secondary, #a0a0a0)',
+                opacity: 0.4,
+                cursor: geometryReadOnly ? 'default' : 'pointer',
+              }}
+              title={geometryReadOnly ? undefined : 'Add marker'}
+            >
+              &#9711;
+            </span>
+          );
+        }
+        return (
+          <span
+            role={geometryReadOnly ? undefined : 'button'}
+            tabIndex={geometryReadOnly ? undefined : -1}
+            onClick={handleClick}
+            style={{
+              display: 'inline-block',
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              background: marker.color,
+              border: '1.5px solid rgba(255,255,255,.2)',
+              verticalAlign: 'middle',
+              cursor: geometryReadOnly ? 'default' : 'pointer',
+              opacity: geometryReadOnly ? 0.6 : 1,
+            }}
+            title={`${marker.marker_type === 'Arrow' ? 'Arrow' : 'NDM'}${marker.text ? ' — ' + marker.text : ''} @ ${Math.round(marker.position)}%`}
+          />
+        );
+      },
     },
   ];
 }

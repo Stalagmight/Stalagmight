@@ -36,6 +36,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     // non-destructive display mode. Its name is kept in the vocabulary for
     // historical continuity; it has no live handler, so the command/undo
     // coverage tests skip it via REMOVED_COMMANDS.
+    "command.add_marker",
     "command.adjust_loop_closures",
     "command.attempt_repair",
     "command.calculate_file_hash",
@@ -56,6 +57,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.debug_trigger_panic",
     "command.delete_dive_plan",
     "command.delete_last_shot_and_section",
+    "command.delete_marker",
     "command.delete_section",
     "command.delete_shot",
     "command.delete_shot_and_split",
@@ -161,6 +163,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.unmerge_stations",
     "command.unresolve_warning",
     "command.update_config",
+    "command.update_marker",
     "command.update_panel_layout",
     "command.update_panel_sizes",
     "command.update_section",
@@ -317,12 +320,14 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.zero-datum-config",
     "dialog-cancel.zero-datum-selection",
     // ── Undo regret (211-237) ──
+    "undo-after.add_marker",
     "undo-after.adjust_loop_closures",
     "undo-after.create_loop_closure",
     "undo-after.create_section",
     "undo-after.create_section_and_merge",
     "undo-after.create_shot",
     "undo-after.delete_last_shot_and_section",
+    "undo-after.delete_marker",
     "undo-after.delete_section",
     "undo-after.delete_shot",
     "undo-after.delete_shot_and_split",
@@ -345,6 +350,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "undo-after.split_shot_at_distance",
     "undo-after.unmerge_station_pair",
     "undo-after.unmerge_stations",
+    "undo-after.update_marker",
     "undo-after.update_section",
     "undo-after.update_shot",
     // ── Dwell: tools (238-249) ──
@@ -871,7 +877,9 @@ mod tests {
         //       command.split_shot_at_distance, undo-after.split_shot_at_distance,
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .insert-station = 654.
-        assert_eq!(EVENT_NAMES.len(), 654);
+        //   + 6 marker commands (#256):
+        //       command.{add,update,delete}_marker + undo-after.{add,update,delete}_marker = 660.
+        assert_eq!(EVENT_NAMES.len(), 660);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

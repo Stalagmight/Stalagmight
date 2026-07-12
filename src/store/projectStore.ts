@@ -32,7 +32,10 @@ import type {
   ClosureStrategy,
   Coordinates,
   FrozenShotRef,
+  MarkerType,
+  MarkerDirection,
 } from '../types/project';
+import type { MarkerUpdates } from '../types/ipc/MarkerUpdates';
 import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
@@ -329,6 +332,9 @@ interface ProjectStore {
   checkMergeConnectivity: (stationA: StationRef, stationB: StationRef) => Promise<ConnectivityResult>;
   createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
   removeLoopClosure: (closureId: bigint) => Promise<CommandResult>;
+  addMarker: (sectionId: number, shotId: number, position: number, markerType: MarkerType, color: string, text: string, direction: MarkerDirection | null) => Promise<CommandResult>;
+  updateMarker: (markerId: bigint, updates: MarkerUpdates) => Promise<CommandResult>;
+  deleteMarker: (markerId: bigint) => Promise<CommandResult>;
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
@@ -1617,6 +1623,30 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       'remove_loop_closure',
       { closureId: Number(closureId) },
       { purpose: 'remove loop closure', fields: { closureId: closureId.toString() } }
+    );
+  },
+
+  addMarker: async (sectionId, shotId, position, markerType, color, text, direction) => {
+    return executeCommand(
+      'add_marker',
+      { sectionId, shotId, position, markerType, color, text, direction },
+      { purpose: 'add marker to shot', fields: { sectionId, shotId } }
+    );
+  },
+
+  updateMarker: async (markerId, updates) => {
+    return executeCommand(
+      'update_marker',
+      { markerId: Number(markerId), updates },
+      { purpose: 'update marker', fields: { markerId: markerId.toString() } }
+    );
+  },
+
+  deleteMarker: async (markerId) => {
+    return executeCommand(
+      'delete_marker',
+      { markerId: Number(markerId) },
+      { purpose: 'delete marker', fields: { markerId: markerId.toString() } }
     );
   },
 

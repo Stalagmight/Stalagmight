@@ -394,6 +394,59 @@ impl Database {
             tracing::info!("Added shot_uuid column to resolved_warnings table (schema v8)");
         }
 
+        // Ensure markers table exists (schema v12: survey markers placed along shots)
+        // shot_uuid column is added separately below (schema v13)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS markers (
+                id INTEGER PRIMARY KEY,
+                section_id INTEGER NOT NULL,
+                shot_id INTEGER NOT NULL,
+                position REAL NOT NULL,
+                marker_type TEXT NOT NULL,
+                color TEXT NOT NULL,
+                text TEXT NOT NULL DEFAULT '',
+                direction TEXT,
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        // Add next_marker_id column to project table if it doesn't exist (schema v12)
+        let has_next_marker_id: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('project') WHERE name='next_marker_id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_next_marker_id {
+            self.conn.execute(
+                "ALTER TABLE project ADD COLUMN next_marker_id INTEGER NOT NULL DEFAULT 1",
+                [],
+            )?;
+            tracing::info!("Added next_marker_id column to project table");
+        }
+
+        // Add shot_uuid column to markers table if it doesn't exist (schema v13)
+        let has_shot_uuid: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('markers') WHERE name='shot_uuid'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_shot_uuid {
+            self.conn
+                .execute("ALTER TABLE markers ADD COLUMN shot_uuid TEXT", [])?;
+            tracing::info!("Added shot_uuid column to markers table (schema v13)");
+        }
+
         tracing::debug!("Schema migration complete");
         Ok(())
     }
@@ -628,7 +681,8 @@ impl Database {
                 created_at TEXT NOT NULL,
                 modified_at TEXT NOT NULL,
                 schema_version INTEGER NOT NULL,
-                next_closure_id INTEGER NOT NULL DEFAULT 1
+                next_closure_id INTEGER NOT NULL DEFAULT 1,
+                next_marker_id INTEGER NOT NULL DEFAULT 1
             );
 
             -- Sections
@@ -774,6 +828,20 @@ impl Database {
                 is_aligned INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (station_a_section) REFERENCES sections(id) ON DELETE CASCADE,
                 FOREIGN KEY (station_b_section) REFERENCES sections(id) ON DELETE CASCADE
+            );
+
+            -- Survey markers placed along shots (schema v12; shot_uuid added v13)
+            CREATE TABLE IF NOT EXISTS markers (
+                id INTEGER PRIMARY KEY,
+                section_id INTEGER NOT NULL,
+                shot_id INTEGER NOT NULL,
+                shot_uuid TEXT,
+                position REAL NOT NULL,
+                marker_type TEXT NOT NULL,
+                color TEXT NOT NULL,
+                text TEXT NOT NULL DEFAULT '',
+                direction TEXT,
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
 
             -- Display settings

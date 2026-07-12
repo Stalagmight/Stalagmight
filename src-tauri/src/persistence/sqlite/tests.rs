@@ -3563,7 +3563,7 @@ fn init_schema_creates_speleo_link_v11() {
         )
         .unwrap();
     assert_eq!(exists, 1, "init_schema created speleo_link");
-    assert_eq!(db.get_user_version().unwrap(), 11, "stamped at v11");
+    assert_eq!(db.get_user_version().unwrap(), 13, "stamped at v13");
 }
 
 #[test]
@@ -3606,7 +3606,7 @@ fn migrate_creates_speleo_link_on_legacy_v8() {
         )
         .unwrap();
     assert_eq!(exists, 1, "migrate_schema recreated speleo_link");
-    assert_eq!(db.get_user_version().unwrap(), 11, "bumped to v11");
+    assert_eq!(db.get_user_version().unwrap(), 13, "bumped to v13");
 }
 
 #[test]
@@ -3864,7 +3864,7 @@ fn migrate_v9_dirty_speleo_link_backfills_last_edit_at() {
     );
     assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
     assert!(link.has_unpushed_edits, "existing row preserved");
-    assert_eq!(db.get_user_version().unwrap(), 11);
+    assert_eq!(db.get_user_version().unwrap(), 13);
 }
 
 #[test]
@@ -3974,7 +3974,7 @@ fn migrate_v10_speleo_link_adds_last_verify_at() {
     );
     assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
     assert!(link.has_unpushed_edits, "existing dirty bit preserved");
-    assert_eq!(db.get_user_version().unwrap(), 11);
+    assert_eq!(db.get_user_version().unwrap(), 13);
 }
 
 #[test]
@@ -4075,7 +4075,7 @@ fn speleo_link_survives_open_then_fast_path_reopen() {
     // First open_existing: already at HEAD, fast-path early return.
     {
         let db = Database::open_existing(&path).unwrap();
-        assert_eq!(db.get_user_version().unwrap(), 11);
+        assert_eq!(db.get_user_version().unwrap(), 13);
         assert!(db.load_speleo_link().unwrap().is_some());
     }
     // Second reopen: still intact, dirty bit preserved.
@@ -4379,4 +4379,198 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
         "Push",
         "survey project preserved in the push snapshot"
     );
+}
+
+// === Marker persistence tests ===
+
+#[test]
+#[expect(clippy::unwrap_used)]
+fn markers_survive_save_reload_round_trip() {
+    use crate::models::{MarkerType, SectionData};
+
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Marker Round-trip".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("S1".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            ..Default::default()
+        }],
+    });
+    let section_id = project.sections[0].id;
+    let shot_id = project.sections[0].shots[0].id;
+    project
+        .add_marker(
+            section_id,
+            shot_id,
+            42.5,
+            MarkerType::Arrow,
+            "#ff6b6b".to_string(),
+            "Test".to_string(),
+            None,
+        )
+        .unwrap();
+
+    db.save_project(&project).unwrap();
+
+    let loaded = db.load_project().unwrap();
+    assert_eq!(loaded.markers.len(), 1, "marker must survive save/load");
+    let m = &loaded.markers[0];
+    assert_eq!(m.section_id, section_id);
+    assert_eq!(m.shot_id, shot_id);
+    assert!((m.position - 42.5).abs() < 0.01);
+    assert_eq!(m.marker_type, MarkerType::Arrow);
+    assert_eq!(m.color, "#ff6b6b");
+    assert_eq!(m.text, "Test");
+    // next_marker_id must advance past the saved marker
+    assert!(loaded.next_marker_id > m.id);
+}
+
+#[test]
+#[expect(clippy::unwrap_used)]
+fn markers_are_pruned_on_shot_deletion() {
+    use crate::models::{MarkerType, SectionData};
+
+    let mut project = Project::new("Cleanup".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("S".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![
+            ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                length: 3.0,
+                ..Default::default()
+            },
+            ShotData {
+                azimuth_in: 90.0,
+                azimuth_out: 90.0,
+                length: 5.0,
+                ..Default::default()
+            },
+        ],
+    });
+    let section_id = project.sections[0].id;
+    let shot_a = project.sections[0].shots[0].id;
+    let shot_b = project.sections[0].shots[1].id;
+
+    project
+        .add_marker(
+            section_id,
+            shot_a,
+            50.0,
+            MarkerType::Ndm,
+            "#4ecdc4".to_string(),
+            String::new(),
+            None,
+        )
+        .unwrap();
+    project
+        .add_marker(
+            section_id,
+            shot_b,
+            50.0,
+            MarkerType::Ndm,
+            "#ff6b6b".to_string(),
+            String::new(),
+            None,
+        )
+        .unwrap();
+    assert_eq!(project.markers.len(), 2);
+
+    // Delete shot A — its marker must be removed; shot B's marker survives.
+    project.remove_shot_with_rewire(section_id, shot_a).unwrap();
+    assert_eq!(
+        project.markers.len(),
+        1,
+        "marker on deleted shot must be pruned"
+    );
+    assert_eq!(project.markers[0].shot_id, shot_b);
+}
+
+#[test]
+#[expect(clippy::unwrap_used)]
+fn markers_are_pruned_on_section_deletion() {
+    use crate::models::{MarkerType, SectionData};
+
+    let mut project = Project::new("Cleanup".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("S1".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 0.0,
+            length: 3.0,
+            ..Default::default()
+        }],
+    });
+    project.add_section(SectionData {
+        name: Some("S2".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff6b6b".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 0.0,
+            length: 3.0,
+            ..Default::default()
+        }],
+    });
+    let s1 = project.sections[0].id;
+    let s2 = project.sections[1].id;
+    let shot1 = project.sections[0].shots[0].id;
+    let shot2 = project.sections[1].shots[0].id;
+
+    project
+        .add_marker(
+            s1,
+            shot1,
+            50.0,
+            MarkerType::Ndm,
+            "#4ecdc4".to_string(),
+            String::new(),
+            None,
+        )
+        .unwrap();
+    project
+        .add_marker(
+            s2,
+            shot2,
+            50.0,
+            MarkerType::Ndm,
+            "#ff6b6b".to_string(),
+            String::new(),
+            None,
+        )
+        .unwrap();
+    assert_eq!(project.markers.len(), 2);
+
+    // Delete section 1 — its marker must be pruned; section 2's marker survives.
+    project.cleanup_section_references(s1);
+    project.remove_section(s1).unwrap();
+    assert_eq!(
+        project.markers.len(),
+        1,
+        "marker on deleted section must be pruned"
+    );
+    assert_eq!(project.markers[0].section_id, s2);
 }
