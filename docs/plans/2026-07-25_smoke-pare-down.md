@@ -1,15 +1,74 @@
 # E2E Smoke pare-down - handoff
 
+## START HERE (handoff, 2026-07-26)
+
+**Status: instrumentation is MERGED and live in CI** (PR #312, master
+`93badc8e`). Measurement phase is done. **Next action is Phase A2 (issue #295):
+cut per-test app-boot cost.** Nothing is in flight; the working tree is clean and
+there is no open branch for this work.
+
+**What you can now do that the previous instance could not:** every `E2E Smoke`
+run prints a ranked hook-vs-body cost table on its run summary page, and uploads
+`timing.json` as the `smoke-timing` artifact (7-day retention). So you can
+measure a change on the real runner instead of extrapolating from an M1:
+
+```
+gh run download <run-id> --repo Stalagmight/Stalagmight -n smoke-timing -D /tmp/t
+node scripts/pw-timing-summary.mjs /tmp/t/timing.json --top 40
+```
+
+**The four numbers that matter** (measured on the hosted runner, run
+30205889359, 83 tests):
+
+| | |
+|---|---|
+| Job wall clock | 7:20 (target: under 7:00; master runs 5:59-7:20) |
+| Test step | 396s of that; all setup is 33s and already at the floor |
+| Hook (setup) share | **60%** of test time - the whole thesis |
+| Effective parallelism | **~1.9x** (753.6s test time in 393.9s wall) |
+
+**Read the parallelism number before you plan anything.** The hosted runner is
+2-core and `workers: '100%'` already saturates it, so **a second saved in test
+time buys only ~half a second of job time.** A 25% test-time cut is a ~12% job
+cut. Local M1 wall-clock deltas (4 workers) overstate the CI win by ~2x. Size
+the work against wall clock, not test time - this is the single easiest way to
+over-promise on Phase A.
+
+**Where Phase A2's prize is**, worst setup-ratio first, from the CI run:
+
+| file | tests | hook | hook % |
+|---|---:|---:|---:|
+| panel-reveal | 1 | 7.8s | 100% |
+| syntactic-highlighting | 1 | 8.2s | 99% |
+| corruption-recovery | 2 | 8.0s | 96% |
+| section-shot-editing | 3 | 23.9s | 91% |
+| merge-closure-dialogs | 2 | 13.1s | 87% |
+| undo-redo-dropdown | 4 | 23.1s | 85% |
+| zoom-tool | 4 | 22.4s | 82% |
+| settings-dialog | 3 | 14.8s | 82% |
+| auto-save-status | 2 | 16.6s | 78% |
+| **gas-planning** | **21** | **150.3s** | **61%** |
+
+`gas-planning` is not the worst *ratio* but is by far the largest *absolute*
+block (150s of the 453s total hook time, 33% of all test time). It is the single
+biggest Phase A2 win and also the Phase B target - fix its setup first and
+re-derive before deciding whether B is still needed.
+
+`custom-renderer-health.spec.ts` (6% hook) is the counter-example to copy: it
+drives the app directly instead of going through the shared per-test seed.
+
+**Do not** start by deleting tests. Phase B is deliberately parked (section 6).
+
+---
+
 **Goal:** get the `E2E Smoke` CI job reliably under **7 minutes**.
 **Status (2026-07-26):** rebased onto ToT `2ab85459`, all measurements re-derived
 on the post-#297 tree. No test has been cut yet. **Phase B is parked** until
 Phase A is done and re-measured.
 
-**Branch:** `chore/smoke-timing-instrumentation` (rebased onto `2ab85459`, clean,
-no conflicts). Commit hashes are deliberately not listed here - a rebase rewrites
-them, and a stale list sends the next reader to dangling objects. Use
-`git log master..HEAD`. Repo rules require the pre-PR review before any PR, and
-do not self-merge.
+**Landed:** PR #312, merged 2026-07-26 as master `93badc8e`. The branch
+`chore/smoke-timing-instrumentation` is spent - do not resume it. Start Phase A
+from a fresh branch off `origin/master`.
 
 ---
 
@@ -141,7 +200,7 @@ The small files remain not worth cutting: the bottom 12 files carry 21 tests for
 
 ---
 
-## 2. What is committed on the branch
+## 2. What landed in #312 (now on master)
 
 | File | What it is |
 |---|---|
@@ -151,9 +210,10 @@ The small files remain not worth cutting: the bottom 12 files carry 21 tests for
 
 | `scripts/pw-timing-reporter.test.mjs`, `scripts/pw-timing-summary.test.mjs` | Fixture tests for the two above, in the repo's pure-Node `lint:*:test` style. Wired as `pnpm lint:pw-timing:test` and run in the smoke job before the browser install. Each pins a bug that produced a confident WRONG number rather than an error - see below. |
 
-Gates re-run on the rebased branch: `lint:e2e-parallel` clean (104 files),
-`lint:ts-file-size` clean (354 files), `lint:private-leaks` clean (1094 files),
-`lint:no-em-dash` clean (1095 files), `lint:pw-timing:test` 26 passed.
+Gates at merge: `lint:e2e-parallel` clean (104 files), `lint:ts-file-size` clean
+(354 files), `lint:private-leaks` clean, `lint:no-em-dash` clean,
+`lint:pw-timing:test` 28 passed. CI on the merged PR: `check` 6m20s pass, `smoke`
+7m20s pass (83 passed, 0 flaky), `leak-scan` pass.
 
 ### Two attribution bugs the pre-PR review caught (both now fixed + pinned)
 
@@ -223,10 +283,14 @@ disabled.)
   ⚠ It is the first spec whose *prose* contains the string `@smoke` (line 44, a
   comment). A bare `grep -c @smoke` now overcounts by one - count `test(` lines,
   or trust the reporter.
-- **PR #307** (`fix/301-review-fallout`, open) - core/mock fidelity fixes. Touches
-  the e2e mock; re-check `tauri-ipc.ts` assumptions after it lands.
+- **#307 MERGED** (mock shot-id fidelity / section-id bound / rigid-group datum
+  guard). It touched `e2e-playwright/mocks/tauri-ipc.ts`, so re-read the mock
+  before relying on any older note about it.
 - **PR #291 / `goblinland`** is unrelated (zero `e2e-playwright` files). There is
   a worktree at `.claude/worktrees/goblinland-291`; leave it alone.
+- Nothing else open touches `e2e-playwright/**`, so Phase A starts on a clear
+  field - but re-check `gh pr list` before branching, since the e2e mock and the
+  specs are high-traffic files.
 
 ---
 
@@ -251,22 +315,30 @@ disabled.)
 
 ## 5. The plan
 
-### Phase A - setup cost (attacks the 67%, zero coverage loss)
+### Phase A - setup cost (attacks the 60%, zero coverage loss)
 
-- **A1. Done** - instrumentation (this branch). Keep it running in CI until the
-  pare-down lands, so we measure on the real runner and not just an M1.
-- **A2. Cut the per-test re-seed. This is the single biggest lever.** Every smoke
-  file re-seeds a full mocked project in `beforeEach` per test; several pay it
-  across many nested describes to run 2-4 smoke tests (`settings-dialog` and
-  `display-toggles` have 9 `beforeEach` each, `undo-redo-dropdown` 7). Ties to already-filed
-  **#295**. Worst ratios first on ToT: `panel-reveal` (99%),
-  `scroll-containment` / `corruption-recovery` / `merge-closure-dialogs` /
-  `section-shot-editing` (94-97%), `walls-import-dialog` (93%), `zoom-tool` (87%),
-  `undo-redo-dropdown` (86%), `back-button-navigation` and `auto-save-status`
-  (84-85% **and** ~6.7s/test - the best absolute prize per test), `gas-planning`
-  (71%, and still the largest absolute block at 67s of hook).
-  A 50% cut in hook time is ~33% of test time - on its own past the target.
-  `custom-renderer-health.spec.ts` (4% hook) is the shape to aim for.
+- **A1. DONE and MERGED** - instrumentation (#312). Leave it in CI until the
+  pare-down lands; it is how Phase A gets measured. Remove it after.
+- **A2. Cut the per-test re-seed. This is the single biggest lever, and the next
+  thing to do.** Every smoke file re-seeds a full mocked project in `beforeEach`
+  per test: `page.goto('/')` boots the whole SPA, then a project is opened
+  through the real New-Project UI flow, then MapLibre initializes - before any
+  assertion runs. Several files pay it across many nested describes to run 2-4
+  smoke tests (`settings-dialog` and `display-toggles` have 9 `beforeEach` each,
+  `undo-redo-dropdown` 7). Tracked as **#295**, which already has the measured
+  case (~90% of a `dive-plan` test is shared setup) and the argument that the
+  30s global timeout exists *because* setup is this heavy.
+  Ranked targets are in the START HERE table above (use those CI numbers, not
+  the local ones further down). `custom-renderer-health.spec.ts` (6% hook) is
+  the shape to aim for: it drives the app directly rather than through the
+  shared seed.
+  ⚠ **Two constraints on any shared-fixture refactor:**
+  `pnpm lint:e2e-parallel` gates `fullyParallel` safety and runs in the smoke
+  job - a worker-scoped fixture must keep it green. And per-test isolation is
+  load-bearing for the mock: `e2e-playwright/mocks/tauri-ipc.ts` mutates
+  `currentProject`'s arrays **in place**, so tests that share a context will
+  leak state into each other in a way the current suite has never had to
+  survive. Budget for that, and prove isolation rather than assuming it.
 - **A3. Remove the remaining `waitForTimeout` sleeps in smoke files.** The
   networkidle half is done (#300). What is left, re-derived on ToT:
   `undo-redo-dropdown:705,825` (400ms x2), `map-tools:449` (400ms),
@@ -277,7 +349,11 @@ disabled.)
   Follow-up issue: **#294**.
 - **A4. Dropped** - #292 is closed as subsumed by #300. No work.
 
-**Re-measure after Phase A before cutting anything.**
+**Re-measure after Phase A before cutting anything.** Measure on CI, not the M1:
+download the `smoke-timing` artifact from the PR's own smoke run and diff the
+hook total against the run 30205889359 baseline in START HERE. Remember the
+~1.9x parallelism divisor when converting a test-time saving into a job-time
+saving.
 
 ### Phase B - test count, only as deep as the shortfall requires
 
@@ -320,9 +396,9 @@ disabled.)
    straddles 7:00, because suite time does not stay down on its own - it only
    ratchets up. Phase A is zero-coverage-loss, so it is worth doing regardless of
    the current gap. Revisit B only after A is done and re-measured.
-3. **#305 has landed**, so a Phase A fixture refactor must accommodate the
-   renderer canary from the start. #307 is still open and touches the e2e mock -
-   re-check `tauri-ipc.ts` assumptions after it lands.
+3. **#305 and #307 have both landed**, so a Phase A fixture refactor must
+   accommodate the renderer canary from the start, and should re-read
+   `tauri-ipc.ts` rather than trusting older notes about it.
 
 ---
 
@@ -331,6 +407,17 @@ disabled.)
 - **After any rebase, `pnpm install` before measuring** - and check the pass count
   on the run. See the section-2 warning: a stale `node_modules` produces a
   plausible-looking, entirely wrong timing table.
+- **`pnpm install` run under the Bash sandbox can silently no-op** - it printed a
+  version banner and installed nothing, which is how the stale-`node_modules`
+  wrong-table incident happened. Run it with the sandbox disabled and read the
+  `+N -N` package line before believing it worked.
+- **Do not pipe a Playwright run through `tail`/`head` and read the exit code** -
+  the pipeline's status is the last command's, so a fully-red run reports
+  `EXIT=0`. Redirect to a file and inspect it instead.
+- **Do not edit files while a review subagent is reading the tree.** One aborted
+  mid-review with "TREE MOVED" and had to be re-run against an explicit commit
+  range, costing a full review cycle. Either finish the fixes first, or brief the
+  reviewer to pin `git diff master...HEAD` at a stated SHA.
 - **Run Playwright with the Bash sandbox DISABLED** - the dev server cannot bind
   :1420 otherwise (EPERM). Check the port is free first; a second clone's dev
   server on :1420 would silently serve the wrong code to the tests.
