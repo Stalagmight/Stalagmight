@@ -404,15 +404,28 @@ not because anything consumes them yet. When `UPDATER_ON` is true, the
 above; both are skipped while the pubkey is pending, since no `.sig` exists
 to require.
 
-**The updater plugin is not wired up yet.** Once the real pubkey and its
-GitHub-hosted `latest-stable.json` endpoint are committed to
-`plugins.updater`, the plugin itself still needs registering in `lib.rs`
-before anything reads either value at runtime - that, generating and
-publishing `latest-stable.json`, and replacing the pubkey are later steps in
-the #579 arc. `scripts/check-updater-pubkey.mjs` (`pnpm lint:updater-pubkey`,
-gated in CI) is a tripwire for that commit: it passes trivially while
-`plugins.updater` is absent, and the day it lands, a placeholder, malformed
-base64, or a non-https/non-`github.com` endpoint fails the gate immediately.
+**The updater plugin is wired up, but still waiting on the real key.**
+`lib.rs` registers `tauri_plugin_updater` only when
+`commands::app_update::updater_configured()` finds a non-empty
+`plugins.updater.pubkey` in the checked-in `tauri.conf.json` - the plugin's
+own `Config` has a required `pubkey` with no `Default`, so registering it
+unconditionally before the key exists would fail `Builder::build()` and stop
+every build, released or local, from starting at all. Only `check_for_app_update`
+consults that gate directly and answers with a named "no update signing key"
+error while it is absent; `download_app_update`, `arm_app_update_restart` and
+`install_app_update_and_restart` each refuse on their own missing precondition
+instead ("No update to download; check for updates first", "restart was not
+armed", etc. - see the state machine in `app_update.rs`), which is unreachable
+in practice because nothing calls them before a successful check. The net
+effect is the same: the Settings > General Updates section and About's manual
+check are present in every build but inert until the key lands.
+`arm_app_update_restart` / `unarm_app_update_restart` are the two commands
+either side of that state machine that take and release the one-shot install
+consent; they never touch the pubkey gate. `scripts/check-updater-pubkey.mjs`
+(`pnpm lint:updater-pubkey`, gated in CI) is a tripwire for that commit: it
+passes trivially while `plugins.updater` is absent, and the day the real key
+lands, a placeholder, malformed base64, or a non-https/non-`github.com`
+endpoint fails the gate immediately.
 
 ### Keypair custody
 
@@ -451,6 +464,68 @@ inside `xcrun stapler validate`. A job-internal `MACOS-SIGNED` marker
 a downloadable release asset. Nothing consumes the marker's value yet - that
 lands with the updater-manifest generation step in a later PR of the #579
 arc, which will use it to decide whether the macOS build enters the manifest.
+
+### Local end-to-end updater test
+
+Exercises the whole check -> download -> verify -> install cycle against a
+throwaway key and a manifest served from `localhost`, without touching the
+real signing key or GitHub Releases. Everything below is local and
+disposable; none of it is committed.
+
+```bash
+# 1. A throwaway minisign keypair (never the real one).
+pnpm tauri signer generate -w /tmp/stalagmight-updater-test.key
+# Prints the public key; note it for step 2.
+
+# 2. Export the throwaway private key BEFORE building, not after: with
+#    createUpdaterArtifacts on, tauri-bundler signs each updater artifact as
+#    part of the `tauri build` invocation itself, so the key has to be in the
+#    environment DURING that step - signing afterward with `tauri signer
+#    sign` cannot retroactively produce the artifacts tauri-bundler skipped.
+export TAURI_SIGNING_PRIVATE_KEY=/tmp/stalagmight-updater-test.key
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=
+
+# 3. Temporarily set plugins.updater.pubkey in src-tauri/tauri.conf.json to
+#    the public key from step 1 - do not commit this. Then build with updater
+#    artifacts turned on, the same --config merge the release workflow uses:
+pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}' --debug
+# tauri-bundler signs the bundle automatically here, using the key exported
+# in step 2, and writes the matching *.sig next to it.
+
+# 4. Hand-write a manifest next to the signed bundle, e.g. latest.json. The
+#    platforms key is Tauri's own OS-ARCH form (linux-x86_64, windows-x86_64,
+#    darwin-x86_64, darwin-aarch64 - see `updater::target()` in the plugin,
+#    `{os}-{arch}`), NOT a Rust target triple: a triple key does not match
+#    what the running app looks up, so `check_for_app_update` finds no entry
+#    for this platform and the recipe silently tests nothing.
+#    { "version": "v9.9.9", "notes": "local test", "pub_date": "<RFC3339>",
+#      "platforms": { "<os>-<arch>, e.g. linux-x86_64": { "signature": "<.sig contents>",
+#      "url": "http://127.0.0.1:8000/<bundle filename>" } } }
+
+# 5. Serve the directory holding the manifest and the signed bundle:
+python3 -m http.server 8000
+
+# 6. Point a DEBUG build at it and run the app:
+STALAGMIGHT_UPDATE_URL=http://127.0.0.1:8000/latest.json ./scripts/dev.sh
+```
+
+`STALAGMIGHT_UPDATE_URL` (`UPDATE_URL_ENV` in `app_update.rs`) is honored
+verbatim only in a debug build - `cfg!(debug_assertions)` - which is exactly
+what makes this recipe work with a plain `http://127.0.0.1` URL; the same
+variable in a release build is restricted to an https `github.com` URL and
+would silently ignore this override (`is_trusted_manifest_url`). Use the
+Settings > General Updates section or About's "Check for updates" button in
+the running app to trigger the check once the server is up.
+
+This recipe reliably exercises check + download + the signature verification
+and restart-arm/quit-guard flow. The final install step is NOT proven by it:
+`./scripts/dev.sh` runs `tauri dev`, an unbundled binary, not the packaged
+`.app`/`.exe`/`.AppImage` a real update installs over - so "Restart to
+update" on a dev build is exercising the same IPC calls but not the actual
+file-replacement path. Proving the install leg itself needs a packaged build
+(step 2's `pnpm tauri build`, launched from its bundle output rather than via
+`dev.sh`) and, on macOS, is further limited by ad-hoc signing rather than a
+real Developer ID (see the Secrets table above) until #226 lands.
 
 ## Testing the release tooling
 

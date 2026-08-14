@@ -28,6 +28,16 @@ recent_projects_max = 20            # Maximum recent projects to track
 locale = "system"                   # "system" or a specific locale tag like "en-US"
 number_format = "locale"            # "locale" (follow language) or a locale tag like "de-DE"
 date_format = "locale"              # "locale" (follow language) or a locale tag like "en-GB"
+update_check_enabled = true         # Automatic launch-time update check only; About's manual check and
+                                     # switching update_track both fetch the manifest regardless of this
+update_track = "stable"             # "stable" or "weekly"; default depends on the build's STALAGMIGHT_CHANNEL
+# update_track's default is a property of the BUILD, not the user: it derives from the
+# STALAGMIGHT_CHANNEL build environment variable (read via option_env! at compile time,
+# so it has no effect on an already-built binary). A build compiled with
+# STALAGMIGHT_CHANNEL=weekly - set by release tooling for weekly builds - ships with
+# "weekly" as its baked-in default; an ordinary build (the variable unset) ships with
+# "stable". Once the user picks a track in Settings, that choice is written here and
+# overrides the build default from then on.
 
 [units]
 length = "meters"                   # meters, feet
