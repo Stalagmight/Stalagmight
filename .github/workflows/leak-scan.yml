@@ -74,3 +74,13 @@ jobs:
         run: node scripts/check-third-party-licenses.test.mjs
       - name: Third-party license bundle gate
         run: node scripts/check-third-party-licenses.mjs
+      # Updater pubkey/endpoint tripwire (#579): passes trivially while
+      # plugins.updater is absent from tauri.conf.json, and turns red the
+      # day a placeholder or malformed pubkey is committed in its place.
+      # Pure-Node, no dependencies - same reason it lives here rather than
+      # `check`, which path-ignores nothing this gate needs anyway but is
+      # kept alongside its siblings for consistency.
+      - name: Updater pubkey/endpoint - fixture test
+        run: node scripts/check-updater-pubkey.test.mjs
+      - name: Updater pubkey/endpoint gate
+        run: node scripts/check-updater-pubkey.mjs

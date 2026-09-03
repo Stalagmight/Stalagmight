@@ -42,6 +42,15 @@ jobs:
         run: |
           node scripts/check-third-party-licenses.test.mjs
           node scripts/check-third-party-licenses.mjs
+      # Same rationale as the license gate above: the leak-scan workflow that
+      # normally runs this gate covers branch/PR events only, and the pubkey
+      # is the update trust root baked into every released client - a direct
+      # tag push from a commit that skipped leak-scan must not reach the paid
+      # build matrix with a placeholder or malformed key.
+      - name: Updater pubkey gate
+        run: |
+          node scripts/check-updater-pubkey.test.mjs
+          node scripts/check-updater-pubkey.mjs
       - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
@@ -98,6 +107,26 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # plugins.updater.pubkey does not exist in the checked-in tauri.conf.json
+      # yet (issue #579 provisioning - see docs/releasing.md), and tauri-cli
+      # base64-decodes that pubkey with a hard failure at bundle time once
+      # createUpdaterArtifacts is on, so enabling it unconditionally breaks
+      # every build until the real key lands. Enablement is therefore CI-side
+      # only (the Build step below merges it in via --config), gated on the
+      # pubkey actually being present, so local `pnpm tauri build` never
+      # needs a signing key and this workflow degrades gracefully until the
+      # follow-up commit that adds the real pubkey.
+      - name: Determine updater enablement
+        id: updater
+        shell: bash
+        run: |
+          PUBKEY=$(jq -r '.plugins.updater.pubkey // empty' src-tauri/tauri.conf.json)
+          if [ -n "$PUBKEY" ]; then
+            echo "on=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "on=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::updater artifacts DISABLED - no plugins.updater.pubkey committed yet (issue #579)"
+          fi
       # Actions sets CI=true, which is what stops Tauri's DMG bundler from
       # driving Finder over AppleScript and hanging headless (see mac-build.sh).
       # shell: bash so the `--` separating tauri args from cargo args is handled
@@ -113,14 +142,74 @@ jobs:
       - name: Build
         shell: bash
         run: |
+          # GitHub renders unset secrets as EMPTY strings, and tauri-bundler
+          # keys on env-var PRESENCE (var_os) for APPLE_CERTIFICATE - an
+          # empty-but-present value sends it down the keychain-import path
+          # with an empty certificate, which fails `security import` on every
+          # macOS build (seen live: run 31671174336). So the six APPLE_* vars
+          # arrive under *_SECRET staging names and the bundler-recognized
+          # names are exported only when non-empty.
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            s="${v}_SECRET"
+            if [ -n "${!s:-}" ]; then
+              export "$v"="${!s}"
+            fi
+          done
+          # When the pubkey is present TAURI_SIGNING_PRIVATE_KEY is required.
+          # Tauri itself already refuses to sign without it (its own error),
+          # so this exists only to fail earlier with a named secret rather
+          # than let a fork chase Tauri's unnamed one.
+          if [ "$UPDATER_ON" = "true" ] && [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret not set. plugins.updater.pubkey is committed, so this build enables bundle.createUpdaterArtifacts and Tauri cannot sign the resulting updater artifacts without it - set TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD if the key has one)."
+            exit 1
+          fi
+          # Real Developer ID signing needs all three notarization credentials
+          # alongside the identity - a partial set produces a signed-but-
+          # unnotarized bundle that fails obscurely much later, inside
+          # `xcrun stapler validate`. Name what's missing now instead.
+          if [ "${{ matrix.os }}" = "macos-latest" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            MISSING=()
+            [ -n "$APPLE_ID" ] || MISSING+=("APPLE_ID")
+            [ -n "$APPLE_PASSWORD" ] || MISSING+=("APPLE_PASSWORD")
+            [ -n "$APPLE_TEAM_ID" ] || MISSING+=("APPLE_TEAM_ID")
+            if [ "${#MISSING[@]}" -gt 0 ]; then
+              echo "::error::APPLE_SIGNING_IDENTITY is set but missing secret(s): ${MISSING[*]}. Set all of APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID together with APPLE_SIGNING_IDENTITY, or unset it to fall back to ad-hoc signing."
+              exit 1
+            fi
+          fi
+          BUNDLE_CFG='{}'
+          if [ "$UPDATER_ON" = "true" ]; then
+            BUNDLE_CFG='{"createUpdaterArtifacts":true}'
+          fi
+          if [ "${{ matrix.os }}" = "macos-latest" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            CFG=$(jq -cn --argjson bundle "$BUNDLE_CFG" --arg id "$APPLE_SIGNING_IDENTITY" '{bundle: ($bundle + {macOS: {signingIdentity: $id}})}')
+          else
+            CFG=$(jq -cn --argjson bundle "$BUNDLE_CFG" '{bundle: $bundle}')
+          fi
           if [ -n "$TELEMETRY_ENDPOINT" ]; then
-            pnpm tauri build -- --features telemetry
+            pnpm tauri build --config "$CFG" -- --features telemetry
           else
             echo "TELEMETRY_ENDPOINT secret not set - building without telemetry."
-            pnpm tauri build
+            pnpm tauri build --config "$CFG"
           fi
         env:
+          UPDATER_ON: ${{ steps.updater.outputs.on }}
           TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Apple credentials are optional (empty on a fork, or until they are
+          # provisioned - see docs/releasing.md). Staged under *_SECRET names:
+          # the run block exports the real names only when non-empty, because
+          # tauri-bundler treats a present-but-empty APPLE_CERTIFICATE as a
+          # request to import it. With none set, Tauri falls back to the
+          # checked-in ad-hoc `signingIdentity: "-"` - byte-identical to
+          # pre-#579 behavior.
+          APPLE_CERTIFICATE_SECRET: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD_SECRET: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD_SECRET: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
       # v0.5.0-rc1 shipped a .app that macOS refused to open as "damaged". The
       # cause was an absent signature rather than a corrupt download: with no
       # signing identity Tauri skips codesign entirely, leaving only the Rust
@@ -140,6 +229,8 @@ jobs:
         if: matrix.os == 'macos-latest'
         shell: bash
         run: ./scripts/verify-macos-signature.sh "$BUNDLE_DIR/dmg"
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
       - name: Collect release artifacts
         shell: bash
         run: |
@@ -150,11 +241,18 @@ jobs:
           # One list for every platform; only the host's own bundles exist.
           for pattern in \
             deb/*.deb \
+            deb/*.deb.sig \
             rpm/*.rpm \
+            rpm/*.rpm.sig \
             appimage/*.AppImage \
+            appimage/*.AppImage.sig \
             dmg/*.dmg \
             msi/*.msi \
-            nsis/*-setup.exe
+            msi/*.msi.sig \
+            nsis/*-setup.exe \
+            nsis/*-setup.exe.sig \
+            macos/*.app.tar.gz \
+            macos/*.app.tar.gz.sig
           do
             cp "$BUNDLE_DIR"/$pattern release-artifacts/ 2>/dev/null || true
           done
@@ -165,6 +263,18 @@ jobs:
             echo "::error::No artifacts found in $BUNDLE_DIR"
             exit 1
           fi
+          # Only asserted when updater artifacts are actually enabled for this
+          # build (see "Determine updater enablement" above) - while the
+          # pubkey is pending, tauri-bundler emits no .sig files at all.
+          if [ "$UPDATER_ON" = "true" ]; then
+            SIG_COUNT=$(find release-artifacts -maxdepth 1 -name '*.sig' -type f | wc -l)
+            if [ "$SIG_COUNT" -eq 0 ]; then
+              echo "::error::updater artifacts are enabled but no *.sig files were found in $BUNDLE_DIR"
+              exit 1
+            fi
+          fi
+        env:
+          UPDATER_ON: ${{ steps.updater.outputs.on }}
       # Nothing is notarized (macOS is only ad-hoc signed, Windows not at all),
       # and the release notes tell recipients how to click past the OS warning,
       # so give them something to check the download against. Computed on the
@@ -182,6 +292,25 @@ jobs:
           $SUM * > "$RUNNER_TEMP/sums"
           mv "$RUNNER_TEMP/sums" "SHA256SUMS-${{ matrix.name }}"
           cat "SHA256SUMS-${{ matrix.name }}"
+      # Job-internal record of which macOS signing path ran, logged now for
+      # the run's own record. Not consumed by anything yet - the
+      # updater-manifest generation step (a later PR in the #579 arc) will
+      # read it to decide whether the macOS build enters the manifest at
+      # all. Written after the checksum step on purpose: it must not appear
+      # in SHA256SUMS-macos (nothing downloads it, so it has no checksum to
+      # verify), and the release job deletes it before `gh release create
+      # release-artifacts/*` so it never becomes a published asset.
+      - name: Record macOS signing marker
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "developer-id" > release-artifacts/MACOS-SIGNED
+          else
+            echo "adhoc" > release-artifacts/MACOS-SIGNED
+          fi
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.name }}
@@ -198,6 +327,19 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The build job cannot pass its per-leg UPDATER_ON output across job
+      # boundaries, so this job derives the same fact the same way: a
+      # non-empty plugins.updater.pubkey in the checked-out tauri.conf.json.
+      - name: Determine updater enablement
+        id: updater
+        shell: bash
+        run: |
+          PUBKEY=$(jq -r '.plugins.updater.pubkey // empty' src-tauri/tauri.conf.json)
+          if [ -n "$PUBKEY" ]; then
+            echo "on=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "on=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: release-artifacts
@@ -225,7 +367,39 @@ jobs:
           [ ${#linux[@]}   -gt 0 ] || { echo "::error::no Linux artifact";   exit 1; }
           [ ${#macos[@]}   -gt 0 ] || { echo "::error::no macOS artifact";   exit 1; }
           [ ${#windows[@]} -gt 0 ] || { echo "::error::no Windows artifact"; exit 1; }
+          # Updater artifacts are only required when they were enabled at
+          # build time (see "Determine updater enablement" above) - while the
+          # pubkey is pending, no build leg produced any .sig at all.
+          if [ "$UPDATER_ON" = "true" ]; then
+            linux_sig=( *.AppImage.sig )
+            windows_sig=( *-setup.exe.sig )
+            macos_tar=( *.app.tar.gz )
+            macos_tar_sig=( *.app.tar.gz.sig )
+            [ ${#linux_sig[@]}     -gt 0 ] || { echo "::error::no Linux updater signature (*.AppImage.sig)";    exit 1; }
+            [ ${#windows_sig[@]}   -gt 0 ] || { echo "::error::no Windows updater signature (*-setup.exe.sig)"; exit 1; }
+            [ ${#macos_tar[@]}     -gt 0 ] || { echo "::error::no macOS update bundle (*.app.tar.gz)";          exit 1; }
+            [ ${#macos_tar_sig[@]} -gt 0 ] || { echo "::error::no macOS updater signature (*.app.tar.gz.sig)";  exit 1; }
+          fi
           echo "SHA256SUMS:"; cat SHA256SUMS
+        env:
+          UPDATER_ON: ${{ steps.updater.outputs.on }}
+      # Job-internal: records which macOS signing path the build job used
+      # (see "Record macOS signing marker" above). Logged for the release
+      # run's own record - not consumed by anything yet, that lands with the
+      # updater-manifest generation step in a later PR of the #579 arc.
+      # Deleted here regardless, so it never rides along with
+      # `gh release create release-artifacts/*` below - it is not an
+      # installable artifact and nobody downloads it.
+      - name: Consume macOS signing marker
+        shell: bash
+        working-directory: release-artifacts
+        run: |
+          if [ -f MACOS-SIGNED ]; then
+            echo "macOS signing mode: $(cat MACOS-SIGNED)"
+            rm MACOS-SIGNED
+          else
+            echo "::warning::MACOS-SIGNED marker missing from release artifacts"
+          fi
       # Same script you can run locally to preview the body before tagging, so
       # what gets published is never a surprise.
       - name: Build release notes

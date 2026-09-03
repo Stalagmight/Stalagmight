@@ -115,6 +115,14 @@ tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+
+# HELD AT 2.9.x ON PURPOSE. From 2.10.0 the plugin requires `tauri = "2.10"`,
+# which drags `tauri-runtime-wry` to 2.10 and therefore `wry` to 0.54 - and
+# that silently drops the `[patch.crates-io]` wry fork below (pinned at
+# 0.53.5 for the Linux WebKit memory-pressure fix). ~2.9.0 is the newest
+# release that still accepts `tauri = "2.9.x"`, i.e. the tauri we are on.
+# Moving off 2.9.x means rebasing the wry fork onto 0.54 first.
+tauri-plugin-updater = "~2.9.0"
 serde = { workspace = true, features = ["derive"] }
 # `float_roundtrip` is REQUIRED, not a preference. serde_json's default float
 # parser is best-effort and lands up to 1 ULP away from the value the writer
