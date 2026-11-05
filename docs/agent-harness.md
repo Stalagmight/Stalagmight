@@ -1397,6 +1397,43 @@ writing the test, and if it does not look like the bug you started from, that
 ambiguity is the reason. (`undo-persistence-fuzz` names the entry each move
 consumed, which is what resolves it there.)
 
+### Determinism mode: the same seed twice
+
+`STALAGMIGHT_FUZZ_DETERMINISM=1` runs the undo fuzzer, the undo-persistence
+fuzzer or the export fuzzer TWICE on the same seed in one app session (each
+replay opens its own fresh copy of the fixture, as a single run does) and fails
+on the first difference between the two replays. `=2sessions` gives each replay
+a session of its own; only `pnpm agent:scenario` can do that. Off by default; any
+other value refuses to run.
+
+```bash
+STALAGMIGHT_FUZZ_DETERMINISM=1 STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx \
+  pnpm agent:scenario undo-persistence-fuzz --seed 3 --iterations 2
+```
+
+What each replay records, in order, and the other must reproduce: every drawn
+trace step; every fused undo step's request and answer and then
+`get_project_state` plus both history stacks; every table of a saved `.stalx`,
+row by row in primary-key order (the gzip undo and redo payloads inflated); the
+outcome of every export call and the exported file (byte-equal when nothing in
+it needed masking, otherwise compared parsed: JSON, CSV and SVG by line, a
+`.tml` zip by entry content, PNG by chunk, PDF by text).
+
+What is masked, and nothing else: wall-clock values (`created_at`,
+`modified_at`, `merged_at`, `executed_at` and the other keys in
+`WALL_CLOCK_KEYS`, zip entry times, PNG `tIME`, PDF dates) and temp paths (the
+session dir, a `mkdtemp` suffix). Random v4 uuids are renamed by first
+appearance, which keeps "kept versus re-minted" visible, and the station
+collections the app sorts by a uuid-bearing key are compared in masked order.
+Key order is compared.
+
+A failure names the seed, the trace step, the record and the first differing
+path, with a reproduce line. When both replays fail the same way the failure
+says it reproduced; a failure in one replay only is itself a determinism
+failure. `STALAGMIGHT_FUZZ_DETERMINISM_PLANT=N` is the self-test: replay B nudges
+one number in its Nth state record, and the run must fail there. The code is
+`e2e/agent/lib/fuzzDeterminism*.ts`.
+
 ## Oracles
 
 - **Cheap sweep** (auto after every mutating tool): crash-marker glob (fatal
