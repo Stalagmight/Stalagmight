@@ -62,6 +62,7 @@ impl Harness {
     fn world(&self, tag: &str) -> Result<World, String> {
         let s = &self.server;
         let own = s.create_stalx_project(Who::Owner, &format!("{tag}-own"), &seed_sections())?;
+        s.observe(Who::Owner, &own)?;
         s.grant(Who::Owner, &own, &s.collab.email, Permission::ReadAndWrite)?;
         let shared =
             s.create_stalx_project(Who::Collab, &format!("{tag}-shared"), &seed_sections())?;
@@ -71,6 +72,7 @@ impl Harness {
             &s.owner.email,
             Permission::ReadAndWrite,
         )?;
+        s.observe(Who::Collab, &shared)?;
         let ariane =
             s.create_ariane_project(Who::Owner, &format!("{tag}-ariane"), &seed_sections())?;
         s.grant(
@@ -79,6 +81,7 @@ impl Harness {
             &s.collab.email,
             Permission::ReadAndWrite,
         )?;
+        s.observe(Who::Owner, &ariane)?;
         let projects = vec![
             Proj {
                 id: own.clone(),
@@ -163,6 +166,7 @@ impl Harness {
             tag.clone(),
         );
         let mut projects = world.projects.clone();
+        let mut admin_of = world.admin_of.clone();
         if let Some(path) = trace {
             append_line(
                 path,
@@ -204,13 +208,7 @@ impl Harness {
             let t0 = Instant::now();
             let (out, events) = if step.act.is_actor() {
                 actor_edits += 1;
-                let out = self.actor(
-                    &step.act,
-                    &projects,
-                    &world.admin_of,
-                    &mut ghost,
-                    actor_edits,
-                );
+                let out = self.actor(&step.act, &projects, &admin_of, &mut ghost, actor_edits);
                 (out, Vec::new())
             } else {
                 proxy.clear();
@@ -224,6 +222,9 @@ impl Harness {
             };
             for c in &out.claims {
                 if let Claim::Published(p) = c {
+                    // The owner published it: let the oracle read it too.
+                    let _ = self.server.observe(Who::Owner, &p.id);
+                    admin_of.insert(p.id.clone(), Who::Owner);
                     projects.push(p.clone());
                 }
             }
@@ -279,8 +280,9 @@ impl Harness {
         app.restart();
         drop(app);
         for p in &projects {
-            let _ = self.server.release(Who::Admin, &p.id);
-            let _ = self.server.delete(Who::Admin, &p.id);
+            let admin = admin_of.get(&p.id).copied().unwrap_or(Who::Owner);
+            let _ = self.server.release(admin, &p.id);
+            let _ = self.server.delete(admin, &p.id);
         }
         drop(proxy);
         drop(other);
@@ -359,7 +361,7 @@ impl Harness {
                     if *who == Who::Owner {
                         ghost.interference.insert(proj.id.clone());
                     }
-                    s.tip_project(&proj.id).and_then(|mut tip| {
+                    s.tip_project(*who, &proj.id).and_then(|mut tip| {
                         tip.add_section(super::world::section(&format!("X{n}"), 2));
                         s.push_project(*who, &proj.id, &tip, newer, "second client")
                             .map(|()| {

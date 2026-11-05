@@ -133,6 +133,8 @@ fn write_upload_pair(
 /// The run's view of the instance.
 pub(super) struct Server {
     pub(super) url: String,
+    /// The oracle's eyes. A superuser has NO implicit API access on SpeleoDB, so
+    /// every project of a run grants this account READ_ONLY ([`Self::observe`]).
     pub(super) admin: Session,
     pub(super) owner: Session,
     pub(super) collab: Session,
@@ -250,6 +252,11 @@ impl Server {
         }
     }
 
+    /// Let the oracle's account read `id` (granted by `who`, an admin of it).
+    pub(super) fn observe(&self, who: Who, id: &str) -> Result<(), String> {
+        self.grant(who, id, &self.admin.email.clone(), Permission::ReadOnly)
+    }
+
     pub(super) fn revoke(&self, who: Who, id: &str, email: &str) -> Result<(), String> {
         let s = self.pick(who);
         client::remove_user_permission(&self.url, &s.token, false, id, email)
@@ -316,10 +323,10 @@ impl Server {
     }
 
     /// The server's tip content for `id` as a project `who` could build on.
-    pub(super) fn tip_project(&self, id: &str) -> Result<Project, String> {
-        let bytes =
-            client::download_dump(&client::TestWire, &self.url, &self.admin.token, false, id)
-                .map_err(|e| format!("download: {e}"))?;
+    pub(super) fn tip_project(&self, who: Who, id: &str) -> Result<Project, String> {
+        let token = &self.pick(who).token;
+        let bytes = client::download_dump(&client::TestWire, &self.url, token, false, id)
+            .map_err(|e| format!("download: {e}"))?;
         let dir = TempDir::new().map_err(|e| format!("tmp: {e}"))?;
         let path = extract_stalx(&bytes, dir.path())?.ok_or("the tip holds no .stalx")?;
         let db = Database::open_readonly(&path).map_err(|e| format!("open tip: {e:#}"))?;
