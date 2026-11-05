@@ -1019,6 +1019,23 @@ impl AppState {
         // project land last (the mutex is not fair), leaving the backend on a project
         // the frontend had moved past.
         check_cancelled!();
+        // [#576 FZ-FZ-INT-R1] The "already open" guard again, now that no commit can
+        // land: it ran when this load STARTED, and a load of this same file that
+        // started earlier can have committed since. Committing anyway installed a
+        // second session of the open file - what this load read before that commit,
+        // with a database handle on the file as it was then. A save since renames a
+        // fresh file over the path, so every later write of the session went into the
+        // deleted file and the next save dropped it (and the release below let go of
+        // the session's own SpeleoDB lock). Answered as a load that started after the
+        // commit is.
+        let reopening_the_open_file = self
+            .project
+            .lock()
+            .as_ref()
+            .is_some_and(|open| open.file_path.as_ref() == Some(&path));
+        if reopening_the_open_file {
+            early_return_err!(LoadError::already_open());
+        }
         self.speleodb_release_held_lock_detached();
 
         // [#576 A5] ALL commits under ONE `project` acquisition, through the commit

@@ -96,6 +96,12 @@ const REGRESSION_SEEDS: &[(Mode, u64)] = &[
     // RV4-R-C2: no cancellation re-check once a load holds `command_lock` - an
     // older load commits after a newer one (shrinks to two loads).
     (Mode::Lifecycle, 251),
+    // FZ-FZ-INT-R1, found by the first long campaign: a second load of the open
+    // file committed a session on the file a save had replaced (see
+    // `a_second_load_of_the_open_file_does_not_commit_a_stale_session`).
+    (Mode::Lifecycle, 1_101_510),
+    (Mode::Lifecycle, 11_102_349),
+    (Mode::Lifecycle, 13_100_691),
 ];
 
 const MAX_STEPS: usize = 200_000;
@@ -1194,6 +1200,17 @@ fn shrink(
 
 /// A schedule as runs of one thread: `t0x5 t1x2 ...` (who held the baton for how
 /// many consecutive scheduling points).
+/// The inverse of [`runs_of`]: a printed schedule back into replay choices.
+fn choices_from_runs(runs: &str) -> Vec<u32> {
+    runs.split_whitespace()
+        .filter_map(|run| {
+            let (thread, len) = run.strip_prefix('t')?.split_once('x')?;
+            Some((thread.parse::<u32>().ok()?, len.parse::<usize>().ok()?))
+        })
+        .flat_map(|(thread, len)| std::iter::repeat_n(thread, len))
+        .collect()
+}
+
 fn runs_of(choices: &[u32]) -> String {
     let mut out = String::new();
     let mut at = 0;
@@ -1304,6 +1321,39 @@ fn ci_seeds_reads() {
 #[test]
 fn ci_seeds_sessions() {
     ci(Mode::Sessions);
+}
+
+/// [#576 FZ-FZ-INT-R1] Two loads of ONE file racing: the second passed the
+/// "already open" check (made when it STARTED) before the first committed, read
+/// the file, and committed after the first session had saved - a save renames a
+/// fresh file over the path - so the session it installed held a database handle
+/// on the deleted file. Every later write of the session (a display setting, an
+/// ignored warning, ...) went into that deleted file, and the next save, built
+/// from it, dropped the write made through the first session. Found by the
+/// campaign (host seed 14100050 shrunk to this case); replayed here with its
+/// schedule. The load now re-checks "already open" under `command_lock` and
+/// answers ALREADY_OPEN, as it does when it starts after the first committed.
+#[test]
+fn a_second_load_of_the_open_file_does_not_commit_a_stale_session() {
+    let case = Case {
+        mode: Mode::Lifecycle,
+        seed: 14_100_050,
+        threads: vec![
+            vec![Op::Load(2), Op::Save, Op::Display(2)],
+            vec![Op::Load(2)],
+        ],
+    };
+    let schedule = choices_from_runs(
+        "t1x2 t0x9 t1x1 t0x1 t1x1 t0x3 t1x3 t0x2 t1x2 t0x1 t1x1 t0x1 t1x1 t0x6 t1x1 \
+         t0x14 t1x1 t0x5 t1x1 t0x1 t1x14",
+    );
+    let (violations, _, records) = execute_case(&case, &schedule);
+    let answers: Vec<String> = records
+        .iter()
+        .map(|r| format!("t{} {:?} -> {:?}", r.thread, r.op, r.answer))
+        .collect();
+    println!("[FZ-FZ-INT-R1] answers: {answers:?}\n  violations: {violations:?}");
+    assert!(violations.is_empty(), "{violations:?}");
 }
 
 /// A seed is a reproducible bug report only if the same seed runs the same
