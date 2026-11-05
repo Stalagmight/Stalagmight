@@ -43,6 +43,7 @@ import {
   type PathShape,
   type ToastSnapshot,
 } from '../lib/exportOracles';
+import { detProbe } from '../lib/fuzzDeterminismProbe';
 
 // ---------------------------------------------------------------------------
 // Knobs. Read at CALL time so a replay's restored environment reaches them.
@@ -814,7 +815,7 @@ export async function callProjectAction(
   action: string,
   actionArgs: readonly unknown[],
 ): Promise<ActionOutcome> {
-  return ctx.eval<ActionOutcome>(
+  const outcome = await ctx.eval<ActionOutcome>(
     `
     const action = args[0];
     const rest = args[1];
@@ -836,6 +837,9 @@ export async function callProjectAction(
   `,
     [action, actionArgs],
   );
+  // Determinism mode: the outcome and, for an export, the file (no-op when off).
+  detProbe()?.exportCall(action, actionArgs, outcome);
+  return outcome;
 }
 
 /** Is the modal Export dialog up? */

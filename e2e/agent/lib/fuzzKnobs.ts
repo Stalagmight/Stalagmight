@@ -74,3 +74,34 @@ export function allowKnownBugs(): boolean {
 export function dumpFullHistory(): boolean {
   return process.env.STALAGMIGHT_FUZZ_DUMP_HISTORY === '1';
 }
+
+export type FuzzDeterminismMode = 'off' | 'one-session' | 'two-sessions';
+
+/**
+ * `STALAGMIGHT_FUZZ_DETERMINISM`: run the seed TWICE and fail on any difference
+ * between the two replays (`lib/fuzzDeterminismRun.ts`). `1` replays in one app
+ * session, `2sessions` in two (only `pnpm agent:scenario` can do that). Unset or
+ * `0` is off. Anything else THROWS: a typo must not quietly run unchecked.
+ */
+export function fuzzDeterminism(): FuzzDeterminismMode {
+  const raw = (process.env.STALAGMIGHT_FUZZ_DETERMINISM ?? '').trim();
+  if (raw === '' || raw === '0') return 'off';
+  if (raw === '1') return 'one-session';
+  if (raw === '2sessions') return 'two-sessions';
+  throw new Error(`STALAGMIGHT_FUZZ_DETERMINISM=${JSON.stringify(raw)}: expected 1 (one session) or 2sessions`);
+}
+
+/**
+ * `STALAGMIGHT_FUZZ_DETERMINISM_PLANT=N`: the mode's self-test. Replay B nudges
+ * one number in its Nth state record, so the run MUST fail at that record - the
+ * proof that the comparison still bites. Null when unset.
+ */
+export function fuzzDeterminismPlant(): number | null {
+  const raw = (process.env.STALAGMIGHT_FUZZ_DETERMINISM_PLANT ?? '').trim();
+  if (raw === '') return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`STALAGMIGHT_FUZZ_DETERMINISM_PLANT=${JSON.stringify(raw)}: expected a positive integer`);
+  }
+  return value;
+}

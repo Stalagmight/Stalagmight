@@ -107,8 +107,68 @@ async function main(): Promise<void> {
   // tauri-wd) was unreachable from here.
   const { createSession } = await import('./createSession');
   const { findingsSummary, runSweep, newOracleState } = await import('./lib/oracles');
-  if (!getScenario(args.name)) {
+  const scenario = getScenario(args.name);
+  if (!scenario) {
     throw new Error(`unknown scenario "${args.name}"; known: ${listScenarios().join(', ')}`);
+  }
+
+  // Determinism mode (`lib/fuzzDeterminismRun.ts`). `=1` pairs inside
+  // `runScenario`; `=2sessions` needs a session per replay, which only this
+  // runner owns.
+  const { DETERMINISM_SCENARIOS } = await import('./scenarios');
+  const { fuzzDeterminism, fuzzDeterminismPlant, fuzzFixture } = await import('./lib/fuzzKnobs');
+  const determinism = fuzzDeterminism();
+  if (determinism !== 'off' && !DETERMINISM_SCENARIOS.has(args.name)) {
+    throw new Error(
+      `STALAGMIGHT_FUZZ_DETERMINISM covers ${[...DETERMINISM_SCENARIOS].join(', ')}; "${args.name}" has no probe hooks`,
+    );
+  }
+  if (determinism === 'two-sessions') {
+    const { runDeterminismPair } = await import('./lib/fuzzDeterminismRun');
+    const runAt = scenarioRunOptions(args, trace);
+    const log = (line: string): void => {
+      process.stdout.write(`   . ${line}\n`);
+    };
+    let pairFailed = false;
+    try {
+      const metrics = await runDeterminismPair(
+        {
+          scenario: args.name,
+          seed: runAt.seed ?? 1,
+          iterations: runAt.iterations ?? scenario.defaultIterations,
+          fixture: fuzzFixture(),
+          mode: 'two-sessions',
+          plantAt: fuzzDeterminismPlant(),
+          log,
+        },
+        async (replay) => {
+          const own = createSession();
+          const ownStart = await own.start({ build: 'auto' });
+          log(`replay ${replay}: session ${ownStart.state} (${ownStart.buildMode} build ${ownStart.buildAction})`);
+          try {
+            const replayMetrics = await runScenario(args.name, own, { ...runAt, log });
+            const sweep = await runSweep(own, newOracleState(), { full: true, recorder: own.recorder });
+            const fatal = sweep.findings.filter((finding) => finding.severity === 'fatal');
+            if (fatal.length > 0) {
+              throw new Error(`replay ${replay}: fatal findings=${redactCorpusText(JSON.stringify(fatal))}`);
+            }
+            return replayMetrics;
+          } finally {
+            await own.stop('scenario-run');
+          }
+        },
+      );
+      process.stdout.write(
+        `PASS: ${args.name} seed=${metrics.seed} iterations=${metrics.iterations} determinism=2sessions ` +
+          `(${metrics.durationMs}ms) ${JSON.stringify(metrics.metrics)}\n`,
+      );
+    } catch (err) {
+      pairFailed = true;
+      process.stdout.write(
+        `FAIL: ${args.name} threw:\n${redactCorpusText(err instanceof Error ? err.message : String(err))}\n`,
+      );
+    }
+    process.exit(pairFailed ? 1 : 0);
   }
 
   const session = createSession();

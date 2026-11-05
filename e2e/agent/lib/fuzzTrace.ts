@@ -109,6 +109,7 @@ import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 
 import { shortId } from './crc32';
+import { detProbe } from './fuzzDeterminismProbe';
 
 /** Current trace schema. Bumped when a step shape changes incompatibly. */
 export const TRACE_VERSION = 4;
@@ -715,7 +716,10 @@ export class TraceRecorder {
   private steps: TraceStep[] = [];
 
   record(step: TraceStep): void {
-    this.steps.push(redactStep(step));
+    const redacted = redactStep(step);
+    this.steps.push(redacted);
+    // Determinism mode compares the drawn trace of two replays (no-op when off).
+    detProbe()?.action(redacted);
   }
 
   /** Drop everything recorded so far. Used by scenarios whose iterations are independent. */

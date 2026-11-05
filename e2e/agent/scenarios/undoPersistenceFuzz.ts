@@ -291,6 +291,7 @@ import * as path from 'path';
 import type { Scenario, ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, loadFixtureWithoutUndoHistory } from './common';
 import { allowKnownBugs, dumpFullHistory, fuzzFixture } from '../lib/fuzzKnobs';
+import { detProbe } from '../lib/fuzzDeterminismProbe';
 import {
   MoveLog,
   RERUN_WITH_IDS,
@@ -464,6 +465,8 @@ async function runIteration(
 
   await injectOracle(ctx);
   const init = await initModel(ctx);
+  // Determinism mode: the opened fixture, before the first move (no-op when off).
+  await detProbe()?.state(ctx, `iteration ${iteration} opened`);
   const strippedRows = Object.values(stripped.cleared).reduce((sum, n) => sum + n, 0);
   ctx.setMetric('strippedUndoRows', strippedRows);
 

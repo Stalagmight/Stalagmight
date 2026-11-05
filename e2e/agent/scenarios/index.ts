@@ -17,6 +17,9 @@ import { importDialogFuzz } from './importDialogFuzz';
 import { exportRoundtripFuzz } from './exportRoundtripFuzz';
 import { rapidProjectCycle } from './rapidProjectCycle';
 import { fractalStress } from './fractalStress';
+import { fuzzDeterminism, fuzzDeterminismPlant, fuzzFixture } from '../lib/fuzzKnobs';
+import { detProbe } from '../lib/fuzzDeterminismProbe';
+import { runDeterminismPair } from '../lib/fuzzDeterminismRun';
 
 const SCENARIOS: Scenario[] = [
   seedLargeProject,
@@ -44,6 +47,13 @@ export function getScenario(name: string): Scenario | undefined {
   return REGISTRY[name];
 }
 
+/** The scenarios `STALAGMIGHT_FUZZ_DETERMINISM` replays twice (they carry the probe hooks). */
+export const DETERMINISM_SCENARIOS: ReadonlySet<string> = new Set([
+  undoRedoFuzz.name,
+  undoPersistenceFuzz.name,
+  exportRoundtripFuzz.name,
+]);
+
 export interface RunScenarioOpts {
   seed?: number | undefined;
   iterations?: number | undefined;
@@ -61,7 +71,22 @@ export async function runScenario(
   }
   const seed = opts.seed ?? 1;
   const iterations = opts.iterations ?? scenario.defaultIterations;
+  // Determinism mode (`lib/fuzzDeterminismRun.ts`): the same seed twice, in
+  // this session, unless a caller already installed a replay's probe.
+  const mode = fuzzDeterminism();
+  if (mode !== 'off' && DETERMINISM_SCENARIOS.has(name) && detProbe() === null) {
+    if (mode === 'two-sessions') {
+      throw new Error(
+        'STALAGMIGHT_FUZZ_DETERMINISM=2sessions needs a session per replay; only `pnpm agent:scenario` runs it',
+      );
+    }
+    return runDeterminismPair(
+      { scenario: name, seed, iterations, fixture: fuzzFixture(), mode, plantAt: fuzzDeterminismPlant(), log: opts.log },
+      () => runScenario(name, target, opts),
+    );
+  }
   const ctx = makeContext(target, seed, opts.log);
+  detProbe()?.addRoot(ctx.artifactsDir);
   ctx.log(`scenario ${name} start (seed=${seed}, iterations=${iterations})`);
   const start = Date.now();
   await scenario.run(ctx, { iterations });

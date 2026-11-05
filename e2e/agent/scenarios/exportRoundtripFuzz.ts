@@ -438,6 +438,7 @@ import { HOSTILE_COMMENTS } from '../lib/surveyFileSpecs';
 import { shotSetDelta, describeShotSetDelta } from '../lib/projectSnapshot';
 import { TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
 import { fuzzFixture } from '../lib/fuzzKnobs';
+import { detProbe } from '../lib/fuzzDeterminismProbe';
 import { MoveLog, openReplay, RERUN_WITH, writeRunTrace } from '../lib/fuzzHarness';
 import {
   asExportedToTml,
@@ -1181,6 +1182,9 @@ export const exportRoundtripFuzz: Scenario = {
         toastKeys,
         strays: ownDir ? straysIn(moveDir, [path.basename(effective)]) : [],
       };
+      // Determinism mode: what this move reported and wrote (no-op when off).
+      detProbe()?.answer(`export move ${draw.seq}`, attempt);
+      detProbe()?.file(`export move ${draw.seq} file`, effective);
       guarded(() => checkFileResult(attempt, reproduce));
       rmrf(moveDir);
     };
@@ -2117,6 +2121,7 @@ export const exportRoundtripFuzz: Scenario = {
       await loadFixtureWithoutUndoHistory(ctx, fixture);
       if (!(await disableAutoSave(ctx))) ctx.metric('autoSaveStillOn');
       const digest = await readProjectDigest(ctx);
+      await detProbe()?.state(ctx, `episode ${episode} opened`);
       if (episode === 0) {
         ctx.setMetric('fixtureSections', digest.sections);
         ctx.setMetric('fixtureShots', digest.shots.length);
@@ -2143,6 +2148,7 @@ export const exportRoundtripFuzz: Scenario = {
         await performExport(draw, episodeDir, digest.filePath, true);
         if (draw.route === 'modal' && (await modalIsOpen(ctx))) await closeModal(ctx);
         if (draw.route === 'panel') await setAppMode(ctx, 'survey');
+        await detProbe()?.state(ctx, `after export move ${seq}`);
       }
 
       // ---- the structural rotation ---------------------------------------
@@ -2171,6 +2177,7 @@ export const exportRoundtripFuzz: Scenario = {
       await stageOracle('x8-option-independence', {}, episodeDir, digest);
       await stageOracle('x9-mode-invariants', {}, episodeDir, digest);
       if (episode % 4 === 0) await stageOracle('x9b-pre-plan-leak', {}, episodeDir, digest);
+      await detProbe()?.state(ctx, `episode ${episode} oracles done`);
 
       await teardown(episodeDir);
       ctx.metric('episodes');

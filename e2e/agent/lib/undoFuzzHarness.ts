@@ -31,6 +31,7 @@ import {
   type StepResponse,
 } from '../scenarios/undoRedoFuzzBridge';
 import type { MoveLog } from './fuzzHarness';
+import { detProbe } from './fuzzDeterminismProbe';
 import { checkSnapshot, type SnapshotCheckLimits } from './fuzzSnapshotCheck';
 import type { FuzzTrace, TraceStep } from './fuzzTrace';
 import { RELOAD_RESOLVED_GEOMETRY, SAVE_HEALING_MUTATIONS } from './projectSnapshot';
@@ -239,6 +240,8 @@ export function undoFuzzHarness(
     ctx.metric('canonicalMs', res.timing.canonicalMs);
     ctx.metric('integrityMs', res.timing.integrityMs);
     ctx.metric('steps');
+    // Determinism mode: this step's answer and the state it left (no-op when off).
+    await detProbe()?.step(ctx, { kind, action, args, steps }, res);
     return res;
   };
 
@@ -384,6 +387,8 @@ export function undoFuzzHarness(
       fail('saveProject failed', `  error: ${saveRes.commandError ?? saveRes.actionError ?? 'unknown'}`);
     }
     note(`${tag} save -> ok (depth ${model.cursor}, undo ${saveRes.undoLen}, redo ${saveRes.redoLen})`);
+    // Determinism mode: the saved file, every table row by row (no-op when off).
+    detProbe()?.stalx(`${tag} saved`, savePath);
     assertInvariants(saveRes, 'save');
     assertStacks('save changed the history stacks', saveRes);
     model.savesDone += 1;
@@ -410,6 +415,7 @@ export function undoFuzzHarness(
     await bumpEpoch(ctx);
     model.reloadsDone += 1;
     const res = await observeOnly(ctx, model.cursor);
+    await detProbe()?.step(ctx, { kind: 'reload', action: 'noop:observe' }, res);
     note(`${tag} reload -> depth ${model.cursor} (undo ${res.undoLen}, redo ${res.redoLen})`);
     assertInvariants(res, 'reload');
     assertStacks('the persisted history did not come back intact', res);

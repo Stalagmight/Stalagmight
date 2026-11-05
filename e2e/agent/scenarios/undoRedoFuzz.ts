@@ -605,6 +605,7 @@ import * as path from 'path';
 import { mulberry32, type Scenario, type ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, loadFixtureWithoutUndoHistory } from './common';
 import { allowKnownBugs, dumpFullHistory, fuzzFixture } from '../lib/fuzzKnobs';
+import { detProbe } from '../lib/fuzzDeterminismProbe';
 import {
   MoveLog,
   RERUN_WITH_IDS,
@@ -802,6 +803,8 @@ async function runFuzz(
 
   await injectOracle(ctx);
   const init = await initModel(ctx);
+  // Determinism mode: the opened fixture, before the first move (no-op when off).
+  await detProbe()?.state(ctx, 'fixture opened');
 
   // Hard expectation, not a tolerance: the fixture's persisted history was
   // deleted from the temp copy before the load, so the app must come up with
