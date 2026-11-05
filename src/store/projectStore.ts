@@ -23,7 +23,13 @@ import { emptyCommandResult, refusedLocally, settleCommand, type CommandOutcome 
 import { useExportStore } from './exportStore';
 import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
 import { runSerialized } from './mutationQueue';
-import { noteProjectSessionChanged, projectSessionEpoch, registerOpenProjectIdentity } from './projectSession';
+import {
+  noteProjectDirtied,
+  noteProjectSessionChanged,
+  projectDirtyMarks,
+  projectSessionEpoch,
+  registerOpenProjectIdentity,
+} from './projectSession';
 import type {
   Project,
   ProjectMetadata,
@@ -629,6 +635,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       issued.file !== (open.file_path ?? null)
     );
   };
+  /** Mark the project dirty, counting the change for a save in flight ([#576 FZ-FZ-INT-8], see saveProject). */
+  const markDirty = () => {
+    noteProjectDirtied();
+    set({ isDirty: true });
+  };
   /** Shared helper: invoke IPC command, refresh state on success, mark dirty. */
   const executeCommand = async <K extends MutationCommand>(
     command: K,
@@ -698,7 +709,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (!lostProject(issued)) {
           applyReverseAftermath(composeReverseTransforms(reversedSectionsOf(result), get().project?.sections ?? []), origin);
         }
-        set({ isDirty: true });
+        markDirty();
         noteImportResolvedDeferredSave(command, result, set);
         // A command can RESOLVE (or surface) an integrity issue - e.g. removing a
         // drifted loop closure clears its banner entry - so re-check, mirroring
@@ -808,7 +819,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       result = await settleCommand((invokeIpc as ForwardedInvoke)(command, args, meta));
       if (result.success) {
         reversedSections = result.reversed_steps;
-        set({ isDirty: true });
+        markDirty();
       } else {
         // `HISTORY_STEP_FAILED`: a step RAN and failed - "failed at step N of M" of a
         // jump (`history_step`), or a single undo/redo past the empty-stack check (1 of
@@ -822,7 +833,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // envelope it was an untagged failure, which dirtied). A jump's crash reports no
         // failed step and keeps the jump's rule: only `HISTORY_STEP_FAILED` dirties it.
         const singleStepCrashed = result.code === 'INTERNAL_ERROR' && (command === 'undo' || command === 'redo');
-        if (failedStep !== null || singleStepCrashed) set({ isDirty: true });
+        if (failedStep !== null || singleStepCrashed) markDirty();
         if (failedStep !== null && failedStep > 1) {
           // A partial multi-step failure still renumbered: the steps BEFORE the
           // failing one already flipped their sections and cannot be rolled back,
@@ -1421,6 +1432,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // as a cheap signal to refresh below, avoiding a get_project_state_binary on every
     // clean save / autosave.
     const hadIntegrityIssues = get().integrityIssues.length > 0;
+    // [#576 FZ-FZ-INT-8] The changes acknowledged so far: one acknowledged after this
+    // point may have run after the save wrote the file, so it keeps the project dirty.
+    const dirtyMarksAtIssue = projectDirtyMarks();
     // A refused save is the rejection's CommandError, settled into the refused outcome
     // (its `code` routes it below); a transport failure still rejects.
     const result = await settleCommand(
@@ -1449,7 +1463,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // leaves the session dirty even if it entered the save clean.
         if (hadIntegrityIssues) {
           await get().refreshProjectState();
-          set({ isDirty: true });
+          markDirty();
         }
         return result;
       }
@@ -1477,7 +1491,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // databaseOpen=false so DB-backed actions stay disabled (issue #57 / Codex).
       const dbNotReopened = result.warnings?.some((w) => w.code === 'DATABASE_NOT_REOPENED') ?? false;
       set({
-        isDirty: false,
+        isDirty: projectDirtyMarks() === dirtyMarksAtIssue ? false : get().isDirty,
         databaseOpen: !dbNotReopened,
         autosaveFailure: null,
         autosaveFailureKind: null,
@@ -1551,7 +1565,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // (#204/fix 8, #303: the SpeleoDB link bits of the import itself rode back on the
     // import command's answer, #576 D22.)
     if (useUIStore.getState().importContext !== 'new-project') {
-      set({ isDirty: true });
+      markDirty();
       return true;
     }
     // New project: the initial save is deferred, so the import is invisible until
@@ -1567,7 +1581,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // skipIntegrityRouting keeps the router from wrongly opening Review &
       // Repair. The project stays dirty (close-guarded).
       console.error('[import] save after import failed:', e);
-      set({ isDirty: true });
+      markDirty();
       surfaceSaveFailure(saveFailureOf(e), useUIStore.getState().openDialog, get(), {
         skipIntegrityRouting: true,
       });
@@ -1577,7 +1591,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // The import isn't on disk: reflect the unsaved state (not a phantom
       // "saved") and surface the actionable error. Signal the caller NOT to close
       // the dialog, so it doesn't dismiss the error/permission guidance.
-      set({ isDirty: true });
+      markDirty();
       surfaceSaveFailure(
         { code: result.code, error: result.error || 'Failed to save the imported project.' },
         useUIStore.getState().openDialog,

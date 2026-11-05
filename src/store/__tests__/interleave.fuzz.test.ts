@@ -66,6 +66,16 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
       'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) undo run(0.000) run(0.000) panel(369) run(0.000) ' +
       'edit(36) run(0.000) run(0.000) run(0.000) create(65, false)',
   },
+  {
+    // An undo acknowledged while an autosave was in flight stayed unsaved, but the
+    // autosave's answer marked the project clean (no prompt, no further autosave).
+    id: 'FZ-FZ-INT-8',
+    found: 'dirty-flag',
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) run(0.000) run(0.000) save run(0.000) ' +
+      'reloadConfig edit(26) run(0.000) run(0.000) run(0.000) run(0.000) undo run(0.000) run(0.000) run(0.000) ' +
+      'run(0.000) run(0.000) run(0.000) autosave run(0.584)',
+  },
 ];
 
 

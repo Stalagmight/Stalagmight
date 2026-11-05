@@ -6,6 +6,7 @@ import { isEditGateCode, READ_ONLY_EDIT_NOTICE } from '../utils/editErrors';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import { useUIStore } from './uiStore';
 import { refuseMutationDuringCarry } from './moveCarry';
+import { noteProjectDirtied } from './projectSession';
 import type { IntegrityRepairResult } from '../types/commands';
 import type { ProjectStore } from './projectStore';
 
@@ -211,7 +212,10 @@ export function createProjectIntegrityActions(
         // The SpeleoDB link bits (#204/fix 8, #303: un-pushed and no longer merely
         // unwound after a repair that changed something) rode back on the answer and
         // `invokeIpc` applied them (#576 D22).
-        if (result.changed) set({ isDirty: true });
+        if (result.changed) {
+          noteProjectDirtied(); // [#576 FZ-FZ-INT-8] see saveProject
+          set({ isDirty: true });
+        }
         return result;
       } catch (e) {
         // #576 D39(a): the backend refuses Repair when editing is blocked (a read-only

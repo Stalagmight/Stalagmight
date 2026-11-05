@@ -29,6 +29,24 @@ export function noteProjectSessionChanged(): void {
 }
 
 /**
+ * [#576 FZ-FZ-INT-8] How many changes the store has acknowledged (marked the project
+ * dirty for) so far. A save reads it when it is issued and clears `isDirty` only if
+ * it has not moved since: a change that landed while the save was in flight may not
+ * be in the file the save wrote, and clearing the flag over it hid it from the
+ * autosave and the close prompt.
+ */
+let dirtyMarks = 0;
+
+/** Called wherever the store sets `isDirty: true`. */
+export function noteProjectDirtied(): void {
+  dirtyMarks += 1;
+}
+
+export function projectDirtyMarks(): number {
+  return dirtyMarks;
+}
+
+/**
  * [#576 RV6b-2] The open project's identity as the backend knows it, or null with
  * none open: what a per-project write names so the backend can refuse it once
  * another project is open. Its `created_at` (the key `projectSwitched` uses) and -
