@@ -175,9 +175,13 @@ impl Project {
         } else {
             self.get_merged_section_ids(station_a.section_id)
         };
-        fallback_sections
+        // [#576 FZ-DET] Summed in PROJECT order, not the set's: float addition
+        // is not associative, so a hash-ordered sum came out a last bit apart
+        // from one run to the next (18.455 vs 18.455000000000002), and the
+        // closure's stored path length and error percentage with it.
+        self.sections
             .iter()
-            .filter_map(|sid| self.get_section(*sid))
+            .filter(|s| fallback_sections.contains(&s.id))
             .flat_map(|s| s.shots.iter())
             // Clamp negative lengths to 0, consistent with the main-loop edges (#176).
             .map(|shot| shot.length.max(0.0))
