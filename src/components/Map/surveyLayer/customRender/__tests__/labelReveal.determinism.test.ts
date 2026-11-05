@@ -40,7 +40,7 @@ import {
 
 /** Regression seeds. 113: a shot comment and a station comment with the same
  *  global index (shot 1 / station 1) overlapped, tied on every sort key and fell
- *  through to the array position (FZ-DET-1). */
+ *  through to the array position (FZ-DET-4). */
 const SEEDS = determinismSeeds([113]);
 const ORIGIN: GpsOrigin = { latitude: 20.21, longitude: -87.46 };
 
@@ -94,7 +94,7 @@ describe('label placement (reveal zooms) is deterministic (FZ-DET-TS)', () => {
 
   it('a shot comment and a station comment sharing a global index: the winner does not depend on array order', () => {
     // Shot comment on global shot 5, station comment on global station 5, same
-    // anchor: equal tier, priority, ordinal AND stable id (FZ-DET-1).
+    // anchor: equal tier, priority, ordinal AND stable id (FZ-DET-4).
     const base = { text: 'StationA5 sump', anchorX: 0, anchorY: 0, ordinal: 0, flags: 0 };
     const shotNote: LabelDescriptor = { ...base, color: [0, 0, 0, 255], kind: LABEL_KIND.SHOT_COMMENT, shotGlobal: 5, sectionId: 1 };
     const stationNote: LabelDescriptor = { ...base, color: [0, 0, 0, 255], kind: LABEL_KIND.STATION_COMMENT, stationGlobal: 5, sectionId: 1 };

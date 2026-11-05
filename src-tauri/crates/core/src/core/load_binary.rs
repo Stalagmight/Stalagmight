@@ -998,10 +998,10 @@ mod tests {
         let differing = (0..8)
             .filter(|_| encode(&serde_json::from_str(&json).unwrap()) != first)
             .count();
-        println!("FZ-DET-1: {differing} of 8 rebuilds of one project encoded differently");
         assert_eq!(
             differing, 0,
-            "the envelope depends on the maps' iteration order"
+            "{differing} of 8 rebuilds of one project encoded differently: \
+             the envelope depends on the maps' iteration order"
         );
     }
 }
