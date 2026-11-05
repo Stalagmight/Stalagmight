@@ -29,6 +29,9 @@
  *     so two replays can never agree on the spelling - but the renaming keeps
  *     the STRUCTURE: a uuid that is kept in one replay and re-minted in the
  *     other still differs;
+ *   - the entries of a collection SORTED BY a uuid-bearing key
+ *     (`UUID_KEYED_COLLECTIONS`) are compared in masked order, because the
+ *     app's own order follows the random uuid;
  *   - sqlite rows are read in primary-key order (rowid when there is none).
  *
  * A file record also carries the sha256 of its raw bytes. When neither replay
@@ -62,6 +65,23 @@ export const WALL_CLOCK_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 export const WALL_CLOCK_MASK = '<wall-clock>';
+
+/**
+ * Collections emitted SORTED BY a key that can embed a shot uuid: a
+ * `StationKey` anchored `AfterShot(uuid)` (models/src/station.rs) orders
+ * `station_comments` / `station_offsets` (models/src/project.rs
+ * `serialize_station_*`). A shot created during the run has a fresh random
+ * uuid, so two replays can list the same entries in a different order. When an
+ * entry carries a uuid, the entries are compared in the order of their masked
+ * form instead - every key and value is still compared. The shots' uuids are
+ * numbered before these entries are reached (`sections` sorts first), so both
+ * replays rename them alike.
+ */
+const UUID_KEYED_COLLECTIONS: ReadonlySet<string> = new Set([
+  'station_comments',
+  'station_offsets',
+  'station_comments_map',
+]);
 
 const UUID_PATTERN = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
 
@@ -142,7 +162,13 @@ export class Masker {
     if (typeof input === 'string') return this.text(input);
     if (typeof input === 'bigint') return input.toString();
     if (typeof input === 'number') return Number.isFinite(input) ? input : String(input);
-    if (Array.isArray(input)) return input.map((item) => this.value(item));
+    if (Array.isArray(input)) {
+      const items = input.map((item) => this.value(item));
+      if (key === null || !UUID_KEYED_COLLECTIONS.has(key)) return items;
+      const keyed = items.map((item) => ({ text: JSON.stringify(item) ?? 'null', item }));
+      if (!keyed.some(({ text }) => text.includes('<uuid#'))) return items;
+      return keyed.sort((a, b) => (a.text < b.text ? -1 : a.text > b.text ? 1 : 0)).map(({ item }) => item);
+    }
     if (input instanceof Uint8Array) return { blob: sha256(input), size: input.length };
     if (input !== null && typeof input === 'object') {
       const out: Record<string, unknown> = {};

@@ -102,6 +102,29 @@ describe('Masker', () => {
     expect(masker.text('/home/user/data/a.stalx')).toBe('/home/user/data/a.stalx');
   });
 
+  it('compares a collection sorted by a uuid-bearing station key in masked order, values still compared', () => {
+    // The shots come first (`sections` sorts before `station_comments`), so both
+    // replays number their uuids alike; the app then lists the comments in the
+    // order of the RANDOM uuids, which differs between the two replays.
+    const state = (u1: string, u2: string, second: string): unknown => ({
+      sections: [{ shots: [{ uuid: u1 }, { uuid: u2 }] }],
+      station_comments: [
+        [{ section_id: 1, anchor: { AfterShot: u1 } }, 'first'],
+        [{ section_id: 1, anchor: { AfterShot: u2 } }, second],
+      ],
+    });
+    const a = new Masker(null).value(state(UUID_A1, UUID_A2, 'second'));
+    const swapped = state(UUID_B1, UUID_B2, 'second') as { station_comments: unknown[] };
+    swapped.station_comments.reverse();
+    expect(firstDifference(a, new Masker(null).value(swapped))).toBeNull();
+    const changed = state(UUID_B1, UUID_B2, 'CHANGED') as { station_comments: unknown[] };
+    changed.station_comments.reverse();
+    expect(firstDifference(a, new Masker(null).value(changed))?.path).toMatch(/^\$\.station_comments\[\d\]\[1\]$/);
+    // Any other collection keeps its order: a reordered list IS a difference.
+    const closures = (ids: number[]): unknown => new Masker(null).value({ loop_closures: ids.map((id) => ({ id })) });
+    expect(firstDifference(closures([1, 2]), closures([2, 1]))?.path).toBe('$.loop_closures[0].id');
+  });
+
   it('sorts object keys, so a map iteration order is not a difference', () => {
     expect(JSON.stringify(new Masker(null).value({ b: 1, a: { d: 2, c: 3 } }))).toBe('{"a":{"c":3,"d":2},"b":1}');
   });
