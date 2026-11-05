@@ -1,0 +1,25 @@
+[package]
+name = "stalagmight-fuzz-gen"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+description = "Test-only: synthetic survey-file generators, semantic mutators and import oracles shared by the parser fuzz targets (src-tauri/fuzz) and the fixed-seed CI property tests. Never a dependency of the shipped app."
+
+# Opt into the workspace lint tables (see the workspace root manifest) so the
+# anti-slop policy applies here too.
+[lints]
+workspace = true
+
+[dependencies]
+stalagmight-core = { path = "../core" }
+stalagmight-export = { path = "../export" }
+stalagmight-models = { path = "../models" }
+stalagmight-parsers = { path = "../parsers" }
+stalagmight-persistence = { path = "../persistence" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+rusqlite = { workspace = true, features = ["bundled"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+zip = { workspace = true }

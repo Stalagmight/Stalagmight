@@ -4502,6 +4502,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "stalagmight-fuzz-gen"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "stalagmight-core",
+ "stalagmight-export",
+ "stalagmight-models",
+ "stalagmight-parsers",
+ "stalagmight-persistence",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
 name = "stalagmight-models"
 version = "0.0.0"
 dependencies = [
