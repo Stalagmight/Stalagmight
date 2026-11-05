@@ -271,6 +271,8 @@ mod open_undo_bugs_tests;
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod perf_probe_tests;
 #[cfg(test)]
+mod persist_roundtrip_fuzz_tests;
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -369,6 +371,10 @@ mod save_history_cache_tests;
               values are the evidence a run captures"
 )]
 mod save_sidecar_tests;
+#[cfg(test)]
+mod save_fault_fuzz_tests;
+#[cfg(test)]
+mod schema_history_fuzz_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

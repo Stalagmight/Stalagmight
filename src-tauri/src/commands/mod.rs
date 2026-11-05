@@ -152,6 +152,8 @@ mod telemetry_coverage_tests;
 )]
 mod write_path_match_tests;
 #[cfg(test)]
+mod write_path_fuzz_tests;
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     clippy::print_stdout,
