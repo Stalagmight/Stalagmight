@@ -476,3 +476,61 @@ Vitest test. The reconnect handshake needs a live box, so verify manually:
 8. Reconnect after the server tip moved with local edits → the divergence prompt.
 9. Opt-out account: no "Edit without the write lock" affordance; only read-only + the existing
    "Save a local copy" detach.
+
+## Protocol fuzzer (#576 fuzzers)
+
+A stateful fuzzer drives the app's SpeleoDB verbs against a **private** SpeleoDB
+instance: `src-tauri/crates/core/src/core/state/speleodb_fuzz/`. Each run builds a
+fresh world on the instance (an owner project shared read-write with a collaborator,
+a collaborator project shared with the owner, an Ariane-only project), signs an
+`AppState` in as the owner through an in-process fault proxy, and plays a seeded
+sequence of the verbs the frontend calls (open with its unpushed / adopt /
+ambiguous branches, start editing, edits, autosave, push, Done, update, take remote,
+discard, revision View / Restore / Unwind / Rewind, the release verbs, close and
+quit with their dialogs, crash, unlink, save a local copy, delete, publish, the
+status poll, logout, sign-in to another deployment). Between them a second client
+(the collaborator, or another session of the owner) takes and drops the lock, pushes
+competing or newer-format revisions, renames or deletes the project and changes the
+owner's access; the proxy injects 4xx / 5xx answers, a status after the server
+applied the request, latency, a dropped upload, a lost reply, a truncated or corrupt
+body, and a hang past the client timeout. After every step an oracle with superuser
+eyes checks the invariants documented in `speleodb_fuzz/oracle.rs` (I1 no silent
+loss of an un-pushed edit ... I11 editing means holding the lock). Each run writes a
+JSONL trace; a failing run is delta-debugged to a short step list.
+
+It refuses to start unless every condition below holds, before it sends anything:
+
+- `STALAGMIGHT_SPELEODB_FUZZ_URL` is `http://<loopback IP literal>:<port>/` (no
+  name is resolved, so no public SpeleoDB can be reached);
+- every account email is under the reserved `.invalid` domain;
+- `DEV_SPELEODB_URL` is unset (the app would prefer it over its own endpoint).
+
+| Env var | Meaning |
+|---------|---------|
+| `STALAGMIGHT_SPELEODB_FUZZ_URL` | The instance base URL (loopback only). |
+| `STALAGMIGHT_SPELEODB_FUZZ_EMAIL` / `_PASSWORD` | The app's account (a normal user). |
+| `STALAGMIGHT_SPELEODB_FUZZ_EMAIL2` / `_PASSWORD2` | The second client (a normal user). |
+| `STALAGMIGHT_SPELEODB_FUZZ_ADMIN_EMAIL` / `_ADMIN_PASSWORD` | A superuser: the oracle's view of locks, history and every commit's content. |
+| `STALAGMIGHT_SPELEODB_FUZZ_SEEDS` | Seed range `a..b` (default `1..4`). |
+| `STALAGMIGHT_SPELEODB_FUZZ_STEPS` | Steps per seed (default 40). |
+| `STALAGMIGHT_SPELEODB_FUZZ_FAULT_PCT` | Percent of app steps with a fault (default 25). |
+| `STALAGMIGHT_SPELEODB_FUZZ_MINUTES` | Stop starting new seeds after this long (default: no limit). |
+| `STALAGMIGHT_SPELEODB_FUZZ_SHRINK` / `_SHRINK_BUDGET` | Shrink failures (default on) / at most this many replays (40). |
+| `STALAGMIGHT_SPELEODB_FUZZ_DIR` | The app's folders for the run (default: a temp dir per process). |
+| `STALAGMIGHT_SPELEODB_FUZZ_TRACE_DIR` | Where traces and step lists go. |
+| `STALAGMIGHT_SPELEODB_FUZZ_REPLAY` | A saved step list for the replay entry point. |
+
+```bash
+cargo test --manifest-path src-tauri/crates/core/Cargo.toml --lib \
+  core::state::speleodb_fuzz::speleodb_fuzz_campaign -- --exact --ignored --nocapture
+```
+
+Run it alone (`--exact`): it sets the process-wide app folders. Parallel workers
+need one account pair each, since `release_all_locks` is account-wide. The replay
+entry point is `speleodb_fuzz_replay`; `speleodb_fuzz_regression_seeds` re-runs
+every seed that once failed. Normal `cargo test` runs only the offline unit tests
+(the allowlist, generator, proxy, stub and oracle); the three entry points are
+`#[ignore]` and fail naming the missing variable when run without an instance.
+
+The instance itself (deployment, accounts, reset to a clean snapshot) is tooling
+on the maintainer's harness host and is not part of this repo.

@@ -47,6 +47,18 @@ use std::path::{Path, PathBuf};
 
 use super::app::{App, Claim, Outcome};
 use super::world::{fingerprint, fingerprint_file, link_of_file, Fp, Server, ServerView};
+
+/// The content of a server commit, by project and sha (the oracle's only
+/// server read during a check; a map in the offline tests).
+pub(super) trait CommitFps {
+    fn commit_fp(&mut self, id: &str, sha: &str) -> Result<Fp, String>;
+}
+
+impl CommitFps for Server {
+    fn commit_fp(&mut self, id: &str, sha: &str) -> Result<Fp, String> {
+        self.fingerprint_at(id, sha)
+    }
+}
 use crate::models::SpeleoLink;
 
 /// One broken invariant.
@@ -190,7 +202,7 @@ pub(super) fn check(
     is_actor: bool,
     before: &Snap,
     after: &Snap,
-    server: &mut Server,
+    server: &mut dyn CommitFps,
     owner: &str,
     allowed: &[&str],
     cache_root: &Path,
@@ -307,7 +319,7 @@ fn check_files(
     ghost: &Ghost,
     before: &Snap,
     after: &Snap,
-    server: &mut Server,
+    server: &mut dyn CommitFps,
     ex: &Excuses,
     cache_root: &Path,
     v: &mut Vec<Violation>,
@@ -339,7 +351,7 @@ fn check_files(
             }
             // I4: a clean mark means the content IS the BASE commit.
             if !link.has_unpushed_edits {
-                if let Ok(base_fp) = server.fingerprint_at(&link.project_id, base) {
+                if let Ok(base_fp) = server.commit_fp(&link.project_id, base) {
                     if let Ok(disk_fp) = &file.fp {
                         if *disk_fp != base_fp {
                             v.push(violation(
@@ -424,7 +436,7 @@ fn check_files(
 fn check_claims(
     out: &Outcome,
     after: &Snap,
-    server: &mut Server,
+    server: &mut dyn CommitFps,
     owner: &str,
     cache_root: &Path,
     v: &mut Vec<Violation>,
@@ -464,7 +476,7 @@ fn check_claims(
                     continue;
                 }
                 if let (Some(tip), Ok(disk)) = (&view.tip, &file.fp) {
-                    if let Ok(tip_fp) = server.fingerprint_at(project_id, tip) {
+                    if let Ok(tip_fp) = server.commit_fp(project_id, tip) {
                         if *disk != tip_fp {
                             v.push(violation(
                                 "I6",

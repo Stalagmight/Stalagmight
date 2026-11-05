@@ -26,6 +26,8 @@
 mod app;
 mod model;
 mod oracle;
+#[cfg(test)]
+mod oracle_tests;
 mod proxy;
 mod run;
 mod stub;
