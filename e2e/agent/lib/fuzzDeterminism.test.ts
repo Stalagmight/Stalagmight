@@ -89,7 +89,7 @@ describe('Masker', () => {
   it('still sees a uuid that one replay kept and the other re-minted', () => {
     const kept = new Masker(null).value({ before: UUID_A1, after: UUID_A1 });
     const reminted = new Masker(null).value({ before: UUID_B1, after: UUID_B2 });
-    expect(firstDifference(kept, reminted)).toEqual({ path: '$.before', a: expect.any(String), b: expect.any(String) });
+    expect(firstDifference(kept, reminted)).toEqual({ path: '$.after', a: '"<uuid#1>" (char 6)', b: '"<uuid#2>" (char 6)' });
   });
 
   it('masks a registered root and the random tail of an mkdtemp dir, nothing else of the path', () => {
@@ -125,8 +125,24 @@ describe('Masker', () => {
     expect(firstDifference(closures([1, 2]), closures([2, 1]))?.path).toBe('$.loop_closures[0].id');
   });
 
-  it('sorts object keys, so a map iteration order is not a difference', () => {
-    expect(JSON.stringify(new Masker(null).value({ b: 1, a: { d: 2, c: 3 } }))).toBe('{"a":{"c":3,"d":2},"b":1}');
+  it('keeps key order, and a key-order difference is reported', () => {
+    const a = new Masker(null).value({ b: 1, a: { d: 2, c: 3 } });
+    expect(JSON.stringify(a)).toBe('{"b":1,"a":{"d":2,"c":3}}');
+    const b = new Masker(null).value({ b: 1, a: { c: 3, d: 2 } });
+    expect(firstDifference(a, b)).toEqual({ path: '$.a<key order>', a: '["d","c"]', b: '["c","d"]' });
+  });
+
+  it('masks the wall-clock keys inside JSON embedded as a string, and still compares the rest', () => {
+    const pair = (modified: string, length: number): unknown => ({
+      ProjectSnapshotPair: {
+        after: JSON.stringify({ name: 'p', modified_at: modified, sections: [{ shots: [{ length }] }] }),
+      },
+    });
+    const a = new Masker(null).value(pair('2026-11-05T22:37:00.3Z', 4.5));
+    expect(firstDifference(a, new Masker(null).value(pair('2026-11-05T22:37:50.7Z', 4.5)))).toBeNull();
+    expect(firstDifference(a, new Masker(null).value(pair('2026-11-05T22:37:50.7Z', 4.75)))).toMatchObject({
+      path: '$.ProjectSnapshotPair.after.embeddedJson.sections[0].shots[0].length',
+    });
   });
 });
 
@@ -250,9 +266,15 @@ describe('exported files', () => {
     expect(compareRecordStreams(a, b)).toBeNull();
   });
 
-  it('bytes must match when nothing was masked: key order in a JSON export is a difference', () => {
+  it('key order in a JSON export is a difference', () => {
     const a = stream([['file', 'export.json', null, text('{"a":1,"b":2}')]]);
     const b = stream([['file', 'export.json', null, text('{"b":2,"a":1}')]]);
+    expect(compareRecordStreams(a, b)).toMatchObject({ path: '$.json<key order>' });
+  });
+
+  it('bytes must match when nothing was masked: whitespace the parse hides is a difference', () => {
+    const a = stream([['file', 'export.json', null, text('{"a":1,"b":2}')]]);
+    const b = stream([['file', 'export.json', null, text('{"a": 1, "b": 2}')]]);
     expect(compareRecordStreams(a, b)).toMatchObject({ path: '$<bytes>' });
   });
 
@@ -275,8 +297,21 @@ describe('exported files', () => {
     const b = stream([['file', 'export.tml', null, zip('<a>\n<b>1</b>\n</a>', 0x5678)]]);
     expect(compareRecordStreams(a, b)).toBeNull();
     const c = stream([['file', 'export.tml', null, zip('<a>\n<b>2</b>\n</a>', 0x5678)]]);
-    const found = compareRecordStreams(a, c);
-    expect(found?.path).toMatch(/^\$\.zip\[0\]\.(content\[1\]|crc32)$/);
+    expect(compareRecordStreams(a, c)).toMatchObject({ path: '$.zip[0].content[1]', a: '"<b>1</b>" (char 3)' });
+    // Two random uuids deflate to different sizes; masked, the entries are equal.
+    const minted = (uuid: string): Buffer => {
+      const xml = `<a id="${uuid}">${'<b>1</b>'.repeat(20)}</a>`;
+      const raw = zlib.deflateRawSync(text(xml));
+      const stored = Buffer.from(zipStore([{ name: 'Data.xml', data: raw }]));
+      for (let at = 0; at + 4 <= stored.length; at++) {
+        if (stored.readUInt32LE(at) === 0x04034b50) stored.writeUInt16LE(8, at + 8);
+        if (stored.readUInt32LE(at) === 0x02014b50) stored.writeUInt16LE(8, at + 10);
+      }
+      return stored;
+    };
+    expect(
+      compareRecordStreams(stream([['file', 'x.tml', null, minted(UUID_A1)]]), stream([['file', 'x.tml', null, minted(UUID_B1)]])),
+    ).toBeNull();
   });
 
   it('PNG: a tIME chunk is masked, a pixel difference is not', () => {

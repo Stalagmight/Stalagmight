@@ -23,7 +23,12 @@
  *
  * ## What is CANONICALIZED (equality-preserving, not masked)
  *
- *   - object key order (a map's iteration order is not data);
+ *   - nothing about key order: it is kept and compared (`<key order>`);
+ *   - a string that holds JSON (the undo tables embed the whole project as a
+ *     string in `ProjectSnapshotPair`) is compared parsed, so the wall-clock
+ *     keys inside it are masked too;
+ *   - a zip entry (`.tml`) is compared by its decoded content; its CRC and
+ *     sizes are functions of that content and are dropped with it;
  *   - random v4 uuids are renamed `<uuid#n>` in order of first appearance in
  *     the replay's stream. `Shot::new` mints one per shot (models/src/shot.rs),
  *     so two replays can never agree on the spelling - but the renaming keeps
@@ -84,6 +89,18 @@ const UUID_KEYED_COLLECTIONS: ReadonlySet<string> = new Set([
 ]);
 
 const UUID_PATTERN = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
+
+/** The parsed object or array a string holds as JSON, or undefined. */
+function embeddedJson(text: string): unknown {
+  const head = text.charCodeAt(0);
+  if (head !== 0x7b && head !== 0x5b) return undefined;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return parsed !== null && typeof parsed === 'object' ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -153,13 +170,23 @@ export class Masker {
     });
   }
 
-  /** The canonical, masked copy of a JSON-shaped value (keys sorted). */
+  /**
+   * The masked copy of a JSON-shaped value. Key order is KEPT (and compared):
+   * serde writes a struct's fields in declaration order and the app sorts its
+   * hash maps (models/src/project.rs), so an order change is a real one.
+   */
   value(input: unknown, key: string | null = null): unknown {
     if (key !== null && WALL_CLOCK_KEYS.has(key) && input !== null && input !== undefined) {
       this.substitutions += 1;
       return WALL_CLOCK_MASK;
     }
-    if (typeof input === 'string') return this.text(input);
+    if (typeof input === 'string') {
+      // A payload that embeds JSON as a string (`ProjectSnapshotPair.before` /
+      // `.after` in the undo tables) is compared parsed, so the wall-clock keys
+      // inside it are masked like any other.
+      const embedded = embeddedJson(input);
+      return embedded === undefined ? this.text(input) : { embeddedJson: this.value(embedded) };
+    }
     if (typeof input === 'bigint') return input.toString();
     if (typeof input === 'number') return Number.isFinite(input) ? input : String(input);
     if (Array.isArray(input)) {
@@ -173,7 +200,7 @@ export class Masker {
     if (input !== null && typeof input === 'object') {
       const out: Record<string, unknown> = {};
       const source = input as Record<string, unknown>;
-      for (const name of Object.keys(source).sort()) out[this.text(name)] = this.value(source[name], name);
+      for (const name of Object.keys(source)) out[this.text(name)] = this.value(source[name], name);
       return out;
     }
     return input === undefined ? null : input;
@@ -282,13 +309,17 @@ export function firstDifference(a: unknown, b: unknown, path = '$'): Difference 
   if (kind === 'object') {
     const left = a as Record<string, unknown>;
     const right = b as Record<string, unknown>;
-    const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
-    for (const key of keys) {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    for (const key of new Set([...leftKeys, ...rightKeys])) {
       const next = IDENTIFIER.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`;
       if (!(key in left)) return { path: next, a: '<absent>', b: preview(right[key]) };
       if (!(key in right)) return { path: next, a: preview(left[key]), b: '<absent>' };
       const found = firstDifference(left[key], right[key], next);
       if (found !== null) return found;
+    }
+    if (leftKeys.join('\u0000') !== rightKeys.join('\u0000')) {
+      return { path: `${path}<key order>`, a: preview(leftKeys), b: preview(rightKeys) };
     }
     return null;
   }
@@ -465,29 +496,31 @@ function zipEntries(bytes: Buffer): { body: unknown; masked: number } | null {
     if (local + 30 > bytes.length || bytes.readUInt32LE(local) !== 0x04034b50) return null;
     const dataStart = local + 30 + bytes.readUInt16LE(local + 26) + bytes.readUInt16LE(local + 28);
     const raw = bytes.subarray(dataStart, dataStart + compressedSize);
-    let content: unknown;
+    let content: unknown = null;
     try {
-      content =
-        method === 0
-          ? raw.toString('utf8').split('\n')
-          : method === 8
-            ? zlib.inflateRawSync(raw).toString('utf8').split('\n')
-            : { sha256: sha256(raw) };
+      if (method === 0) content = raw.toString('utf8').split('\n');
+      if (method === 8) content = zlib.inflateRawSync(raw).toString('utf8').split('\n');
     } catch {
-      content = { undecodable: sha256(raw) };
+      content = null;
     }
     // The DOS time and date (offsets 12 and 14) are the entry's mtime: masked.
     masked += 1 + extra.masked;
-    entries.push({
-      name,
-      method,
-      flags: bytes.readUInt16LE(at + 8),
-      crc32: bytes.readUInt32LE(at + 16),
-      compressedSize,
-      size: bytes.readUInt32LE(at + 24),
-      extra: extra.fields,
-      content,
-    });
+    const header = { name, method, flags: bytes.readUInt16LE(at + 8), extra: extra.fields };
+    // A decoded entry is compared by its CONTENT, and the CRC and both sizes
+    // are functions of that content, not further data: a masked uuid or stamp
+    // inside it (tml.rs mints uuids) changes how it deflates. An entry that
+    // could not be decoded keeps them, with a hash of its bytes.
+    entries.push(
+      content === null
+        ? {
+            ...header,
+            crc32: bytes.readUInt32LE(at + 16),
+            compressedSize,
+            size: bytes.readUInt32LE(at + 24),
+            sha256: sha256(raw),
+          }
+        : { ...header, content },
+    );
     at += 46 + nameLength + extraLength + commentLength;
   }
   return { body: { zip: entries }, masked };
