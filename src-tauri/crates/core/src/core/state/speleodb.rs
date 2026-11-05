@@ -9492,10 +9492,24 @@ mod tests {
     /// region in the workspace may name either, outside the line that defines it.
     #[test]
     fn no_production_code_names_a_test_licence() {
+        // The protocol fuzzer (#576 fuzzers) is a directory of test-only files: this
+        // module's parent declares it `#[cfg(test)] mod speleodb_fuzz;`. Its files are
+        // skipped below only while that gate stands.
+        let state_mod = include_str!("mod.rs");
+        let fuzz_decl = state_mod
+            .find("\nmod speleodb_fuzz;")
+            .expect("state/mod.rs declares the fuzzer module");
+        let above = state_mod.get(..fuzz_decl).unwrap_or_default();
+        let gate = above.rfind("\n#[cfg(test)]");
+        assert!(
+            gate.is_some_and(|g| !above.get(g..).unwrap_or_default().contains("\nmod ")),
+            "the fuzzer module is declared under #[cfg(test)], so its files are test-only"
+        );
         let mut named: Vec<String> = Vec::new();
         for (path, src) in workspace_rust_files() {
             let name = path.rsplit('/').next().unwrap_or(&path);
             let test_only_file = path.contains("/tests/")
+                || path.contains("/state/speleodb_fuzz/")
                 || name == "tests.rs"
                 || name.ends_with("_tests.rs")
                 || name == "test_fixtures.rs"
