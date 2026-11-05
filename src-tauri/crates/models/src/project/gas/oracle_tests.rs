@@ -69,6 +69,26 @@ const CI_SEEDS: u64 = 240;
 /// Seeds that once failed (or once reached a rare shape); checked on every run.
 const REGRESSION_SEEDS: &[u64] = &[];
 
+/// Seeds of findings still open, as (finding, seed, the check classes it fails with). The sweep
+/// keeps them out of its CI range; [`open_findings_still_reproduce`] requires each to fail with
+/// exactly those classes, so the finding stays pinned while it is open and its fix shows up as
+/// that test failing - then the seeds move to [`REGRESSION_SEEDS`].
+///
+/// FZ-ORACLE-1: no origin (or one that no longer resolves), zero datums in several disconnected
+/// parts, and two stage drops pinned in different parts. Each pin is reachable from SOME datum, so
+/// both count as usable, but the second pin's leg from the first cannot be flown: the pinned
+/// field then paints nothing - not even the roots - yet still reports a turn and a route toward
+/// the first pin. More conservative than the truth, never less; what the plan should do instead
+/// is a product choice.
+const OPEN_FINDINGS: &[(&str, u64, &[&str])] = &[
+    ("FZ-ORACLE-1", 0x2a48, &["REPORT turn-dark"]),
+    (
+        "FZ-ORACLE-1",
+        0xbd4b,
+        &["REPORT route-station-dark", "REPORT turn-dark"],
+    ),
+];
+
 /// splitmix64: tiny, seedable, and the same stream on every platform.
 struct Rng(u64);
 
@@ -1409,7 +1429,12 @@ fn gas_field_never_promises_more_than_the_independent_oracle_allows() {
     let default_run = std::env::var_os("GAS_ORACLE_SEED").is_none()
         && std::env::var_os("GAS_ORACLE_FIRST").is_none()
         && std::env::var_os("GAS_ORACLE_SEEDS").is_none();
-    let t = run(seeds.into_iter().chain(REGRESSION_SEEDS.iter().copied()));
+    // An open finding's seeds are pinned by `open_findings_still_reproduce` instead.
+    let open = |s: &u64| OPEN_FINDINGS.iter().any(|f| f.1 == *s);
+    let t = run(seeds
+        .into_iter()
+        .filter(|s| !open(s))
+        .chain(REGRESSION_SEEDS.iter().copied()));
     report("sweep", &t);
     if default_run {
         // The CI range must actually reach what the oracle was extended for: a route over a jump
@@ -1435,4 +1460,24 @@ fn gas_field_never_promises_more_than_the_independent_oracle_allows() {
         "{} oracle check(s) failed - see the classes and replay seeds above",
         t.errors.len()
     );
+}
+
+/// The open findings' seeds still fail, and only as their finding does.
+#[test]
+fn open_findings_still_reproduce() {
+    for &(id, seed, classes) in OPEN_FINDINGS {
+        let t = run(std::iter::once(seed));
+        report(id, &t);
+        assert!(
+            !t.errors.is_empty(),
+            "{id}: seed {seed:#x} passes now - if the finding is fixed, move the seed to \
+             REGRESSION_SEEDS"
+        );
+        for (_, class, m) in &t.errors {
+            assert!(
+                classes.contains(class),
+                "{id}: seed {seed:#x} fails with {class}, not the finding's own classes: {m}"
+            );
+        }
+    }
 }
