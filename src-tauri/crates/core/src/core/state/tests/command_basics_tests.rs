@@ -441,3 +441,46 @@ fn test_multiple_undo_redo_sequence() {
 
     assert_eq!(state.get_project_state().unwrap().sections.len(), 2);
 }
+
+/// [#576 FZ-DET-2] `get_segment_geometry` lists the segment's sections in
+/// project order. It walked a `HashSet` built per call, so the same project,
+/// asked twice with nothing changed in between, could list its sections in
+/// another order each time.
+#[test]
+fn segment_geometry_lists_sections_in_project_order() {
+    let state = state_with_project("CaveA");
+    let create = |index: usize| Command::CreateSection {
+        name: Some(format!("Section{index}")),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![shot(5.0), shot(6.0)],
+    };
+    let ids: Vec<SectionId> = (0..8)
+        .map(|index| state.execute(create(index)).section_id.unwrap())
+        .collect();
+    for pair in ids.windows(2) {
+        let merged = state.execute(Command::MergeStations {
+            station_a: StationRef::new(pair[0], 2),
+            station_b: StationRef::new(pair[1], 0),
+        });
+        assert!(merged.success, "merge failed: {:?}", merged.error);
+    }
+    let listings: Vec<Vec<SectionId>> = (0..8)
+        .map(|_| {
+            state
+                .get_segment_geometry(ids[0])
+                .unwrap()
+                .sections
+                .iter()
+                .map(|section| section.section_id)
+                .collect()
+        })
+        .collect();
+    let differing = listings.iter().filter(|listed| **listed != ids).count();
+    assert_eq!(
+        differing, 0,
+        "{differing} of 8 calls listed the segment's sections out of project order: {listings:?}"
+    );
+}

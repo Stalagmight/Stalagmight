@@ -152,12 +152,16 @@ impl AppState {
             }
         }
 
-        // Build geometry for each section
+        // Build geometry for each section, in PROJECT order (#576 FZ-DET-2):
+        // `connected` is a set, and walking it listed the sections in another
+        // order on every call.
         let mut sections = Vec::new();
-        for &sid in &connected {
-            let Some(section) = project.sections.iter().find(|s| s.id == sid) else {
-                continue;
-            };
+        for section in project
+            .sections
+            .iter()
+            .filter(|s| connected.contains(&s.id))
+        {
+            let sid = section.id;
             let Some(stations) = section_stations.get(&sid) else {
                 continue;
             };
