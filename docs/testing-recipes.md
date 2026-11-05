@@ -437,6 +437,44 @@ to `REGRESSION_SEEDS`. Seeds name schedules of this generator and scheduler: a
 change to either, or one more lock on a path, moves them, so a regression seed
 is re-derived by reverting its fix and keeping a failing seed of a campaign.
 
+## The interleaving fuzzer (vitest tier)
+
+`src/store/__tests__/interleave.fuzz.test.ts` drives the REAL stores (projectStore,
+uiStore, the setting write chain, gasConfigDisk, the edit queue, refreshes,
+load/close/create/Save As, import-as-new) through seeded action lists, with Tauri's
+`invoke` replaced by a scheduler (`src/test/interleave/`) that holds every call
+pending until the list executes it against a small reference backend
+(`backendModel.ts`, which mirrors the real guards) and delivers its answer -
+together, later, or as a fault. Both the order the backend applies calls in and the
+order their answers land in are the seed's to choose, and the invariants
+(`fuzzRun.ts` `INVARIANTS`: no write in another project, no lost write, the store
+equals the backend at quiescence, no queue stall, ...) are checked after every step
+and at quiescence. A failure is shrunk and printed as a replayable trace.
+
+```bash
+# The gate: pinned traces + seeds 1-100, about 3 s.
+pnpm exec vitest run src/store/__tests__/interleave.fuzz.test.ts
+
+# A campaign (also FZ_INT_SECS=<n> for random seeds, FZ_INT_SEED=<s> for one
+# seed with its trace, FZ_INT_TRACE='<printed action list>' to replay a trace,
+# FZ_INT_IGNORE=<inv,...> to stop reporting an invariant).
+FZ_INT_SEEDS=5000 FZ_INT_SEED_START=1000 \
+  pnpm exec vitest run src/store/__tests__/interleave.fuzz.test.ts -t "fixed seeds"
+
+# Include the shapes of the still-open findings (all, or a list of RunOptions keys).
+FZ_INT_SHAPES=all FZ_INT_SEEDS=1000 \
+  pnpm exec vitest run src/store/__tests__/interleave.fuzz.test.ts -t "fixed seeds"
+```
+
+The gate leaves out the shapes of the findings still open (`KNOWN_OPEN_EXCLUDED`:
+overlapping switches, a save or an edit across a switch, Settings patching a gas
+field, a display write landing after a reload of its file); switch one back on
+when its fix lands. A seed stands for whatever
+`generate` makes of it today, so pin a found bug as its shrunk TRACE in
+`REGRESSION_TRACES`, not as a seed. A command the stores start sending that the
+model does not know fails the gate (`unmodelled`): model it in `backendModel.ts`
+(mirroring the backend's guard, with file:line) or list it in `AMBIENT`.
+
 ## Determinism
 
 Every engine above compares two STATES or two ROUTES; none of them compares a

@@ -10,6 +10,7 @@
  *   FZ_INT_SEEDS=2000 FZ_INT_SEED_START=1000 pnpm exec vitest run src/store/__tests__/interleave.fuzz.test.ts
  *   FZ_INT_SECS=600 ...            random seeds for that long
  *   FZ_INT_SEED=1234 ...           one seed, printing its trace
+ *   FZ_INT_TRACE='load("/caves/CaveA.stalx") run(0.000) ...'   replay a printed trace
  *   FZ_INT_SHAPES=all ...          include the open findings' shapes (or a comma list of RunOptions keys)
  *   FZ_INT_IGNORE=state,... ...    do not report these invariants
  * A failure prints the seed, the shrunk action list and its schedule trace; pin
@@ -169,6 +170,11 @@ describe('interleaving fuzzer (#576 FZ-INT)', () => {
   it.each(REGRESSION_TRACES)('regression trace $id ($found) holds every invariant', async ({ options, actions }) => {
     const result = await runActions(parseActions(actions), { ...KNOWN_OPEN_EXCLUDED, ...options });
     expect(result.violations.map((v) => `[${v.inv}] ${v.msg}`)).toEqual([]);
+  });
+
+  it.runIf(Boolean(env.FZ_INT_TRACE))('replays FZ_INT_TRACE (a printed action list)', async () => {
+    const result = await runActions(parseActions(env.FZ_INT_TRACE ?? ''), OPTIONS);
+    console.log([...result.trace, ...result.violations.map((v) => `VIOLATION [${v.inv}] ${v.msg}`)].join('\n'));
   });
 
   it('replays a seed exactly (the harness is deterministic)', async () => {
