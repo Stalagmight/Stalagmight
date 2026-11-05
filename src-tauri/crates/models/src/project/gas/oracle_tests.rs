@@ -112,8 +112,14 @@ fn shots(r: &mut Rng, n: usize, depth: (f64, f64), len: (f64, f64)) -> Vec<ShotD
         .map(|_| {
             let from = d;
             d = (d + r.range(-4.0, 4.0)).clamp(depth.0.max(0.0), depth.1 + 5.0);
+            // Now and then a zero-length shot: free on gas and range, like a tie, but a shot.
+            let length = if r.chance(0.02) {
+                0.0
+            } else {
+                r.range(len.0, len.1)
+            };
             ShotData {
-                length: r.range(len.0, len.1),
+                length,
                 azimuth_in: r.range(0.0, 360.0),
                 azimuth_out: 0.0,
                 depth_in: from,
