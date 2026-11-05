@@ -23,6 +23,7 @@
 import { describe, expect, it } from 'vitest';
 import { computeRevealZooms, emitSlackFor, type RevealInput } from '../labelReveal';
 import { buildLabelDescriptors, shapeDescriptors, type LabelDescriptor } from '../labelTessellate';
+import { LABEL_KIND } from '../labelShaders';
 import { shapedExtent, type ExtentEm } from '../labelLayout';
 import { computeMercatorAnchor } from '../mercator';
 import type { GpsOrigin } from '../../../../../types/config';
@@ -37,8 +38,10 @@ import {
   type Rng,
 } from '../../../../../test/determinism';
 
-/** Regression seeds: none yet. */
-const SEEDS = determinismSeeds();
+/** Regression seeds. 113: a shot comment and a station comment with the same
+ *  global index (shot 1 / station 1) overlapped, tied on every sort key and fell
+ *  through to the array position (FZ-DET-1). */
+const SEEDS = determinismSeeds([113]);
 const ORIGIN: GpsOrigin = { latitude: 20.21, longitude: -87.46 };
 
 interface Case {
@@ -87,6 +90,28 @@ describe('label placement (reveal zooms) is deterministic (FZ-DET-TS)', () => {
       const second = computeRevealZooms(c.descriptors, c.extents, c.input);
       expect(seededDiff(seed, 'reveal zooms', first, second)).toBeNull();
     }
+  });
+
+  it('a shot comment and a station comment sharing a global index: the winner does not depend on array order', () => {
+    // Shot comment on global shot 5, station comment on global station 5, same
+    // anchor: equal tier, priority, ordinal AND stable id (FZ-DET-1).
+    const base = { text: 'StationA5 sump', anchorX: 0, anchorY: 0, ordinal: 0, flags: 0 };
+    const shotNote: LabelDescriptor = { ...base, color: [0, 0, 0, 255], kind: LABEL_KIND.SHOT_COMMENT, shotGlobal: 5, sectionId: 1 };
+    const stationNote: LabelDescriptor = { ...base, color: [0, 0, 0, 255], kind: LABEL_KIND.STATION_COMMENT, stationGlobal: 5, sectionId: 1 };
+    const extent = { minX: -2, maxX: 2, minY: -1, maxY: 0 };
+    const input: RevealInput = {
+      buildZoom: 18,
+      worldPixelScale: 512 * Math.pow(2, 18),
+      kindVisible: [true, true, true, true, true],
+      hideReference: false,
+      hideJump: false,
+    };
+    const [shotFirst, stationSecond] = computeRevealZooms([shotNote, stationNote], [extent, extent], input);
+    const [stationFirst, shotSecond] = computeRevealZooms([stationNote, shotNote], [extent, extent], input);
+    expect([shotSecond, stationFirst]).toEqual([shotFirst, stationSecond]);
+    // The shot comment wins, as it always did: the descriptor walk emits shot
+    // comments before station comments (labelTessellate.ts 213 vs 291).
+    expect(shotFirst!).toBeLessThan(stationSecond!);
   });
 
   it('descriptor list permuted -> every label keeps its reveal zoom', () => {

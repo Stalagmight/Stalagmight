@@ -30,7 +30,7 @@
  *
  * ALGORITHM (zoom-ladder greedy, chosen for provable monotonicity + determinism
  * over analytic elegance): candidates are ordered ONCE by a ZOOM-INDEPENDENT
- * priority - (decimation tier asc, kind priority, ordinal, stable id) - then a
+ * priority - (decimation tier asc, kind priority, ordinal, stable id, kind) - then a
  * ladder of 0.5-zoom steps runs from the coarsest candidate minzoom up to the
  * emit horizon (`buildZoom + slack`). At each step, already-revealed winners are
  * re-seeded into the grid at THAT zoom, then still-unrevealed admitted candidates
@@ -42,7 +42,10 @@
  * DETERMINISM ACROSS REBUILDS. The priority order uses a STABLE per-label id
  * (global shot / station index, or section id) rather than the array position,
  * so a pan-settle rebuild whose candidate membership shifts still resolves an
- * unchanged neighbourhood identically (padding absorbs the edge effects).
+ * unchanged neighbourhood identically (padding absorbs the edge effects). The id
+ * alone is not unique - a shot comment and a station comment share a kind
+ * priority and can share a number (global shot 5, global station 5) - so the
+ * kind breaks that tie; the array position only orders exact duplicates.
  */
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
 import type { LabelDescriptor } from './labelTessellate';
@@ -340,13 +343,20 @@ export function computeRevealZooms(
   if (candidates.length === 0) return reveal;
 
   // Zoom-INDEPENDENT priority order: coarser decimation tier first (so a finer
-  // tier can never evict it), then kind priority, then ordinal, then stable id.
+  // tier can never evict it), then kind priority, then ordinal, then stable id,
+  // then kind. Both comment kinds have priority 4 and their ids are a global
+  // shot index and a global station index, so the two can tie on everything
+  // above; without the kind that tie fell through to the array position, i.e.
+  // to the order the caller happened to list the labels in. Descending kind puts
+  // the shot comment first - the order `buildLabelDescriptors` always emitted
+  // them in - so the winner is unchanged, just no longer order-dependent.
   candidates.sort(
     (a, b) =>
       a.tier - b.tier ||
       a.priority - b.priority ||
       a.ordinal - b.ordinal ||
       a.id - b.id ||
+      b.desc.kind - a.desc.kind ||
       a.index - b.index,
   );
 
