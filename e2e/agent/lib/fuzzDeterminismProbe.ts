@@ -172,6 +172,19 @@ export class DetProbe {
   }
 
   /**
+   * One export move's judged attempt, then the file it wrote. The attempt's
+   * `size` is reported as "written" only: for a `.tml` it is the size of a
+   * DEFLATED zip, which follows the random uuids a load mints for shots that
+   * have none (export/tml.rs `shot_export_uuid`), and the file record compares
+   * the content itself.
+   */
+  exportMove(seq: number, attempt: { effective: string; size: number | null }): void {
+    const { size, ...rest } = attempt;
+    this.answer(`export move ${seq}`, { ...rest, written: size !== null });
+    this.file(`export move ${seq} file`, attempt.effective);
+  }
+
+  /**
    * A store export call and its outcome (`callProjectAction`). The file at
    * `args[0]` is recorded when the call says it succeeded.
    */

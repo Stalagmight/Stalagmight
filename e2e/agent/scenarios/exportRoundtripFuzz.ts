@@ -1183,8 +1183,7 @@ export const exportRoundtripFuzz: Scenario = {
         strays: ownDir ? straysIn(moveDir, [path.basename(effective)]) : [],
       };
       // Determinism mode: what this move reported and wrote (no-op when off).
-      detProbe()?.answer(`export move ${draw.seq}`, attempt);
-      detProbe()?.file(`export move ${draw.seq} file`, effective);
+      detProbe()?.exportMove(draw.seq, attempt);
       guarded(() => checkFileResult(attempt, reproduce));
       rmrf(moveDir);
     };
