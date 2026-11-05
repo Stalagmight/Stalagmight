@@ -458,14 +458,16 @@ fn encode_project(
         .iter()
         .filter_map(|c| project.closure_to_wire(c))
         .collect();
-    let station_offsets = project
-        .station_offsets
-        .iter()
+    // [#576 FZ-DET-1] The three map-held collections go out in KEY order, as
+    // their JSON form does (`serialize_station_offsets` and its siblings in
+    // models/project.rs): in map order, every map built anew (an open, a
+    // restored snapshot) encoded one project to different bytes.
+    let station_offsets = key_ordered(&project.station_offsets)
+        .into_iter()
         .filter_map(|(k, v)| Some((project.resolve_key(k)?, *v)))
         .collect();
-    let station_comments_map = project
-        .station_comments
-        .iter()
+    let station_comments_map = key_ordered(&project.station_comments)
+        .into_iter()
         .filter_map(|(k, v)| Some((project.resolve_key(k)?, v.clone())))
         .collect();
     // #576 A10: the map is reached through its accessor.
@@ -544,8 +546,19 @@ fn encode_project(
     Ok(bytes)
 }
 
-fn hashmap_to_pairs<K: Eq + std::hash::Hash, V>(map: HashMap<K, V>) -> Vec<(K, V)> {
-    map.into_iter().collect()
+/// The map's pairs in key order (#576 FZ-DET-1): never its iteration order,
+/// which changes with every map built.
+fn hashmap_to_pairs<K: Ord + std::hash::Hash, V>(map: HashMap<K, V>) -> Vec<(K, V)> {
+    let mut pairs: Vec<(K, V)> = map.into_iter().collect();
+    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+    pairs
+}
+
+/// The map's entries, borrowed, in key order (#576 FZ-DET-1).
+fn key_ordered<K: Ord, V>(map: &HashMap<K, V>) -> Vec<(&K, &V)> {
+    let mut entries: Vec<(&K, &V)> = map.iter().collect();
+    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    entries
 }
 
 #[cfg(test)]
@@ -932,5 +945,63 @@ mod tests {
         assert_eq!(refresh.stations_uints, load.stations_uints);
         assert_eq!(refresh.stations_flags, load.stations_flags);
         assert_eq!(project.name, "CaveA", "the project was only borrowed");
+    }
+
+    /// [#576 FZ-DET-1] The envelope is a function of the project. Section
+    /// offsets, station offsets and station comments live in `HashMap`s, and
+    /// every map built anew (an open, a restored undo snapshot) iterates in
+    /// another order; the pairs the envelope carries came out in that order,
+    /// so one project encoded to different bytes from one map to the next.
+    /// Each rebuild below deserializes the same project into fresh maps.
+    #[test]
+    fn the_envelope_does_not_depend_on_map_order() {
+        use crate::models::{SectionData, ShotData};
+        let mut project = new_project("CaveA");
+        let mut ids = Vec::new();
+        for s in 0..6_u32 {
+            let section = project.add_section(SectionData {
+                name: Some(format!("Section{s}")),
+                surveyor: None,
+                date: None,
+                color: "#123456".to_string(),
+                direction: None,
+                quality: 1.0,
+                shots: (0..3)
+                    .map(|i| ShotData {
+                        length: 2.0 + f64::from(i),
+                        azimuth_in: f64::from(i * 40),
+                        azimuth_out: f64::from(i * 40),
+                        ..Default::default()
+                    })
+                    .collect(),
+            });
+            ids.push((s, section.id));
+        }
+        project.ensure_shot_uuids();
+        for &(s, id) in &ids {
+            project.set_section_offset(id, (10.0 * f64::from(s + 1), -5.0));
+            for i in 0..=3_u32 {
+                let key = project.key_for_ref(StationRef::new(id, i)).unwrap();
+                project
+                    .station_comments
+                    .insert(key.clone(), format!("StationA{s}-{i}"));
+                project
+                    .station_offsets
+                    .insert(key, (f64::from(i), f64::from(i) / 2.0, 0.25));
+            }
+        }
+        let json = serde_json::to_string(&project).unwrap();
+        let encode = |p: &Project| {
+            encode_refresh(p, p.compute_station_coordinates(), empty_stats()).unwrap()
+        };
+        let first = encode(&serde_json::from_str(&json).unwrap());
+        let differing = (0..8)
+            .filter(|_| encode(&serde_json::from_str(&json).unwrap()) != first)
+            .count();
+        println!("FZ-DET-1: {differing} of 8 rebuilds of one project encoded differently");
+        assert_eq!(
+            differing, 0,
+            "the envelope depends on the maps' iteration order"
+        );
     }
 }
