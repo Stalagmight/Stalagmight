@@ -84,6 +84,30 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
       'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) run(0.000) fault(0.000) geom saveAs(37) ' +
       'run(0.000) grid refresh exec(0.724)',
   },
+  // The historical #576 bugs, re-planted to prove the fuzzer finds them (report.json
+  // "proof"); their shrunk traces keep them out for good.
+  {
+    // NF-FIX5-1: a refresh issued before a close answered after it and reopened the project.
+    id: 'NF-FIX5-1',
+    found: 'state',
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) run(0.000) fault(0.000) edit(46) close ' +
+      'run(0.000) refresh run(0.000) run(0.543) run(0.636) run(0.833) exec(0.000) run(0.961) run(0.609)',
+  },
+  {
+    // SETTINGS-ORDER: two toggles of one setting landed in reverse order.
+    id: 'SETTINGS-ORDER',
+    found: 'display-lost',
+    actions: 'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) toggleGrid toggleGrid run(0.852)',
+  },
+  {
+    // RV9a-2: a display write queued across a Save As was dropped.
+    id: 'RV9a-2',
+    found: 'display-lost',
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) refresh run(0.000) geom fault(0.463) geom saveAs(36) ' +
+      'run(0.000) geom',
+  },
 ];
 
 
@@ -91,7 +115,7 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
  * The CI sweep. A seed stands for the list `generate` makes of it today, so a change
  * to the generator moves every seed: pin a found bug as its trace above, not as a seed.
  */
-const FIXED_SEEDS = Array.from({ length: 55 }, (_, i) => 41 + i);
+const FIXED_SEEDS = Array.from({ length: 100 }, (_, i) => 1 + i);
 
 function shapes(): RunOptions {
   const wanted = env.FZ_INT_SHAPES;
