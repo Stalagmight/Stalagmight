@@ -679,8 +679,12 @@ impl App {
             Ok(r) => {
                 self.unsaved = false;
                 out.note(format!("discard(keep_lock={keep_lock}) -> Ok({r:?})"));
-                if r.is_none() {
-                    if let Some(project_id) = pid {
+                // "Throw the local copy away and come back at the server tip."
+                if let Some(project_id) = pid {
+                    out.claims.push(Claim::InSync {
+                        project_id: project_id.clone(),
+                    });
+                    if r.is_none() {
                         out.claims.push(Claim::LockReleased { project_id });
                     }
                 }
