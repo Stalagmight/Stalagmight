@@ -91,6 +91,8 @@ mod config_patch_tests;
 #[cfg(test)]
 mod crash_property_tests;
 #[cfg(test)]
+mod determinism_tests;
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     clippy::print_stdout,

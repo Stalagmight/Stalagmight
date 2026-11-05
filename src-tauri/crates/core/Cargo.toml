@@ -75,6 +75,10 @@ stalagmight-parsers = { path = "../parsers", features = ["test-support"] }
 stalagmight-persistence = { path = "../persistence", features = ["test-support"] }
 stalagmight-speleodb = { path = "../speleodb", features = ["test-support"] }
 tempfile = { workspace = true }
+# The determinism harness (`core/state/determinism_tests.rs`) inflates the
+# gzipped history blobs of a saved file so the clock inside them can be masked.
+# Already a shipped dependency of stalagmight-persistence; test-only here.
+flate2 = { workspace = true }
 libc = "0.2"
 # The profiling harnesses in `core::state::tests` install a real fmt
 # subscriber so the timing markers land on stdout.

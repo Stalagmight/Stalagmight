@@ -1018,7 +1018,7 @@ impl Project {
         for section in &mut self.sections {
             for shot in &mut section.shots {
                 if shot.uuid.as_deref().map_or(true, str::is_empty) {
-                    shot.uuid = Some(uuid::Uuid::new_v4().to_string());
+                    shot.uuid = Some(crate::uuid_mint::mint());
                     minted = true;
                 }
             }
@@ -1046,7 +1046,7 @@ impl Project {
         };
         for shot in &mut section.shots {
             if shot.uuid.as_deref().map_or(true, str::is_empty) {
-                shot.uuid = Some(uuid::Uuid::new_v4().to_string());
+                shot.uuid = Some(crate::uuid_mint::mint());
             }
         }
     }
@@ -1068,7 +1068,7 @@ impl Project {
                 }
                 // insert() == false means this UUID already appeared in-section.
                 if !seen.insert(u) {
-                    let fresh = uuid::Uuid::new_v4().to_string();
+                    let fresh = crate::uuid_mint::mint();
                     seen.insert(fresh.clone());
                     shot.uuid = Some(fresh);
                     reminted += 1;

@@ -613,7 +613,7 @@ impl Shot {
     /// `StationKey::AfterShot`, so a station cross-reference cannot be made to
     /// the shot at all until some later save mints one.
     pub fn uuid_or_mint(recorded: Option<String>) -> String {
-        recorded.unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+        recorded.unwrap_or_else(crate::uuid_mint::mint)
     }
 
     /// Construct a shot, resolving its persistent identity.

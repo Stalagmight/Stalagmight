@@ -396,6 +396,56 @@ reads a worker that panicked as one that is stuck, so a known assert gets
 reported as a deadlock. Poll `JoinHandle::is_finished` instead, and cross-check
 that every unwound worker was seen by the panic hook.
 
+## Determinism
+
+Every engine above compares two STATES or two ROUTES; none of them compares a
+run with itself, so none could see a `HashMap`'s iteration order leaking into
+something the app hands out (HFI-15's closure order, a save's row order). The
+determinism checks replay one seed and require the same bytes.
+
+### Rust tier
+
+`src-tauri/crates/core/src/core/state/determinism_tests.rs` replays the undo
+fuzzer, the metamorphic pairs, the format and crash engines and a closure-hub
+scenario, each replay on a FRESH thread (std's `RandomState` is keyed per
+thread, so every map iterates in another order; a premise test fails the run
+if two replays' hashers happen to agree). After every move it records the
+snapshot, the binary and JSON project state and the other read commands; at
+the end, the argument-taking reads, every export, and a save read back table
+by table, undo history included. Only the wall clock, v4 uuids (renamed by
+first appearance; test builds mint seeded uuids via
+`stalagmight_models::uuid_mint`) and temp paths are masked.
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib determinism_
+
+STALAGMIGHT_RUST_DET_SEEDS=40 STALAGMIGHT_RUST_DET_REPLAYS=3 \
+  STALAGMIGHT_RUST_DET_ITERATIONS=120 \
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib determinism_sweep -- --ignored --nocapture
+```
+
+The sweep lists every differing scenario with the stage, channel, byte offset
+and JSON path. `STALAGMIGHT_RUST_DET_ONLY='undo-fuzz seed=15 '` replays one
+line of it; `STALAGMIGHT_RUST_DET_DUMP=<dir>` writes each replay's stream for
+diffing. A seed the sweep finds joins the gate's fixed list.
+
+### Frontend tier
+
+The `*.determinism.test.ts` files (kit in `src/test/determinism.ts`) check the
+pure layers - snapshot canonicalisation, the binary-envelope decode, the
+tessellators, label layout and reveal, the gas-reach masks: the same input
+twice gives the same output, and set-like input in another insertion order
+does too. CI runs the regression seeds plus 8 generated ones per file:
+
+```bash
+STALAGMIGHT_DETERMINISM_RUNS=2000 pnpm exec vitest run determinism
+```
+
+The real-app replay mode for the agent-harness fuzzers is in
+[Agent Harness](agent-harness.md) (`STALAGMIGHT_FUZZ_DETERMINISM`).
+
 ## Corpus guidance, and why it is not wired into anything
 
 `fuzz_corpus_sweep` (`#[ignore]`d) measures whether remembering the shapes a

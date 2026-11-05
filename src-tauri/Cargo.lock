@@ -4457,6 +4457,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "directories",
+ "flate2",
  "libc",
  "rmp-serde",
  "rusqlite",

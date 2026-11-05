@@ -1653,7 +1653,10 @@ fn run_pairs(
                 None => entry.skipped += 1,
                 Some(found) => {
                     entry.built += 1;
+                    // [#576 FZ-DET] No-ops unless a determinism replay runs here.
+                    super::determinism_tests::probe_twins(pair.id, &twins.left, &twins.right);
                     let (_, distance) = twins.unwind_and_compare(pair.id, Mask::Strict);
+                    super::determinism_tests::probe_twins(pair.id, &twins.left, &twins.right);
                     entry.baseline_distance += distance.0 + distance.1;
                     for (id, count) in found.hits {
                         *entry.hits.entry(id).or_insert(0) += count;
@@ -1672,6 +1675,12 @@ fn run_pairs(
         }
     }
     out
+}
+
+/// [#576 FZ-DET] One seed's pairs, summarized: the determinism harness's way in
+/// (`determinism_tests.rs` replays it and compares the twins it probes).
+pub(super) fn run_pairs_summary(seed: u32, repeats: usize, prelude: usize) -> String {
+    summarize(seed, &run_pairs(seed, repeats, false, prelude))
 }
 
 fn summarize(seed: u32, outcomes: &BTreeMap<&'static str, PairOutcome>) -> String {

@@ -3368,7 +3368,9 @@ impl Fuzzer {
     /// Disarm it: the move returned, so its own log line is (or is about to be)
     /// the last one and there is nothing left in flight to name.
     fn finished_move(&mut self) {
-        self.in_flight = None;
+        let label = self.in_flight.take();
+        // [#576 FZ-DET] A no-op unless a determinism replay runs on this thread.
+        super::determinism_tests::probe_move(label.as_deref(), &self.state);
     }
 
     /// Move the in-flight label INTO the log, marked as never having returned.
@@ -6425,6 +6427,9 @@ fn finish_run(mut fuzzer: Fuzzer, plan: Plan) -> Outcome {
         fuzzer.cross_boundary();
     }
     fuzzer.finish();
+    // [#576 FZ-DET] Everything the final state answers, exports and a save
+    // included. A no-op unless a determinism replay runs on this thread.
+    super::determinism_tests::probe_full("final", &fuzzer.state);
     fuzzer.outcome
 }
 

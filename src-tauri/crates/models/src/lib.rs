@@ -39,6 +39,7 @@ pub mod test_support;
 #[cfg(test)]
 mod test_support_probe_tests;
 pub mod undo_mode;
+pub mod uuid_mint;
 pub mod warning;
 
 pub use angle::*;
