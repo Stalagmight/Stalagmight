@@ -160,6 +160,17 @@ mod geometry_query_tests;
 mod import_pipeline_tests;
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point, the injected crash \
+              panics ON PURPOSE to poison a cell, and the printed reports are the evidence a \
+              run captures"
+)]
+mod interleave_fuzz_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point"
