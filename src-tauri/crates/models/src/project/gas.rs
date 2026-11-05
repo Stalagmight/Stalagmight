@@ -19,6 +19,12 @@ mod half_minus_gauge_tests;
 #[cfg(test)]
 #[expect(
     clippy::print_stdout,
+    reason = "the printed sweep counts and failure classes are the evidence a run captures"
+)]
+mod oracle_tests;
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
     reason = "the printed plans are the evidence a run captures"
 )]
 mod pin_decides_route_tests;
