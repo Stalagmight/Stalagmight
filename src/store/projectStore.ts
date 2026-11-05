@@ -487,6 +487,9 @@ export function projectSwitched(before: string | null, after: string | null): bo
 export const selectNewerFileReadOnly = (s: Pick<ProjectStore, 'newerSchemaVersion'>): boolean =>
   s.newerSchemaVersion !== null;
 
+/** What a mutation was issued against: see `lostProject` in the store. */
+type IssuedAgainst = { key: string | null; file: string | null; session: number };
+
 /** What every seam returns for a request whose project changed out from under it. */
 const PROJECT_CHANGED = 'The project changed before this action could run.';
 
@@ -597,8 +600,32 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => {
-  /** True when the project a request was ISSUED against is no longer the open one (#24). */
-  const lostProject = (key: string | null) => projectSwitched(key, get().project?.created_at ?? null);
+  /** What a request was ISSUED against (#24): the project's key, the file it was open from and the session. */
+  const issuedAgainst = (): IssuedAgainst => ({
+    key: get().project?.created_at ?? null,
+    file: get().project?.file_path ?? null,
+    session: projectSessionEpoch(),
+  });
+  /**
+   * True when the project a request was ISSUED against is no longer the open one (#24).
+   *
+   * [#576 FZ-FZ-INT-2] Two copies of one project file share `created_at`, so an edit
+   * issued in one copy while a switch to the other was under way ran in the other.
+   * Once the session moved (another open committed) the file must match too. A Save
+   * As moves the file within the session, and a reload of the same file opens the
+   * project the edit was made in: neither counts - the display-setting chain's rule
+   * (`utils/settingWriteChain.ts`).
+   */
+  const lostProject = (issued: IssuedAgainst) => {
+    const open = get().project;
+    if (projectSwitched(issued.key, open?.created_at ?? null)) return true;
+    return (
+      issued.key !== null &&
+      open !== null &&
+      issued.session !== projectSessionEpoch() &&
+      issued.file !== (open.file_path ?? null)
+    );
+  };
   /** Shared helper: invoke IPC command, refresh state on success, mark dirty. */
   const executeCommand = async <K extends MutationCommand>(
     command: K,
@@ -612,7 +639,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // through the queue, so B can open while this entry is still waiting, and reading the
     // identity inside the callback would capture B and run A's section ids against B's
     // sections - which, since section ids are small per-project integers, would mostly RESOLVE.
-    const requestProjectKey = get().project?.created_at ?? null;
+    const issued = issuedAgainst();
     // GHOST-2 (#576), also at ISSUE time: a move carry's own commit claims its marker here;
     // any other survey mutation issued while a carry is in flight cancels the carry and is
     // refused before it can queue (src/store/moveCarry.ts). Renaming a project by path is a
@@ -621,19 +648,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const mutatesOpenSurvey = command !== 'set_project_name_for_path' || args?.path === get().project?.file_path;
     const refused = carryCommit || !mutatesOpenSurvey ? null : refuseMutationDuringCarry();
     if (refused) return refused;
-    return runSerialized(() => executeCommandInner(command, args, meta, requestProjectKey, carryCommit));
+    return runSerialized(() => executeCommandInner(command, args, meta, issued, carryCommit));
   };
 
   const executeCommandInner = async <K extends MutationCommand>(
     command: K,
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown>; readOnlyNoticeInline?: boolean },
-    requestProjectKey: string | null,
+    issued: IssuedAgainst,
     carryCommit: MoveCarryCommit | null
   ): Promise<CommandOutcome<IpcResult<K>>> => {
+    const requestProjectKey = issued.key;
     // Refuse before the IPC leaves: a command issued against a project that is no longer open
     // must not mutate whatever replaced it.
-    if (lostProject(requestProjectKey)) return refusedLocally(PROJECT_CHANGED);
+    if (lostProject(issued)) return refusedLocally(PROJECT_CHANGED);
     try {
       // #310: anchor the gas-plan pins against the survey as it stands BEFORE this edit - a pin
       // placed a moment ago may still be sitting on the debounce. No-op for a plan with no pins.
@@ -644,7 +672,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // above ran before that window existed, and `args` were captured against the OUTGOING
       // project - whose section ids, being small per-project integers, would mostly RESOLVE in
       // whatever is now open.
-      if (lostProject(requestProjectKey)) return refusedLocally(PROJECT_CHANGED);
+      if (lostProject(issued)) return refusedLocally(PROJECT_CHANGED);
       // GHOST-2 R3: a carry's commit that queued behind another mutation, or outlived the
       // survey it was computed against, is refused here - the last moment before IPC.
       const staleCarryCommit = refuseStaleCarryCommit(carryCommit, get().projectTreeGeneration);
@@ -656,7 +684,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (result.success) {
         // Re-resolve those pins BEFORE the refetch: the reach-field effect keys on modified_at,
         // so a stale pin sent here would paint a route through the wrong station for a frame.
-        if (!lostProject(requestProjectKey)) await Promise.all([remapPlanPins(), remapDistanceOrigin(origin, requestProjectKey)]);
+        if (!lostProject(issued)) await Promise.all([remapPlanPins(), remapDistanceOrigin(origin, requestProjectKey)]);
         await get().refreshProjectState();
         // A reverse's aftermath (clearing the selection, the merge staging and the comment
         // pickup it renumbered) runs HERE rather than in the caller, so a reverse and an undo
@@ -664,7 +692,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // immediately after the refresh they belong to. (The distance-gradient origin is re-resolved
         // from its anchor above, #576 D39(g); it is mirrored here only when that anchor could not be
         // taken.)
-        if (!lostProject(requestProjectKey)) {
+        if (!lostProject(issued)) {
           applyReverseAftermath(composeReverseTransforms(reversedSectionsOf(result), get().project?.sections ?? []), origin);
         }
         set({ isDirty: true });
@@ -734,11 +762,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     toastId: string,
   ): Promise<CommandOutcome<HistoryOutcome>> => {
     // Captured at ISSUE time - see `executeCommand`, which also explains the GHOST-2 check.
-    const requestProjectKey = get().project?.created_at ?? null;
+    const issued = issuedAgainst();
     const refused = refuseMutationDuringCarry();
     if (refused) return refused;
     const args = typedArgs as Record<string, unknown> | undefined;
-    return runSerialized(() => executeUndoRedoInner(command, args, meta, toastId, requestProjectKey));
+    return runSerialized(() => executeUndoRedoInner(command, args, meta, toastId, issued));
   };
 
   const executeUndoRedoInner = async (
@@ -746,9 +774,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown> },
     toastId: string,
-    requestProjectKey: string | null,
+    issued: IssuedAgainst,
   ): Promise<CommandOutcome<HistoryOutcome>> => {
-    if (lostProject(requestProjectKey)) return refusedLocally(PROJECT_CHANGED);
+    const requestProjectKey = issued.key;
+    if (lostProject(issued)) return refusedLocally(PROJECT_CHANGED);
     let result: CommandOutcome<HistoryOutcome>;
     // #24: undoing (or redoing) a reverse renumbers station i back to N - i, so
     // every positional StationRef the frontend holds - the gas-plan pins, the
@@ -770,7 +799,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // than merely tolerable: its remap and its aftermath carry the same guard and skip
       // themselves, and the refresh + integrity re-check simply re-read whatever is now open -
       // exactly what already happens today when the switch is caught one guard later.
-      if (lostProject(requestProjectKey)) return refusedLocally(PROJECT_CHANGED);
+      if (lostProject(issued)) return refusedLocally(PROJECT_CHANGED);
       // An undo/redo mutates the remote project too: its SpeleoDB link bits ride on the
       // answer, success or failure, and `invokeIpc` applied them (#576 D22).
       result = await settleCommand((invokeIpc as ForwardedInvoke)(command, args, meta));
@@ -819,7 +848,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // #310: re-resolve the plan pins before the refetch (see executeCommandInner). In the
       // `finally` because a PARTIAL multi-step undo renumbered too, and its pins need it just
       // as much as a clean one's do. The distance-gradient origin likewise (#576 D39(g)).
-      if (!lostProject(requestProjectKey)) await Promise.all([remapPlanPins(), remapDistanceOrigin(origin, requestProjectKey)]);
+      if (!lostProject(issued)) await Promise.all([remapPlanPins(), remapDistanceOrigin(origin, requestProjectKey)]);
       await get().refreshProjectState();
       // #24: same project-switch guard as executeCommand. Section ids are small per-project
       // integers, so entries from the OUTGOING project would otherwise match sections in
@@ -829,7 +858,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // A multi-step undo_to can walk past a CreateShot, so the post-range count
       // is NOT the divisor the earlier steps mirrored against - composing the
       // entries is what keeps those steps landing on the right station.
-      if (!lostProject(requestProjectKey)) {
+      if (!lostProject(issued)) {
         applyReverseAftermath(composeReverseTransforms(reversedSections, get().project?.sections ?? []), origin);
       }
       // Undo/redo can change which cross-references resolve - e.g. undoing a

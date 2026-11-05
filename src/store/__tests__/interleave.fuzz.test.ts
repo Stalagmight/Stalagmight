@@ -47,7 +47,18 @@ const KNOWN_UNMODELLED = new Set<string>([]);
  * Every bug the fuzzer found and that is fixed, as its shrunk trace: each must now
  * hold every invariant. (`options` = the shapes the trace needs switched on.)
  */
-const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Partial<RunOptions>; actions: string }> = [];
+const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Partial<RunOptions>; actions: string }> = [
+  {
+    // An edit issued in CaveA while a switch to its copy was under way ran in the
+    // copy: the identity guard compared created_at only, which copies share.
+    id: 'FZ-FZ-INT-2',
+    found: 'edit-target',
+    options: { editAcrossSwitch: true },
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) run(0.000) edit(27) run(0.000) ' +
+      'load("/caves/CaveA copy.stalx") edit(38) edit(39)',
+  },
+];
 
 
 /**
