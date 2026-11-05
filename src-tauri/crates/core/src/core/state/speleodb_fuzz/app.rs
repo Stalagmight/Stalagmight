@@ -309,13 +309,21 @@ impl App {
                 out.claims.push(Claim::Crashed);
                 self.restart();
             }
-            Act::Unlink => match self.state.speleodb_unlink() {
-                Ok(()) => {
-                    out.note("unlink -> Ok");
-                    out.claims.push(Claim::LinkDropped);
+            Act::Unlink => {
+                let pid = self.open_link().map(|l| l.project_id);
+                match self.state.speleodb_unlink() {
+                    Ok(()) => {
+                        out.note("unlink -> Ok");
+                        out.claims.push(Claim::LinkDropped);
+                        // Unlink hands a held lock back best-effort (it abandons the link,
+                        // so nothing could release it from this copy again).
+                        if let Some(project_id) = pid {
+                            out.claims.push(Claim::LockReleaseBestEffort { project_id });
+                        }
+                    }
+                    Err(e) => out.refused("unlink", &e),
                 }
-                Err(e) => out.refused("unlink", &e),
-            },
+            }
             Act::SaveLocalCopy => self.save_local_copy(out),
             Act::DeleteProject => {
                 let pid = self.open_link().map(|l| l.project_id);
@@ -665,7 +673,7 @@ impl App {
                     out.claims.push(Claim::InSync {
                         project_id: project_id.clone(),
                     });
-                    out.claims.push(Claim::LockReleased { project_id });
+                    out.claims.push(Claim::LockReleaseBestEffort { project_id });
                 }
             }
             Err(e) => out.refused("take_remote", &e),
