@@ -69,7 +69,8 @@ use tempfile::TempDir;
 
 use super::fuzz_undo_tests::{
     adjusted_diffs, adjusted_geometry_of, build_project, canonical_snapshot, describe_diffs,
-    diff_snapshots, integrity_verdict, random_offset, random_shot, read_targets, Rng, COLORS,
+    diff_snapshots, integrity_verdict, random_offset, random_shot, read_targets, sweep_seeds, Rng,
+    COLORS,
 };
 use super::AppState;
 use crate::core::Command;
@@ -930,7 +931,7 @@ fn format_property_sweep() {
     let mut dirty = Vec::new();
     let mut classified: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut skipped = 0;
-    for seed in 1..=seeds {
+    for seed in sweep_seeds("STALAGMIGHT_RUST_FORMAT_FIRST_SEED", seeds) {
         let mut seed_problems = Vec::new();
         let fixpoint = check_save_load_save(seed, closures, moves);
         if !fixpoint.checked {

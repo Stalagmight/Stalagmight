@@ -6837,6 +6837,17 @@ const THREAD_HEADROOM: usize = 1;
 /// way a parallel run could fail where the sequential one does not.
 const WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
 
+/// The seeds a sweep runs: `count` of them from `$var` (default 1), so a long
+/// run can start where the last one stopped instead of re-running seed 1. Unset,
+/// the range is `1..=count`, the one every sweep has always run.
+pub(super) fn sweep_seeds(var: &str, count: u32) -> std::ops::Range<u32> {
+    let first: u32 = std::env::var(var)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    first..first.saturating_add(count)
+}
+
 /// How many workers a sweep runs its seeds on: `STALAGMIGHT_RUST_FUZZ_THREADS`,
 /// else the machine's parallelism less [`THREAD_HEADROOM`], never more than
 /// there are jobs and never less than one.
@@ -7583,7 +7594,7 @@ fn fuzz_seed_survey() {
     let verbose = fuzz_verbose();
     // Seed-major, mode-minor: the same order the sweep used when it ran the
     // seeds one at a time, and the order every line below is merged in.
-    let jobs: Vec<(u32, bool)> = (1..=seeds)
+    let jobs: Vec<(u32, bool)> = sweep_seeds("STALAGMIGHT_RUST_FUZZ_FIRST_SEED", seeds)
         .flat_map(|seed| [(seed, false), (seed, true)])
         .collect();
     let results = run_seed_jobs(&jobs, fuzz_threads(jobs.len()), |&(seed, persistence)| {
@@ -7895,7 +7906,7 @@ fn undo_redo_fuzz_horizon() {
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut trimmed = 0;
     let mut failures = Vec::new();
-    let jobs: Vec<u32> = (1..=seeds).collect();
+    let jobs: Vec<u32> = sweep_seeds("STALAGMIGHT_RUST_FUZZ_FIRST_SEED", seeds).collect();
     // Caught per seed, and RE-RAISED at the end. A long run is expensive enough
     // that stopping the whole sweep on the first failure wastes the other seeds'
     // evidence; hiding the failure would be worse, so every one is reported and
@@ -7988,7 +7999,7 @@ fn undo_redo_fuzz_soak() {
     let mut failures = Vec::new();
     // Seed-major, mode-minor: the order the soak ran in when it ran one seed at
     // a time, and the order the totals are merged in.
-    let jobs: Vec<(u32, bool)> = (1..=seeds)
+    let jobs: Vec<(u32, bool)> = sweep_seeds("STALAGMIGHT_RUST_FUZZ_FIRST_SEED", seeds)
         .flat_map(|seed| [(seed, false), (seed, true)])
         .collect();
     let results = run_seed_jobs(&jobs, fuzz_threads(jobs.len()), |&(seed, persistence)| {

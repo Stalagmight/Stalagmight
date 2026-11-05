@@ -208,9 +208,19 @@ fn prop_anchors_survive_interleaved_edits(seed: u64) {
     );
 }
 
+/// Where the run starts (`ANCHOR_FUZZ_FIRST`, default 0), so a long run can go
+/// on from the last one instead of repeating its cases.
+fn first() -> u64 {
+    std::env::var("ANCHOR_FUZZ_FIRST")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
+
 #[test]
 fn fuzz_anchors_survive_interleaved_edits() {
-    for i in 0..iters() {
+    let first = first();
+    for i in first..first.saturating_add(iters()) {
         prop_anchors_survive_interleaved_edits(i ^ 0x0A11_0001);
     }
 }

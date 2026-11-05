@@ -210,7 +210,7 @@ use super::format_property_tests::{
     build_state, dump_database, dump_differences, load_differences, mutate, observe, open_fresh,
     Loaded,
 };
-use super::fuzz_undo_tests::Rng;
+use super::fuzz_undo_tests::{sweep_seeds, Rng};
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
 // and every save reaches `note_recent_project` -> `Config::save()`, which WRITES
@@ -1059,7 +1059,7 @@ fn crash_property_sweep() {
     let mut checked = 0;
     let mut skipped = 0;
     let mut notes: BTreeMap<&'static str, usize> = BTreeMap::new();
-    for seed in 1..=seeds {
+    for seed in sweep_seeds("STALAGMIGHT_RUST_CRASH_FIRST_SEED", seeds) {
         let outcome = check_crash_states(seed, moves, extra);
         checked += outcome.checked;
         if outcome.checked == 0 {

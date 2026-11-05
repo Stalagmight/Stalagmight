@@ -1164,12 +1164,25 @@ fn sweeps(
     draw: fn(&mut Rng) -> Plan,
     every_input: bool,
 ) -> (Tally, Tally) {
-    let main = sweep(seed, plans, draw, every_input);
+    let main = sweep(farm_seed(seed), plans, draw, every_input);
     let mut reseeded = Tally::default();
     for s in RESEEDS {
-        reseeded.add(sweep(s, reseed_plans, draw, every_input));
+        reseeded.add(sweep(farm_seed(s), reseed_plans, draw, every_input));
     }
     (main, reseeded)
+}
+
+/// `seed`, or with `STALAGMIGHT_GAS_PIN_SEED=<n>` set a seed of its own per `n`, so a long run
+/// can sweep plans no CI run has drawn: every sweep and every reseed moves together, each to a
+/// different seed. Unset, every sweep runs the fixed seeds above, as it always has.
+fn farm_seed(seed: u64) -> u64 {
+    match std::env::var("STALAGMIGHT_GAS_PIN_SEED")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+    {
+        Some(n) => seed ^ n.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        None => seed,
+    }
 }
 
 #[test]

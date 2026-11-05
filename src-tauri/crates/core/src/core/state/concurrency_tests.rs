@@ -77,7 +77,7 @@ use tempfile::TempDir;
 
 use super::fuzz_undo_tests::{
     adjusted_geometry_of, build_project, canonical_snapshot, integrity_verdict, random_offset,
-    random_shot, read_targets, Rng, COLORS,
+    random_shot, read_targets, sweep_seeds, Rng, COLORS,
 };
 use super::AppState;
 use crate::core::Command;
@@ -1006,7 +1006,7 @@ fn concurrency_soak() {
         std::collections::BTreeMap::new();
     let mut dirty = Vec::new();
     let mut completed = 0;
-    for seed in 1..=seeds {
+    for seed in sweep_seeds("STALAGMIGHT_RUST_CONC_FIRST_SEED", seeds) {
         let outcome = run_concurrent(seed, threads, operations, 300);
         completed += outcome.operations;
         for (id, count) in outcome.hits {

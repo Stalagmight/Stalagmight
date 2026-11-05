@@ -60,7 +60,8 @@ use std::collections::BTreeMap;
 
 use super::fuzz_undo_tests::{
     adjusted_diffs, adjusted_geometry_of, build_project, canonical_snapshot, describe_diffs,
-    diff_snapshots, integrity_verdict, random_shot, read_targets, Rng, COLORS, GEOMETRY_EXTREME,
+    diff_snapshots, integrity_verdict, random_shot, read_targets, sweep_seeds, Rng, COLORS,
+    GEOMETRY_EXTREME,
 };
 use super::AppState;
 use crate::core::{Command, CommandResult};
@@ -755,7 +756,7 @@ fn adversarial_sweep() {
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut dirty = Vec::new();
     let (mut attempted, mut rejected, mut accepted) = (0, 0, 0);
-    for seed in 1..=seeds {
+    for seed in sweep_seeds("STALAGMIGHT_RUST_ADV_FIRST_SEED", seeds) {
         let outcome = run_adversarial(seed, moves, closures);
         attempted += outcome.attempted;
         rejected += outcome.rejected;

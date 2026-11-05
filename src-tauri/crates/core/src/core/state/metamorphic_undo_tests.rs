@@ -105,7 +105,7 @@ use tempfile::TempDir;
 
 use super::fuzz_undo_tests::{
     adjusted_diffs, adjusted_geometry_of, build_project, canonical_snapshot, describe_diffs,
-    diff_snapshots, integrity_verdict, random_offset, random_shot, read_targets,
+    diff_snapshots, integrity_verdict, random_offset, random_shot, read_targets, sweep_seeds,
     topology_signature, Diff, Rng, Targets, Verdict, COLORS,
 };
 use super::AppState;
@@ -1886,7 +1886,7 @@ fn metamorphic_fuzz() {
     let mut shapes: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut signatures: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut dirty = Vec::new();
-    for seed in 1..=seeds {
+    for seed in sweep_seeds("STALAGMIGHT_RUST_META_FIRST_SEED", seeds) {
         let outcomes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_pairs(seed, repeats, closures, prelude)
         }));
