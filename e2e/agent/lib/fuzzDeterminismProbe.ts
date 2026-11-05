@@ -121,7 +121,11 @@ export class DetProbe {
   async step(ctx: ScenarioContext, request: Record<string, unknown>, response: object): Promise<void> {
     this.fused += 1;
     // The page's own durations are wall-clock values: masked like any other.
-    const answer = { ...response, timing: WALL_CLOCK_MASK };
+    const answer: Record<string, unknown> = { ...response, timing: WALL_CLOCK_MASK };
+    // `bytes` is the LENGTH of the page's canonical string, which carries
+    // `merged_at` / `created_at` stamps whose fraction digits vary with the
+    // clock; the state record below compares that content, stamps masked.
+    if ('bytes' in answer) answer.bytes = WALL_CLOCK_MASK;
     this.answer(`fused step ${this.fused}: ${String(request.kind)} ${String(request.action)}`, { request, answer });
     await this.state(ctx, `after fused step ${this.fused}`);
   }

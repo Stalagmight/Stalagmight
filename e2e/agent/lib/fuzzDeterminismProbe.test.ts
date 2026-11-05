@@ -91,10 +91,11 @@ describe('DetProbe', () => {
     });
   });
 
-  it('records the state after a fused step with the page timings masked', async () => {
+  it('records the state after a fused step with the page timings and the canonical length masked', async () => {
     const run = async (probe: DetProbe, actionMs: number): Promise<void> => {
       const ctx = fakeCtx(() => ({ project: { ok: { modified_at: String(actionMs), sections: [] } } }));
-      await probe.step(ctx, { kind: 'undo', action: 'undo' }, { undoLen: 1, timing: { actionMs } });
+      // `bytes` follows the stamps' length, as `modified_at` here does.
+      await probe.step(ctx, { kind: 'undo', action: 'undo' }, { undoLen: 1, bytes: 100 + actionMs, timing: { actionMs } });
     };
     const left = new DetProbe('A');
     const right = new DetProbe('B');
