@@ -785,6 +785,15 @@ mod settled_reads_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test module: the SpeleoDB protocol fuzzer (#576 fuzzers) - a broken invariant \
+              is a panic by design, and the printed trace is the evidence a run captures"
+)]
+mod speleodb_fuzz;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
     clippy::print_stdout,
     clippy::panic,
     reason = "test module: panics on a failed assumption are the point, and the printed \
