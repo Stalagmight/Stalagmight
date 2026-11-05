@@ -69,10 +69,26 @@ use crate::models::{Project, ShotData};
 use crate::persistence::Database;
 use crate::test_fixtures::state_with_null_sink;
 
-/// Seeds every CI run replays, per mode: a spread of fresh seeds plus every seed
-/// a campaign ever failed on (none so far).
+/// Seeds every CI run replays, per mode: a spread of fresh seeds, plus
+/// [`REGRESSION_SEEDS`].
 const CI_SEEDS: std::ops::Range<u64> = 0..12;
-const REGRESSION_SEEDS: &[(Mode, u64)] = &[];
+/// Seeds a campaign failed on, and seeds proven to catch a planted regression of
+/// a fixed #576 bug (each one failed with that fix reverted, and passes with it).
+/// They name schedules of THIS generator and scheduler: a change to either moves
+/// them, so re-derive them (revert the fix, run a campaign, keep a failing seed).
+const REGRESSION_SEEDS: &[(Mode, u64)] = &[
+    // RV5-1: `save_display_setting` without `command_lock` - a write landing while
+    // a save holds the handle is lost (shrinks to one Save and one write).
+    (Mode::Edits, 127),
+    // RV6b-2: `save_display_setting_for` without `command_lock` - a load commits
+    // between the identity check and the write, which lands in CaveB.
+    (Mode::Lifecycle, 97),
+    // (C2: `settled_read` without `command_lock` - a read inside a command sees
+    // the edit's section without its undo entry - is caught by CI seed Edits 11.)
+    // RV4-R-C2: no cancellation re-check once a load holds `command_lock` - an
+    // older load commits after a newer one (shrinks to two loads).
+    (Mode::Lifecycle, 251),
+];
 
 const MAX_STEPS: usize = 200_000;
 const WATCHDOG: Duration = Duration::from_mins(2);
