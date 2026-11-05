@@ -108,6 +108,19 @@ const MARKER: &str = "fz-";
 enum Mode {
     Edits,
     Lifecycle,
+    /// `Edits` with the IPC reads that compute on a settled snapshot.
+    Reads,
+    /// `Lifecycle` with project creates and the IPC reads.
+    Sessions,
+}
+
+impl Mode {
+    const ALL: [Self; 4] = [Self::Edits, Self::Lifecycle, Self::Reads, Self::Sessions];
+
+    /// One project for the whole case (a Save As moves it; nothing opens another).
+    fn single_project(self) -> bool {
+        matches!(self, Self::Edits | Self::Reads)
+    }
 }
 
 /// The cells an injected crash can poison.
@@ -152,6 +165,11 @@ enum Op {
     Legacy(u32),
     SettledRead,
     SettledSnapshot,
+    /// An IPC read computed on a settled snapshot (`distance_field_checked`).
+    Measure,
+    /// File > New: a project at this thread's n-th new file, its first save
+    /// deferred when n is even.
+    Create(u32),
     /// Load file n of the world (0 CaveA, 1 CaveB, 2 the copy of CaveA).
     Load(usize),
     Close,
@@ -209,12 +227,14 @@ fn generate(mode: Mode, seed: u64) -> Case {
     let salt = match mode {
         Mode::Edits => 0x45_44_49_54,
         Mode::Lifecycle => 0x4c_49_46_45,
+        Mode::Reads => 0x52_45_41_44,
+        Mode::Sessions => 0x53_45_53_53,
     };
     let mut rng = SplitMix::new(seed ^ salt);
     let crashes = mode == Mode::Edits && rng.below(3) == 0;
     // Half the lifecycle cases are load storms: every thread opens with a load of
     // a file that is not open (CaveB or the copy), so loads overlap.
-    let storm = mode == Mode::Lifecycle && rng.below(2) == 0;
+    let storm = matches!(mode, Mode::Lifecycle | Mode::Sessions) && rng.below(2) == 0;
     let thread_count = 2 + rng.below(3);
     let mut threads = Vec::with_capacity(thread_count);
     for t in 0..thread_count {
@@ -258,6 +278,29 @@ fn generate(mode: Mode, seed: u64) -> Case {
                     56..=65 => Op::SettledRead,
                     66..=69 => Op::SettledSnapshot,
                     70..=89 => Op::Load(rng.below(3)),
+                    _ => Op::Close,
+                },
+                Mode::Reads => match roll {
+                    0..=29 => Op::Edit(format!("{MARKER}t{t}-{i}")),
+                    30..=37 => Op::Undo,
+                    38..=42 => Op::Redo,
+                    43..=49 => Op::Save,
+                    50..=51 => Op::SaveAs(n),
+                    52..=59 => Op::Display(n),
+                    60..=79 => Op::Measure,
+                    80..=89 => Op::SettledRead,
+                    _ => Op::SettledSnapshot,
+                },
+                Mode::Sessions => match roll {
+                    0..=19 => Op::Edit(format!("{MARKER}t{t}-{i}")),
+                    20..=24 => Op::Undo,
+                    25..=27 => Op::Redo,
+                    28..=35 => Op::Save,
+                    36..=49 => Op::Display(n),
+                    50..=57 => Op::Measure,
+                    58..=63 => Op::SettledRead,
+                    64..=79 => Op::Load(rng.below(3)),
+                    80..=89 => Op::Create(n),
                     _ => Op::Close,
                 },
             };
@@ -306,6 +349,11 @@ fn stem(path: &Path) -> String {
     path.file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// The file a `Create(n)` of `thread` makes its project at.
+fn new_file(dir: &Path, thread: usize, n: u32) -> PathBuf {
+    dir.join(format!("New t{thread} n{n}.stalx"))
 }
 
 /// The marker section names of `project`, in section order (duplicates kept).
@@ -454,6 +502,23 @@ fn run_op(ctx: &Ctx, thread: usize, index: usize, op: &Op) -> (Answer, Option<St
             }
         }
         Op::Close => (Answer::of(&state.execute(Command::CloseProject)), None),
+        Op::Measure => match state.distance_field_checked(None) {
+            Ok(_) => (Answer::Ok, None),
+            Err(e) => (Answer::Refused(None, e), None),
+        },
+        Op::Create(n) => {
+            let created = state.do_create_project_full(
+                format!("New t{thread} n{n}"),
+                None,
+                None,
+                Some(new_file(&ctx.dir, thread, *n)),
+                n % 2 == 0,
+            );
+            match created {
+                Ok(_) => (Answer::Ok, None),
+                Err(e) => (Answer::Refused(None, format!("{e:?}")), None),
+            }
+        }
         Op::Crash(cell) => {
             let cell = cell.of(state);
             let crashed = panic::catch_unwind(AssertUnwindSafe(|| {
@@ -578,7 +643,7 @@ fn last_acked(mode: Mode, records: &[Record]) -> BTreeMap<(String, String), Stri
             _ => continue,
         };
         let tag = match (mode, &r.op) {
-            (Mode::Edits, _) => "open".to_owned(),
+            (mode, _) if mode.single_project() => "open".to_owned(),
             (_, Op::Legacy(_)) => "legacy".to_owned(),
             _ => value.split('|').next().unwrap_or_default().to_owned(),
         };
@@ -625,8 +690,9 @@ fn post_run(case: &Case, ctx: &Ctx, records: &[Record], outcome: &Outcome) -> Ve
         }
     }
 
+    found.extend(settled_windows(records, outcome));
     let open = state.project_snapshot();
-    if case.mode == Mode::Edits {
+    if case.mode.single_project() {
         let created: BTreeSet<String> = records
             .iter()
             .filter(|r| r.answer == Answer::Ok)
@@ -689,6 +755,8 @@ fn post_run(case: &Case, ctx: &Ctx, records: &[Record], outcome: &Outcome) -> Ve
             .unwrap_or_else(PoisonError::into_inner),
     );
 
+    // Before the final save, which would paper over a handle to another file.
+    found.extend(handle_is_file(state, open.as_deref()));
     // The final save, and the file read back.
     let saved_path = open.as_ref().and_then(|p| p.file_path.clone());
     if let Some(path) = saved_path {
@@ -708,13 +776,15 @@ fn post_run(case: &Case, ctx: &Ctx, records: &[Record], outcome: &Outcome) -> Ve
         found.push("a cell crashed and no internal-error notice was raised".to_owned());
     }
     found.extend(display_files(case, ctx, records));
-    if case.mode == Mode::Lifecycle {
+    if !case.mode.single_project() {
+        found.extend(edit_homes(ctx, records, outcome));
         found.extend(load_order(ctx, records, outcome));
     }
     found
 }
 
-/// Oracle 6 (`Lifecycle`, RV4-R-C2 class): loads commit in the order they STARTED
+/// Oracle 6 (`Lifecycle`, `Sessions`, RV4-R-C2 class): loads (and creates, which
+/// share the load token) commit in the order they STARTED
 /// (`start_new_load`, which cancels the load in flight). The frontend shows the
 /// project of the load it issued last, so a backend that let an older load commit
 /// after a newer one sits on a project the user moved past. With no successful
@@ -739,16 +809,13 @@ fn load_order(ctx: &Ctx, records: &[Record], outcome: &Outcome) -> Vec<String> {
     };
     let newest = records
         .iter()
-        .filter(|r| r.answer == Answer::Ok)
-        .filter_map(|r| match r.op {
-            Op::Load(file) => started_at(r).map(|at| (at, file, r)),
-            _ => None,
-        })
-        .max_by_key(|(at, _, _)| *at);
-    let Some((_, file, r)) = newest else {
+        .filter(|r| r.answer == Answer::Ok && matches!(r.op, Op::Load(_) | Op::Create(_)))
+        .filter_map(|r| started_at(r).map(|at| (at, r)))
+        .max_by_key(|(at, _)| *at);
+    let Some((_, r)) = newest else {
         return Vec::new();
     };
-    let expected = ctx.files.get(file).cloned();
+    let expected = slot_file(ctx, r).flatten();
     let open = ctx
         .state
         .project_snapshot()
@@ -757,11 +824,179 @@ fn load_order(ctx: &Ctx, records: &[Record], outcome: &Outcome) -> Vec<String> {
         return Vec::new();
     }
     vec![format!(
-        "the newest successful load (t{} op {}, {:?}) did not leave its file open: open is {:?} (RV4-R-C2 class)",
+        "the newest successful load or create (t{} op {}, {:?}) did not leave its file open: open is {:?} (RV4-R-C2 class)",
         r.thread,
         r.index,
         expected.as_deref().map(stem),
         open.as_deref().map(stem)
+    )]
+}
+
+/// The first `cell` the thread of `r` took inside `r`'s window, at or after
+/// point `from` of `Outcome::acquired`.
+fn first_in(outcome: &Outcome, r: &Record, cell: &str, from: usize) -> Option<usize> {
+    outcome
+        .acquired
+        .iter()
+        .enumerate()
+        .take(r.locks.1)
+        .skip(from.max(r.locks.0))
+        .find(|(_, (thread, taken))| *thread == r.thread && *taken == cell)
+        .map(|(at, _)| at)
+}
+
+/// Oracle 7 (every mode, C2 / RV5-4 class), on the lock order alone: a settled
+/// read takes its project snapshot between commands. A forward edit holds
+/// `command_lock` from before its mutation until after its undo push and passes
+/// the `park_after_mutation` seam in between, so a read that took `project` after
+/// another thread passed that seam and before that thread pushed its undo entry
+/// computed on a project no user ever sees - whatever the read returns. This is
+/// what catches a read that does not wait (`distance_field_checked` on
+/// `project_snapshot`) even when its answer happens to look the same.
+fn settled_windows(records: &[Record], outcome: &Outcome) -> Vec<String> {
+    let edits: Vec<(&Record, usize, usize)> = records
+        .iter()
+        .filter(|e| matches!(e.op, Op::Edit(_)) && e.answer == Answer::Ok)
+        .filter_map(|e| {
+            let mutated = first_in(outcome, e, "park_after_mutation", 0)?;
+            let pushed = first_in(outcome, e, "undo_stack", mutated + 1).unwrap_or(e.locks.1);
+            Some((e, mutated, pushed))
+        })
+        .collect();
+    let mut found = Vec::new();
+    for r in records
+        .iter()
+        .filter(|r| matches!(r.op, Op::SettledRead | Op::SettledSnapshot | Op::Measure))
+    {
+        let Some(read) = first_in(outcome, r, "project", 0) else {
+            continue;
+        };
+        for (e, mutated, pushed) in &edits {
+            if e.thread != r.thread && *mutated < read && read < *pushed {
+                found.push(format!(
+                    "t{} op {}: a settled read ({:?}) took the project at point {read}, inside t{} op {}'s edit (mutated by {mutated}, undo entry pushed at {pushed}) (C2 / RV5-4 class)",
+                    r.thread, r.index, r.op, e.thread, e.index
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// The file a project-slot op leaves open when it succeeds: `Some(None)` for a
+/// close, `None` for an op that is not one.
+fn slot_file(ctx: &Ctx, r: &Record) -> Option<Option<PathBuf>> {
+    match r.op {
+        Op::Load(file) => Some(ctx.files.get(file).cloned()),
+        Op::Create(n) => Some(Some(new_file(&ctx.dir, r.thread, n))),
+        Op::Close => Some(None),
+        _ => None,
+    }
+}
+
+/// Oracle 8 (`Lifecycle`, `Sessions`): a command applies to the project that was
+/// open when it took `command_lock`, never to one a load, create or close
+/// committed after it started. Each acknowledged edit's home is the file the
+/// last slot commit before its `command_lock` left open (a commit is the slot
+/// op's last `command_lock`); every marker in every file of the world, and in the
+/// open project, must have been made while that file was the open one.
+fn edit_homes(ctx: &Ctx, records: &[Record], outcome: &Outcome) -> Vec<String> {
+    let mut commits: Vec<(usize, Option<PathBuf>)> = records
+        .iter()
+        .filter(|r| r.answer == Answer::Ok)
+        .filter_map(|r| {
+            let file = slot_file(ctx, r)?;
+            let at = outcome
+                .acquired
+                .iter()
+                .enumerate()
+                .take(r.locks.1)
+                .skip(r.locks.0)
+                .filter(|(_, (thread, cell))| *thread == r.thread && *cell == "command_lock")
+                .map(|(at, _)| at)
+                .next_back()?;
+            Some((at, file))
+        })
+        .collect();
+    commits.sort_by_key(|(at, _)| *at);
+    let homes: BTreeMap<String, Option<PathBuf>> = records
+        .iter()
+        .filter(|r| r.answer == Answer::Ok)
+        .filter_map(|r| {
+            let Op::Edit(name) = &r.op else {
+                return None;
+            };
+            let took = first_in(outcome, r, "command_lock", 0)?;
+            let home = commits
+                .iter()
+                .rev()
+                .find(|(at, _)| *at < took)
+                .map_or_else(|| ctx.files.first().cloned(), |(_, file)| file.clone());
+            Some((name.clone(), home))
+        })
+        .collect();
+    let mut places: Vec<(String, Option<PathBuf>, Vec<String>)> = Vec::new();
+    if let Some(open) = ctx.state.project_snapshot() {
+        places.push((
+            "the open project".to_owned(),
+            open.file_path.clone(),
+            markers_of(&open),
+        ));
+    }
+    if let Ok(entries) = std::fs::read_dir(&ctx.dir) {
+        for path in entries.flatten().map(|e| e.path()) {
+            if path.extension().is_none_or(|e| e != "stalx") {
+                continue;
+            }
+            if let Ok(project) = Database::open_readonly(&path).and_then(|db| db.load_project()) {
+                places.push((stem(&path), Some(path), markers_of(&project)));
+            }
+        }
+    }
+    let mut found = Vec::new();
+    for (place, file, markers) in places {
+        for marker in markers {
+            match homes.get(&marker) {
+                Some(home) if *home == file => {}
+                Some(home) => found.push(format!(
+                    "{place}: marker {marker} was made while {:?} was open, not this file",
+                    home.as_deref().map(stem)
+                )),
+                None => found.push(format!(
+                    "{place}: marker {marker} is there but its edit was not acknowledged"
+                )),
+            }
+        }
+    }
+    found
+}
+
+/// Oracle 9 (every mode): the open project's database handle is its file. A
+/// session holding a handle on a file a save has since renamed another over
+/// writes every display setting into the deleted file, and its next save builds
+/// the side tables from there and drops the writes the file at the path holds.
+/// One probe write through the handle must be in the file at the project's path.
+fn handle_is_file(state: &AppState, open: Option<&Project>) -> Vec<String> {
+    let Some(path) = open.and_then(|p| p.file_path.clone()) else {
+        return Vec::new();
+    };
+    if state.database.lock().is_none() {
+        return Vec::new();
+    }
+    let probe = "fzProbe";
+    if let Err(e) = state.save_display_setting(probe, "probe") {
+        return vec![format!("the post-run probe display write failed: {e}")];
+    }
+    let on_disk = Database::open_readonly(&path)
+        .and_then(|db| db.load_display_settings())
+        .ok()
+        .and_then(|settings| settings.get(probe).cloned());
+    if on_disk.as_deref() == Some("probe") {
+        return Vec::new();
+    }
+    vec![format!(
+        "{}: a write through the open project's database handle is not in the file at its path (on disk {on_disk:?}): a stale handle on a file a save replaced",
+        stem(&path)
     )]
 }
 
@@ -821,7 +1056,7 @@ fn display_files(case: &Case, ctx: &Ctx, records: &[Record]) -> Vec<String> {
             };
         for (key, value) in &settings {
             let tag = value.split('|').next().unwrap_or_default();
-            if case.mode == Mode::Lifecycle && key.starts_with("fzKey") && tag != file {
+            if !case.mode.single_project() && key.starts_with("fzKey") && tag != file {
                 found.push(format!(
                     "{file}: display {key} = {value:?} was made for {tag:?} (RV6b-2 / NF-W8FE-3 class)"
                 ));
@@ -829,9 +1064,12 @@ fn display_files(case: &Case, ctx: &Ctx, records: &[Record]) -> Vec<String> {
         }
         // Edits mode: the open file carries the last value of every key (Save As
         // moves the project; the file it is at now is the one that counts).
-        let relevant = |tag: &str| match case.mode {
-            Mode::Lifecycle => tag == file,
-            Mode::Edits => open_path.as_deref() == Some(path.as_path()),
+        let relevant = |tag: &str| {
+            if case.mode.single_project() {
+                open_path.as_deref() == Some(path.as_path())
+            } else {
+                tag == file
+            }
         };
         for ((key, tag), value) in &last {
             if tag == "none" || tag == "unsaved" || !relevant(tag) {
@@ -872,11 +1110,13 @@ const SHRINK_RESEEDS: u64 = 24;
 /// Which oracle a violation comes from, so a shrink keeps chasing the bug it
 /// started with instead of drifting to another one.
 fn class_of(violation: &str) -> &'static str {
-    const CLASSES: [(&str, &str); 10] = [
+    const CLASSES: [(&str, &str); 12] = [
         ("scheduler:", "scheduler"),
         ("panicked", "panic"),
         ("settled", "settled-read"),
         ("RV4-R-C2", "load-order"),
+        ("stale handle", "handle"),
+        ("made while", "edit-home"),
         ("display", "display"),
         ("marker", "edits"),
         ("REFUSED_AFTER", "poison"),
@@ -1056,11 +1296,26 @@ fn ci_seeds_lifecycle() {
     ci(Mode::Lifecycle);
 }
 
+#[test]
+fn ci_seeds_reads() {
+    ci(Mode::Reads);
+}
+
+#[test]
+fn ci_seeds_sessions() {
+    ci(Mode::Sessions);
+}
+
 /// A seed is a reproducible bug report only if the same seed runs the same
 /// schedule: the same thread at every point, the same locks, the same answers.
 #[test]
 fn a_seed_replays_the_same_run() {
-    for (mode, seed) in [(Mode::Edits, 3), (Mode::Lifecycle, 4)] {
+    for (mode, seed) in [
+        (Mode::Edits, 3),
+        (Mode::Lifecycle, 4),
+        (Mode::Reads, 5),
+        (Mode::Sessions, 6),
+    ] {
         let case = generate(mode, seed);
         let answers = |records: &[Record]| {
             let mut sorted: Vec<(usize, usize, Answer)> = records
@@ -1104,7 +1359,7 @@ fn env_u64(name: &str) -> Option<u64> {
 #[test]
 fn on_demand_campaign() {
     if let Some(seed) = env_u64("FZ_INT_SEED") {
-        for mode in [Mode::Edits, Mode::Lifecycle] {
+        for mode in Mode::ALL {
             let case = generate(mode, seed);
             let (violations, outcome, records) = execute_case(&case, &[]);
             println!(
@@ -1145,7 +1400,7 @@ fn on_demand_campaign() {
         {
             break;
         }
-        for mode in [Mode::Edits, Mode::Lifecycle] {
+        for mode in Mode::ALL {
             let (c, p, f) = run_seeds(std::iter::once((mode, seed)), &mut seen);
             cases += c;
             points += p;
