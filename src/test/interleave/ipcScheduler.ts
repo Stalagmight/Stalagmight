@@ -35,7 +35,6 @@ export const AMBIENT: Record<string, () => unknown> = {
 
 /** Scheduled, answered by the fake itself (no backend state behind them). */
 const FIXED: Record<string, () => unknown> = {
-  get_project_warnings: () => [],
   check_project_integrity: () => ({ messages: [], save_blocked: false }),
 };
 
@@ -179,7 +178,7 @@ function summary(outcome: Outcome): string {
 const MODELLED = new Set([
   'cancel_loading', 'load_project_full_binary', 'create_project_full', 'close_project', 'save_project',
   'get_project_state_binary', 'can_undo', 'can_redo', 'create_section', 'set_surface_elevation', 'undo', 'redo',
-  'import_sections',
+  'import_sections', 'get_project_warnings',
   'save_display_setting', 'get_config', 'patch_config', 'update_gas_config', 'update_panel_sizes',
 ]);
 

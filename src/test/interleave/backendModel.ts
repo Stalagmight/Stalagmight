@@ -70,6 +70,8 @@ interface OpenProject {
   cache: Map<string, StoredDisplay>;
   /** `opened_from` (display_settings.rs note_open_project_moved). */
   openedFrom: Array<string | null>;
+  /** What `get_project_warnings` answers: a loaded project carries one naming its generation. */
+  warnings: Array<Record<string, unknown>>;
 }
 
 /** Where a display write was stored: a file, or a generation's in-memory cache. */
@@ -215,6 +217,8 @@ export class BackendModel {
         return ok({ warnings: [] });
       case 'save_project':
         return this.save(args ?? {});
+      case 'get_project_warnings':
+        return ok(this.open?.warnings ?? []);
       case 'get_project_state_binary':
         return ok(this.open ? this.envelope(this.open) : new ArrayBuffer(0));
       case 'can_undo':
@@ -285,12 +289,21 @@ export class BackendModel {
       redo: [],
       cache: new Map(),
       openedFrom: [],
+      warnings: [],
     });
+    const open = this.open!;
+    open.warnings = [
+      {
+        sectionId: 1, shotId: 0, shotIndex: 0, code: 'FUZZ_GENERATION', message: `gen-${open.gen}`,
+        severity: 'warning', isResolved: false,
+      },
+    ];
     this.loadingId += 1;
     return ok(
-      this.envelope(this.open!, {
+      this.envelope(open, {
         loading_id: this.loadingId,
         display_settings: displayAnswer(file.display),
+        warnings: open.warnings,
       }),
     );
   }
@@ -310,7 +323,7 @@ export class BackendModel {
     const open: OpenProject = {
       gen: 0, createdAt, name, filePath, deferred,
       content: { sections: [], surfaceElevation: null },
-      nextSectionId: 1, undo: [], redo: [], cache: new Map(), openedFrom: [],
+      nextSectionId: 1, undo: [], redo: [], cache: new Map(), openedFrom: [], warnings: [],
     };
     if (!deferred) this.writeFile(filePath, open, new Map());
     this.commitGen(open);
@@ -422,7 +435,10 @@ export class BackendModel {
     return !sameContent(file.content, open.content);
   }
 
-  openSummary(): { gen: number; createdAt: string; filePath: string | null; sections: string[]; elevation: number | null; canUndo: boolean; canRedo: boolean } | null {
+  openSummary(): {
+    gen: number; createdAt: string; filePath: string | null; sections: string[]; elevation: number | null;
+    canUndo: boolean; canRedo: boolean; warnings: string[];
+  } | null {
     const open = this.open;
     if (!open) return null;
     return {
@@ -433,6 +449,7 @@ export class BackendModel {
       elevation: open.content.surfaceElevation,
       canUndo: open.undo.length > 0,
       canRedo: open.redo.length > 0,
+      warnings: open.warnings.map((w) => String(w.message)),
     };
   }
 

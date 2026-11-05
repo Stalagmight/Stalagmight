@@ -23,7 +23,7 @@ export const INVARIANTS = {
   'display-shown': 'after quiescence the display settings shown equal what the open project stores',
   'edit-lost': 'an edit issued in a project still open at the end was not refused or dropped',
   'dirty-flag': 'after quiescence a clean (isDirty=false) project has no unsaved change in the backend',
-  'state': 'after quiescence the store shows exactly the backend\'s open project (generation, file, sections, elevation, undo/redo)',
+  'state': 'after quiescence the store shows exactly the backend\'s open project (generation, file, sections, elevation, undo/redo, warnings)',
   'config-lost': 'after quiescence each config field holds the last value the user set (absent faults on its writer)',
   'config-shown': 'after quiescence the store\'s config equals the backend\'s for the fuzzed fields',
   'liveness': 'every operation settles once no call is pending (no queue stalls after a rejected or crashed call)',
@@ -579,6 +579,9 @@ export async function runActions(actions: Action[], options: RunOptions = DEFAUL
       }
       if (!undoStale && P.canUndo !== open.canUndo) mismatch.push(`canUndo ${P.canUndo} vs ${open.canUndo}`);
       if (!undoStale && P.canRedo !== open.canRedo) mismatch.push(`canRedo ${P.canRedo} vs ${open.canRedo}`);
+      const warnings = P.warnings.map((w) => w.message);
+      if (!stale('get_project_warnings') && JSON.stringify(warnings) !== JSON.stringify(open.warnings))
+        mismatch.push(`warnings ${JSON.stringify(warnings)} vs ${JSON.stringify(open.warnings)}`);
       if (mismatch.length) violate('state', `store vs backend: ${mismatch.join('; ')}`);
 
       if (genShown() === open.gen) {

@@ -141,6 +141,9 @@ function nextProjectTreeGeneration(): number {
 // dropped rather than written over the newer state.
 let refreshRequestCounter = 0;
 let refreshAppliedRequest = 0;
+// [#576 FZ-FZ-INT-10] The same pair for `refreshUndoState`.
+let undoStateRequestCounter = 0;
+let undoStateAppliedRequest = 0;
 
 interface CreateProjectOptions {
   savePath?: string;
@@ -2142,11 +2145,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   refreshUndoState: async () => {
+    // [#576 FZ-FZ-INT-10] In issue order and for the session it was issued in, like the
+    // project refresh (RV5-8, NF-FIX5-1): a read issued for the previous project (an
+    // autosave's, a refresh's tail) answering after a switch showed its Undo/Redo
+    // availability in the new one, and an older answer could overwrite a newer one.
+    undoStateRequestCounter += 1;
+    const request = undoStateRequestCounter;
+    const session = projectSessionEpoch();
     try {
       const [canUndo, canRedo] = await Promise.all([
         invokeIpc('can_undo', undefined, { purpose: 'check undo availability' }),
         invokeIpc('can_redo', undefined, { purpose: 'check redo availability' }),
       ]);
+      if (request < undoStateAppliedRequest || session !== projectSessionEpoch()) return;
+      undoStateAppliedRequest = request;
       set({ canUndo, canRedo });
     } catch (e) {
       console.error('Failed to refresh undo state:', e);

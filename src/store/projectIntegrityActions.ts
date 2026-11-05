@@ -6,7 +6,7 @@ import { isEditGateCode, READ_ONLY_EDIT_NOTICE } from '../utils/editErrors';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import { useUIStore } from './uiStore';
 import { refuseMutationDuringCarry } from './moveCarry';
-import { noteProjectDirtied } from './projectSession';
+import { noteProjectDirtied, projectSessionEpoch } from './projectSession';
 import type { IntegrityRepairResult } from '../types/commands';
 import type { ProjectStore } from './projectStore';
 
@@ -54,6 +54,9 @@ function showReadOnlyRefusal(e: unknown): boolean {
 // must not clobber the newer result (e.g. a manual save's check racing a Repair's
 // check on the same project, where the project-identity guard can't tell them apart).
 let integrityCheckSeq = 0;
+// [#576 FZ-FZ-INT-10] `refreshWarnings` requests in issue order, and the newest one applied.
+let warningsRequestCounter = 0;
+let warningsAppliedRequest = 0;
 
 export function createProjectIntegrityActions(
   set: StoreApi<ProjectStore>['setState'],
@@ -61,14 +64,24 @@ export function createProjectIntegrityActions(
 ): ProjectIntegrityActions {
   return {
     refreshWarnings: async () => {
+      // [#576 FZ-FZ-INT-10] In issue order and for the session it was issued in: a read
+      // issued for the previous project answering after a switch replaced (or, failing,
+      // cleared) the warnings the new project's load had just set - and a Resolve on
+      // such a row names the previous project's section and shot ids.
+      warningsRequestCounter += 1;
+      const request = warningsRequestCounter;
+      const session = projectSessionEpoch();
+      const current = () => request >= warningsAppliedRequest && session === projectSessionEpoch();
       try {
         const warnings = await invokeIpc('get_project_warnings', undefined, {
           purpose: 'refresh validation warnings',
         });
+        if (!current()) return;
+        warningsAppliedRequest = request;
         set({ warnings });
       } catch (e) {
         console.error('Failed to refresh warnings:', e);
-        set({ warnings: [] });
+        if (current()) set({ warnings: [] });
       }
     },
 

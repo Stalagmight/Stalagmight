@@ -84,6 +84,26 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
       'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) run(0.000) fault(0.000) geom saveAs(37) ' +
       'run(0.000) grid refresh exec(0.724)',
   },
+  {
+    // A warnings read issued before a switch answered after it and wiped the new project's warnings.
+    id: 'FZ-FZ-INT-10 (warnings)',
+    found: 'state',
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) patch("font_size", 359) fault(0.000) run(0.768) run(0.736) ' +
+      'close refresh grid run(0.473) run(0.432) run(0.262) run(0.587) run(0.562) load("/caves/CaveB.stalx") ' +
+      'run(0.927) exec(0.538) run(0.687)',
+  },
+  {
+    // An undo-state read issued in CaveA answered after a create and showed CaveA's Undo in the new project.
+    id: 'FZ-FZ-INT-10 (undo)',
+    found: 'state',
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) gas(24) run(0.000) run(0.000) run(0.000) elev(14) grid ' +
+      'run(0.000) run(0.000) undo elev(21) create(23, true) run(0.000) run(0.000) run(0.000) run(0.000) run(0.000) ' +
+      'run(0.000) run(0.000) grid tick run(0.000) run(0.000) run(0.000) run(0.000) run(0.000) run(0.000) run(0.000) ' +
+      'run(0.000) run(0.000) run(0.000) run(0.000) run(0.000) grid run(0.000) run(0.000) refresh run(0.000) ' +
+      'run(0.000) run(0.751) exec(0.731)',
+  },
   // The historical #576 bugs, re-planted to prove the fuzzer finds them (report.json
   // "proof"); their shrunk traces keep them out for good.
   {
