@@ -386,12 +386,13 @@ impl App {
     /// The open guard (`useOpenRemoteProject.ts`): no open over a copy with
     /// un-pushed edits, a held lock or unsaved changes.
     fn leave_guard(&self) -> Option<&'static str> {
-        let (open, _, dirty, _) = self.hint_bits();
+        let (open, linked, dirty, force_editing) = self.hint_bits();
         if !open {
             None
         } else if dirty {
             Some("un-pushed edits")
-        } else if self.state.edit_enabled() {
+        } else if linked && self.state.edit_enabled() && !force_editing {
+            // An unlinked (local) project's edit gate is simply open: no lock.
             Some("editing (lock held)")
         } else if self.unsaved {
             Some("unsaved changes")
@@ -843,8 +844,9 @@ impl App {
         if self.unsaved {
             self.save(out);
         }
-        let (_, _, dirty, _) = self.hint_bits();
-        if dirty || self.state.edit_enabled() {
+        let (_, linked, dirty, _) = self.hint_bits();
+        // `useProject.ts`: the close dialog is raised for un-pushed edits or a held lock.
+        if dirty || (linked && self.editing()) {
             match mode {
                 LeaveMode::PushRelease => {
                     if self.done(out) {
