@@ -73,7 +73,7 @@ use super::{AppState, DisplaySettingTarget};
 use crate::core::{Command, CommandErrorCode, CommandResult};
 use crate::models::interleave::{self, Outcome, SplitMix, Worker};
 use crate::models::poison_policy::LockCell;
-use crate::models::{Project, ShotData};
+use crate::models::{CreationStamp, Project, ShotData};
 use crate::persistence::Database;
 use crate::test_fixtures::state_with_null_sink;
 
@@ -274,10 +274,7 @@ fn generate(mode: Mode, seed: u64) -> Case {
 
 /// The `created_at` the wire carries (`DisplaySettingTarget`).
 fn wire_created_at(project: &Project) -> String {
-    serde_json::to_value(project.created_at)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
+    project.created_at.as_str().to_owned()
 }
 
 /// What the frontend would name the open project as, now.
@@ -325,7 +322,7 @@ fn markers_of(project: &Project) -> Vec<String> {
 /// A saved project file with nothing in it.
 fn write_project(path: &Path, name: &str, created_at: &str) {
     let mut project = Project::new(name.to_owned(), None);
-    project.created_at = created_at.parse().expect("timestamp");
+    project.created_at = CreationStamp::parse(created_at).expect("timestamp");
     let mut db = Database::open(path).expect("create project file");
     db.save_project(&project).expect("write project file");
 }
