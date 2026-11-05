@@ -19,7 +19,12 @@
 //!   reads, and injected crashes (a panic while holding one cell);
 //! - `Lifecycle`: edits, undo/redo, saves, identity-checked display writes and
 //!   settled reads racing loads of three files (two of them copies of one project:
-//!   same `created_at`, other path) and closes.
+//!   same `created_at`, other path) and closes. Half of these cases are load
+//!   storms: every thread opens with a load of a file that is not open.
+//!
+//! The seed also picks the scheduling strategy (`models::interleave`): a biased
+//! random walk, or random thread priorities with a few change points (PCT), which
+//! is what lets one load run a long stretch while another waits at one lock.
 //!
 //! # Oracles (interleaving-independent)
 //!
@@ -40,6 +45,9 @@
 //!    `undo_stack`, every later undo/redo is refused with
 //!    `REFUSED_AFTER_INTERNAL_ERROR` and nothing else is refused for that reason;
 //!    the final save still succeeds; the internal-error notice is raised.
+//! 6. Loads commit in the order they started (`Lifecycle`, no successful close):
+//!    the open project at the end is the file of the successful load whose
+//!    `start_new_load` came last, the one the frontend shows.
 //!
 //! # Running
 //!
