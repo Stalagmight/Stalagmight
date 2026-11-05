@@ -50,6 +50,9 @@ import {
   type Rng,
 } from '../../test/determinism';
 
+// The controller's dev build log (bound to console.log at import) is noise here.
+vi.mock('../debugLog', () => ({ debugLog: () => {} }));
+
 /** The GL layer is the only fake: it keeps the data the controller hands it. */
 const fake = vi.hoisted(() => ({ last: null as { data: unknown } | null }));
 vi.mock('../../components/Map/surveyLayer/customRender/surveyCustomLayer', () => {
@@ -85,7 +88,7 @@ vi.mock('../../components/Map/surveyLayer/customRender/surveyCustomLayer', () =>
   return { SurveyCustomLayer: FakeLayer };
 });
 
-const { SurveyCustomController, buildCustomDimState } = await import(
+const { SurveyCustomController, buildCustomDimState, GAS_DIM_LEVEL } = await import(
   '../../components/Map/surveyLayer/customRender/controller'
 );
 const { overlayInputFrom } = await import('../../components/Map/surveyLayer/customRender/overlayColor');
@@ -302,6 +305,7 @@ describe('gas-reach overlay masks are deterministic (FZ-DET-TS)', () => {
   });
 
   it('what the overlay draws (real controller): permuted field + shuffled sets, fresh or live -> identical bytes', () => {
+    let sawGasDim = false;
     for (const seed of SEEDS) {
       const rng = mulberry32(seed);
       const data = syntheticSurvey(rng);
@@ -329,6 +333,9 @@ describe('gas-reach overlay masks are deterministic (FZ-DET-TS)', () => {
       live.setDimming(dimState(data, variantField, variantSets));
       expect(seededDiff(seed, 'live re-sync vs fresh draw', reference, drawn(fake.last!.data as CustomRenderData))).toBeNull();
       live.dispose();
+      sawGasDim ||= reference.circleDim.includes(GAS_DIM_LEVEL);
     }
+    // Not vacuous: the beyond-reach dim really reached the drawn bytes.
+    expect(sawGasDim).toBe(true);
   });
 });
