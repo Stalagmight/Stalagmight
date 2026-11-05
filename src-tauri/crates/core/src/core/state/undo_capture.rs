@@ -460,11 +460,15 @@ impl AppState {
             | Command::MoveSegment { section_id, offset } => {
                 let existing: std::collections::HashSet<SectionId> =
                     project.sections.iter().map(|s| s.id).collect();
-                let connected: Vec<SectionId> = project
+                let mut connected: Vec<SectionId> = project
                     .get_rigid_connected_section_ids(*section_id)
                     .into_iter()
                     .filter(|id| existing.contains(id))
                     .collect();
+                // [#576 FZ-DET-3] In id order: the group is a set, and its
+                // iteration order made one move record (and save) a different
+                // entry each time.
+                connected.sort_unstable();
                 let mut previous_offsets = std::collections::HashMap::new();
                 for sid in &connected {
                     previous_offsets.insert(*sid, project.section_offsets().get(sid).copied());

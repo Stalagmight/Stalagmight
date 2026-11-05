@@ -1133,3 +1133,52 @@ fn test_batch_disallowed_command() {
         "Error should mention batch whitelist"
     );
 }
+
+/// [#576 FZ-DET-3] A segment move's undo entry lists the sections it moved in
+/// section-id order. They came from a `HashSet` (the rigid group), so the same
+/// move recorded them in another order each time - and the saved history of one
+/// session differed from the next save of the same history.
+#[test]
+fn segment_move_undo_lists_its_sections_in_id_order() {
+    let state = state_with_project("CaveA");
+    let create = |index: usize| Command::CreateSection {
+        name: Some(format!("Section{index}")),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![shot(5.0)],
+    };
+    let ids: Vec<SectionId> = (0..8)
+        .map(|index| state.execute(create(index)).section_id.unwrap())
+        .collect();
+    for pair in ids.windows(2) {
+        let merged = state.execute(Command::MergeStations {
+            station_a: StationRef::new(pair[0], 1),
+            station_b: StationRef::new(pair[1], 0),
+        });
+        assert!(merged.success, "merge failed: {:?}", merged.error);
+    }
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    let recorded: Vec<Vec<SectionId>> = (0..8)
+        .map(|round| {
+            let moved = state.execute(Command::MoveSection {
+                section_id: ids[round % ids.len()],
+                offset: Coordinates::new(1.0, 1.0, 0.0),
+            });
+            assert!(moved.success, "move failed: {:?}", moved.error);
+            match state.undo_stack.lock().peek_undo_data() {
+                Some(UndoData::SegmentMoveInfo {
+                    affected_sections, ..
+                }) => affected_sections.clone(),
+                other => panic!("a move recorded {other:?}"),
+            }
+        })
+        .collect();
+    let unordered = recorded.iter().filter(|listed| **listed != sorted).count();
+    assert_eq!(
+        unordered, 0,
+        "{unordered} of 8 moves recorded their sections out of id order: {recorded:?}"
+    );
+}
