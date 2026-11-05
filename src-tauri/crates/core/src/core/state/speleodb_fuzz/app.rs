@@ -577,7 +577,12 @@ impl App {
     }
 
     fn push(&mut self, out: &mut Outcome) {
-        let pid = self.open_link().map(|l| l.project_id);
+        // Only an upload makes the copy and the tip one: a push over a clean copy
+        // sends nothing and claims nothing about the tip.
+        let pid = self
+            .open_link()
+            .filter(|l| l.has_unpushed_edits)
+            .map(|l| l.project_id);
         match self
             .state
             .speleodb_push_only_reported(Some("fuzz push".to_owned()), false)
@@ -597,29 +602,29 @@ impl App {
 
     /// Done; `true` when it released (or left the lock with the account).
     fn done(&mut self, out: &mut Outcome) -> bool {
-        let pid = self.open_link().map(|l| l.project_id);
+        let link = self.open_link();
+        let uploads = link.as_ref().is_some_and(|l| l.has_unpushed_edits);
+        let pid = link.map(|l| l.project_id);
         match self
             .state
             .speleodb_done_reported(Some("fuzz done".to_owned()), false)
         {
             Ok(report) => {
                 out.note(format!("done -> Ok({:?})", report.result));
-                match (report.result, pid) {
-                    (DoneResult::Released, Some(project_id)) => {
-                        self.save(out);
-                        out.claims.push(Claim::InSync {
-                            project_id: project_id.clone(),
-                        });
-                        out.claims.push(Claim::LockReleased { project_id });
-                        true
-                    }
-                    (DoneResult::LockHeldElsewhere, Some(project_id)) => {
-                        self.save(out);
-                        out.claims.push(Claim::InSync { project_id });
-                        true
-                    }
-                    _ => false,
+                let released = matches!(
+                    report.result,
+                    DoneResult::Released | DoneResult::LockHeldElsewhere
+                );
+                if released {
+                    self.save(out);
                 }
+                if let (true, true, Some(project_id)) = (released, uploads, pid.clone()) {
+                    out.claims.push(Claim::InSync { project_id });
+                }
+                if let (DoneResult::Released, Some(project_id)) = (report.result, pid) {
+                    out.claims.push(Claim::LockReleased { project_id });
+                }
+                released
             }
             Err(e) => {
                 out.refused("done", &e);

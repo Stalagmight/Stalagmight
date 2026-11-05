@@ -148,14 +148,13 @@ pub(super) fn snapshot(
         endpoint: app.session_endpoint(),
         ..Snap::default()
     };
-    for id in ids {
-        let view = server.view(id);
+    for (id, view) in server.views(ids) {
         for sha in &view.commits {
-            if let Ok(fp) = server.fingerprint_at(id, sha) {
+            if let Ok(fp) = server.fingerprint_at(&id, sha) {
                 snap.server_tokens.extend(tokens(&fp).cloned());
             }
         }
-        snap.server.insert(id.clone(), view);
+        snap.server.insert(id, view);
     }
     snap.mem = app
         .state

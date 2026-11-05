@@ -268,6 +268,27 @@ fn speleodb_fuzz_replay() {
     }
 }
 
+/// Instance tooling: write a synthetic `.stalx` (three sections, nothing from any
+/// real survey) to `STALAGMIGHT_SPELEODB_FUZZ_SEED_OUT`, for seeding the
+/// instance's baseline Stalagmight projects. No network.
+#[test]
+#[ignore = "instance tooling: writes a synthetic seed .stalx to STALAGMIGHT_SPELEODB_FUZZ_SEED_OUT"]
+fn speleodb_fuzz_write_seed_stalx() {
+    let out = PathBuf::from(
+        std::env::var("STALAGMIGHT_SPELEODB_FUZZ_SEED_OUT")
+            .unwrap_or_else(|_| panic!("FZ-SDB: STALAGMIGHT_SPELEODB_FUZZ_SEED_OUT is not set")),
+    );
+    let project = world::project_with(&[
+        ("A".to_owned(), 3),
+        ("B".to_owned(), 2),
+        ("C".to_owned(), 2),
+    ]);
+    let _ = std::fs::remove_file(&out);
+    let mut db = crate::persistence::Database::open(&out).expect("create the seed");
+    db.save_project(&project).expect("save the seed");
+    println!("FZ-SDB: wrote {}", out.display());
+}
+
 /// Every seed that once failed, re-run (on the instance only).
 #[test]
 #[ignore = "env-gated: needs a private SpeleoDB instance (STALAGMIGHT_SPELEODB_FUZZ_URL etc.)"]

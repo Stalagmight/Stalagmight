@@ -326,12 +326,32 @@ impl Server {
         db.load_project().map_err(|e| format!("load tip: {e:#}"))
     }
 
-    /// The oracle's view of `id`, as the superuser sees it.
-    pub(super) fn view(&self, id: &str) -> ServerView {
+    /// The oracle's view of every project in `ids`, as the superuser sees it.
+    /// "Exists" means an account of the run can still see it: a soft delete drops
+    /// every permission, so the run's accounts lose it while the superuser keeps it.
+    /// Each account's list is fetched once for all of `ids`.
+    pub(super) fn views(&self, ids: &[String]) -> BTreeMap<String, ServerView> {
+        let visible = |token: &str| -> Option<std::collections::HashSet<String>> {
+            client::list_projects(&self.url, token, false)
+                .ok()
+                .map(|list| list.into_iter().map(|p| p.id).collect())
+        };
+        let lists = [visible(&self.owner.token), visible(&self.collab.token)];
+        ids.iter()
+            .map(|id| {
+                // An unreadable list says nothing: count the project as present.
+                let active = lists
+                    .iter()
+                    .any(|l| l.as_ref().is_none_or(|set| set.contains(id)));
+                (id.clone(), self.view(id, active))
+            })
+            .collect()
+    }
+
+    fn view(&self, id: &str, active: bool) -> ServerView {
         let Ok(project) = client::get_project(&self.url, &self.admin.token, false, id) else {
             return ServerView::default();
         };
-        let active = self.is_active(id);
         let commits = client::get_revisions(&self.url, &self.admin.token, false, id)
             .map(|h| h.commits)
             .unwrap_or_default();
@@ -343,16 +363,6 @@ impl Server {
             kind: project.kind,
             name: project.name,
         }
-    }
-
-    /// Whether the owner account can still see the project (a soft delete drops
-    /// every permission, so the owner loses it while the superuser keeps it).
-    fn is_active(&self, id: &str) -> bool {
-        let sees = |token: &str| {
-            client::list_projects(&self.url, token, false)
-                .map_or(true, |list| list.iter().any(|p| p.id == id))
-        };
-        sees(&self.owner.token) || sees(&self.collab.token)
     }
 
     /// The fingerprint of commit `sha` of `id` (cached; commits are immutable).
