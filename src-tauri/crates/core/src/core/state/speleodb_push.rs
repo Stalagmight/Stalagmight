@@ -149,6 +149,29 @@ where
     Ok(first)
 }
 
+/// [#576 FZ-SDB-1] A push's two scratch files beside the cache copy - the `.tml`
+/// render and the VACUUM snapshot - removed when the push that wrote them returns,
+/// on every path (landed, refused, failed). Nothing reads them afterwards (the next
+/// push rebuilds both from the live file), and left behind they kept two more full
+/// copies of the survey in the cache.
+struct PushScratch([std::path::PathBuf; 2]);
+
+impl Drop for PushScratch {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "speleodb_upload: could not remove a push scratch file; the next push replaces it"
+                ),
+            }
+        }
+    }
+}
+
 impl AppState {
     /// Render the open remote project to a scratch `ariane.tml` at `dest` for
     /// co-push (#196). Mints a stable UUID for any shot still missing one - a
@@ -1035,6 +1058,7 @@ impl AppState {
             .ok_or_else(|| local_dto(SpeleoDbError::Io("cache path has no parent".to_owned())))?;
         let snapshot_path = dir.join("snapshot.stalx");
         let tml = dir.join("ariane.tml");
+        let _scratch = PushScratch([snapshot_path.clone(), tml.clone()]);
 
         // [#576 B35(d)] The LOCAL half of the push - the name fold, the push-start
         // fence, the flush, the render and the snapshot - under `command_lock`, so an

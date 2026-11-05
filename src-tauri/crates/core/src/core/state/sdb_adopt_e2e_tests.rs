@@ -320,6 +320,24 @@ fn adoption_body_in_a_process_of_its_own() {
         usize::try_from(REMOTE_SHOTS).expect("a small count"),
         "it holds the converted survey"
     );
+    // [#576 FZ-SDB-1] The push's snapshot and `.tml` render are its own scratch:
+    // they went when it returned, and the cache holds the copy alone.
+    let mut scratch: Vec<String> = std::fs::read_dir(dest.parent().expect("cache dir"))
+        .expect("read the cache dir")
+        .map(|e| {
+            e.expect("a dir entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|name| !name.starts_with("project.stalx"))
+        .collect();
+    scratch.sort();
+    assert_eq!(
+        scratch,
+        Vec::<String>::new(),
+        "the push left no scratch beside the cache copy"
+    );
     assert!(
         !still_open,
         "and the verb's own close, last, left nothing open"
