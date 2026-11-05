@@ -76,6 +76,14 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
       'reloadConfig edit(26) run(0.000) run(0.000) run(0.000) run(0.000) undo run(0.000) run(0.000) run(0.000) ' +
       'run(0.000) run(0.000) run(0.000) autosave run(0.584)',
   },
+  {
+    // A refresh read before a Save As answered after it and put the old file path back.
+    id: 'FZ-FZ-INT-9',
+    found: 'state',
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) run(0.000) fault(0.000) geom saveAs(37) ' +
+      'run(0.000) grid refresh exec(0.724)',
+  },
 ];
 
 

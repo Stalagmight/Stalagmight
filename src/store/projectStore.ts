@@ -1481,6 +1481,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // The session moved to that file, written without the unreadable link
           // (#576 B35(b)), so saving over the open file works again.
           set({ project: { ...project, file_path: result.saved_path }, speleoLinkUnreadable: false });
+          // [#576 FZ-FZ-INT-9] A refresh read before the save moved the file still
+          // names the old one, and landing after this it put the old path back. Drop
+          // every refresh issued so far and read the state once more, after the move.
+          refreshAppliedRequest = refreshRequestCounter;
+          await get().refreshProjectState();
         }
       }
       // Lightweight: just refresh undo/redo availability
