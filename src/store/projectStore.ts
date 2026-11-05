@@ -575,6 +575,9 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
     stats: null,
     frozenShots: [],
     isDirty: false,
+    // [#576 FZ-FZ-INT-5] No project, no history to undo; the next create reads none either.
+    canUndo: false,
+    canRedo: false,
     autosaveFailure: null,
     autosaveFailureKind: null,
     integrityIssues: [],
@@ -1367,6 +1370,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         frozenShots: [],
         warnings: [],
         isDirty: false,
+        // [#576 FZ-FZ-INT-5] A new project has no history: the previous project's
+        // Undo/Redo availability must not carry over (nothing on this path re-reads it).
+        canUndo: false,
+        canRedo: false,
         // Reset integrity state on project switch (see loadProject).
         integrityIssues: [],
         integrityDismissed: false,

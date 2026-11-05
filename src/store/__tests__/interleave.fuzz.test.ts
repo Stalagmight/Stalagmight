@@ -58,6 +58,14 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
       'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) run(0.000) edit(27) run(0.000) ' +
       'load("/caves/CaveA copy.stalx") edit(38) edit(39)',
   },
+  {
+    // A new project showed the previous project's Undo as available.
+    id: 'FZ-FZ-INT-5',
+    found: 'state',
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) undo run(0.000) run(0.000) panel(369) run(0.000) ' +
+      'edit(36) run(0.000) run(0.000) run(0.000) create(65, false)',
+  },
 ];
 
 
