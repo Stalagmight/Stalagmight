@@ -11,6 +11,10 @@ pub mod dive_plan;
 pub mod geo;
 pub mod id_stride;
 pub mod import_receipt;
+/// [#576 FZ-INT] The deterministic lock-granular scheduler the interleaving
+/// fuzzers run under: see the module doc.
+#[cfg(any(test, feature = "test-support"))]
+pub mod interleave;
 pub mod placement_suggest;
 pub mod poison_policy;
 pub mod process_memory;

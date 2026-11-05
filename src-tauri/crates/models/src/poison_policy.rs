@@ -192,6 +192,13 @@ impl<T: ?Sized> RecoveringMutex<T> {
         if self.inner.is_poisoned() {
             self.report(Location::caller());
         }
+        // [#576 FZ-INT] Test builds only: a thread an interleaving fuzzer registered
+        // takes the lock under its deterministic schedule (`interleave.rs`); every
+        // other thread falls through after one atomic load.
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(scheduled) = crate::interleave::scheduled_lock(self.name, &self.inner) {
+            return scheduled.unwrap_or_else(PoisonError::into_inner);
+        }
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
