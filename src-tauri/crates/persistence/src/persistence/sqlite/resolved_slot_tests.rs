@@ -50,7 +50,10 @@ fn a_position_keyed_ignore_never_deletes_another_shots_ignore_in_its_slot() {
         .unwrap();
 
     // Ignore on shot A, whose uuid is not on disk, at the same slot.
-    let refused = db.save_resolved_warning(&ignore(None, "A's")).is_err();
+    let refusal = db
+        .save_resolved_warning(&ignore(None, "A's"))
+        .err()
+        .map(|e| e.to_string());
 
     let rows = db.load_resolved_warnings().unwrap();
     assert!(
@@ -59,9 +62,17 @@ fn a_position_keyed_ignore_never_deletes_another_shots_ignore_in_its_slot() {
         "shot B's ignore was deleted by an ignore on another shot: {rows:?}"
     );
     assert!(
-        refused,
+        refusal.is_some(),
         "the slot is held by another shot's ignore, so this one is refused, not recorded \
          over it: {rows:?}"
+    );
+    // [#576 FZ-PERSIST-1-D1] A save is what frees the slot (it writes A's uuid and
+    // re-keys the ignores), so that is what the refusal asks for - not a reload.
+    assert!(
+        refusal
+            .as_deref()
+            .is_some_and(|m| m.ends_with("save the project and try again")),
+        "the refusal says what to do: {refusal:?}"
     );
 }
 

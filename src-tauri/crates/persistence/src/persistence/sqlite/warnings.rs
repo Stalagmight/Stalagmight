@@ -332,9 +332,10 @@ impl Database {
             // The positional slot is held by a DIFFERENT shot's UUID-keyed ignore
             // (a stale position from a prior save, before the ids re-sync on
             // reload). Roll back (drop without commit) so neither ignore is lost,
-            // and surface the failure so the caller can prompt a reload + retry.
+            // and surface the failure so the caller can ask for a save and a retry
+            // (#576 FZ-PERSIST-1-D1).
             anyhow::bail!(
-                "could not record this ignore: its position is held by another shot's ignore - reload the project and try again"
+                "could not record this ignore: its position is held by another shot's ignore - save the project and try again"
             );
         }
         tx.commit()?;

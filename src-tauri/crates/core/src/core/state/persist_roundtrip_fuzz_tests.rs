@@ -1156,20 +1156,41 @@ fn an_ignore_on_a_restored_shot_keeps_the_ignore_of_the_shot_in_its_slot() {
         "precondition: A's uuid is not on disk, so its ignore is keyed by position"
     );
 
-    // Ignore A as the Ignore command does. Refusing it is allowed (its slot is
-    // held); deleting B's ignore is not.
-    let _ = state.save_resolved_warning(&ignore(shot_a, None, "A's"));
+    // Ignore A as the Ignore command does. It is refused (its slot is held);
+    // deleting B's ignore is not allowed.
+    let refusal = state
+        .save_resolved_warning(&ignore(shot_a, None, "A's"))
+        .err()
+        .map(|e| e.to_string());
 
-    let kept_b = |rows: &[ResolvedWarning]| {
-        rows.iter()
-            .any(|r| r.shot_uuid.as_deref() == Some(uuid_b.as_str()))
+    let kept = |rows: &[ResolvedWarning], uuid: &str| {
+        rows.iter().any(|r| r.shot_uuid.as_deref() == Some(uuid))
     };
     let rows = state.load_resolved_warnings().expect("read the ignores");
-    assert!(kept_b(&rows), "B's ignore was deleted: {rows:?}");
+    assert!(kept(&rows, &uuid_b), "B's ignore was deleted: {rows:?}");
+    // [#576 FZ-PERSIST-1-D1] The refusal asks for a save, and a save is what
+    // clears it: it writes A's uuid, so the same Ignore, keyed by it now, goes
+    // through.
+    assert!(
+        refusal
+            .as_deref()
+            .is_some_and(|m| m.ends_with("save the project and try again")),
+        "the refusal asks for a save: {refusal:?}"
+    );
     assert!(state.save_project(None).success);
+    assert!(
+        state.shot_uuid_is_persisted(section_id, &uuid_a),
+        "the save wrote A's uuid"
+    );
+    state
+        .save_resolved_warning(&ignore(shot_a, Some(uuid_a.clone()), "A's"))
+        .expect("after the save, the same Ignore goes through");
     let reopened = open_fresh(&path).expect("reopen");
     let rows = reopened.load_resolved_warnings().expect("read the ignores");
-    assert!(kept_b(&rows), "B's ignore did not survive a save: {rows:?}");
+    assert!(
+        kept(&rows, &uuid_b) && kept(&rows, &uuid_a),
+        "B's ignore did not survive a save, or A's retried one is missing: {rows:?}"
+    );
 }
 
 /// [#576 FZ-PERSIST-2] (fault sweep seed 27349) An Ignore on a shot not yet saved
