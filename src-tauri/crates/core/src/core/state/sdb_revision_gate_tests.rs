@@ -87,6 +87,66 @@ fn view_is_not_a_survey_change_and_is_not_refused_by_the_workspace() {
     }
 }
 
+/// [#576 FZ-SDB-4] View is the read-only, no-lock peek, so it is refused while the
+/// app is editing under the write lock. Accepted, its reload shut the gate without
+/// handing the lock claim back, the next status poll forgot the claim, and the
+/// quit-time silent release then left the lock held (fuzzer: ResumeHeldLock ->
+/// View -> Quit). Refused before anything is touched: no request, gate and claim
+/// kept, the project still open.
+#[test]
+fn view_is_refused_while_editing_under_the_write_lock() {
+    let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+    let (_temp, state) = editing_fixture(&base);
+    assert!(
+        state.edit_enabled()
+            && !state.force_editing()
+            && state.speleodb_lock_acquired_here(REMOTE_ID),
+        "precondition: an edit session that took the lock"
+    );
+
+    let result = state
+        .speleodb_restore_revision(
+            REMOTE_ID.to_owned(),
+            "Remote".to_owned(),
+            SHA.to_owned(),
+            false,
+            false,
+            None,
+            false,
+            false,
+            false,
+        )
+        .map(|_| ())
+        .map_err(CommandError::from);
+
+    let requests = seen.lock().expect("request log").clone();
+    println!("View while editing -> {result:?}; requests sent: {requests:?}");
+    let refusal = result.expect_err("a View under the write lock is refused");
+    assert!(
+        refusal.code == CommandErrorCode::SpeleodbFatal
+            && refusal.message.contains("release the write lock"),
+        "refused with the coded View refusal, got: {refusal:?}"
+    );
+    assert!(
+        requests.is_empty(),
+        "refused before any request: {requests:?}"
+    );
+    assert!(
+        state.edit_enabled() && !state.force_editing(),
+        "the edit gate is still open"
+    );
+    assert!(
+        state.speleodb_lock_acquired_here(REMOTE_ID),
+        "the lock claim is still held"
+    );
+    assert!(
+        state
+            .speleodb_open_link()
+            .is_ok_and(|link| link.project_id == REMOTE_ID),
+        "the linked project is still open"
+    );
+}
+
 #[test]
 fn the_imported_file_record_stays_ungated() {
     // Only reached inside an import flow, which is itself gated; recording the hash

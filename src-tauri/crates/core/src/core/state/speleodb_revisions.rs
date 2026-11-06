@@ -543,9 +543,9 @@ impl AppState {
     /// Both ids are validated at the trust boundary before the download URL is built,
     /// and the swap is BOUND to the open project (a mismatched id is refused). A
     /// force-edit session (#213) is refused outright (both View and Restore), and
-    /// Restore additionally requires the write lock genuinely held - the backend never
-    /// trusts the FE's View/Restore choice. Returns the local path (like a pull); the
-    /// FE pulls the swapped geometry.
+    /// Restore additionally requires the write lock genuinely held while View is refused
+    /// under it - the backend never trusts the FE's View/Restore choice. Returns the
+    /// local path (like a pull); the FE pulls the swapped geometry.
     pub fn speleodb_restore_revision(
         &self,
         project_id: String,
@@ -622,6 +622,19 @@ impl AppState {
             return Err(local_dto(SpeleoDbError::refused(
                 "loading a revision's undo history needs a restore with the write lock held"
                     .to_owned(),
+            )));
+        }
+        // [#576 FZ-SDB-4] View is the read-only, no-lock peek, so it is refused while
+        // editing under the write lock (force-editing is refused above, so an open
+        // gate here means a lock). The View reload shuts the gate without handing the
+        // lock claim back, so the next status poll forgets the claim and the quit-time
+        // silent release then leaves the lock held. The UI offers View only without the
+        // lock; this holds for a direct IPC call too, and refuses before anything is
+        // captured or closed. (Below the Keep refusal so a View asking to keep history
+        // is still told what it asked for.)
+        if !restore && self.edit_enabled() {
+            return Err(local_dto(SpeleoDbError::refused(
+                "release the write lock (or restore) before viewing a revision".to_owned(),
             )));
         }
         // [#303] The Unwind flavour: keeping the downloaded copy's undo history is a
