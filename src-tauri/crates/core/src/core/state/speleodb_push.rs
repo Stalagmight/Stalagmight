@@ -154,20 +154,111 @@ where
 /// on every path (landed, refused, failed). Nothing reads them afterwards (the next
 /// push rebuilds both from the live file), and left behind they kept two more full
 /// copies of the survey in the cache.
-struct PushScratch([std::path::PathBuf; 2]);
+///
+/// [#576 RVF-b-4] Each push gets its own directory, `<cache>/<id>/push-<uuid>/`,
+/// holding both files under their usual names, and the guard removes that directory
+/// and nothing else. On names shared by every push of a project, two overlapping
+/// pushes collided: the upload half runs outside `command_lock`, so the first
+/// push's drop unlinked the second's snapshot before the second's upload opened
+/// it. The local names never reach the server - `client::build_upload_parts` sends
+/// the canonical wire names - so only the directory is new.
+struct PushScratch {
+    dir: std::path::PathBuf,
+}
+
+impl PushScratch {
+    /// Make this push's directory inside `cache_dir`. `create_dir`, not
+    /// `create_dir_all`: it fails on ANY entry already at the name, a link included
+    /// (mkdir never follows its last component), so the files go into a directory
+    /// this call made, empty, and the writers below find nothing there to follow.
+    fn create(cache_dir: &Path) -> std::io::Result<Self> {
+        sweep_stale_push_scratch(cache_dir, STALE_PUSH_SCRATCH);
+        let dir = cache_dir.join(format!("push-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&dir)?;
+        Ok(Self { dir })
+    }
+
+    fn snapshot(&self) -> std::path::PathBuf {
+        self.dir.join("snapshot.stalx")
+    }
+
+    fn tml(&self) -> std::path::PathBuf {
+        self.dir.join("ariane.tml")
+    }
+}
+
+/// How old a `push-*` entry has to be before the next push of the project sweeps it.
+/// A running push never lasts this long, so only a crashed push's scratch qualifies.
+const STALE_PUSH_SCRATCH: std::time::Duration = std::time::Duration::from_hours(24);
+
+/// [#576 RVF-b-4] Remove the `push-*` entries in `cache_dir` last modified at least
+/// `older_than` ago: the scratch of a push that crashed before its guard ran. The
+/// fixed names were bounded (the next push replaced them); without this, every
+/// crashed push kept a full copy of the survey forever. An age test, not a registry
+/// of live pushes, because it holds across processes. Best-effort: nothing here can
+/// fail the push. `symlink_metadata`, so a `push-*` link is removed, never followed.
+fn sweep_stale_push_scratch(cache_dir: &Path, older_than: std::time::Duration) {
+    let entries = match std::fs::read_dir(cache_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    error = %e,
+                    path = %cache_dir.display(),
+                    "speleodb_upload: could not list the cache dir to sweep stale push scratch"
+                );
+            }
+            return;
+        }
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        if !entry.file_name().to_string_lossy().starts_with("push-") {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        // A modification time in the future (a clock set back) is not stale.
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= older_than);
+        if !stale {
+            continue;
+        }
+        let removed = if meta.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        match removed {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "speleodb_upload: could not sweep a stale push scratch entry"
+            ),
+        }
+    }
+}
 
 impl Drop for PushScratch {
     fn drop(&mut self) {
-        for path in &self.0 {
-            match std::fs::remove_file(path) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    path = %path.display(),
-                    "speleodb_upload: could not remove a push scratch file; the next push replaces it"
-                ),
-            }
+        // `remove_dir_all` removes a link it meets instead of following it, so
+        // nothing outside this push's directory goes with it; it also takes any
+        // sidecar a failed SQLite write left beside the snapshot.
+        match std::fs::remove_dir_all(&self.dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                path = %self.dir.display(),
+                "speleodb_upload: could not remove a push's scratch directory; a push a day later sweeps it"
+            ),
         }
     }
 }
@@ -1051,14 +1142,18 @@ impl AppState {
         }
 
         // The live on-disk `.stalx` (the open project's cache file) and the scratch
-        // snapshot / render paths beside it.
+        // snapshot / render paths in this push's own directory beside it.
         let live = self.speleodb_cache_path(project_id).map_err(local_dto)?;
         let dir = live
             .parent()
             .ok_or_else(|| local_dto(SpeleoDbError::Io("cache path has no parent".to_owned())))?;
-        let snapshot_path = dir.join("snapshot.stalx");
-        let tml = dir.join("ariane.tml");
-        let _scratch = PushScratch([snapshot_path.clone(), tml.clone()]);
+        let scratch = PushScratch::create(dir).map_err(|e| {
+            local_dto(SpeleoDbError::Io(format!(
+                "could not create the push's scratch directory: {e}"
+            )))
+        })?;
+        let snapshot_path = scratch.snapshot();
+        let tml = scratch.tml();
 
         // [#576 B35(d)] The LOCAL half of the push - the name fold, the push-start
         // fence, the flush, the render and the snapshot - under `command_lock`, so an
@@ -1880,6 +1975,213 @@ mod snapshot_undo_metadata_tests {
                 Some("2026-08-02T10:00:00+00:00")
             );
         });
+    }
+
+    /// Write `bytes` at `path` the way a scratch writer leaves it.
+    fn put(path: &Path, bytes: &[u8]) {
+        std::fs::write(path, bytes).expect("write a scratch file");
+    }
+
+    #[test]
+    fn a_finished_push_leaves_an_overlapping_push_its_scratch() {
+        // [#576 RVF-b-4] Two pushes of one project overlap: B has written its
+        // snapshot and render, and A returns before B's upload opens them. On names
+        // shared by every push, A's guard unlinked B's files and B's upload failed
+        // with NotFound.
+        let cache = TempDir::new().expect("temp dir");
+        let a = PushScratch::create(cache.path()).expect("A's scratch");
+        let b = PushScratch::create(cache.path()).expect("B's scratch");
+        put(&a.snapshot(), b"A snapshot");
+        put(&a.tml(), b"A render");
+        put(&b.snapshot(), b"B snapshot");
+        put(&b.tml(), b"B render");
+
+        drop(a);
+
+        assert_eq!(
+            std::fs::read(b.snapshot()).ok(),
+            Some(b"B snapshot".to_vec()),
+            "dropping A's guard must leave B's snapshot in place"
+        );
+        assert_eq!(
+            std::fs::read(b.tml()).ok(),
+            Some(b"B render".to_vec()),
+            "dropping A's guard must leave B's render in place"
+        );
+    }
+
+    #[test]
+    fn each_push_scratch_is_its_own_directory_and_its_guard_removes_only_that() {
+        let cache = TempDir::new().expect("temp dir");
+        let live = cache.path().join("project.stalx");
+        put(&live, b"live copy");
+        let a = PushScratch::create(cache.path()).expect("A's scratch");
+        let b = PushScratch::create(cache.path()).expect("B's scratch");
+        assert_ne!(
+            a.snapshot(),
+            b.snapshot(),
+            "two pushes share a snapshot path"
+        );
+        assert_ne!(a.tml(), b.tml(), "two pushes share a render path");
+        assert_eq!(
+            (a.snapshot().file_name(), a.tml().file_name()),
+            (
+                Some(std::ffi::OsStr::new("snapshot.stalx")),
+                Some(std::ffi::OsStr::new("ariane.tml"))
+            ),
+            "the files keep the names the writers and the upload expect"
+        );
+        let a_dir = a.snapshot().parent().expect("A's dir").to_path_buf();
+        let b_dir = b.snapshot().parent().expect("B's dir").to_path_buf();
+        assert_eq!(a_dir.parent(), Some(cache.path()), "beside the cache copy");
+        put(&a.snapshot(), b"A snapshot");
+        put(&a.tml(), b"A render");
+        // What a failed SQLite write on the snapshot leaves beside it.
+        put(&a_dir.join("snapshot.stalx-journal"), b"journal");
+
+        drop(a);
+        assert!(!a_dir.exists(), "the guard removes its own directory");
+        assert!(b_dir.is_dir(), "and not the other push's");
+        assert_eq!(
+            std::fs::read(&live).ok(),
+            Some(b"live copy".to_vec()),
+            "and not the cache copy"
+        );
+
+        drop(b);
+        let left: Vec<_> = std::fs::read_dir(cache.path())
+            .expect("read the cache dir")
+            .map(|e| e.expect("a dir entry").file_name())
+            .collect();
+        assert_eq!(
+            left,
+            vec![std::ffi::OsString::from("project.stalx")],
+            "only the cache copy is left"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_scratch_guard_removes_a_link_inside_it_without_following_it() {
+        let cache = TempDir::new().expect("temp dir");
+        let outside = TempDir::new().expect("outside dir");
+        let precious = outside.path().join("keep.stalx");
+        put(&precious, b"not the push's");
+        let scratch = PushScratch::create(cache.path()).expect("scratch");
+        let dir = scratch.snapshot().parent().expect("dir").to_path_buf();
+        std::os::unix::fs::symlink(outside.path(), dir.join("linked-dir"))
+            .expect("plant a directory link");
+        std::os::unix::fs::symlink(&precious, scratch.snapshot()).expect("plant a file link");
+
+        drop(scratch);
+
+        assert!(!dir.exists(), "the scratch directory went");
+        assert_eq!(
+            std::fs::read(&precious).ok(),
+            Some(b"not the push's".to_vec()),
+            "a link's target outside the scratch survives"
+        );
+    }
+
+    /// The names in `dir`, sorted.
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .expect("read the cache dir")
+            .map(|e| {
+                e.expect("a dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn the_scratch_sweep_takes_only_push_entries_past_the_threshold() {
+        // [#576 RVF-b-4] A crashed push's scratch is not left behind for good: the
+        // sweep takes `push-*` entries old enough, and nothing else in the cache dir.
+        let cache = TempDir::new().expect("temp dir");
+        put(&cache.path().join("project.stalx"), b"live copy");
+        put(&cache.path().join("push.log"), b"not scratch");
+        std::fs::create_dir(cache.path().join("other")).expect("a non-push dir");
+        std::fs::create_dir(cache.path().join("push-crashed")).expect("a push dir");
+        put(
+            &cache.path().join("push-crashed").join("snapshot.stalx"),
+            b"crashed snapshot",
+        );
+        put(&cache.path().join("push-stray"), b"a push-named file");
+        let everything = names_in(cache.path());
+
+        sweep_stale_push_scratch(cache.path(), STALE_PUSH_SCRATCH);
+        assert_eq!(
+            names_in(cache.path()),
+            everything,
+            "an entry inside the threshold is kept"
+        );
+
+        sweep_stale_push_scratch(cache.path(), std::time::Duration::ZERO);
+        assert_eq!(
+            names_in(cache.path()),
+            vec!["other", "project.stalx", "push.log"],
+            "every push-* entry past the threshold went, and only those"
+        );
+        assert_eq!(
+            std::fs::read(cache.path().join("project.stalx")).ok(),
+            Some(b"live copy".to_vec()),
+            "the live cache copy is untouched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_push_sweeps_a_day_old_scratch_and_keeps_a_recent_one() {
+        let cache = TempDir::new().expect("temp dir");
+        let old = cache.path().join("push-old");
+        let recent = cache.path().join("push-recent");
+        std::fs::create_dir(&old).expect("an old push dir");
+        put(&old.join("snapshot.stalx"), b"crashed snapshot");
+        std::fs::create_dir(&recent).expect("a recent push dir");
+        let two_days_ago = std::time::SystemTime::now()
+            .checked_sub(std::time::Duration::from_hours(48))
+            .expect("a time two days back");
+        std::fs::File::open(&old)
+            .expect("open the old push dir")
+            .set_modified(two_days_ago)
+            .expect("age the old push dir");
+
+        let scratch = PushScratch::create(cache.path()).expect("the new push's scratch");
+
+        assert!(!old.exists(), "the day-old scratch was swept");
+        assert!(recent.is_dir(), "a recent push's scratch is kept");
+        assert!(
+            scratch.snapshot().parent().is_some_and(Path::is_dir),
+            "and the new push has its own"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_scratch_sweep_removes_a_push_named_link_without_following_it() {
+        let cache = TempDir::new().expect("temp dir");
+        let outside = TempDir::new().expect("outside dir");
+        let precious = outside.path().join("keep.stalx");
+        put(&precious, b"not the push's");
+        let link = cache.path().join("push-linked");
+        std::os::unix::fs::symlink(outside.path(), &link).expect("plant a push-named link");
+
+        sweep_stale_push_scratch(cache.path(), std::time::Duration::ZERO);
+
+        assert!(
+            std::fs::symlink_metadata(&link).is_err(),
+            "the push-named link was removed"
+        );
+        assert_eq!(
+            std::fs::read(&precious).ok(),
+            Some(b"not the push's".to_vec()),
+            "and its target was not touched"
+        );
     }
 }
 
