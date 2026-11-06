@@ -8,6 +8,7 @@ use crate::commands::import_runner::{
     guarded, run_file_import, ApplyPath, ConvertedImport, ImportKind,
 };
 use crate::commands::pool;
+use crate::core::state::ProjectIdentity;
 use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::{CommandError, CommandErrorCode, CommandResult, ImportOutcome};
 use crate::models::placement_suggest::{
@@ -251,6 +252,7 @@ fn merge_deferred_save_outcome(
 #[tauri::command]
 pub async fn import_sections<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     sections: Vec<crate::models::ImportSectionConfig>,
     file_hash: Option<String>,
     section_hashes: Option<Vec<String>>,
@@ -261,7 +263,7 @@ pub async fn import_sections<R: Runtime>(
     sections_found: Option<u32>,
     source_warnings: Option<Vec<String>>,
 ) -> Result<ImportOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         let updates = existing_shot_updates.unwrap_or_default();
         tracing::info!(
             section_count = sections.len(),
@@ -350,6 +352,7 @@ pub async fn parse_tml(path: PathBuf) -> Result<TmlFile, CommandError> {
 )]
 pub async fn execute_tml_import<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     path: PathBuf,
     file_hash: Option<String>,
     include_excluded: bool,
@@ -359,7 +362,7 @@ pub async fn execute_tml_import<R: Runtime>(
     root_placement: Option<TmlRootPlacement>,
 ) -> Result<ImportOutcome, CommandError> {
     let sink = tauri_sink(app.clone());
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         let opts = TmlImportOptions {
             include_excluded,
             comments_on_stations,
@@ -450,6 +453,7 @@ pub async fn parse_compass(path: PathBuf) -> Result<CompassFile, CommandError> {
 #[tauri::command]
 pub async fn execute_compass_import<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     path: PathBuf,
     file_hash: Option<String>,
     include_excluded: bool,
@@ -457,7 +461,7 @@ pub async fn execute_compass_import<R: Runtime>(
     comments_on_stations: bool,
 ) -> Result<ImportOutcome, CommandError> {
     let sink = tauri_sink(app.clone());
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         let opts = CompassImportOptions {
             include_excluded,
             apply_corrections,
@@ -551,6 +555,7 @@ pub async fn parse_gpx(path: PathBuf) -> Result<GpxFile, CommandError> {
 )]
 pub async fn execute_gpx_import<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     path: PathBuf,
     file_hash: Option<String>,
     import_waypoints: bool,
@@ -560,7 +565,7 @@ pub async fn execute_gpx_import<R: Runtime>(
     depth_inverted: bool,
 ) -> Result<ImportOutcome, CommandError> {
     let sink = tauri_sink(app.clone());
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         let selection = GpxSelection {
             import_waypoints,
             import_tracks,
@@ -800,6 +805,7 @@ pub async fn parse_walls(path: PathBuf) -> Result<WallsFile, CommandError> {
 #[tauri::command]
 pub async fn execute_walls_import<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     path: PathBuf,
     file_hash: Option<String>,
     comments_on_stations: bool,
@@ -807,7 +813,7 @@ pub async fn execute_walls_import<R: Runtime>(
     selected_surveys: Option<Vec<u32>>,
 ) -> Result<ImportOutcome, CommandError> {
     let sink = tauri_sink(app.clone());
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         let opts = WallsImportOptions {
             comments_on_stations,
             include_splays,

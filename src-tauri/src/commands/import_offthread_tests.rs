@@ -28,6 +28,7 @@ use tauri::webview::InvokeRequest;
 use tauri::{App, Listener, Manager, WebviewWindow, WebviewWindowBuilder};
 use tempfile::TempDir;
 
+use super::command_tests::made_for;
 use super::import_command_tests::{
     synthetic_compass_dat, synthetic_tmlu, synthetic_walls_srv, write,
 };
@@ -163,9 +164,14 @@ fn cases(dir: &TempDir) -> Vec<ImportCase> {
     ]
 }
 
-fn body_for(case: &ImportCase) -> Value {
+fn body_for(case: &ImportCase, app: &App<MockRuntime>) -> Value {
     let mut body = case.args.clone();
     body["path"] = json!(case.path);
+    // [#576 FZ-FZ-INT-7] What the frontend sends with an edit: the open project.
+    body["expectedProject"] = match made_for(app) {
+        Some(open) => json!({ "createdAt": open.created_at, "filePath": open.file_path }),
+        None => Value::Null,
+    };
     body
 }
 
@@ -192,7 +198,7 @@ fn run_with_cancel_in_read_phase(case: &ImportCase) -> Observed {
 
     // The main thread dispatches the import.
     let started = Instant::now();
-    let import = dispatch(&window, request(case.command, body_for(case)));
+    let import = dispatch(&window, request(case.command, body_for(case, &app)));
     let dispatch_held_thread = started.elapsed();
 
     // The read phase is reported while the import is still running...
@@ -316,7 +322,7 @@ fn an_import_dispatched_off_the_main_thread_still_lands() {
     for case in cases(&dir) {
         let (app, window) = app_with_import_commands();
         let started = Instant::now();
-        let import = dispatch(&window, request(case.command, body_for(&case)));
+        let import = dispatch(&window, request(case.command, body_for(&case, &app)));
         let held = started.elapsed();
         let answer = import
             .recv_timeout(Duration::from_secs(20))

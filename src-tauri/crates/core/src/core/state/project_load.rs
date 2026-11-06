@@ -6,6 +6,15 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only: runs on the loading thread at its commit, holding `command_lock`,
+    /// right after the first cancellation re-check and before the checks that
+    /// follow it (#576 FZ-FZ-INT-1, FZ-FZ-INT-R2).
+    pub(super) static BEFORE_SESSION_COMMIT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 impl AppState {
     /// Legacy open, deliberately WITHOUT the canonical-storage guard that
     /// `do_load_project_full` runs (`foreign_link`): this function has no
@@ -1019,6 +1028,10 @@ impl AppState {
         // project land last (the mutex is not fair), leaving the backend on a project
         // the frontend had moved past.
         check_cancelled!();
+        #[cfg(test)]
+        if let Some(hook) = BEFORE_SESSION_COMMIT.with(|hook| hook.borrow_mut().take()) {
+            hook();
+        }
         // [#576 FZ-FZ-INT-R1] The "already open" guard again, now that no commit can
         // land: it ran when this load STARTED, and a load of this same file that
         // started earlier can have committed since. Committing anyway installed a

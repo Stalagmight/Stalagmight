@@ -1,8 +1,7 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use ts_rs::TS;
 
 use super::AppState;
@@ -83,23 +82,10 @@ impl AppState {
         value: &str,
     ) -> Result<(), CommandError> {
         let _between_commands = self.hold_commands();
-        let open = self
-            .project
-            .lock()
-            .as_ref()
-            .map(|p| (p.created_at.utc(), p.file_path.clone()));
-        let same_project = match (made_for, open) {
-            (None, None) => true,
-            (Some(made_for), Some((open_created_at, open_path))) => {
-                let same_created_at = DateTime::parse_from_rfc3339(&made_for.created_at)
-                    .is_ok_and(|at| at.with_timezone(&Utc) == open_created_at);
-                let made_for_path = made_for.file_path.as_ref().map(PathBuf::from);
-                same_created_at
-                    && (made_for_path == open_path
-                        || self.opened_from.lock().contains(&made_for_path))
-            }
-            _ => false,
-        };
+        // The rule every save and edit is decided by too (#576 FZ-FZ-INT-4/7).
+        let same_project = self.names_open_project(
+            made_for.map(|target| (target.created_at.as_str(), target.file_path.as_deref())),
+        );
         if !same_project {
             return Err(CommandError::new(
                 CommandErrorCode::ProjectChanged,

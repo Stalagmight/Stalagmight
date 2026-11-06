@@ -18,7 +18,7 @@ use tauri::test::{mock_app, MockRuntime};
 use tauri::Manager;
 use tempfile::TempDir;
 
-use super::command_tests::{h, run, shot_data, with_config_lock};
+use super::command_tests::{h, made_for, run, shot_data, with_config_lock};
 use super::{history, section};
 use crate::core::{AppState, Command, CommandErrorCode, RemoteLinkBits};
 use crate::models::{Project, SectionData, SectionId, SectionUpdates, SpeleoLink};
@@ -137,6 +137,7 @@ fn restamp(path: &Path, dirty: bool, unwound: bool) {
 fn create(app: &tauri::App<MockRuntime>, name: &str) -> SectionId {
     run(section::create_section(
         h(app),
+        made_for(app),
         Some(name.to_owned()),
         None,
         None,
@@ -154,6 +155,7 @@ fn an_edit_answers_the_link_row_dirty_and_no_longer_unwound() {
         let fx = linked(true);
         let outcome = run(section::update_section(
             h(&fx.app),
+            made_for(&fx.app),
             fx.with_shots,
             SectionUpdates {
                 name: Some(Some("Renamed".to_owned())),
@@ -185,8 +187,13 @@ fn an_edit_answers_the_link_row_dirty_and_no_longer_unwound() {
 fn a_provable_no_op_reverse_answers_clean_and_still_unwound() {
     with_config_lock(|| {
         let fx = linked(true);
-        let outcome = run(section::reverse_section(h(&fx.app), fx.shotless, false))
-            .expect("the no-op reverse succeeds");
+        let outcome = run(section::reverse_section(
+            h(&fx.app),
+            made_for(&fx.app),
+            fx.shotless,
+            false,
+        ))
+        .expect("the no-op reverse succeeds");
         let row = link_row(&fx.path);
         println!(
             "no-op reverse -> remote_link {:?}; link row {row:?}",
@@ -212,7 +219,7 @@ fn an_undo_answers_the_link_row() {
         create(&fx.app, "A");
         // As a push and an Unwind leave it: clean, and off the server tip.
         restamp(&fx.path, false, true);
-        let outcome = run(history::undo(h(&fx.app))).expect("the undo lands");
+        let outcome = run(history::undo(h(&fx.app), made_for(&fx.app))).expect("the undo lands");
         let row = link_row(&fx.path);
         println!(
             "undo -> remote_link {:?}; link row {row:?}",
@@ -246,7 +253,8 @@ fn a_failed_undo_to_that_mutated_rejects_with_the_dirty_link_row() {
         state.set_project_for_tests(live);
         restamp(&fx.path, false, false);
 
-        let error = run(history::undo_to(h(&fx.app), 1)).expect_err("step 2 of 2 fails");
+        let error =
+            run(history::undo_to(h(&fx.app), made_for(&fx.app), 1)).expect_err("step 2 of 2 fails");
         let row = link_row(&fx.path);
         println!(
             "failed undo_to -> code {} message {:?} history_step {:?}; remote_link {:?}; \
@@ -286,6 +294,7 @@ fn a_local_project_answers_no_link_bits() {
         app.state::<AppState>().set_project_for_tests(project);
         let outcome = run(section::update_section(
             h(&app),
+            made_for(&app),
             section_id,
             SectionUpdates {
                 name: Some(Some("Renamed".to_owned())),
@@ -295,7 +304,8 @@ fn a_local_project_answers_no_link_bits() {
         .expect("the edit lands");
         println!("local edit -> remote_link {:?}", outcome.remote_link);
         assert_eq!(outcome.remote_link, None, "a local project has no link");
-        let error = run(section::delete_section(h(&app), 999)).expect_err("no such section");
+        let error = run(section::delete_section(h(&app), made_for(&app), 999))
+            .expect_err("no such section");
         assert_eq!(
             error.payload.remote_link, None,
             "and its failures carry none either"
@@ -315,6 +325,7 @@ fn a_mutation_that_crashes_after_marking_the_copy_rejects_with_the_dirty_link_ro
         let section_id = fx.with_shots;
         let error = run(super::pool::run_mutation(
             h(&fx.app),
+            made_for(&fx.app),
             move |state| -> Result<crate::core::EditOutcome, crate::core::CommandError> {
                 let edited = state.execute(Command::UpdateSectionMetadata {
                     section_id,

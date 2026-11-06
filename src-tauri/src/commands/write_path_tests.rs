@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use tauri::Manager;
 use tempfile::TempDir;
 
-use super::command_tests::{h, run};
+use super::command_tests::{h, made_for, run};
 use crate::commands::write_path::{check_write_path_with, AppDirs, WriteTarget};
 use crate::core::AppState;
 use crate::export::ImageFormat;
@@ -156,6 +156,7 @@ fn the_commands_refuse_before_writing_or_deleting() {
     {
         let saved = run(crate::commands::project::save_project(
             h(&app),
+            made_for(&app),
             Some(PathBuf::from("/etc/stalagmight-w4.stalx")),
             None,
         ));

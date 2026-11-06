@@ -7,7 +7,7 @@
 use tempfile::NamedTempFile;
 
 use super::command_tests::{
-    app_with_state, assert_success, h, run, shot_data, state, with_config_lock,
+    app_with_state, assert_success, h, made_for, run, shot_data, state, with_config_lock,
 };
 use super::import;
 use crate::core::Command;
@@ -43,6 +43,7 @@ fn test_import_sections_provenance_params_decorate_receipt() {
 
         let result = run(import::import_sections(
             h(&app),
+            made_for(&app),
             sections,
             None,
             None,
@@ -111,6 +112,7 @@ fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
 
         let result = run(import::import_sections(
             h(&app),
+            made_for(&app),
             sections,
             None,
             None,
@@ -171,6 +173,7 @@ fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
 
         let result = run(import::import_sections(
             h(&app),
+            made_for(&app),
             sections,
             None,
             None,
@@ -224,6 +227,7 @@ fn test_execute_gpx_import_decorates_receipt() {
 
         let result = tauri::async_runtime::block_on(import::execute_gpx_import(
             app.handle().clone(),
+            made_for(&app),
             file.path().to_path_buf(),
             None,
             false,
@@ -262,6 +266,7 @@ fn test_import_sections_with_nothing_to_import_still_reports_a_receipt() {
 
         let result = run(import::import_sections(
             h(&app),
+            made_for(&app),
             Vec::new(),
             None,
             None,

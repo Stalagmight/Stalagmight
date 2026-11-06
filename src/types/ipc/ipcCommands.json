@@ -353,6 +353,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "station_a",
           "key": "stationA",
           "rust": "StationRef",
@@ -439,6 +446,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "name",
           "key": "name",
           "rust": "Option<String>",
@@ -495,6 +509,13 @@
       "module": "section",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "name",
           "key": "name",
@@ -573,6 +594,13 @@
       "module": "shot",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "section_id",
           "key": "sectionId",
@@ -661,6 +689,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "section_id",
           "key": "sectionId",
           "rust": "SectionId",
@@ -712,6 +747,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "section_id",
           "key": "sectionId",
           "rust": "SectionId",
@@ -733,6 +775,13 @@
       "module": "shot",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "section_id",
           "key": "sectionId",
@@ -762,6 +811,13 @@
       "module": "shot",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "section_id",
           "key": "sectionId",
@@ -806,6 +862,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "section_id",
           "key": "sectionId",
           "rust": "SectionId",
@@ -841,6 +904,13 @@
       "module": "shot",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "section_id",
           "key": "sectionId",
@@ -892,6 +962,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "commands",
           "key": "commands",
           "rust": "Vec<Command>",
@@ -913,6 +990,13 @@
       "module": "import",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "path",
           "key": "path",
@@ -963,6 +1047,13 @@
       "module": "import",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "path",
           "key": "path",
@@ -1028,6 +1119,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "path",
           "key": "path",
           "rust": "PathBuf",
@@ -1091,6 +1189,13 @@
       "module": "import",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "path",
           "key": "path",
@@ -1831,6 +1936,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "sections",
           "key": "sections",
           "rust": "Vec<crate::models::ImportSectionConfig>",
@@ -2096,6 +2208,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "station_a",
           "key": "stationA",
           "rust": "StationRef",
@@ -2124,6 +2243,13 @@
       "module": "station",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "source",
           "key": "source",
@@ -2161,6 +2287,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "section_id",
           "key": "sectionId",
           "rust": "SectionId",
@@ -2190,6 +2323,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "section_id",
           "key": "sectionId",
           "rust": "SectionId",
@@ -2218,6 +2358,13 @@
       "module": "station",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "station_ref",
           "key": "stationRef",
@@ -2516,7 +2663,15 @@
       "name": "redo",
       "module": "history",
       "async": true,
-      "args": [],
+      "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        }
+      ],
       "result": {
         "rust": "HistoryOutcome",
         "ts": "HistoryOutcome"
@@ -2531,6 +2686,13 @@
       "module": "history",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "index",
           "key": "index",
@@ -2590,6 +2752,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "closure_id",
           "key": "closureId",
           "rust": "u64",
@@ -2611,6 +2780,13 @@
       "module": "station",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "station_ref",
           "key": "stationRef",
@@ -2654,7 +2830,15 @@
       "name": "repair_project_integrity",
       "module": "validation",
       "async": true,
-      "args": [],
+      "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        }
+      ],
       "result": {
         "rust": "IntegrityRepairResult",
         "ts": "IntegrityRepairResult"
@@ -2669,6 +2853,13 @@
       "module": "validation",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "section_id",
           "key": "sectionId",
@@ -2741,6 +2932,13 @@
       "module": "section",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "section_id",
           "key": "sectionId",
@@ -2843,6 +3041,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "path",
           "key": "path",
           "rust": "Option<PathBuf>",
@@ -2894,6 +3099,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "path",
           "key": "path",
           "rust": "PathBuf",
@@ -2922,6 +3134,13 @@
       "module": "shot",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "section_id",
           "key": "sectionId",
@@ -2959,6 +3178,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "station_ref",
           "key": "stationRef",
           "rust": "StationRef",
@@ -2987,6 +3213,13 @@
       "module": "project",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "elevation",
           "key": "elevation",
@@ -3053,6 +3286,13 @@
       "module": "station",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "station_ref",
           "key": "stationRef",
@@ -4139,6 +4379,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "section_id",
           "key": "sectionId",
           "rust": "SectionId",
@@ -4311,7 +4558,15 @@
       "name": "undo",
       "module": "history",
       "async": true,
-      "args": [],
+      "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        }
+      ],
       "result": {
         "rust": "HistoryOutcome",
         "ts": "HistoryOutcome"
@@ -4326,6 +4581,13 @@
       "module": "history",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "index",
           "key": "index",
@@ -4348,6 +4610,13 @@
       "module": "station",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "station_a",
           "key": "stationA",
@@ -4378,6 +4647,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "station_ref",
           "key": "stationRef",
           "rust": "StationRef",
@@ -4399,6 +4675,13 @@
       "module": "validation",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "section_id",
           "key": "sectionId",
@@ -4759,6 +5042,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "name",
           "key": "name",
           "rust": "String",
@@ -4795,6 +5085,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "section_id",
           "key": "sectionId",
           "rust": "SectionId",
@@ -4823,6 +5120,13 @@
       "module": "shot",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "section_id",
           "key": "sectionId",

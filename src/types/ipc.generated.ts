@@ -29,6 +29,7 @@ export * from './ipc/InternalErrorNotice';
 export * from './ipc/LoadProjectFullResult';
 export * from './ipc/OpenFileFlags';
 export * from './ipc/DisplaySettingTarget';
+export * from './ipc/ProjectIdentity';
 export * from './ipc/CreateProjectFullResult';
 export * from './ipc/SpeleoManagedFile';
 export * from './ipc/Project';

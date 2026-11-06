@@ -665,6 +665,10 @@ impl AppState {
     /// which ProjectSettingsDialog deliberately keeps enabled in every mode
     /// (docs/app-modes.md). Everything else that mutates calls `guard_mutation`.
     pub(super) fn guard_metadata_mutation(&self, what: &str) -> Result<(), CommandError> {
+        // [#576 FZ-FZ-INT-4, FZ-FZ-INT-7] First: an edit made for another project
+        // than the open one is refused whatever the open one's gates say - its
+        // reason is the switch, not this project's read-only state.
+        self.refuse_other_project(what)?;
         if let Some(version) = self.newer_file_schema() {
             return Err(newer_file_edit_refusal(what, version));
         }

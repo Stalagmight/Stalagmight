@@ -14,6 +14,7 @@ use tauri::test::MockRuntime;
 use tauri::{App, Manager};
 use tempfile::TempDir;
 
+use super::command_tests::made_for;
 use super::import::{
     check_duplicate_import, execute_compass_import, execute_tml_import, execute_walls_import,
 };
@@ -93,6 +94,7 @@ fn tml_import(
     let app = project_app();
     let result = block_on(execute_tml_import(
         app.handle().clone(),
+        made_for(&app),
         path.to_path_buf(),
         hash.map(str::to_string),
         false,
@@ -180,6 +182,7 @@ fn compass_import(
     let app = project_app();
     let result = block_on(execute_compass_import(
         app.handle().clone(),
+        made_for(&app),
         path.to_path_buf(),
         hash.map(str::to_string),
         include_excluded,
@@ -239,6 +242,7 @@ fn walls_import(
     let app = project_app();
     let result = block_on(execute_walls_import(
         app.handle().clone(),
+        made_for(&app),
         path.to_path_buf(),
         hash.map(str::to_string),
         false,
@@ -278,6 +282,7 @@ fn the_walls_command_honours_include_splays_and_records_the_file() {
     let none = project_app();
     let result = block_on(execute_walls_import(
         none.handle().clone(),
+        made_for(&none),
         path.clone(),
         None,
         false,

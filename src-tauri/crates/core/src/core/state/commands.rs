@@ -601,7 +601,14 @@ impl AppState {
         // `return self.execute_move_comment(..)`), so it inherits this guard -
         // see the chokepoint enumeration test
         // (`gate_rejects_every_mutation_entrypoint`).
-        if !Self::is_lifecycle_passthrough(&cmd) {
+        if Self::is_lifecycle_passthrough(&cmd) {
+            // [#576 FZ-FZ-INT-4] A save (manual, autosave, Save As) made for another
+            // project than the open one is refused: the edit gates below do not
+            // apply to it, but the identity does.
+            if let Err(f) = self.refuse_other_project(&cmd.description()) {
+                return CommandResult::refused(f);
+            }
+        } else {
             if let Err(f) = self.guard_mutation(&cmd.description()) {
                 return CommandResult::refused(f);
             }

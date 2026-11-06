@@ -5,6 +5,7 @@ use ts_rs::TS;
 use crate::commands::pool;
 use crate::commands::write_path::{check_write_path, load_upgrade_refusal, WriteTarget};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
+use crate::core::state::{for_project, ProjectIdentity};
 use crate::core::{
     AppState, Command, CommandError, CommandResult, DeleteProjectOutcome, EditOutcome,
     ProjectFileOutcome, SaveOutcome,
@@ -21,11 +22,12 @@ use crate::persistence::with_stalx_extension;
 #[tauri::command]
 pub async fn update_project_settings<R: Runtime>(
     app: tauri::AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     name: String,
     validation: crate::config::ValidationConfig,
     default_azimuth_reference: Option<crate::models::AzimuthReference>,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .update_project_settings(name, validation, default_azimuth_reference)
             .into_outcome::<EditOutcome>()
@@ -40,9 +42,10 @@ pub async fn update_project_settings<R: Runtime>(
 #[tauri::command]
 pub async fn set_surface_elevation<R: Runtime>(
     app: tauri::AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     elevation: Option<f64>,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .set_surface_elevation(elevation)
             .into_outcome::<EditOutcome>()
@@ -60,23 +63,37 @@ pub async fn set_surface_elevation<R: Runtime>(
 #[tauri::command]
 pub async fn save_project<R: Runtime>(
     app: tauri::AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     path: Option<PathBuf>,
     is_autosave: Option<bool>,
 ) -> Result<SaveOutcome, CommandError> {
     pool::run(app, move |state| {
-        tracing::info!(
-            trigger = if is_autosave.unwrap_or(false) {
-                "autosave"
-            } else {
-                "manual"
-            },
-            path = ?path,
-            purpose = "persist edits safely",
-            "Save requested"
-        );
-        save_project_impl(state, path).into_outcome::<SaveOutcome>()
+        // [#576 FZ-FZ-INT-4] For the project the save was made for: one that lands
+        // after a switch is refused (`PROJECT_CHANGED`) rather than writing the
+        // project now open - to the path chosen for the other one, for a Save As.
+        for_project(expected_project, || {
+            save_project_for(state, path, is_autosave)
+        })
     })
     .await
+}
+
+fn save_project_for(
+    state: &AppState,
+    path: Option<PathBuf>,
+    is_autosave: Option<bool>,
+) -> Result<SaveOutcome, CommandError> {
+    tracing::info!(
+        trigger = if is_autosave.unwrap_or(false) {
+            "autosave"
+        } else {
+            "manual"
+        },
+        path = ?path,
+        purpose = "persist edits safely",
+        "Save requested"
+    );
+    save_project_impl(state, path).into_outcome::<SaveOutcome>()
 }
 
 pub(crate) fn save_project_impl(state: &AppState, path: Option<PathBuf>) -> CommandResult {
@@ -340,10 +357,11 @@ pub async fn delete_project<R: Runtime>(
 #[tauri::command]
 pub async fn set_project_name_for_path<R: Runtime>(
     app: tauri::AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     path: PathBuf,
     name: String,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         if let Err(why) = check_project_target(&path) {
             return Err(CommandError::failed(why));
         }

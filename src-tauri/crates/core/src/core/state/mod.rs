@@ -13,6 +13,7 @@ mod commands;
 mod config;
 mod display_settings;
 pub mod dive_plan;
+pub mod expected_project;
 mod import_tracking;
 mod project_create;
 mod project_io;
@@ -722,12 +723,21 @@ mod workspace_mode_tests;
 // AppState test setters in here (via the `test-support` feature the root's
 // [dev-dependencies] enable); the source-scan tripwires inside stay
 // `cfg(test)`-gated.
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              answers are the evidence a run captures"
+)]
+mod switch_identity_tests;
 #[cfg(any(test, feature = "test-support"))]
 mod tests_support;
 
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;
 pub use display_settings::DisplaySettingTarget;
+pub use expected_project::{for_project, ProjectIdentity};
 pub use settled_adjusted::SettledProject;
 pub use workspace_mode::WorkspaceMode;
 #[cfg(test)]

@@ -2,6 +2,7 @@ use chrono::NaiveDate;
 use tauri::{AppHandle, Runtime};
 
 use crate::commands::pool;
+use crate::core::state::ProjectIdentity;
 use crate::core::{
     BatchOutcome, Command, CommandError, EditOutcome, ReverseOutcome, SectionCreated,
 };
@@ -16,6 +17,7 @@ pub use crate::models::{SegmentGeometry, SegmentSectionGeometry};
 #[tauri::command]
 pub async fn create_section<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     name: Option<String>,
     surveyor: Option<String>,
     date: Option<NaiveDate>,
@@ -23,7 +25,7 @@ pub async fn create_section<R: Runtime>(
     direction: Option<SurveyDirection>,
     shots: Vec<ShotData>,
 ) -> Result<SectionCreated, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::CreateSection {
                 name,
@@ -42,10 +44,11 @@ pub async fn create_section<R: Runtime>(
 #[tauri::command]
 pub async fn update_section<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     updates: SectionUpdates,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::UpdateSectionMetadata {
                 section_id,
@@ -60,9 +63,10 @@ pub async fn update_section<R: Runtime>(
 #[tauri::command]
 pub async fn delete_section<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::DeleteSection { section_id })
             .into_outcome::<EditOutcome>()
@@ -79,10 +83,11 @@ pub async fn delete_section<R: Runtime>(
 #[tauri::command]
 pub async fn reverse_section<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     swap_left_right: bool,
 ) -> Result<ReverseOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::ReverseSection {
                 section_id,
@@ -97,10 +102,11 @@ pub async fn reverse_section<R: Runtime>(
 #[tauri::command]
 pub async fn move_section<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     offset: Coordinates,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::MoveSection { section_id, offset })
             .into_outcome::<EditOutcome>()
@@ -112,10 +118,11 @@ pub async fn move_section<R: Runtime>(
 #[tauri::command]
 pub async fn move_segment<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     offset: Coordinates,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::MoveSegment { section_id, offset })
             .into_outcome::<EditOutcome>()
@@ -127,9 +134,10 @@ pub async fn move_segment<R: Runtime>(
 #[tauri::command]
 pub async fn execute_batch<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     commands: Vec<Command>,
 ) -> Result<BatchOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::Batch { commands })
             .into_outcome::<BatchOutcome>()
@@ -172,6 +180,7 @@ pub async fn get_anchored_section_ids<R: Runtime>(
 #[tauri::command]
 pub async fn create_section_and_merge<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     name: Option<String>,
     surveyor: Option<String>,
     date: Option<NaiveDate>,
@@ -182,7 +191,7 @@ pub async fn create_section_and_merge<R: Runtime>(
     target_station: StationRef,
     closure_strategy: ClosureStrategy,
 ) -> Result<SectionCreated, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         // Use a special internal execution that:
         // 1. Takes a project snapshot for undo
         // 2. Creates the section

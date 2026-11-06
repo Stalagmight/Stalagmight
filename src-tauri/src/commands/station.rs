@@ -1,6 +1,7 @@
 use tauri::{AppHandle, Runtime};
 
 use crate::commands::pool;
+use crate::core::state::ProjectIdentity;
 use crate::core::{Command, CommandError, CommentHolder, EditOutcome};
 use crate::models::{ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates, StationRef};
 
@@ -23,11 +24,12 @@ pub async fn check_merge_connectivity<R: Runtime>(
 #[tauri::command]
 pub async fn create_loop_closure<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     station_a: StationRef,
     station_b: StationRef,
     closure_strategy: ClosureStrategy,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::CreateLoopClosure {
                 station_a,
@@ -43,9 +45,10 @@ pub async fn create_loop_closure<R: Runtime>(
 #[tauri::command]
 pub async fn remove_loop_closure<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     closure_id: u64,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::RemoveLoopClosure { closure_id })
             .into_outcome::<EditOutcome>()
@@ -57,10 +60,11 @@ pub async fn remove_loop_closure<R: Runtime>(
 #[tauri::command]
 pub async fn merge_stations<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     station_a: StationRef,
     station_b: StationRef,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::MergeStations {
                 station_a,
@@ -75,9 +79,10 @@ pub async fn merge_stations<R: Runtime>(
 #[tauri::command]
 pub async fn unmerge_stations<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     station_ref: StationRef,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::UnmergeStations { station_ref })
             .into_outcome::<EditOutcome>()
@@ -89,10 +94,11 @@ pub async fn unmerge_stations<R: Runtime>(
 #[tauri::command]
 pub async fn unmerge_station_pair<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     station_a: StationRef,
     station_b: StationRef,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::UnmergeStationPair {
                 station_a,
@@ -107,10 +113,11 @@ pub async fn unmerge_station_pair<R: Runtime>(
 #[tauri::command]
 pub async fn set_zero_datum<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     station_ref: StationRef,
     coordinates: GpsCoordinates,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::SetZeroDatum {
                 station_ref,
@@ -125,9 +132,10 @@ pub async fn set_zero_datum<R: Runtime>(
 #[tauri::command]
 pub async fn remove_zero_datum<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     station_ref: StationRef,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::RemoveZeroDatum { station_ref })
             .into_outcome::<EditOutcome>()
@@ -139,10 +147,11 @@ pub async fn remove_zero_datum<R: Runtime>(
 #[tauri::command]
 pub async fn set_station_comment<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     station_ref: StationRef,
     comment: Option<String>,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::SetStationComment {
                 station_ref,
@@ -157,11 +166,12 @@ pub async fn set_station_comment<R: Runtime>(
 #[tauri::command]
 pub async fn move_comment<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     source: CommentHolder,
     target: CommentHolder,
     swap: bool,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::MoveComment {
                 source,
@@ -177,10 +187,11 @@ pub async fn move_comment<R: Runtime>(
 #[tauri::command]
 pub async fn move_station<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     station_ref: StationRef,
     offset: Coordinates,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::MoveStation {
                 station_ref,

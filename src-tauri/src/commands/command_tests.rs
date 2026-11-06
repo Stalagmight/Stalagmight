@@ -3,6 +3,7 @@
 use super::{
     cache, config, export, history, import, project, raw_data, section, shot, station, validation,
 };
+use crate::core::state::ProjectIdentity;
 use crate::core::{AppState, Command, CommandError, CommandResult};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
@@ -40,6 +41,20 @@ pub(super) fn state(app: &tauri::App<MockRuntime>) -> State<'_, AppState> {
 /// command itself).
 pub(super) fn h(app: &tauri::App<MockRuntime>) -> tauri::AppHandle<MockRuntime> {
     app.handle().clone()
+}
+
+/// [#576 FZ-FZ-INT-4, FZ-FZ-INT-7] What the frontend sends with a save or an edit:
+/// the identity of the project open now (`None` with none open).
+pub(super) fn made_for(app: &tauri::App<MockRuntime>) -> Option<ProjectIdentity> {
+    app.state::<AppState>()
+        .project_snapshot()
+        .map(|p| ProjectIdentity {
+            created_at: p.created_at.as_str().to_owned(),
+            file_path: p
+                .file_path
+                .as_ref()
+                .map(|f| f.to_string_lossy().into_owned()),
+        })
 }
 
 /// Drive a command to completion: its body runs on the blocking pool, as in the
@@ -177,6 +192,7 @@ fn set_project_for_tests(app: &tauri::App<MockRuntime>, project: Project) {
 fn create_section_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>) -> u32 {
     let result = run(section::create_section(
         h(app),
+        made_for(app),
         Some("Section A".to_string()),
         Some("Surveyor".to_string()),
         None,
@@ -204,7 +220,12 @@ fn project_with_section(shots: Vec<ShotData>) -> Project {
 
 fn save_project_to_temp(app: &tauri::App<MockRuntime>, dir: &TempDir) -> PathBuf {
     let path = dir.path().join("project");
-    let result = run(project::save_project(h(app), Some(path.clone()), None));
+    let result = run(project::save_project(
+        h(app),
+        made_for(app),
+        Some(path.clone()),
+        None,
+    ));
     assert_success(&result);
     path.with_extension("stalx")
 }
@@ -1202,14 +1223,14 @@ fn test_can_redo_false_initial() {
 #[test]
 fn test_undo_fails_when_empty() {
     let app = app_with_state();
-    let result = run(history::undo(h(&app)));
+    let result = run(history::undo(h(&app), made_for(&app)));
     assert_failure_contains(&result, "Nothing to undo");
 }
 
 #[test]
 fn test_redo_fails_when_empty() {
     let app = app_with_state();
-    let result = run(history::redo(h(&app)));
+    let result = run(history::redo(h(&app), made_for(&app)));
     assert_failure_contains(&result, "Nothing to redo");
 }
 
@@ -1226,7 +1247,7 @@ fn test_undo_removes_section() {
     let app = app_with_state();
     create_project(&app);
     let section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let undo_result = run(history::undo(h(&app)));
+    let undo_result = run(history::undo(h(&app), made_for(&app)));
     assert_success(&undo_result);
     let section = get_section(state(&app), section_id);
     assert!(section.is_none());
@@ -1237,7 +1258,7 @@ fn test_can_redo_true_after_undo() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = run(history::undo(h(&app)));
+    let _ = run(history::undo(h(&app), made_for(&app)));
     assert!(read(history::can_redo(h(&app))));
 }
 
@@ -1246,8 +1267,8 @@ fn test_redo_restores_section() {
     let app = app_with_state();
     create_project(&app);
     let _section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = run(history::undo(h(&app)));
-    let redo_result = run(history::redo(h(&app)));
+    let _ = run(history::undo(h(&app), made_for(&app)));
+    let redo_result = run(history::redo(h(&app), made_for(&app)));
     assert_success(&redo_result);
     let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 1);
@@ -1261,7 +1282,7 @@ fn test_undo_to_fails_when_index_out_of_bounds() {
     create_section_with_shots(&app, vec![shot_data(1.0)]);
 
     // Index 0 should work (1 item), but index 1 should fail
-    let result = run(history::undo_to(h(&app), 1));
+    let result = run(history::undo_to(h(&app), made_for(&app), 1));
     assert!(result.is_err());
     assert!(result.unwrap_err().message.contains("Invalid undo index"));
 }
@@ -1273,7 +1294,7 @@ fn test_undo_to_index_0_undoes_one_operation() {
     let section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
 
     // Undo to index 0 should undo just the most recent action
-    let result = run(history::undo_to(h(&app), 0));
+    let result = run(history::undo_to(h(&app), made_for(&app), 0));
     assert_success(&result);
 
     // Section should be removed
@@ -1296,7 +1317,7 @@ fn test_undo_to_index_2_undoes_three_operations() {
     assert_eq!(project_state.project.sections.len(), 3);
 
     // Undo to index 2 should undo all 3 sections (indices 0, 1, 2)
-    let result = run(history::undo_to(h(&app), 2));
+    let result = run(history::undo_to(h(&app), made_for(&app), 2));
     assert_success(&result);
 
     // All sections should be removed
@@ -1310,10 +1331,10 @@ fn test_redo_to_fails_when_index_out_of_bounds() {
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     // Undo to create a redo entry
-    let _ = run(history::undo(h(&app)));
+    let _ = run(history::undo(h(&app), made_for(&app)));
 
     // Index 0 should work (1 item), but index 1 should fail
-    let result = run(history::redo_to(h(&app), 1));
+    let result = run(history::redo_to(h(&app), made_for(&app), 1));
     assert!(result.is_err());
     assert!(result.unwrap_err().message.contains("Invalid redo index"));
 }
@@ -1323,14 +1344,14 @@ fn test_redo_to_index_0_redoes_one_operation() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = run(history::undo(h(&app)));
+    let _ = run(history::undo(h(&app), made_for(&app)));
 
     // Verify section is gone
     let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 0);
 
     // Redo to index 0 should redo just the most recent undone action
-    let result = run(history::redo_to(h(&app), 0));
+    let result = run(history::redo_to(h(&app), made_for(&app), 0));
     assert_success(&result);
 
     // Section should be restored
@@ -1349,14 +1370,14 @@ fn test_redo_to_index_2_redoes_three_operations() {
     let _section_3 = create_section_with_shots(&app, vec![shot_data(3.0)]);
 
     // Undo all 3
-    let _ = run(history::undo_to(h(&app), 2));
+    let _ = run(history::undo_to(h(&app), made_for(&app), 2));
 
     // Verify all sections are gone
     let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 0);
 
     // Redo to index 2 should redo all 3 sections (indices 0, 1, 2)
-    let result = run(history::redo_to(h(&app), 2));
+    let result = run(history::redo_to(h(&app), made_for(&app), 2));
     assert_success(&result);
 
     // All sections should be restored
@@ -1368,7 +1389,7 @@ fn test_redo_to_index_2_redoes_three_operations() {
 fn test_undo_to_fails_when_stack_empty() {
     let app = app_with_state();
     // No project or actions
-    let result = run(history::undo_to(h(&app), 0));
+    let result = run(history::undo_to(h(&app), made_for(&app), 0));
     assert!(result.is_err());
     assert!(result.unwrap_err().message.contains("Invalid undo index"));
 }
@@ -1377,7 +1398,7 @@ fn test_undo_to_fails_when_stack_empty() {
 fn test_redo_to_fails_when_stack_empty() {
     let app = app_with_state();
     // No project or actions, so no redo available
-    let result = run(history::redo_to(h(&app), 0));
+    let result = run(history::redo_to(h(&app), made_for(&app), 0));
     assert!(result.is_err());
     assert!(result.unwrap_err().message.contains("Invalid redo index"));
 }
@@ -1433,6 +1454,7 @@ fn test_save_project_fails_when_no_project() {
     let app = app_with_state();
     let result = run(project::save_project(
         h(&app),
+        made_for(&app),
         Some(PathBuf::from("/tmp/nope.stalx")),
         None,
     ));
@@ -1453,7 +1475,12 @@ fn test_save_project_creates_stalx_extension() {
         create_project(&app);
         let dir = TempDir::new().unwrap();
         let raw_path = dir.path().join("project_data");
-        let result = run(project::save_project(h(&app), Some(raw_path), None));
+        let result = run(project::save_project(
+            h(&app),
+            made_for(&app),
+            Some(raw_path),
+            None,
+        ));
         assert_success(&result);
         let saved_path = dir.path().join("project_data.stalx");
         assert!(saved_path.exists());
@@ -1486,6 +1513,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
 
         let merge_result = run(station::merge_stations(
             h(&app),
+            made_for(&app),
             StationRef::new(section_a, 0),
             StationRef::new(section_b, 0),
         ));
@@ -1494,6 +1522,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
         let gps = GpsCoordinates::new(10.0, 20.0, 0.0).unwrap();
         let datum_result = run(station::set_zero_datum(
             h(&app),
+            made_for(&app),
             StationRef::new(section_a, 0),
             gps,
         ));
@@ -1504,7 +1533,13 @@ fn test_project_lifecycle_persists_undo_and_state() {
             comment: Some(Some("recalc".to_string())),
             ..Default::default()
         };
-        let update_result = run(shot::update_shot(h(&app), section_a, 0, updates));
+        let update_result = run(shot::update_shot(
+            h(&app),
+            made_for(&app),
+            section_a,
+            0,
+            updates,
+        ));
         assert_success(&update_result);
 
         let undo_before = read(history::get_undo_stack(h(&app)));
@@ -1550,6 +1585,7 @@ fn test_get_project_state_emits_positional_wire_refs() {
         // resolve a non-trivial positional index.
         assert_success(&run(station::merge_stations(
             h(&app),
+            made_for(&app),
             StationRef::new(section_a, 1),
             StationRef::new(section_b, 1),
         )));
@@ -1753,7 +1789,12 @@ fn test_save_project_fails_when_output_is_directory() {
             let blocked = dir.path().join("blocked.stalx");
             fs::create_dir_all(&blocked).unwrap();
 
-            let result = run(project::save_project(h(&app), Some(blocked.clone()), None));
+            let result = run(project::save_project(
+                h(&app),
+                made_for(&app),
+                Some(blocked.clone()),
+                None,
+            ));
             assert_failure_contains(&result, "Failed to finalize save");
 
             let temp_path = blocked.with_extension("stalx.tmp");
@@ -1810,6 +1851,7 @@ fn test_import_sections_persists_deferred_new_project() {
         }];
         let result = run(import::import_sections(
             h(&app),
+            made_for(&app),
             sections,
             None,
             None,
@@ -1899,6 +1941,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
         }];
         let result = run(import::import_sections(
             h(&app),
+            made_for(&app),
             sections,
             None,
             None,
@@ -2023,6 +2066,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
         }];
         let result = run(import::import_sections(
             h(&app),
+            made_for(&app),
             sections,
             None,
             None,
@@ -2100,6 +2144,7 @@ fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
         }];
         let result = run(import::import_sections(
             h(&app),
+            made_for(&app),
             sections,
             None,
             None,
@@ -2409,7 +2454,7 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
             // already empty would prove nothing.
             create_section_with_shots(&app, vec![shot_data(1.0)]);
             create_section_with_shots(&app, vec![shot_data(2.0)]);
-            assert_success(&run(history::undo(h(&app))));
+            assert_success(&run(history::undo(h(&app), made_for(&app))));
 
             assert_eq!(
                 read(project::get_project_state(h(&app)))
@@ -3062,6 +3107,7 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
             fs::create_dir(&real_dir).unwrap();
             assert_success(&run(project::save_project(
                 h(&app),
+                made_for(&app),
                 Some(real_dir.join("project")),
                 None,
             )));
@@ -3140,7 +3186,12 @@ fn test_save_project_fails_when_directory_missing() {
         let missing_dir = dir.path().join("missing");
         let path = missing_dir.join("project");
 
-        let result = run(project::save_project(h(&app), Some(path), None));
+        let result = run(project::save_project(
+            h(&app),
+            made_for(&app),
+            Some(path),
+            None,
+        ));
         // #429: refused up front, naming the destination as the problem, rather
         // than relaying SQLite's "Failed to open database" from an attempt that
         // never had a folder to write into.
@@ -3184,6 +3235,7 @@ fn test_create_section_fails_without_project() {
     let app = app_with_state();
     let result = run(section::create_section(
         h(&app),
+        made_for(&app),
         Some("Section".to_string()),
         None,
         None,
@@ -3208,6 +3260,7 @@ fn test_create_section_defaults_direction() {
     create_project(&app);
     let result = run(section::create_section(
         h(&app),
+        made_for(&app),
         Some("Section".to_string()),
         None,
         None,
@@ -3242,6 +3295,7 @@ fn test_update_section_fails_missing() {
     create_project(&app);
     let result = run(section::update_section(
         h(&app),
+        made_for(&app),
         99,
         SectionUpdates::default(),
     ));
@@ -3257,7 +3311,12 @@ fn test_update_section_updates_name() {
         name: Some(Some("Updated".to_string())),
         ..Default::default()
     };
-    let result = run(section::update_section(h(&app), id, updates));
+    let result = run(section::update_section(
+        h(&app),
+        made_for(&app),
+        id,
+        updates,
+    ));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.name, Some("Updated".to_string()));
@@ -3272,7 +3331,12 @@ fn test_update_section_updates_color() {
         color: Some("#123456".to_string()),
         ..Default::default()
     };
-    let result = run(section::update_section(h(&app), id, updates));
+    let result = run(section::update_section(
+        h(&app),
+        made_for(&app),
+        id,
+        updates,
+    ));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.color, "#123456".to_string());
@@ -3282,7 +3346,7 @@ fn test_update_section_updates_color() {
 fn test_delete_section_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = run(section::delete_section(h(&app), 22));
+    let result = run(section::delete_section(h(&app), made_for(&app), 22));
     assert_failure_contains(&result, "not found");
 }
 
@@ -3291,7 +3355,7 @@ fn test_delete_section_removes_section() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = run(section::delete_section(h(&app), id));
+    let result = run(section::delete_section(h(&app), made_for(&app), id));
     assert_success(&result);
     assert!(get_section(state(&app), id).is_none());
 }
@@ -3302,6 +3366,7 @@ fn test_move_section_fails_missing() {
     create_project(&app);
     let result = run(section::move_section(
         h(&app),
+        made_for(&app),
         22,
         Coordinates::new(1.0, 1.0, 0.0),
     ));
@@ -3315,6 +3380,7 @@ fn test_move_section_success() {
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
     let result = run(section::move_section(
         h(&app),
+        made_for(&app),
         id,
         Coordinates::new(2.0, -3.0, 0.0),
     ));
@@ -3330,6 +3396,7 @@ fn test_move_segment_moves_connected_sections() {
 
     assert_success(&run(station::merge_stations(
         h(&app),
+        made_for(&app),
         StationRef::new(section_a, 1),
         StationRef::new(section_b, 0),
     )));
@@ -3349,7 +3416,12 @@ fn test_move_segment_moves_connected_sections() {
         .unwrap_or((0.0, 0.0));
 
     let delta = Coordinates::new(3.0, -2.0, 0.0);
-    assert_success(&run(section::move_segment(h(&app), section_a, delta)));
+    assert_success(&run(section::move_segment(
+        h(&app),
+        made_for(&app),
+        section_a,
+        delta,
+    )));
 
     let after = read(project::get_project_state(h(&app))).expect("project state");
     let offset_a_after = after
@@ -3377,6 +3449,7 @@ fn test_create_section_with_validation_warnings() {
     create_project(&app);
     let result = run(section::create_section(
         h(&app),
+        made_for(&app),
         Some("Section".to_string()),
         None,
         None,
@@ -3393,7 +3466,14 @@ fn test_create_section_with_validation_warnings() {
 #[test]
 fn test_create_shot_fails_without_project() {
     let app = app_with_state();
-    let result = run(shot::create_shot(h(&app), 0, shot_data(1.0), None, None));
+    let result = run(shot::create_shot(
+        h(&app),
+        made_for(&app),
+        0,
+        shot_data(1.0),
+        None,
+        None,
+    ));
     assert_failure_contains(&result, "No project open");
 }
 
@@ -3401,7 +3481,14 @@ fn test_create_shot_fails_without_project() {
 fn test_create_shot_fails_invalid_section() {
     let app = app_with_state();
     create_project(&app);
-    let result = run(shot::create_shot(h(&app), 99, shot_data(1.0), None, None));
+    let result = run(shot::create_shot(
+        h(&app),
+        made_for(&app),
+        99,
+        shot_data(1.0),
+        None,
+        None,
+    ));
     assert_failure_contains(&result, "Section 99 not found");
 }
 
@@ -3410,7 +3497,14 @@ fn test_create_shot_success_adds_shot() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![]);
-    let result = run(shot::create_shot(h(&app), id, shot_data(1.0), None, None));
+    let result = run(shot::create_shot(
+        h(&app),
+        made_for(&app),
+        id,
+        shot_data(1.0),
+        None,
+        None,
+    ));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots.len(), 1);
@@ -3423,6 +3517,7 @@ fn test_create_shot_after_shot_id_inserts() {
     let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
     let result = run(shot::create_shot(
         h(&app),
+        made_for(&app),
         id,
         shot_data(3.0),
         Some(0),
@@ -3439,7 +3534,14 @@ fn test_create_shot_returns_warning_for_short() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![]);
-    let result = run(shot::create_shot(h(&app), id, shot_data(0.05), None, None));
+    let result = run(shot::create_shot(
+        h(&app),
+        made_for(&app),
+        id,
+        shot_data(0.05),
+        None,
+        None,
+    ));
     // `ShotCreated::shot_id` is required: a success without it is INTERNAL_ERROR,
     // so the `expect` is the "shot_id is returned" assertion.
     let result = result.expect("shot_id must be returned even when warnings are present");
@@ -3455,6 +3557,7 @@ fn test_create_shot_rejects_both_after_and_before() {
     let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
     let result = run(shot::create_shot(
         h(&app),
+        made_for(&app),
         id,
         shot_data(3.0),
         Some(0),
@@ -3471,6 +3574,7 @@ fn test_create_shot_before_inserts_at_position() {
     // Insert before the first shot (position 0)
     let result = run(shot::create_shot(
         h(&app),
+        made_for(&app),
         id,
         shot_data(5.0),
         None,
@@ -3505,6 +3609,7 @@ fn test_create_shot_wrapper_strips_a_client_named_uuid() {
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
     let result = run(shot::create_shot(
         h(&app),
+        made_for(&app),
         id,
         ShotData {
             uuid: Some(SPOOFED.to_string()),
@@ -3541,7 +3646,13 @@ fn test_create_shot_wrapper_strips_a_client_named_uuid() {
 fn test_update_shot_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = run(shot::update_shot(h(&app), 0, 999, ShotUpdates::default()));
+    let result = run(shot::update_shot(
+        h(&app),
+        made_for(&app),
+        0,
+        999,
+        ShotUpdates::default(),
+    ));
     assert_failure_contains(&result, "not found");
 }
 
@@ -3554,7 +3665,7 @@ fn test_update_shot_updates_length() {
         length: Some(12.0),
         ..Default::default()
     };
-    let result = run(shot::update_shot(h(&app), id, 0, updates));
+    let result = run(shot::update_shot(h(&app), made_for(&app), id, 0, updates));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots[0].length, 12.0);
@@ -3569,7 +3680,7 @@ fn test_update_shot_updates_comment() {
         comment: Some(Some("note".to_string())),
         ..Default::default()
     };
-    let result = run(shot::update_shot(h(&app), id, 0, updates));
+    let result = run(shot::update_shot(h(&app), made_for(&app), id, 0, updates));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots[0].comment, Some("note".to_string()));
@@ -3579,7 +3690,7 @@ fn test_update_shot_updates_comment() {
 fn test_delete_shot_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = run(shot::delete_shot(h(&app), 0, 1));
+    let result = run(shot::delete_shot(h(&app), made_for(&app), 0, 1));
     assert_failure_contains(&result, "not found");
 }
 
@@ -3588,7 +3699,7 @@ fn test_delete_shot_removes_shot() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = run(shot::delete_shot(h(&app), id, 0));
+    let result = run(shot::delete_shot(h(&app), made_for(&app), id, 0));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert!(section.shots.is_empty());
@@ -3604,6 +3715,7 @@ fn test_delete_shot_and_split_creates_new_section() {
 
     let result = run(shot::delete_shot_and_split(
         h(&app),
+        made_for(&app),
         id,
         shot_id,
         "Section A".to_string(),
@@ -3628,7 +3740,12 @@ fn test_delete_last_shot_and_section_removes_section() {
     let section_state = get_section(state(&app), id).unwrap();
     let shot_id = section_state.shots[0].id;
 
-    let result = run(shot::delete_last_shot_and_section(h(&app), id, shot_id));
+    let result = run(shot::delete_last_shot_and_section(
+        h(&app),
+        made_for(&app),
+        id,
+        shot_id,
+    ));
     assert_success(&result);
     assert!(get_section(state(&app), id).is_none());
 }
@@ -3637,7 +3754,13 @@ fn test_delete_last_shot_and_section_removes_section() {
 fn test_set_shot_kind_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = run(shot::set_shot_kind(h(&app), 0, 999, ShotKind::Jump));
+    let result = run(shot::set_shot_kind(
+        h(&app),
+        made_for(&app),
+        0,
+        999,
+        ShotKind::Jump,
+    ));
     assert_failure_contains(&result, "not found");
 }
 
@@ -3646,7 +3769,13 @@ fn test_set_shot_kind_sets_jump() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = run(shot::set_shot_kind(h(&app), id, 0, ShotKind::Jump));
+    let result = run(shot::set_shot_kind(
+        h(&app),
+        made_for(&app),
+        id,
+        0,
+        ShotKind::Jump,
+    ));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots[0].kind, ShotKind::Jump);
@@ -3657,7 +3786,13 @@ fn test_set_shot_kind_sets_reference() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = run(shot::set_shot_kind(h(&app), id, 0, ShotKind::Reference));
+    let result = run(shot::set_shot_kind(
+        h(&app),
+        made_for(&app),
+        id,
+        0,
+        ShotKind::Reference,
+    ));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots[0].kind, ShotKind::Reference);
@@ -3668,8 +3803,20 @@ fn test_set_shot_kind_back_to_normal() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = run(shot::set_shot_kind(h(&app), id, 0, ShotKind::Jump));
-    let result = run(shot::set_shot_kind(h(&app), id, 0, ShotKind::Normal));
+    let _ = run(shot::set_shot_kind(
+        h(&app),
+        made_for(&app),
+        id,
+        0,
+        ShotKind::Jump,
+    ));
+    let result = run(shot::set_shot_kind(
+        h(&app),
+        made_for(&app),
+        id,
+        0,
+        ShotKind::Normal,
+    ));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots[0].kind, ShotKind::Normal);
@@ -3683,15 +3830,22 @@ fn test_set_shot_kind_undo_restores_previous_kind() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    assert_success(&run(shot::set_shot_kind(h(&app), id, 0, ShotKind::Jump)));
     assert_success(&run(shot::set_shot_kind(
         h(&app),
+        made_for(&app),
+        id,
+        0,
+        ShotKind::Jump,
+    )));
+    assert_success(&run(shot::set_shot_kind(
+        h(&app),
+        made_for(&app),
         id,
         0,
         ShotKind::Reference,
     )));
 
-    assert_success(&run(history::undo(h(&app))));
+    assert_success(&run(history::undo(h(&app), made_for(&app))));
 
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(
@@ -3708,6 +3862,7 @@ fn test_merge_stations_fails_without_project() {
     let app = app_with_state();
     let result = run(station::merge_stations(
         h(&app),
+        made_for(&app),
         StationRef::new(0, 0),
         StationRef::new(1, 0),
     ));
@@ -3721,6 +3876,7 @@ fn test_merge_stations_fails_same_section() {
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     let result = run(station::merge_stations(
         h(&app),
+        made_for(&app),
         StationRef::new(0, 0),
         StationRef::new(0, 1),
     ));
@@ -3735,6 +3891,7 @@ fn test_merge_stations_success_between_sections() {
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     let result = run(station::merge_stations(
         h(&app),
+        made_for(&app),
         StationRef::new(0, 1),
         StationRef::new(1, 0),
     ));
@@ -3746,7 +3903,11 @@ fn test_unmerge_stations_noop_success() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = run(station::unmerge_stations(h(&app), StationRef::new(0, 0)));
+    let result = run(station::unmerge_stations(
+        h(&app),
+        made_for(&app),
+        StationRef::new(0, 0),
+    ));
     assert_success(&result);
 }
 
@@ -3758,10 +3919,15 @@ fn test_unmerge_stations_removes_merge() {
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     let _ = run(station::merge_stations(
         h(&app),
+        made_for(&app),
         StationRef::new(0, 1),
         StationRef::new(1, 0),
     ));
-    let result = run(station::unmerge_stations(h(&app), StationRef::new(0, 1)));
+    let result = run(station::unmerge_stations(
+        h(&app),
+        made_for(&app),
+        StationRef::new(0, 1),
+    ));
     assert_success(&result);
 }
 
@@ -3775,7 +3941,12 @@ fn test_set_zero_datum_success() {
         longitude: 2.0,
         depth_reference: 3.0,
     };
-    let result = run(station::set_zero_datum(h(&app), StationRef::new(0, 0), gps));
+    let result = run(station::set_zero_datum(
+        h(&app),
+        made_for(&app),
+        StationRef::new(0, 0),
+        gps,
+    ));
     assert_success(&result);
 }
 
@@ -3790,6 +3961,7 @@ fn test_set_zero_datum_fails_invalid_station() {
     };
     let result = run(station::set_zero_datum(
         h(&app),
+        made_for(&app),
         StationRef::new(0, 99),
         gps,
     ));
@@ -3801,7 +3973,11 @@ fn test_remove_zero_datum_fails_when_not_zero() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = run(station::remove_zero_datum(h(&app), StationRef::new(0, 0)));
+    let result = run(station::remove_zero_datum(
+        h(&app),
+        made_for(&app),
+        StationRef::new(0, 0),
+    ));
     assert_failure_contains(&result, "not a zero datum");
 }
 
@@ -3815,8 +3991,17 @@ fn test_remove_zero_datum_success() {
         longitude: 2.0,
         depth_reference: 3.0,
     };
-    let _ = run(station::set_zero_datum(h(&app), StationRef::new(0, 0), gps));
-    let result = run(station::remove_zero_datum(h(&app), StationRef::new(0, 0)));
+    let _ = run(station::set_zero_datum(
+        h(&app),
+        made_for(&app),
+        StationRef::new(0, 0),
+        gps,
+    ));
+    let result = run(station::remove_zero_datum(
+        h(&app),
+        made_for(&app),
+        StationRef::new(0, 0),
+    ));
     assert_success(&result);
 }
 
@@ -3825,6 +4010,7 @@ fn test_move_station_fails_without_project() {
     let app = app_with_state();
     let result = run(station::move_station(
         h(&app),
+        made_for(&app),
         StationRef::new(0, 0),
         Coordinates::new(1.0, 1.0, 0.0),
     ));
@@ -3837,6 +4023,7 @@ fn test_move_station_fails_invalid_section() {
     create_project(&app);
     let result = run(station::move_station(
         h(&app),
+        made_for(&app),
         StationRef::new(99, 0),
         Coordinates::new(1.0, 1.0, 0.0),
     ));
@@ -3850,6 +4037,7 @@ fn test_move_station_fails_invalid_index() {
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     let result = run(station::move_station(
         h(&app),
+        made_for(&app),
         StationRef::new(0, 5),
         Coordinates::new(1.0, 1.0, 0.0),
     ));
@@ -3863,6 +4051,7 @@ fn test_move_station_success() {
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     let result = run(station::move_station(
         h(&app),
+        made_for(&app),
         StationRef::new(0, 0),
         Coordinates::new(1.0, 1.0, 0.0),
     ));
@@ -4208,6 +4397,7 @@ fn test_export_roundtrip_includes_reference_and_comment() {
     let section_id = create_section_with_shots(&app, vec![shot]);
     assert_success(&run(shot::set_shot_kind(
         h(&app),
+        made_for(&app),
         section_id,
         0,
         ShotKind::Jump,
@@ -4463,6 +4653,7 @@ fn test_resolve_warning_fails_without_db() {
     let app = app_with_state();
     let result = run(validation::resolve_warning(
         h(&app),
+        made_for(&app),
         0,
         0,
         "SHORT_SHOT".to_string(),
@@ -4476,6 +4667,7 @@ fn test_unresolve_warning_fails_without_db() {
     let app = app_with_state();
     let result = run(validation::unresolve_warning(
         h(&app),
+        made_for(&app),
         0,
         0,
         "SHORT_SHOT".to_string(),
@@ -4498,6 +4690,7 @@ fn test_resolve_warning_marks_resolved_in_list() {
 
     run(validation::resolve_warning(
         h(&app),
+        made_for(&app),
         warning.section_id,
         warning.shot_id,
         warning.code.clone(),
@@ -4542,6 +4735,7 @@ fn test_resolve_warning_refuses_when_shot_missing() {
     // A shot_id that does not exist in the section.
     let result = run(validation::resolve_warning(
         h(&app),
+        made_for(&app),
         warning.section_id,
         warning.shot_id + 9999,
         "SHORT_SHOT".to_string(),
@@ -4571,6 +4765,7 @@ fn test_unresolve_warning_clears_resolved_flag() {
 
     run(validation::resolve_warning(
         h(&app),
+        made_for(&app),
         warning.section_id,
         warning.shot_id,
         warning.code.clone(),
@@ -4580,6 +4775,7 @@ fn test_unresolve_warning_clears_resolved_flag() {
 
     run(validation::unresolve_warning(
         h(&app),
+        made_for(&app),
         warning.section_id,
         warning.shot_id,
         warning.code,
@@ -4613,6 +4809,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
 
     run(validation::resolve_warning(
         h(&app),
+        made_for(&app),
         warning.section_id,
         warning.shot_id,
         warning.code.clone(),
@@ -4770,6 +4967,7 @@ fn test_resolved_warning_survives_save() {
         .expect("short shot warning");
     run(validation::resolve_warning(
         h(&app),
+        made_for(&app),
         warning.section_id,
         warning.shot_id,
         warning.code.clone(),
@@ -4823,6 +5021,7 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
     for w in &zero {
         run(validation::resolve_warning(
             h(&app),
+            made_for(&app),
             w.section_id,
             w.shot_id,
             w.code.clone(),
@@ -4833,7 +5032,11 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
     let surviving_section = zero[1].section_id;
 
     // Delete the first section - its resolved_warnings row is now orphaned.
-    assert_success(&run(section::delete_section(h(&app), zero[0].section_id)));
+    assert_success(&run(section::delete_section(
+        h(&app),
+        made_for(&app),
+        zero[0].section_id,
+    )));
 
     // Save, then confirm the surviving section's ignore is still resolved.
     let dir = tempfile::tempdir().unwrap();
@@ -4939,6 +5142,7 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     for w in &zero {
         run(validation::resolve_warning(
             h(&app),
+            made_for(&app),
             w.section_id,
             w.shot_id,
             w.code.clone(),
@@ -4958,7 +5162,12 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     // Delete the first shot. The successor shifts into its index/position, so the
     // orphaned by-UUID row for the deleted shot now shares the survivor's new
     // position. (No datums → not frozen → delete succeeds.)
-    assert_success(&run(shot::delete_shot(h(&app), section_id, shot_a_id)));
+    assert_success(&run(shot::delete_shot(
+        h(&app),
+        made_for(&app),
+        section_id,
+        shot_a_id,
+    )));
 
     let dir = tempfile::tempdir().unwrap();
     let _ = save_project_to_temp(&app, &dir);
@@ -5009,6 +5218,7 @@ fn test_project_validation_drives_warnings_and_persists() {
     };
     assert_success(&run(project::update_project_settings(
         h(&app),
+        made_for(&app),
         "Renamed Cave".to_string(),
         validation_cfg,
         None,
@@ -5043,6 +5253,7 @@ fn test_update_project_settings_is_undoable() {
     };
     assert_success(&run(project::update_project_settings(
         h(&app),
+        made_for(&app),
         "Renamed Cave".to_string(),
         validation_cfg,
         None,
@@ -5056,7 +5267,7 @@ fn test_update_project_settings_is_undoable() {
     assert_eq!(applied.validation.warn_shot_length_min, 2.0);
 
     // Undo reverts the settings change instead of leaving it stranded.
-    assert_success(&run(history::undo(h(&app))));
+    assert_success(&run(history::undo(h(&app), made_for(&app))));
     let reverted = state(&app).get_project_state().unwrap();
     assert_eq!(reverted.name, "Test Cave");
     assert_eq!(reverted.validation.warn_shot_length_min, 0.3);
@@ -5072,6 +5283,7 @@ fn test_resolve_warning_refuses_to_ignore_over_anchoring() {
 
     run(validation::resolve_warning(
         h(&app),
+        made_for(&app),
         0,
         0,
         crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT.to_string(),
@@ -5114,6 +5326,7 @@ fn test_resolve_warning_refuses_error_severity_codes() {
         .expect("zero length warning");
     run(validation::resolve_warning(
         h(&app),
+        made_for(&app),
         warning.section_id,
         warning.shot_id,
         warning.code.clone(),
@@ -5176,6 +5389,7 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
 
     run(validation::resolve_warning(
         h(&app),
+        made_for(&app),
         a_warning.section_id,
         a_warning.shot_id,
         "SHORT_SHOT".to_string(),
@@ -5211,6 +5425,7 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
         .clone();
     run(validation::resolve_warning(
         h(&app),
+        made_for(&app),
         b_warning.section_id,
         b_warning.shot_id,
         "SHORT_SHOT".to_string(),
@@ -5219,6 +5434,7 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
     .unwrap();
     run(validation::unresolve_warning(
         h(&app),
+        made_for(&app),
         a_warning.section_id,
         a_warning.shot_id,
         "SHORT_SHOT".to_string(),
@@ -5355,6 +5571,7 @@ fn test_create_section_with_date_roundtrip() {
     let date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
     let result = run(section::create_section(
         h(&app),
+        made_for(&app),
         Some("Dated".to_string()),
         None,
         Some(date),
@@ -5373,6 +5590,7 @@ fn test_create_section_and_merge_fails_without_project() {
     let app = app_with_state();
     let result = run(section::create_section_and_merge(
         h(&app),
+        made_for(&app),
         Some("Imported".to_string()),
         None,
         None,
@@ -5394,6 +5612,7 @@ fn test_create_section_and_merge_success() {
 
     let result = run(section::create_section_and_merge(
         h(&app),
+        made_for(&app),
         Some("Imported".to_string()),
         None,
         None,
@@ -5586,6 +5805,7 @@ fn test_get_segment_geometry_connected_sections() {
     // Merge section A station 1 with section B station 0
     assert_success(&run(station::merge_stations(
         h(&app),
+        made_for(&app),
         StationRef::new(id_a, 1),
         StationRef::new(id_b, 0),
     )));
@@ -5650,6 +5870,7 @@ fn test_get_segment_geometry_queried_from_either_end() {
 
     assert_success(&run(station::merge_stations(
         h(&app),
+        made_for(&app),
         StationRef::new(id_a, 1),
         StationRef::new(id_b, 0),
     )));

@@ -1,6 +1,7 @@
 use tauri::{AppHandle, Runtime};
 
 use crate::commands::pool;
+use crate::core::state::ProjectIdentity;
 use crate::core::{Command, CommandError, EditOutcome, SectionCreated, ShotCreated};
 use crate::models::{
     DeleteShotImpact, DeleteShotRangeImpact, SectionId, ShotData, ShotId, ShotKind, ShotUpdates,
@@ -10,12 +11,13 @@ use crate::models::{
 #[tauri::command]
 pub async fn create_shot<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     shot: ShotData,
     after_shot_id: Option<ShotId>,
     before_shot_id: Option<ShotId>,
 ) -> Result<ShotCreated, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         let mut shot = shot;
         // Identity is not the caller's to name (#423). `ShotData::uuid` exists so a
         // uuid can travel with its own shot through the transforms that rebuild
@@ -65,11 +67,12 @@ pub async fn create_shot<R: Runtime>(
 #[tauri::command]
 pub async fn update_shot<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     shot_id: ShotId,
     updates: ShotUpdates,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::UpdateShot {
                 section_id,
@@ -103,10 +106,11 @@ pub async fn preview_delete_shot<R: Runtime>(
 #[tauri::command]
 pub async fn delete_shot<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     shot_id: ShotId,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::DeleteShot {
                 section_id,
@@ -121,12 +125,13 @@ pub async fn delete_shot<R: Runtime>(
 #[tauri::command]
 pub async fn delete_shot_and_split<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     shot_id: ShotId,
     name_a: String,
     name_b: String,
 ) -> Result<SectionCreated, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute_delete_shot_and_split(section_id, shot_id, name_a, name_b)
             .into_outcome::<SectionCreated>()
@@ -138,11 +143,12 @@ pub async fn delete_shot_and_split<R: Runtime>(
 #[tauri::command]
 pub async fn split_shot_at_distance<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     shot_id: ShotId,
     distance: f64,
 ) -> Result<ShotCreated, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute_split_shot_at_distance(section_id, shot_id, distance)
             .into_outcome::<ShotCreated>()
@@ -154,10 +160,11 @@ pub async fn split_shot_at_distance<R: Runtime>(
 #[tauri::command]
 pub async fn delete_last_shot_and_section<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     shot_id: ShotId,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute_delete_last_shot_and_section(section_id, shot_id)
             .into_outcome::<EditOutcome>()
@@ -188,13 +195,14 @@ pub async fn preview_delete_shot_range<R: Runtime>(
 #[tauri::command]
 pub async fn delete_shot_range_split<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     start_shot_id: ShotId,
     end_shot_id: ShotId,
     name_a: String,
     name_b: String,
 ) -> Result<SectionCreated, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute_delete_shot_range_split(section_id, start_shot_id, end_shot_id, name_a, name_b)
             .into_outcome::<SectionCreated>()
@@ -206,11 +214,12 @@ pub async fn delete_shot_range_split<R: Runtime>(
 #[tauri::command]
 pub async fn delete_shot_range_shift<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     start_shot_id: ShotId,
     end_shot_id: ShotId,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute_delete_shot_range_shift(section_id, start_shot_id, end_shot_id)
             .into_outcome::<EditOutcome>()
@@ -222,11 +231,12 @@ pub async fn delete_shot_range_shift<R: Runtime>(
 #[tauri::command]
 pub async fn set_shot_kind<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     shot_id: ShotId,
     kind: ShotKind,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         state
             .execute(Command::SetShotKind {
                 section_id,

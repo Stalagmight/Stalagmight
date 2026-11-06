@@ -29,6 +29,7 @@
 
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::core::state::{for_project, ProjectIdentity};
 use crate::core::{AppState, CommandError, MutationOutcome};
 
 /// How a command's answer says its body panicked on the pool.
@@ -74,8 +75,16 @@ where
 /// missing or one too many (#303, #576 A18(a)). A command that mutates the survey
 /// answers through here; `commands::app_contract_tests` checks that every
 /// command whose answer carries the bits does.
+///
+/// [#576 FZ-FZ-INT-7] `expected_project` is the project the frontend made the
+/// edit for (the command's `expected_project` argument): `f` runs inside
+/// [`for_project`], so the mutation it reaches is refused with `PROJECT_CHANGED`
+/// when another project is open by the time it holds `command_lock`. Every
+/// survey mutation names one; `app_contract_tests` checks that each command
+/// passes its own argument through.
 pub(crate) async fn run_mutation<R, T>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     f: impl FnOnce(&AppState) -> Result<T, CommandError> + Send + 'static,
 ) -> Result<T, CommandError>
 where
@@ -85,7 +94,7 @@ where
     let after_crash = app.clone();
     let answer = spawn(move || {
         let state = app.state::<AppState>().inner();
-        let mut answer = f(state);
+        let mut answer = for_project(expected_project, || f(state));
         let link = state.remote_link_bits();
         match &mut answer {
             Ok(outcome) => outcome.set_remote_link(link),

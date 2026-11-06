@@ -123,6 +123,8 @@ pub enum CommandErrorCode {
     /// [#576 RV6b-2] A per-project write (a display setting) refused because the
     /// project it was made for is no longer the open one: the user switched
     /// projects while the write was queued or in flight. Nothing was written.
+    /// [#576 FZ-FZ-INT-4, FZ-FZ-INT-7] Likewise a save or a survey edit whose
+    /// expected project is not the open one.
     ProjectChanged,
 
     // --- SpeleoDB (the former `SpeleoDbAction`, one code per action) ----------

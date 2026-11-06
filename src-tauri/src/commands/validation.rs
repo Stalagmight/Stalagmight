@@ -2,6 +2,7 @@ use chrono::Utc;
 use tauri::{AppHandle, Runtime};
 
 use crate::commands::pool;
+use crate::core::state::ProjectIdentity;
 use crate::core::{
     AppState, CommandError, EditOutcome, IntegrityCheckResult, IntegrityRepairResult,
 };
@@ -60,8 +61,14 @@ pub async fn check_project_integrity<R: Runtime>(
 #[tauri::command]
 pub async fn repair_project_integrity<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
 ) -> Result<IntegrityRepairResult, CommandError> {
-    pool::run_mutation(app, AppState::repair_open_project_integrity).await
+    pool::run_mutation(
+        app,
+        expected_project,
+        AppState::repair_open_project_integrity,
+    )
+    .await
 }
 
 /// An ignore-list edit's answer: it reports no validation warnings of its own
@@ -77,12 +84,13 @@ fn ignore_list_edited() -> EditOutcome {
 #[tauri::command]
 pub async fn resolve_warning<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     shot_id: ShotId,
     warning_code: String,
     comment: Option<String>,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         // Errors are not ignorable (issue #57): refuse to persist a suppression for
         // any error-severity warning (over-anchoring, invalid pitch/azimuth, zero/
         // negative length, length-below-depth, negative LRUD). One predicate -
@@ -172,11 +180,12 @@ pub async fn resolve_warning<R: Runtime>(
 #[tauri::command]
 pub async fn unresolve_warning<R: Runtime>(
     app: AppHandle<R>,
+    expected_project: Option<ProjectIdentity>,
     section_id: SectionId,
     shot_id: ShotId,
     warning_code: String,
 ) -> Result<EditOutcome, CommandError> {
-    pool::run_mutation(app, move |state| {
+    pool::run_mutation(app, expected_project, move |state| {
         let shot_uuid = state.shot_uuid_for(section_id, shot_id);
         tracing::info!(
             section_id = section_id,
