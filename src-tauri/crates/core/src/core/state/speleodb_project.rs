@@ -453,6 +453,20 @@ impl AppState {
                 );
             }
         }
+        // [#576 FZ-SDB-2] The project is now linked and its lock is not held: it comes
+        // back read-only like any opened linked project, and Start editing takes the
+        // lock. Under the `project` mutex, re-reading the open link, as
+        // `speleodb_shut_gate_over_lost_lock` does, so a project opened meanwhile keeps
+        // its own gate.
+        {
+            let _proj_guard = self.project.lock();
+            if self
+                .speleodb_open_link()
+                .is_ok_and(|open| open.project_id == project_id)
+            {
+                self.set_edit_enabled(false);
+            }
+        }
 
         // 5. If the initial push did not confirm, BASE is still the empty-repo
         //    sentinel from step 3 while the copy is dirty - and that pair fences

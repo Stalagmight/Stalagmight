@@ -499,6 +499,14 @@ mod sdb_lock_span_tests;
 mod sdb_newer_pull_tests;
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              answers are the evidence a run captures"
+)]
+mod sdb_publish_gate_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \
