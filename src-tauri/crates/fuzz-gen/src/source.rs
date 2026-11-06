@@ -241,7 +241,7 @@ mod tests {
         assert_eq!(s.range(3, 9), 3);
         assert_eq!(s.ident(5), "A");
         assert!(!s.chance(255));
-        assert_eq!(s.f64_in(2.0, 4.0), 2.0);
+        assert!((s.f64_in(2.0, 4.0) - 2.0).abs() < f64::EPSILON);
     }
 
     #[test]
