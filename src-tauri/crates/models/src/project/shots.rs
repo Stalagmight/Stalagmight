@@ -116,6 +116,29 @@ impl Project {
         excluded_shot: Option<(SectionId, usize)>,
         include_closures: bool,
     ) -> bool {
+        self.are_stations_connected_with_planned(
+            station_a,
+            station_b,
+            excluded_shot,
+            include_closures,
+            &[],
+        )
+    }
+
+    /// [`Self::are_stations_connected_excluding_shot`] over the graph that ALSO
+    /// holds `planned`: merges a caller has decided to record but has not
+    /// recorded yet. `preview_delete_shot` asks its closure-vs-merge question
+    /// against this hypothesis, so that once one closure on the doomed station
+    /// is promoted, a second closure whose ends that promotion reconnects is
+    /// seen as the genuine loop it now is.
+    fn are_stations_connected_with_planned(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        excluded_shot: Option<(SectionId, usize)>,
+        include_closures: bool,
+        planned: &[(StationRef, StationRef)],
+    ) -> bool {
         if station_a == station_b {
             return true;
         }
@@ -126,7 +149,20 @@ impl Project {
         queue.push_back(station_a);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in self.station_neighbors_excluding_shot(&links, current, excluded_shot) {
+            let planned_partners = planned.iter().filter_map(|&(x, y)| {
+                if x == current {
+                    Some(y)
+                } else if y == current {
+                    Some(x)
+                } else {
+                    None
+                }
+            });
+            for neighbor in self
+                .station_neighbors_excluding_shot(&links, current, excluded_shot)
+                .into_iter()
+                .chain(planned_partners)
+            {
                 if visited.insert(neighbor) {
                     if neighbor == station_b {
                         return true;
@@ -751,11 +787,12 @@ impl Project {
                         || self.are_stations_in_closure(replacement_station, other)
                     {
                         impact.closure_rewire_skipped = true;
-                    } else if self.are_stations_connected_excluding_shot(
+                    } else if self.are_stations_connected_with_planned(
                         replacement_station,
                         other,
                         Some((section_id, pos)),
                         false,
+                        &planned,
                     ) || self.would_double_anchor_after_removal(
                         replacement_station.section_id,
                         other.section_id,
@@ -766,7 +803,17 @@ impl Project {
                         // deleted station:
                         //
                         // * the two ends still reach each other through the survey
-                        //   (shots + merges), so it remains a genuine loop;
+                        //   (shots + merges), so it remains a genuine loop. Asked
+                        //   of the graph that includes `planned`: once an earlier
+                        //   closure on this station is promoted, a second closure
+                        //   into the same rigid group is a loop again, and promoting
+                        //   it too would mint a merge between two DIFFERENT
+                        //   stations of one rigid group - a cyclic misclosure that
+                        //   `plan_merge_promotion` cannot settle (empty `movable`)
+                        //   and no cascade, realign or Repair can close. This is
+                        //   the iterative rule `convert_orphan_closures_to_merges`
+                        //   already follows (the first becomes the merge, the
+                        //   second is kept);
                         // * or promoting it would weld two components that each
                         //   survive independently zero-datum-anchored. That edge
                         //   puts two GPS anchors in one rigid group -

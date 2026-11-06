@@ -271,6 +271,7 @@
     "src-tauri/crates/core/src/core/state/adversarial_tests.rs": 579,
     "src-tauri/crates/core/src/core/state/azimuth_reference_tests.rs": 426,
     "src-tauri/crates/core/src/core/state/cancelled_load_lock_tests.rs": 109,
+    "src-tauri/crates/core/src/core/state/closure_promotion_delete_tests.rs": 160,
     "src-tauri/crates/core/src/core/state/command_ordering_tests.rs": 220,
     "src-tauri/crates/core/src/core/state/concurrency_tests.rs": 638,
     "src-tauri/crates/core/src/core/state/config_patch_tests.rs": 177,
