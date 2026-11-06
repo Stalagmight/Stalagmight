@@ -81,6 +81,10 @@ const GATE_SEEDS: &[u64] = &[
     // `-journal` (5172404); SQLite removed that entry, its own recovery on open,
     // and the effect oracle failed the load for it.
     5076236, 5172404,
+    // W27: a merge into `<user>/missing/../cave.stalx` created its temp database
+    // through a link at `<user>/cave.stalx.tmp` into the settings folder (SQLite
+    // resolves `missing/..` by name; the kernel refuses the path).
+    5172924,
 ];
 
 /// A deterministic PRNG (SplitMix64): every decision of a seed comes from here,

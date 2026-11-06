@@ -144,3 +144,41 @@ fn merging_an_older_project_leaves_the_source_and_its_folder_untouched() {
         "the current source is not written"
     );
 }
+
+/// [#576 W27] (write-policy fuzzer seed 5172924) A merge whose output is spelled
+/// through a folder that is not there (`missing/../CaveC.stalx`) wrote its temp
+/// database through a link at the temp name: the kernel cannot walk that path,
+/// so the output "did not exist" and the leftover-temp check saw nothing, but
+/// SQLite resolves `missing/..` by the name alone, opened `CaveC.stalx.tmp`
+/// beside it and followed the link there into another folder - which a merge
+/// may not write - then the rename failed and the file stayed. The output's
+/// folder is now checked first, as a save checks it.
+#[cfg(unix)]
+#[test]
+fn a_merge_into_a_folder_that_is_not_there_writes_nothing_through_a_link() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let sources = TempDir::new().expect("dir");
+    let root = TempDir::new().expect("dir");
+    let a = write_project(sources.path(), "CaveA.stalx", "SectionA", &[5.0], "");
+    let b = write_project(sources.path(), "CaveB.stalx", "SectionB", &[3.0], "");
+    let user = root.path().join("user");
+    let guarded = root.path().join("guarded");
+    std::fs::create_dir_all(&user).expect("user folder");
+    std::fs::create_dir_all(&guarded).expect("guarded folder");
+    // A link at the temp name the output gets, to a file that is not there yet.
+    std::os::unix::fs::symlink("../guarded/Cave.JSON", user.join("CaveC.stalx.tmp")).expect("link");
+    let output = user.join("missing").join("..").join("CaveC.stalx");
+
+    let state = AppState::new().expect("state");
+    let merged = state.merge_projects(vec![a, b], output, "Merged".to_owned(), false);
+    let landed = files_in(&guarded);
+    println!(
+        "merge into missing/..: success={} error={:?}; the guarded folder holds {landed:?}",
+        merged.success, merged.error
+    );
+    assert!(
+        landed.is_empty(),
+        "the merge created {landed:?} through the link at its temp name"
+    );
+    assert!(!merged.success, "the output's folder is not there");
+}

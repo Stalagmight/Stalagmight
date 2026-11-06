@@ -177,6 +177,44 @@ thread_local! {
         const { std::cell::Cell::new(false) };
 }
 
+/// The refusal for a save to `path` whose folder is not there, or `None`.
+///
+/// The destination folder has to be there before anything is opened. SQLite
+/// answers a deleted folder or an unmapped drive with the same errno-free
+/// "unable to open database file" as a genuine denial, so asking first is what
+/// lets the user be told which one it is instead of being handed a raw database
+/// error (#429). [#576 W27] It also keeps SQLite off a path the kernel cannot
+/// walk: a folder that is not there followed by `..` (`missing/../cave.stalx`)
+/// fails every file call the save makes, but SQLite resolves `missing/..` by
+/// the name alone and opens its database at a name the kernel never reaches.
+pub(super) fn unreachable_folder_refusal(path: &Path) -> Option<CommandResult> {
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty())?;
+    let reachable = match parent.try_exists() {
+        Ok(present) => present,
+        // A folder whose metadata cannot be read at all - a removed stick, a
+        // dropped share - cannot host the save either. A permission error is the
+        // one exception: the folder IS there, and the pipeline classifies that
+        // denial with its own guidance.
+        Err(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
+    };
+    if reachable {
+        return None;
+    }
+    tracing::warn!(
+        path = ?path,
+        parent = ?parent,
+        purpose = "persist edits safely",
+        "Save refused: the destination folder is not reachable"
+    );
+    Some(CommandResult::refused(CommandError::new(
+        CommandErrorCode::FsPathNotFound,
+        format!(
+            "Cannot save to {}: the folder no longer exists or the drive is not connected",
+            path.display()
+        ),
+    )))
+}
+
 /// Build a save-failure `CommandResult`, tagging it with the code that tells
 /// the frontend which remediation to show, and logging the full error chain -
 /// the one place every failing save passes through, so a failure that only ever
@@ -653,37 +691,8 @@ impl AppState {
             }
         }
 
-        // The destination folder has to be there before anything is opened.
-        // SQLite answers a deleted folder or an unmapped drive with the same
-        // errno-free "unable to open database file" as a genuine denial, so
-        // asking first is what lets the user be told which one it is instead of
-        // being handed a raw database error (#429).
-        if let Some(parent) = save_path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            let reachable = match parent.try_exists() {
-                Ok(present) => present,
-                // A folder whose metadata cannot be read at all - a removed
-                // stick, a dropped share - cannot host the save either. A
-                // permission error is the one exception: the folder IS there,
-                // and the pipeline below classifies that denial with its own
-                // guidance.
-                Err(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
-            };
-            if !reachable {
-                tracing::warn!(
-                    path = ?save_path,
-                    parent = ?parent,
-                    purpose = "persist edits safely",
-                    "Save refused: the destination folder is not reachable"
-                );
-                return CommandResult::refused(CommandError::new(
-                    CommandErrorCode::FsPathNotFound,
-                    format!(
-                        "Cannot save to {}: the folder no longer exists or the drive is not \
-                         connected",
-                        save_path.display()
-                    ),
-                ));
-            }
+        if let Some(refused) = unreachable_folder_refusal(&save_path) {
+            return refused;
         }
 
         // Create a temporary file path in the same directory (for atomic rename)

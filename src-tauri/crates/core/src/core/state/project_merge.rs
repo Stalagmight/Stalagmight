@@ -1,4 +1,4 @@
-use super::project_io::save_failure;
+use super::project_io::{save_failure, unreachable_folder_refusal};
 use super::AppState;
 use crate::core::CommandResult;
 use crate::models::{
@@ -43,6 +43,17 @@ impl AppState {
                 "Output file already exists: {}",
                 output_path.display()
             ));
+        }
+
+        // [#576 W27] The output's folder has to be there before anything is
+        // written, as for a save. Without this, an output spelled through a folder
+        // that is not there (`missing/../cave.stalx`) passed the check above (the
+        // kernel cannot walk it, so nothing "exists"), and SQLite - which resolves
+        // `missing/..` by the name alone - created the temp database at
+        // `cave.stalx.tmp` beside it, through a link there into the app's own
+        // folders, before the rename failed.
+        if let Some(refused) = unreachable_folder_refusal(&output_path) {
+            return refused;
         }
 
         // Verify all source files exist
