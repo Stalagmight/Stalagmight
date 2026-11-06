@@ -57,7 +57,13 @@ pub(super) const PROBES_PER_SEED: usize = 12;
 
 /// The seeds the CI gate runs: a fixed spread, then every seed a sweep found
 /// failing (regression seeds, with the finding they caught).
-const GATE_SEEDS: &[u64] = &[2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+const GATE_SEEDS: &[u64] = &[
+    2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+    // FZ-PERSIST-fs-1: a project path spelled inside the managed cache, through a
+    // link there into the settings (1, Windows rules) or data (4, Linux rules)
+    // folder, was allowed.
+    1, 4,
+];
 
 /// A deterministic PRNG (SplitMix64): every decision of a seed comes from here,
 /// so a seed replays exactly.

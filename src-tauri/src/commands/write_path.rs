@@ -236,13 +236,26 @@ fn location_refusal(path: &Path, project: bool, dirs: &AppDirs, walk: Walk<'_>) 
     let Some(forms) = path_forms(path, walk) else {
         return Some("that is reached through more links than Windows follows".to_owned());
     };
+    let forms_of =
+        |dir: &Path| path_forms(dir, walk).unwrap_or_else(|| vec![lexical(&absolute(dir))]);
     let inside = |dir: &Path| {
-        let dir_forms = path_forms(dir, walk).unwrap_or_else(|| vec![lexical(&absolute(dir))]);
+        let dir_forms = forms_of(dir);
         forms
             .iter()
             .any(|p| dir_forms.iter().any(|d| starts_with_dir(p, d, walk.rules)))
     };
-    let managed = project && dirs.managed_projects.as_deref().is_some_and(inside);
+    // [#576 FZ-PERSIST-fs-1] The managed-cache exception is for a project the
+    // write LANDS in the cache: judged by the place it reaches (the last form),
+    // not by the path as given. `<cache>/speleodb/link/x.stalx`, with `link`
+    // leading into the settings folder, writes into the settings folder - and
+    // was let through because it was spelled inside the cache.
+    let lands_inside = |dir: &Path| {
+        let dir_forms = forms_of(dir);
+        forms
+            .last()
+            .is_some_and(|p| dir_forms.iter().any(|d| starts_with_dir(p, d, walk.rules)))
+    };
+    let managed = project && dirs.managed_projects.as_deref().is_some_and(lands_inside);
     if !managed && dirs.internal.iter().any(|d| inside(d)) {
         return Some("that is inside the app's own settings, data or cache folder".to_owned());
     }
