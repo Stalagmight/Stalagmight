@@ -186,9 +186,24 @@ fn a_second_closure_into_the_same_rigid_group_stays_a_closure() {
 #[test]
 fn seed_34425_combined_keeps_every_merge_aligned() {
     let _config = isolated_config();
+    run_combined_survey_seed(34425);
+}
+
+/// The farm's other two hits of the same signature at 8062377e2: seed 37147
+/// (`deleteShot(s=8,shot=800001)`, `merged 5:0 <-> 7:1 is 11.988662 m apart`)
+/// and seed 44745 (`deleteShot(s=8,shot=800000)`, `merged 12:1 <-> 7:1 is
+/// 6.604524 m apart`), both halves, under the same plan.
+#[test]
+fn farm_seeds_37147_and_44745_combined_keep_every_merge_aligned() {
+    let _config = isolated_config();
+    run_combined_survey_seed(37147);
+    run_combined_survey_seed(44745);
+}
+
+fn run_combined_survey_seed(seed: u32) {
     for persistence in [false, true] {
         run_fuzz(
-            34425,
+            seed,
             Plan {
                 iterations: GATE_ITERATIONS,
                 persistence,
