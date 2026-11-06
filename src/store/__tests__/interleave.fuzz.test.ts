@@ -5,7 +5,8 @@
  * checked after every step and at quiescence.
  *
  * CI runs the pinned regression traces and the fixed seeds below (seconds), with
- * the shapes of the still-open findings left out (`KNOWN_OPEN_EXCLUDED`). Long
+ * the shapes of the still-open findings left out (`KNOWN_OPEN_EXCLUDED`: today only
+ * FZ-FZ-INT-3's `gasFieldPatches`). Long
  * runs, on demand (docs/testing-recipes.md):
  *   FZ_INT_SEEDS=2000 FZ_INT_SEED_START=1000 pnpm exec vitest run src/store/__tests__/interleave.fuzz.test.ts
  *   FZ_INT_SECS=600 ...            random seeds for that long
@@ -163,6 +164,17 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
     actions:
       'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) run(0.000) run(0.000) load("/caves/CaveA.stalx") ' +
       'saveAs(18) exec(0.000) run(0.000) run(0.595)',
+  },
+  {
+    // Hand-built: a grid write made before a close and reload of the same file
+    // landed in the reopened session, which showed the value the reload read.
+    id: 'FZ-FZ-INT-6',
+    found: 'display-shown',
+    options: { crossSessionDisplay: true },
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) run(0.000) run(0.000) grid grid close ' +
+      'run(0.500) load("/caves/CaveA.stalx") run(0.500) run(0.500) run(0.500) run(0.000) run(0.000) run(0.000) ' +
+      'run(0.000)',
   },
   {
     // An elevation edit issued in CaveA while a create was in flight was applied to

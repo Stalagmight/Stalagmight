@@ -240,12 +240,15 @@ export const ALL_SHAPES: RunOptions = {
   editAcrossSwitch: true,
 };
 
-/** What CI runs: every shape except those of the open findings. */
+/**
+ * What CI runs: every shape except those of the open findings. FZ-FZ-INT-1, -4, -6
+ * and -7 are fixed (their shapes are on); FZ-FZ-INT-3 is still open.
+ */
 export const KNOWN_OPEN_EXCLUDED: RunOptions = {
   overlapSwitches: true,
   saveAcrossSwitch: true,
   gasFieldPatches: true,
-  crossSessionDisplay: false,
+  crossSessionDisplay: true,
   editAcrossSwitch: true,
 };
 

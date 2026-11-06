@@ -21,10 +21,13 @@
  * switch with no `dropped` outcome (a delete, which the user confirmed) is never
  * dropped; it runs in its turn.
  *
- * [#576 FZ-FZ-INT-4] It also waits for the saves already sent (`savesSettled`).
+ * [#576 FZ-FZ-INT-4] It also waits for the saves already sent (`savesSettled`), and
+ * [#576 FZ-FZ-INT-6] a load or close first flushes the queued display-setting writes
+ * (`flushProjectSettingWrites`), so each lands in the session it was made in.
  */
 import { mutationsSettled } from '../store/mutationQueue';
 import { noteSwitchRequested, savesSettled } from '../store/switchGate';
+import { flushProjectSettingWrites } from './settingWriteChain';
 
 /** What a running switch's work can ask about its turn. */
 export interface SwitchTurn {
@@ -49,6 +52,8 @@ export interface SwitchOptions<T> {
   dropped?: () => T;
   /** Called once if a newer switch is requested while this one runs. */
   onSuperseded?: () => void;
+  /** Flush the queued display-setting writes before the work starts (load, close). */
+  flushDisplayWrites?: boolean;
   /**
    * Share the newest switch requested, while it has not settled, when it has the same
    * key: a load of the same path (a double click, a StrictMode re-mount) runs once.
@@ -102,6 +107,7 @@ export function runProjectSwitch<T>(
     settleDropped = resolve;
   });
   const ran = before
+    .then(() => (options.flushDisplayWrites && !dropped ? flushProjectSettingWrites() : undefined))
     .then(async () => {
       if (dropped) return droppedOutcome;
       entry.started = true;

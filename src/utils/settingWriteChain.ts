@@ -28,6 +28,12 @@ import type { DisplaySettingTarget } from '../types/ipc.generated';
 
 const tails = new Map<string, Promise<void>>();
 
+/** Every project-setting write queued so far, numbered, and the newest one a timed-out flush dropped. */
+let projectWritesQueued = 0;
+let droppedUpTo = 0;
+/** The chain keys `chainProjectSettingWrite` has used. */
+const projectSettingKeys = new Set<string>();
+
 /**
  * Run `write` after every earlier write chained under `key` has settled, and
  * return its result. A failed write does not block the ones queued after it.
@@ -71,9 +77,52 @@ export function chainProjectSettingWrite<T>(
 ): Promise<T | undefined> {
   const session = projectSessionEpoch();
   const madeFor = openProjectIdentity();
+  projectWritesQueued += 1;
+  const queued = projectWritesQueued;
+  projectSettingKeys.add(key);
   return chainSettingWrite(key, () =>
-    stillTheProjectItWasMadeIn(madeFor, session) ? write(madeFor) : Promise.resolve(undefined),
+    queued > droppedUpTo && stillTheProjectItWasMadeIn(madeFor, session)
+      ? write(madeFor)
+      : Promise.resolve(undefined),
   );
+}
+
+/**
+ * [#576 FZ-FZ-INT-6] How long a project switch (a load or a close) waits for the
+ * project-setting writes queued before it ({@link flushProjectSettingWrites}). A
+ * write normally lands in milliseconds; the bound only keeps a wedged command from
+ * stalling the switch.
+ */
+export const PROJECT_SETTING_FLUSH_TIMEOUT_MS = 2000;
+
+/**
+ * [#576 FZ-FZ-INT-6] Settle the project-setting writes queued so far, before a load
+ * or a close replaces the project they were made in. Without it a write queued
+ * behind another of its key could be sent after a close and a reload of the SAME
+ * file - the same `created_at` and file, so the identity rule above took it as the
+ * project it was made in, and the backend stored a value the reopened session did
+ * not show. Each write now lands in its own session.
+ *
+ * Bounded by {@link PROJECT_SETTING_FLUSH_TIMEOUT_MS}: a write still QUEUED (not yet
+ * sent) when the bound runs out is dropped unsent; one already sent lands as it
+ * would have. With nothing queued it returns at once and arms no timer.
+ */
+export function flushProjectSettingWrites(timeoutMs = PROJECT_SETTING_FLUSH_TIMEOUT_MS): Promise<void> {
+  const pending = [...projectSettingKeys].flatMap((key) => {
+    const tail = tails.get(key);
+    return tail ? [tail] : [];
+  });
+  if (pending.length === 0) return Promise.resolve();
+  const queuedBefore = projectWritesQueued;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(true), timeoutMs);
+  });
+  const flushed = Promise.all(pending).then(() => false);
+  return Promise.race([flushed, timedOut]).then((outOfTime) => {
+    clearTimeout(timer);
+    if (outOfTime) droppedUpTo = Math.max(droppedUpTo, queuedBefore);
+  });
 }
 
 /**

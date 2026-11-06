@@ -1267,6 +1267,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       dedupKey: path,
       dropped: () => ({ success: false, superseded: true }),
       onSuperseded: () => void get().cancelLoading(), // stop the backend's work at once
+      flushDisplayWrites: true, // [#576 FZ-FZ-INT-6]
     }),
 
   // Project operations - uses consolidated create_project_full command
@@ -1615,6 +1616,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         set({ isClosing: false });
         return refusedLocally('Already closing');
       },
+      flushDisplayWrites: true, // [#576 FZ-FZ-INT-6]
     });
   },
 
