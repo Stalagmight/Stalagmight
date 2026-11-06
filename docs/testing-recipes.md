@@ -467,9 +467,9 @@ FZ_INT_SHAPES=all FZ_INT_SEEDS=1000 \
 ```
 
 The gate leaves out the shapes of the findings still open (`KNOWN_OPEN_EXCLUDED`:
-overlapping switches, a save or an edit across a switch, Settings patching a gas
-field, a display write landing after a reload of its file); switch one back on
-when its fix lands. A seed stands for whatever
+overlapping switches, a save or an edit across a switch, a display write landing
+after a reload of its file); switch one back on when its fix lands, as Settings
+patching a gas field was (FZ-FZ-INT-3). A seed stands for whatever
 `generate` makes of it today, so pin a found bug as its shrunk TRACE in
 `REGRESSION_TRACES`, not as a seed. A command the stores start sending that the
 model does not know fails the gate (`unmodelled`): model it in `backendModel.ts`
