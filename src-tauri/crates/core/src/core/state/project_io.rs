@@ -834,6 +834,8 @@ impl AppState {
                 );
                 return save_failure("Failed to finalize save", &save_path, &e);
             }
+            // [#576 FZ-FZ-INT-R2] As below: the copy replaced whatever was there.
+            self.note_save_renamed();
             drop(proj_guard);
             self.note_recent_project(&save_path);
             tracing::info!(
@@ -884,6 +886,9 @@ impl AppState {
             );
             return save_failure("Failed to finalize save", &save_path, &e);
         }
+        // [#576 FZ-FZ-INT-R2] A file was renamed over `save_path`: a load of it in
+        // flight read the file this replaced, and its commit refuses on this.
+        self.note_save_renamed();
 
         // The `.stalx` is now written, so the initial save is no longer deferred.
         // Set this BEFORE the reopen below: that path returns early on failure, and

@@ -488,6 +488,9 @@ impl AppState {
                 early_return_err!(LoadError::speleodb_managed(managed));
             }
         };
+        // [#576 FZ-FZ-INT-R2] The file the handle below is opened on, as the commit
+        // compares it with the file then at the path (`load_file_stamp.rs`).
+        let opened_stamp = self.file_stamp(&path);
         // Local variable only - NO state mutation until Finalizing
         let opened = match upgrade_refusal {
             None => Database::open_existing(&path),
@@ -560,6 +563,12 @@ impl AppState {
                 )),
             },
         };
+        // [#576 FZ-FZ-INT-R2] A save renamed another file over the path while the
+        // handle was being opened: it may be on either file. Refused now, before
+        // the read; the stamp the commit compares is then one the open handle holds.
+        if self.file_stamp(&path) != opened_stamp {
+            early_return_err!(LoadError::file_replaced_during_load());
+        }
         check_cancelled!();
         progress.complete_phase(LoadingPhase::OpeningDatabase);
         // [#576 RV4-R-M3-D2] A file where nothing may be written (the app's own
@@ -1049,6 +1058,26 @@ impl AppState {
         if reopening_the_open_file {
             early_return_err!(LoadError::already_open());
         }
+        // [#576 FZ-FZ-INT-R2] Not the open file, but maybe no longer the file this
+        // load read: a session of it can have committed after this load started,
+        // saved (a save renames a fresh file over the path) and closed. Committing
+        // anyway installed a database handle on the deleted file. Every save holds
+        // `command_lock`, so the file at the path cannot change while this decides.
+        // Retryable: the same load again reads the file now there.
+        if self.file_stamp(&path) != opened_stamp {
+            tracing::info!(
+                path = ?path,
+                purpose = "never commit a session on a file a save replaced",
+                "Refused a load whose file was replaced while it read it"
+            );
+            early_return_err!(LoadError::file_replaced_during_load());
+        }
+        // [#576 FZ-FZ-INT-1] The load token once more, still under `command_lock`
+        // and at the last point where refusing leaves nothing behind (the release
+        // below lets go of the outgoing project's SpeleoDB lock, the commit after it
+        // writes every cell): a cancel or a newer load that landed after the check
+        // above - during the checks in between - was committed over.
+        check_cancelled!();
         self.speleodb_release_held_lock_detached();
 
         // [#576 A5] ALL commits under ONE `project` acquisition, through the commit

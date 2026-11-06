@@ -143,6 +143,10 @@ pub struct AppState {
     /// since that commit (`note_open_project_moved`), so it names each file this
     /// session's project has been at; the next commit starts it again.
     pub(super) opened_from: RecoveringMutex<Vec<Option<PathBuf>>>,
+    /// [#576 FZ-FZ-INT-R2] How many times a save renamed a file into place this
+    /// session: the stamp a load's commit compares where no inode is available
+    /// (`load_file_stamp.rs`). Bumped on every platform, read only off unix.
+    pub(super) saves_renamed: AtomicU64,
     /// Serialization lock for command execution.
     /// Held for the entire duration of execute(), undo(), and redo() to prevent
     /// concurrent commands from interleaving (especially with batch sub-commands).
@@ -356,6 +360,7 @@ impl AppState {
                 &poison,
             ),
             opened_from: RecoveringMutex::with_monitor("opened_from", Vec::new(), &poison),
+            saves_renamed: AtomicU64::new(0),
             command_lock: RecoveringMutex::with_monitor("command_lock", (), &poison),
             tile_cache: Arc::new(RecoveringMutex::with_monitor(
                 "tile_cache",

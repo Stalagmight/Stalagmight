@@ -133,6 +133,17 @@ const REGRESSION_SEEDS: &[(Mode, u64)] = &[
     (Mode::Lifecycle, 1_101_510),
     (Mode::Lifecycle, 11_102_349),
     (Mode::Lifecycle, 13_100_691),
+    // FZ-FZ-INT-R2, the same race with a Close between the first session's save
+    // and the second load's commit: nothing is open at the commit, so the "already
+    // open" re-check passed and the load committed a session on the deleted file.
+    // The two host seeds that still failed after the R1 fix (both shrink to a
+    // stale handle; see
+    // `a_load_whose_file_a_save_replaced_is_refused_under_the_schedule`).
+    // 14100050 fails with the load's file-stamp check reverted; 7104685 only with
+    // that check AND the load's last token re-check reverted (its stale load had
+    // been cancelled after its first check under `command_lock`).
+    (Mode::Lifecycle, 7_104_685),
+    (Mode::Lifecycle, 14_100_050),
 ];
 
 const MAX_STEPS: usize = 200_000;
@@ -1403,6 +1414,45 @@ fn a_second_load_of_the_open_file_does_not_commit_a_stale_session() {
         .collect();
     println!("[FZ-FZ-INT-R1] answers: {answers:?}\n  violations: {violations:?}");
     assert!(violations.is_empty(), "{violations:?}");
+}
+
+/// [#576 FZ-FZ-INT-R2] The R1 race with a Close between the first session's save
+/// and the second load's commit: t1's load read the file, t0's load of it
+/// committed, saved (renaming a fresh file over the path) and closed, and t1's
+/// commit - nothing open, so the "already open" re-check passed - installed a
+/// session whose database handle was on the deleted file (SQLite then refused the
+/// oracle's probe write: "attempt to write a readonly database"). Host seed
+/// 14100050 on the R1 fix, shrunk to this case; replayed with its schedule. The
+/// commit now compares the file the load read with the file at the path and
+/// refuses with the retryable `FILE_REPLACED_DURING_LOAD`.
+#[test]
+fn a_load_whose_file_a_save_replaced_is_refused_under_the_schedule() {
+    let case = Case {
+        mode: Mode::Lifecycle,
+        seed: 14_100_050,
+        threads: vec![vec![Op::Load(2), Op::Save, Op::Close], vec![Op::Load(2)]],
+    };
+    let schedule = choices_from_runs(
+        "t1x2 t0x9 t1x2 t0x1 t1x3 t0x3 t1x1 t0x1 t1x1 t0x1 t1x1 t0x2 t1x1 t0x6 t1x1 \
+         t0x14 t1x1 t0x5 t1x1 t0x6 t1x15",
+    );
+    let (violations, _, records) = execute_case(&case, &schedule);
+    let answers: Vec<String> = records
+        .iter()
+        .map(|r| format!("t{} {:?} -> {:?}", r.thread, r.op, r.answer))
+        .collect();
+    println!("[FZ-FZ-INT-R2] answers: {answers:?}\n  violations: {violations:?}");
+    assert!(violations.is_empty(), "{violations:?}");
+    let second_load = records
+        .iter()
+        .find(|r| r.thread == 1 && r.op == Op::Load(2))
+        .map(|r| format!("{:?}", r.answer));
+    assert!(
+        second_load
+            .as_deref()
+            .is_some_and(|answer| answer.contains("FileReplacedDuringLoad")),
+        "t1's load: {second_load:?}"
+    );
 }
 
 /// A seed is a reproducible bug report only if the same seed runs the same

@@ -92,6 +92,15 @@ impl LoadError {
         Self::new(CommandErrorCode::Cancelled, "Operation cancelled")
     }
 
+    /// [#576 FZ-FZ-INT-R2] A save renamed a new file over the path while the open
+    /// was reading it. Retryable: the same open again reads the file now there.
+    pub fn file_replaced_during_load() -> Self {
+        Self::new(
+            CommandErrorCode::FileReplacedDuringLoad,
+            "The project file was saved while it was being opened; open it again.",
+        )
+    }
+
     /// Error when a file is not found.
     pub fn not_found(path: &str) -> Self {
         Self::new(

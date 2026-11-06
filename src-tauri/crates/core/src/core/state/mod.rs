@@ -15,6 +15,7 @@ mod display_settings;
 pub mod dive_plan;
 pub mod expected_project;
 mod import_tracking;
+mod load_file_stamp;
 mod project_create;
 mod project_io;
 mod project_load;
@@ -723,6 +724,14 @@ mod workspace_mode_tests;
 // AppState test setters in here (via the `test-support` feature the root's
 // [dev-dependencies] enable); the source-scan tripwires inside stay
 // `cfg(test)`-gated.
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              answers are the evidence a run captures"
+)]
+mod switch_commit_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

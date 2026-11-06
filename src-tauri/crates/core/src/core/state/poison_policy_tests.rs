@@ -64,6 +64,7 @@ fn every_cell(state: &AppState) -> Vec<&dyn LockCell> {
         force_editing: _,
         display_settings_cache,
         opened_from,
+        saves_renamed: _,
         command_lock,
         tile_cache,
         tilemap_cache,
