@@ -1251,8 +1251,6 @@ fn shrink(
     (best, best_choices, best_violations, best_outcome)
 }
 
-/// A schedule as runs of one thread: `t0x5 t1x2 ...` (who held the baton for how
-/// many consecutive scheduling points).
 /// The inverse of [`runs_of`]: a printed schedule back into replay choices.
 fn choices_from_runs(runs: &str) -> Vec<u32> {
     runs.split_whitespace()
@@ -1264,6 +1262,8 @@ fn choices_from_runs(runs: &str) -> Vec<u32> {
         .collect()
 }
 
+/// A schedule as runs of one thread: `t0x5 t1x2 ...` (who held the baton for how
+/// many consecutive scheduling points).
 fn runs_of(choices: &[u32]) -> String {
     let mut out = String::new();
     let mut at = 0;
