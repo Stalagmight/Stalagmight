@@ -53,7 +53,8 @@ use crate::commands::write_path::WriteTarget;
 use crate::export::{ImageFormat, ProfileFormat};
 
 /// Probes (random paths, each put to one caller) per seed of the disk fuzzer.
-pub(super) const PROBES_PER_SEED: usize = 12;
+#[cfg(target_os = "linux")]
+const PROBES_PER_SEED: usize = 12;
 
 /// The seeds the CI gate runs: a fixed spread, then every seed a sweep found
 /// failing (regression seeds, with the finding they caught).
@@ -326,6 +327,7 @@ impl Kind {
     }
 
     /// The type a file of this name is, by its extension.
+    #[cfg(target_os = "linux")]
     pub(super) fn of(path: &Path) -> Option<Self> {
         Self::ALL
             .into_iter()
@@ -387,6 +389,10 @@ pub(super) enum Expect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Said {
     Policy,
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(dead_code, reason = "only the disk fuzzer, Linux-only, drives a load")
+    )]
     Load,
 }
 
