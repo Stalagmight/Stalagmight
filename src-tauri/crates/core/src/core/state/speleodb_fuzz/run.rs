@@ -187,6 +187,7 @@ impl Harness {
                         Step {
                             act: Act::Login,
                             fault: None,
+                            then: Vec::new(),
                         }
                     } else if i == 1 {
                         Step {
@@ -195,6 +196,7 @@ impl Harness {
                                 on_unpushed: super::model::OnUnpushed::KeepLocal,
                             },
                             fault: None,
+                            then: Vec::new(),
                         }
                     } else {
                         next_step(rng, hint, *fault_pct)
@@ -212,7 +214,7 @@ impl Harness {
                 (out, Vec::new())
             } else {
                 proxy.clear();
-                if let Some(f) = &step.fault {
+                for f in step.fault.iter().chain(&step.then) {
                     proxy.arm(rule(f));
                 }
                 let out = app.run(&step.act, &projects);

@@ -531,7 +531,12 @@ entry point is `speleodb_fuzz_replay`; `speleodb_fuzz_regression_seeds` re-runs
 every seed that once failed (`REGRESSION_SEEDS` in `speleodb_fuzz/mod.rs`; each
 is a fixed bug or a since-fixed oracle false positive, so all of them pass; a seed
 that pins a still-open question goes in with a comment and fails until it is
-decided). Every load in a run ends in the status poll, as the frontend's
+decided), then the directed step lists beside them (`directed_steps`): shapes the
+generator cannot draw because it arms one fault per step, such as Start Editing's
+acquire losing its reply while every attempt of the holder re-read after it fails
+(#576 SDB-POLL-D1). A directed step arms its further faults (`then`) after its
+`fault`, in order; the first armed rule that matches a request fires. Every load in
+a run ends in the status poll, as the frontend's
 `loadProject` does. Normal
 `cargo test` runs only the offline unit tests (the allowlist, generator, proxy,
 stub and oracle); the three entry points are

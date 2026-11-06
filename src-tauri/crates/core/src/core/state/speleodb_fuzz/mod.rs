@@ -85,6 +85,76 @@ const REGRESSION_SEEDS: &[(u64, usize, u64)] = &[
     (100057, 40, 25),
 ];
 
+/// Directed step lists, replayed by [`speleodb_fuzz_regression_seeds`] beside the
+/// seeds: shapes the generator cannot draw, because it arms one fault per step.
+fn directed_steps() -> Vec<(&'static str, Vec<Step>)> {
+    vec![("sdb-poll-d1", sdb_poll_d1_steps())]
+}
+
+/// [#576 SDB-POLL-D1] Start Editing's acquire lands with its reply lost (a 502 after
+/// the server applied it), and every attempt of the holder re-read after it fails
+/// (503: the read and the client's two retries); the probe before the acquire gets
+/// through (a 1 ms delay takes the first matching rule). The poll then finds the
+/// lock ours, and the quit over the clean copy must hand it back (I2b): the claim
+/// the lost reply cost is recorded by that poll.
+fn sdb_poll_d1_steps() -> Vec<Step> {
+    use model::{Act, Fault, FaultSpec, LeaveMode, OnUnpushed};
+    let spec = |fault, method: &str, path: &str, times| FaultSpec {
+        fault,
+        method: Some(method.to_owned()),
+        path: path.to_owned(),
+        times,
+    };
+    let plain = |act| Step {
+        act,
+        fault: None,
+        then: Vec::new(),
+    };
+    vec![
+        plain(Act::Login),
+        plain(Act::Open {
+            p: 0,
+            on_unpushed: OnUnpushed::KeepLocal,
+        }),
+        Step {
+            act: Act::StartEditing,
+            fault: Some(spec(Fault::LatencyMs(1), "GET", "/projects/", 1)),
+            then: vec![
+                spec(Fault::StatusAfter(502), "POST", "/acquire/", 1),
+                spec(Fault::Status(503), "GET", "/projects/", 3),
+            ],
+        },
+        plain(Act::Poll),
+        plain(Act::Quit {
+            mode: LeaveMode::KeepLock,
+        }),
+    ]
+}
+
+/// The SDB-POLL-D1 directed list as a saved step list, for `speleodb_fuzz_replay`.
+const SDB_POLL_D1_REPLAY: &str = r#"[
+  {"act": "Login", "fault": null},
+  {"act": {"Open": {"p": 0, "on_unpushed": "KeepLocal"}}, "fault": null},
+  {"act": "StartEditing",
+   "fault": {"fault": {"LatencyMs": 1}, "method": "GET", "path": "/projects/", "times": 1},
+   "then": [
+     {"fault": {"StatusAfter": 502}, "method": "POST", "path": "/acquire/", "times": 1},
+     {"fault": {"Status": 503}, "method": "GET", "path": "/projects/", "times": 3}
+   ]},
+  {"act": "Poll", "fault": null},
+  {"act": {"Quit": {"mode": "KeepLock"}}, "fault": null}
+]"#;
+
+/// [#576 SDB-POLL-D1] Offline: the directed list is the saved list the replay entry
+/// point reads, so a replay of that file runs exactly the regression set's steps.
+#[test]
+fn the_directed_list_is_its_saved_replay() {
+    let lists = directed_steps();
+    let (name, steps) = lists.first().expect("one directed list");
+    let saved: Vec<Step> = serde_json::from_str(SDB_POLL_D1_REPLAY).expect("parse");
+    assert_eq!((*name, steps), ("sdb-poll-d1", &saved));
+}
+
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name)
         .ok()
@@ -352,6 +422,30 @@ fn speleodb_fuzz_regression_seeds() {
         if let Some((i, v)) = r.failure {
             failed.push(format!(
                 "seed {seed} step {i}: {}",
+                serde_json::to_string(&v).unwrap_or_default()
+            ));
+        }
+    }
+    for (name, steps) in directed_steps() {
+        let label = format!("reg-{name}");
+        let trace = dir.join(format!("{label}.jsonl"));
+        let _ = std::fs::remove_file(&trace);
+        let r = h.run(
+            &label,
+            Source::Fixed(steps.clone()),
+            steps.len(),
+            Some(&trace),
+        );
+        println!(
+            "FZ-SDB directed {name}: {}",
+            r.failure.as_ref().map_or("ok".to_owned(), |(i, v)| format!(
+                "FAIL at step {i}: {}",
+                serde_json::to_string(v).unwrap_or_default()
+            ))
+        );
+        if let Some((i, v)) = r.failure {
+            failed.push(format!(
+                "directed {name} step {i}: {}",
                 serde_json::to_string(&v).unwrap_or_default()
             ));
         }

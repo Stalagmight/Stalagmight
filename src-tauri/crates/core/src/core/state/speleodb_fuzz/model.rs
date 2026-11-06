@@ -214,6 +214,12 @@ pub(super) struct FaultSpec {
 pub(super) struct Step {
     pub(super) act: Act,
     pub(super) fault: Option<FaultSpec>,
+    /// [#576 SDB-POLL-D1] Further faults armed after `fault`, in this order (the
+    /// first armed rule that matches a request fires), for a directed step whose act
+    /// needs two of its requests to fail. The generator never draws one; step lists
+    /// saved without it read as empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) then: Vec<FaultSpec>,
 }
 
 /// What the generator may know about the app between steps.
@@ -387,7 +393,11 @@ pub(super) fn next_step(rng: &mut Rng, hint: Hint, fault_percent: u64) -> Step {
     }
     let act = rng.weighted(&table).unwrap_or(Act::Poll);
     let fault = (!act.is_actor() && rng.chance(fault_percent)).then(|| pick_fault(rng));
-    Step { act, fault }
+    Step {
+        act,
+        fault,
+        then: Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -425,6 +435,42 @@ mod tests {
                 .iter()
                 .all(|s| !(s.act.is_actor() && s.fault.is_some())),
             "no fault is armed on a second-client step (it bypasses the proxy)"
+        );
+        assert!(
+            steps.iter().all(|s| s.then.is_empty()),
+            "the generator arms one fault per step; further ones are for directed steps"
+        );
+    }
+
+    /// [#576 SDB-POLL-D1] A step list saved before `then` existed still reads, and a
+    /// directed step's further faults survive the round trip in their order.
+    #[test]
+    fn further_faults_are_optional_and_keep_their_order() {
+        let old: Step = serde_json::from_str(r#"{"act":"StartEditing","fault":null}"#)
+            .expect("an old step reads");
+        assert_eq!(
+            old.then,
+            Vec::<super::FaultSpec>::new(),
+            "no further faults"
+        );
+        assert!(
+            !serde_json::to_string(&old)
+                .expect("serialize")
+                .contains("then"),
+            "and is written back the same way"
+        );
+        let directed: Step = serde_json::from_str(
+            r#"{"act":"StartEditing","fault":null,"then":[
+                {"fault":{"StatusAfter":502},"method":"POST","path":"/acquire/","times":1},
+                {"fault":{"Status":503},"method":"GET","path":"/projects/","times":3}]}"#,
+        )
+        .expect("a directed step reads");
+        let json = serde_json::to_string(&directed).expect("serialize");
+        let back: Step = serde_json::from_str(&json).expect("parse");
+        assert_eq!(back, directed);
+        assert_eq!(
+            back.then.iter().map(|f| f.times).collect::<Vec<_>>(),
+            [1, 3]
         );
     }
 
