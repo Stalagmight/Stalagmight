@@ -93,8 +93,8 @@ use crate::config::GasConfig;
 use crate::core::Command;
 use crate::export::{ExportImageOptions, ImageFormat};
 use crate::models::{
-    ClosureStrategy, CylRole, Cylinder, Diver, Project, RulerEndpoint, Station, StationRef,
-    TankMaterial,
+    ClosureStrategy, CreationStamp, CylRole, Cylinder, Diver, Project, RulerEndpoint, Station,
+    StationRef, TankMaterial,
 };
 use crate::test_helpers::isolated_config;
 
@@ -413,7 +413,7 @@ impl Serialize for IpcProject<'_> {
 fn pinned_clock(project: &Project) -> Project {
     let epoch = chrono::DateTime::<chrono::Utc>::UNIX_EPOCH;
     let mut pinned = project.clone();
-    pinned.created_at = epoch;
+    pinned.created_at = CreationStamp::at(epoch);
     pinned.modified_at = epoch;
     pinned.file_path = None;
     for merge in pinned.station_merges.iter_mut() {
