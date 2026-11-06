@@ -99,6 +99,8 @@ describe('projectStore.importSections argument forwarding', () => {
       sectionsFound: 4,
       // #576 B13: the DMP file's parse warnings, led onto the receipt.
       sourceWarnings: ['Section "BBB" (#2 in the file) has no end-of-section marker'],
+      // #576 FZ-FZ-INT-7: the project it was issued against (none open here).
+      expectedProject: null,
     });
   });
 

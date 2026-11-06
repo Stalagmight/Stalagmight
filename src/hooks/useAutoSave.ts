@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { useProjectStore, selectNewerFileReadOnly, type ProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { isAutosaveHeld, useAutosaveHoldStore } from '../utils/autosaveHold';
+import { isProjectChangedRefusal } from '../store/commandResult';
 
 export type AutoSaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 
@@ -204,8 +205,9 @@ export function useAutoSave(): AutoSaveState {
           // a Save As to a working folder) already put the changes on disk,
           // so this failure is moot - and painting it red anyway leaves the
           // Save menu item red with nothing to save, for as long as the
-          // project stays clean (#429).
-          setStatus(useProjectStore.getState().isDirty ? 'error' : 'idle');
+          // project stays clean (#429). Nor is one refused because the project changed or was
+          // being switched (#576 FZ-FZ-INT-4): not an autosave failure.
+          setStatus(useProjectStore.getState().isDirty && !isProjectChangedRefusal(result) ? 'error' : 'idle');
         }
       }, seconds * 1000);
     };

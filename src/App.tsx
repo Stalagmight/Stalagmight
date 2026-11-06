@@ -8,6 +8,7 @@ import { InternalErrorBanner } from './components/common/InternalErrorBanner';
 import { useInternalErrorEvent } from './hooks/useInternalErrorEvent';
 import { SETTABLE_UNREADABLE_SETTINGS } from './store/unreadableSettings';
 import { isMoveCarryRefusal } from './store/moveCarry';
+import { isProjectChangedRefusal } from './store/commandResult';
 import { useUIStore } from './store/uiStore';
 import { useSpeleoStore } from './store/speleoStore';
 import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
@@ -604,8 +605,9 @@ function App() {
     } catch (e) {
       // A move-carry refusal (GHOST-2) is not a failed repair and is its own notice;
       // nor is a read-only refusal (#576 D39(a)), which the store already showed as
-      // the read-only notice.
-      if (isMoveCarryRefusal(e) || isEditGateCode(errorCode(e))) return;
+      // the read-only notice. Nor is a refusal because the project changed or was being
+      // switched (#576 FZ-FZ-INT-7): what was asked of it no longer applies.
+      if (isMoveCarryRefusal(e) || isEditGateCode(errorCode(e)) || isProjectChangedRefusal(e)) return;
       // repairProjectIntegrity re-throws on a real failure (e.g. the IPC rejected
       // during teardown) rather than reporting a fake no-op success. Surface it and
       // keep the dialog open - integrityIssues is untouched, so the banner/save-block

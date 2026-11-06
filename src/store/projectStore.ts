@@ -19,7 +19,7 @@ import { useUIStore } from './uiStore';
 import { autosaveFailureMessage, saveFailureOf, surfaceSaveFailure, surfaceSaveWarnings } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
 import { speleoState } from './speleoStoreHandle';
-import { emptyCommandResult, refusedLocally, settleCommand, type CommandOutcome } from './commandResult';
+import { emptyCommandResult, isProjectChangedRefusal, PROJECT_CHANGED_REFUSAL as PROJECT_CHANGED, refusedLocally, settleCommand, type CommandOutcome } from './commandResult';
 import { useExportStore } from './exportStore';
 import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
 import { runSerialized } from './mutationQueue';
@@ -72,6 +72,8 @@ import { createProjectLoadRepairsActions, LOAD_REPAIRS_CLEARED, loadRepairsState
 import { createProjectIntegrityActions, type ProjectIntegrityActions } from './projectIntegrityActions';
 import { createProjectExportActions, type ProjectExportActions } from './projectExportActions';
 import { runProjectSwitch } from '../utils/projectTransition';
+import { expectedProjectOf, issuedAgainstOf, lostProjectOf, type IssuedAgainst } from './projectIssue';
+import { issueSave, refuseDuringSwitch } from './switchGate';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -470,22 +472,8 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
  */
 const inFlightLoads = new Map<string, Promise<{ success: boolean }>>();
 
-/**
- * Whether the project changed identity between issuing a command and its reply (#24).
- *
- * `created_at` alone: it is immutable for the life of a project, whereas `file_path` changes on
- * a first save or a Save As - keying on that made the guard reject replies that were perfectly
- * valid and silently leave the frontend's positional refs on the wrong physical station.
- *
- * A missing value on either side is NOT a switch. Before the first refresh the store may hold
- * no project at all, and a closed project resolves to no sections, which the transform builder
- * already reduces to a no-op. Only two DIFFERENT identities mean the reply belongs to a project
- * that is no longer open - and because section ids are small per-project integers, those entries
- * would otherwise match sections in whatever is now open.
- */
-export function projectSwitched(before: string | null, after: string | null): boolean {
-  return before !== null && after !== null && before !== after;
-}
+// The rule lives in `projectIssue.ts`; re-exported for the callers that always imported it from here.
+export { projectSwitched } from './projectIssue';
 
 /**
  * [#576 B6-D1] Is the open project read-only because a NEWER Stalagmight saved it?
@@ -495,12 +483,6 @@ export function projectSwitched(before: string | null, after: string | null): bo
  */
 export const selectNewerFileReadOnly = (s: Pick<ProjectStore, 'newerSchemaVersion'>): boolean =>
   s.newerSchemaVersion !== null;
-
-/** What a mutation was issued against: see `lostProject` in the store. */
-type IssuedAgainst = { key: string | null; file: string | null; session: number };
-
-/** What every seam returns for a request whose project changed out from under it. */
-const PROJECT_CHANGED = 'The project changed before this action could run.';
 
 /** The four history verbs `executeUndoRedo` runs. */
 type HistoryCommand = 'undo' | 'redo' | 'undo_to' | 'redo_to';
@@ -612,32 +594,10 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => {
-  /** What a request was ISSUED against (#24): the project's key, the file it was open from and the session. */
-  const issuedAgainst = (): IssuedAgainst => ({
-    key: get().project?.created_at ?? null,
-    file: get().project?.file_path ?? null,
-    session: projectSessionEpoch(),
-  });
-  /**
-   * True when the project a request was ISSUED against is no longer the open one (#24).
-   *
-   * [#576 FZ-FZ-INT-2] Two copies of one project file share `created_at`, so an edit
-   * issued in one copy while a switch to the other was under way ran in the other.
-   * Once the session moved (another open committed) the file must match too. A Save
-   * As moves the file within the session, and a reload of the same file opens the
-   * project the edit was made in: neither counts - the display-setting chain's rule
-   * (`utils/settingWriteChain.ts`).
-   */
-  const lostProject = (issued: IssuedAgainst) => {
-    const open = get().project;
-    if (projectSwitched(issued.key, open?.created_at ?? null)) return true;
-    return (
-      issued.key !== null &&
-      open !== null &&
-      issued.session !== projectSessionEpoch() &&
-      issued.file !== (open.file_path ?? null)
-    );
-  };
+  /** What a request was ISSUED against (#24): see `projectIssue.ts`. */
+  const issuedAgainst = (): IssuedAgainst => issuedAgainstOf(get().project);
+  /** True when the project a request was ISSUED against is no longer the open one (`projectIssue.ts`). */
+  const lostProject = (issued: IssuedAgainst) => lostProjectOf(issued, get().project);
   /** Mark the project dirty, counting the change for a save in flight ([#576 FZ-FZ-INT-8], see saveProject). */
   const markDirty = () => {
     noteProjectDirtied();
@@ -663,9 +623,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // survey mutation only for the OPEN project (`set_project_name_for_path`'s own gate).
     const carryCommit = takeMoveCarryCommit();
     const mutatesOpenSurvey = command !== 'set_project_name_for_path' || args?.path === get().project?.file_path;
-    const refused = carryCommit || !mutatesOpenSurvey ? null : refuseMutationDuringCarry();
-    if (refused) return refused;
-    return runSerialized(() => executeCommandInner(command, args, meta, issued, carryCommit));
+    // [#576 FZ-FZ-INT-7] And an edit requested while a project switch is under way is refused
+    // (`switchGate.ts`): until the switch answers, nothing knows which project it would reach.
+    const refused = (carryCommit || !mutatesOpenSurvey ? null : refuseMutationDuringCarry()) ?? (mutatesOpenSurvey ? refuseDuringSwitch() : null);
+    if (refused) carryCommit?.restorePreview();
+    return refused ?? runSerialized(() => executeCommandInner(command, args, meta, issued, carryCommit));
   };
 
   const executeCommandInner = async <K extends MutationCommand>(
@@ -697,7 +659,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // The backend's refusal arrives as the rejection's CommandError and becomes the refused
       // outcome; any other rejection (a transport failure) is the `catch` below. The SpeleoDB
       // link bits on either answer were applied by `invokeIpc` (#576 D22).
-      const result = await settleCommand((invokeIpc as ForwardedInvoke)(command, args, meta));
+      // [#576 FZ-FZ-INT-7] It names the project it was issued against; the backend refuses
+      // it with PROJECT_CHANGED, nothing written, when another is open (`expected_project.rs`).
+      const result = await settleCommand((invokeIpc as ForwardedInvoke)(command, { ...args, expectedProject: expectedProjectOf(issued) }, meta));
       if (result.success) {
         // Re-resolve those pins BEFORE the refetch: the reach-field effect keys on modified_at,
         // so a stale pin sent here would paint a route through the wrong station for a frame.
@@ -743,7 +707,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           if (!meta.readOnlyNoticeInline) {
             useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(result.code), TOAST_KEYS.EDIT_DISABLED, 'warning');
           }
-        } else {
+        } else if (result.code !== 'PROJECT_CHANGED') {
+          // (PROJECT_CHANGED is the local refusal's backend twin, and as quiet: #576 FZ-FZ-INT-7.)
           // Catch-all (docs/notifications.md): a failure no specific handler
           // claims must not die silently. Dialogs own their inline errors and
           // are open when they issue commands, so the catch-all yields to them.
@@ -780,7 +745,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   ): Promise<CommandOutcome<HistoryOutcome>> => {
     // Captured at ISSUE time - see `executeCommand`, which also explains the GHOST-2 check.
     const issued = issuedAgainst();
-    const refused = refuseMutationDuringCarry();
+    const refused = refuseMutationDuringCarry() ?? refuseDuringSwitch(); // [#576 FZ-FZ-INT-7]
     if (refused) return refused;
     const args = typedArgs as Record<string, unknown> | undefined;
     return runSerialized(() => executeUndoRedoInner(command, args, meta, toastId, issued));
@@ -819,7 +784,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (lostProject(issued)) return refusedLocally(PROJECT_CHANGED);
       // An undo/redo mutates the remote project too: its SpeleoDB link bits ride on the
       // answer, success or failure, and `invokeIpc` applied them (#576 D22).
-      result = await settleCommand((invokeIpc as ForwardedInvoke)(command, args, meta));
+      result = await settleCommand((invokeIpc as ForwardedInvoke)(command, { ...args, expectedProject: expectedProjectOf(issued) }, meta));
       if (result.success) {
         reversedSections = result.reversed_steps;
         markDirty();
@@ -854,7 +819,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           speleoState()?.notifyReverifyDivergence();
         } else if (isEditGateCode(result.code)) {
           useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(result.code), TOAST_KEYS.EDIT_DISABLED, 'warning');
-        } else {
+        } else if (result.code !== 'PROJECT_CHANGED') {
+          // (PROJECT_CHANGED ran no step and is as quiet as the local refusal: #576 FZ-FZ-INT-7.)
           useUIStore.getState().showToast(result.error ?? i18n.t('editGate.commandFailed'), toastId, 'error');
         }
       }
@@ -1012,7 +978,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (key !== path) inFlightLoads.delete(key);
     }
 
-    const promise: Promise<LoadProjectOutcome> = runProjectSwitch(async () => {
+    const promise: Promise<LoadProjectOutcome> = runProjectSwitch(async (turn) => {
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
@@ -1147,6 +1113,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         useUIStore.getState().setView('single');
         const tViewDone = performance.now();
         recordPerfTiming('setView(single)', tViewDone - tViewStart);
+        // The project is on screen: an edit or a save made from here is made for it.
+        turn.committed();
 
         // Update recent projects list
         await get().loadRecentProjects();
@@ -1226,6 +1194,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             speleoState()?.syncProjectLink(true, path);
           }
           useUIStore.getState().setView('single');
+          turn.committed();
           get().resetLoading();
           await get().refreshUndoState();
           // #270: then re-resolve from the backend, which knows what the short
@@ -1308,7 +1277,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Project operations - uses consolidated create_project_full command
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) =>
-    runProjectSwitch(async () => {
+    runProjectSwitch(async (turn) => {
     // [#576 RV15-2] A create that names its file or folder is judged by the
     // write-path policy before anything else (the backend does the same, RV14-1):
     // one it refuses must not stop the open or load in progress, nor show the
@@ -1411,6 +1380,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       useUIStore.getState().resetToolTransientsForProjectSwitch();
       dropDormantDistanceOrigin();
       useUIStore.getState().setView('single');
+      turn.committed(); // the new project is on screen: see loadProject
       await get().loadRecentProjects();
       get().resetLoading();
 
@@ -1427,7 +1397,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
     }),
 
-  saveProject: async (path?: string, isAutosave?: boolean) => {
+  // [#576 FZ-FZ-INT-4] Refused while a project switch is under way, else tracked until it
+  // settles, so a switch requested meanwhile waits for it (`switchGate.ts`).
+  saveProject: (path?: string, isAutosave?: boolean) => issueSave(async () => {
     // The Rust save path heals duplicate shot UUIDs / orphan section offsets /
     // non-finite geometry in memory before persisting, which mutates the backend
     // project - so afterward the frontend's mirror can be stale. Those heals only
@@ -1438,15 +1410,21 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // [#576 FZ-FZ-INT-8] The changes acknowledged so far: one acknowledged after this
     // point may have run after the save wrote the file, so it keeps the project dirty.
     const dirtyMarksAtIssue = projectDirtyMarks();
+    // The project it is made for, named on the IPC: the backend refuses another with
+    // PROJECT_CHANGED (`expected_project.rs`).
+    const issued = issuedAgainst();
     // A refused save is the rejection's CommandError, settled into the refused outcome
     // (its `code` routes it below); a transport failure still rejects.
     const result = await settleCommand(
       invokeIpc(
         'save_project',
-        { path, isAutosave: isAutosave === true },
+        { path, isAutosave: isAutosave === true, expectedProject: expectedProjectOf(issued) },
         { purpose: 'persist project changes', fields: { path, isAutosave } }
       )
     );
+    // [#576 FZ-FZ-INT-4] A refusal because the project changed is not a failed save (no
+    // banner, no dialog), and an answer for a session that ended applies to nothing open now.
+    if (isProjectChangedRefusal(result) || issued.session !== projectSessionEpoch() || lostProject(issued)) return result;
     if (result.success) {
       // A detached copy was written; the OPEN project was not saved. Do not
       // re-point file_path and do not clear isDirty (see SaveOutcome).
@@ -1561,7 +1539,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       await get().checkProjectIntegrity();
     }
     return result;
-  },
+  }),
 
   clearAutosaveFailure: () => set({ autosaveFailure: null, autosaveFailureKind: null }),
 

@@ -243,10 +243,10 @@ export const ALL_SHAPES: RunOptions = {
 /** What CI runs: every shape except those of the open findings. */
 export const KNOWN_OPEN_EXCLUDED: RunOptions = {
   overlapSwitches: false,
-  saveAcrossSwitch: false,
+  saveAcrossSwitch: true,
   gasFieldPatches: true,
   crossSessionDisplay: false,
-  editAcrossSwitch: false,
+  editAcrossSwitch: true,
 };
 
 export const DEFAULT_OPTIONS = ALL_SHAPES;
@@ -266,13 +266,40 @@ export async function runActions(actions: Action[], options: RunOptions = DEFAUL
   });
   const violations: Violation[] = [];
   const writes: DisplayWrite[] = [];
-  const edits = new Map<string, { madeGen: number | null; outcome?: { success: boolean; code?: string | null } }>();
+  const edits = new Map<
+    string,
+    { madeGen: number | null; duringSwitch?: boolean; outcome?: { success: boolean; code?: string | null } }
+  >();
   const configIntent = new Map<string, ConfigIntent>();
-  const ops: Array<{ label: string; settled: boolean }> = [];
+  /** `sent`: the scheduler's call count when the op started (its own calls come after). */
+  const ops: Array<{ label: string; settled: boolean; sent: number }> = [];
   const SWITCHES = new Set(['load', 'create', 'close', 'importNew']);
   const SAVES = new Set(['save', 'autosave', 'saveAs']);
   const EDITS = new Set(['edit', 'elev', 'undo', 'redo']);
   const inFlight = (labels: Set<string>) => ops.some((o) => !o.settled && labels.has(o.label));
+  /** The IPC whose answer decides each switch. */
+  const SWITCH_IPC: Record<string, string> = {
+    load: 'load_project_full_binary', create: 'create_project_full', importNew: 'create_project_full',
+    close: 'close_project',
+  };
+  /** The scheduler's call count when the last switch op settled. */
+  let switchSettledSent = 0;
+  /**
+   * [#576 FZ-FZ-INT-7] Whether a switch requested so far is still undecided: more than
+   * one in flight, or the one in flight not answered yet. An edit requested then is
+   * refused by design (store/switchGate.ts). Once the only switch in flight has been
+   * answered, the store shows what it left open, and an edit made there is not.
+   * Switches run one after another (utils/projectTransition.ts), so a switch's own IPC
+   * is sent after it started AND after the switch before it settled.
+   */
+  const switchUndecided = (): boolean => {
+    const running = ops.filter((o) => !o.settled && SWITCHES.has(o.label));
+    if (running.length !== 1) return running.length > 1;
+    const { label, sent } = running[0]!;
+    const after = Math.max(sent, switchSettledSent);
+    const answered = new RegExp(`^run #(\\d+) ${SWITCH_IPC[label]!}\\b`);
+    return !sched.trace.some((line) => Number(answered.exec(line)?.[1] ?? 0) > after);
+  };
   let step = 0;
   let opsStarted = 0;
   let opsSkipped = 0;
@@ -291,17 +318,19 @@ export async function runActions(actions: Action[], options: RunOptions = DEFAUL
     return typeof loc === 'string' && loc.startsWith('gen-') ? Number(loc.slice(4)) : null;
   };
   const track = (label: string, p: Promise<unknown>, after?: (value: unknown) => void) => {
-    const entry = { label, settled: false };
+    const entry = { label, settled: false, sent: sched.sent };
     ops.push(entry);
     opsStarted += 1;
+    const settled = () => {
+      entry.settled = true;
+      if (SWITCHES.has(label)) switchSettledSent = sched.sent;
+    };
     p.then(
       (value) => {
-        entry.settled = true;
+        settled();
         after?.(value);
       },
-      () => {
-        entry.settled = true;
-      },
+      settled,
     );
   };
   const checkIdentity = () => {
@@ -402,7 +431,8 @@ export async function runActions(actions: Action[], options: RunOptions = DEFAUL
       case 'edit': {
         if (!open) return false;
         const marker = `e${op.n}`;
-        const entry: { madeGen: number | null; outcome?: { success: boolean; code?: string | null } } = { madeGen: gen };
+        const entry: { madeGen: number | null; duringSwitch: boolean; outcome?: { success: boolean; code?: string | null } } =
+          { madeGen: gen, duringSwitch: switchUndecided() };
         edits.set(marker, entry);
         track(op.k, P.createSection({
             name: marker, surveyor: null, date: null, color: '#123456', direction: null, quality: 1, shots: [],
@@ -414,7 +444,8 @@ export async function runActions(actions: Action[], options: RunOptions = DEFAUL
       case 'elev': {
         if (!open) return false;
         const value = 100 + op.n;
-        const entry: { madeGen: number | null; outcome?: { success: boolean; code?: string | null } } = { madeGen: gen };
+        const entry: { madeGen: number | null; duringSwitch: boolean; outcome?: { success: boolean; code?: string | null } } =
+          { madeGen: gen, duringSwitch: switchUndecided() };
         edits.set(`elev:${value}`, entry);
         track(op.k, P.setSurfaceElevation(value), (o) => {
           entry.outcome = o as { success: boolean; code?: string | null };
@@ -616,6 +647,8 @@ export async function runActions(actions: Action[], options: RunOptions = DEFAUL
       }
       for (const [marker, e] of edits) {
         if (e.madeGen !== open.gen || !e.outcome || e.outcome.success) continue;
+        // Refused here (no code) while a switch was undecided: the switch gate's design.
+        if (e.duringSwitch && !e.outcome.code) continue;
         const faulted = sched.faulted.some((f) => f.command === 'create_section' || f.command === 'set_surface_elevation');
         if (!faulted) violate('edit-lost', `edit ${marker} issued in open gen-${open.gen} was refused (${String(e.outcome.code)})`);
       }

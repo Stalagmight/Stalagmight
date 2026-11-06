@@ -145,6 +145,47 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
       'load("/caves/CaveA.stalx") run(0.000) run(0.000) refresh run(0.000) geom fault(0.463) geom saveAs(36) ' +
       'run(0.000) geom',
   },
+  {
+    // A Save As of CaveA issued while a reload of it was in flight: its answer
+    // re-pointed the reloaded session at the Save As file.
+    id: 'FZ-FZ-INT-4',
+    found: 'identity',
+    options: { saveAcrossSwitch: true },
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) run(0.000) run(0.000) load("/caves/CaveA.stalx") ' +
+      'saveAs(18) exec(0.000) run(0.000) run(0.595)',
+  },
+  {
+    // An elevation edit issued in CaveA while a create was in flight was applied to
+    // the new project: the backend applied the create first. (Seed 30, re-shrunk
+    // once the create's write-path check became its first IPC.)
+    id: 'FZ-FZ-INT-7',
+    found: 'edit-target',
+    options: { editAcrossSwitch: true },
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) run(0.000) run(0.000) create(33, false) ' +
+      'elev(35) run(0.000) run(0.796) run(0.730)',
+  },
+  {
+    // An edit made once the loaded project was on screen, while the load still read
+    // the recent list and the undo state, was refused by the switch gate: the gate
+    // now opens when the switch commits its project in the store (#576 FZ-FZ-INT-7).
+    id: 'FZ-W22-GATE',
+    found: 'edit-lost',
+    actions: 'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) edit(16)',
+  },
+];
+
+/**
+ * Seeds that found a bug, with the shape that found it. A seed stands for the list
+ * `generate` makes of it TODAY (see FIXED_SEEDS), so these pin only as long as the
+ * generator is unchanged; the shrunk traces above are the durable pin.
+ */
+const REGRESSION_SEEDS: Array<{ id: string; seed: number; options: Partial<RunOptions> }> = [
+  { id: 'FZ-FZ-INT-4', seed: 182, options: { saveAcrossSwitch: true } },
+  { id: 'FZ-FZ-INT-7', seed: 30, options: { editAcrossSwitch: true } },
+  // The switch gate held edits until the load's whole aftermath ran (FZ-W22-GATE).
+  { id: 'FZ-W22-GATE', seed: 53, options: {} },
 ];
 
 
@@ -191,6 +232,11 @@ async function report(seed: number, result: RunResult, inv: InvariantId): Promis
 describe('interleaving fuzzer (#576 FZ-INT)', () => {
   it.each(REGRESSION_TRACES)('regression trace $id ($found) holds every invariant', async ({ options, actions }) => {
     const result = await runActions(parseActions(actions), { ...KNOWN_OPEN_EXCLUDED, ...options });
+    expect(result.violations.map((v) => `[${v.inv}] ${v.msg}`)).toEqual([]);
+  });
+
+  it.each(REGRESSION_SEEDS)('regression seed $seed ($id) holds every invariant', async ({ seed, options }) => {
+    const result = await runActions(generate(seed), { ...KNOWN_OPEN_EXCLUDED, ...options });
     expect(result.violations.map((v) => `[${v.inv}] ${v.msg}`)).toEqual([]);
   });
 

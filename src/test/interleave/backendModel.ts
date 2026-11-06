@@ -98,6 +98,11 @@ const DISPLAY_DEFAULTS: Record<string, string> = {
   geometryMode: 'measured',
 };
 
+/** The commands `execute` checks `expectedProject` on (save_project + the modelled mutations). */
+const CHECKS_PROJECT = new Set([
+  'save_project', 'create_section', 'set_surface_elevation', 'import_sections', 'undo', 'redo',
+]);
+
 const err = (code: string, message: string): Outcome => ({ ok: false, error: { code, message } satisfies ModelError });
 const ok = (value: unknown = null): Outcome => ({ ok: true, value });
 
@@ -124,6 +129,12 @@ function displayAnswer(stored: Map<string, StoredDisplay>): Record<string, unkno
 /** A load's cancellation token (`AppState::start_new_load`). */
 interface LoadToken {
   cancelled: boolean;
+}
+
+/** The project a save or an edit was made for (`expectedProject`, expected_project.rs `ProjectIdentity`). */
+interface MadeFor {
+  createdAt: string;
+  filePath: string | null;
 }
 
 export class BackendModel {
@@ -193,6 +204,33 @@ export class BackendModel {
     if (this.activeLoad === token) this.activeLoad = null;
   }
 
+  /**
+   * expected_project.rs:90-108 `names_open_project`, the rule a display-setting write
+   * (display_settings.rs:86) and every save and edit are decided by: both none, or the
+   * same created_at and the file the session was committed from, is at, or was moved
+   * off by a Save As (`opened_from`, session_commit.rs:198, display_settings.rs:109).
+   */
+  private namesOpenProject(madeFor: MadeFor | null): boolean {
+    const open = this.open;
+    if (madeFor === null || open === null) return madeFor === null && open === null;
+    return (
+      madeFor.createdAt === open.createdAt &&
+      (madeFor.filePath === open.filePath || open.openedFrom.includes(madeFor.filePath))
+    );
+  }
+
+  /**
+   * expected_project.rs:115-134 `refuse_other_project`: a save or a survey edit whose
+   * `expectedProject` does not name the open project is refused with PROJECT_CHANGED
+   * and nothing is written. A missing argument is `None` on the wire, "made with no
+   * project open" (pool.rs:85-97 `run_mutation`, project.rs:70-76 `save_project`).
+   */
+  private refuseOtherProject(args: Record<string, unknown> | undefined, what: string): Outcome | null {
+    const madeFor = (args?.expectedProject as MadeFor | null | undefined) ?? null;
+    if (this.namesOpenProject(madeFor)) return null;
+    return err('PROJECT_CHANGED', `${what} was not applied: another project is open now.`);
+  }
+
   private commitGen(open: OpenProject | null): void {
     const id = this.gens.length;
     this.gens.push({
@@ -207,6 +245,14 @@ export class BackendModel {
 
   /** The command's effect and answer, at the moment the scheduler runs it. */
   execute(command: string, args: Record<string, unknown> | undefined, token?: LoadToken): Outcome {
+    // Every save (commands.rs:604-610, in `execute` under command_lock) and every
+    // survey mutation (app_state.rs:672-676 `guard_metadata_mutation`, the first gate
+    // of `guard_mutation`, e.g. undo.rs:69 / :621, ahead of NOTHING_TO_UNDO) first
+    // checks the project it was made for.
+    if (CHECKS_PROJECT.has(command)) {
+      const refused = this.refuseOtherProject(args, command);
+      if (refused) return refused;
+    }
     switch (command) {
       case 'load_project_full_binary':
         return this.load(String(args?.path), token!);
@@ -230,7 +276,8 @@ export class BackendModel {
         return this.edit(command, args ?? {});
       case 'import_sections': {
         // commands/import.rs: the import, then finalize_deferred_import - a deferred
-        // project's first save, in the same command.
+        // project's first save, in the same command (and the same `expectedProject`
+        // scope, import.rs:266, so that save passes the check the import passed).
         const first = (args?.sections as Array<{ name: string | null }> | undefined)?.[0];
         const imported = this.edit('create_section', { name: first?.name ?? 'imported' });
         if (!imported.ok) return imported;
@@ -397,16 +444,10 @@ export class BackendModel {
   private saveDisplaySetting(args: Record<string, unknown>): Outcome {
     const key = String(args.key);
     const value = String(args.value);
-    const madeFor = (args.madeFor as { createdAt: string; filePath: string | null } | undefined) ?? null;
+    const madeFor = (args.madeFor as MadeFor | undefined) ?? null;
     const open = this.open;
     const writeId = this.writeIdOf(key, value) ?? -1;
-    let same: boolean;
-    if (madeFor === null || open === null) same = madeFor === null && open === null;
-    else
-      same =
-        madeFor.createdAt === open.createdAt &&
-        (madeFor.filePath === open.filePath || open.openedFrom.includes(madeFor.filePath));
-    if (!same) {
+    if (!this.namesOpenProject(madeFor)) {
       this.refused.push({ writeId, key, value });
       return err('PROJECT_CHANGED', 'The display setting was not saved: another project is open now.');
     }

@@ -7,18 +7,41 @@
  * (`mutationsSettled`): edits run on their own queue (`runSerialized`), and one
  * still waiting there when the user opened another project used to reach the
  * backend after the switch and run against the new project, where the same small
- * section and shot ids mostly resolve. Edits issued DURING a switch are not held
- * back by it; the identity guards (`lostProject`, `projectSwitched`) still refuse
- * those.
+ * section and shot ids mostly resolve. Edits issued DURING a switch are refused at
+ * the store's chokepoint (`store/switchGate.ts`, [#576 FZ-FZ-INT-7]).
+ *
+ * [#576 FZ-FZ-INT-4] It also waits for the saves already sent (`savesSettled`).
  */
 import { mutationsSettled } from '../store/mutationQueue';
+import { noteSwitchRequested, savesSettled } from '../store/switchGate';
 
 let replacementTail: Promise<void> = Promise.resolve();
 let switchTail: Promise<void> = Promise.resolve();
 
-export function runProjectSwitch<T>(work: () => Promise<T>): Promise<T> {
-  const editsIssuedBefore = mutationsSettled();
-  const result = Promise.all([replacementTail, editsIssuedBefore]).then(() => work());
+/** What a running switch's work can tell the coordinator. */
+export interface SwitchTurn {
+  /**
+   * The switch's project is committed in the store (shown, editable): saves and edits
+   * made from here are made for it, so the gate lets them through while the rest of
+   * the work (the recent list, the undo state) runs. The next switch still waits for
+   * all of it.
+   */
+  committed(): void;
+}
+
+export function runProjectSwitch<T>(work: (turn: SwitchTurn) => Promise<T>): Promise<T> {
+  // The gate (`switchGate.ts`) is released when the work says its project is committed,
+  // or at the latest BEFORE the switch's promise resolves, so a caller that awaits the
+  // switch and then saves or edits is not refused.
+  const release = noteSwitchRequested();
+  const before = Promise.all([replacementTail, mutationsSettled(), savesSettled()]);
+  const result = before.then(async () => {
+    try {
+      return await work({ committed: release });
+    } finally {
+      release();
+    }
+  });
   switchTail = Promise.allSettled([switchTail, result]).then(() => undefined);
   return result;
 }

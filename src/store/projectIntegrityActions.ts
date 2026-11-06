@@ -7,6 +7,9 @@ import { TOAST_KEYS } from '../utils/toastKeys';
 import { useUIStore } from './uiStore';
 import { refuseMutationDuringCarry } from './moveCarry';
 import { noteProjectDirtied, projectSessionEpoch } from './projectSession';
+import { isProjectChangedRefusal } from './commandResult';
+import { expectedProjectOf, issuedAgainstOf } from './projectIssue';
+import { refuseDuringSwitch } from './switchGate';
 import type { IntegrityRepairResult } from '../types/commands';
 import type { ProjectStore } from './projectStore';
 
@@ -86,12 +89,14 @@ export function createProjectIntegrityActions(
     },
 
     resolveWarning: async (sectionId: number, shotId: number, warningCode: string, comment?: string): Promise<boolean> => {
-      // GHOST-2: a survey mutation (resolved warnings are pushed content), see `executeCommand`.
-      if (refuseMutationDuringCarry()) return false;
+      // GHOST-2: a survey mutation (resolved warnings are pushed content), see `executeCommand`;
+      // refused during a project switch too, and named for its project ([#576 FZ-FZ-INT-7]).
+      if (refuseMutationDuringCarry() || refuseDuringSwitch()) return false;
+      const expectedProject = expectedProjectOf(issuedAgainstOf(get().project));
       try {
         await invokeIpc(
           'resolve_warning',
-          { sectionId, shotId, warningCode, comment },
+          { sectionId, shotId, warningCode, comment, expectedProject },
           { purpose: 'acknowledge validation warning', fields: { sectionId, shotId, warningCode } }
         );
         // The SpeleoDB link bits came back on the answer; `invokeIpc` applied them (#576 D22).
@@ -104,7 +109,8 @@ export function createProjectIntegrityActions(
         // refusal gets the same friendly notice as every other edit, anything else
         // the resolve flow's own message.
         console.error('Failed to resolve warning:', e);
-        if (!showReadOnlyRefusal(e)) {
+        // A PROJECT_CHANGED refusal is not a failure to report (#576 FZ-FZ-INT-7).
+        if (!showReadOnlyRefusal(e) && !isProjectChangedRefusal(e)) {
           useUIStore.getState().showToast(i18n.t('detailPanel.warnings.resolveFailed'), TOAST_KEYS.WARNING_RESOLVE, 'error');
         }
         return false;
@@ -112,11 +118,12 @@ export function createProjectIntegrityActions(
     },
 
     unresolveWarning: async (sectionId: number, shotId: number, warningCode: string) => {
-      if (refuseMutationDuringCarry()) return; // GHOST-2, see `resolveWarning`
+      if (refuseMutationDuringCarry() || refuseDuringSwitch()) return; // GHOST-2, #576 FZ-FZ-INT-7: see `resolveWarning`
+      const expectedProject = expectedProjectOf(issuedAgainstOf(get().project));
       try {
         await invokeIpc(
           'unresolve_warning',
-          { sectionId, shotId, warningCode },
+          { sectionId, shotId, warningCode, expectedProject },
           { purpose: 'reopen validation warning', fields: { sectionId, shotId, warningCode } }
         );
         await get().refreshWarnings(); // link bits: applied by `invokeIpc`, see `resolveWarning`
@@ -194,11 +201,14 @@ export function createProjectIntegrityActions(
     repairProjectIntegrity: async () => {
       // GHOST-2: Repair mutates the survey. A refusal is thrown (the result type has no
       // failure shape, and a zero result would read as a clean repair); the caller
-      // recognises it with `isMoveCarryRefusal` and shows nothing more.
-      const refused = refuseMutationDuringCarry();
+      // recognises it with `isMoveCarryRefusal` and shows nothing more. So for a Repair
+      // requested during a project switch ([#576 FZ-FZ-INT-7], `isProjectChangedRefusal`),
+      // and it names the project it was made for.
+      const refused = refuseMutationDuringCarry() ?? refuseDuringSwitch();
       if (refused) throw refused;
+      const expectedProject = expectedProjectOf(issuedAgainstOf(get().project));
       try {
-        const result = await invokeIpc('repair_project_integrity', undefined, {
+        const result = await invokeIpc('repair_project_integrity', { expectedProject }, {
           purpose: 'repair project structural integrity',
         });
         // Repair mutates the project; refresh derived state so the UI reflects it.

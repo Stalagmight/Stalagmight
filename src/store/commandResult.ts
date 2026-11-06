@@ -68,6 +68,24 @@ export function refusedLocally(error: string): CommandRefused {
   return { success: false, error, code: null, failure: null };
 }
 
+/** What every seam returns for a request whose project changed out from under it. */
+export const PROJECT_CHANGED_REFUSAL = 'The project changed before this action could run.';
+
+/**
+ * [#576 FZ-FZ-INT-4, FZ-FZ-INT-7] Whether a refusal says the project changed - or
+ * was being switched - under the request: the backend's PROJECT_CHANGED (on a
+ * refused outcome, a thrown `CommandError` or a `SaveFailure`), or the frontend's
+ * own refusal of that kind, which is {@link PROJECT_CHANGED_REFUSAL} with no code
+ * (compared to this module's own constant, never to a backend message). Not a
+ * failure to report: the switch is the user's own action, and what they asked of
+ * the old project no longer applies.
+ */
+export function isProjectChangedRefusal(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const { code, error } = value as { code?: unknown; error?: unknown };
+  return code === 'PROJECT_CHANGED' || (code === null && error === PROJECT_CHANGED_REFUSAL);
+}
+
 /**
  * Settle a command's promise into its store outcome: a resolve is accepted, a
  * rejection carrying the backend's `CommandError` is refused with it, and any other

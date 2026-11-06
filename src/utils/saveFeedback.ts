@@ -8,6 +8,7 @@ import type { CommandErrorCode } from '../types/ipc/CommandErrorCode';
 import i18n from '../i18n';
 import { importReceiptSummaryParts, isEmptyImportReceipt } from './importReceipt';
 import { TOAST_KEYS } from './toastKeys';
+import { isProjectChangedRefusal } from '../store/commandResult';
 import type { ValidationWarning } from '../types/ipc/ValidationWarning';
 import type { ImportReceipt } from '../types/ipc/ImportReceipt';
 import type { OrphanPlacementSuggestion } from '../types/commands';
@@ -74,6 +75,9 @@ export function surfaceSaveFailure(
   integrity: SaveFailureIntegrity,
   opts?: { skipIntegrityRouting?: boolean; title?: string },
 ): void {
+  // [#576 FZ-FZ-INT-4] A save refused because the project changed - or was being switched
+  // - under it is not a failure: the switch is the user's own action. Nothing to show.
+  if (isProjectChangedRefusal(failure)) return;
   const { code, error } = failure ?? NO_FAILURE;
   const kind = saveErrorKind(code);
   // [#576 B6-D1] A project saved by a newer version refuses every save. That is a

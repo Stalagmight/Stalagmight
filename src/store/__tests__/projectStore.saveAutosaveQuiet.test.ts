@@ -109,8 +109,9 @@ describe('saveProject autosave quieting', () => {
     const calls = invokeIpcMock.mock.calls.filter((c) => c[0] === 'save_project');
     // Always a boolean, never undefined: the Rust side reads it as "manual"
     // when absent, and a manual save should say so rather than default to it.
-    expect(calls[0]?.[1]).toEqual({ path: '/cave.stalx', isAutosave: true });
-    expect(calls[1]?.[1]).toEqual({ path: '/cave.stalx', isAutosave: false });
+    // (#576 FZ-FZ-INT-4: and the project it was made for, none open here.)
+    expect(calls[0]?.[1]).toEqual({ path: '/cave.stalx', isAutosave: true, expectedProject: null });
+    expect(calls[1]?.[1]).toEqual({ path: '/cave.stalx', isAutosave: false, expectedProject: null });
   });
 
   it('feeds the banner a destination failure without leaking the code (#429)', async () => {

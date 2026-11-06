@@ -99,4 +99,24 @@ describe('useAutoSave error status', () => {
 
     expect(hook.result.current.status).not.toBe('error');
   });
+
+  /**
+   * [#576 FZ-FZ-INT-4] An autosave refused because the project changed - or was
+   * being switched - under it (the backend's PROJECT_CHANGED, or the store's own
+   * refusal during a switch) is not an autosave failure: the switch is the user's
+   * own action, and nothing about their changes failed.
+   */
+  it.each([
+    ['the backend', { success: false, error: 'Save was not applied: another project is open now.', code: 'PROJECT_CHANGED' }],
+    ['the store', { success: false, error: 'The project changed before this action could run.', code: null }],
+  ])('does not go red for a PROJECT_CHANGED refusal from %s', async (_by, refusal) => {
+    const pending = deferred<CommandResult>();
+    const hook = await startPendingSave(() => pending.promise);
+
+    await act(async () => {
+      pending.resolve(refusal as unknown as CommandResult);
+    });
+
+    expect(hook.result.current.status).not.toBe('error');
+  });
 });

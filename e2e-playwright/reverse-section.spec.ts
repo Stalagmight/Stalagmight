@@ -27,6 +27,9 @@ import type { CommandError } from '../src/types/ipc/CommandError';
 
 type StationRef = { section_id: number; station_index: number };
 
+/** Every edit names the project it was made for, the open one (#576 FZ-FZ-INT-7). */
+const OPEN_PROJECT = expect.objectContaining({ createdAt: expect.any(String) });
+
 /** A shot whose readings differ field by field; the values are arbitrary. */
 function buildShot(index: number) {
   const base = index + 1;
@@ -177,7 +180,7 @@ test.describe('Reverse Section', () => {
 
     // One single-section reverse reached the backend, without the left/right swap.
     const [call] = await waitForIpcCall(page, 'reverse_section');
-    expect(call.args).toEqual({ sectionId, swapLeftRight: false });
+    expect(call.args).toEqual({ sectionId, swapLeftRight: false, expectedProject: OPEN_PROJECT });
     expect(await getIpcCalls(page, 'reverse_section')).toHaveLength(1);
     expect(await getIpcCalls(page, 'execute_batch')).toHaveLength(0);
   });
@@ -193,7 +196,7 @@ test.describe('Reverse Section', () => {
     await expect(page.getByTestId('reverse-section-dialog')).not.toBeVisible({ timeout: 5000 });
 
     const [call] = await waitForIpcCall(page, 'reverse_section');
-    expect(call.args).toEqual({ sectionId, swapLeftRight: true });
+    expect(call.args).toEqual({ sectionId, swapLeftRight: true, expectedProject: OPEN_PROJECT });
   });
 
   test('offers a separate entry for a multi-section selection', async ({ page }) => {
@@ -368,7 +371,7 @@ test.describe('Reverse Section', () => {
     await expect(page.getByTestId('reverse-confirm')).toBeEnabled();
     // The message is the backend's answer to the one request that was sent.
     expect((await getIpcCalls(page, 'reverse_section')).map((c) => c.args)).toEqual([
-      { sectionId, swapLeftRight: false },
+      { sectionId, swapLeftRight: false, expectedProject: OPEN_PROJECT },
     ]);
   });
 

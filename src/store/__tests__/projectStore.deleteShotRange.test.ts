@@ -24,7 +24,7 @@ describe('projectStore range deletion', () => {
 
     expect(invokeIpcMock).toHaveBeenCalledWith(
       'delete_shot_range_split',
-      { sectionId: 1, startShotId: 10, endShotId: 13, nameA: 'Left', nameB: 'Right' },
+      { sectionId: 1, startShotId: 10, endShotId: 13, nameA: 'Left', nameB: 'Right', expectedProject: null },
       expect.objectContaining({ purpose: expect.any(String) })
     );
     expect(result.success).toBe(true);
@@ -35,7 +35,7 @@ describe('projectStore range deletion', () => {
 
     expect(invokeIpcMock).toHaveBeenCalledWith(
       'delete_shot_range_shift',
-      { sectionId: 2, startShotId: 20, endShotId: 22 },
+      { sectionId: 2, startShotId: 20, endShotId: 22, expectedProject: null },
       expect.objectContaining({ purpose: expect.any(String) })
     );
     expect(result.success).toBe(true);
