@@ -617,8 +617,21 @@ impl World {
             },
             _ => None,
         };
+        // Under POSIX rules a create also makes the name before each `..` where
+        // the walk reaches it (`create_dir_all`); Windows folds the `..` first.
+        let parts: Vec<Component<'_>> = path.components().collect();
+        let made: Vec<PathBuf> = (1..parts.len())
+            .filter(|&i| !self.model.rules.windows && parts[i] == Component::ParentDir)
+            .filter_map(
+                |i| match self.model.walk(&parts[..i].iter().collect::<PathBuf>()) {
+                    Lands::At(at, false) => Some(at),
+                    _ => None,
+                },
+            )
+            .collect();
         let real: Vec<&Path> = std::iter::once(land.as_path())
             .chain(entry.as_deref())
+            .chain(made.iter().map(PathBuf::as_path))
             .collect();
         let real_app = real.iter().any(|p| in_app(p));
         let real_sys = real.iter().any(|p| in_sys(p));

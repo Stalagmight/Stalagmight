@@ -281,6 +281,23 @@ fn written_forms(path: &Path, walk: Walk<'_>) -> Option<Vec<PathBuf>> {
     if let (Some(folder), Some(name)) = (absolute.parent(), absolute.file_name()) {
         forms.push(resolved(folder, walk)?.join(name));
     }
+    // [#576 FZ-PERSIST-fs-4] A create makes the missing folders of the path as
+    // spelled (`create_dir_all`), and under POSIX rules a name before a `..` is
+    // made where the walk reaches it, then stepped out of:
+    // `<cache>/nope/../speleodb/x.stalx` makes `<cache>/nope`, a folder no other
+    // form names. Each such folder is judged too. (Windows folds the `..` away
+    // before anything is made.)
+    if !walk.rules.windows {
+        let parts: Vec<Component<'_>> = absolute.components().collect();
+        for (i, part) in parts.iter().enumerate() {
+            if *part == Component::ParentDir {
+                let reached = resolved(&parts[..i].iter().collect::<PathBuf>(), walk)?;
+                if walk.disk.canonical(&reached).is_none() {
+                    forms.push(reached);
+                }
+            }
+        }
+    }
     Some(forms)
 }
 

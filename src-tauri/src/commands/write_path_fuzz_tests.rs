@@ -67,6 +67,9 @@ const GATE_SEEDS: &[u64] = &[
     // `<settings>/CAVE.stalx` into the managed cache (55), one in the system
     // folder reached through a link (784) - replaced the link there.
     55, 784,
+    // FZ-PERSIST-fs-4: a create at `<cache>/nope/../speleodb/...` made
+    // `<cache>/nope`, a folder in the app's own cache.
+    1801, 1808,
 ];
 
 /// A deterministic PRNG (SplitMix64): every decision of a seed comes from here,
@@ -191,10 +194,6 @@ const KNOWN_OPEN_SEEDS: &[(u64, &str)] = &[
     // dangling link into the system folder: the save creates its temp file
     // through it.
     (437, "fs-3"),
-    // FZ-PERSIST-fs-4: a create at `<cache>/nope/../speleodb/...` makes
-    // `<cache>/nope`.
-    (1801, "fs-4"),
-    (1808, "fs-4"),
 ];
 
 /// The open findings still reproduce. When one no longer does - it was fixed -
@@ -659,10 +658,13 @@ mod disk {
         };
         let in_sys = |p: &Path| guarded.system.iter().any(|d| within(p, d));
         // Where a write really lands: the place the name leads to (opened, links
-        // followed), and the entry the name is (replaced by a rename over it).
+        // followed), the entry the name is (replaced by a rename over it), and
+        // every folder a create makes on the way (`create_dir_all`).
         let entry = entry_of(&abs, jail);
+        let made = made_folders(&abs, jail);
         let real: Vec<&Path> = std::iter::once(land.as_path())
             .chain(entry.as_deref())
+            .chain(made.iter().map(PathBuf::as_path))
             .collect();
         let real_app = real.iter().any(|p| in_app(p));
         let real_sys = real.iter().any(|p| in_sys(p));
@@ -1790,6 +1792,22 @@ mod disk {
         }
     }
 
+    /// [Oracle] The folders a write that makes missing folders (`create_dir_all`)
+    /// makes for a name right before a `..` in `abs`: the walk reaches the name,
+    /// makes it, and steps out of it.
+    fn made_folders(abs: &Path, jail: &Path) -> Vec<PathBuf> {
+        let parts: Vec<Component<'_>> = abs.components().collect();
+        (1..parts.len())
+            .filter(|&i| parts[i] == Component::ParentDir)
+            .filter_map(
+                |i| match kernel_landing(&parts[..i].iter().collect::<PathBuf>(), jail) {
+                    Landing::At(at, Found::Missing) => Some(at),
+                    _ => None,
+                },
+            )
+            .collect()
+    }
+
     /// The names a write keeps beside its file that this fuzzer links: the
     /// save's temp file (`with_extension("stalx.tmp")`), and the `BESIDE` names.
     fn beside_names(entry: &Path) -> Vec<(String, PathBuf)> {
@@ -1803,42 +1821,17 @@ mod disk {
     }
 
     /// [Known open] Which reported, still-open finding explains a change at
-    /// `changed` in a protected folder, if one does:
-    ///
-    /// - `fs-3.<name>`: a link at a name a write keeps beside the file it writes
-    ///   (the save's `.stalx.tmp`, ...) that leads to `changed` - the write follows
-    ///   it, and the policy judges only the file's own name;
-    /// - `fs-4`: `changed` is a new empty folder the path names right before a
-    ///   `..` - `create_dir_all` makes it (`<cache>/nope/../speleodb/x.stalx`
-    ///   makes `<cache>/nope`), and the policy, which folds the `..`, never sees
-    ///   it.
+    /// `changed` in a protected folder, if one does: `fs-3.<name>`, a link at a
+    /// name a write keeps beside the file it writes (the save's `.stalx.tmp`,
+    /// ...), in that file's own folder, that leads to `changed` - the write
+    /// follows it, and the policy judges only the file's own name.
     fn known_open(
         tree: &Tree,
         before: &BTreeMap<PathBuf, Shot>,
-        after: &BTreeMap<PathBuf, Shot>,
         plan: &Plan,
         changed: &Path,
     ) -> Option<String> {
-        let walks = walked(plan);
-        let new_empty_folder = !before.contains_key(changed)
-            && after.get(changed) == Some(&Shot::Folder)
-            && names_in(changed).is_empty();
-        if new_empty_folder {
-            let before_dot_dot = walks.iter().any(|path| {
-                let parts: Vec<Component<'_>> = path.components().collect();
-                (1..parts.len()).any(|i| {
-                    parts[i] == Component::ParentDir
-                        && matches!(
-                            kernel_landing(&absolute(&parts[..i].iter().collect::<PathBuf>()), &tree.jail),
-                            Landing::At(at, _) if at.as_path() == changed
-                        )
-                })
-            });
-            if before_dot_dot {
-                return Some("fs-4".to_owned());
-            }
-        }
-        for written in walks.iter().filter_map(|p| entry_of(p, &tree.jail)) {
+        for written in walked(plan).iter().filter_map(|p| entry_of(p, &tree.jail)) {
             for (suffix, beside) in beside_names(&written) {
                 if let Some(Shot::Link(target)) = before.get(&beside) {
                     let naive = beside.parent().map(|f| folded(&f.join(target)));
@@ -1971,7 +1964,7 @@ mod disk {
                     Some(Place::Managed) => !plan.caller.writes_project(),
                     Some(Place::App | Place::System) => true,
                 })
-                .filter(|p| match known_open(&tree, &before, &after, &plan, p) {
+                .filter(|p| match known_open(&tree, &before, &plan, p) {
                     Some(id) => {
                         stats.bump(&format!("disk.known-open.{id}"));
                         false
