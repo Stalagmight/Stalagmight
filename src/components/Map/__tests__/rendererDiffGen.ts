@@ -745,10 +745,8 @@ function display(r: Rng, m: Model, kind: DisplayKind): string {
       return `refJump ${k}=${d[k]}`;
     }
     case 'tool':
+      // A non-interactive pick drops the hovered section at the end of step().
       d.tool = r.pick(TOOLS);
-      // SurveyLayer.setActiveTool drops the hover on a non-interactive tool and
-      // tells MapCanvas (onFeatureHover(false) ...), whose hover state follows.
-      if (isNonInteractiveTool(d.tool)) d.hoverSection = null;
       return `tool ${d.tool}`;
     case 'hiddenComment': {
       const sec = pickSection(r, m);
@@ -763,6 +761,7 @@ function display(r: Rng, m: Model, kind: DisplayKind): string {
 /** Apply one random step (a single edit / display change, or 2-4 of them that
  *  land in ONE commit + flush). Every step bumps nothing but what it touches. */
 export function step(r: Rng, m: Model): StepResult {
+  let navSwitch = false;
   const one = (): StepResult => {
     if (r.bool(0.55)) {
       const k = r.weighted(EDIT_WEIGHTS);
@@ -770,7 +769,9 @@ export function step(r: Rng, m: Model): StepResult {
     }
     // Display steps that change the store-backed geometry (adjusted pair) say so.
     const k = r.weighted(DISPLAY_WEIGHTS);
-    return { desc: display(r, m, k), store: k === 'adjusted' };
+    const desc = display(r, m, k);
+    if (k === 'tool' && isNonInteractiveTool(m.display.tool)) navSwitch = true;
+    return { desc, store: k === 'adjusted' };
   };
   let res: StepResult;
   if (r.bool(0.12)) {
@@ -779,6 +780,11 @@ export function step(r: Rng, m: Model): StepResult {
   } else {
     res = one();
   }
+  // uiStore.setActiveTool clears hoveredSectionId in the same set() as a switch to
+  // pan / zoom, and no one event both switches the tool and starts a panel-row
+  // hover, so a commit with that switch never carries a hovered section - not even
+  // when a later part of a multi set one (seed 1007948).
+  if (navSwitch) m.display.hoverSection = null;
   if (res.store) m.version++;
   return res;
 }

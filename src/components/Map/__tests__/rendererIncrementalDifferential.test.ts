@@ -111,8 +111,10 @@ const CI_STEPS = 50;
  *  depth-colour change dropped the latter; see the two theme-commit tests).
  *  102, 125, 167: driver-model gaps found while building this (a cleared gas
  *  origin flags the field failed; a non-interactive tool drops the hover; the
- *  app never passes an undefined precision) - kept so the model stays right. */
-const REGRESSION_SEEDS: readonly number[] = [12, 102, 125, 167];
+ *  app never passes an undefined precision) - kept so the model stays right.
+ *  1007948: the same kind of gap - a multi that switched to pan and then hovered a
+ *  section, a commit the app cannot make (see the end of rendererDiffGen step()). */
+const REGRESSION_SEEDS: readonly number[] = [12, 102, 125, 167, 1007948];
 
 
 const envNum = (k: string): number | undefined => {
