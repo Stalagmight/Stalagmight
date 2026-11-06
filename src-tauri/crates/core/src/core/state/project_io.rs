@@ -165,6 +165,16 @@ thread_local! {
     /// test can land another write in exactly that window.
     pub(super) static AFTER_TEMP_WRITTEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
+    /// [#576 FZ-PERSIST] Test seam: run once on the saving thread with the temp
+    /// database as soon as it is created and before anything is written into it,
+    /// so a fault-injection test can make a later write fail (a disk that fills up
+    /// part-way through the save).
+    pub(super) static AFTER_TEMP_OPENED: std::cell::RefCell<Option<Box<dyn FnOnce(&Database)>>> =
+        const { std::cell::RefCell::new(None) };
+    /// [#576 FZ-PERSIST] Test seam: when set, the reopen of the saved file after
+    /// the rename reports a failure (taken once), as an unreadable file would.
+    pub(super) static FAIL_REOPEN_AFTER_RENAME: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 /// Build a save-failure `CommandResult`, tagging it with the code that tells
@@ -723,6 +733,11 @@ impl AppState {
             }
         };
 
+        #[cfg(test)]
+        if let Some(hook) = AFTER_TEMP_OPENED.with(|hook| hook.borrow_mut().take()) {
+            hook(&db);
+        }
+
         if let Err(e) = db.save_project(project) {
             // Clean up temp file on failure
             drop(db);
@@ -832,7 +847,14 @@ impl AppState {
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
         // Reopen the database at the final path
-        let db = match Database::open(&save_path) {
+        let reopened = Database::open(&save_path);
+        #[cfg(test)]
+        let reopened = if FAIL_REOPEN_AFTER_RENAME.with(std::cell::Cell::take) {
+            reopened.and(Err(anyhow::anyhow!("injected reopen failure")))
+        } else {
+            reopened
+        };
+        let db = match reopened {
             Ok(db) => db,
             Err(e) => {
                 tracing::error!(
