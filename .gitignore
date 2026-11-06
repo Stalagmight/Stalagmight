@@ -103,3 +103,13 @@ CLAUDE.local.md
 **/.claude/review-log.jsonl
 # Python bytecode (repo-wide; scripts/ralph emits it)
 __pycache__/
+
+# cargo-fuzz crate (src-tauri/fuzz): build output, the lockfile run.sh copies
+# from src-tauri/Cargo.lock, and local corpora / crash artifacts (never commit
+# a corpus: seeds are generated in code)
+src-tauri/fuzz/target/
+src-tauri/fuzz/Cargo.lock
+src-tauri/fuzz/work/
+src-tauri/fuzz/corpus/
+src-tauri/fuzz/artifacts/
+src-tauri/fuzz/coverage/

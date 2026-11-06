@@ -17,7 +17,7 @@
 use std::cell::RefCell;
 use std::path::Path;
 
-use rusqlite::types::Value;
+use rusqlite::types::{Value, ValueRef};
 use rusqlite::Connection;
 use stalagmight_core::core::{AppState, Command, VirtualShotMode};
 use stalagmight_models::section::{ImportPlacement, ImportSectionConfig};
@@ -282,9 +282,10 @@ fn mutate_json_or_number(src: &mut ByteSource<'_>, current: &Value) -> Value {
             }
             Err(_) => Value::Text(format!("{t}{}", src.text(4))),
         },
-        Value::Integer(i) => {
-            Value::Integer(src.pick_or(&[-*i, i.saturating_mul(1_000_000), i64::MAX, -1], 0))
-        }
+        Value::Integer(i) => Value::Integer(src.pick_or(
+            &[i.wrapping_neg(), i.saturating_mul(1_000_000), i64::MAX, -1],
+            0,
+        )),
         Value::Real(r) => {
             Value::Real(src.pick_or(&[-*r, r * 1e12, f64::INFINITY, r / 0.3048, r * 0.3048], 0.0))
         }
@@ -376,6 +377,22 @@ fn rowids(conn: &Connection, table: &str) -> Vec<i64> {
     .unwrap_or_default()
 }
 
+/// The cell at `row` of column `c` in table `t` (both quoted), with text that
+/// is not UTF-8 read lossily (rusqlite's own `Value` conversion panics on it).
+fn cell(conn: &Connection, t: &str, c: &str, row: i64) -> Value {
+    conn.query_row(
+        &format!("SELECT {c} FROM {t} WHERE rowid = ?1"),
+        [row],
+        |r| {
+            Ok(match r.get_ref(0)? {
+                ValueRef::Text(bytes) => Value::Text(String::from_utf8_lossy(bytes).into_owned()),
+                other => Value::from(other),
+            })
+        },
+    )
+    .unwrap_or(Value::Null)
+}
+
 /// Apply one mutation; a statement SQLite refuses is simply skipped.
 fn mutate_once(src: &mut ByteSource<'_>, conn: &Connection) {
     let names = tables(conn);
@@ -390,15 +407,9 @@ fn mutate_once(src: &mut ByteSource<'_>, conn: &Connection) {
     let c = quote_ident(&col);
     // Errors (constraint, type, missing table) are expected and ignored: the
     // mutation then does nothing and the next one gets its turn.
-    let _ = match src.below(16) {
+    let _ = match src.below(17) {
         0..=6 => {
-            let current: Value = conn
-                .query_row(
-                    &format!("SELECT {c} FROM {t} WHERE rowid = ?1"),
-                    [row],
-                    |r| r.get(0),
-                )
-                .unwrap_or(Value::Null);
+            let current = cell(conn, &t, &c, row);
             let value = hostile_value(src, &current);
             conn.execute(
                 &format!("UPDATE {t} SET {c} = ?1 WHERE rowid = ?2"),
@@ -412,7 +423,11 @@ fn mutate_once(src: &mut ByteSource<'_>, conn: &Connection) {
         ),
         9 => {
             // Point a reference at another row's id, or at nothing.
-            let other = rows.get(src.below(rows.len())).copied().unwrap_or(0) + src.range(-1, 1);
+            let other = rows
+                .get(src.below(rows.len()))
+                .copied()
+                .unwrap_or(0)
+                .wrapping_add(src.range(-1, 1));
             conn.execute(
                 &format!("UPDATE {t} SET {c} = ?1 WHERE rowid = ?2"),
                 [other, row],
@@ -429,6 +444,20 @@ fn mutate_once(src: &mut ByteSource<'_>, conn: &Connection) {
             );
             conn.execute_batch(&format!("PRAGMA user_version = {v}"))
                 .map(|()| 0)
+        }
+        15 => {
+            // TEXT that is not UTF-8: SQLite stores the bytes as given, and a
+            // reader that assumes UTF-8 trips on them (FZ-PARSE-2).
+            let mut bytes = match cell(conn, &t, &c, row) {
+                Value::Text(text) => text.into_bytes(),
+                _ => src.bytes(16).to_vec(),
+            };
+            let at = src.below(bytes.len() + 1);
+            bytes.insert(at, src.pick_or(&[0xC3, 0xFF, 0x80, 0xED, 0xF4], 0xFF));
+            conn.execute(
+                &format!("UPDATE {t} SET {c} = CAST(?1 AS TEXT) WHERE rowid = ?2"),
+                rusqlite::params![bytes, row],
+            )
         }
         _ => conn.execute(
             &format!(

@@ -24,6 +24,18 @@ fn env_u64(name: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// Seeds that once failed, replayed on every run on top of the fixed range
+/// (the bug each one found is named; its own regression test lives with the
+/// fix).
+fn regression_seeds(target: Target) -> &'static [u64] {
+    match target {
+        // FZ-PARSE-2: a project setting stored as TEXT that is not UTF-8
+        // panicked the load (persistence project_settings_utf8_tests).
+        Target::StalxSql => &[147, 283],
+        _ => &[],
+    }
+}
+
 fn run_seeds(target: Target, default_count: u64) {
     if let Ok(only) = std::env::var("STALAGMIGHT_FUZZ_TARGET") {
         if only != target.name() {
@@ -34,7 +46,8 @@ fn run_seeds(target: Target, default_count: u64) {
     let count = env_u64("STALAGMIGHT_FUZZ_SEEDS", default_count);
     let mut failures = Vec::new();
     let mut parsed = 0u64;
-    for seed in start..start.saturating_add(count) {
+    let regressions = regression_seeds(target).iter().copied();
+    for seed in (start..start.saturating_add(count)).chain(regressions) {
         let input = match seed_input(target, seed) {
             Ok(input) => input,
             Err(v) => panic!("{}: cannot build seed {seed}: {v}", target.name()),
@@ -121,4 +134,25 @@ fn every_target_has_a_fixed_seed_test() {
         listed,
         "add the new target to seed_tests!"
     );
+}
+
+/// Replay one input file (a cargo-fuzz crash artifact or a corpus entry) on
+/// stable: `STALAGMIGHT_FUZZ_REPLAY=<target>:<file>`. A no-op without the
+/// variable.
+#[test]
+fn replay() {
+    let Ok(spec) = std::env::var("STALAGMIGHT_FUZZ_REPLAY") else {
+        return;
+    };
+    let Some((name, file)) = spec.split_once(':') else {
+        panic!("STALAGMIGHT_FUZZ_REPLAY must be <target>:<file>, got {spec}");
+    };
+    let Some(target) = Target::from_name(name) else {
+        panic!("unknown target {name}");
+    };
+    let data = std::fs::read(file).unwrap_or_else(|e| panic!("read {file}: {e}"));
+    match run(target, &data) {
+        Ok(outcome) => eprintln!("{name} {file}: {outcome:?}"),
+        Err(violation) => panic!("{name} {file}: {violation}"),
+    }
 }

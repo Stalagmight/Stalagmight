@@ -1,0 +1,161 @@
+# Coverage-guided fuzzing of every file Stalagmight reads (cargo-fuzz /
+# libFuzzer, nightly only). Deliberately NOT a member of the src-tauri
+# workspace: it is its own workspace root (below) and the root excludes it, so
+# CI, `cargo test --workspace`, clippy and the release build never see it.
+#
+# Each target is a one-line wrapper over `stalagmight_fuzz_gen::targets::run`
+# (src-tauri/crates/fuzz-gen), which the stable fixed-seed tests also call.
+# Run with src-tauri/fuzz/run.sh; see docs/testing-recipes.md "Parser fuzzing".
+#
+# No Cargo.lock is committed here: run.sh starts every build from a copy of
+# src-tauri/Cargo.lock, so the fuzzed parser dependencies (quick-xml, zip,
+# rusqlite, ...) are exactly the versions the app ships.
+
+[package]
+name = "stalagmight-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+stalagmight-fuzz-gen = { path = "../crates/fuzz-gen" }
+
+[profile.release]
+debug = 1
+
+# The seed corpora are written by the stable `fuzz_seeds` example of
+# stalagmight-fuzz-gen (run.sh does it when a corpus directory is empty).
+
+[[bin]]
+name = "raw_dmp"
+path = "fuzz_targets/raw_dmp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raw_tml"
+path = "fuzz_targets/raw_tml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raw_tmlu"
+path = "fuzz_targets/raw_tmlu.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raw_srv"
+path = "fuzz_targets/raw_srv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raw_wpj"
+path = "fuzz_targets/raw_wpj.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raw_dat"
+path = "fuzz_targets/raw_dat.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raw_mak"
+path = "fuzz_targets/raw_mak.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raw_gpx"
+path = "fuzz_targets/raw_gpx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gen_dmp"
+path = "fuzz_targets/gen_dmp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gen_tml"
+path = "fuzz_targets/gen_tml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gen_tmlu"
+path = "fuzz_targets/gen_tmlu.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gen_srv"
+path = "fuzz_targets/gen_srv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gen_wpj"
+path = "fuzz_targets/gen_wpj.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gen_dat"
+path = "fuzz_targets/gen_dat.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gen_mak"
+path = "fuzz_targets/gen_mak.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gen_gpx"
+path = "fuzz_targets/gen_gpx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "stalx_sql"
+path = "fuzz_targets/stalx_sql.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "stalx_raw"
+path = "fuzz_targets/stalx_raw.rs"
+test = false
+doc = false
+bench = false

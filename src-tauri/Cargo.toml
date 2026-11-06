@@ -25,7 +25,8 @@ members = [
 resolver = "2"
 # Required: path deps inside the workspace directory are auto-adopted as
 # members, which would drag the vendored crate into the fmt/clippy gates.
-exclude = ["vendor/compass_data"]
+# The cargo-fuzz crate (fuzz/) is nightly-only and its own workspace root.
+exclude = ["vendor/compass_data", "fuzz"]
 
 # Shared keys future members inherit via `key.workspace = true`. Deliberately
 # no `version` here: members declare their own 0.0.0, and the root package
