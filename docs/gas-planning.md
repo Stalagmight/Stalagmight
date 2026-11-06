@@ -257,6 +257,14 @@ passes a way point:
 - With way points, every pin the way-point chain does not pass is visited after
   the last way point, in drop order (D6: kept, also for a pin that sits between
   two way points on another branch).
+- A pin the dive cannot reach from the previous point is ignored, and that stage
+  keeps its default drop (#576 FZ-ORACLE-1-D1). The previous point is the last way
+  point (or the origin) for the first pin, the previous usable pin for later ones.
+  With an origin set, a pin in a part of the cave the origin does not connect to
+  was already ignored this way; with no origin the roots are every zero datum, so
+  two pins can each sit in a part some datum reaches, and the second one, which
+  the dive cannot fly to from the first, is now ignored too instead of leaving the
+  map dark.
 
 The route through the pins does not depend on the budget; only where the dive
 turns on it does. So the gas each pin has cost is read off the pinned route before

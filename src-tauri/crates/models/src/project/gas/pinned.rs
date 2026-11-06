@@ -76,7 +76,13 @@ impl PinnedWalk {
 /// The pinned plan's walk, or `None` when no stage has a usable pin.
 ///
 /// A pin is usable when it resolves to a station the plan's own walk reaches (same graph component
-/// as the last way point; a stalled way-point chain has no plan to pin anything on). Each usable
+/// as the last way point; a stalled way-point chain has no plan to pin anything on) and the dive
+/// can reach it from the previous point: the last way point (or the origin roots) for the first
+/// pin leg, the previous usable pin for later ones. A pin the dive cannot reach from there is
+/// ignored, and its stage keeps its default drop (#576 FZ-ORACLE-1-D1) - as a pin outside the
+/// walk's component is with an explicit origin. Without way points and with no origin, the roots
+/// are every zero datum, so two pins can each be reachable from SOME datum in parts the dive cannot
+/// fly between: the second pin's leg would stall the walk and leave nothing painted. Each usable
 /// pin gets its own leg after the last way point, in drop order, on the last segment's pace -
 /// unless the route already passes it before that leg starts: on the way-point chain (the diver's
 /// own constraint), or on the way to an earlier pin (a drop moved shallower than the one before
@@ -98,7 +104,7 @@ pub(super) fn pinned_walk(
     in_rmv: f64,
     scooter_limit: f64,
 ) -> Option<PinnedWalk> {
-    let stage_pins: Vec<Option<usize>> = pins
+    let mut stage_pins: Vec<Option<usize>> = pins
         .iter()
         .map(|p| p.filter(|&si| base.gas_in.get(si).is_some_and(|g| g.is_finite())))
         .collect();
@@ -111,8 +117,8 @@ pub(super) fn pinned_walk(
         .iter()
         .map(|p| p.is_some_and(|si| first_pass(base, si).is_none()))
         .collect();
-    // Each round either settles or takes one pin off its own leg, so this ends within the stage
-    // count.
+    // Each round either settles, takes one pin off its own leg, or ignores one pin whose leg cannot
+    // be flown; a pin changes state at most once, so this ends within the stage count.
     loop {
         let appended: Vec<usize> = stage_pins
             .iter()
@@ -142,6 +148,7 @@ pub(super) fn pinned_walk(
         };
         let mut leg = 0usize;
         let mut passed_before_its_leg = None;
+        let mut unreachable = None;
         let mut pin_chain_idx = Vec::with_capacity(stage_pins.len());
         for (k, &pin) in stage_pins.iter().enumerate() {
             let Some(si) = pin else {
@@ -160,8 +167,22 @@ pub(super) fn pinned_walk(
             if first_pass(w, si).zip(start).is_some_and(passed) {
                 passed_before_its_leg.get_or_insert(k);
             }
+            // The walk stalls at the first leg it cannot fly, so the first leg with no end is the
+            // first pin the dive cannot reach from the previous point.
+            if leg_end(leg).is_none() {
+                unreachable.get_or_insert(k);
+            }
             pin_chain_idx.push(leg_end(leg));
             leg += 1;
+        }
+        // FZ-ORACLE-1-D1: a pin the dive cannot reach from the previous point is ignored, and its
+        // stage keeps its default drop. The next pin's leg then starts at the pin before it.
+        if let Some(k) = unreachable {
+            stage_pins[k] = None;
+            if stage_pins.iter().all(Option::is_none) {
+                return None;
+            }
+            continue;
         }
         if let Some(k) = passed_before_its_leg {
             own_leg[k] = false;

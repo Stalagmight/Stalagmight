@@ -67,27 +67,22 @@ use crate::{
 const CI_SEEDS: u64 = 240;
 
 /// Seeds that once failed (or once reached a rare shape); checked on every run.
-const REGRESSION_SEEDS: &[u64] = &[];
+///
+/// FZ-ORACLE-1 (0x2a48, 0xbd4b): no origin (or one that no longer resolves), zero datums in
+/// several disconnected parts, and two stage drops pinned in different parts. Each pin was
+/// reachable from SOME datum, so both counted, but the second pin's leg from the first could not
+/// be flown: the pinned field painted nothing - not even the roots - yet still reported a turn and
+/// a route toward the first pin. Decided (FZ-ORACLE-1-D1): a pin the dive cannot reach from the
+/// previous point is ignored, and that stage keeps its default drop.
+const REGRESSION_SEEDS: &[u64] = &[0x2a48, 0xbd4b];
 
 /// Seeds of findings still open, as (finding, seed, the check classes it fails with). The sweep
 /// keeps them out of its CI range; [`open_findings_still_reproduce`] requires each to fail with
 /// exactly those classes, so the finding stays pinned while it is open and its fix shows up as
 /// that test failing - then the seeds move to [`REGRESSION_SEEDS`].
 ///
-/// FZ-ORACLE-1: no origin (or one that no longer resolves), zero datums in several disconnected
-/// parts, and two stage drops pinned in different parts. Each pin is reachable from SOME datum, so
-/// both count as usable, but the second pin's leg from the first cannot be flown: the pinned
-/// field then paints nothing - not even the roots - yet still reports a turn and a route toward
-/// the first pin. More conservative than the truth, never less; what the plan should do instead
-/// is a product choice.
-const OPEN_FINDINGS: &[(&str, u64, &[&str])] = &[
-    ("FZ-ORACLE-1", 0x2a48, &["REPORT turn-dark"]),
-    (
-        "FZ-ORACLE-1",
-        0xbd4b,
-        &["REPORT route-station-dark", "REPORT turn-dark"],
-    ),
-];
+/// None open: FZ-ORACLE-1's seeds moved to [`REGRESSION_SEEDS`] with its fix.
+const OPEN_FINDINGS: &[(&str, u64, &[&str])] = &[];
 
 /// splitmix64: tiny, seedable, and the same stream on every platform.
 struct Rng(u64);
@@ -1480,4 +1475,118 @@ fn open_findings_still_reproduce() {
             );
         }
     }
+}
+
+/// [#576 FZ-ORACLE-1-D1] Directed: no origin, a zero datum in each of two disconnected parts, and
+/// a stage drop pinned in each. The dive flies to the first pin from its datum and cannot fly on
+/// from there to the second, so the second pin is ignored and its stage keeps its default drop:
+/// the field is the one with that pin unset, exactly as with an explicit origin, where a pin in
+/// the other part was never usable. Before the decision both pins counted, the second leg stalled
+/// the pinned walk, and the field painted nothing - not even the dive's own datum - while it still
+/// reported a turn and a route.
+#[test]
+fn a_pin_the_dive_cannot_reach_from_the_previous_pin_keeps_its_default_drop() {
+    let line = || -> Vec<ShotData> {
+        (0..4_u8)
+            .map(|i| ShotData {
+                length: 40.0,
+                azimuth_in: 90.0,
+                depth_in: 6.0 + 4.0 * f64::from(i),
+                depth_out: 10.0 + 4.0 * f64::from(i),
+                ..Default::default()
+            })
+            .collect()
+    };
+    let mut p = Project::new("CaveA".to_string(), None);
+    let part_a = add_line(&mut p, line());
+    let part_b = add_line(&mut p, line());
+    let (a0, b0) = (StationRef::new(part_a, 0), StationRef::new(part_b, 0));
+    for datum in [a0, b0] {
+        p.zero_datums.push(ZeroDatum {
+            station_ref: datum.into(),
+            gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        });
+    }
+    let cyl = |volume: f64, role: CylRole| {
+        Cylinder::new(volume, 232.0, 220.0, TankMaterial::Steel, role, None).unwrap()
+    };
+    let mut cfg = GasConfig {
+        default_reserve: ReservePreset::TwoStage,
+        ..GasConfig::default()
+    };
+    cfg.normalize();
+    let pin_a = StationRef::new(part_a, 2);
+    let pin_b = StationRef::new(part_b, 3);
+    let mut plan = Plan {
+        seed: 0,
+        shape: "parts",
+        p,
+        parts: 2,
+        origin: None,
+        endpoint: None,
+        waypoints: Vec::new(),
+        segments: Vec::new(),
+        pins: vec![Some(pin_a), Some(pin_b)],
+        rmv: 20.0,
+        rig: vec![
+            cyl(24.0, CylRole::BackGas),
+            cyl(11.0, CylRole::Stage),
+            cyl(11.0, CylRole::Stage),
+        ],
+        cfg,
+    };
+
+    let pinned = field(&plan, &plan.pins);
+    let first_pin_only = field(&plan, &[Some(pin_a), None]);
+    let painted = |f: &GasReachField, s: StationRef| {
+        f.station_refs
+            .iter()
+            .position(|&r| r == s)
+            .is_some_and(|i| f.reachable[i])
+    };
+    let route: Vec<StationRef> = pinned.route.iter().flat_map(|l| [l.from, l.to]).collect();
+    assert!(
+        painted(&pinned, a0),
+        "the dive's own datum {a0:?} is dark: {} of {} stations painted, turn {:?}, route {:?}, \
+         drops {:?} (the drops with the second pin unset: {:?})",
+        pinned.reachable.iter().filter(|&&x| x).count(),
+        pinned.reachable.len(),
+        pinned.final_turn_ref,
+        route,
+        pinned.stage_drop_refs,
+        first_pin_only.stage_drop_refs,
+    );
+    assert!(
+        route
+            .iter()
+            .chain(&pinned.final_turn_ref)
+            .chain(&pinned.stage_drop_refs)
+            .all(|s| s.section_id == part_a),
+        "nothing heads for the ignored pin's part: turn {:?}, route {route:?}, drops {:?}",
+        pinned.final_turn_ref,
+        pinned.stage_drop_refs,
+    );
+    assert_eq!(
+        (&pinned.stage_drop_refs, &pinned.stage_drop_bars),
+        (
+            &first_pin_only.stage_drop_refs,
+            &first_pin_only.stage_drop_bars
+        ),
+        "the ignored pin's stage keeps the drop it has with no pin"
+    );
+    assert_eq!(
+        pinned, first_pin_only,
+        "an ignored pin changes nothing in the field"
+    );
+    let mut t = Tally::default();
+    check_field(&plan, &pinned, "pinned", &mut t);
+    assert!(t.errors.is_empty(), "oracle: {:?}", t.errors);
+
+    // The same rule an explicit origin already gave: the other part's pin is not usable.
+    plan.origin = Some(a0);
+    assert_eq!(
+        field(&plan, &plan.pins),
+        field(&plan, &[Some(pin_a), None]),
+        "with the origin set, the pin in the other part is ignored"
+    );
 }
