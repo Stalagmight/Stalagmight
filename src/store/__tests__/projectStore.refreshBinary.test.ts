@@ -170,7 +170,7 @@ describe('refreshProjectState through get_project_state_binary (#576 A9-D2)', ()
     expect(s.warnings).toEqual(REFRESHED_WARNINGS);
   });
 
-  it('logs a refused envelope and changes nothing, as any refresh failure does', async () => {
+  it('logs a refused envelope and leaves the project as it was, but still reads Undo and the warnings', async () => {
     const calls = serve(projectStateEnvelope(state(), { version: 4 }));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -180,7 +180,11 @@ describe('refreshProjectState through get_project_state_binary (#576 A9-D2)', ()
     expect(errorSpy).toHaveBeenCalledWith('Failed to refresh project state:', expect.any(Error));
     expect(String(errorSpy.mock.calls[0]![1])).toMatch(/version mismatch: expected 5, got 4/);
     expect(s.project).toBe(BEFORE);
-    expect(calls).toEqual(['get_project_state_binary']);
+    // [#576 FZ-FZ-INT-11] Those are reads of their own: a failed state read skipping them
+    // left Undo disabled after an edit until the next refresh.
+    expect(calls).toEqual(['get_project_state_binary', 'can_undo', 'can_redo', 'get_project_warnings']);
+    expect(s.canUndo).toBe(true);
+    expect(s.warnings).toBe(REFRESHED_WARNINGS);
     errorSpy.mockRestore();
   });
 });

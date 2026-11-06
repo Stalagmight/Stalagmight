@@ -1679,14 +1679,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           frozenShots: state.frozen_shots,
         });
       }
-      debugLog('[projectStore] refreshProjectState: calling refreshUndoState...');
-      await get().refreshUndoState();
-      // Also refresh warnings
-      await get().refreshWarnings();
-      debugLog('[projectStore] refreshProjectState: done');
     } catch (e) {
       console.error('Failed to refresh project state:', e);
     }
+    // [#576 FZ-FZ-INT-11] Outside the try: a failed state read skipped both, so after an
+    // edit whose re-read failed Undo stayed disabled (and the warnings stale) until the
+    // next refresh. Each read is its own call and handles its own failure.
+    debugLog('[projectStore] refreshProjectState: calling refreshUndoState...');
+    await get().refreshUndoState();
+    // Also refresh warnings
+    await get().refreshWarnings();
+    debugLog('[projectStore] refreshProjectState: done');
   },
 
   loadRecentProjects: async () => {

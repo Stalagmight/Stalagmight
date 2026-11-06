@@ -105,6 +105,12 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
       'run(0.000) run(0.000) run(0.000) run(0.000) run(0.000) grid run(0.000) run(0.000) refresh run(0.000) ' +
       'run(0.000) run(0.751) exec(0.731)',
   },
+  {
+    // An edit's state re-read failed, and with it the undo-state read never ran: Undo stayed disabled.
+    id: 'FZ-FZ-INT-11',
+    found: 'state',
+    actions: 'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) run(0.000) run(0.000) edit(71) run(0.000) fault(0.000)',
+  },
   // The historical #576 bugs, re-planted to prove the fuzzer finds them (report.json
   // "proof"); their shrunk traces keep them out for good.
   {
