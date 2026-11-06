@@ -1639,9 +1639,13 @@ impl Database {
             return Ok(());
         }
         // Written under a name the backup listing does not offer, then renamed,
-        // so a half-written copy never shows up as a backup.
+        // so a half-written copy never shows up as a backup. [#576 RVF-b-1] As a
+        // new file: `fs::copy` wrote through a link left at that name (creating
+        // the file a dangling one named, overwriting the one it led to); a stale
+        // copy a crash left there is replaced, and one that cannot be removed
+        // refuses the upgrade.
         let partial = sibling(&format!(".pre-v{from_version}.partial"));
-        let written = std::fs::copy(path, &partial)
+        let written = super::repair::copy_to_new_file(path, &partial)
             .and_then(|_| std::fs::File::open(&partial)?.sync_all())
             .and_then(|()| std::fs::rename(&partial, &copy));
         if let Err(e) = written {

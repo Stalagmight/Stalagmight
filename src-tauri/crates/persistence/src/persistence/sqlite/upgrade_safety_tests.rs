@@ -342,3 +342,192 @@ fn a_refused_upgrade_says_which_write_it_refused() {
         assert_eq!(b6_dir_listing(dir.path()), ["CaveA.stalx"], "{what}");
     }
 }
+
+/// [#576 RVF-b-1] What a link planted at a scratch name leads to: a file that is
+/// not there yet, or an existing one (a settings file), in a folder of its own.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug)]
+pub(super) enum PlantedLink {
+    Dangling,
+    ToExistingFile,
+}
+
+#[cfg(unix)]
+impl PlantedLink {
+    pub(super) const BOTH: [Self; 2] = [Self::Dangling, Self::ToExistingFile];
+    /// What an existing target holds before anything runs.
+    const EXISTING_BYTES: &'static [u8] = b"theme = \"dark\"\n";
+
+    /// Plant the link at `name`, leading into `elsewhere`; returns its target.
+    pub(super) fn plant(self, name: &Path, elsewhere: &Path) -> std::path::PathBuf {
+        let target = match self {
+            Self::Dangling => elsewhere.join("planted.toml"),
+            Self::ToExistingFile => {
+                let target = elsewhere.join("config.toml");
+                std::fs::write(&target, Self::EXISTING_BYTES).unwrap();
+                target
+            }
+        };
+        std::os::unix::fs::symlink(&target, name).unwrap();
+        target
+    }
+
+    /// How the target is no longer as it was (`None`: it is): a dangling link's
+    /// target was created, an existing one's bytes changed.
+    pub(super) fn written_through(self, target: &Path) -> Option<String> {
+        match (self, std::fs::read(target)) {
+            (Self::Dangling, Err(_)) => None,
+            (Self::Dangling, Ok(bytes)) => Some(format!("created, {} bytes", bytes.len())),
+            (Self::ToExistingFile, Ok(bytes)) if bytes == Self::EXISTING_BYTES => None,
+            (Self::ToExistingFile, Ok(bytes)) => {
+                Some(format!("overwritten, {} bytes", bytes.len()))
+            }
+            (Self::ToExistingFile, Err(e)) => Some(format!("gone: {e}")),
+        }
+    }
+}
+
+/// [#576 RVF-b-1] The pre-upgrade copy is never written through a link left at
+/// the name it is written under first (`<name>.pre-v<N>.partial`), whether the
+/// link leads nowhere yet or to an existing file: the link is removed, the copy
+/// is created afresh, and the upgrade goes ahead with a real copy kept.
+///
+/// `fs::copy` opened that name following the link: a dangling one got its target
+/// created holding the whole project, one to an existing file (a settings file)
+/// got it overwritten, and the rename then moved the link itself to the
+/// `.backup` name. The write policy judges only the project's own path.
+#[cfg(unix)]
+#[test]
+fn an_upgrade_never_writes_its_copy_through_a_link_at_the_partial_name() {
+    for planted in PlantedLink::BOTH {
+        let temp = TempDir::new().unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let path = b6_build_file(
+            temp.path(),
+            "CaveA.stalx",
+            "UPDATE project SET schema_version = 17; PRAGMA user_version = 17;",
+        );
+        let original = std::fs::read(&path).unwrap();
+        let partial = temp.path().join("CaveA.stalx.pre-v17.partial");
+        let target = planted.plant(&partial, elsewhere.path());
+
+        let opened = Database::open_existing(&path).map(drop);
+        let through = planted.written_through(&target);
+        let copy = temp.path().join("CaveA.stalx.pre-v17.backup");
+        let copy_is_a_file = copy.symlink_metadata().is_ok_and(|m| m.is_file());
+        println!(
+            "{planted:?}: open -> {opened:?}; target: {through:?}; folder: {:?}",
+            b6_dir_listing(temp.path())
+        );
+        assert_eq!(
+            through, None,
+            "{planted:?}: the upgrade's copy was written through the link at .partial"
+        );
+        assert!(opened.is_ok(), "{planted:?}: the upgrade goes ahead");
+        assert!(copy_is_a_file, "{planted:?}: the kept copy is a real file");
+        assert!(
+            std::fs::read(&copy).unwrap() == original,
+            "{planted:?}: the copy is the file as it was"
+        );
+        assert_eq!(
+            b6_dir_listing(temp.path()),
+            ["CaveA.stalx", "CaveA.stalx.pre-v17.backup"],
+            "{planted:?}: no link and no partial copy left"
+        );
+        assert_eq!(b6_user_version(&path), i64::from(SCHEMA_VERSION));
+    }
+}
+
+/// [#576 RVF-b-1] A stale `.partial` a crash left mid-copy (a plain file) never
+/// blocks a later upgrade: it is replaced by a whole copy.
+#[test]
+fn a_stale_partial_copy_does_not_block_the_upgrade() {
+    let temp = TempDir::new().unwrap();
+    let path = b6_build_file(
+        temp.path(),
+        "CaveA.stalx",
+        "UPDATE project SET schema_version = 17; PRAGMA user_version = 17;",
+    );
+    let original = std::fs::read(&path).unwrap();
+    std::fs::write(
+        temp.path().join("CaveA.stalx.pre-v17.partial"),
+        b"half a copy",
+    )
+    .unwrap();
+
+    let opened = Database::open_existing(&path).map(drop);
+    println!(
+        "open -> {opened:?}; folder: {:?}",
+        b6_dir_listing(temp.path())
+    );
+    assert!(opened.is_ok(), "the upgrade goes ahead: {opened:?}");
+    assert!(
+        std::fs::read(temp.path().join("CaveA.stalx.pre-v17.backup")).unwrap() == original,
+        "the copy is the whole file as it was, not the stale partial"
+    );
+    assert_eq!(
+        b6_dir_listing(temp.path()),
+        ["CaveA.stalx", "CaveA.stalx.pre-v17.backup"]
+    );
+    assert_eq!(b6_user_version(&path), i64::from(SCHEMA_VERSION));
+}
+
+/// [#576 RVF-b-1] A link at `.partial` that cannot be removed (the folder is
+/// read-only, the project inside it writable) refuses the upgrade, and the link's
+/// target - in a writable folder - is not written: `fs::copy` followed the link
+/// there before the rename failed.
+#[cfg(unix)]
+#[test]
+fn an_upgrade_is_refused_when_a_link_at_the_partial_name_cannot_be_removed() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for planted in PlantedLink::BOTH {
+        let temp = TempDir::new().unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let folder = temp.path().join("CaveA");
+        std::fs::create_dir(&folder).unwrap();
+        let path = b6_build_file(
+            &folder,
+            "CaveA.stalx",
+            "UPDATE project SET schema_version = 17; PRAGMA user_version = 17;",
+        );
+        let original = std::fs::read(&path).unwrap();
+        let target = planted.plant(
+            &folder.join("CaveA.stalx.pre-v17.partial"),
+            elsewhere.path(),
+        );
+
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let premise = std::fs::File::create(folder.join("premise-probe"));
+        let opened = premise
+            .is_err()
+            .then(|| Database::open_existing(&path).map(drop));
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            premise.is_err(),
+            "premise: a read-only folder refuses new files (run the tests as a non-root user)"
+        );
+
+        let through = planted.written_through(&target);
+        let message = opened.unwrap().err().map(|e| format!("{e:#}"));
+        println!(
+            "{planted:?}: open -> {message:?}; target: {through:?}; folder: {:?}",
+            b6_dir_listing(&folder)
+        );
+        assert_eq!(
+            through, None,
+            "{planted:?}: the upgrade's copy was written through the link at .partial"
+        );
+        assert!(
+            message
+                .as_deref()
+                .is_some_and(|m| m.contains("Could not keep a copy of this project")),
+            "{planted:?}: the upgrade is refused, saying why: {message:?}"
+        );
+        assert!(
+            std::fs::read(&path).unwrap() == original,
+            "{planted:?}: a refused upgrade leaves the file byte-identical"
+        );
+        assert_eq!(b6_user_version(&path), 17, "{planted:?}: not migrated");
+    }
+}

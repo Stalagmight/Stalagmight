@@ -92,14 +92,57 @@ fn remove_with_journal(path: &Path) {
 
 /// Copy `from` (and its rollback journal, when there is one) to `to`, replacing
 /// whatever was at `to`.
+///
+/// [#576 RVF-b-1] Never through a link left at `to` or at its journal's name:
+/// both are cleared first, and a leftover that cannot be removed fails the copy
+/// (see [`copy_to_new_file`]).
 fn copy_with_journal(from: &Path, to: &Path) -> std::io::Result<()> {
-    remove_with_journal(to);
-    std::fs::copy(from, to)?;
+    clear_scratch_name(&journal_of(to))?;
+    copy_to_new_file(from, to)?;
     let journal = journal_of(from);
     if journal.exists() {
-        std::fs::copy(&journal, journal_of(to))?;
+        copy_to_new_file(&journal, &journal_of(to))?;
     }
     Ok(())
+}
+
+/// [#576 RVF-b-1] Remove whatever is at `path` - a leftover of an interrupted
+/// run, or a link, which `remove_file` removes itself and never what it leads to
+/// (even one that leads nowhere yet, which `exists()` says is not there) - so
+/// the write that follows creates `path` afresh. An entry that cannot be removed
+/// (a folder the user cannot change, a link someone else owns in a shared one)
+/// is an error: written to, a link at the name would take the write to wherever
+/// it points, a place no write policy judged.
+pub(super) fn clear_scratch_name(path: &Path) -> std::io::Result<()> {
+    if path.symlink_metadata().is_ok() {
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// [#576 RVF-b-1] Copy `from` to `to` as a NEW file, which `fs::copy` does not
+/// do: it opens `to` following a link there, so a link left at the name
+/// received the copy wherever it pointed - creating a file a dangling one named,
+/// overwriting a file it led to. Here the name is cleared first
+/// ([`clear_scratch_name`]) and then created with `create_new` (O_EXCL, which
+/// refuses any entry at the name, a link included). The copy gets `from`'s
+/// permission bits (narrowed by the umask), as `fs::copy` gave it, so a private
+/// project never gets a world-readable copy. Returns the bytes copied.
+pub(super) fn copy_to_new_file(from: &Path, to: &Path) -> std::io::Result<u64> {
+    clear_scratch_name(to)?;
+    let mut source = std::fs::File::open(from)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        options.mode(source.metadata()?.permissions().mode() & 0o777);
+    }
+    let mut target = options.open(to)?;
+    std::io::copy(&mut source, &mut target)
 }
 
 /// What the listing calls a file beside the project named `stem`, or `None`
@@ -205,11 +248,12 @@ impl Database {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create snapshot dir {}", parent.display()))?;
         }
-        // VACUUM INTO fails outright if the target file already exists.
-        if dest.exists() {
-            std::fs::remove_file(dest)
-                .with_context(|| format!("remove stale snapshot {}", dest.display()))?;
-        }
+        // VACUUM INTO fails outright if the target file already exists. [#576
+        // RVF-b-1] A link there is removed too, even one that leads nowhere yet
+        // (`exists()` follows it and says no): SQLite resolves a link at the
+        // target name and would create the snapshot where it points.
+        clear_scratch_name(dest)
+            .with_context(|| format!("remove stale snapshot {}", dest.display()))?;
         let conn = Connection::open(src).context("open source .stalx for snapshot")?;
         // The destination filename is a bound parameter (supported by VACUUM INTO
         // since SQLite 3.27); this avoids any path-quoting pitfalls.
@@ -521,8 +565,15 @@ impl Database {
         // [`Self::vacuum_snapshot`], which has always done it this way.
         let compacted = Self::vacuum_temp_path(snapshot);
         // VACUUM INTO refuses to overwrite an existing target; a leftover from a
-        // killed run must not wedge every later push.
-        let _ = std::fs::remove_file(&compacted);
+        // killed run must not wedge every later push. [#576 RVF-b-1] One that
+        // cannot be removed refuses the push: a link left there would take the
+        // compacted copy wherever it points (SQLite resolves it).
+        if let Err(e) = clear_scratch_name(&compacted) {
+            return Err(anyhow::Error::from(e).context(format!(
+                "could not clear {} for the compacted push snapshot; refusing to upload it",
+                compacted.display()
+            )));
+        }
         if let Err(e) = conn.execute("VACUUM INTO ?1", params![compacted.to_string_lossy()]) {
             let _ = std::fs::remove_file(&compacted);
             return Err(anyhow::Error::from(e).context(format!(
@@ -619,7 +670,14 @@ impl Database {
         // same reasoning as `sanitize_push_snapshot` - and a leftover from a
         // killed run is removed first (`VACUUM INTO` refuses an existing target).
         let staging = sibling(path, REPAIR_STAGING_SUFFIX);
-        remove_with_journal(&staging);
+        // [#576 RVF-b-1] A leftover that cannot be removed stops the repair: a
+        // link left there would take the rewrite wherever it points.
+        if let Err(e) =
+            clear_scratch_name(&staging).and_then(|()| clear_scratch_name(&journal_of(&staging)))
+        {
+            return Err(anyhow::Error::from(e)
+                .context("Could not clear the name the repaired copy is written under"));
+        }
         if let Err(e) = conn.execute("VACUUM INTO ?1", params![staging.to_string_lossy()]) {
             remove_with_journal(&staging);
             return Err(anyhow::Error::from(e)
@@ -1324,5 +1382,179 @@ mod tests {
             temp.file_name().and_then(|n| n.to_str()),
             Some("snap.stalx.vacuum.tmp")
         );
+    }
+
+    /// [#576 RVF-b-1] A push snapshot is never written through a link left at its
+    /// name, dangling or to an existing file: the link is removed and the snapshot
+    /// is a real file there. `exists()` follows a link and says no for a dangling
+    /// one, so it stayed, and SQLite created the snapshot where it pointed.
+    #[cfg(unix)]
+    #[test]
+    fn a_snapshot_is_never_written_through_a_link_at_its_name() {
+        use super::super::upgrade_safety_tests::PlantedLink;
+
+        for planted in PlantedLink::BOTH {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let elsewhere = tempfile::tempdir().expect("tempdir");
+            let live = dir.path().join("live.stalx");
+            let mut db = Database::open(&live).expect("open live");
+            db.save_project(&crate::models::Project::new("Live".to_owned(), None))
+                .expect("save project");
+            drop(db);
+            let dest = dir.path().join("snapshot.stalx");
+            let target = planted.plant(&dest, elsewhere.path());
+
+            let snapshot = Database::vacuum_snapshot(&live, &dest);
+
+            assert_eq!(
+                planted.written_through(&target),
+                None,
+                "{planted:?}: the snapshot was written through the link at its name"
+            );
+            assert!(snapshot.is_ok(), "{planted:?}: {snapshot:?}");
+            assert!(
+                dest.symlink_metadata().is_ok_and(|m| m.is_file()),
+                "{planted:?}: the snapshot is a real file at its name"
+            );
+            Database::open_for_metadata(&dest).expect("the snapshot opens");
+        }
+    }
+
+    /// [#576 RVF-b-1] A link at the compaction's staging name that cannot be
+    /// removed (the staging folder is read-only) refuses the push, and the link's
+    /// target - in a writable folder - is not written: the leftover's removal was
+    /// best-effort, and SQLite resolved the dangling link and created the compacted
+    /// copy where it pointed. (A link to an existing, non-empty file SQLite
+    /// refuses as an existing target.) The snapshot holds none of the tables the
+    /// sanitize strips, so nothing before the compaction writes to it (in a
+    /// read-only folder a strip could not create its journal).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_compaction_is_refused_when_a_link_at_its_staging_name_cannot_be_removed() {
+        use super::super::upgrade_safety_tests::PlantedLink;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        for planted in PlantedLink::BOTH {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let elsewhere = tempfile::tempdir().expect("tempdir");
+            let staging = dir.path().join("staging");
+            std::fs::create_dir(&staging).expect("staging dir");
+            let snapshot = staging.join("snap.stalx");
+            super::Connection::open(&snapshot)
+                .expect("open snapshot")
+                .execute_batch("CREATE TABLE survey (x); INSERT INTO survey VALUES (1);")
+                .expect("write snapshot");
+            let before = std::fs::read(&snapshot).expect("read snapshot bytes");
+            let target = planted.plant(&Database::vacuum_temp_path(&snapshot), elsewhere.path());
+
+            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o555))
+                .expect("make the staging dir unwritable");
+            crate::models::test_support::assert_dir_refuses_new_files(&staging);
+            let result = Database::sanitize_push_snapshot(&snapshot, false, None);
+            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
+                .expect("restore permissions so tempdir can clean up");
+
+            assert_eq!(
+                planted.written_through(&target),
+                None,
+                "{planted:?}: the compacted copy was written through the link"
+            );
+            let err = result.expect_err("the push is refused");
+            assert!(
+                format!("{err:#}").contains("refusing to upload it"),
+                "{planted:?}: {err:#}"
+            );
+            assert_eq!(
+                std::fs::read(&snapshot).expect("snapshot still readable"),
+                before,
+                "{planted:?}: the snapshot is left byte-identical"
+            );
+        }
+    }
+
+    /// [#576 RVF-b-1] The journal half of `copy_with_journal` (a restore's or a
+    /// candidate check's staging, a numbered backup) is never written through a
+    /// link at `<to>-journal` that cannot be removed (the folder is read-only; a
+    /// writable leftover at `<to>` itself lets the copy reach the journal): the
+    /// copy fails and the link's target is not written. The removal's error was
+    /// ignored and `fs::copy` followed the link.
+    #[cfg(unix)]
+    #[test]
+    fn copying_with_a_journal_never_writes_through_a_link_at_the_journal_name() {
+        use super::super::upgrade_safety_tests::PlantedLink;
+        use super::{copy_with_journal, journal_of};
+        use std::os::unix::fs::PermissionsExt as _;
+
+        for planted in PlantedLink::BOTH {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let elsewhere = tempfile::tempdir().expect("tempdir");
+            let from = dir.path().join("CaveA.stalx.backup");
+            std::fs::write(&from, b"the candidate").expect("write the candidate");
+            std::fs::write(journal_of(&from), b"its journal").expect("write its journal");
+            let locked = dir.path().join("locked");
+            std::fs::create_dir(&locked).expect("locked dir");
+            let to = locked.join("CaveA.stalx.restore-staging");
+            std::fs::write(&to, b"a leftover").expect("write a leftover");
+            let target = planted.plant(&journal_of(&to), elsewhere.path());
+
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555))
+                .expect("make the folder read-only");
+            crate::models::test_support::assert_dir_refuses_new_files(&locked);
+            let copied = copy_with_journal(&from, &to);
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+                .expect("restore permissions so tempdir can clean up");
+
+            assert_eq!(
+                planted.written_through(&target),
+                None,
+                "{planted:?}: the journal was copied through the link at its name"
+            );
+            assert!(copied.is_err(), "{planted:?}: the copy fails: {copied:?}");
+        }
+    }
+
+    /// [#576 RVF-b-1] What every scratch writer clears its name with: a link there
+    /// is removed and its target never touched; nothing there is fine; and an
+    /// entry that cannot be removed (a read-only folder here) is an error, not a
+    /// silent leftover the write would then follow.
+    #[cfg(unix)]
+    #[test]
+    fn clearing_a_scratch_name_removes_a_link_and_reports_one_it_cannot() {
+        use super::super::upgrade_safety_tests::PlantedLink;
+        use super::clear_scratch_name;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        for planted in PlantedLink::BOTH {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let elsewhere = tempfile::tempdir().expect("tempdir");
+            let name = dir.path().join("scratch");
+            let target = planted.plant(&name, elsewhere.path());
+            clear_scratch_name(&name).expect("a link in a writable folder is removed");
+            assert!(
+                name.symlink_metadata().is_err(),
+                "{planted:?}: link removed"
+            );
+            assert_eq!(planted.written_through(&target), None, "{planted:?}");
+            clear_scratch_name(&name).expect("nothing at the name is fine");
+
+            let locked = dir.path().join("locked");
+            std::fs::create_dir(&locked).expect("locked dir");
+            let name = locked.join("scratch");
+            let other = tempfile::tempdir().expect("tempdir");
+            let target = planted.plant(&name, other.path());
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555))
+                .expect("make the folder read-only");
+            crate::models::test_support::assert_dir_refuses_new_files(&locked);
+            let cleared = clear_scratch_name(&name);
+            let nothing_there = clear_scratch_name(&locked.join("absent"));
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+                .expect("restore permissions so tempdir can clean up");
+            assert!(
+                cleared.is_err(),
+                "{planted:?}: a link it cannot remove is an error"
+            );
+            assert!(nothing_there.is_ok(), "{planted:?}: {nothing_there:?}");
+            assert_eq!(planted.written_through(&target), None, "{planted:?}");
+        }
     }
 }

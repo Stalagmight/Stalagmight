@@ -416,6 +416,139 @@ fn repair_replaces_the_file_rather_than_vacuuming_it_in_place() {
     assert_eq!(project_name(&project), "Original");
 }
 
+/// [#576 RVF-b-1] A restore never stages the candidate through a link left at its
+/// staging name (`<name>.restore-staging`), dangling or to an existing file: the
+/// link is removed, the copy is made afresh, and the restore goes ahead.
+#[cfg(unix)]
+#[test]
+fn a_restore_never_stages_through_a_link_at_its_staging_name() {
+    use super::upgrade_safety_tests::PlantedLink;
+
+    for planted in PlantedLink::BOTH {
+        let temp = TempDir::new().unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let project = temp.path().join("CaveA.stalx");
+        project_file(&project, "Original");
+        let candidate = temp.path().join("CaveA.stalx.backup");
+        project_file(&candidate, "Backup");
+        let staging = temp.path().join("CaveA.stalx.restore-staging");
+        let target = planted.plant(&staging, elsewhere.path());
+
+        let restored = Database::restore_from_backup(&project, &candidate);
+        let through = planted.written_through(&target);
+        println!(
+            "{planted:?}: restore -> {:?}; target: {through:?}; project holds: {}",
+            restored.as_ref().map(|_| ()),
+            project_name(&project)
+        );
+        assert_eq!(through, None, "{planted:?}: staged through the link");
+        assert!(restored.is_ok(), "{planted:?}: the restore goes ahead");
+        assert_eq!(project_name(&project), "Backup", "{planted:?}");
+        assert!(
+            staging.symlink_metadata().is_err(),
+            "{planted:?}: nothing is left at the staging name"
+        );
+    }
+}
+
+/// [#576 RVF-b-1] A link at the restore's staging name that cannot be removed
+/// (the project's folder is read-only) refuses the restore before anything is
+/// copied, and the link's target - in a writable folder - is not written:
+/// `fs::copy` followed the link there and staged the candidate in it, until
+/// keeping the safety copy failed.
+#[cfg(unix)]
+#[test]
+fn a_restore_is_refused_when_a_link_at_its_staging_name_cannot_be_removed() {
+    use super::upgrade_safety_tests::PlantedLink;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for planted in PlantedLink::BOTH {
+        let temp = TempDir::new().unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let folder = temp.path().join("CaveA");
+        std::fs::create_dir(&folder).unwrap();
+        let project = folder.join("CaveA.stalx");
+        project_file(&project, "Original");
+        let before = std::fs::read(&project).unwrap();
+        let candidate = temp.path().join("Backup.stalx");
+        project_file(&candidate, "Backup");
+        let target = planted.plant(
+            &folder.join("CaveA.stalx.restore-staging"),
+            elsewhere.path(),
+        );
+
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+        crate::models::test_support::assert_dir_refuses_new_files(&folder);
+        let restored = Database::restore_from_backup(&project, &candidate);
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let through = planted.written_through(&target);
+        let message = restored.err().map(|e| format!("{e:#}"));
+        println!("{planted:?}: restore -> {message:?}; target: {through:?}");
+        assert_eq!(through, None, "{planted:?}: staged through the link");
+        assert!(message.is_some(), "{planted:?}: the restore is refused");
+        assert_eq!(
+            std::fs::read(&project).unwrap(),
+            before,
+            "{planted:?}: the project is untouched"
+        );
+    }
+}
+
+/// [#576 RVF-b-1] Repair's numbered backup is never written through a link at
+/// its name that cannot be removed (the folder is read-only): the repair is
+/// refused before anything is written, and the link's target is not written.
+/// `fs::copy` followed a dangling link at `.backup` there, and the rewrite then
+/// went through one at `.repair-staging` too (SQLite resolves a link at a
+/// `VACUUM INTO` target), until the final rename failed. A link to an existing
+/// file at `.backup` counts as a backup already there and is never written.
+#[cfg(unix)]
+#[test]
+fn repair_is_refused_when_a_link_at_its_backup_name_cannot_be_removed() {
+    use super::upgrade_safety_tests::PlantedLink;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for planted in PlantedLink::BOTH {
+        let temp = TempDir::new().unwrap();
+        let backup_elsewhere = TempDir::new().unwrap();
+        let staging_elsewhere = TempDir::new().unwrap();
+        let folder = temp.path().join("CaveA");
+        std::fs::create_dir(&folder).unwrap();
+        let project = folder.join("CaveA.stalx");
+        project_file(&project, "Original");
+        let before = std::fs::read(&project).unwrap();
+        let backup_target =
+            planted.plant(&folder.join("CaveA.stalx.backup"), backup_elsewhere.path());
+        let staging_target = planted.plant(
+            &folder.join("CaveA.stalx.repair-staging"),
+            staging_elsewhere.path(),
+        );
+
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+        crate::models::test_support::assert_dir_refuses_new_files(&folder);
+        let repaired = Database::attempt_repair(&project);
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let through = (
+            planted.written_through(&backup_target),
+            planted.written_through(&staging_target),
+        );
+        let message = repaired.err().map(|e| format!("{e:#}"));
+        println!("{planted:?}: repair -> {message:?}; (backup, staging) targets: {through:?}");
+        assert_eq!(
+            through,
+            (None, None),
+            "{planted:?}: repair wrote through a link at its backup or staging name"
+        );
+        assert!(message.is_some(), "{planted:?}: the repair is refused");
+        assert_eq!(
+            std::fs::read(&project).unwrap(),
+            before,
+            "{planted:?}: the project is untouched"
+        );
+    }
+}
+
 /// [#576 B27(f)] A source-level tripwire, like the push snapshot's: Repair must
 /// never fall back to a plain `VACUUM`.
 #[test]
