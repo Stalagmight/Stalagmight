@@ -108,6 +108,14 @@ pub(crate) struct SpeleoDbSession {
     /// already held mints nothing and leaves this alone, which is what makes the
     /// unwind's promised no-op on an inherited lock real.
     pub(super) acquired_by_this_flow: Option<super::speleodb_session::LockClaim>,
+    /// [#576 SDB-POLL-D1] An acquire this process sent whose reply was lost and whose
+    /// holder re-read failed too: the server may hold the lock for this account with
+    /// no claim here to say so. Stamped with the account like a claim, so it can only
+    /// be settled for the account that sent the acquire. Written and settled only in
+    /// `speleodb_unconfirmed.rs`: the first successful status poll records the claim
+    /// (our account holds the lock) or drops the mark (another holder, or none); a
+    /// close drops it too. Never persisted.
+    pub(super) unconfirmed_acquire: Option<super::speleodb_session::LockClaim>,
     /// [#258] Which dump entry the user picked, per project, for THIS session.
     ///
     /// Deliberately process-local and never persisted. The chosen entry is a
@@ -825,6 +833,13 @@ impl AppState {
         } else {
             edit_enabled
         };
+        // [#576 SDB-POLL-D1] A successful holder read settles an acquire whose reply
+        // was lost and whose re-read failed (`speleodb_unconfirmed`): ours - the claim
+        // is recorded (the reopen above already did, when it opened the gate);
+        // another holder or none - the mark is dropped.
+        if holder_read {
+            self.speleodb_settle_unconfirmed_acquire(&link.project_id, holds_lock);
+        }
 
         Ok(SpeleoLinkStatus {
             is_remote: true,
@@ -2017,14 +2032,22 @@ impl AppState {
             // exactly as on an answered acquire (taken here: recorded; inherited:
             // not). Anything else stays the failed acquire.
             Err(e) => {
-                if self.speleodb_reread_after_lock_verb(
+                let after = self.speleodb_reread_after_lock_verb(
                     &endpoint,
                     &token,
                     insecure_http,
                     &link.project_id,
                     &e,
-                ) != super::speleodb_lock_release::AfterLockVerb::Ours
-                {
+                );
+                if after != super::speleodb_lock_release::AfterLockVerb::Ours {
+                    // [#576 SDB-POLL-D1] The re-read failed too: the acquire may have
+                    // landed. Where an answered acquire would have been claimed (the
+                    // probe saw the lock not ours), the next successful poll settles it.
+                    if after == super::speleodb_lock_release::AfterLockVerb::Unknown
+                        && acquired_here
+                    {
+                        self.speleodb_mark_acquire_unconfirmed(&link.project_id);
+                    }
                     return Err(dto_for_error(Endpoint::Acquire, &e));
                 }
                 tracing::info!(
@@ -4269,6 +4292,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            unconfirmed_acquire: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         }
@@ -6668,6 +6692,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            unconfirmed_acquire: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         }
@@ -6755,6 +6780,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            unconfirmed_acquire: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         }
@@ -7516,6 +7542,7 @@ mod tests {
             rehydrate_attempted: false,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            unconfirmed_acquire: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         }
@@ -7892,6 +7919,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            unconfirmed_acquire: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };
@@ -7909,6 +7937,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            unconfirmed_acquire: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };
@@ -7924,6 +7953,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            unconfirmed_acquire: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };
@@ -7939,6 +7969,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            unconfirmed_acquire: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };
@@ -8138,6 +8169,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            unconfirmed_acquire: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };

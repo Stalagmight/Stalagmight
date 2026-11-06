@@ -729,8 +729,17 @@ impl AppState {
         if !super::speleodb::lock_held_by_me(holder.as_deref(), Some(me.as_str())) {
             return false;
         }
-        self.speleodb_commit_editing(&lock_ops, None, &link.project_id, false)
-            .is_ok()
+        if self
+            .speleodb_commit_editing(&lock_ops, None, &link.project_id, false)
+            .is_err()
+        {
+            return false;
+        }
+        // [#576 SDB-POLL-D1] Not inherited after all when this session's own acquire
+        // lost its reply (and the re-read after it failed): the re-read above says
+        // it landed, so the claim is recorded, with the gate open, in this span.
+        self.speleodb_claim_unconfirmed_acquire(&lock_ops, &link.project_id);
+        true
     }
 
     /// [#576 B35(e)-D2] The other half of the poll's gate rule: CLOSE the edit gate

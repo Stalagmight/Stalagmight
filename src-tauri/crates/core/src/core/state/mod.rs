@@ -40,6 +40,7 @@ mod speleodb_pull;
 mod speleodb_push;
 mod speleodb_revisions;
 mod speleodb_session;
+mod speleodb_unconfirmed;
 mod speleodb_unlink;
 mod undo;
 mod undo_capture;
@@ -590,6 +591,12 @@ mod sdb_silent_release_claim_tests;
               values are the evidence a run captures"
 )]
 mod sdb_swap_gate_tests;
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "test module: the printed answers are the evidence a run captures"
+)]
+mod sdb_unconfirmed_acquire_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,

@@ -442,6 +442,13 @@ impl AppState {
                     self.speleodb_note_lock_acquired(Some(&project_id));
                     Ok(())
                 }
+                // [#576 SDB-POLL-D1] The re-read failed too: the acquire on this
+                // just-created project may have landed. The next successful poll
+                // settles it (ours: the claim is recorded).
+                super::speleodb_lock_release::AfterLockVerb::Unknown => {
+                    self.speleodb_mark_acquire_unconfirmed(&project_id);
+                    Err(e)
+                }
                 _ => Err(e),
             },
         };

@@ -49,7 +49,7 @@ impl AppState {
 /// spread across the family - a scan that stops seeing a file stops guarding it, and
 /// an absence assertion goes on passing while it does.
 #[cfg(test)]
-fn speleodb_prod_sources() -> [(&'static str, &'static str); 15] {
+fn speleodb_prod_sources() -> [(&'static str, &'static str); 16] {
     [
         ("speleodb.rs", include_str!("speleodb.rs")),
         ("speleodb_admin.rs", include_str!("speleodb_admin.rs")),
@@ -75,6 +75,10 @@ fn speleodb_prod_sources() -> [(&'static str, &'static str); 15] {
         (
             "speleodb_revisions.rs",
             include_str!("speleodb_revisions.rs"),
+        ),
+        (
+            "speleodb_unconfirmed.rs",
+            include_str!("speleodb_unconfirmed.rs"),
         ),
         ("speleodb_unlink.rs", include_str!("speleodb_unlink.rs")),
         // [#576 RV10a-3] The lock-ops span module lives in its own file (a doctest

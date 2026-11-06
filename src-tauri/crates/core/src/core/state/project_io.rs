@@ -1225,6 +1225,9 @@ impl AppState {
         // `speleodb_session` rule). Covers close, delete and the project switch, which
         // all route through here.
         self.commit_open_session_into(commands, project, SessionCommit::closed());
+        // [#576 SDB-POLL-D1] An acquire whose reply was lost is settled by a poll of
+        // the project it was sent for; the close ends that session.
+        self.speleodb_drop_unconfirmed_acquire();
         tracing::info!(purpose = "release project resources", "Project closed");
         CommandResult::success()
     }
