@@ -96,7 +96,7 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | `shot.azimuth_in`, `shot.azimuth_out` | `Azimut` / `AZ` | Their circular mean - the bearing the app draws (`models::average_azimuth_of`). The two are two FORWARD readings of the same line, not a foresight/backsight pair (see SPEC), and Ariane carries one azimuth per shot, so a pair that disagrees goes out as its mean and re-imports with both readings equal to it: the drawn geometry is unchanged. Before #576 NF-AN5-1 the export wrote `azimuth_in` alone, so a DMP shot read at 10/20 and drawn at 15 went out at 10. |
 | `shot.length` | `Length` / `LG` | |
 | `shot.depth_out` | `Depth` / `DP` | Absolute station depth |
-| `shot.depth_in` | `DepthIn` / `DPI` | -1.0 sentinel when equal to previous `depth_out` |
+| `shot.depth_in` | `DepthIn` / `DPI` | -1.0 sentinel when equal to previous `depth_out`, and on every shot refitted at a junction (see [Junction depths](#junction-depths)) |
 | `shot.pitch_in` | `Inclination` / `INC` | 0.0 if unset. Collides with a genuinely measured level shot (`Some(0.0)`) the same way LRUD does; see the "Inclination zero/null collision" entry in [Ariane import](ariane-import.md) for the import-side rule that keeps this from fabricating validator warnings on re-import (#482). |
 | LRUD | `Left`/`Right`/`Up`/`Down` | `0.0` for `None` - Ariane's format has no null, so an UNMEASURED passage dimension and one MEASURED as zero are written as the same `0.0`. See [The LRUD zero/null collision](#the-lrud-zeronull-collision). |
 | `shot.comment` | `Comment` / `CM` | Empty string if unset. Also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker - see [Station-comment co-encoding](#station-comment-co-encoding). |
@@ -198,6 +198,56 @@ When a root section is split at a non-zero zero datum, the generated pre-zero se
 ### Loop closures
 
 `loop_closures` are exported as CLOSURE-type shots with `ClosureToID` / `CID` pointing to the target station's Ariane ID. These encode the same loop-closure metadata that Ariane uses internally.
+
+### Junction depths
+
+A station has one depth in Ariane's chain, and a consumer takes every shot's
+start from its parent's `Depth` (SpeleoDB's `openspeleo_lib` never reads
+`DepthIn`). Our model can hold several readings of one station: the main line
+arrives at it with one, and every branch hung off it starts with its own. Where
+they disagree the file still has to state one number (#576, decisions
+TML-DEPTH-D1 and D2):
+
+- **The junction is exported at the mean of its readings**: the main line's
+  depth, plus the start depth of every branch hung there - every section merged
+  at that station, however many merges deep. A section merged mid-way leaves
+  the junction in both directions, so it starts two blocks there and gives two
+  readings.
+- **Every other station keeps its true depth.** A shot after the first on a
+  branch states its own absolute depth and carries no offset.
+- **Only the shots touching the junction change, and only their slope.** Each
+  shot into or out of an averaged junction, on the main line and on every
+  branch, gets the length that keeps its measured horizontal run:
+  `L' = sqrt(h^2 + dz'^2)`, with `h` from its own length and depth change. The
+  plan stays where it is. `L'` is rounded up to the next written micrometre and
+  never below the depth change as written, so `|Depth - parent.Depth| <=
+  Length` holds on the file's six decimals in both profiles. A zero-length tie
+  has no run, so its new length is its whole new depth change.
+- Every refitted shot writes the `DepthIn` sentinel ("I start at my parent's
+  `Depth`"), which our importer resolves to exactly that, so all three readers
+  - Ariane, our importer and `openspeleo_lib` - see the same geometry.
+
+Example: main-line station A reads 10.0 m and a branch's first shot starts at
+12.0 m and ends at 12.5 m. A is exported at 11.0 m. The branch shot goes from
+11.0 to 12.5 m (1.5 m) with a length that keeps its horizontal run; the
+main-line shots into and out of A absorb +1.0 and -1.0 m the same way; every
+later shot keeps its true depth.
+
+The export toast says so: "N junctions had disagreeing depths (largest X m);
+exported at their average, shot lengths adjusted." X is the widest
+disagreement, highest reading minus lowest. Re-importing the file brings the
+junction back at its mean - that is the loss.
+
+This replaces the earlier **re-hang**, which started the branch at the
+parent's depth, kept each shot's measured depth change, and so shifted every
+later shot on the branch by the size of the mismatch.
+
+Two older guards stay. A shot whose own drop already exceeds its own tape is
+broken data and is clamped onto the tape, which moves the station it ends at;
+the next shot takes that up like any shot touching a moved station. A
+`DepthIn` written out explicitly (a second reading of a station inside one
+section) is kept while its shot still satisfies the bound against its parent
+and neither end moved; otherwise the shot is refitted the same way.
 
 ### ID assignment
 

@@ -34,7 +34,7 @@ use stalagmight_fuzz_gen::gen::tml::{self, DepthIn, RowType, TmlModel, Units};
 use stalagmight_fuzz_gen::gen::{Faults, LengthUnit};
 use stalagmight_fuzz_gen::source::{seed_bytes, ByteSource};
 use stalagmight_models::section::ImportSectionConfig;
-use stalagmight_models::{average_azimuth_of, Shot, ShotData};
+use stalagmight_models::{average_azimuth_of, Project, SectionId, Shot, ShotData};
 use stalagmight_parsers::parsers::tml::{
     convert_tml_with_options, parse_tml, TmlFile, TmlImportOptions,
 };
@@ -135,17 +135,23 @@ fn circular_gap(a: f64, b: f64) -> f64 {
 /// How a shot's depths must come back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Depths {
-    /// Both absolute depths.
+    /// Both absolute depths, and the tape.
     Absolute,
-    /// The shot's own vertical change only, as written or clamped to its tape:
-    /// the Ariane export re-hangs a shot that starts away from the station it
-    /// hangs off, or drops further than its tape, from that station's depth,
-    /// keeping the change it measured (clamped to the tape when longer) and
-    /// carrying the offset down the rest of its branch. Designed behaviour,
-    /// stated at `enforce_ariane_geometry_invariants` (export/tml.rs:1640-1689)
-    /// and in docs/agent-harness.md:1170-1177; docs/ariane-export.md does not
-    /// list it among the export's losses.
-    Descent,
+    /// [#576 TML-DEPTH-D1] A shot the Ariane export may have refitted: one
+    /// touching a junction whose depth readings disagree (exported at their
+    /// mean), one starting away from where the file's chain puts it, or broken
+    /// data (a drop longer than its tape, clamped onto it). Depth readings are
+    /// true, so its END depth still comes back exactly unless `end_may_move`
+    /// (its end station is such a junction, or the clamp moved it), and its
+    /// horizontal run - the plan - always comes back; its start and its tape
+    /// follow from the depth change the file now states (docs/ariane-export.md,
+    /// "Junction depths").
+    Refitted { end_may_move: bool },
+}
+
+/// A shot's horizontal run, as the model derives it (`ShotData::horizontal_length`).
+fn horizontal_run(length: f64, change: f64) -> f64 {
+    (length * length - change * change).max(0.0).sqrt()
 }
 
 /// Each way `got` differs from `want`: lengths and depths by more than `tol`
@@ -154,20 +160,28 @@ enum Depths {
 fn differences(want: &Measured, got: &Measured, tol: f64, depths: Depths) -> Vec<String> {
     let close = |a: f64, b: f64| (a - b).abs() <= tol + 1e-9 * a.abs().max(b.abs());
     let mut out = Vec::new();
-    let mut pairs = vec![("length", want.length, got.length)];
+    let mut pairs = Vec::new();
     match depths {
         Depths::Absolute => {
+            pairs.push(("length", want.length, got.length));
             pairs.push(("depth_in", want.depth_in, got.depth_in));
             pairs.push(("depth_out", want.depth_out, got.depth_out));
         }
-        Depths::Descent => {
-            let written = want.depth_out - want.depth_in;
-            let tape = want.length.max(0.0);
-            let clamped = written.clamp(-tape, tape);
-            let back = got.depth_out - got.depth_in;
-            if !close(written, back) && !close(clamped, back) {
+        Depths::Refitted { end_may_move } => {
+            if !end_may_move {
+                pairs.push(("depth_out", want.depth_out, got.depth_out));
+            }
+            // The run as the file states it: six decimals on the tape and on
+            // both depths, and the tape rounded up by up to two micrometres
+            // more, so a steep shot's run is held only to what those can move
+            // it by (a vertical one by about the square root of that).
+            let run = horizontal_run(want.length, want.depth_out - want.depth_in);
+            let back = horizontal_run(got.length, got.depth_out - got.depth_in);
+            let slack = (got.length.abs() + (got.depth_out - got.depth_in).abs()) * 8e-6;
+            let allowed = (run * run + slack).sqrt() - run + tol;
+            if (back - run).abs() > allowed {
                 out.push(format!(
-                    "descent {written} (clamped to the tape {clamped}) vs {back}"
+                    "horizontal run {run} vs {back} (allowed {allowed})"
                 ));
             }
         }
@@ -480,8 +494,8 @@ fn expected_after_export(shot: &Shot) -> Measured {
 
 /// Make every shot start where the station it hangs off ends (inheriting its
 /// start depth), drop less than its tape by at least a centimetre, and be
-/// included: a survey Ariane's chain holds exactly, so the export has nothing
-/// to re-hang and the absolute depths must come back. Rows are minted
+/// included: a survey Ariane's chain holds exactly, so no junction disagrees,
+/// the export has nothing to refit and the absolute depths must come back. Rows are minted
 /// parent-first, so in id order every parent is settled before its children.
 fn make_continuous(model: &mut TmlModel) {
     let mut order: Vec<usize> = (0..model.rows.len()).collect();
@@ -514,11 +528,108 @@ fn make_continuous(model: &mut TmlModel) {
     }
 }
 
+/// [#576 TML-DEPTH-D1] How each shot of `project` must come back from the
+/// Ariane export, by (section id, shot index): [`Depths::Absolute`] for one the
+/// export leaves exactly as measured, [`Depths::Refitted`] for one it may
+/// refit. Worked out from the project alone and on the safe side:
+/// - a merged station whose readings (every arriving and departing depth of
+///   every station merged into it) disagree is a junction that may be
+///   exported at their mean;
+/// - a shot dropping further than its tape is broken data and may be clamped
+///   onto it, which moves its end station;
+/// - a shot that does not start where the one before it ended (a second
+///   reading inside its section, or after a clamped shot) may be refitted.
+///
+/// Everything else - every station of an ordinary chain - must come back
+/// exactly: depths, tape and all.
+fn expected_depths(project: &Project) -> HashMap<(SectionId, usize), Depths> {
+    type Station = (SectionId, u32);
+    let mut group: HashMap<Station, Station> = HashMap::new();
+    fn root(group: &mut HashMap<Station, Station>, s: Station) -> Station {
+        let mut r = s;
+        while let Some(&up) = group.get(&r) {
+            if up == r {
+                break;
+            }
+            r = up;
+        }
+        group.insert(s, r);
+        r
+    }
+    for merge in &project.station_merges {
+        let (Some(a), Some(b)) = (
+            project.resolve_key(&merge.station_a),
+            project.resolve_key(&merge.station_b),
+        ) else {
+            continue;
+        };
+        let ra = root(&mut group, (a.section_id, a.station_index));
+        let rb = root(&mut group, (b.section_id, b.station_index));
+        group.insert(ra, rb);
+        group.entry(rb).or_insert(rb);
+    }
+    let broken = |shot: &Shot| (shot.depth_out - shot.depth_in).abs() > shot.length + 1e-9;
+    // Per merge group: (lowest reading, highest reading, a broken shot arrives).
+    let mut readings: HashMap<Station, (f64, f64, bool)> = HashMap::new();
+    let members: Vec<Station> = group.keys().copied().collect();
+    for station in members {
+        let Some(section) = project.sections.iter().find(|s| s.id == station.0) else {
+            continue;
+        };
+        let i = station.1 as usize;
+        let arriving = i.checked_sub(1).and_then(|k| section.shots.get(k));
+        let departing = section.shots.get(i);
+        let key = root(&mut group, station);
+        let entry = readings
+            .entry(key)
+            .or_insert((f64::INFINITY, f64::NEG_INFINITY, false));
+        for depth in [arriving.map(|s| s.depth_out), departing.map(|s| s.depth_in)]
+            .into_iter()
+            .flatten()
+        {
+            entry.0 = entry.0.min(depth);
+            entry.1 = entry.1.max(depth);
+        }
+        entry.2 |= arriving.is_some_and(broken);
+    }
+    let mut status = |station: Station| -> (bool, bool, bool) {
+        // (merged, its readings disagree, a broken shot arrives there)
+        if !group.contains_key(&station) {
+            return (false, false, false);
+        }
+        let key = root(&mut group, station);
+        let (low, high, broken_arrival) = readings.get(&key).copied().unwrap_or((0.0, 0.0, false));
+        (true, high - low > 1e-9, broken_arrival)
+    };
+    let mut out = HashMap::new();
+    for section in &project.sections {
+        for (i, shot) in section.shots.iter().enumerate() {
+            let (_, from_disagrees, from_broken) = status((section.id, i as u32));
+            let (_, to_disagrees, _) = status((section.id, i as u32 + 1));
+            let follows_chain = match i.checked_sub(1).and_then(|k| section.shots.get(k)) {
+                Some(before) => (before.depth_out - shot.depth_in).abs() < 1e-9 && !broken(before),
+                None => true,
+            };
+            let plain =
+                !from_disagrees && !to_disagrees && !from_broken && !broken(shot) && follows_chain;
+            let depths = if plain {
+                Depths::Absolute
+            } else {
+                Depths::Refitted {
+                    end_may_move: to_disagrees || broken(shot),
+                }
+            };
+            out.insert((section.id, i), depths);
+        }
+    }
+    out
+}
+
 /// One checked round trip.
 struct RoundTrip {
     shots: usize,
-    /// Shots whose absolute depth the export moved (see [`Depths::Descent`]).
-    rehung: usize,
+    /// Shots whose end depth the export moved (see [`Depths::Refitted`]).
+    moved: usize,
     continuous: bool,
 }
 
@@ -540,11 +651,6 @@ fn round_trip_case(seed: u64) -> Result<Option<RoundTrip>, String> {
     if continuous {
         make_continuous(&mut model);
     }
-    let depths = if continuous {
-        Depths::Absolute
-    } else {
-        Depths::Descent
-    };
     // Unique identities: the export re-mints a repeated one (a documented
     // repair, docs/ariane-export.md "Shot UUIDs"), and the comparison keys
     // on them. A row without one gets a fresh mint at import.
@@ -595,8 +701,9 @@ fn round_trip_case(seed: u64) -> Result<Option<RoundTrip>, String> {
     .map_err(|e| format!("scratch dir: {e:#}"))??;
 
     let got = by_uuid(&back.configs)?;
+    let refits = (!continuous).then(|| expected_depths(&project));
     let mut diffs = Vec::new();
-    let (mut shots, mut rehung) = (0usize, 0usize);
+    let (mut shots, mut moved) = (0usize, 0usize);
     for (si, section) in project.sections.iter().enumerate() {
         for (i, shot) in section.shots.iter().enumerate() {
             shots += 1;
@@ -612,8 +719,12 @@ fn round_trip_case(seed: u64) -> Result<Option<RoundTrip>, String> {
             let mut back = back.clone();
             back.comment = as_written(back.comment.as_deref());
             if (back.depth_out - shot.depth_out).abs() > EXPORT_TOLERANCE_M {
-                rehung += 1;
+                moved += 1;
             }
+            let depths = refits
+                .as_ref()
+                .and_then(|r| r.get(&(section.id, i)).copied())
+                .unwrap_or(Depths::Absolute);
             let d = differences(
                 &expected_after_export(shot),
                 &back,
@@ -634,7 +745,7 @@ fn round_trip_case(seed: u64) -> Result<Option<RoundTrip>, String> {
     if diffs.is_empty() {
         Ok(Some(RoundTrip {
             shots,
-            rehung,
+            moved,
             continuous,
         }))
     } else {
@@ -658,17 +769,17 @@ fn units_name(units: &Units) -> &'static str {
 fn export_round_trip_keeps_every_shot() {
     let (start, count) = seeds(32);
     let mut failures = Vec::new();
-    let (mut checked, mut refused, mut rehung) = (0u64, 0u64, 0usize);
+    let (mut checked, mut refused, mut moved) = (0u64, 0u64, 0usize);
     for seed in start..start.saturating_add(count) {
         match round_trip_case(seed) {
             Ok(Some(case)) => {
                 checked += 1;
-                rehung += case.rehung;
+                moved += case.moved;
                 if verbose() {
                     eprintln!(
                         "tml round trip seed {seed}: {} shots came back, continuous={}, \
-                         re-hung by the export={}",
-                        case.shots, case.continuous, case.rehung
+                         end depth moved by the export={}",
+                        case.shots, case.continuous, case.moved
                     );
                 }
             }
@@ -678,7 +789,7 @@ fn export_round_trip_keeps_every_shot() {
     }
     eprintln!(
         "tml export round trip: {count} seeds from {start}, {checked} checked, {refused} refused \
-         at import, {rehung} shots re-hung by the export, {} failed",
+         at import, {moved} shots' end depth moved by the export, {} failed",
         failures.len()
     );
     assert!(

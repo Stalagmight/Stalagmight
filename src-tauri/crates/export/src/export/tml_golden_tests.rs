@@ -1,7 +1,7 @@
 //! Byte-level pins of the Ariane export (#576 B4).
 //!
 //! Every other TML test asserts a property - a chain is rooted, a uuid
-//! survives, a depth is re-hung. None of them notices an exporter that writes
+//! survives, a junction is averaged. None of them notices an exporter that writes
 //! the same survey with a field renamed, reordered, reformatted or dropped,
 //! which is exactly what a refactor of the element-name tables or of the shot
 //! constructors could do silently. These tests pin the WHOLE document for one
@@ -443,7 +443,7 @@ const GOLDEN_USER_TMLU: &str = r#"<?xml version="1.0" encoding="UTF-8" standalon
             <CM>station note
 junction note</CM>
             <DT>2024-03-05</DT>
-            <DP>2.0</DP>
+            <DP>2.166667</DP>
             <DPI>-1.0</DPI>
             <D>0.0</D>
             <EXC>false</EXC>
@@ -453,7 +453,7 @@ junction note</CM>
             <INC>0.0</INC>
             <LT>0.0</LT>
             <L>0.0</L>
-            <LG>6.25</LG>
+            <LG>6.225508</LG>
             <LCK>false</LCK>
             <LGT>0.0</LGT>
             <NM></NM>
@@ -536,7 +536,7 @@ junction note</CM>
             <INC>0.0</INC>
             <LT>0.0</LT>
             <L>0.0</L>
-            <LG>2.0</LG>
+            <LG>2.048035</LG>
             <LCK>false</LCK>
             <LGT>0.0</LGT>
             <NM></NM>
@@ -555,7 +555,7 @@ junction note</CM>
             <DT>2000-01-01</DT>
             <!--stalagmight:no-survey-date-->
             <DP>2.0</DP>
-            <DPI>2.5</DPI>
+            <DPI>-1.0</DPI>
             <D>0.0</D>
             <EXC>false</EXC>
             <EX>unknown</EX>
@@ -564,7 +564,7 @@ junction note</CM>
             <INC>0.0</INC>
             <LT>0.0</LT>
             <L>0.0</L>
-            <LG>3.0</LG>
+            <LG>2.962732</LG>
             <LCK>false</LCK>
             <LGT>0.0</LGT>
             <NM></NM>
@@ -780,7 +780,7 @@ const GOLDEN_SIDECAR_TMLU: &str = r#"<?xml version="1.0" encoding="UTF-8" standa
             <CM>station note
 junction note</CM>
             <DT>2024-03-05</DT>
-            <DP>2.0</DP>
+            <DP>2.166667</DP>
             <DPI>-1.0</DPI>
             <D>0.0</D>
             <EXC>false</EXC>
@@ -790,7 +790,7 @@ junction note</CM>
             <INC>0.0</INC>
             <LT>0.0</LT>
             <L>0.0</L>
-            <LG>6.25</LG>
+            <LG>6.225508</LG>
             <LCK>false</LCK>
             <LGT>0.0</LGT>
             <NM></NM>
@@ -872,7 +872,7 @@ junction note</CM>
             <INC>0.0</INC>
             <LT>0.0</LT>
             <L>0.0</L>
-            <LG>2.0</LG>
+            <LG>2.048035</LG>
             <LCK>false</LCK>
             <LGT>0.0</LGT>
             <NM></NM>
@@ -890,7 +890,7 @@ junction note</CM>
             <CM></CM>
             <DT>2000-01-01</DT>
             <DP>2.0</DP>
-            <DPI>2.5</DPI>
+            <DPI>-1.0</DPI>
             <D>0.0</D>
             <EXC>false</EXC>
             <EX>unknown</EX>
@@ -899,7 +899,7 @@ junction note</CM>
             <INC>0.0</INC>
             <LT>0.0</LT>
             <L>0.0</L>
-            <LG>3.0</LG>
+            <LG>2.962732</LG>
             <LCK>false</LCK>
             <LGT>0.0</LGT>
             <NM></NM>
