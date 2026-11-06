@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   useSpeleoStore,
   PUSH_FAILURE_DIALOGS,
@@ -82,6 +82,7 @@ describe('speleoStore', () => {
         storage: 'keychain',
         keychain: 'available',
         needs_storage_choice: false,
+        replaced_session: false,
       });
 
       expect(speleoProjectSessionStillCurrent(issuedFor)).toBe(false);
@@ -222,6 +223,7 @@ describe('speleoStore', () => {
           storage: 'keychain',
           keychain: 'available',
           needs_storage_choice: false,
+          replaced_session: false,
         });
       useSpeleoStore.getState().clearSession();
       const s = useSpeleoStore.getState();
@@ -272,6 +274,7 @@ describe('speleoStore', () => {
           storage: 'keychain',
           keychain: 'available',
           needs_storage_choice: false,
+          replaced_session: false,
         });
       useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
       invokeIpcMock.mockRejectedValue({
@@ -284,6 +287,90 @@ describe('speleoStore', () => {
       expect(result.ok).toBe(false);
       expect(useSpeleoStore.getState().session).toBeNull();
       expect(useSpeleoStore.getState().pendingAuth).toBeNull();
+    });
+
+    /**
+     * [#576 FZ-SDB-3-D1] A login that replaced a live session for another account or
+     * server: the backend ran logout's hand-back for the old one first (lock released
+     * best-effort, edit gate shut, claim forgotten), so the store mirrors that logout
+     * BEFORE the new session lands and re-seeds the link from the backend.
+     */
+    describe('applyPendingAuth over a replaced session', () => {
+      const seenAtNewSession: Array<{
+        editState: string | undefined;
+        lockHolder: string | null | undefined;
+        heldLocks: unknown;
+      }> = [];
+      const realSetSessionFromLogin = useSpeleoStore.getState().setSessionFromLogin;
+
+      const loginReplacing = async (replaced_session: boolean) => {
+        loggedInAs('old@x');
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, lock_holder: 'old@x' }));
+        useSpeleoStore.setState({
+          heldLocks: [{ projectId: 'p1', projectName: 'Cenote Azul' }],
+          remoteProjectId: 'p1',
+          // What the new session looks like at the moment it is set.
+          setSessionFromLogin: (r) => {
+            const s = useSpeleoStore.getState();
+            seenAtNewSession.push({
+              editState: s.link?.editState,
+              lockHolder: s.link?.lockHolder,
+              heldLocks: s.heldLocks,
+            });
+            realSetSessionFromLogin(r);
+          },
+        });
+        useSpeleoStore.getState().setPendingAuth({
+          kind: 'login',
+          email: 'new@y',
+          password: 'pw',
+          token: '',
+          useToken: false,
+        });
+        invokeIpcMock.mockImplementation(async (cmd: string) => {
+          if (cmd === 'speleodb_login')
+            return {
+              user_email: 'new@y',
+              endpoint: 'https://y/',
+              keychain_backed: true,
+              storage: 'keychain',
+              keychain: 'available',
+              needs_storage_choice: false,
+              replaced_session,
+            };
+          // The re-seed: never answers, so what is asserted is the reset, not a status.
+          if (cmd === 'speleodb_link_status') return new Promise(() => {});
+          return [];
+        });
+        return useSpeleoStore.getState().applyPendingAuth('https://y/');
+      };
+
+      beforeEach(() => {
+        seenAtNewSession.length = 0;
+      });
+
+      afterEach(() => {
+        useSpeleoStore.setState({ setSessionFromLogin: realSetSessionFromLogin });
+      });
+
+      it('drops the old link and held-lock state before the new session, then re-seeds', async () => {
+        expect((await loginReplacing(true)).ok).toBe(true);
+
+        expect(seenAtNewSession).toEqual([{ editState: 'read-only', lockHolder: null, heldLocks: null }]);
+        expect(useSpeleoStore.getState().session?.userEmail).toBe('new@y');
+        expect(useSpeleoStore.getState().remoteProjectId).toBeNull();
+        expect(invokeIpcMock.mock.calls.map(([cmd]) => cmd)).toContain('speleodb_link_status');
+      });
+
+      it('leaves the link alone when no session was replaced', async () => {
+        expect((await loginReplacing(false)).ok).toBe(true);
+
+        expect(seenAtNewSession).toEqual([
+          { editState: 'editing', lockHolder: 'old@x', heldLocks: [{ projectId: 'p1', projectName: 'Cenote Azul' }] },
+        ]);
+        expect(useSpeleoStore.getState().session?.userEmail).toBe('new@y');
+        expect(invokeIpcMock.mock.calls.map(([cmd]) => cmd)).not.toContain('speleodb_link_status');
+      });
     });
   });
 

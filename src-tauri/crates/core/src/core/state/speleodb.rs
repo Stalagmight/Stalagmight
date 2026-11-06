@@ -1560,13 +1560,34 @@ impl AppState {
         // lock - free to mutate a project whose mutex their credentials do not
         // hold. Logout takes the guard for the same reason (see
         // `speleodb_logout`); a login is the same event in the other direction.
-        let _lock_ops = self.speleodb_lock_ops_guard();
+        let lock_ops = self.speleodb_lock_ops_guard();
+        // [#576 FZ-SDB-3-D1] A sign-in that REPLACES a live session (another account,
+        // or the same one on another server) first runs logout's hand-back for it:
+        // the old session's held lock released best-effort with ITS token, the edit
+        // gate shut, the claim gone with the release. The UI used to be the only
+        // thing standing between a re-login and a forgotten session still holding a
+        // lock with its gate open; the backend must not depend on it. Decided under
+        // a brief session guard, which the hand-back (it takes the session lock to
+        // read the token and clear the claim) must not run under.
+        let replaced_session = {
+            let session = self.speleodb.lock();
+            session.email.is_some()
+                && (session.endpoint.as_deref() != Some(endpoint.as_str())
+                    || session.email.as_deref() != Some(email.as_str()))
+        };
+        if replaced_session {
+            tracing::info!(
+                purpose = "hand back the session a sign-in replaces (#576 FZ-SDB-3)",
+                "speleodb login: replacing a live session; handing its lock and edit \
+                 gate back first"
+            );
+            self.speleodb_hand_back_replaced_session(&lock_ops);
+        }
         let (tier, keychain_state, has_token) = {
             let mut session = self.speleodb.lock();
             // If a *different* account is already active, forget it first so its
-            // keychain entry isn't orphaned. (The UI logs out before re-login, but
-            // the backend shouldn't depend on that; a same-account re-login just
-            // overwrites the existing entry.)
+            // keychain entry isn't orphaned; its lock and edit gate were handed back
+            // above. A same-account re-login just overwrites the existing entry.
             let switching = session.endpoint.as_deref() != Some(endpoint.as_str())
                 || session.email.as_deref() != Some(email.as_str());
             if switching {
@@ -1676,6 +1697,7 @@ impl AppState {
             // another go, so `Declined` cannot appear in `keychain` here and the
             // check is on the failure itself.
             needs_storage_choice: keychain == KeychainReport::Unavailable && !previously_declined,
+            replaced_session,
         })
     }
 

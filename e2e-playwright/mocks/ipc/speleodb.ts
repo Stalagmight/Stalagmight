@@ -187,6 +187,8 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
           storage: 'keychain',
           keychain: 'available',
           needs_storage_choice: false,
+          // [#576 FZ-SDB-3-D1] A mocked run starts signed out, so no session is replaced.
+          replaced_session: false,
         } satisfies MockReply<'speleodb_login'>;
 
       // The write workflow (#576 E3): canned happy-path answers - the open lands on the

@@ -934,7 +934,14 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           token: p.useToken ? p.token.trim() || undefined : undefined,
         });
         set({ pendingAuth: null, authError: null });
+        // [#576 FZ-SDB-3-D1] The login replaced a live session for another account or
+        // server, and the backend ran logout's hand-back for it first (lock released
+        // best-effort with the old token, edit gate shut, claim forgotten). Mirror that
+        // logout here before the new session lands, then re-seed the link from the
+        // backend, so the old session's held lock and edit state do not carry over.
+        if (r.replaced_session) get().clearSession();
         get().setSessionFromLogin(r);
+        if (r.replaced_session) void get().refreshLinkStatus();
         // The keychain failed on THIS login and the user has not already settled
         // where the key should go, so ask now, while the failure is in context and
         // the token is still in hand. Raised from here so BOTH login paths reach it

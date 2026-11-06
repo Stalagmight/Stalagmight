@@ -418,6 +418,11 @@ pub struct SpeleoLoginResult {
     /// failure is in context. False when the keychain worked, and false when the
     /// user has already declined it (we are not re-litigating a settled choice).
     pub needs_storage_choice: bool,
+    /// [#576 FZ-SDB-3-D1] This login replaced a live session for another account or
+    /// server, and ran logout's hand-back for it first: the old session's held lock
+    /// was released best-effort with its token, the edit gate was shut and the
+    /// claim forgotten. The frontend mirrors that locally, as it does a logout.
+    pub replaced_session: bool,
 }
 
 /// Where the API key is being kept. Mirrors `auth::TokenTier` across the IPC
@@ -1101,6 +1106,7 @@ mod tests {
             storage: TokenStorage::Keychain,
             keychain: KeychainReport::Available,
             needs_storage_choice: false,
+            replaced_session: false,
         })
         .expect("serialize login result");
         let status = serde_json::to_string(&SpeleoSessionStatus {

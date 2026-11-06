@@ -2,4 +2,4 @@
 import type { KeychainReport } from "./KeychainReport";
 import type { TokenStorage } from "./TokenStorage";
 
-export interface SpeleoLoginResult { user_email: string, endpoint: string, keychain_backed: boolean, storage: TokenStorage, keychain: KeychainReport, needs_storage_choice: boolean, }
+export interface SpeleoLoginResult { user_email: string, endpoint: string, keychain_backed: boolean, storage: TokenStorage, keychain: KeychainReport, needs_storage_choice: boolean, replaced_session: boolean, }

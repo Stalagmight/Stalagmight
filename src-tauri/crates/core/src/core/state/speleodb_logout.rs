@@ -337,6 +337,23 @@ impl AppState {
         logout_residue_error(cleared.err().map(|e| e.to_string()), seed_cleared.err())
     }
 
+    /// [#576 FZ-SDB-3-D1] Logout's hand-back for a session a sign-in is about to
+    /// REPLACE (another account, or another server): the held write lock released
+    /// best-effort with the OLD token, the edit and force-edit gates shut, the
+    /// session boundary bumped - the gate half of [`Self::speleodb_logout`], run in
+    /// the login's own lock-ops span before it forgets the old session. Without it
+    /// the old session was forgotten with its lock still held and its gate open, and
+    /// Done then went to the new server.
+    ///
+    /// Only the gate half: the login goes on to forget the old credential itself, and
+    /// writes the new account record in place of logout's clear.
+    pub(super) fn speleodb_hand_back_replaced_session<'s>(
+        &self,
+        lock_ops: &'s super::speleodb_session::LockOpsHeld<'s>,
+    ) {
+        let _gates_dropped = self.speleodb_logout_drop_gates(lock_ops);
+    }
+
     /// [#576 A8] Drop the session (token, keychain entry, plaintext) - inside the
     /// SAME lock-ops span the gate half ran in: it takes the gate half's
     /// [`logout_span::GatesDropped`], which borrows that span, so a forget after the span
