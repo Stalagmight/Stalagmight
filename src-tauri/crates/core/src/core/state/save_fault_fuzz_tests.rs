@@ -789,6 +789,163 @@ fn a_dangling_link_at_the_temp_name_is_not_followed_by_the_save() {
     );
 }
 
+/// What a link at a temp name leads to, for the [#576 RVF-b-3] tests: a file not
+/// there yet, or another project (a database a save would write into), each in a
+/// folder of its own. Returns the target and its bytes before anything runs.
+#[cfg(unix)]
+fn plant_temp_link(temp: &Path, elsewhere: &Path, existing: bool) -> (PathBuf, Option<Vec<u8>>) {
+    let target = elsewhere.join(if existing {
+        "Other.stalx"
+    } else {
+        "planted.stalx"
+    });
+    if existing {
+        crate::persistence::Database::open(&target)
+            .expect("create the other project")
+            .save_project(&crate::models::Project::new("Other".to_owned(), None))
+            .expect("write the other project");
+    }
+    std::os::unix::fs::symlink(&target, temp).expect("plant the link");
+    let before = std::fs::read(&target).ok();
+    (target, before)
+}
+
+/// Make `dir` read-only (and prove it bites), run `f`, give `dir` its
+/// permissions back so the folder can be cleaned up, and return what `f` did.
+#[cfg(unix)]
+fn in_read_only_dir<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555))
+        .expect("make the folder read-only");
+    crate::models::test_support::assert_dir_refuses_new_files(dir);
+    let done = f();
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755))
+        .expect("give the folder its permissions back");
+    done
+}
+
+/// What is wrong with a write that had to be refused over a link at its temp
+/// name: the link's target was written (created, or its bytes changed), or the
+/// write was not refused with the write policy's wording for `file`.
+#[cfg(unix)]
+fn refused_over_the_link(
+    existing: bool,
+    target: &Path,
+    before: Option<&[u8]>,
+    result: &CommandResult,
+    file: &str,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    let after = std::fs::read(target).ok();
+    if after.as_deref() != before {
+        problems.push(format!(
+            "existing {existing}: written through the link at the temp name ({:?} bytes \
+             before, {:?} after)",
+            before.map(<[u8]>::len),
+            after.as_ref().map(Vec::len)
+        ));
+    }
+    let expected = format!("Refused to change {file}: {file}.tmp");
+    let message = result.error.as_deref().unwrap_or_default();
+    if result.success || !message.starts_with(&expected) {
+        problems.push(format!(
+            "existing {existing}: not refused as `{expected}...` (success {}): {message}",
+            result.success
+        ));
+    }
+    problems
+}
+
+/// [#576 RVF-b-3] A link at the save's temp name that cannot be removed - here the
+/// destination folder is read-only, as a shared folder is for a link someone else
+/// owns - refuses the save, as the write policy words a refusal, and writes
+/// nothing where the link leads: neither a new file for a dangling link nor
+/// another project the link leads to.
+///
+/// The removal's error was ignored, so the temp database was opened THROUGH the
+/// surviving link: a dangling one got a whole project created where it pointed,
+/// one to another project got this project saved into it, and only the final
+/// rename (in the read-only folder) failed.
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_temp_name_that_cannot_be_removed_refuses_the_save() {
+    let _config = isolated_config();
+    let mut problems = Vec::new();
+    for existing in [false, true] {
+        let mut rng = Rng::new(3);
+        let session = Session::new(&mut rng);
+        let elsewhere = tempfile::TempDir::new().expect("a folder the save must not write");
+        let locked = session.dir.path().join("locked");
+        std::fs::create_dir(&locked).expect("the destination folder");
+        let destination = locked.join("CaveA.stalx");
+        let (target, before) = plant_temp_link(&temp_of(&destination), elsewhere.path(), existing);
+
+        let saved = in_read_only_dir(&locked, || {
+            session.state.save_project(Some(destination.clone()))
+        });
+
+        problems.extend(refused_over_the_link(
+            existing,
+            &target,
+            before.as_deref(),
+            &saved,
+            "CaveA.stalx",
+        ));
+        if names_in(&locked)
+            .iter()
+            .any(|name| name != "CaveA.stalx.tmp")
+        {
+            problems.push(format!(
+                "existing {existing}: written beside the link: {:?}",
+                names_in(&locked)
+            ));
+        }
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// [#576 RVF-b-3] The merge's equivalent: a link at the merged file's temp name
+/// that cannot be removed refuses the merge, and nothing is written where it
+/// leads.
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_merge_temp_name_that_cannot_be_removed_refuses_the_merge() {
+    let _config = isolated_config();
+    let mut problems = Vec::new();
+    for existing in [false, true] {
+        let sources_dir = tempfile::TempDir::new().expect("the sources' folder");
+        let sources: Vec<PathBuf> = ["CaveA", "CaveB"]
+            .iter()
+            .map(|name| {
+                let path = sources_dir.path().join(format!("{name}.stalx"));
+                crate::persistence::Database::open(&path)
+                    .expect("create a source")
+                    .save_project(&crate::models::Project::new((*name).to_owned(), None))
+                    .expect("write a source");
+                path
+            })
+            .collect();
+        let elsewhere = tempfile::TempDir::new().expect("a folder the merge must not write");
+        let output_dir = tempfile::TempDir::new().expect("the output's folder");
+        let output = output_dir.path().join("Merged.stalx");
+        let (target, before) = plant_temp_link(&temp_of(&output), elsewhere.path(), existing);
+        let state = super::AppState::new().expect("state");
+
+        let merged = in_read_only_dir(output_dir.path(), || {
+            state.merge_projects(sources.clone(), output.clone(), "Merged".to_owned(), false)
+        });
+
+        problems.extend(refused_over_the_link(
+            existing,
+            &target,
+            before.as_deref(),
+            &merged,
+            "Merged.stalx",
+        ));
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
 /// The CI seed list. Seeds that ever failed are added here as regressions.
 const GATE_SEEDS: std::ops::RangeInclusive<u32> = 1..=24;
 

@@ -448,9 +448,10 @@ impl AppState {
 
         // Remove any leftover temp file - and a link at that name even when it
         // leads nowhere yet, which `exists()` misses and the temp database would
-        // be created through (#576 FZ-PERSIST-fs-3, as in `save_project`).
-        if std::fs::symlink_metadata(&temp_path).is_ok() {
-            let _ = std::fs::remove_file(&temp_path);
+        // be created through (#576 FZ-PERSIST-fs-3, as in `save_project`); one that
+        // cannot be removed refuses the merge (#576 RVF-b-3).
+        if let Err(refused) = super::project_io::clear_save_temp(&temp_path, &output_path) {
+            return *refused;
         }
 
         // Save to temporary file

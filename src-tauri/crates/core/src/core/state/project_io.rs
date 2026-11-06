@@ -198,6 +198,46 @@ pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) ->
     }
 }
 
+/// [#576 FZ-PERSIST-fs-3, RVF-b-3] Clear a save's temp name `temp` before the
+/// temp database is created there: whatever is at it - a leftover temp, or a
+/// link, even one that leads nowhere yet (`exists()` follows a link and says no
+/// for a dangling one) - is removed, and `remove_file` removes a link itself,
+/// never its target. An entry that cannot be removed (a folder the user cannot
+/// change, a link someone else owns in a shared folder) refuses the save with
+/// nothing written: the temp database would be created THROUGH a link left
+/// there, wherever it points, the write policy having judged only `target`'s
+/// name. Worded as that policy words a refusal.
+pub(super) fn clear_save_temp(temp: &Path, target: &Path) -> Result<(), Box<CommandResult>> {
+    if std::fs::symlink_metadata(temp).is_err() {
+        return Ok(());
+    }
+    match std::fs::remove_file(temp) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => {
+            let name_of = |path: &Path| {
+                path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                )
+            };
+            tracing::warn!(
+                path = ?target,
+                temp_path = ?temp,
+                error = %e,
+                purpose = "persist edits safely",
+                "Save refused: the entry at the temp name could not be removed"
+            );
+            Err(Box::new(CommandResult::failure(format!(
+                "Refused to change {}: {} beside it, the name it is written under first, \
+                 is taken and could not be removed ({e})",
+                name_of(target),
+                name_of(temp)
+            ))))
+        }
+    }
+}
+
 /// [#576 NF-W14BE-1] Give every section that has no creation time yet `now`.
 ///
 /// On the MODEL, not only in the file: the `.stalx` `sections.created_at`
@@ -722,9 +762,10 @@ impl AppState {
         // at that name, even one that leads nowhere yet: `exists()` follows a link
         // and says no for a dangling one, and the temp database would then be
         // created THROUGH it, wherever it points (#576 FZ-PERSIST-fs-3). The write
-        // policy judged the project's own name, not this one.
-        if std::fs::symlink_metadata(&temp_path).is_ok() {
-            let _ = std::fs::remove_file(&temp_path);
+        // policy judged the project's own name, not this one. One that cannot be
+        // removed refuses the save (#576 RVF-b-3).
+        if let Err(refused) = clear_save_temp(&temp_path, &save_path) {
+            return *refused;
         }
 
         // Save to temporary file first
