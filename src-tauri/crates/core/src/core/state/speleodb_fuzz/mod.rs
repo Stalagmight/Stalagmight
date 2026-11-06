@@ -43,7 +43,22 @@ use run::{shrink, Harness, Source};
 
 /// Seeds that once failed, replayed by [`speleodb_fuzz_regression_seeds`].
 /// Each entry: (seed, steps, fault percent).
-const REGRESSION_SEEDS: &[(u64, usize, u64)] = &[];
+const REGRESSION_SEEDS: &[(u64, usize, u64)] = &[
+    // FZ-SDB-2: Publish left the now-linked project editing without its lock (I11).
+    (101, 40, 25),
+    (2100, 40, 25),
+    (3600, 40, 25),
+    (4101, 40, 25),
+    // A close's silent release over a lock this process never took (another session
+    // of the account held it): an I2b false positive, since claimed only for a lock
+    // held here.
+    (10002, 40, 25),
+    // FZ-SDB-3 (open question): a sign-in that replaces the session leaves the lock
+    // this process holds on the old server held, without a word (I2b). These fail
+    // until that is decided.
+    (10000, 40, 25),
+    (14000, 40, 25),
+];
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name)

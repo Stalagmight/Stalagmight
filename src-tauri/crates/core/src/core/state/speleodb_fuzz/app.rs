@@ -180,6 +180,16 @@ impl App {
             .and_then(|db| db.load_speleo_link().ok().flatten())
     }
 
+    /// The open linked project's id while the app edits it under the lock (gate
+    /// open, not force-editing): the lock a silent release promises to hand back.
+    /// A read-only copy holds no lock of the app's, whoever holds the account's.
+    fn held_here(&self) -> Option<String> {
+        if !self.state.edit_enabled() || self.state.force_editing() {
+            return None;
+        }
+        self.open_link().map(|l| l.project_id)
+    }
+
     pub(super) fn logged_in(&self) -> bool {
         self.state
             .speleodb_session_status()
@@ -222,15 +232,27 @@ impl App {
                 .cloned()
         };
         match act {
-            Act::Login => self.login(&self.proxy_url.clone(), out),
-            Act::LoginOther => self.login(&self.other_url.clone(), out),
+            Act::Login => {
+                self.login(&self.proxy_url.clone(), out);
+            }
+            Act::LoginOther => {
+                // A sign-in that replaces the session (Settings shows the form while
+                // signed in) leaves this server: a lock this process holds on it is
+                // stranded unless handed back, as a logout hands it back.
+                let clean = !self.hint_bits().2;
+                let held = self.held_here();
+                let logged_in = self.login(&self.other_url.clone(), out);
+                if let (true, true, Some(project_id)) = (logged_in, clean, held) {
+                    out.claims.push(Claim::LockReleaseBestEffort { project_id });
+                }
+            }
             Act::Logout => {
                 let clean = !self.hint_bits().2;
-                let pid = self.open_link().map(|l| l.project_id);
+                let held = self.held_here();
                 match self.state.speleodb_logout() {
                     Ok(()) => {
                         out.note("logout -> Ok");
-                        if let (true, Some(project_id)) = (clean, pid) {
+                        if let (true, Some(project_id)) = (clean, held) {
                             out.claims.push(Claim::LockReleaseBestEffort { project_id });
                         }
                     }
@@ -300,14 +322,14 @@ impl App {
                 self.restart();
             }
             Act::Unlink => {
-                let pid = self.open_link().map(|l| l.project_id);
+                let held = self.held_here();
                 match self.state.speleodb_unlink() {
                     Ok(()) => {
                         out.note("unlink -> Ok");
                         out.claims.push(Claim::LinkDropped);
                         // Unlink hands a held lock back best-effort (it abandons the link,
                         // so nothing could release it from this copy again).
-                        if let Some(project_id) = pid {
+                        if let Some(project_id) = held {
                             out.claims.push(Claim::LockReleaseBestEffort { project_id });
                         }
                     }
@@ -333,15 +355,22 @@ impl App {
         }
     }
 
-    fn login(&self, endpoint: &str, out: &mut Outcome) {
+    /// Sign in as the owner at `endpoint`; whether it succeeded.
+    fn login(&self, endpoint: &str, out: &mut Outcome) -> bool {
         match self.state.speleodb_login(
             Some(endpoint.to_owned()),
             Some(self.owner.email.clone()),
             Some(self.owner.password.clone()),
             None,
         ) {
-            Ok(r) => out.note(format!("login {} -> Ok", r.endpoint)),
-            Err(e) => out.refused("login", &e),
+            Ok(r) => {
+                out.note(format!("login {} -> Ok", r.endpoint));
+                true
+            }
+            Err(e) => {
+                out.refused("login", &e);
+                false
+            }
         }
     }
 
@@ -669,15 +698,16 @@ impl App {
 
     fn take_remote(&mut self, out: &mut Outcome) {
         let pid = self.open_link().map(|l| l.project_id);
+        let held = self.held_here();
         out.claims.push(Claim::DisclosedLoss);
         match self.state.speleodb_take_remote() {
             Ok(path) => {
                 out.note("take_remote -> Ok");
                 self.load(Path::new(&path), out);
                 if let Some(project_id) = pid {
-                    out.claims.push(Claim::InSync {
-                        project_id: project_id.clone(),
-                    });
+                    out.claims.push(Claim::InSync { project_id });
+                }
+                if let Some(project_id) = held {
                     out.claims.push(Claim::LockReleaseBestEffort { project_id });
                 }
             }
@@ -826,10 +856,10 @@ impl App {
     /// `close_project(releaseLock)` as the command runs it.
     fn close_project(&mut self, release: bool, out: &mut Outcome) {
         let (_, _, dirty, _) = self.hint_bits();
-        let pid = self.open_link().map(|l| l.project_id);
+        let held = self.held_here();
         if release {
             self.state.speleodb_release_held_lock_best_effort();
-            if let (false, Some(project_id)) = (dirty, pid) {
+            if let (false, Some(project_id)) = (dirty, held) {
                 out.claims.push(Claim::LockReleaseBestEffort { project_id });
             }
         } else {
@@ -871,7 +901,6 @@ impl App {
             self.save(out);
         }
         let (_, _, dirty, _) = self.hint_bits();
-        let pid = self.open_link().map(|l| l.project_id);
         if dirty {
             match mode {
                 LeaveMode::PushRelease => {
@@ -891,9 +920,10 @@ impl App {
         }
         // The exit hook (`lib.rs`, RunEvent::ExitRequested).
         let still_dirty = self.hint_bits().2;
+        let held = self.held_here();
         self.state
             .speleodb_release_held_lock_bounded(Duration::from_secs(5));
-        if let (false, Some(project_id)) = (still_dirty, pid) {
+        if let (false, Some(project_id)) = (still_dirty, held) {
             out.claims.push(Claim::LockReleaseBestEffort { project_id });
         }
         out.note("quit -> restart");
@@ -948,9 +978,13 @@ impl App {
                 };
                 out.claims.push(Claim::Published(proj));
                 self.load(Path::new(&report.result.local_path), out);
-                out.claims.push(Claim::InSync {
-                    project_id: report.result.project_id,
-                });
+                // The initial push is best-effort: one that did not confirm leaves the
+                // copy marked un-pushed for a later Done, which claims nothing.
+                if !self.hint_bits().2 {
+                    out.claims.push(Claim::InSync {
+                        project_id: report.result.project_id,
+                    });
+                }
             }
             Err(e) => out.refused("publish", &e),
         }
