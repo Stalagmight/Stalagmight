@@ -62,24 +62,27 @@ const REGRESSION_SEEDS: &[(u64, usize, u64)] = &[
     (14007, 40, 25),
     (402, 40, 15),
     (200, 40, 15),
-    // Open questions; these fail until each is decided.
-    // FZ-SDB-3: a sign-in that replaces the session keeps the old server's lock
-    // without a word (I2b).
+    // FZ-SDB-3 (fixed, decision FZ-SDB-3-D1): a sign-in that replaced the session
+    // kept the old server's lock without a word (I2b).
     (10000, 40, 25),
     (13506, 40, 25),
-    // FZ-SDB-5: re-opening a project from SpeleoDB overwrites an unlinked copy at its
-    // cache path (I1).
+    // FZ-SDB-5 (fixed, decisions FZ-SDB-5-D1..D3): re-opening a project from
+    // SpeleoDB overwrote an unlinked copy at its cache path (I1). Farm seed 100000.
     (302, 40, 15),
     (12508, 40, 25),
     (11009, 40, 25),
-    // FZ-SDB-6: a lock verb whose reply was lost after the server applied it leaves
-    // the app's lock state out of step: a lost release (or Done) reply keeps the gate
-    // open over a free lock (I11); a lost acquire reply (Publish) makes the lock read
-    // as inherited, so a logout never hands it back (I2b).
+    (100000, 40, 25),
+    // FZ-SDB-6 (fixed, decision FZ-SDB-6-D1): a lock verb whose reply was lost after
+    // the server applied it left the app's lock state out of step: a lost release (or
+    // Done) reply kept the gate open over a free lock (I11; farm seed 100057); a lost
+    // acquire reply (Publish, Start Editing) made the lock read as inherited, so a
+    // logout or quit never handed it back (I2b; farm seed 100026).
     (12505, 40, 25),
     (12008, 40, 25),
     (203, 40, 15),
     (13004, 40, 25),
+    (100026, 40, 25),
+    (100057, 40, 25),
 ];
 
 fn env_or(name: &str, default: &str) -> String {
