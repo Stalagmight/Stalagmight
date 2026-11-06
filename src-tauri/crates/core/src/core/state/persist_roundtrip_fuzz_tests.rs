@@ -922,7 +922,18 @@ pub(super) fn run_seed(seed: u32, steps: usize) -> (Vec<String>, BTreeMap<&'stat
                 &mut problems,
             ),
             17 => {
-                let to = session.next_path();
+                // A new file, or over an older file of this session that is not
+                // the open one: nothing of what it held may bleed into the save.
+                let older = (session.files_made > 1 && rng.chance(35))
+                    .then(|| {
+                        let k = rng.range(1, session.files_made as i64);
+                        session.dir.path().join(format!("Cave{k}.stalx"))
+                    })
+                    .filter(|p| p.exists() && session.file.as_ref() != Some(p));
+                if older.is_some() {
+                    session.count("save-as-over-older-file");
+                }
+                let to = older.unwrap_or_else(|| session.next_path());
                 save_and_check(
                     &mut session,
                     Some(to),

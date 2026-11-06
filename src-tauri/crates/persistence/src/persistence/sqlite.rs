@@ -617,22 +617,6 @@ pub struct Database {
     conn: Connection,
 }
 
-/// [#576 FZ-PERSIST] TEST HOOK: cap this connection's database at `pages` pages
-/// (`PRAGMA max_page_count`), so a write that would grow the file past it fails
-/// with `SQLITE_FULL` - a disk that fills up part-way through a save, at a
-/// chosen point, without a real full disk. Returns the cap SQLite settled on (it
-/// never goes below the file's current size). Compiled for tests alone.
-#[cfg(any(test, feature = "test-support"))]
-impl Database {
-    pub fn cap_page_count_for_test(&self, pages: u32) -> Result<u32> {
-        Ok(self
-            .conn
-            .query_row(&format!("PRAGMA max_page_count = {pages}"), [], |row| {
-                row.get(0)
-            })?)
-    }
-}
-
 mod integrity;
 mod open;
 mod read;

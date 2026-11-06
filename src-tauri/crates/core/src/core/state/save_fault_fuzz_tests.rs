@@ -64,11 +64,11 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use super::format_property_tests::open_fresh;
+use super::format_property_tests::{dump_database, open_fresh};
 use super::fuzz_undo_tests::{random_shot, Rng};
 use super::persist_roundtrip_fuzz_tests::{
     adopt_live_bookkeeping, check_file, edit, knob, observe_state, side_tables_of, side_write,
-    Session, SideModel,
+    trace, trace_take, Session, SideModel,
 };
 use super::project_io::{AFTER_TEMP_OPENED, AFTER_TEMP_WRITTEN, FAIL_REOPEN_AFTER_RENAME};
 use super::save_sidecars::fault::fail_writes_to;
@@ -144,6 +144,53 @@ fn pick_fault(rng: &mut Rng, old_pages: u32) -> Fault {
         }),
         10 => Fault::Kill(*rng.pick(&[Kill::BeforeTemp, Kill::TempWhole])),
         _ => Fault::Kill(Kill::AfterRename),
+    }
+}
+
+/// The save the user makes to `destination` from where the session is NOW: a
+/// plain Save once the session is on it (an explicit Save As to the open file of
+/// a linked project is refused by design, "Save a Copy needs a different
+/// destination"), else Save As when the run asked for one - a detached copy if
+/// the project is linked. `(request, detached)`.
+fn plan_save(session: &Session, destination: &Path, explicit: bool) -> (Option<PathBuf>, bool) {
+    if session.file.as_deref() == Some(destination) || !explicit {
+        (None, false)
+    } else {
+        (
+            Some(destination.to_path_buf()),
+            session.model.link.is_some(),
+        )
+    }
+}
+
+/// The file's logical content without its display settings (a dump, see
+/// `dump_database`).
+fn dump_without_display_settings(bytes: &[u8]) -> Result<String, String> {
+    let scratch = tempfile::TempDir::new().map_err(|e| e.to_string())?;
+    let path = scratch.path().join("Dumped.stalx");
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    let dump = dump_database(&path)?;
+    let mut out = String::new();
+    let mut skipping = false;
+    for line in dump.lines() {
+        if line.starts_with("== ") {
+            skipping = line.starts_with("== display_settings ");
+        }
+        if !skipping {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    Ok(out)
+}
+
+/// A fault that is not a kill (a chain goes on after it).
+fn pick_injected(rng: &mut Rng, old_pages: u32) -> Fault {
+    loop {
+        let fault = pick_fault(rng, old_pages);
+        if !matches!(fault, Fault::Kill(_)) {
+            return fault;
+        }
     }
 }
 
@@ -249,22 +296,31 @@ fn run_seed(seed: u32) -> (Vec<String>, BTreeMap<String, usize>) {
         .unwrap_or_default()
         .to_owned();
 
-    let outcome = match fault {
-        Fault::Kill(kill) => check_kill(
+    let outcome = if let Fault::Kill(kill) = fault {
+        check_kill(
             &mut session,
             request.as_deref(),
             &destination,
             old_bytes.as_deref(),
             kill,
-        ),
-        _ => check_failure(
+        )
+    } else {
+        // Sometimes a chain: two or three faulted saves before the clean one,
+        // so a session that already failed once is the one failing again.
+        let mut faults = vec![fault];
+        if rng.chance(30) {
+            for _ in 0..rng.range(1, 2) {
+                faults.push(pick_injected(&mut rng, old_pages));
+            }
+            *counts.entry("chained".to_owned()).or_insert(0) += 1;
+        }
+        check_failure(
             &mut session,
-            request.as_deref(),
+            &mut rng,
             &destination,
-            old_bytes.as_deref(),
-            fault,
-            detached,
-        ),
+            mode != Mode::InPlace,
+            &faults,
+        )
     };
     match outcome {
         Ok(what) => {
@@ -282,16 +338,112 @@ fn run_seed(seed: u32) -> (Vec<String>, BTreeMap<String, usize>) {
     (problems, counts)
 }
 
-/// A save under `fault`, then the retry. `Ok` names what the save did.
+/// A chain of saves, each under one of `faults`, the session going on between
+/// them, then the retry with nothing failing. `Ok` names what the FIRST faulted
+/// save did. Problems found after a later fault are prefixed with its kind.
 fn check_failure(
+    session: &mut Session,
+    rng: &mut Rng,
+    destination: &Path,
+    explicit: bool,
+    faults: &[Fault],
+) -> Result<&'static str, Vec<String>> {
+    let mut problems = Vec::new();
+    let mut first_outcome = "refused";
+    for (index, &fault) in faults.iter().enumerate() {
+        let (request, detached) = plan_save(session, destination, explicit);
+        trace(|| format!("faulted save {fault:?} request {request:?} detached {detached}"));
+        let (outcome, found) =
+            save_under_fault(session, request.as_deref(), destination, fault, detached)?;
+        if index == 0 {
+            first_outcome = outcome;
+        }
+        let prefix = if index == 0 {
+            String::new()
+        } else {
+            let kind = format!("{fault:?}");
+            let kind = kind
+                .split([' ', '(', '{'])
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            format!("then-{kind}: ")
+        };
+        problems.extend(found.into_iter().map(|p| format!("{prefix}{p}")));
+        // The session goes on - a few more edits and side-table writes (after a
+        // failed reopen they land in the in-memory cache, or are refused).
+        for _ in 0..rng.below(4) {
+            if rng.chance(50) {
+                edit(&session.state, rng);
+            } else {
+                side_write(session, rng);
+            }
+        }
+        if let Some(problem) = adopt_live_bookkeeping(session) {
+            problems.push(format!("{prefix}after the save, {problem}"));
+        }
+    }
+    if session
+        .state
+        .get_project_state()
+        .is_some_and(|p| p.has_unresolvable_cross_references())
+    {
+        // An edit since left a dangling reference: the retry is refused by design.
+        return if problems.is_empty() {
+            Ok(first_outcome)
+        } else {
+            Err(problems)
+        };
+    }
+    // The same save again, with nothing failing.
+    let (request, detached) = plan_save(session, destination, explicit);
+    let retry = session.state.save_project(request);
+    if retry.success {
+        let unexpected: Vec<&str> = retry
+            .warnings
+            .iter()
+            .map(|w| w.code.as_str())
+            .filter(|code| *code != NOT_REOPENED)
+            .collect();
+        if !unexpected.is_empty() {
+            problems.push(format!("the retry warned {unexpected:?}"));
+        }
+        let model = session.model_after_save(detached);
+        let expected = observe_state(&session.state);
+        for problem in check_file(destination, &expected, &model) {
+            problems.push(format!("after the retry: {problem}"));
+        }
+        if temp_of(destination).exists() {
+            problems.push("the retry left a .stalx.tmp behind".to_owned());
+        }
+    } else {
+        problems.push(format!(
+            "the retry with nothing failing was refused: {:?} {:?}",
+            retry.code, retry.error
+        ));
+    }
+    if problems.is_empty() {
+        Ok(first_outcome)
+    } else {
+        Err(problems)
+    }
+}
+
+/// One save under `fault`, checked: what it did, and every problem with it.
+fn save_under_fault(
     session: &mut Session,
     request: Option<&Path>,
     destination: &Path,
-    old_bytes: Option<&[u8]>,
     fault: Fault,
     detached: bool,
-) -> Result<&'static str, Vec<String>> {
+) -> Result<(&'static str, Vec<String>), Vec<String>> {
     let mut problems = Vec::new();
+    let old_bytes = std::fs::read(destination).ok();
+    // A session that lost its handle (a failed reopen) reopens the file first and
+    // writes the display settings changed meanwhile into it
+    // (`restore_missing_database`) - a write to the open file a failed save does
+    // not undo, and is not meant to.
+    let handle_lost = request.is_none() && !session.has_database();
     let side_fault = match fault {
         Fault::SideTable(table) => Some(fail_writes_to(table)),
         _ => None,
@@ -368,13 +520,27 @@ fn check_failure(
         if !detached && result.warnings.iter().any(|w| w.code == DISPLAY_NOT_SAVED) {
             session.model.display.clear();
         }
+        // A save that is not a detached copy moves the session onto its file.
+        if !detached {
+            session.file = Some(destination.to_path_buf());
+        }
     } else {
         let now = std::fs::read(destination).ok();
-        if now.as_deref() != old_bytes {
+        let only_settings_flushed = || match (&old_bytes, &now) {
+            (Some(old), Some(now)) => {
+                handle_lost
+                    && matches!(
+                        (dump_without_display_settings(old), dump_without_display_settings(now)),
+                        (Ok(a), Ok(b)) if a == b
+                    )
+            }
+            _ => false,
+        };
+        if now != old_bytes && !only_settings_flushed() {
             problems.push(format!(
                 "the save failed ({:?}) but the destination changed: {} -> {} bytes",
                 result.error,
-                old_bytes.map_or(0, <[u8]>::len),
+                old_bytes.as_ref().map_or(0, Vec::len),
                 now.as_ref().map_or(0, Vec::len)
             ));
         }
@@ -382,37 +548,7 @@ fn check_failure(
             problems.push("a failed save left its .stalx.tmp behind".to_owned());
         }
     }
-    // The session goes on: the same save again, with nothing failing.
-    let retry = session.state.save_project(request.map(Path::to_path_buf));
-    if retry.success {
-        let unexpected: Vec<&str> = retry
-            .warnings
-            .iter()
-            .map(|w| w.code.as_str())
-            .filter(|code| *code != NOT_REOPENED)
-            .collect();
-        if !unexpected.is_empty() {
-            problems.push(format!("the retry warned {unexpected:?}"));
-        }
-        let model = session.model_after_save(detached);
-        let expected = observe_state(&session.state);
-        for problem in check_file(destination, &expected, &model) {
-            problems.push(format!("after the retry: {problem}"));
-        }
-        if temp_of(destination).exists() {
-            problems.push("the retry left a .stalx.tmp behind".to_owned());
-        }
-    } else {
-        problems.push(format!(
-            "the retry with nothing failing was refused: {:?} {:?}",
-            retry.code, retry.error
-        ));
-    }
-    if problems.is_empty() {
-        Ok(what)
-    } else {
-        Err(problems)
-    }
+    Ok((what, problems))
 }
 
 /// A save that went through under `fault`: allowed only where the policy says,
@@ -649,8 +785,11 @@ fn save_fault_fuzz_sweep() {
     let began = Instant::now();
     let mut failed = 0;
     let mut coverage: BTreeMap<String, usize> = BTreeMap::new();
+    let want_trace = knob("STALAGMIGHT_RUST_PERSIST_TRACE", 0) == 1;
     for seed in start..start.saturating_add(count) {
+        trace_take(want_trace);
         let (problems, counts) = run_seed(seed);
+        let steps_taken = trace_take(false);
         for (what, n) in counts {
             *coverage.entry(what).or_insert(0) += n;
         }
@@ -662,6 +801,9 @@ fn save_fault_fuzz_sweep() {
             );
             for problem in &problems {
                 println!("  {problem}");
+            }
+            for line in &steps_taken {
+                println!("  trace: {line}");
             }
         }
     }
