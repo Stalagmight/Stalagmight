@@ -64,7 +64,10 @@ Changes from upstream v0.0.7:
   this crate's own `serialize`); upstream skipped `multispace1` after the tag,
   which swallowed that empty line, read the `DECLINATION:` line as the team and
   then failed on the survey, dropping it and every survey after it. The team is
-  now the next line (possibly empty), or the rest of the tag's own line when a
-  writer put it there. Found by Stalagmight's parser fuzzing (#576 FZ-PARSE-6).
+  now the next non-blank line, or the rest of the tag's own line when a writer
+  put it there; when the next non-blank line is the `DECLINATION:` line, the
+  survey has no team. Blank lines before the team are skipped, as upstream
+  skipped them, so a team written after one still reads. Found by Stalagmight's
+  parser fuzzing (#576 FZ-PARSE-6, RVF-b).
 
 These should be contributed upstream where appropriate.

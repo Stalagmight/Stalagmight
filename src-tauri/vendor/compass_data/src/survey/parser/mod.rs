@@ -59,12 +59,25 @@ fn parse_survey_team(input: &str) -> IResult<&str, String> {
     // one after it) failed to parse. A team written on the tag's own line is
     // still read from there.
     let (input, _) = tag("SURVEY TEAM:")(input)?;
-    let (input, rest_of_tag_line) = recognize_line(input)?;
+    let (mut input, rest_of_tag_line) = recognize_line(input)?;
     if !rest_of_tag_line.trim().is_empty() {
         return Ok((input, rest_of_tag_line.trim_start().to_string()));
     }
-    let (input, team_line) = recognize_line(input)?;
-    Ok((input, team_line.trim_start().to_string()))
+    // (#576 RVF-b.) Blank lines before the team line are skipped, as
+    // upstream's `multispace1` skipped them: a team written after one is
+    // still the team, and the surveys after it still read. The survey has no
+    // team when the next non-blank line is its parameter line, which is left
+    // for `parse_survey_parameters`.
+    loop {
+        let (rest, line) = recognize_line(input)?;
+        if line.starts_with("DECLINATION:") {
+            return Ok((input, String::new()));
+        }
+        if !line.trim().is_empty() {
+            return Ok((rest, line.trim_start().to_string()));
+        }
+        input = rest;
+    }
 }
 
 fn gobble_labels(input: &str) -> IResult<&str, &str> {
@@ -249,6 +262,35 @@ mod test {
         let (_, parsed) = parse_dat_file(&same_line).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].team, "Ann");
+    }
+
+    /// (Stalagmight fork, #576 RVF-b.) A team written after a blank line
+    /// used to read as no team, and the team line then failed the parameter
+    /// line: that survey and every later one were dropped. Neither Compass nor
+    /// `serialize` writes this layout, but a reader must not lose the rest of
+    /// the file to it. The survey after it has no team at all.
+    #[test]
+    fn a_team_after_a_blank_line_reads_and_later_surveys_survive() {
+        let survey = |name: &str, team_lines: &str| {
+            format!(
+                "CAVE\r\nSURVEY NAME: {name}\r\nSURVEY DATE: 7 10 1979\r\nSURVEY TEAM:\r\n\
+                 {team_lines}DECLINATION: 0.00\r\n\r\n\
+                 FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT\r\n\r\n\
+                 {name}1 {name}2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\x0c\r\n"
+            )
+        };
+        let text = [
+            survey("A", "\r\n\r\nAnn\r\n"),
+            survey("B", "\r\n"),
+            survey("C", "Cy\r\n"),
+        ]
+        .concat();
+        let (_, parsed) = parse_dat_file(&text).unwrap();
+        let read: Vec<(&str, &str)> = parsed
+            .iter()
+            .map(|s| (s.name.as_str(), s.team.as_str()))
+            .collect();
+        assert_eq!(read, [("A", "Ann"), ("B", ""), ("C", "Cy")]);
     }
 
     #[test]
