@@ -1388,7 +1388,8 @@ fn pair_batch_vs_sequential(
 /// A batch whose last sub-command cannot succeed must roll back to its
 /// before-snapshot and push nothing; the same commands run singly apply every
 /// one that succeeded. So: the left twin must be EXACTLY as it started with an
-/// empty undo stack, and the right twin must have moved.
+/// empty undo stack, and the right twin must have moved - a draw on which it did
+/// not is vacuous and skipped.
 fn pair_poisoned_batch_is_a_no_op(
     twins: &Twins,
     rng: &mut Rng,
@@ -1430,9 +1431,14 @@ fn pair_poisoned_batch_is_a_no_op(
         ));
     }
     // The sequential route, for the other half of the contract: it partially
-    // applies. Anything it does is legitimate; what would NOT be is the sequence
-    // also being a no-op, which would mean the commands were vacuous and this
-    // pair proved nothing.
+    // applies, and anything it does is legitimate. If it ALSO changed nothing,
+    // the batch had nothing real to roll back and the assertions above proved
+    // nothing: a vacuous draw, so a SKIP like `applied == 0`, not a divergence.
+    // No defect is needed to get one - a sub-command can succeed and change
+    // nothing (`ReverseSection` of `build_project`'s deliberately empty section
+    // 1 reverses to itself) while the datum guard refuses every move that would
+    // have (seed 1272, and 500042 with closures). A vacuous draw whose rollback
+    // DID go wrong is still reported.
     let mut applied = 0;
     for command in commands {
         if twins.right.execute(command).success {
@@ -1442,11 +1448,8 @@ fn pair_poisoned_batch_is_a_no_op(
     if applied == 0 {
         return None;
     }
-    if mask_timestamps(&canonical_snapshot(&twins.right, false)) == before {
-        problems.push(format!(
-            "{applied} command(s) ran singly and changed nothing, so the rollback assertion above \
-             was vacuous"
-        ));
+    if problems.is_empty() && mask_timestamps(&canonical_snapshot(&twins.right, false)) == before {
+        return None;
     }
     Some(Comparison {
         problems,
@@ -1722,7 +1725,11 @@ fn summarize(seed: u32, outcomes: &BTreeMap<&'static str, PairOutcome>) -> Strin
 
 /// Seeds the gate runs. PINNED, and pinned to seeds that are clean TODAY - see
 /// `metamorphic_fuzz` for how the list was chosen and how to re-choose it.
-const GATE_SEEDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8];
+///
+/// 1272 is a regression seed: the sweep once reported its vacuous poisoned batch
+/// (a `ReverseSection` of the empty section 1, every move refused by the datum
+/// guard) as an `a-failed-batch-is-a-no-op` divergence.
+const GATE_SEEDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 1272];
 /// Prelude commands before the twins split. Enough to give the pairs varied
 /// topology (merged groups, sections of several lengths, an offset or two)
 /// without spending the run in the generator.
