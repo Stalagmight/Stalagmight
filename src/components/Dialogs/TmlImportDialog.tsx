@@ -54,8 +54,10 @@ interface TmlImportDialogProps {
 interface DiscardTarget {
   /** null while the initial save is deferred - nothing on disk, so close, don't delete. */
   savedPath: string | null;
-  /** Project identity (the token `lostProject` uses), so a project switch between
-   *  raising the prompt and clicking Discard cannot redirect the delete. */
+  /** The project's `created_at`, compared at Discard so a project switch between
+   *  raising the prompt and clicking Discard cannot redirect the delete. Only part of
+   *  the identity the store's edit guard keeps (key, file and session: `lostProjectOf`,
+   *  `store/projectIssue.ts`, #576 RVF-a-1); the delete names `savedPath`, captured here too. */
   createdAt: string | null;
 }
 

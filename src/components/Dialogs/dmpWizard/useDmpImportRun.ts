@@ -23,7 +23,8 @@ import type { ImportOutcome } from '../../../types/ipc/ImportOutcome';
 import type { CommandRefused } from '../../../store/commandResult';
 import type { DmpFile } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
-import { useProjectStore, projectSwitched, type ImportReceiptProvenance } from '../../../store/projectStore';
+import { useProjectStore, type ImportReceiptProvenance } from '../../../store/projectStore';
+import { issuedAgainstOf, lostProjectOf, type IssuedAgainst } from '../../../store/projectIssue';
 import { useUIStore } from '../../../store/uiStore';
 import { extractFilename } from '../../../utils/path';
 import { aggregateImportReceipts } from '../../../utils/importReceipt';
@@ -96,16 +97,19 @@ export interface DmpRunCarry {
    */
   importedSectionIds?: number[];
   /**
-   * The `created_at` of the project those ids were created in.
+   * The project those ids were created in: its key, file and session, the
+   * identity the store's own guard keeps for every edit ([#576 RVF-a-1],
+   * `store/projectIssue.ts`). Its `created_at` alone was not enough: two copies of
+   * one file share it, and Save As leaves exactly such a copy behind.
    *
    * Nothing clears `dialogData` when the open project changes, so a saved state
    * can outlive the project it describes - and section ids are small
    * per-project integers, so every one of them would RESOLVE against whatever
    * is open instead. Carried so the imports and the withdrawal can refuse
    * rather than write into, or delete same-numbered sections from, the wrong
-   * survey. Optional: absent means "unknown", which never refuses.
+   * survey. Optional: absent means the project open when the run (re)starts.
    */
-  projectKey?: string | null;
+  project?: IssuedAgainst;
 }
 
 /** A refusal from the payload guard is already written for the user; anything
@@ -126,14 +130,16 @@ function importFailureText(result: CommandRefused, fallback: string): string {
 }
 
 /**
- * [#576 RV2-FE-D1] Whether the project this run imports into (`runKey`, its
- * `created_at`) has been replaced by another. Checked before EVERY import, not only the
- * withdrawal: the store's own staleness guard captures the project when the import is
- * called, which is already the replacement once the run (its saved state rides
- * `dialogData`, which a project switch does not clear) has outlived a switch.
+ * [#576 RV2-FE-D1] Whether the project this run imports into (`run`) has been replaced
+ * by another. Checked before EVERY import, not only the withdrawal: the store's own
+ * staleness guard captures the project when the import is called, which is already the
+ * replacement once the run (its saved state rides `dialogData`, which a project switch
+ * does not clear) has outlived a switch. [#576 RVF-a-1] By the store's rule
+ * (`lostProjectOf`): another copy of the same file is another project. The import is
+ * issued in the same tick, so the project its IPC names (`expectedProject`) is this one.
  */
-function runProjectReplaced(runKey: string | null): boolean {
-  return projectSwitched(runKey, useProjectStore.getState().project?.created_at ?? null);
+function runProjectReplaced(run: IssuedAgainst): boolean {
+  return lostProjectOf(run, useProjectStore.getState().project);
 }
 
 /** What the user is told when the backend gives no reason of its own: the en.json
@@ -175,11 +181,8 @@ export function useDmpImportRun({
   // reaches App.tsx as "this import created nothing", which skips
   // `suggest_orphan_placements` altogether.
   const importedSectionIdsRef = useRef<number[]>([...(carried?.importedSectionIds ?? [])]);
-  // `created_at` is the identity `executeCommand`'s own staleness guard uses:
-  // immutable for the life of a project, unlike `file_path`. Read once.
-  const projectKeyRef = useRef<string | null>(
-    carried?.projectKey ?? useProjectStore.getState().project?.created_at ?? null
-  );
+  // The identity `executeCommand`'s own staleness guard uses (`DmpRunCarry.project`). Read once.
+  const projectRef = useRef<IssuedAgainst>(carried?.project ?? issuedAgainstOf(useProjectStore.getState().project));
   // One #391 summary for the whole run, aggregated at completion.
   const importedReceiptsRef = useRef<ImportReceipt[]>([...(carried?.importedReceipts ?? [])]);
   const filePathRef = useRef(
@@ -233,7 +236,7 @@ export function useDmpImportRun({
    */
   const send = useCallback(
     async (kind: 'anchor' | 'early' | 'late' | 'segment', configs: ImportSectionConfig[], emittedDmpIndices: number[] | null) => {
-      if (runProjectReplaced(projectKeyRef.current)) {
+      if (runProjectReplaced(projectRef.current)) {
         fail(kind, t('dialogs.dmpNewImport.importWrongProject'));
         return null;
       }
@@ -409,8 +412,7 @@ export function useDmpImportRun({
     // fails safe. Nothing clears `dialogData` on a project switch
     // (`resetToolTransientsForProjectSwitch` leaves the dialog slot alone), so
     // a saved state really can outlive its project. This is the refusal.
-    const openProjectKey = useProjectStore.getState().project?.created_at ?? null;
-    if (projectSwitched(projectKeyRef.current, openProjectKey)) {
+    if (runProjectReplaced(projectRef.current)) {
       setWithdrawalFailure({ kind: 'wrongProject', message: t('dialogs.dmpNewImport.removeImportedWrongProject') });
       return false;
     }
@@ -529,7 +531,7 @@ export function useDmpImportRun({
       earlyImported: Array.from(earlyImportedRef.current.entries()),
       importedReceipts: [...importedReceiptsRef.current],
       importedSectionIds: [...importedSectionIdsRef.current],
-      projectKey: projectKeyRef.current,
+      project: projectRef.current,
     }),
     [],
   );

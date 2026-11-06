@@ -56,6 +56,7 @@ import type { ZeroDatumConfigResult } from '../ZeroDatumConfigDialog';
 import { convertToEditableShots } from '../../../utils/shotConversion';
 import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
+import { noteProjectSessionChanged } from '../../../store/projectSession';
 import type { Project } from '../../../types/project';
 
 const receipt = (): ImportReceipt => ({
@@ -769,7 +770,36 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
         segmentQueue: [[1]],
         segmentAnchor: { sectionIndex: 1, stationIndex: 0 },
         importedSectionIds: [7],
-        projectKey: 'project-A',
+        project: { key: 'project-A', file: null, session: 0 },
+      }),
+      { onCancel, selected: [0, 1] },
+    );
+
+    fireEvent.click(screen.getByTestId('cancel-button'));
+    fireEvent.click(screen.getByTestId('cancel-remove-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('cancel-confirm-dialog')).toHaveTextContent(
+        'dialogs.dmpNewImport.removeImportedWrongProject',
+      ),
+    );
+    expect(batches).toEqual([]);
+    expect(projectSectionIds).toEqual([7]);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  /** [#576 RVF-a-1] Same refusal for another copy of the run project (see the late import's test). */
+  it('refuses to withdraw into another copy of the project it imported to', async () => {
+    projectSectionIds = [7];
+    noteProjectSessionChanged();
+    useProjectStore.setState({ project: { created_at: 'project-A', file_path: '/caves/A copy.stalx' } as Project });
+    const onCancel = vi.fn();
+    renderWizard(
+      savedState({
+        segmentQueue: [[1]],
+        segmentAnchor: { sectionIndex: 1, stationIndex: 0 },
+        importedSectionIds: [7],
+        project: { key: 'project-A', file: '/caves/A.stalx', session: 0 },
       }),
       { onCancel, selected: [0, 1] },
     );
@@ -1020,7 +1050,7 @@ describe('DMP wizard: imports land in the run project, a read-only refusal reads
   it('refuses the late import once another project is open', async () => {
     useProjectStore.setState({ project: { created_at: 'project-B' } as Project });
     const onComplete = vi.fn();
-    renderWizard(placedOnly({ projectKey: 'project-A' }), { onComplete, selected: [0] });
+    renderWizard(placedOnly({ project: { key: 'project-A', file: null, session: 0 } }), { onComplete, selected: [0] });
 
     await waitFor(() =>
       expect(screen.getByTestId('wizard-placing')).toHaveTextContent('dialogs.dmpNewImport.importWrongProject'),
@@ -1029,9 +1059,28 @@ describe('DMP wizard: imports land in the run project, a read-only refusal reads
     expect(onComplete).not.toHaveBeenCalled();
   });
 
+  /**
+   * [#576 RVF-a-1] The run was keyed by `created_at` alone, and two copies of one file
+   * share it (Save As leaves exactly such a copy behind): after a switch to the copy the
+   * run's imports went into the copy. Now keyed by the store's own identity (key, file,
+   * session): another copy, opened in another session, is another project.
+   */
+  it('refuses the late import into another copy of the run project', async () => {
+    noteProjectSessionChanged();
+    useProjectStore.setState({ project: { created_at: 'project-A', file_path: '/caves/A copy.stalx' } as Project });
+    const onComplete = vi.fn();
+    renderWizard(placedOnly({ project: { key: 'project-A', file: '/caves/A.stalx', session: 0 } }), { onComplete, selected: [0] });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('wizard-placing')).toHaveTextContent('dialogs.dmpNewImport.importWrongProject'),
+    );
+    expect(ipcOrder, 'imported into another copy of the run project').not.toContain('import_sections');
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
   it('still imports into the project the run belongs to', async () => {
     const onComplete = vi.fn();
-    renderWizard(placedOnly({ projectKey: 'project-A' }), { onComplete, selected: [0] });
+    renderWizard(placedOnly({ project: { key: 'project-A', file: null, session: 0 } }), { onComplete, selected: [0] });
 
     await waitFor(() => expect(onComplete).toHaveBeenCalled());
     expect(ipcOrder).toContain('import_sections');
