@@ -436,6 +436,15 @@ oracle, and the schedule as runs of one thread (`t0x5 t1x2 ...`); add the seed
 to `REGRESSION_SEEDS`. Seeds name schedules of this generator and scheduler: a
 change to either, or one more lock on a path, moves them, so a regression seed
 is re-derived by reverting its fix and keeping a failing seed of a campaign.
+Directed tests that need one exact interleaving replay a shrunk case with its
+printed schedule (`choices_from_runs("t1x2 t0x9 ...")`, e.g.
+`a_load_whose_file_a_save_replaced_is_refused_under_the_schedule`, #576
+FZ-FZ-INT-R2). Orderings across a load's commit outside the scheduler use the
+load's test hook `project_load::BEFORE_SESSION_COMMIT`, which runs on the loading
+thread holding `command_lock` (`switch_commit_tests.rs`, `switch_identity_tests.rs`).
+A test that drives a save or a survey mutation through the registered command
+passes the open project's identity (`command_tests::made_for`), as the frontend
+does; without it the command is refused with `PROJECT_CHANGED`.
 
 ## The interleaving fuzzer (vitest tier)
 

@@ -129,7 +129,7 @@ Because they are generic, tests call the registered command itself with a
 `tauri::test` app (`run(cmd(h(&app), ..))` in `command_tests.rs`); there are no
 `*_impl` twins for tests to call instead (#576 C9).
 
-Commands now run **concurrently**, which makes two rules explicit:
+Commands now run **concurrently**, which makes three rules explicit:
 
 - **Mutations stay serialized.** Every project mutation (`execute`, undo/redo, the
   imports, repair, settings, save, the project-slot commits) takes `command_lock`
@@ -139,6 +139,19 @@ Commands now run **concurrently**, which makes two rules explicit:
   it over the open one, so a write landing in between was lost (#576 RV5-1). The
   frontend additionally issues its edits one at a time through its mutation queue
   (`store/mutationQueue.ts`), so they apply in the order the user made them.
+- **A save or an edit names the project it was made for** (#576 FZ-FZ-INT-4,
+  FZ-FZ-INT-7). Every command answering a `MutationOutcome` and `save_project` take
+  `expected_project: Option<ProjectIdentity>` - the `createdAt` and `filePath` the
+  frontend captured when the user made the edit, the shape a display-setting write's
+  `madeFor` has - and `pool::run_mutation` (or the save itself) runs the body inside
+  `core::state::for_project`. Once the body holds `command_lock`, the mutation
+  chokepoint (`guard_metadata_mutation`) and `execute` for a save check it
+  (`refuse_other_project`, by the display-setting rule `names_open_project`: the same
+  `created_at` and a file the session's project has been at). A mismatch is refused
+  with `PROJECT_CHANGED` and nothing is written; every project-slot commit takes the
+  same lock, so no switch lands between the check and the write. `None` means "made
+  with no project open". A source scan (`app_contract_tests.rs`) fails when a new
+  mutation command does not declare, hand on, or put the identity on the wire.
 - **A read of the project is a settled read.** A command mutates the project and
   then settles it (orphan conversion, frame renormalisation, the reconcile, the undo
   push) under one `command_lock` span but several `project` acquisitions, so a read
@@ -159,6 +172,14 @@ explicit deep copy, for the few callers that must own the project.
 `cancel_loading` is not a command in this sense: it flips the active load's token
 and takes no `command_lock`, so it is never queued behind the import or load it
 cancels (`commands/import_offthread_tests.rs`, `core/state/command_ordering_tests.rs`).
+A load reads its file with no lock held and commits under `command_lock`, so its
+commit re-checks what may have changed meanwhile: its cancel token (right after
+taking the lock, and again at the last point before the commit's first side
+effect), whether the file is now the open one (`ALREADY_OPEN`), and whether a save
+renamed another file over the path since the load opened it (#576 FZ-FZ-INT-R2,
+`core/state/load_file_stamp.rs`: dev + inode on unix, a save epoch elsewhere). The
+last is refused with the retryable `FILE_REPLACED_DURING_LOAD`, which the frontend
+answers by loading once more.
 
 ## IPC trust boundary
 

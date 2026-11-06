@@ -119,6 +119,9 @@ handling.
 ### Backend (`save_project` in `project_io.rs`)
 
 ```
+0. Under command_lock, refuse with PROJECT_CHANGED when the save was made for
+   another project than the open one (its `expected_project`, #576 FZ-FZ-INT-4;
+   docs/architecture.md, "Where commands run") - nothing is written
 1. Lock project, resolve save path, ensure .stalx extension, refuse early if the
    destination folder is not reachable (see Failure classification below)
 2. Snapshot the side tables from the open file and resolve the save mode
@@ -316,6 +319,14 @@ All saves use a temp file with atomic rename to prevent data loss on crash or po
 1. Write to `file.stalx.tmp` (new SQLite database)
 2. On success: `rename(file.stalx.tmp, file.stalx)` - atomic on POSIX, nearly atomic on Windows
 3. On failure: delete `file.stalx.tmp`, original file untouched
+
+The rename replaces the file at the path, so a load of that path still reading the
+file it replaced must not commit a session on it (its handle is on the deleted
+file): the load compares the file it opened with the file at the path at its commit
+and is refused with the retryable `FILE_REPLACED_DURING_LOAD`, which the frontend
+answers by loading once more (#576 FZ-FZ-INT-R2, `core/state/load_file_stamp.rs`).
+Every save rename moves the stamp: the path's dev + inode on unix, the session's
+save epoch elsewhere.
 
 If a leftover `.stalx.tmp` file exists from a previous failed save, it is removed before starting. Its rollback journal (`.stalx.tmp-journal`) is not, so the next save's fresh temp database can meet an orphaned hot journal - a state the crash-timing gate injects deliberately.
 
