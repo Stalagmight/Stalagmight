@@ -32,6 +32,7 @@ import {
   checkResidue,
   checkRoundtripState,
   checkTempFiles,
+  exportChordVerdict,
   s4WorkStarted,
   ipcArgRejections,
   leftoverTempNames,
@@ -497,5 +498,48 @@ describe('s4WorkStarted', () => {
         }
       }
     }
+  });
+});
+
+/**
+ * #576 W27 (fuzzers): EXPORT CHORD failed six farm runs on a chord that opened
+ * nothing. Two Ctrl+E interjections in a row: the first, at idle, opened the
+ * export modal legally; the second was dispatched OVER that modal
+ * (`activeDialog="export"`), the screen stayed export-modal, and the oracle read
+ * "a gate was on and the modal is up" as a leak. Replays: app-idf-corpus seed
+ * 10014 (64 iterations, SYN-naharon + corpus), app-idf-gen seed 10027 (78
+ * iterations, SYN-naharon).
+ */
+describe('exportChordVerdict (EXPORT CHORD)', () => {
+  const noGate = { dialogAtDispatch: null, placementAtDispatch: false, fullscreenAtDispatch: false };
+
+  it('THE REGRESSION: a chord over the export modal itself opened nothing', () => {
+    const overModal = { ...noGate, dialogAtDispatch: 'export' };
+    expect(exportChordVerdict(overModal, 'export-modal', 'export-modal')).toEqual({ kind: 'already-open' });
+  });
+
+  it('still fails a modal opened behind an import dialog', () => {
+    const overFlow = { ...noGate, dialogAtDispatch: 'new-project-for-import' };
+    expect(exportChordVerdict(overFlow, 'new-project', 'export-modal')).toEqual({
+      kind: 'opened-behind-gate',
+      gates: ['activeDialog="new-project-for-import"'],
+    });
+  });
+
+  it('still fails a modal opened during placement or over a full-screen table', () => {
+    expect(exportChordVerdict({ ...noGate, placementAtDispatch: true }, 'wiz-manual', 'export-modal')).toEqual({
+      kind: 'opened-behind-gate',
+      gates: ['placementMode active'],
+    });
+    expect(exportChordVerdict({ ...noGate, fullscreenAtDispatch: true }, 'idle', 'export-modal')).toEqual({
+      kind: 'opened-behind-gate',
+      gates: ['dataTableFullScreen'],
+    });
+  });
+
+  it('counts a chord that landed after the dialog closed, and ignores a legal one', () => {
+    expect(exportChordVerdict(noGate, 'walls', 'export-modal')).toEqual({ kind: 'after-dialog-closed' });
+    expect(exportChordVerdict(noGate, 'idle', 'export-modal')).toEqual({ kind: 'none' });
+    expect(exportChordVerdict({ ...noGate, dialogAtDispatch: 'error' }, 'error', 'error')).toEqual({ kind: 'none' });
   });
 });

@@ -419,6 +419,7 @@ import {
   checkResidue,
   checkRoundtripState,
   checkTempFiles,
+  exportChordVerdict,
   ImportOracleError,
   importGateRefusalSeen,
   leftoverTempNames,
@@ -2161,17 +2162,19 @@ export const importDialogFuzz: Scenario = {
             // `walls` with the import still running, the next move was the Ctrl+E
             // interjection, and the failure blamed the dispatcher for a chord it
             // had swallowed correctly - the dialog was simply gone by then.
-            const gatesAtDispatch: string[] = [];
-            if (outcome.dialogAtDispatch !== null) gatesAtDispatch.push(`activeDialog="${outcome.dialogAtDispatch}"`);
-            if (outcome.placementAtDispatch === true) gatesAtDispatch.push('placementMode active');
-            if (outcome.fullscreenAtDispatch === true) gatesAtDispatch.push('dataTableFullScreen');
-            if (gatesAtDispatch.length > 0 && digest.screen === 'export-modal') {
+            //
+            // A chord dispatched over the export modal ITSELF opens nothing: the
+            // modal after it is the one that was up - see `exportChordVerdict`.
+            const verdict = exportChordVerdict(outcome, screenBefore, digest.screen);
+            if (verdict.kind === 'opened-behind-gate') {
               fail(
-                `EXPORT CHORD: Ctrl+E opened the export modal behind ${gatesAtDispatch.join(' + ')}`,
+                `EXPORT CHORD: Ctrl+E opened the export modal behind ${verdict.gates.join(' + ')}`,
                 `  screen ${screenBefore} -> ${digest.screen}; that gate was on when the keydown was ` +
                   'dispatched, so the shortcut dispatcher must swallow the chord',
               );
-            } else if (screenBefore !== 'idle' && digest.screen === 'export-modal') {
+            } else if (verdict.kind === 'already-open') {
+              ctx.metric('exportChordOverOpenModal');
+            } else if (verdict.kind === 'after-dialog-closed') {
               ctx.metric('exportChordAfterDialogClosed');
             }
           }

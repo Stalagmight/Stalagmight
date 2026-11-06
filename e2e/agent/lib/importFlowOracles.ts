@@ -237,6 +237,45 @@ export function s4WorkStarted(input: {
   return { started: true, reason: null };
 }
 
+/** The store state `useKeyboardShortcuts` reads when a Ctrl+E is dispatched. */
+export interface ExportChordGates {
+  /** `activeDialog` at dispatch; null when no dialog was up. */
+  dialogAtDispatch: string | null;
+  placementAtDispatch: boolean | null;
+  fullscreenAtDispatch: boolean | null;
+}
+
+/**
+ * EXPORT CHORD's verdict on one performed Ctrl+E.
+ *
+ * - `opened-behind-gate`: a gate was on at dispatch and the export modal is up
+ *   after it. The shortcut dispatcher let the chord through.
+ * - `already-open`: the export modal was ITSELF the active dialog at dispatch.
+ *   The modal on screen afterwards is the one that was already there, so
+ *   nothing was opened behind anything. Measured on the farm (#576 W27, six
+ *   runs across app-idf-corpus, app-idf-gen and app-idf-syndmp): two Ctrl+E
+ *   interjections in a row, the first at idle opening the modal legally, the
+ *   second dispatched over it (`activeDialog="export"`, screen export-modal ->
+ *   export-modal). That second one was failed as a gate leak.
+ * - `after-dialog-closed`: no gate at dispatch, a non-idle screen before, the
+ *   modal after. The dialog closed in the round trip; a counter.
+ * - `none`: nothing to report.
+ */
+export function exportChordVerdict(
+  gates: ExportChordGates,
+  screenBefore: string,
+  screenAfter: string,
+): { kind: 'opened-behind-gate'; gates: string[] } | { kind: 'already-open' | 'after-dialog-closed' | 'none' } {
+  if (screenAfter !== 'export-modal') return { kind: 'none' };
+  if (gates.dialogAtDispatch === 'export') return { kind: 'already-open' };
+  const on: string[] = [];
+  if (gates.dialogAtDispatch !== null) on.push(`activeDialog="${gates.dialogAtDispatch}"`);
+  if (gates.placementAtDispatch === true) on.push('placementMode active');
+  if (gates.fullscreenAtDispatch === true) on.push('dataTableFullScreen');
+  if (on.length > 0) return { kind: 'opened-behind-gate', gates: on };
+  return screenBefore !== 'idle' ? { kind: 'after-dialog-closed' } : { kind: 'none' };
+}
+
 /**
  * The receipt's summary, parsed.
  *
