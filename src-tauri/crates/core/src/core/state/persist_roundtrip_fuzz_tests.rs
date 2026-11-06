@@ -1085,6 +1085,94 @@ fn reopen_session(session: &mut Session, label: &str, problems: &mut Vec<String>
 }
 
 // ===========================================================================
+// Directed regressions for what the sweep found
+// ===========================================================================
+
+/// [#576 FZ-PERSIST-1] (sweep seed 3526, before the generator changed) An Ignore
+/// on a shot an undo brought back never deletes the ignore of the shot that a
+/// save moved into its slot.
+///
+/// Shot B is ignored; shot A, in front of it, is deleted and the project saved,
+/// so the save re-keys B's ignore to the slot A had; the delete is undone, so A
+/// is back in the session under that slot's id, its uuid no longer on disk.
+/// Ignoring A is then keyed by position - and used to delete B's ignore on its
+/// way in.
+#[test]
+fn an_ignore_on_a_restored_shot_keeps_the_ignore_of_the_shot_in_its_slot() {
+    let _config = isolated_config();
+    let state = AppState::new().expect("AppState::new");
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: "CaveA".to_owned(),
+                location: None,
+            })
+            .success
+    );
+    let mut rng = Rng::new(7);
+    let created = state.execute(Command::CreateSection {
+        name: Some("SectionA".to_owned()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_owned(),
+        direction: None,
+        shots: (0..3).map(|_| random_shot(&mut rng)).collect(),
+    });
+    let section_id = created.section_id.expect("a section");
+    let dir = TempDir::new().expect("temp dir");
+    let path = dir.path().join("CaveA.stalx");
+    assert!(state.save_project(Some(path.clone())).success);
+
+    let targets = read_targets(&state);
+    let shots = targets.shots_of(section_id).expect("the section").to_vec();
+    let (shot_a, shot_b) = (shots[0], shots[1]);
+    let uuid_b = targets.uuid_of(section_id, shot_b).expect("B has a uuid");
+    let ignore = |shot_id, shot_uuid: Option<String>, comment: &str| ResolvedWarning {
+        section_id,
+        shot_id,
+        warning_code: "AZIMUTH_DEVIATION".to_owned(),
+        resolved_at: Utc::now(),
+        resolved_comment: Some(comment.to_owned()),
+        shot_uuid,
+    };
+    state
+        .save_resolved_warning(&ignore(shot_b, Some(uuid_b.clone()), "B's"))
+        .expect("ignore B");
+    assert!(
+        state
+            .execute(Command::DeleteShot {
+                section_id,
+                shot_id: shot_a,
+            })
+            .success
+    );
+    assert!(state.save_project(None).success);
+    assert!(state.undo().success, "undo the delete");
+    let uuid_a = read_targets(&state)
+        .uuid_of(section_id, shot_a)
+        .expect("A is back");
+    assert!(
+        !state.shot_uuid_is_persisted(section_id, &uuid_a),
+        "precondition: A's uuid is not on disk, so its ignore is keyed by position"
+    );
+
+    // Ignore A as the Ignore command does. Refusing it is allowed (its slot is
+    // held); deleting B's ignore is not.
+    let _ = state.save_resolved_warning(&ignore(shot_a, None, "A's"));
+
+    let kept_b = |rows: &[ResolvedWarning]| {
+        rows.iter()
+            .any(|r| r.shot_uuid.as_deref() == Some(uuid_b.as_str()))
+    };
+    let rows = state.load_resolved_warnings().expect("read the ignores");
+    assert!(kept_b(&rows), "B's ignore was deleted: {rows:?}");
+    assert!(state.save_project(None).success);
+    let reopened = open_fresh(&path).expect("reopen");
+    let rows = reopened.load_resolved_warnings().expect("read the ignores");
+    assert!(kept_b(&rows), "B's ignore did not survive a save: {rows:?}");
+}
+
+// ===========================================================================
 // Gate and sweep
 // ===========================================================================
 

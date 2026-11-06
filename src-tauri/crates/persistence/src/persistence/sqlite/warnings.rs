@@ -294,7 +294,22 @@ impl Database {
         // rolls the delete back too, so this shot's OWN prior ignore is preserved
         // rather than dropped on the way to refusing (issue #57 / Codex).
         let tx = self.conn.unchecked_transaction()?;
-        Self::delete_matching_resolved(&tx, warning)?;
+        if warning.shot_uuid.is_some() {
+            Self::delete_matching_resolved(&tx, warning)?;
+        } else {
+            // [#576 FZ-PERSIST-1] A POSITION-keyed ignore (its shot's uuid is not
+            // on disk yet) replaces only a position-keyed row in its slot. A
+            // uuid-keyed row there belongs to whichever shot that uuid names -
+            // after a save re-keyed the ignores to saved positions while the
+            // session kept its ids, a different shot - and deleting it lost that
+            // shot's ignore. Left in place, it makes the guarded upsert below
+            // refuse this insert instead, as it does for a uuid-keyed one.
+            tx.execute(
+                "DELETE FROM resolved_warnings WHERE warning_code = ?1 \
+                 AND section_id = ?2 AND shot_id = ?3 AND shot_uuid IS NULL",
+                params![warning.warning_code, warning.section_id, warning.shot_id],
+            )?;
+        }
         let affected = tx.execute(
             "INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6) \

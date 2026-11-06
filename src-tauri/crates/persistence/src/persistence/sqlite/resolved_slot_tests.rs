@@ -1,0 +1,80 @@
+//! [#576 FZ-PERSIST-1] An Ignore keyed by POSITION never deletes another shot's
+//! uuid-keyed ignore that sits in the same slot.
+//!
+//! The open file is written with the session's shot ids, which drift from the
+//! file's positions: a save re-keys every ignore to its shot's saved position
+//! while the session keeps its ids, so after "delete a shot, save, undo the
+//! delete" a uuid-keyed ignore of shot B can sit at the slot `(section, id)`
+//! that the session gives to the restored shot A. A's uuid is not on disk (the
+//! save dropped it), so Ignore on A is keyed by position - and its pre-insert
+//! dedup deleted every row in that slot, B's included: B's warning came back,
+//! with nothing said. Found by the round-trip fuzzer (seed 3526).
+//!
+//! The dedup now clears only position-keyed rows there (as the uuid branch
+//! already did), so the guarded upsert sees B's row and refuses the insert
+//! instead, keeping B's ignore - the outcome `save_resolved_warning` documents
+//! for a slot held by a different shot.
+
+use chrono::Utc;
+
+use super::{Database, ResolvedWarning};
+use crate::models::{Project, SectionData};
+
+fn ignore(shot_uuid: Option<&str>, comment: &str) -> ResolvedWarning {
+    ResolvedWarning {
+        section_id: 0,
+        shot_id: 1,
+        warning_code: "AZIMUTH_DEVIATION".to_owned(),
+        resolved_at: Utc::now(),
+        resolved_comment: Some(comment.to_owned()),
+        shot_uuid: shot_uuid.map(str::to_owned),
+    }
+}
+
+fn database_with_one_section() -> Database {
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("CaveA".to_owned(), None);
+    project.add_section(SectionData {
+        color: "#000".to_owned(),
+        ..Default::default()
+    });
+    db.save_project(&project).unwrap();
+    db
+}
+
+#[test]
+fn a_position_keyed_ignore_never_deletes_another_shots_ignore_in_its_slot() {
+    let db = database_with_one_section();
+    // Shot B's ignore, keyed by B's uuid, at slot (0, 1).
+    db.save_resolved_warning(&ignore(Some("uuid-b"), "B's"))
+        .unwrap();
+
+    // Ignore on shot A, whose uuid is not on disk, at the same slot.
+    let refused = db.save_resolved_warning(&ignore(None, "A's")).is_err();
+
+    let rows = db.load_resolved_warnings().unwrap();
+    assert!(
+        rows.iter().any(|r| r.shot_uuid.as_deref() == Some("uuid-b")
+            && r.resolved_comment.as_deref() == Some("B's")),
+        "shot B's ignore was deleted by an ignore on another shot: {rows:?}"
+    );
+    assert!(
+        refused,
+        "the slot is held by another shot's ignore, so this one is refused, not recorded \
+         over it: {rows:?}"
+    );
+}
+
+#[test]
+fn a_position_keyed_ignore_still_replaces_the_position_keyed_one_in_its_slot() {
+    let db = database_with_one_section();
+    db.save_resolved_warning(&ignore(None, "first")).unwrap();
+    db.save_resolved_warning(&ignore(None, "second")).unwrap();
+
+    let rows = db.load_resolved_warnings().unwrap();
+    assert_eq!(rows.len(), 1, "one ignore per slot: {rows:?}");
+    assert_eq!(
+        rows.first().and_then(|r| r.resolved_comment.as_deref()),
+        Some("second")
+    );
+}
