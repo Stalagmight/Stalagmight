@@ -44,20 +44,42 @@ use run::{shrink, Harness, Source};
 /// Seeds that once failed, replayed by [`speleodb_fuzz_regression_seeds`].
 /// Each entry: (seed, steps, fault percent).
 const REGRESSION_SEEDS: &[(u64, usize, u64)] = &[
-    // FZ-SDB-2: Publish left the now-linked project editing without its lock (I11).
+    // FZ-SDB-2 (fixed): Publish left the now-linked project editing without its
+    // lock (I11).
     (101, 40, 25),
     (2100, 40, 25),
     (3600, 40, 25),
     (4101, 40, 25),
-    // A close's silent release over a lock this process never took (another session
-    // of the account held it): an I2b false positive, since claimed only for a lock
-    // held here.
+    // FZ-SDB-4 (fixed): a revision View mid-edit dropped the lock claim, and the
+    // quit kept the lock without a word (I2b).
+    (14503, 40, 25),
+    // Oracle false positives, since fixed: a silent release promised for a
+    // read-only copy or a lock the second client touched (I2b), and a publish whose
+    // best-effort push did not land read as synced (I6).
     (10002, 40, 25),
-    // FZ-SDB-3 (open question): a sign-in that replaces the session leaves the lock
-    // this process holds on the old server held, without a word (I2b). These fail
-    // until that is decided.
-    (10000, 40, 25),
+    (10005, 40, 25),
     (14000, 40, 25),
+    (14007, 40, 25),
+    (402, 40, 15),
+    (200, 40, 15),
+    // Open questions; these fail until each is decided.
+    // FZ-SDB-3: a sign-in that replaces the session keeps the old server's lock
+    // without a word (I2b).
+    (10000, 40, 25),
+    (13506, 40, 25),
+    // FZ-SDB-5: re-opening a project from SpeleoDB overwrites an unlinked copy at its
+    // cache path (I1).
+    (302, 40, 15),
+    (12508, 40, 25),
+    (11009, 40, 25),
+    // FZ-SDB-6: a lock verb whose reply was lost after the server applied it leaves
+    // the app's lock state out of step: a lost release (or Done) reply keeps the gate
+    // open over a free lock (I11); a lost acquire reply (Publish) makes the lock read
+    // as inherited, so a logout never hands it back (I2b).
+    (12505, 40, 25),
+    (12008, 40, 25),
+    (203, 40, 15),
+    (13004, 40, 25),
 ];
 
 fn env_or(name: &str, default: &str) -> String {

@@ -528,8 +528,11 @@ cargo test --manifest-path src-tauri/crates/core/Cargo.toml --lib \
 Run it alone (`--exact`): it sets the process-wide app folders. Parallel workers
 need one account pair each, since `release_all_locks` is account-wide. The replay
 entry point is `speleodb_fuzz_replay`; `speleodb_fuzz_regression_seeds` re-runs
-every seed that once failed. Normal `cargo test` runs only the offline unit tests
-(the allowlist, generator, proxy, stub and oracle); the three entry points are
+every seed that once failed (`REGRESSION_SEEDS` in `speleodb_fuzz/mod.rs`; the
+seeds that pin a still-open question fail until it is decided). Every load in a
+run ends in the status poll, as the frontend's `loadProject` does. Normal
+`cargo test` runs only the offline unit tests (the allowlist, generator, proxy,
+stub and oracle); the three entry points are
 `#[ignore]` and fail naming the missing variable when run without an instance.
 
 The instance itself (deployment, accounts, reset to a clean snapshot) is tooling

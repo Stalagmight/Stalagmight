@@ -236,7 +236,15 @@ pub(super) fn check(
 
     check_loss(ghost, out, before, after, &excuses, &mut v);
     check_files(ghost, before, after, server, &excuses, cache_root, &mut v);
-    check_claims(out, after, server, owner, cache_root, &mut v);
+    check_claims(
+        out,
+        after,
+        server,
+        owner,
+        &ghost.interference,
+        cache_root,
+        &mut v,
+    );
 
     // I11: an open edit gate means the lock is held (unless someone else touched it).
     let _ = is_actor;
@@ -437,6 +445,7 @@ fn check_claims(
     after: &Snap,
     server: &mut dyn CommitFps,
     owner: &str,
+    interference: &HashSet<String>,
     cache_root: &Path,
     v: &mut Vec<Violation>,
 ) {
@@ -520,7 +529,13 @@ fn check_claims(
                     }
                 }
             }
-            Claim::LockReleaseBestEffort { project_id } if holder_is_owner(project_id) => {
+            // Not when the second client touched this project's lock or the owner's
+            // access since the app took the lock (as for I11): a lock another session
+            // took is not the app's to hand back, and a release the server refuses
+            // after the owner's access was lowered is that change's doing.
+            Claim::LockReleaseBestEffort { project_id }
+                if holder_is_owner(project_id) && !interference.contains(project_id) =>
+            {
                 v.push(violation(
                     "I2b",
                     format!("{project_id}: a silent release over a clean copy left the lock held, without a word"),
