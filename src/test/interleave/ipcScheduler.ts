@@ -36,6 +36,10 @@ export const AMBIENT: Record<string, () => unknown> = {
 /** Scheduled, answered by the fake itself (no backend state behind them). */
 const FIXED: Record<string, () => unknown> = {
   check_project_integrity: () => ({ messages: [], save_blocked: false }),
+  // commands/project.rs check_create_target: a pool command that only runs the
+  // write-path check on the file a create would open (nothing created, cancelled
+  // or emitted); every path this model knows is writable, so it answers Ok.
+  check_create_target: () => null,
 };
 
 /** Commands whose error type is a plain string (config.rs), not a CommandError. */
