@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use chrono::{Datelike, NaiveDate};
 
 use crate::parsers::geo::non_empty;
+use crate::parsers::reading_bounds::{beyond_limit, note, BoundNotes, Quantity};
 
 use super::{
     apply_segment, apply_units_options, datum_recognized, is_anonymous, is_omitted,
@@ -45,6 +46,9 @@ pub(crate) fn parse_srv_contents(
     // that was later overridden) - surfaces on the import receipt so a
     // feet-to-meters conversion is never silent (#391).
     let mut used_feet = false;
+    // Readings beyond the limit no real survey reaches, read as missing
+    // (#576 FZ-PARSE-5-D1).
+    let mut bound_notes = BoundNotes::default();
 
     for (line_no, raw) in contents.lines().enumerate() {
         let line = raw.trim_end_matches(['\r', '\n']);
@@ -114,13 +118,27 @@ pub(crate) fn parse_srv_contents(
                 continue;
             }
         };
-        if let Some(vec) = parse_vector_line(&expanded, &units, date, grid_relative, derive_decl) {
+        let mut beyond = Vec::new();
+        let vector = parse_vector_line(
+            &expanded,
+            &units,
+            date,
+            grid_relative,
+            derive_decl,
+            &mut beyond,
+        );
+        for (quantity, what, value) in beyond {
+            let at = format!("{name}:{}", line_no + 1);
+            bound_notes.push(quantity.note(&at, what, value, "read as missing"));
+        }
+        if let Some(vec) = vector {
             if units.d_unit == LengthUnit::Feet || units.s_unit == LengthUnit::Feet {
                 used_feet = true;
             }
             vectors.push(vec);
         }
     }
+    bound_notes.finish_into(warnings);
 
     // If this survey projected any UTM `#Fix` through an unrecognized datum,
     // warn ONCE (the datum is a `.REF` property shared by every fix, so a
@@ -212,7 +230,13 @@ pub(crate) fn handle_directive(
         "prefix2" => set_prefix(units, 1, rest.trim_matches(is_walls_separator)),
         "prefix3" => set_prefix(units, 2, rest.trim_matches(is_walls_separator)),
         "fix" => {
-            if let Some(fix) = parse_fix(rest, units, georef) {
+            if let Some(mut fix) = parse_fix(rest, units, georef) {
+                // #576 FZ-PARSE-5-D1: the elevation seeds station depths.
+                if let Some(up) = fix.up.filter(|&up| beyond_limit(up)) {
+                    let at = format!("{name}:{line_no}");
+                    warnings.push(note(&at, "#Fix elevation", up, "read as missing"));
+                    fix.up = None;
+                }
                 fixes.push(fix);
             }
         }
@@ -235,11 +259,22 @@ pub(crate) fn parse_vector_line(
     date: Option<NaiveDate>,
     grid_relative: bool,
     derive_decl: bool,
+    beyond: &mut Beyond,
 ) -> Option<WallsVector> {
     // Split off the comment (everything after the first ';').
     let (body, comment) = match line.find(';') {
         Some(pos) => (&line[..pos], non_empty(&line[pos + 1..])),
         None => (line, None),
+    };
+    // #576 FZ-PARSE-5-D1: an angle correction beyond the limit reads as
+    // missing; the copy is made only then.
+    let bounded_units;
+    let units = match bound_angle_corrections(units, beyond) {
+        Some(copy) => {
+            bounded_units = copy;
+            &bounded_units
+        }
+        None => units,
     };
 
     // Extract delimited LRUD / variance spans and the leftover token stream.
@@ -276,17 +311,27 @@ pub(crate) fn parse_vector_line(
         let Some(tok) = tok else { break };
         match elem {
             OrderElem::Dist => {
-                length_m = parse_length(tok, units.d_unit);
+                length_m = bounded(parse_length(tok, units.d_unit), "distance", beyond);
             }
             OrderElem::Azm => {
-                az = parse_fsbs(tok, units.a_unit, units.ab_unit);
+                let fsbs = parse_fsbs(tok, units.a_unit, units.ab_unit);
+                az = bounded_fsbs(fsbs, ["azimuth", "azimuth backsight"], beyond);
             }
             OrderElem::Inc => {
-                inc = parse_fsbs(tok, units.v_unit, units.vb_unit);
+                let fsbs = parse_fsbs(tok, units.v_unit, units.vb_unit);
+                inc = bounded_fsbs(fsbs, ["inclination", "inclination backsight"], beyond);
             }
-            OrderElem::East => east = parse_length(tok, units.d_unit).unwrap_or(0.0),
-            OrderElem::North => north = parse_length(tok, units.d_unit).unwrap_or(0.0),
-            OrderElem::Up => up_rect = parse_length(tok, units.d_unit).unwrap_or(0.0),
+            // Bounded before the squaring below, which overflows from about
+            // 1.3e154 (#576 FZ-PARSE-8).
+            OrderElem::East => {
+                east = bounded(parse_length(tok, units.d_unit), "east", beyond).unwrap_or(0.0);
+            }
+            OrderElem::North => {
+                north = bounded(parse_length(tok, units.d_unit), "north", beyond).unwrap_or(0.0);
+            }
+            OrderElem::Up => {
+                up_rect = bounded(parse_length(tok, units.d_unit), "up", beyond).unwrap_or(0.0);
+            }
         }
     }
 
@@ -316,7 +361,7 @@ pub(crate) fn parse_vector_line(
         let (left, right, up, down) = extracted
             .lrud
             .as_deref()
-            .map(|l| parse_lrud(l, units))
+            .map(|l| parse_lrud(l, units, beyond))
             .unwrap_or((None, None, None, None));
         return Some(WallsVector {
             from,
@@ -362,11 +407,11 @@ pub(crate) fn parse_vector_line(
         // `parse_length_arg(val, i, u->bFeetS)` (the S feet flag). The S unit
         // covers LRUD plus instrument/target heights and these station depths.
         if let Some(tok) = meas.get(cursor) {
-            from_depth = parse_depth(tok, units.s_unit);
+            from_depth = bounded(parse_depth(tok, units.s_unit), "from depth", beyond);
             cursor += 1;
         }
         if let Some(tok) = meas.get(cursor) {
-            to_depth = parse_depth(tok, units.s_unit);
+            to_depth = bounded(parse_depth(tok, units.s_unit), "to depth", beyond);
         }
     }
 
@@ -377,6 +422,10 @@ pub(crate) fn parse_vector_line(
     let length_m = length_m
         .map(|d| if d != 0.0 { d + units.incd } else { 0.0 })
         .unwrap_or(0.0);
+    // An `IncD=` set beyond the limit (a `.WPJ` options string can carry one
+    // too) is caught on the corrected distance.
+    let length_m =
+        bounded(Some(length_m), "distance with its IncD= correction", beyond).unwrap_or(0.0);
 
     // Combine foresight/backsight azimuth into two forward readings.
     let (azimuth_in, azimuth_out) = combine_azimuth(&az, units);
@@ -391,7 +440,7 @@ pub(crate) fn parse_vector_line(
     let (left, right, up, down) = extracted
         .lrud
         .as_deref()
-        .map(|l| parse_lrud(l, units))
+        .map(|l| parse_lrud(l, units, beyond))
         .unwrap_or((None, None, None, None));
 
     // A floated/`(?)` variance is a network-adjustment hint on a REAL measured
@@ -437,7 +486,11 @@ pub(crate) fn parse_vector_line(
         units_decl: units.decl,
         // IncH only adjusts the vertical of non-plumb CT shots; dive shots take
         // their vertical from the depth gauges, so it never applies there.
-        inch: if is_dive { 0.0 } else { units.inch },
+        inch: if is_dive {
+            0.0
+        } else {
+            bounded(Some(units.inch), "IncH= correction", beyond).unwrap_or(0.0)
+        },
         grid_relative,
         // `#Units Grid=` convergence applies to CT azimuths (dive shots take it
         // too); RECT vectors apply it the same way on top of their frame rotation.
@@ -446,6 +499,84 @@ pub(crate) fn parse_vector_line(
         is_rect: false,
         lrud_is_to: units.lrud_type == LrudType::To,
     })
+}
+
+/// The readings of one vector line read as missing because they are beyond
+/// the limit (#576 FZ-PARSE-5-D1): kind, name and value, for the caller to
+/// warn with the line.
+pub(crate) type Beyond = Vec<(Quantity, &'static str, f64)>;
+
+/// `value`, or `None` when it is a length beyond the reading limit (#576
+/// FZ-PARSE-5-D1), noted in `beyond` as `what` so the caller can warn with the
+/// line. Missing is what Walls makes of an unreadable number too.
+fn bounded(value: Option<f64>, what: &'static str, beyond: &mut Beyond) -> Option<f64> {
+    bounded_as(Quantity::Length, value, what, beyond)
+}
+
+fn bounded_as(
+    quantity: Quantity,
+    value: Option<f64>,
+    what: &'static str,
+    beyond: &mut Beyond,
+) -> Option<f64> {
+    match value {
+        Some(v) if quantity.beyond_limit(v) => {
+            beyond.push((quantity, what, v));
+            None
+        }
+        other => other,
+    }
+}
+
+/// A foresight/backsight angle pair with either side beyond the angle limit
+/// read as missing: averaged or corrected, one near `f64::MAX` overflowed to
+/// infinity and the shot became NaN.
+fn bounded_fsbs(fsbs: FsBs, [fs, bs]: [&'static str; 2], beyond: &mut Beyond) -> FsBs {
+    FsBs {
+        fs: bounded_as(Quantity::Angle, fsbs.fs, fs, beyond),
+        bs: bounded_as(Quantity::Angle, fsbs.bs, bs, beyond),
+    }
+}
+
+/// A copy of `units` with each angle correction beyond the angle limit read
+/// as missing (0, or no `Decl=`), noted in `beyond`; `None`, and no copy,
+/// when they are all inside it. Bounded here, per vector, because a `.WPJ`
+/// options string can set them as well as a `#Units` line.
+fn bound_angle_corrections(units: &WallsUnits, beyond: &mut Beyond) -> Option<WallsUnits> {
+    let angle = Quantity::Angle;
+    let decl = units.decl.unwrap_or(0.0);
+    let all = [
+        units.inca,
+        units.incab,
+        units.incv,
+        units.incvb,
+        units.grid,
+        units.rect,
+        decl,
+    ];
+    if !all.iter().any(|&v| angle.beyond_limit(v)) {
+        return None;
+    }
+    let mut copy = units.clone();
+    let corrections = [
+        ("IncA= correction", &mut copy.inca),
+        ("IncAB= correction", &mut copy.incab),
+        ("IncV= correction", &mut copy.incv),
+        ("IncVB= correction", &mut copy.incvb),
+        ("Grid= convergence", &mut copy.grid),
+        ("RECT= frame bearing", &mut copy.rect),
+    ];
+    for (what, value) in corrections {
+        if angle.beyond_limit(*value) {
+            beyond.push((angle, what, *value));
+            *value = 0.0;
+        }
+    }
+    if angle.beyond_limit(decl) {
+        beyond.push((angle, "Decl= declination", decl));
+        copy.decl = None;
+    }
+    Some(copy)
 }
 
 #[derive(Default)]
@@ -608,12 +739,16 @@ fn combine_inclination(inc: &FsBs, units: &WallsUnits) -> (Option<f64>, Option<f
 fn parse_lrud(
     span: &str,
     units: &WallsUnits,
+    beyond: &mut Beyond,
 ) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
     let parts: Vec<&str> = span
         .split(|c: char| c == ',' || c.is_whitespace())
         .filter(|s| !s.is_empty())
         .collect();
     let mut vals: [Option<f64>; 4] = [None; 4];
+    // #576 FZ-PARSE-5-D1: the correction and each dimension are bounded before
+    // they are added (two near f64::MAX overflowed to infinity), then the sum.
+    let incs = bounded(Some(units.incs), "IncS= correction", beyond).unwrap_or(0.0);
     for (i, slot) in units.lrud_order.iter().enumerate() {
         let Some(tok) = parts.get(i) else { break };
         if is_omitted(tok) {
@@ -621,7 +756,8 @@ fn parse_lrud(
         }
         // Trailing facing/C-flag tokens are ignored (positions >= 4).
         // IncS= corrects the "short" measurements (LRUDs + inst/target heights).
-        let v = parse_length(tok, units.s_unit).map(|x| x + units.incs);
+        let v =
+            bounded(parse_length(tok, units.s_unit), "passage dimension", beyond).map(|x| x + incs);
         let idx = match slot {
             'L' => 0,
             'R' => 1,
@@ -629,7 +765,8 @@ fn parse_lrud(
             'D' => 3,
             _ => continue,
         };
-        vals[idx] = v.filter(|x| *x >= 0.0);
+        let what = "passage dimension with its IncS= correction";
+        vals[idx] = bounded(v, what, beyond).filter(|x| *x >= 0.0);
     }
     (vals[0], vals[1], vals[2], vals[3])
 }

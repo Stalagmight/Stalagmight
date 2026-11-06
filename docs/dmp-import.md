@@ -455,6 +455,10 @@ receipts are concatenated at completion, so sending them every time would
 repeat them once per batch. The backend puts them first on the receipt, the
 slot `decorate_receipt` gives every other importer's converter warnings.
 
+## Reading Bounds
+
+Every other importer reads a length, depth or elevation beyond 10,000 km as missing and names it on the preview (#576 FZ-PARSE-5-D1, [SPEC.md section 17.4](SPEC.md#174-import-reading-rules)). The DMP parser needs no such check: every reading is a 16-bit centimetre field, so none can exceed 327.67 m. The core's refusal of an import whose computed station positions are not finite (`execute_import_sections`) covers the wizard's own arithmetic as it does every importer's.
+
 ## Backend Safety Guards
 
 The `execute_import_sections` function in `src-tauri/crates/core/src/core/state/command_import.rs` applies two guards before modifying existing section shots:

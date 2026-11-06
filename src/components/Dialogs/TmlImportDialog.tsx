@@ -642,6 +642,18 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           </div>
         </div>
 
+        {/* Parser warnings */}
+        {tmlFile.warnings && tmlFile.warnings.length > 0 && (
+          <div
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-sm space-y-1 max-h-32 overflow-y-auto"
+            data-testid="tml-parse-warnings"
+          >
+            {tmlFile.warnings.map((w, i) => (
+              <div key={i}>{w}</div>
+            ))}
+          </div>
+        )}
+
         {/* Nothing survives the current options - there is no import to run */}
         {isEmptyImport && (
           <div

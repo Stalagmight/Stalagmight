@@ -140,3 +140,40 @@ describe('GpxSelectionDialog waypoints-only import (#110/#391)', () => {
     expect(showToast).not.toHaveBeenCalled();
   });
 });
+
+// #576 FZ-PARSE-5: a reading beyond the 10,000 km bound is read as missing by
+// the parser, which names it on `GpxFile.warnings`. The dialog must show those
+// lines before Import is pressed, and show nothing when there are none.
+describe('GpxSelectionDialog parser warnings (#576 FZ-PARSE-5)', () => {
+  const WARNINGS = [
+    "Track 'T' point 2: elevation 1.7977e308 m is beyond the 10,000 km limit no real survey reaches; read as missing.",
+    "Waypoint 'W': elevation -1e300 m is beyond the 10,000 km limit no real survey reaches; read as missing.",
+  ];
+
+  it('lists every parser warning line in the warnings block', async () => {
+    render(
+      <GpxSelectionDialog gpxFile={{ ...waypointsOnlyGpx, warnings: WARNINGS }} filePath="/tmp/waypoints.gpx" />,
+    );
+
+    const block = await screen.findByTestId('gpx-parse-warnings');
+    for (const line of WARNINGS) expect(block).toHaveTextContent(line);
+    expect(block.children).toHaveLength(WARNINGS.length);
+    expect(executeGpxImport).not.toHaveBeenCalled();
+  });
+
+  it('renders no warnings block when the file carries no warnings', async () => {
+    render(<GpxSelectionDialog gpxFile={waypointsOnlyGpx} filePath="/tmp/waypoints.gpx" />);
+
+    await screen.findByTestId('gpx-import-confirm');
+    expect(screen.queryByTestId('gpx-parse-warnings')).toBeNull();
+  });
+
+  it('renders no warnings block for an empty warnings list', async () => {
+    render(
+      <GpxSelectionDialog gpxFile={{ ...waypointsOnlyGpx, warnings: [] }} filePath="/tmp/waypoints.gpx" />,
+    );
+
+    await screen.findByTestId('gpx-import-confirm');
+    expect(screen.queryByTestId('gpx-parse-warnings')).toBeNull();
+  });
+});

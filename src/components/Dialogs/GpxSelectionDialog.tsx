@@ -202,6 +202,18 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
           </div>
         </div>
 
+        {/* Parser warnings */}
+        {gpxFile.warnings && gpxFile.warnings.length > 0 && (
+          <div
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-sm space-y-1 max-h-32 overflow-y-auto"
+            data-testid="gpx-parse-warnings"
+          >
+            {gpxFile.warnings.map((w, i) => (
+              <div key={i}>{w}</div>
+            ))}
+          </div>
+        )}
+
         {/* Selection checkboxes */}
         <div className="space-y-2">
           {gpxFile.waypoints.length > 0 && (

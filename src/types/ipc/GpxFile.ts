@@ -3,4 +3,4 @@ import type { GpxRoute } from "./GpxRoute";
 import type { GpxTrack } from "./GpxTrack";
 import type { GpxWaypoint } from "./GpxWaypoint";
 
-export interface GpxFile { name: string | null, waypoints: Array<GpxWaypoint>, tracks: Array<GpxTrack>, routes: Array<GpxRoute>, }
+export interface GpxFile { name: string | null, waypoints: Array<GpxWaypoint>, tracks: Array<GpxTrack>, routes: Array<GpxRoute>, warnings?: Array<string>, }

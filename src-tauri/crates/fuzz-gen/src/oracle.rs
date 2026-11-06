@@ -7,10 +7,14 @@
 //! "no panic", a run returns a [`Violation`] when:
 //! - a preview the import dialog receives cannot be serialised for IPC;
 //! - an import that the app accepted left a shot with a non-finite number in
-//!   the project, or a station whose computed position is non-finite.
+//!   the project, or a station whose computed position is non-finite;
+//! - the app refused an import for non-finite geometry. Every importer bounds
+//!   its readings and names an out-of-bound one on the preview (#576
+//!   FZ-PARSE-5-D1), so the preview the user saw accepted every number in the
+//!   file: the core refusing it after all means the two disagree.
 //!
-//! An `Err` from a parser or converter, or a refused apply, is NOT a violation:
-//! rejecting a bad file with a message is the correct outcome.
+//! An `Err` from a parser or converter, or any other refused apply, is NOT a
+//! violation: rejecting a bad file with a message is the correct outcome.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -398,7 +402,16 @@ fn apply(converted: Converted, project_path: &Path) -> Result<Result<(), String>
             ),
         };
         if !result.success {
-            return Ok(Err(result.error.unwrap_or_default()));
+            let refusal = result.error.unwrap_or_default();
+            // `create_section`'s shot check says "non-finite", the core's
+            // station-position backstop "not finite".
+            if refusal.contains("non-finite") || refusal.contains("not finite") {
+                return Err(violation(format!(
+                    "the preview accepted this file but the import refused its geometry as \
+                     non-finite: {refusal}"
+                )));
+            }
+            return Ok(Err(refusal));
         }
         let project = state
             .get_project_state()

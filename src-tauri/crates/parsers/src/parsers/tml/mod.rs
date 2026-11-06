@@ -28,6 +28,7 @@ mod azimuth;
 mod decode;
 mod import_options;
 mod linearize;
+mod reading_bounds;
 pub mod schema;
 
 use schema::element as el;
@@ -47,6 +48,11 @@ mod mock_narrowing_tests;
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::print_stdout)]
 mod cdata_tests;
+
+// #576 FZ-PARSE-5: readings beyond the limit read as missing.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod reading_bound_tests;
 
 use linearize::{
     collapsed_trip_report, join_contiguous_chains, linearize_section, split_runs_at_trip_boundaries,
@@ -96,6 +102,14 @@ pub struct TmlFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub scaled_depth_in_marker: Option<TmlScaledDepthInMarker>,
+    /// Readings the parser read as missing because they are beyond the limit
+    /// no real survey reaches (#576 FZ-PARSE-5-D1), one line each naming the
+    /// shot ID. Shown on the import dialog before Import is pressed and copied
+    /// into the import warnings; absent for a clean file. Built from shot IDs
+    /// and numbers only, never file text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub warnings: Option<Vec<String>>,
     pub geo_coding: Option<TmlGeoCoding>,
     pub sections: Vec<TmlSection>,
     pub closures: Vec<TmlClosure>,
@@ -1206,7 +1220,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
         xml,
         encoding_warning,
     } = decode::load_xml(path)?;
-    let (raw_shots, metadata) = parse_raw_shots(&xml)?;
+    let (mut raw_shots, mut metadata) = parse_raw_shots(&xml)?;
 
     tracing::debug!(
         shot_count = raw_shots.len(),
@@ -1216,6 +1230,11 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
     );
 
     let (unit, unrecognized_unit) = classify_unit(&metadata.unit);
+    let warnings = reading_bounds::bound_readings(
+        &mut raw_shots,
+        &mut metadata.first_start_absolute_elevation,
+        unit,
+    );
 
     let mut anomalies = metadata.anomalies;
     anomalies.duplicate_shot_ids = count_duplicate_shot_ids(&raw_shots);
@@ -1255,6 +1274,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
         parse_anomalies: anomalies.any().then_some(anomalies),
         encoding_warning,
         scaled_depth_in_marker,
+        warnings,
         geo_coding,
         sections,
         closures,
@@ -1418,6 +1438,10 @@ pub fn convert_tml_with_options(
 
     if let Some(note) = &tml.encoding_warning {
         warnings.push(note.clone());
+    }
+
+    if let Some(notes) = &tml.warnings {
+        warnings.extend(notes.iter().cloned());
     }
 
     if let Some(raw_unit) = &tml.unrecognized_unit {
@@ -2435,6 +2459,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             scaled_depth_in_marker: None,
+            warnings: None,
             geo_coding,
             sections,
             closures,
@@ -3052,6 +3077,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             scaled_depth_in_marker: None,
+            warnings: None,
             geo_coding: None,
             sections: vec![TmlSection {
                 name: "Main".to_string(),
@@ -4048,6 +4074,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             scaled_depth_in_marker: None,
+            warnings: None,
             geo_coding: None,
             sections,
             closures,
@@ -4532,6 +4559,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             scaled_depth_in_marker: None,
+            warnings: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -4609,6 +4637,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             scaled_depth_in_marker: None,
+            warnings: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -4705,6 +4734,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             scaled_depth_in_marker: None,
+            warnings: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -4791,6 +4821,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             scaled_depth_in_marker: None,
+            warnings: None,
             geo_coding: None,
             sections: vec![
                 // Section A (index 0): shots 1,2
@@ -4962,6 +4993,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             scaled_depth_in_marker: None,
+            warnings: None,
             geo_coding: None,
             sections,
             closures,
@@ -5166,6 +5198,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             scaled_depth_in_marker: None,
+            warnings: None,
             geo_coding: None,
             sections: vec![TmlSection {
                 name: "S".to_string(),

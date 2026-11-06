@@ -2475,6 +2475,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             scaled_depth_in_marker: None,
+            warnings: None,
         }
     }
 

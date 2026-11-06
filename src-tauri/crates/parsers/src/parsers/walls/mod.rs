@@ -513,3 +513,8 @@ mod wpj_budget_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod wpj_outside_rv4_tests;
+
+// #576 FZ-PARSE-5 / FZ-PARSE-8: readings beyond the limit read as missing.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod reading_bound_tests;

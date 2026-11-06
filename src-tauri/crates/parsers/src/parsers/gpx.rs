@@ -27,6 +27,7 @@ const GPX_AZIMUTH_REFERENCE: AzimuthReference = AzimuthReference {
     source: CorrectionSource::FileDeclared,
 };
 use crate::parsers::encoding::{read_utf8, FileFamily};
+use crate::parsers::reading_bounds::{beyond_limit, note, BoundNotes};
 
 // ============================================================================
 // IPC-visible types
@@ -40,6 +41,13 @@ pub struct GpxFile {
     pub waypoints: Vec<GpxWaypoint>,
     pub tracks: Vec<GpxTrack>,
     pub routes: Vec<GpxRoute>,
+    /// Elevations the parser read as missing because they are beyond the
+    /// limit no real survey reaches (#576 FZ-PARSE-5-D1), one line each naming
+    /// the point. Shown on the import dialog before Import is pressed and
+    /// carried onto the import receipt; absent for a clean file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub warnings: Option<Vec<String>>,
 }
 
 /// A GPX waypoint.
@@ -180,6 +188,7 @@ pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
         waypoints: Vec::new(),
         tracks: Vec::new(),
         routes: Vec::new(),
+        warnings: None,
     };
 
     let mut buf = Vec::new();
@@ -271,7 +280,61 @@ pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
         buf.clear();
     }
 
+    bound_elevations(&mut gpx);
     Ok(gpx)
+}
+
+/// An elevation beyond the limit no real survey reaches reads as missing
+/// (#576 FZ-PARSE-5-D1), noted with the point it was on. A track elevation
+/// becomes a depth, and two near `f64::MAX` overflowed the slope length to
+/// infinity; a missing one is filled in from its neighbours like any other.
+fn bound_elevations(gpx: &mut GpxFile) {
+    /// The elevation, taken out of `ele`, when it is beyond the limit.
+    fn take_beyond(ele: &mut Option<f64>) -> Option<f64> {
+        let e = ele.filter(|&e| beyond_limit(e))?;
+        *ele = None;
+        Some(e)
+    }
+    let named = |kind: &str, name: Option<&String>, index: usize| match name {
+        Some(n) => format!("{kind} '{}'", crate::models::sanitize_display_text(n, 64)),
+        None => format!("{kind} {}", index + 1),
+    };
+    let mut notes = BoundNotes::default();
+    let missing = "read as missing";
+    for (i, wpt) in gpx.waypoints.iter_mut().enumerate() {
+        if let Some(e) = take_beyond(&mut wpt.elevation) {
+            let at = named("Waypoint", wpt.name.as_ref(), i);
+            notes.push(note(&at, "elevation", e, missing));
+        }
+    }
+    for (ti, trk) in gpx.tracks.iter_mut().enumerate() {
+        let segments = trk.segments.len();
+        for (si, seg) in trk.segments.iter_mut().enumerate() {
+            for (pi, pt) in seg.points.iter_mut().enumerate() {
+                if let Some(e) = take_beyond(&mut pt.elevation) {
+                    let segment = if segments > 1 {
+                        format!(" segment {}", si + 1)
+                    } else {
+                        String::new()
+                    };
+                    let track = named("Track", trk.name.as_ref(), ti);
+                    let at = format!("{track}{segment} point {}", pi + 1);
+                    notes.push(note(&at, "elevation", e, missing));
+                }
+            }
+        }
+    }
+    for (ri, rte) in gpx.routes.iter_mut().enumerate() {
+        for (pi, pt) in rte.points.iter_mut().enumerate() {
+            if let Some(e) = take_beyond(&mut pt.elevation) {
+                let at = format!("{} point {}", named("Route", rte.name.as_ref(), ri), pi + 1);
+                notes.push(note(&at, "elevation", e, missing));
+            }
+        }
+    }
+    let mut warnings = Vec::new();
+    notes.finish_into(&mut warnings);
+    gpx.warnings = (!warnings.is_empty()).then_some(warnings);
 }
 
 /// Parse lat/lon attributes from a waypoint-like element.
@@ -1220,7 +1283,9 @@ pub fn convert_gpx_to_import_configs(
         }
     }
 
-    let mut warnings = Vec::new();
+    // The parser's notes first, as the other importers' receipts lead with
+    // theirs.
+    let mut warnings = gpx.warnings.clone().unwrap_or_default();
     match counted.filled {
         0 => {}
         1 => warnings.push(
@@ -2056,3 +2121,8 @@ mod tests {
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout, clippy::panic)]
 mod repeated_point_tests;
+
+// #576 FZ-PARSE-5: an elevation beyond the limit reads as missing.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod reading_bound_tests;

@@ -2457,6 +2457,45 @@ What every survey importer does with a reading the model cannot hold. Each
 rule is reported where the user sees it: on the import dialog's preview
 before Import is pressed, or on the import receipt after.
 
+- **The reading limit: 10,000 km** (`MAX_READING_M` = 1e7 m in
+  `parsers/reading_bounds.rs`). A reading that is finite but larger than this
+  is read as missing, the same way the format treats a non-finite one, and the
+  preview names it with its location ("survey:12: distance 1e308 m is beyond
+  the 10,000 km limit no real survey reaches; read as missing."). The same
+  note leads the import receipt. No survey reading on Earth gets near the
+  limit (a UTM northing tops out at exactly 10,000,000 m), and with every
+  reading inside it the station walk cannot overflow. An angle (bearing,
+  inclination, declination or angle correction) has its own limit,
+  1,000,000 degrees (`MAX_ANGLE_DEG`), and is read as missing the same way
+  ("survey:3: inclination backsight -1.7977e308 degrees is beyond the
+  1,000,000 degree limit ..."). At most 20 notes per file are listed, then
+  one line counts the rest. Per importer:
+  - **Walls**: tape distance (also after its `IncD=` correction), RECT
+    east/north/up (bounded before they are squared), depth-gauge depths,
+    passage dimensions and the `IncS=` correction (each, then their sum),
+    the `IncH=` correction, and a `#Fix`
+    elevation; azimuth and inclination foresights and backsights (an fs/bs
+    average of two near `f64::MAX` overflowed), and the `IncA=`, `IncAB=`,
+    `IncV=`, `IncVB=`, `Decl=`, `Grid=` and `RECT=` angle corrections, from a
+    `#Units` line or a `.WPJ` options string. Located by `.SRV` name and line.
+  - **Compass**: a survey's length correction (`CORRECTIONS`) reads as 0,
+    named by survey; a `.MAK` fixed station whose elevation is beyond the limit
+    is ignored as an anchor candidate. Shot lengths and LRUDs need no bound:
+    990 ft and above is already Compass's missing marker. Angles need none
+    either: 990 and above (and -900 and below) is the missing marker, every
+    corrected sight is checked finite, and the fs/bs inclinations are averaged
+    without overflow.
+  - **Ariane**: length, depth, `DepthIn` (read as "same as previous"),
+    passage dimensions and the entrance elevation, named by shot ID. See
+    [ariane-import.md](ariane-import.md#unit-conversion).
+  - **GPX**: waypoint, track and route point elevations, named by point. A
+    missing elevation is then filled in from the neighbouring points.
+  - **DMP**: no check is needed. Every reading is a 16-bit centimetre field,
+    so none can exceed 327.67 m (see [dmp-import.md](dmp-import.md)).
+- **Non-finite station positions.** As a backstop for a reading no importer
+  bounds, the core refuses an import whose computed station positions are not
+  finite, naming the section ("Import refused: section "S" places a station
+  at a position that is not finite ..."), and nothing is imported.
 - **GPX repeated points.** A track or route point at the same position and
   elevation as the point before it (a GPS standing still) is dropped, since it
   would make a zero-length shot, and the receipt counts them in one line

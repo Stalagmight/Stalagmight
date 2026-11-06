@@ -42,6 +42,7 @@ use crate::parsers::geo::{non_empty, FEET_TO_METERS};
 use crate::parsers::linked_files::{
     outside_root, resolve_link, Admission, LinkBudget, MAX_LINKED_BYTES,
 };
+use crate::parsers::reading_bounds::{beyond_limit, note, BoundNotes};
 use crate::parsers::station_graph::{
     build_closures, place_chains, split_into_chains, topological_sort_configs, Anchor, ConfigOrder,
     PlacementPolicy,
@@ -218,14 +219,41 @@ pub fn parse_compass(path: &Path) -> Result<ParsedCompass> {
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase);
-    match ext.as_deref() {
-        Some("mak") => parse_mak(path),
-        Some("dat") => parse_dat(path),
-        _ => Err(anyhow!(
-            "Unsupported Compass file '{}' (expected .mak or .dat)",
-            path.display()
-        )),
+    let mut parsed = match ext.as_deref() {
+        Some("mak") => parse_mak(path)?,
+        Some("dat") => parse_dat(path)?,
+        _ => {
+            return Err(anyhow!(
+                "Unsupported Compass file '{}' (expected .mak or .dat)",
+                path.display()
+            ))
+        }
+    };
+    bound_length_corrections(&mut parsed);
+    Ok(parsed)
+}
+
+/// A survey's length correction beyond the limit no real survey reaches is
+/// read as 0 (#576 FZ-PARSE-5-D1): added to every shot, one near `f64::MAX`
+/// pushed the computed depths to infinity. Done on the parsed surveys, so
+/// the preview's counts, the warning it shows and the import all see the
+/// same value. A shot's own length and LRUDs need no bound: Compass reads
+/// 990 ft and above as its missing marker.
+fn bound_length_corrections(parsed: &mut ParsedCompass) {
+    let mut notes = BoundNotes::default();
+    for entry in &mut parsed.surveys {
+        let survey = &mut entry.survey;
+        if let Some(cf) = survey.parameters.correction_factors.as_mut() {
+            // CORRECTIONS are feet, like the lengths they adjust.
+            let metres = cf.length * FEET_TO_METERS;
+            if beyond_limit(metres) {
+                let at = format!("Survey '{}'", survey.name);
+                notes.push(note(&at, "length correction", metres, "read as 0"));
+                cf.length = 0.0;
+            }
+        }
     }
+    notes.finish_into(&mut parsed.warnings);
 }
 
 fn parse_mak(path: &Path) -> Result<ParsedCompass> {
@@ -355,6 +383,13 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
                          as an anchor candidate.",
                         station.name
                     ));
+                    continue;
+                }
+                // #576 FZ-PARSE-5-D1: the elevation seeds every station depth.
+                if beyond_limit(loc.up) {
+                    let at = format!("Fixed station '{}'", station.name);
+                    let outcome = "it was ignored as an anchor candidate";
+                    warnings.push(note(&at, "elevation", loc.up, outcome));
                     continue;
                 }
                 fixed_stations.push(FixedStation {
@@ -4485,3 +4520,8 @@ mod lrud_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod negative_lrud_tests;
+
+// #576 FZ-PARSE-5: a length correction beyond the limit reads as 0.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod reading_bound_tests;

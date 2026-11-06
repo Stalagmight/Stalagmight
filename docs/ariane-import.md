@@ -272,6 +272,10 @@ When the file specifies imperial units, lengths, LRUD values, depths, section st
 
 An absent or recognised `<unit>` (empty, `m`, `metric`, `ft`, `imperial`) is handled silently. Anything else falls back to metric AND raises an import warning naming the unrecognised string, so a silent mis-scaling is visible on the receipt.
 
+### Readings beyond the 10,000 km limit (#576 FZ-PARSE-5-D1)
+
+A length, depth, `DepthIn`, passage dimension or entrance elevation that is finite but beyond 10,000 km (1e7 m, after the unit conversion) is read as missing, the way a non-finite one already is: 0.0 for a length, depth or LRUD, the "same as previous" marker for a `DepthIn`, and the no-data 0.0 for the entrance elevation. The check runs on the raw shots before the sections are built (`parsers/tml/reading_bounds.rs`), so a branch's start depth never inherits the value. Each one is named by shot ID in `TmlFile::warnings`, which the import dialog shows before Import is pressed and the receipt repeats: "Shot 12: depth 1e308 m is beyond the 10,000 km limit no real survey reaches; read as missing." The limit and the other importers' versions of it are in [SPEC.md section 17.4](SPEC.md#174-import-reading-rules). A length read as missing on a real shot is a zero-length shot, which the core refuses; that is the same outcome a non-finite length already had.
+
 ### A "same as previous" marker scaled from feet (#576 HFI-1)
 
 The `DepthIn` value `-1.0` is the format's "this shot starts where the previous one ended" marker, not a depth, and the feet-to-metre conversion above leaves it alone. A file converted to metres by a tool that did NOT leave it alone carries -1 ft written in metres instead: -0.3048, which Ariane (two decimals, trailing zero trimmed) writes as `-0.3`. Read literally, every such shot started 0.3 m above the datum, and the validator flagged the impossible geometry without naming the cause.

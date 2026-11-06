@@ -1051,3 +1051,38 @@ describe('TmlImportDialog orphan lookup failure (#576 NF-DMPS-1)', () => {
     expect(openDialog).not.toHaveBeenCalledWith('orphan-placement', expect.anything());
   });
 });
+
+// #576 FZ-PARSE-5: a reading beyond the 10,000 km bound is read as missing by
+// the parser, which names it on `TmlFile.warnings`. The preview must show those
+// lines before Import is pressed, and show nothing when there are none.
+describe('TmlImportDialog parser warnings (#576 FZ-PARSE-5)', () => {
+  const WARNINGS = [
+    'Shot 2: depth 1e308 m is beyond the 10,000 km limit no real survey reaches; read as missing.',
+    'Shot 3: length 1.7977e308 m is beyond the 10,000 km limit no real survey reaches; read as missing.',
+  ];
+
+  it('lists every parser warning line in the preview', async () => {
+    const file: TmlFile = { ...withShots([shot()]), warnings: WARNINGS };
+    render(<TmlImportDialog tmlFile={file} filePath="/tmp/cave.tml" />);
+
+    const block = await screen.findByTestId('tml-parse-warnings');
+    for (const line of WARNINGS) expect(block).toHaveTextContent(line);
+    expect(block.children).toHaveLength(WARNINGS.length);
+    expect(executeTmlImport).not.toHaveBeenCalled();
+  });
+
+  it('renders no warnings block when the file carries no warnings', async () => {
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+
+    await screen.findByTestId('tml-shot-count');
+    expect(screen.queryByTestId('tml-parse-warnings')).toBeNull();
+  });
+
+  it('renders no warnings block for an empty warnings list', async () => {
+    const file: TmlFile = { ...withShots([shot()]), warnings: [] };
+    render(<TmlImportDialog tmlFile={file} filePath="/tmp/cave.tml" />);
+
+    await screen.findByTestId('tml-shot-count');
+    expect(screen.queryByTestId('tml-parse-warnings')).toBeNull();
+  });
+});
