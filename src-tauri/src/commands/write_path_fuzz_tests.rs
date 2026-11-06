@@ -28,7 +28,9 @@
 //! CI runs `write_path_fuzz_gate` (fixed seeds, seconds). The long run is the
 //! ignored `write_path_fuzz_sweep`: `STALAGMIGHT_RUST_PERSIST_SEEDS` seeds from
 //! `STALAGMIGHT_RUST_PERSIST_SEED_START` (default 1), on
-//! `STALAGMIGHT_RUST_PERSIST_THREADS` threads (default 1).
+//! `STALAGMIGHT_RUST_PERSIST_THREADS` threads (default 1);
+//! `STALAGMIGHT_RUST_PERSIST_TRACE` (set) prints every probe of the disk fuzzer,
+//! for replaying one seed.
 //!
 //! All data is synthetic, built in code; every file lives in a `TempDir`.
 
@@ -195,6 +197,9 @@ const KNOWN_OPEN_SEEDS: &[(u64, &str)] = &[
     // dangling link into the system folder: the save creates its temp file
     // through it.
     (437, "fs-3"),
+    // The same through an alias of the settings folder: Save As to
+    // `<home>/app/x.stalx` made a project in `<settings>/x.stalx/SpeleoDB/`.
+    (10402, "fs-3"),
 ];
 
 /// The open findings still reproduce. When one no longer does - it was fixed -
@@ -1840,17 +1845,25 @@ mod disk {
         for written in walked(plan).iter().filter_map(|p| entry_of(p, &tree.jail)) {
             for (suffix, beside) in beside_names(&written) {
                 if let Some(Shot::Link(target)) = before.get(&beside) {
-                    let naive = beside.parent().map(|f| folded(&f.join(target)));
-                    let lands = kernel_landing(&beside, &tree.jail);
-                    let leads = naive.as_deref() == Some(changed)
-                        || matches!(&lands, Landing::At(at, _) if at.as_path() == changed);
-                    if leads {
+                    if leads_to(tree, &beside, target, changed) {
                         return Some(format!("fs-3{suffix}"));
                     }
                 }
             }
         }
         None
+    }
+
+    /// Whether the link that was at `link` (to `target`, before an attempt)
+    /// leads to `entry`: its target taken from the link's folder, walked now -
+    /// the write may have moved the link itself away (a rename of the save's
+    /// temp file over the project's name moves a link at the temp name).
+    fn leads_to(tree: &Tree, link: &Path, target: &Path, entry: &Path) -> bool {
+        let Some(folder) = link.parent() else {
+            return false;
+        };
+        let lands_at = |path: &Path| matches!(kernel_landing(path, &tree.jail), Landing::At(at, _) if at.as_path() == entry);
+        folded(&folder.join(target)) == entry || lands_at(&folder.join(target)) || lands_at(link)
     }
 
     /// The links (as they were before an attempt) that lead to `entry`, for a
@@ -1862,11 +1875,8 @@ mod disk {
                 let Shot::Link(target) = shot else {
                     return None;
                 };
-                let naive = folded(&link.parent()?.join(target));
-                let lands = kernel_landing(link, &tree.jail);
-                let leads = naive == entry
-                    || matches!(&lands, Landing::At(land, _) if land.as_path() == entry);
-                leads.then(|| format!("{} -> {}", tree.show(link), target.display()))
+                leads_to(tree, link, target, entry)
+                    .then(|| format!("{} -> {}", tree.show(link), target.display()))
             })
             .collect()
     }
@@ -1898,9 +1908,14 @@ mod disk {
                 Landing::At(land, found) => format!("{} ({found:?})", tree.show(&land)),
                 other => format!("{other:?}"),
             };
+            let open = state
+                .settled_snapshot()
+                .and_then(|p| p.file_path.clone())
+                .map_or_else(|| "none".to_owned(), |p| tree.show(&p));
             let fail = |why: String| {
                 format!(
-                    "probe {i} {:?} {} (others {:?}): {why}; landed (before) {lands}",
+                    "probe {i} {:?} {} (others {:?}): {why}; landed (before) {lands}; open \
+                     project (before) {open}",
                     plan.caller,
                     tree.show(&plan.path),
                     plan.others.iter().map(|p| tree.show(p)).collect::<Vec<_>>(),
@@ -1960,6 +1975,16 @@ mod disk {
             // in a protected folder (a project in the managed cache excepted).
             let changes = changed(&before, &after);
             let shown: Vec<String> = changes.iter().map(|p| tree.show(p)).collect();
+            if std::env::var_os("STALAGMIGHT_RUST_PERSIST_TRACE").is_some() {
+                println!(
+                    "FZ-PERSIST TRACE fs seed={seed} probe {i} {:?} {} others={:?} refused={} \
+                     changed={shown:?}",
+                    plan.caller,
+                    tree.show(&plan.path),
+                    plan.others.iter().map(|p| tree.show(p)).collect::<Vec<_>>(),
+                    outcome.refused
+                );
+            }
             if outcome.refused && !changes.is_empty() {
                 return Err(fail(format!("refused, yet changed {shown:?}")));
             }
