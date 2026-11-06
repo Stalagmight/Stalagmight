@@ -758,8 +758,9 @@ const GATE_SEEDS: std::ops::RangeInclusive<u32> = 1..=24;
 /// Seeds the sweep once failed on, kept as regressions: 196 (display settings a
 /// save could not keep are gone for the session too), 285 (a kill leaves an
 /// ignore for a shot that only existed in memory), 6268 (a kill leaves a
-/// uuid-keyed ignore at a stale position).
-const REGRESSION_SEEDS: &[u32] = &[196, 285, 6268];
+/// uuid-keyed ignore at a stale position), 27349 (FZ-PERSIST-2: an unsaved shot's
+/// ignore moved to another shot by a reverse and back).
+const REGRESSION_SEEDS: &[u32] = &[196, 285, 6268, 27349];
 
 #[test]
 fn save_fault_fuzz_gate() {

@@ -231,7 +231,16 @@ impl AppState {
     ///
     /// The mirror: `shots[p].id` is unchanged by the reverse (ids stay with positions),
     /// while the record that HELD that id moved to position `N - 1 - p`. So the row keyed
-    /// by `shots[p].id` belongs to `shots[N - 1 - p]`'s UUID.
+    /// by `shots[p].id` belongs to `shots[N - 1 - p]`, whose id is now
+    /// `shots[N - 1 - p].id`.
+    ///
+    /// [#576 FZ-PERSIST-2] Every such row is first MOVED to that id, so it follows its
+    /// shot whether or not the shot's UUID is on disk; then the ones whose shot's UUID IS
+    /// on disk are pinned to it. Pinning alone left the rows of a shot not saved yet
+    /// where they were: one reverse moved its ignore to the mirrored shot, and reversing
+    /// back (or Undo) then pinned it there for good - by the UUID of the mirrored shot,
+    /// which is on disk. If the move cannot be made (a target slot holds another ignore
+    /// with the same code), the rows stay and only the mirror pin is applied, as before.
     ///
     /// The map is rebuilt from the CURRENT project on every call, so it is not "its own
     /// inverse" in any useful sense: what makes undo/redo of a reverse safe to re-run is
@@ -242,29 +251,60 @@ impl AppState {
     ///
     /// Best-effort: no database (an unsaved project) means no rows exist to fix.
     pub(super) fn pin_position_keyed_warnings_after_reverse(&self, section_ids: &[SectionId]) {
-        let live: std::collections::HashMap<(u32, u32), String> = {
+        type Slots = std::collections::HashMap<(u32, u32), String>;
+        // `moves`: (section, id the row holds, id its shot has now). `mirrored`: the
+        // shot each row belongs to, by the id it holds. `current`: the shot at each id.
+        let (moves, mirrored, current) = {
             let guard = self.project.lock();
             let Some(project) = guard.as_ref() else {
                 return;
             };
-            section_ids
+            let mut moves = Vec::new();
+            let mut mirrored = Slots::new();
+            let mut current = Slots::new();
+            for section in section_ids
                 .iter()
                 .filter_map(|sid| project.get_section(*sid))
-                .flat_map(|section| {
-                    let last = section.shots.len().saturating_sub(1);
-                    section.shots.iter().enumerate().filter_map(move |(p, s)| {
-                        let mirrored = section.shots.get(last - p)?;
-                        Some(((section.id, s.id), mirrored.uuid.clone()?))
-                    })
-                })
-                .collect()
+            {
+                let last = section.shots.len().saturating_sub(1);
+                for (p, shot) in section.shots.iter().enumerate() {
+                    let Some(owner) = section.shots.get(last - p) else {
+                        continue;
+                    };
+                    if shot.id != owner.id {
+                        moves.push((section.id, shot.id, owner.id));
+                    }
+                    if let Some(uuid) = &owner.uuid {
+                        mirrored.insert((section.id, shot.id), uuid.clone());
+                    }
+                    if let Some(uuid) = &shot.uuid {
+                        current.insert((section.id, shot.id), uuid.clone());
+                    }
+                }
+            }
+            (moves, mirrored, current)
         };
-        if live.is_empty() {
-            return;
-        }
         let db_guard = self.database.lock();
         let Some(db) = db_guard.as_ref() else {
             return;
+        };
+        // Moved: each row now sits at its own shot's id, so it is pinned by the shot AT
+        // that id. Not moved: by the mirror, as the rows still hold the old ids.
+        let pins = if moves.is_empty() {
+            current
+        } else {
+            match db.rekey_position_resolved_warnings(&moves) {
+                Ok(_) => current,
+                Err(e) => {
+                    tracing::warn!(
+                        reason = %e,
+                        purpose = "keep ignores on their shots across a section reverse",
+                        "Could not move position-keyed warning ignores with their shots; \
+                         one on a shot not saved yet may migrate to the mirrored shot"
+                    );
+                    mirrored
+                }
+            }
         };
         // Only pin onto a UUID the FILE already holds. A pre-v6 project, or any shot whose UUID
         // was minted in memory and not yet saved, would otherwise get that transient value
@@ -272,19 +312,19 @@ impl AppState {
         // exits before the next save, the following load mints a DIFFERENT UUID and the ignore
         // is orphaned onto a shot that no longer exists (issue #57 / Codex). Those shots simply
         // keep their position-keyed rows, which the save carry-over re-keys once the UUIDs are
-        // durable. A failed lookup is treated as "not persisted": skipping a pin costs an ignore
-        // migrating to the mirrored shot, writing a bad one costs it outright.
-        let live: std::collections::HashMap<(u32, u32), String> = live
+        // durable. A failed lookup is treated as "not persisted": skipping a pin costs nothing
+        // now that the row has moved with its shot; writing a bad one costs it outright.
+        let pins: Slots = pins
             .into_iter()
             .filter(|((section_id, _), uuid)| {
                 db.shot_uuid_is_persisted(*section_id, uuid)
                     .unwrap_or(false)
             })
             .collect();
-        if live.is_empty() {
+        if pins.is_empty() {
             return;
         }
-        match db.backfill_resolved_warning_uuids(&live) {
+        match db.backfill_resolved_warning_uuids(&pins) {
             Ok(0) => {}
             Ok(n) => tracing::info!(
                 pinned = n,
@@ -293,7 +333,7 @@ impl AppState {
             Err(e) => tracing::warn!(
                 reason = %e,
                 purpose = "pin ignores across a section reverse",
-                "Could not pin position-keyed warning ignores; one may migrate to the mirrored shot"
+                "Could not pin position-keyed warning ignores; they stay keyed by position"
             ),
         }
     }

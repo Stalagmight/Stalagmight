@@ -398,6 +398,37 @@ impl Database {
         Ok(())
     }
 
+    /// [#576 FZ-PERSIST-2] Move position-keyed (NULL-uuid) ignores to new shot
+    /// ids: each `(section_id, from, to)` re-keys the rows at `from` to `to`, all
+    /// moves at once (a swap of two slots is a pair of moves). Rows keyed by a
+    /// uuid are not touched. One transaction: if any move cannot be made (its
+    /// target slot holds another ignore with the same code), none is, and the
+    /// error is returned. Returns how many rows moved.
+    pub fn rekey_position_resolved_warnings(&self, moves: &[(u32, u32, u32)]) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        // Park every moving row on a slot no shot id can take (negative), so a
+        // swap never meets the UNIQUE(section_id, shot_id, warning_code) key
+        // half-way, then land each on its target.
+        let park = |id: u32| -1 - i64::from(id);
+        for &(section_id, from, _) in moves {
+            tx.execute(
+                "UPDATE resolved_warnings SET shot_id = ?3 \
+                 WHERE section_id = ?1 AND shot_id = ?2 AND shot_uuid IS NULL",
+                params![section_id, from, park(from)],
+            )?;
+        }
+        let mut moved = 0;
+        for &(section_id, from, to) in moves {
+            moved += tx.execute(
+                "UPDATE resolved_warnings SET shot_id = ?3 \
+                 WHERE section_id = ?1 AND shot_id = ?2 AND shot_uuid IS NULL",
+                params![section_id, park(from), to],
+            )?;
+        }
+        tx.commit()?;
+        Ok(moved)
+    }
+
     /// Upgrade legacy NULL-uuid resolved-warning rows to UUID keying using the
     /// supplied (section_id, shot_id) -> uuid map (issue #57, Item 4). Idempotent:
     /// only rewrites rows whose shot_uuid IS NULL and whose (section_id, shot_id)

@@ -1172,6 +1172,106 @@ fn an_ignore_on_a_restored_shot_keeps_the_ignore_of_the_shot_in_its_slot() {
     assert!(kept_b(&rows), "B's ignore did not survive a save: {rows:?}");
 }
 
+/// [#576 FZ-PERSIST-2] (fault sweep seed 27349) An Ignore on a shot not yet saved
+/// stays on that shot when its section is reversed and reversed back.
+///
+/// The ignore is keyed by position (the shot's uuid is not on disk). The first
+/// reverse cannot pin it to the shot (`pin_position_keyed_warnings_after_reverse`
+/// pins only onto a uuid the file holds), so by position it now names the
+/// mirrored shot; the reverse back DOES pin it - to that mirrored shot, whose
+/// uuid is on disk. The section is as it was, and the ignore is on another shot
+/// for good. `back_by_undo` takes the way back through Undo instead.
+fn reverse_and_back_keeps_an_unsaved_shots_ignore(back_by_undo: bool) -> Result<(), String> {
+    let state = AppState::new().map_err(|e| e.to_string())?;
+    state.execute(Command::CreateProject {
+        name: "CaveA".to_owned(),
+        location: None,
+    });
+    let mut rng = Rng::new(11);
+    let created = state.execute(Command::CreateSection {
+        name: Some("SectionA".to_owned()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_owned(),
+        direction: None,
+        shots: (0..2).map(|_| random_shot(&mut rng)).collect(),
+    });
+    let section_id = created.section_id.ok_or("no section")?;
+    let dir = TempDir::new().map_err(|e| e.to_string())?;
+    let path = dir.path().join("CaveA.stalx");
+    if !state.save_project(Some(path.clone())).success {
+        return Err("first save".to_owned());
+    }
+    // A shot added since the save: its uuid is not on disk.
+    let before = read_targets(&state);
+    state.execute(Command::CreateShot {
+        section_id,
+        shot: random_shot(&mut rng),
+        after_shot_id: None,
+        before_shot_id: None,
+    });
+    let targets = read_targets(&state);
+    let (_, new_shot, new_uuid) = targets
+        .shot_uuids
+        .iter()
+        .find(|(_, _, uuid)| before.by_uuid(uuid).is_none())
+        .cloned()
+        .ok_or("no new shot")?;
+    let shot_uuid = state
+        .shot_uuid_is_persisted(section_id, &new_uuid)
+        .then(|| new_uuid.clone());
+    state
+        .save_resolved_warning(&ResolvedWarning {
+            section_id,
+            shot_id: new_shot,
+            warning_code: "MISSING_LRUD".to_owned(),
+            resolved_at: Utc::now(),
+            resolved_comment: None,
+            shot_uuid,
+        })
+        .map_err(|e| e.to_string())?;
+    let reverse = || {
+        state.execute(Command::ReverseSection {
+            section_id,
+            swap_left_right: false,
+        })
+    };
+    if !reverse().success {
+        return Err("reverse".to_owned());
+    }
+    let back = if back_by_undo {
+        state.undo()
+    } else {
+        reverse()
+    };
+    if !back.success {
+        return Err("reverse back".to_owned());
+    }
+    if !state.save_project(None).success {
+        return Err("save".to_owned());
+    }
+    let reopened = open_fresh(&path).ok_or("reopen")?;
+    let (sides, _) = side_tables_of(&reopened)?;
+    let on: Vec<&String> = sides.ignores.keys().map(|(uuid, _)| uuid).collect();
+    if on == [&new_uuid] {
+        Ok(())
+    } else {
+        Err(format!(
+            "the ignore on the new shot {new_uuid} is now on {on:?} (back by undo: {back_by_undo})"
+        ))
+    }
+}
+
+#[test]
+fn an_unsaved_shots_ignore_stays_on_it_across_a_reverse_and_back() {
+    let _config = isolated_config();
+    let found: Vec<String> = [false, true]
+        .into_iter()
+        .filter_map(|by_undo| reverse_and_back_keeps_an_unsaved_shots_ignore(by_undo).err())
+        .collect();
+    assert!(found.is_empty(), "{found:#?}");
+}
+
 // ===========================================================================
 // Gate and sweep
 // ===========================================================================

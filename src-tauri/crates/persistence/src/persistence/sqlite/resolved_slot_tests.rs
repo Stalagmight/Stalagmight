@@ -78,3 +78,67 @@ fn a_position_keyed_ignore_still_replaces_the_position_keyed_one_in_its_slot() {
         Some("second")
     );
 }
+
+/// [#576 FZ-PERSIST-2] The re-key a section reverse uses to keep position-keyed
+/// ignores on their shots: moves swap slots, leave uuid-keyed rows alone, and
+/// are all-or-nothing.
+#[test]
+fn position_keyed_ignores_move_with_their_shots_all_or_nothing() {
+    let db = database_with_one_section();
+    let at = |shot_id: u32, code: &str, shot_uuid: Option<&str>, comment: &str| ResolvedWarning {
+        shot_id,
+        warning_code: code.to_owned(),
+        ..ignore(shot_uuid, comment)
+    };
+    let slots = |db: &Database| {
+        let mut rows: Vec<(u32, String, String)> = db
+            .load_resolved_warnings()
+            .unwrap()
+            .into_iter()
+            .map(|r| {
+                (
+                    r.shot_id,
+                    r.warning_code,
+                    r.resolved_comment.unwrap_or_default(),
+                )
+            })
+            .collect();
+        rows.sort();
+        rows
+    };
+    let row =
+        |shot_id: u32, code: &str, comment: &str| (shot_id, code.to_owned(), comment.to_owned());
+    db.save_resolved_warning(&at(1, "A", None, "shot one"))
+        .unwrap();
+    db.save_resolved_warning(&at(2, "A", None, "shot two"))
+        .unwrap();
+    db.save_resolved_warning(&at(1, "B", Some("uuid-kept"), "kept"))
+        .unwrap();
+
+    // A swap of slots 1 and 2: the position-keyed rows trade places, the
+    // uuid-keyed one stays.
+    let moved = db
+        .rekey_position_resolved_warnings(&[(0, 1, 2), (0, 2, 1)])
+        .unwrap();
+    assert_eq!(moved, 2);
+    assert_eq!(
+        slots(&db),
+        vec![
+            row(1, "A", "shot two"),
+            row(1, "B", "kept"),
+            row(2, "A", "shot one")
+        ],
+        "a swap trades the position-keyed rows and leaves the uuid-keyed one"
+    );
+
+    // A move onto a slot whose ignore with the same code stays put fails whole.
+    db.save_resolved_warning(&at(3, "B", None, "shot three"))
+        .unwrap();
+    let before = slots(&db);
+    assert!(db.rekey_position_resolved_warnings(&[(0, 3, 1)]).is_err());
+    assert_eq!(
+        slots(&db),
+        before,
+        "a move that cannot be made moves nothing"
+    );
+}
