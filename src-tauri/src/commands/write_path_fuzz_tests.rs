@@ -63,6 +63,10 @@ const GATE_SEEDS: &[u64] = &[
     // link there into the settings (1, Windows rules) or data (4, Linux rules)
     // folder, was allowed.
     1, 4,
+    // FZ-PERSIST-fs-2: Save As over a link that sits in a protected folder -
+    // `<settings>/CAVE.stalx` into the managed cache (55), one in the system
+    // folder reached through a link (784) - replaced the link there.
+    55, 784,
 ];
 
 /// A deterministic PRNG (SplitMix64): every decision of a seed comes from here,
@@ -648,23 +652,32 @@ mod disk {
             return Expect::Any;
         };
         let lex = folded(&abs);
-        let in_app = |p: &Path| guarded.app.iter().any(|d| within(p, d));
+        // Each place on its own: one in the app's folders is protected unless a
+        // project is written into the managed cache there.
+        let in_app = |p: &Path| {
+            guarded.app.iter().any(|d| within(p, d)) && !(project && within(p, &guarded.managed))
+        };
         let in_sys = |p: &Path| guarded.system.iter().any(|d| within(p, d));
-        let land_managed = project && within(&land, &guarded.managed);
-        let land_app = !land_managed && in_app(&land);
-        let land_sys = in_sys(&land);
+        // Where a write really lands: the place the name leads to (opened, links
+        // followed), and the entry the name is (replaced by a rename over it).
+        let entry = entry_of(&abs, jail);
+        let real: Vec<&Path> = std::iter::once(land.as_path())
+            .chain(entry.as_deref())
+            .collect();
+        let real_app = real.iter().any(|p| in_app(p));
+        let real_sys = real.iter().any(|p| in_sys(p));
         let mut facts = Vec::new();
         let wrong_type = kind.is_some_and(|kind| !has_extension(&land, kind));
         if wrong_type {
             facts.push(Why::LinkType);
         }
-        if land_app || (!land_managed && in_app(&lex)) {
+        if real_app || in_app(&lex) {
             facts.push(Why::AppFolder);
         }
-        if land_sys || in_sys(&lex) {
+        if real_sys || in_sys(&lex) {
             facts.push(Why::SystemFolder);
         }
-        if wrong_type || land_app || land_sys {
+        if wrong_type || real_app || real_sys {
             Expect::Refuse(facts)
         } else if facts.is_empty() {
             Expect::Allow

@@ -233,36 +233,55 @@ pub(crate) fn load_upgrade_refusal_with(path: &Path, dirs: &AppDirs) -> Option<U
 fn location_refusal(path: &Path, project: bool, dirs: &AppDirs, walk: Walk<'_>) -> Option<String> {
     // [#576 RV13-2] Past the links Windows follows on one path, where the write
     // would land cannot be told: refused, not judged by the last link's name.
-    let Some(forms) = path_forms(path, walk) else {
+    let Some(forms) = written_forms(path, walk) else {
         return Some("that is reached through more links than Windows follows".to_owned());
     };
     let forms_of =
-        |dir: &Path| path_forms(dir, walk).unwrap_or_else(|| vec![lexical(&absolute(dir))]);
-    let inside = |dir: &Path| {
-        let dir_forms = forms_of(dir);
-        forms
+        |dir: &PathBuf| path_forms(dir, walk).unwrap_or_else(|| vec![lexical(&absolute(dir))]);
+    let within = |form: &Path, dir_forms: &[PathBuf]| {
+        dir_forms
             .iter()
-            .any(|p| dir_forms.iter().any(|d| starts_with_dir(p, d, walk.rules)))
+            .any(|d| starts_with_dir(form, d, walk.rules))
     };
-    // [#576 FZ-PERSIST-fs-1] The managed-cache exception is for a project the
-    // write LANDS in the cache: judged by the place it reaches (the last form),
-    // not by the path as given. `<cache>/speleodb/link/x.stalx`, with `link`
-    // leading into the settings folder, writes into the settings folder - and
-    // was let through because it was spelled inside the cache.
-    let lands_inside = |dir: &Path| {
-        let dir_forms = forms_of(dir);
-        forms
-            .last()
-            .is_some_and(|p| dir_forms.iter().any(|d| starts_with_dir(p, d, walk.rules)))
+    // [#576 FZ-PERSIST-fs-1] Each form on its own: one inside the app's folders
+    // is refused unless it is inside the managed cache and a project is written.
+    // The exception used to be granted when ANY form was in the cache, so
+    // `<cache>/speleodb/link/x.stalx`, with `link` leading into the settings
+    // folder, was let through and written into the settings folder - and so was
+    // `<settings>/x.stalx`, a link INTO the cache, which a save replaces where
+    // the link is.
+    let managed: Vec<PathBuf> = match &dirs.managed_projects {
+        Some(dir) if project => forms_of(dir),
+        _ => Vec::new(),
     };
-    let managed = project && dirs.managed_projects.as_deref().is_some_and(lands_inside);
-    if !managed && dirs.internal.iter().any(|d| inside(d)) {
+    let app: Vec<Vec<PathBuf>> = dirs.internal.iter().map(forms_of).collect();
+    let in_app = |form: &Path| app.iter().any(|d| within(form, d)) && !within(form, &managed);
+    if forms.iter().any(|form| in_app(form)) {
         return Some("that is inside the app's own settings, data or cache folder".to_owned());
     }
-    if system_dirs().iter().any(|d| inside(d)) {
+    let system: Vec<Vec<PathBuf>> = system_dirs().iter().map(forms_of).collect();
+    if forms
+        .iter()
+        .any(|form| system.iter().any(|d| within(form, d)))
+    {
         return Some("that is inside a system folder".to_owned());
     }
     None
+}
+
+/// [#576 FZ-PERSIST-fs-2] The forms of a path a command writes: [`path_forms`],
+/// and the entry the name itself is - its folder as a write reaches it, its own
+/// name not followed. A save writes its temp file beside the name and renames
+/// it over the name, so a link at the name is replaced where IT is, not where
+/// it leads: `<user>/via/x.stalx`, with `via` a link into a system folder and
+/// `x.stalx` there a link back out, put the project into the system folder.
+fn written_forms(path: &Path, walk: Walk<'_>) -> Option<Vec<PathBuf>> {
+    let mut forms = path_forms(path, walk)?;
+    let absolute = absolute(path);
+    if let (Some(folder), Some(name)) = (absolute.parent(), absolute.file_name()) {
+        forms.push(resolved(folder, walk)?.join(name));
+    }
+    Some(forms)
 }
 
 /// The forms of `path` to compare: as given (made absolute) with `.`/`..` folded,

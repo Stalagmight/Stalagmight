@@ -601,23 +601,39 @@ impl World {
             Lands::NoWrite | Lands::TooMany => return Expect::Any,
         };
         let lex = fold(path);
-        let in_app = |p: &Path| self.app.iter().any(|d| self.within(p, d));
+        // Each place on its own: one in the app's folders is protected unless a
+        // project is written into the managed cache there.
+        let in_app = |p: &Path| {
+            self.app.iter().any(|d| self.within(p, d))
+                && !(kind == Kind::Project && self.within(p, &self.managed))
+        };
         let in_sys = |p: &Path| self.system.iter().any(|d| self.within(p, d));
-        let land_managed = kind == Kind::Project && self.within(&land, &self.managed);
-        let land_app = !land_managed && in_app(&land);
-        let land_sys = in_sys(&land);
+        // Where a write really lands: the place the name leads to, and the entry
+        // the name is (its folder walked, the name not followed).
+        let entry = match (path.parent(), path.file_name()) {
+            (Some(folder), Some(name)) => match self.model.walk(folder) {
+                Lands::At(at, _) => Some(at.join(name)),
+                Lands::NoWrite | Lands::TooMany => None,
+            },
+            _ => None,
+        };
+        let real: Vec<&Path> = std::iter::once(land.as_path())
+            .chain(entry.as_deref())
+            .collect();
+        let real_app = real.iter().any(|p| in_app(p));
+        let real_sys = real.iter().any(|p| in_sys(p));
         let wrong_type = !has_extension(&land, kind);
         let mut facts = Vec::new();
         if wrong_type {
             facts.push(Why::LinkType);
         }
-        if land_app || (!land_managed && in_app(&lex)) {
+        if real_app || in_app(&lex) {
             facts.push(Why::AppFolder);
         }
-        if land_sys || in_sys(&lex) {
+        if real_sys || in_sys(&lex) {
             facts.push(Why::SystemFolder);
         }
-        if wrong_type || land_app || land_sys {
+        if wrong_type || real_app || real_sys {
             Expect::Refuse(facts)
         } else if facts.is_empty() {
             Expect::Allow
