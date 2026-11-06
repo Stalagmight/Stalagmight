@@ -22,6 +22,20 @@ export interface ProjectExportActions {
   exportImage: (path: string, options: ExportImageOptions) => Promise<void>;
 }
 
+/**
+ * An export note's code and the values it carries. `count` is a number, so
+ * the copy can pluralise on it; every other value is shown as sent.
+ */
+function parseExportNote(note: string): { code: string; values: Record<string, string | number> } {
+  const at = note.indexOf('?');
+  if (at < 0) return { code: note, values: {} };
+  const values: Record<string, string | number> = Object.fromEntries(
+    new URLSearchParams(note.slice(at + 1)),
+  );
+  if (typeof values.count === 'string') values.count = Number(values.count);
+  return { code: note.slice(0, at), values };
+}
+
 export function createProjectExportActions(): ProjectExportActions {
   return {
     exportCsv: async (path: string) => {
@@ -48,19 +62,22 @@ export function createProjectExportActions(): ProjectExportActions {
         purpose: 'export project as Ariane TML',
         fields: { path },
       });
-      for (const code of notes ?? []) {
+      for (const note of notes ?? []) {
         // `warning`, per docs/notifications.md: the export SUCCEEDED, with a
         // caveat about what the file says. The copy is i18n's, never the
-        // backend's - the note is a stable code.
+        // backend's - the note is a stable code, optionally followed by its
+        // values as a query (`junction-depths-averaged?count=2&largest=0.40`,
+        // #576 TML-DEPTH-D2), which the copy interpolates.
         // `exists` rather than `t`'s defaultValue: a note code this build has no
         // copy for must show as the code, never as the i18n key path, which is
         // what a bare `t()` renders for a miss.
+        const { code, values } = parseExportNote(note);
         const key = `dialogs.export.notes.${code}`;
         // Keyed per CODE: one export can return several notes (#378 added a
         // second possible code), and a shared key would let the second toast
         // replace the first inside the burst window.
         useUIStore.getState().showToast(
-          i18n.exists(key) ? i18n.t(key) : code,
+          i18n.exists(key, values) ? i18n.t(key, values) : note,
           `${TOAST_KEYS.EXPORT_NOTE}:${code}`,
           'warning',
         );

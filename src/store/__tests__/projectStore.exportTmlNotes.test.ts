@@ -111,6 +111,36 @@ describe('exportTml surfaces the backend azimuth notes', () => {
     expect(new Set(keys).size).toBe(2);
   });
 
+  /**
+   * #576 TML-DEPTH-D2: junctions whose depth readings disagreed were exported
+   * at their mean. The note carries its values after the code; the line states
+   * them, pluralised on the count, and the toast is still keyed per CODE.
+   */
+  it('states the averaged-junction receipt line with its values', async () => {
+    invokeIpcMock.mockResolvedValue(['junction-depths-averaged?count=3&largest=2.00']);
+
+    await useProjectStore.getState().exportTml('/tmp/cave.tml');
+
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    const [message, key, kind] = showToastMock.mock.calls[0] as [string, string, string];
+    expect(message).toBe(
+      '3 junctions had disagreeing depths (largest 2.00 m); exported at their average, shot lengths adjusted.',
+    );
+    expect(key).toBe(`${TOAST_KEYS.EXPORT_NOTE}:junction-depths-averaged`);
+    expect(kind).toBe('warning');
+  });
+
+  it('states a single averaged junction in the singular', async () => {
+    invokeIpcMock.mockResolvedValue(['junction-depths-averaged?count=1&largest=<0.01']);
+
+    await useProjectStore.getState().exportTml('/tmp/cave.tml');
+
+    const [message] = showToastMock.mock.calls[0] as [string];
+    expect(message).toBe(
+      '1 junction had disagreeing depths (largest <0.01 m); exported at their average, shot lengths adjusted.',
+    );
+  });
+
   /** A command that returns nothing at all (an older backend) is not a crash. */
   it('tolerates a missing notes array', async () => {
     invokeIpcMock.mockResolvedValue(undefined);
