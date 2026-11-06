@@ -1176,13 +1176,17 @@ fn sweeps(
 /// can sweep plans no CI run has drawn: every sweep and every reseed moves together, each to a
 /// different seed. Unset, every sweep runs the fixed seeds above, as it always has.
 fn farm_seed(seed: u64) -> u64 {
-    match std::env::var("STALAGMIGHT_GAS_PIN_SEED")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-    {
+    match farm_pin_seed() {
         Some(n) => seed ^ n.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15),
         None => seed,
     }
+}
+
+/// The `n` of `STALAGMIGHT_GAS_PIN_SEED=<n>`, when a long run set one.
+fn farm_pin_seed() -> Option<u64> {
+    std::env::var("STALAGMIGHT_GAS_PIN_SEED")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
 #[test]
@@ -1319,8 +1323,17 @@ fn in_a_tree_cave_a_scooter_plan_through_way_points_turns_within_its_range() {
              monotone"
         );
     }
+    // The floors are what the fixed seeds reach (1306 and 179 turns). A farm seed draws other
+    // caves: over 240 of them the counts were 1319 +- 99 and 167 +- 25, the fewest 1089 and 107,
+    // and the farm met 95 on routes the pins decide (#576 W27). So a farm seed is held to a floor
+    // no draw comes near, which still fails a sweep that stopped reaching either domain.
+    let (waypoint_floor, pinned_floor) = if farm_pin_seed().is_some() {
+        (500, 40)
+    } else {
+        (1000, 100)
+    };
     assert!(
-        t.waypoint_oracle_turns > 1000 && t.pinned_oracle_turns > 100,
+        t.waypoint_oracle_turns > waypoint_floor && t.pinned_oracle_turns > pinned_floor,
         "the sweep must check the range at turns past way points ({}) and on routes the pins \
          decide ({})",
         t.waypoint_oracle_turns,
