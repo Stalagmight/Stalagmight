@@ -355,6 +355,8 @@ mod roundtrip_fidelity_tests;
 )]
 mod save_as_unreadable_tests;
 #[cfg(test)]
+mod save_fault_fuzz_tests;
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::print_stdout,
@@ -371,8 +373,6 @@ mod save_history_cache_tests;
               values are the evidence a run captures"
 )]
 mod save_sidecar_tests;
-#[cfg(test)]
-mod save_fault_fuzz_tests;
 #[cfg(test)]
 mod schema_history_fuzz_tests;
 #[cfg(test)]
