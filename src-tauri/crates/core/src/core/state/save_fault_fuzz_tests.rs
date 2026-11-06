@@ -827,6 +827,13 @@ fn save_fault_fuzz_sweep() {
     for seed in start..start.saturating_add(count) {
         trace_take(want_trace);
         let (problems, counts) = run_seed(seed);
+        if (seed - start + 1) % 100 == 0 {
+            // A run cut short by a timeout still says how far it got.
+            println!(
+                "FZ-PERSIST PROGRESS fault seeds={start}..{seed} failed={failed} secs={}",
+                began.elapsed().as_secs()
+            );
+        }
         let steps_taken = trace_take(false);
         for (what, n) in counts {
             *coverage.entry(what).or_insert(0) += n;
