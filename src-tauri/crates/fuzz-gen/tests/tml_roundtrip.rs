@@ -396,13 +396,19 @@ fn unit_case(seed: u64) -> Result<UnitCase, String> {
     })
 }
 
+/// Farm seeds that once failed, run on every run as well as the window:
+/// 363281 (#576 W27) cut a section at a junction in feet but not in metres,
+/// so an excluded leg was dropped mid-section in one import and as a lead in
+/// the other, and the shot after it took two different start depths.
+const UNIT_REGRESSION_SEEDS: [u64; 1] = [363_281];
+
 #[test]
 fn metres_and_feet_import_alike() {
     let (start, count) = seeds(64);
     let mut failures = Vec::new();
     let mut scaled = 0u64;
     let mut cut_differently = 0u64;
-    for seed in start..start.saturating_add(count) {
+    for seed in (start..start.saturating_add(count)).chain(UNIT_REGRESSION_SEEDS) {
         match unit_case(seed) {
             Ok(case) => {
                 scaled += u64::from(case.scaled.is_some());

@@ -54,6 +54,9 @@ mod cdata_tests;
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod reading_bound_tests;
 
+#[cfg(test)]
+mod excluded_leg_depth_tests;
+
 use linearize::{
     collapsed_trip_report, join_contiguous_chains, linearize_section, split_runs_at_trip_boundaries,
 };
@@ -1970,8 +1973,9 @@ pub(crate) fn survives_import(shot: &TmlShot, include_excluded: bool) -> bool {
 /// Convert TML shots to `ShotData` for import.
 ///
 /// Depth handling: Ariane `DP` is absolute station depth (depth gauge reading).
-/// For each shot, `depth_in` = DPI if available, otherwise previous shot's DP
-/// (or `start_depth` for the first shot). `depth_out` = this shot's DP.
+/// For each shot, `depth_in` = DPI if available, otherwise the DP of the raw
+/// leg before it, dropped or not (or `start_depth` for the first shot).
+/// `depth_out` = this shot's DP.
 /// Depths are stored as absolute values - no rebasing is applied.
 fn convert_shots_to_shot_data(
     shots: &[TmlShot],
@@ -1991,27 +1995,21 @@ fn convert_shots_to_shot_data(
         return Vec::new();
     }
 
-    // Dropped leading shots move where the first kept one starts: to the end
-    // of the last of them, where `import_options::dropped_lead_offset` carries
-    // the datum. Its "same as previous" `DepthIn` is THAT depth, not the
-    // parent's start depth (#576 NF-TML-2). A CLOSURE row is no leg.
-    let dropped_lead_end_depth = shots
-        .iter()
-        .take_while(|s| !survives_import(s, include_excluded))
-        .filter(|s| s.shot_type != TmlShotType::Closure)
-        .last()
-        .map(|s| s.depth);
-
+    // A "same as previous" `DepthIn` is the depth the file records where the
+    // shot starts: the end of the leg before it, kept or dropped. A dropped
+    // leg moves where the next kept shot starts, never that station's depth -
+    // a dropped lead (#576 NF-TML-2) or a leg mid-section (#576 W27, the tml
+    // metres-vs-feet seed 363281). A CLOSURE row is no leg.
     let mut result = Vec::with_capacity(real_shots.len());
-
-    for (i, shot) in real_shots.iter().enumerate() {
-        let prev_depth = if i > 0 {
-            Some(real_shots[i - 1].depth)
-        } else {
-            dropped_lead_end_depth
-        };
-        let depth_in = resolve_tml_depth_in(shot, prev_depth, start_depth);
-        result.push(normalize_tml_shot(shot, depth_in));
+    let mut leg_end_depth = None;
+    for shot in shots {
+        if survives_import(shot, include_excluded) {
+            let depth_in = resolve_tml_depth_in(shot, leg_end_depth, start_depth);
+            result.push(normalize_tml_shot(shot, depth_in));
+        }
+        if shot.shot_type != TmlShotType::Closure {
+            leg_end_depth = Some(shot.depth);
+        }
     }
 
     result

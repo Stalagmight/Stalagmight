@@ -184,4 +184,27 @@ describe('Ariane preview layout (computeTmlPreviewLayout)', () => {
       [6, 6],
     ]);
   });
+
+  // #576 W27: the importer's rule for a dropped excluded leg mid-section
+  // (excluded_leg_depth_tests.rs) - the next shot starts at that leg's end depth.
+  it('starts the shot after a dropped excluded leg at the depth that leg ends', () => {
+    const file = tmlFile([
+      tmlSection(
+        'Root',
+        0,
+        [
+          tmlShot(1, 0, { azimuth: 90, length: 20, depth_in: -1, depth: 10 }),
+          tmlShot(2, 1, { azimuth: 90, length: 20, depth_in: -1, depth: 10.5, excluded: true }),
+          tmlShot(3, 2, { azimuth: 90, length: 20, depth_in: -1, depth: 12 }),
+        ],
+        1.5
+      ),
+    ]);
+    const layout = computeTmlPreviewLayout(file, { includeExcluded: false, selected: null });
+    const drawn = layout.sections[0]!.section.shots;
+    expect(drawn.map((s) => [s.depth_in, s.depth_out])).toEqual([
+      [1.5, 10],
+      [10.5, 12],
+    ]);
+  });
 });

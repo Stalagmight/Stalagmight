@@ -118,26 +118,27 @@ const DEPTH_IN_SAME_AS_PREVIOUS = -1;
 /**
  * The kept shots as the importer hands them to the walk
  * (`convert_shots_to_shot_data`): one azimuth on both legs, and the "same as
- * previous" start depth resolved (`resolve_tml_depth_in`) - to the previous
- * KEPT shot's depth, or for the first kept shot to the end of the dropped lead
- * shots (closure rows are no leg), else the section's start depth.
+ * previous" start depth resolved (`resolve_tml_depth_in`) - to the depth of
+ * the raw leg before the shot, kept or dropped (closure rows are no leg), else
+ * the section's start depth.
  *
  * Taken literally the sentinel is a depth change of (depth + 1) m, which folds
  * a shot to nothing once the passage is deeper than the tape is long.
  */
 function walkShots(section: TmlSection, kept: TmlShot[], includeExcluded: boolean): WalkShot[] {
-  let droppedLeadEnd: number | undefined;
+  const legEndBefore = new Map<TmlShot, number | undefined>();
+  let legEnd: number | undefined;
   for (const shot of section.shots) {
-    if (survivesImport(shot, includeExcluded)) break;
-    if (shot.shot_type !== 'Closure') droppedLeadEnd = shot.depth;
+    if (survivesImport(shot, includeExcluded)) legEndBefore.set(shot, legEnd);
+    if (shot.shot_type !== 'Closure') legEnd = shot.depth;
   }
-  return kept.map((shot, i) => ({
+  return kept.map((shot) => ({
     azimuth_in: shot.azimuth,
     azimuth_out: shot.azimuth,
     length: shot.length,
     depth_in:
       shot.depth_in === DEPTH_IN_SAME_AS_PREVIOUS
-        ? ((i > 0 ? kept[i - 1]!.depth : droppedLeadEnd) ?? section.start_depth)
+        ? (legEndBefore.get(shot) ?? section.start_depth)
         : shot.depth_in,
     depth_out: shot.depth,
   }));

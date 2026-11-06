@@ -111,6 +111,8 @@ When excluded shots are filtered:
 
 **A dropped lead moves the first imported shot's start depth** (#576 NF-TML-2). When a section's leading shots are dropped, its first imported shot starts where the last of them ends, so a "same as previous" `DepthIn` on that shot resolves to the last dropped shot's depth instead of `start_depth` (the depth the file records for the station the section leaves from). CLOSURE rows are no leg and are skipped; an explicit `DepthIn` is used as written. For a section placed by its own GPS, that is the station `gps_placement` carries the datum to. For a non-root section attached to its parent at its raw start (`FromImporting`: station 0 merged onto the parent's station), only the depth follows the dropped lead: station 0's plan position stays merged on the parent's station, and the merged point's depth, the average of the shot depths around it, now takes the dropped lead's end depth where it used to take `start_depth`.
 
+**So does a dropped leg mid-section** (#576 W27). When an excluded shot inside a section is dropped, the next kept shot's "same as previous" `DepthIn` resolves to the dropped shot's depth - the depth the file records at the station that shot leaves from - not to the depth of the kept shot before it. It is one rule: a "same as previous" `DepthIn` is the depth of the raw leg before the shot, kept or dropped, so a shot starts at the same depth whether its excluded predecessor leads the section, sits inside it, or is included. Where the dropped leg sat between two kept shots, the kept shot after it now starts at a different depth from the one the shot before ends at; the import keeps both readings as the file records them.
+
 ## Shot Types
 
 | Type | Handling |
