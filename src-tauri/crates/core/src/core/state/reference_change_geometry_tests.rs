@@ -122,6 +122,49 @@ fn merged_sections_stay_together_after_a_reference_change_and_a_reopen() {
     assert_eq!(reference_reopened, Some(magnetic(30.0)));
 }
 
+/// [#576 FZ-PERSIST-3] A correction that opens the junction by less than the
+/// reconcile's 1 cm heal gate (0.02 degrees, 20 m out: 7 mm) is settled live too,
+/// so a save and reopen moves nothing. The gap used to stay open live and in the
+/// file, and the reopen - which re-solves unconditionally - closed it by moving
+/// SectionB.
+#[test]
+fn a_sub_centimetre_reference_change_keeps_the_junction_and_a_reopen_moves_nothing() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("CaveA.stalx");
+    let (state, a, b) = merged_pair();
+    change_reference(&state, magnetic(0.02));
+    let gap_live = junction_gap(&state, a, b);
+    let offsets_live = state.get_project_state().unwrap().section_offsets().clone();
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone()),
+            })
+            .success
+    );
+    let reopened = AppState::new().unwrap();
+    assert!(reopened.open_project(path).success, "reopen the saved file");
+    let gap_reopened = junction_gap(&reopened, a, b);
+    let offsets_reopened = reopened
+        .get_project_state()
+        .unwrap()
+        .section_offsets()
+        .clone();
+    println!("junction gap after the change (live): {gap_live:.6} m");
+    println!("junction gap after save + reopen: {gap_reopened:.6} m");
+    println!("offsets live: {offsets_live:?}");
+    println!("offsets reopened: {offsets_reopened:?}");
+    assert!(
+        gap_live < 1e-6,
+        "a small reference change split the merged stations by {gap_live} m"
+    );
+    assert_eq!(
+        offsets_reopened, offsets_live,
+        "a save and reopen moved a section"
+    );
+}
+
 /// Undo restores the old reference AND the old geometry; redo restores the new
 /// reference with the junction still coincident (the undo entry's after-snapshot
 /// holds the re-aligned offsets).

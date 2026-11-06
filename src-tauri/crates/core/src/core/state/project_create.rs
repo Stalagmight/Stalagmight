@@ -260,10 +260,21 @@ impl AppState {
             // a later station moved: the frame datum off local (0, 0), and every
             // other datum off its GPS-implied place. Hold each merge group's datum
             // where it was and re-place the group's partners around it, exactly as
-            // a shot edit does (`realign_after_shot_edit`); the epilogue's reconcile
-            // then settles the groups that hold no datum.
+            // a shot edit does (`realign_after_shot_edit`).
             for (section_id, held_at) in datum_holds {
                 project.realign_after_shot_edit(section_id, Some(held_at));
+            }
+            // [#576 FZ-PERSIST-3] Then settle every other group with the solve a
+            // reopen runs (`redrive_offsets_after_load`), claims measured first as
+            // the reconcile does. The epilogue's reconcile cannot settle a group
+            // that holds no datum: it re-solves only a merge at least
+            // `MERGE_ALIGNMENT_INVARIANT_M` apart, and a small correction opens a
+            // junction by less (0.04 degrees, 5.8 m out: 4 mm). That gap stayed
+            // live and in the file, and the reopen closed it - a section moved by a
+            // save and reopen. The same solve here leaves the reopen nothing to move.
+            if reference_changed {
+                project.remeasure_closure_alignment();
+                project.resolve_offsets();
             }
             project.touch();
             reference_changed
