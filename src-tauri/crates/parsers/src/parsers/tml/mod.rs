@@ -44,6 +44,10 @@ mod undated_date_rv4_tests;
 #[cfg(test)]
 mod mock_narrowing_tests;
 
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::print_stdout)]
+mod cdata_tests;
+
 use linearize::{
     collapsed_trip_report, join_contiguous_chains, linearize_section, split_runs_at_trip_boundaries,
 };
@@ -358,7 +362,15 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
     let mut open_elements: usize = 0;
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        // [#576 FZ-PARSE-3] A CDATA section is character data like any other
+        // text: re-escaped into a text event, it reads (after the unescape the
+        // text arm does) exactly as the value it wraps. Only text events were
+        // read, so a CDATA length read as 0 and a CDATA comment vanished.
+        let event = match reader.read_event_into(&mut buf) {
+            Ok(Event::CData(c)) => c.escape().map(Event::Text).map_err(quick_xml::Error::from),
+            other => other,
+        };
+        match event {
             Ok(Event::Start(e)) => {
                 open_elements += 1;
                 let name_bytes = e.name();
