@@ -47,7 +47,7 @@ const CHILD_TEST: &str =
     "core::state::sdb_unlink_move_tests::unlink_move_body_in_a_process_of_its_own";
 
 /// The section names of the project stored at `path`.
-fn sections_at(path: &Path) -> Vec<String> {
+pub(super) fn sections_at(path: &Path) -> Vec<String> {
     Database::open_existing(path)
         .and_then(|db| db.load_project())
         .map(|p| p.sections.iter().filter_map(|s| s.name.clone()).collect())
@@ -55,7 +55,7 @@ fn sections_at(path: &Path) -> Vec<String> {
 }
 
 /// Whether the file at `path` carries a SpeleoDB link row.
-fn linked_at(path: &Path) -> bool {
+pub(super) fn linked_at(path: &Path) -> bool {
     Database::open_for_metadata(path)
         .and_then(|db| db.load_speleo_link())
         .ok()
@@ -64,7 +64,7 @@ fn linked_at(path: &Path) -> bool {
 }
 
 /// Add a section named `name` through the command pipeline (an in-memory edit).
-fn edit(state: &AppState, name: &str) {
+pub(super) fn edit(state: &AppState, name: &str) {
     let r = state.execute(Command::CreateSection {
         name: Some(name.to_owned()),
         surveyor: None,
@@ -80,7 +80,7 @@ fn edit(state: &AppState, name: &str) {
 }
 
 /// How many release POSTs the stub has seen for the project.
-fn releases(seen: &std::sync::Mutex<Vec<String>>) -> usize {
+pub(super) fn releases(seen: &std::sync::Mutex<Vec<String>>) -> usize {
     seen.lock()
         .map(|lines| {
             lines
@@ -94,7 +94,7 @@ fn releases(seen: &std::sync::Mutex<Vec<String>>) -> usize {
 }
 
 /// The recent-projects list.
-fn recents(state: &AppState) -> Vec<PathBuf> {
+pub(super) fn recents(state: &AppState) -> Vec<PathBuf> {
     state.recent_projects.lock().clone()
 }
 

@@ -2,7 +2,8 @@
  * [#576 FZ-SDB-5] Unlink MOVES the open project's copy out of the SpeleoDB cache.
  *
  * Two entry points share it: `convertToUnmanagedStalx` (the no-permission and
- * divergence prompts) and the refused-open prompt's keep-local branch for a
+ * divergence prompts, and the Admin tab after Delete project on SpeleoDB,
+ * #576 SDB-DEL-D1) and the refused-open prompt's keep-local branch for a
  * link-less copy an Unlink made before this change left in the cache
  * (`UnpushedLocalEdits.unlinked`, FZ-SDB-5-D3). Both ask the same Save As and run
  * the same tail, so the two can never drift apart.

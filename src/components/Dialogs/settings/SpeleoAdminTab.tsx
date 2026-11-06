@@ -9,6 +9,7 @@ import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 import { permissionAtLeast } from '../../../utils/speleoPermission';
 import { holdsWriteLock } from '../../../utils/quit';
+import { convertToUnmanagedStalx } from '../../../utils/projectActions';
 import { TOAST_KEYS } from '../../../utils/toastKeys';
 
 const inputClass =
@@ -69,7 +70,14 @@ export function SpeleoAdminTab() {
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.delete.deleteFailed')), TOAST_KEYS.SPELEODB_DELETE, 'error');
       setDeleting(false);
+      return;
     }
+    // [#576 SDB-DEL-D1] The unlinked copy is still at its SpeleoDB cache path. Ask
+    // where to keep it and move it out, exactly as Unlink does (the same Save As in
+    // the default projects folder, then `speleodb_unlink`, then the moved copy is
+    // loaded, so the session and Recent projects follow it). Cancel leaves the copy
+    // unlinked in the cache, where the download guard refuses to replace it.
+    await convertToUnmanagedStalx();
   }, [syncProjectLink, closeDialog, showToast, t]);
 
   const holder = link?.lockHolder ?? null;

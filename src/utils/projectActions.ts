@@ -126,6 +126,8 @@ export async function saveProjectAs(opts?: {
  * Detach the open SpeleoDB project from SpeleoDB, keeping the user's work as a
  * plain unmanaged `.stalx` at a path they pick (#204 - the shared action behind
  * the no-permission prompt (10) and the divergence "keep my copy" path (11)).
+ * [#576 SDB-DEL-D1] The Admin tab's Delete project on SpeleoDB runs it too, once
+ * the server delete has succeeded and left the copy unlinked in the cache.
  *
  * [#576 FZ-SDB-5-D1/D2] The copy MOVES out of the SpeleoDB cache:
  *
