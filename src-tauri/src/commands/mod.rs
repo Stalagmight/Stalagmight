@@ -146,13 +146,15 @@ mod save_target_tests;
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod telemetry_coverage_tests;
 #[cfg(test)]
+mod write_path_fuzz_model_tests;
+#[cfg(test)]
+mod write_path_fuzz_tests;
+#[cfg(test)]
 #[expect(
     clippy::print_stdout,
     reason = "test module: the printed verdicts are the evidence a run captures"
 )]
 mod write_path_match_tests;
-#[cfg(test)]
-mod write_path_fuzz_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,

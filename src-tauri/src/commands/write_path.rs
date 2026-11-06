@@ -504,7 +504,22 @@ fn path_components(path: &str, rules: PathRules) -> Vec<String> {
 }
 
 /// The system directories no command may write into.
+#[cfg(not(test))]
 fn system_dirs() -> Vec<PathBuf> {
+    host_system_dirs()
+}
+
+/// [#576 FZ-PERSIST] The system directories, and the stand-ins a test added on
+/// its thread ([`test_system_dirs`]).
+#[cfg(test)]
+fn system_dirs() -> Vec<PathBuf> {
+    let mut dirs = host_system_dirs();
+    dirs.extend(test_system_dirs::added());
+    dirs
+}
+
+/// The system directories of the platform this build runs on.
+fn host_system_dirs() -> Vec<PathBuf> {
     if cfg!(windows) {
         [
             "SystemRoot",
@@ -538,5 +553,41 @@ fn system_dirs() -> Vec<PathBuf> {
         .iter()
         .map(PathBuf::from)
         .collect()
+    }
+}
+
+/// [#576 FZ-PERSIST] Test-only stand-ins for system folders. The real ones
+/// (`/etc`, `C:\Windows`, ...) lie outside any temp tree, so a test that really
+/// writes - the write-policy fuzzer - names folders of its own temp tree, which
+/// [`system_dirs`] then lists too, on that thread until the guard drops.
+#[cfg(test)]
+pub(crate) mod test_system_dirs {
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+
+    thread_local! {
+        static ADDED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// `dirs` are system folders on this thread until the guard drops.
+    #[must_use = "the folders are system folders only while the guard lives"]
+    pub(crate) fn add(dirs: Vec<PathBuf>) -> Added {
+        ADDED.with(|added| added.borrow_mut().extend(dirs.iter().cloned()));
+        Added(dirs)
+    }
+
+    /// Takes its folders back on drop, so a failed assertion cannot leak them
+    /// into the next test on the same thread.
+    pub(crate) struct Added(Vec<PathBuf>);
+
+    impl Drop for Added {
+        fn drop(&mut self) {
+            ADDED.with(|added| added.borrow_mut().retain(|dir| !self.0.contains(dir)));
+        }
+    }
+
+    /// The folders added on this thread.
+    pub(super) fn added() -> Vec<PathBuf> {
+        ADDED.with(|added| added.borrow().clone())
     }
 }
