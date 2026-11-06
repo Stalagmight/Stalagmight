@@ -353,18 +353,37 @@ impl Comparison {
 /// (open_undo_bugs_tests.rs) pins it on a hand-built shape, and
 /// `command_delete_split.rs` now states it.
 ///
-/// So the allowance is narrow and directional. Only the PARTNER sections' own
-/// placement may differ; every other path, every other station, both verdicts
-/// and both allocators are still compared exactly. And when the two routes do
-/// disagree about a partner, the ATOMIC route has to be the one that left it
-/// alone - a divergence the other way round is the atomic path breaking its own
-/// contract and fails.
+/// The same deferral has a second face, seen from the EDITED section. When the
+/// partner is the anchored side, the first single delete sees the doomed tail
+/// anchor still live, keeps the tail fixed and shifts the edited section's HEAD;
+/// a later single then deletes the merge, and the edited section - cut loose,
+/// with nothing to pull it back - stays displaced, along with whatever is merged
+/// to it. The atomic route ignores the doomed anchor and keeps the head, which is
+/// exactly what `test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor`
+/// pins (and `command_delete_split.rs` states where it builds `doomed_anchors`).
+///
+/// So the allowance is narrow and directional. Only the PARTNER sections'
+/// placement, and the placement of an edited group the delete CUT LOOSE, may
+/// differ; every other path, every other station, both verdicts and both
+/// allocators are still compared exactly. And when the two routes do disagree,
+/// the ATOMIC route has to be the one that left things alone - the partner where
+/// it was, the edited section's head where it was - and a divergence the other
+/// way round is the atomic path breaking its own contract and fails.
 struct Documented {
     /// Sections whose placement the two routes may disagree about: the far side
     /// of every merge the delete removes, plus everything merged rigidly to
     /// those without passing through the edited section (a displaced partner
     /// drags its own merge group with it).
     partners: std::collections::BTreeSet<SectionId>,
+    /// The edited section's merge group AFTER the delete when no section in it
+    /// holds a zero datum - the group the delete cut loose - and empty when the
+    /// group is still anchored (something holds it, so both routes have to agree
+    /// about it). See [`cut_loose_group`].
+    cut_loose: std::collections::BTreeSet<SectionId>,
+    /// The edited section and the last HEAD station of the interior range:
+    /// stations `0..=head` survive a gap-close with their index unchanged, which
+    /// is what makes "the atomic route kept the head" a decidable question.
+    edited: (SectionId, u32),
     /// The adjusted station geometry BEFORE either route ran, keyed
     /// `section:index`. The twins are asserted equal at that point, so one map
     /// is both routes' starting position - which is what makes "the atomic route
@@ -416,15 +435,20 @@ fn positions_differ_in_plane(left: [f64; 3], right: [f64; 3]) -> bool {
 }
 
 impl Documented {
+    /// Whether the allowance covers a section's placement at all.
+    fn covers(&self, id: SectionId) -> bool {
+        self.partners.contains(&id) || self.cut_loose.contains(&id)
+    }
+
     /// Whether a stored-project difference is one this allowance covers.
     ///
     /// `section_offsets` is a map keyed by section id, so the diff path NAMES
     /// the section it is about - `section_offsets.7` when a whole entry is
     /// present on one side only, `section_offsets.7[0]` when one component of
     /// the pair differs - and the allowance can be per-section rather than
-    /// per-collection. A `section_offsets` entry for the EDITED section, or for
-    /// any section the delete did not cut a merge to, is not this and still
-    /// fails.
+    /// per-collection. A `section_offsets` entry for the EDITED section while it
+    /// is still anchored, or for any section the delete neither cut a merge to
+    /// nor cut loose, is not this and still fails.
     fn allows_stored(&self, diff: &Diff) -> bool {
         diff.path
             .strip_prefix("section_offsets.")
@@ -434,7 +458,7 @@ impl Documented {
                     .collect::<String>()
             })
             .and_then(|id| id.parse::<SectionId>().ok())
-            .is_some_and(|id| self.partners.contains(&id))
+            .is_some_and(|id| self.covers(id))
     }
 
     /// Whether an adjusted-geometry difference line is one this allowance
@@ -445,7 +469,7 @@ impl Documented {
         line.strip_prefix("station ")
             .and_then(|rest| rest.split_whitespace().next())
             .and_then(section_of_station_key)
-            .is_some_and(|id| self.partners.contains(&id))
+            .is_some_and(|id| self.covers(id))
     }
 }
 
@@ -1039,7 +1063,8 @@ const PAIRS: &[Pair] = &[
         promise: "command_delete_split.rs execute_delete_shot_range_shift - an ATOMIC range \
                   gap-close: identical to the n single deletes on every range that removes no \
                   merge, and on a range that removes one it keeps the partner section in place \
-                  where the singles drag it (issue #413 finding 22; PR #95 tests)",
+                  where the singles drag it, and the edited section's head in place where the \
+                  singles shift it toward a doomed anchor (issue #413 finding 22; PR #95 tests)",
         run: pair_range_shift_vs_singles,
     },
     // ---------------------------------------------------------------------
@@ -1114,8 +1139,10 @@ const PAIRS: &[Pair] = &[
 /// the surveyor put it. So on that shape three things are asserted: every
 /// difference is confined to the PARTNER sections' placement, the atomic route
 /// is the one that left the partner alone, and a partner the delete cut loose
-/// entirely is exactly where it was. See [`Documented`] and the PR #95 tests it
-/// names.
+/// entirely is exactly where it was. When the partner is the anchored side and
+/// the delete cuts the EDITED section loose instead, that group's placement may
+/// differ too, and the atomic route has to be the one that kept its head. See
+/// [`Documented`] and the PR #95 tests it names.
 ///
 /// A single delete that the guards refuse is a SKIP, not a failure: `delete_shot`
 /// has three guards the range path does not consult (the loop/datum pair and the
@@ -1159,7 +1186,15 @@ fn pair_range_shift_vs_singles(
         }
     }
 
-    let documented = partners.map(|partners| Documented { partners, before });
+    let documented = partners.map(|partners| Documented {
+        partners,
+        // Read off the ATOMIC twin after the delete: the two routes agree on
+        // every merge and datum (the stored-project oracle still asserts it), so
+        // this is the group on both sides.
+        cut_loose: cut_loose_group(&twins.left, section_id),
+        edited: (section_id, start as u32),
+        before,
+    });
     let mut found = twins.compare_allowing(pair, Mask::Strict, documented.as_ref());
     if let Some(documented) = documented.as_ref() {
         // Counted, so a generator that stopped producing the doomed-anchor shape
@@ -1228,7 +1263,36 @@ fn doomed_anchor_partners(
     Some(partners)
 }
 
-/// The two positive assertions the documented divergence carries, on top of the
+/// The edited section's merge group on `state`, or an empty set when any
+/// section in it holds a zero datum. Read AFTER the delete, so it is the group
+/// the gap-close left behind: empty means something still anchors the edited
+/// section and neither route may place it differently from the other.
+fn cut_loose_group(
+    state: &AppState,
+    section_id: SectionId,
+) -> std::collections::BTreeSet<SectionId> {
+    let targets = read_targets(state);
+    let mut group = std::collections::BTreeSet::from([section_id]);
+    loop {
+        let mut grew = false;
+        for (a, b) in &targets.merges {
+            for (near, far) in [(a, b), (b, a)] {
+                if group.contains(&near.0) && group.insert(far.0) {
+                    grew = true;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    if targets.datums.iter().any(|(id, _)| group.contains(id)) {
+        return std::collections::BTreeSet::new();
+    }
+    group
+}
+
+/// The positive assertions the documented divergence carries, on top of the
 /// confinement [`Documented`] applies to the five oracles.
 ///
 /// 1. DIRECTION. Where the two routes disagree about a partner station, the
@@ -1242,6 +1306,14 @@ fn doomed_anchor_partners(
 ///    (`test_delete_range_shift_does_not_displace_free_floating_merged_section`)
 ///    asserted on random topology, and it fires whether or not the singles route
 ///    diverged, so the arm is never vacuous.
+/// 3. THE CUT-LOOSE EDITED GROUP. Where the two routes disagree about any station
+///    of it, the ATOMIC route must be the one holding the edited section's head
+///    (`0..=head`) at its pre-delete position - the PR #95 property
+///    (`test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor`). Only
+///    on disagreement: when nothing rigid pins either side,
+///    `anchored_sides_of_edit` falls back to aligned closures, so an aligned
+///    closure on the tail side can make the atomic route keep the TAIL - and then
+///    the singles keep it as well and the routes agree.
 fn documented_divergence_problems(twins: &Twins, documented: &Documented) -> Vec<String> {
     let atomic = adjusted_positions(&adjusted_geometry_of(&twins.left));
     let singles = adjusted_positions(&adjusted_geometry_of(&twins.right));
@@ -1284,6 +1356,30 @@ fn documented_divergence_problems(twins: &Twins, documented: &Documented) -> Vec
                  free-floating partner where it was (PR #95, \
                  test_delete_range_shift_does_not_displace_free_floating_merged_section)"
             ));
+        }
+    }
+    let disagree = atomic.iter().any(|(key, now)| {
+        section_of_station_key(key).is_some_and(|id| documented.cut_loose.contains(&id))
+            && singles
+                .get(key)
+                .is_none_or(|other| positions_differ_in_plane(*now, *other))
+    });
+    if disagree {
+        let (edited, head) = documented.edited;
+        for index in 0..=head {
+            let key = format!("{edited}:{index}");
+            let (was, now) = (documented.before.get(&key), atomic.get(&key));
+            if !matches!((was, now), (Some(was), Some(now)) if !positions_differ_in_plane(*was, *now))
+            {
+                problems.push(format!(
+                    "the two routes disagree about the cut-loose edited group {:?} AND the ATOMIC \
+                     route moved the edited section's head: station {key} was {was:?}, atomic \
+                     {now:?} - the documented divergence is the single deletes shifting the head \
+                     toward a doomed tail anchor (PR #95, \
+                     test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor)",
+                    documented.cut_loose
+                ));
+            }
         }
     }
     problems
@@ -1736,6 +1832,21 @@ const GATE_SEEDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 1272];
 const GATE_PRELUDE: usize = 12;
 /// Times each pair is built per seed, each on fresh twins.
 const GATE_REPEATS: usize = 3;
+/// Seeds the sweep once reported an UNEXPLAINED divergence on, replayed by the
+/// gate as regressions with the settings they failed under: `(seed, repeats,
+/// closures)`. Not part of `GATE_SEEDS` because a pair's draw depends on the
+/// repeat index, so a seed that failed on a repeat past `GATE_REPEATS`, or only
+/// with closures on, would replay clean there.
+const GATE_REGRESSIONS: &[(u32, usize, bool)] = &[
+    // `range-shift-is-n-single-deletes`, repeat 3: the partner is datum-anchored,
+    // so the first single delete keeps the doomed tail anchor fixed and shifts the
+    // edited section's head; the next one cuts the merge and the edited group is
+    // stranded. Intended (see `Documented`); the allowance used to cover only the
+    // partner side, so this read as unexplained. 1016 also drags a section merged
+    // to the edited section's surviving tail; 500089 holds an unaligned closure.
+    (1016, 4, false),
+    (500_089, 4, true),
+];
 
 /// THE METAMORPHIC GATE. Not `#[ignore]`d, so it runs on every `cargo test`.
 ///
@@ -1759,8 +1870,12 @@ fn metamorphic_gate() {
     let mut built = 0;
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut shapes: BTreeMap<&'static str, usize> = BTreeMap::new();
-    for &seed in GATE_SEEDS {
-        let outcomes = run_pairs(seed, GATE_REPEATS, false, GATE_PRELUDE);
+    let runs = GATE_SEEDS
+        .iter()
+        .map(|&seed| (seed, GATE_REPEATS, false))
+        .chain(GATE_REGRESSIONS.iter().copied());
+    for (seed, repeats, closures) in runs {
+        let outcomes = run_pairs(seed, repeats, closures, GATE_PRELUDE);
         println!("{}", summarize(seed, &outcomes));
         for outcome in outcomes.values() {
             built += outcome.built;
