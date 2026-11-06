@@ -44,6 +44,8 @@ interface FileRec {
   name: string;
   content: Content;
   display: Map<string, StoredDisplay>;
+  /** The file's inode: every save renames a fresh file over its path (project_io.rs:824-850). */
+  inode: number;
 }
 
 export interface Generation {
@@ -129,6 +131,8 @@ function displayAnswer(stored: Map<string, StoredDisplay>): Record<string, unkno
 /** A load's cancellation token (`AppState::start_new_load`). */
 interface LoadToken {
   cancelled: boolean;
+  /** A load's stamp of its file, taken as it opens it (project_load.rs:491-493); unset for a create. */
+  stamp?: number | null;
 }
 
 /** The project a save or an edit was made for (`expectedProject`, expected_project.rs `ProjectIdentity`). */
@@ -150,6 +154,7 @@ export class BackendModel {
   private activeLoad: LoadToken | null = null;
   private loadingId = 0;
   private createdCounter = 0;
+  private inodes = 0;
 
   constructor() {
     const file = (createdAt: string, name: string): FileRec => ({
@@ -157,6 +162,7 @@ export class BackendModel {
       name,
       content: { sections: [{ id: 1, name: `${name}-s1` }], surfaceElevation: null },
       display: new Map(),
+      inode: this.newInode(),
     });
     // Two copies of one project share created_at (#576 NF-W8FE-3).
     this.files.set('/caves/CaveA.stalx', file('2026-01-01T10:00:00Z', 'CaveA'));
@@ -183,7 +189,13 @@ export class BackendModel {
         // project_load.rs:397-409: ALREADY_OPEN, then start_new_load, before the file is read.
         const path = String(args?.path);
         if (this.open && this.open.filePath === path) return { early: err('ALREADY_OPEN', 'already open') };
-        return { token: this.startLoad() };
+        const token = this.startLoad();
+        // project_load.rs:491-493: the stamp of the file the load opens, which its
+        // commit compares (load_file_stamp.rs). Taken here, at the send: the earliest
+        // the real load can take it, so every save the backend applies after the send
+        // lands between the stamp and the commit.
+        token.stamp = this.fileStamp(path);
+        return { token };
       }
       case 'create_project_full':
         // project_create.rs: a create starts a load too (its cancel token).
@@ -202,6 +214,21 @@ export class BackendModel {
 
   private finishLoad(token: LoadToken): void {
     if (this.activeLoad === token) this.activeLoad = null;
+  }
+
+  private newInode(): number {
+    this.inodes += 1;
+    return this.inodes;
+  }
+
+  /**
+   * load_file_stamp.rs:49-56 (unix, the CI platform): the inode at the path, null
+   * when there is no file. Off unix (load_file_stamp.rs:57-62) the stamp is a
+   * process-wide save epoch instead, so a save of ANY file refuses a load in flight
+   * once; not modelled.
+   */
+  private fileStamp(path: string): number | null {
+    return this.files.get(path)?.inode ?? null;
   }
 
   /**
@@ -327,6 +354,14 @@ export class BackendModel {
     // project_load.rs:1044-1060: "already open" once more under command_lock - a load
     // of this file that started earlier can have committed since this one was sent.
     if (this.open && this.open.filePath === path) return err('ALREADY_OPEN', 'Project already open');
+    // project_load.rs:1061-1074: a save renamed a fresh file over the path since the
+    // load stamped it (onSend): retryable, nothing committed.
+    if (token.stamp !== undefined && this.fileStamp(path) !== token.stamp) {
+      return err(
+        'FILE_REPLACED_DURING_LOAD',
+        'The project file was saved while it was being opened; open it again.',
+      );
+    }
     const content = cloneContent(file.content);
     this.commitGen({
       gen: 0,
@@ -388,6 +423,7 @@ export class BackendModel {
       name: open.name,
       content: cloneContent(open.content),
       display: new Map(display),
+      inode: this.newInode(),
     });
   }
 
@@ -402,7 +438,10 @@ export class BackendModel {
       open.cache = new Map();
       open.deferred = false;
     } else if (target === open.filePath) {
-      this.files.get(target)!.content = cloneContent(open.content);
+      // A fresh file renamed over the path (project_io.rs:824-850): a new inode.
+      const file = this.files.get(target)!;
+      file.content = cloneContent(open.content);
+      file.inode = this.newInode();
     } else {
       // Save As: the side tables travel with the project (save_sidecars.rs).
       this.writeFile(target, open, this.files.get(open.filePath!)?.display ?? new Map());

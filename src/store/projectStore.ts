@@ -74,6 +74,7 @@ import { createProjectExportActions, type ProjectExportActions } from './project
 import { runProjectSwitch } from '../utils/projectTransition';
 import { expectedProjectOf, issuedAgainstOf, lostProjectOf, type IssuedAgainst } from './projectIssue';
 import { issueSave, refuseDuringSwitch } from './switchGate';
+import { loadRetryingReplacedFile } from './loadRetry';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -985,7 +986,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // `load_project_full` JSON response so the rest of the load pipeline
         // doesn't need to change. See utils/loadProjectBinary.ts.
         const { loadProjectFullBinary } = await import('../utils/loadProjectBinary');
-        const result = await loadProjectFullBinary(path);
+        // [#576 FZ-FZ-INT-R2] Repeated once, silently, when a save replaced the file mid-read.
+        const result = await loadRetryingReplacedFile(() => loadProjectFullBinary(path), () => {
+          if (turn.superseded || get().loading.clientOpId !== clientOpId) return false;
+          get().setLoadingProgress({ loadingId: 0 }); // the repeat's progress events carry a new id
+          return true;
+        });
         // The await above includes both the Rust handler runtime AND the
         // JS-side msgpack decode + typed-array materialization.
         const tIpcDone = performance.now();
