@@ -446,8 +446,10 @@ impl AppState {
         // Save the merged project using safe save pattern (temp file + atomic rename)
         let temp_path = output_path.with_extension("stalx.tmp");
 
-        // Remove any leftover temp file
-        if temp_path.exists() {
+        // Remove any leftover temp file - and a link at that name even when it
+        // leads nowhere yet, which `exists()` misses and the temp database would
+        // be created through (#576 FZ-PERSIST-fs-3, as in `save_project`).
+        if std::fs::symlink_metadata(&temp_path).is_ok() {
             let _ = std::fs::remove_file(&temp_path);
         }
 

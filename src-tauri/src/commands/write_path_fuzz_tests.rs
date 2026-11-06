@@ -73,6 +73,10 @@ const GATE_SEEDS: &[u64] = &[
     // FZ-PERSIST-fs-4: a create at `<cache>/nope/../speleodb/...` made
     // `<cache>/nope`, a folder in the app's own cache.
     1801, 1808,
+    // FZ-PERSIST-fs-3: Save As with a link that leads nowhere yet at the save's
+    // temp name (`notes.stalx.tmp` into the system folder, 437; an alias of the
+    // settings folder, 10402): the save created its temp database through it.
+    437, 10402,
 ];
 
 /// A deterministic PRNG (SplitMix64): every decision of a seed comes from here,
@@ -187,41 +191,6 @@ fn write_path_fuzz_gate() {
         started.elapsed().as_secs_f64()
     );
     assert!(failed.is_empty(), "{failed:#?}");
-}
-
-/// Seeds that reproduce each finding reported and still open (its fix lies
-/// outside this module), with its id: see `disk::known_open`.
-#[cfg(target_os = "linux")]
-const KNOWN_OPEN_SEEDS: &[(u64, &str)] = &[
-    // FZ-PERSIST-fs-3: Save As into the managed cache, `notes.stalx.tmp` a
-    // dangling link into the system folder: the save creates its temp file
-    // through it.
-    (437, "fs-3"),
-    // The same through an alias of the settings folder: Save As to
-    // `<home>/app/x.stalx` made a project in `<settings>/x.stalx/SpeleoDB/`.
-    (10402, "fs-3"),
-];
-
-/// The open findings still reproduce. When one no longer does - it was fixed -
-/// remove its matcher from `disk::known_open` and move its seeds into
-/// `GATE_SEEDS`.
-#[cfg(target_os = "linux")]
-#[test]
-fn write_path_fuzz_known_open() {
-    let mut gone = Vec::new();
-    for &(seed, id) in KNOWN_OPEN_SEEDS {
-        match one_seed(seed) {
-            Ok(stats) => {
-                let seen = stats.count(&format!("disk.known-open.{id}"));
-                println!("FZ-PERSIST KNOWN-OPEN fs seed={seed} {id} seen={seen}");
-                if seen == 0 {
-                    gone.push(format!("seed={seed} no longer reproduces {id}"));
-                }
-            }
-            Err(why) => gone.push(format!("seed={seed} {why}")),
-        }
-    }
-    assert!(gone.is_empty(), "{gone:#?}");
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -1819,41 +1788,6 @@ mod disk {
             .collect()
     }
 
-    /// The names a write keeps beside its file that this fuzzer links: the
-    /// save's temp file (`with_extension("stalx.tmp")`), and the `BESIDE` names.
-    fn beside_names(entry: &Path) -> Vec<(String, PathBuf)> {
-        let mut names = vec![(".stalx.tmp".to_owned(), entry.with_extension("stalx.tmp"))];
-        for suffix in BESIDE {
-            let mut name = entry.as_os_str().to_os_string();
-            name.push(suffix);
-            names.push(((*suffix).to_owned(), PathBuf::from(name)));
-        }
-        names
-    }
-
-    /// [Known open] Which reported, still-open finding explains a change at
-    /// `changed` in a protected folder, if one does: `fs-3.<name>`, a link at a
-    /// name a write keeps beside the file it writes (the save's `.stalx.tmp`,
-    /// ...), in that file's own folder, that leads to `changed` - the write
-    /// follows it, and the policy judges only the file's own name.
-    fn known_open(
-        tree: &Tree,
-        before: &BTreeMap<PathBuf, Shot>,
-        plan: &Plan,
-        changed: &Path,
-    ) -> Option<String> {
-        for written in walked(plan).iter().filter_map(|p| entry_of(p, &tree.jail)) {
-            for (suffix, beside) in beside_names(&written) {
-                if let Some(Shot::Link(target)) = before.get(&beside) {
-                    if leads_to(tree, &beside, target, changed) {
-                        return Some(format!("fs-3{suffix}"));
-                    }
-                }
-            }
-        }
-        None
-    }
-
     /// Whether the link that was at `link` (to `target`, before an attempt)
     /// leads to `entry`: its target taken from the link's folder, walked now -
     /// the write may have moved the link itself away (a rename of the save's
@@ -1994,13 +1928,6 @@ mod disk {
                     None => false,
                     Some(Place::Managed) => !plan.caller.writes_project(),
                     Some(Place::App | Place::System) => true,
-                })
-                .filter(|p| match known_open(&tree, &before, &plan, p) {
-                    Some(id) => {
-                        stats.bump(&format!("disk.known-open.{id}"));
-                        false
-                    }
-                    None => true,
                 })
                 .map(|p| {
                     format!(

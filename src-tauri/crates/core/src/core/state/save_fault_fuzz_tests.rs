@@ -752,6 +752,43 @@ fn check_kill(
     }
 }
 
+/// [#576 FZ-PERSIST-fs-3] (write-policy fuzzer seeds 437, 10402) A link left at
+/// the save's temp name that leads nowhere yet is removed like any leftover
+/// temp, and the save writes nothing where it led.
+///
+/// The cleanup asked `exists()`, which follows the link and says no for one that
+/// leads nowhere, so the link stayed and the temp database was created THROUGH
+/// it - wherever it pointed, the policy having judged only the project's own
+/// name: a whole project in a system or settings folder.
+#[cfg(unix)]
+#[test]
+fn a_dangling_link_at_the_temp_name_is_not_followed_by_the_save() {
+    let _config = isolated_config();
+    let mut rng = Rng::new(3);
+    let session = Session::new(&mut rng);
+    let elsewhere = tempfile::TempDir::new().expect("a folder the save must not write");
+    let target = elsewhere.path().join("planted.toml");
+    let destination = session.dir.path().join("CaveA.stalx");
+    std::os::unix::fs::symlink(&target, temp_of(&destination)).expect("plant the link");
+
+    let saved = session.state.save_project(Some(destination.clone()));
+
+    assert!(
+        !target.exists() && names_in(elsewhere.path()).is_empty(),
+        "the save wrote through the link at its temp name: {:?}",
+        names_in(elsewhere.path())
+    );
+    assert!(saved.success, "the save failed: {:?}", saved.error);
+    assert!(
+        std::fs::symlink_metadata(temp_of(&destination)).is_err(),
+        "the link at the temp name is still there"
+    );
+    assert!(
+        open_fresh(&destination).is_some(),
+        "the saved file does not open"
+    );
+}
+
 /// The CI seed list. Seeds that ever failed are added here as regressions.
 const GATE_SEEDS: std::ops::RangeInclusive<u32> = 1..=24;
 

@@ -718,8 +718,12 @@ impl AppState {
             }
         }
 
-        // Remove any leftover temp file from previous failed saves
-        if temp_path.exists() {
+        // Remove any leftover temp file from previous failed saves - and any link
+        // at that name, even one that leads nowhere yet: `exists()` follows a link
+        // and says no for a dangling one, and the temp database would then be
+        // created THROUGH it, wherever it points (#576 FZ-PERSIST-fs-3). The write
+        // policy judged the project's own name, not this one.
+        if std::fs::symlink_metadata(&temp_path).is_ok() {
             let _ = std::fs::remove_file(&temp_path);
         }
 
