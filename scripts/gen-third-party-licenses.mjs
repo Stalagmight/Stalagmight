@@ -53,6 +53,8 @@ const FIRST_PARTY_CRATES = new Set([
   'stalagmight-speleodb',
   'stalagmight-tiles',
   'stalagmight-core',
+  // Test-only (fuzz generators and oracles); never linked into the app.
+  'stalagmight-fuzz-gen',
 ]);
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
