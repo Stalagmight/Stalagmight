@@ -531,24 +531,7 @@ pub(super) fn side_write(session: &mut Session, rng: &mut Rng) {
                 return;
             }
             let comment = rng.chance(50).then(|| format!("ok {}", rng.range(0, 99)));
-            // As the Ignore command does: keyed by the uuid once it is on disk,
-            // by position before (issue #57).
-            let shot_uuid = state
-                .shot_uuid_is_persisted(section_id, &uuid)
-                .then(|| uuid.clone());
-            let row = ResolvedWarning {
-                section_id,
-                shot_id,
-                warning_code: code.clone(),
-                resolved_at: Utc::now(),
-                resolved_comment: comment.clone(),
-                shot_uuid,
-            };
-            if state.save_resolved_warning(&row).is_ok() {
-                trace(|| format!("ignore {code} on {section_id}/{shot_id} uuid {uuid}"));
-                session.model.ignores.insert((uuid, code), comment);
-                session.count("ignore-added");
-            }
+            add_ignore(session, (section_id, shot_id, uuid), code, comment);
         }
         6 => {
             if session.model.ignores.is_empty() || !session.has_database() {
@@ -614,6 +597,34 @@ pub(super) fn side_write(session: &mut Session, rng: &mut Rng) {
                 }
             }
         }
+    }
+}
+
+/// Ignore `code` on the shot `(section, id, uuid)` as the Ignore command does -
+/// keyed by the uuid once it is on disk, by position before (issue #57) - and
+/// mirror it into the model.
+fn add_ignore(
+    session: &mut Session,
+    (section_id, shot_id, uuid): (u32, u32, String),
+    code: String,
+    comment: Option<String>,
+) {
+    let state = &session.state;
+    let shot_uuid = state
+        .shot_uuid_is_persisted(section_id, &uuid)
+        .then(|| uuid.clone());
+    let row = ResolvedWarning {
+        section_id,
+        shot_id,
+        warning_code: code.clone(),
+        resolved_at: Utc::now(),
+        resolved_comment: comment.clone(),
+        shot_uuid,
+    };
+    if state.save_resolved_warning(&row).is_ok() {
+        trace(|| format!("ignore {code} on {section_id}/{shot_id} uuid {uuid}"));
+        session.model.ignores.insert((uuid, code), comment);
+        session.count("ignore-added");
     }
 }
 
@@ -1262,7 +1273,14 @@ fn the_settings_edit_is_traced_like_every_other_edit() {
 /// mirrored shot; the reverse back DOES pin it - to that mirrored shot, whose
 /// uuid is on disk. The section is as it was, and the ignore is on another shot
 /// for good. `back_by_undo` takes the way back through Undo instead.
-fn reverse_and_back_keeps_an_unsaved_shots_ignore(back_by_undo: bool) -> Result<(), String> {
+///
+/// `mirror_code` also ignores the shot the new one mirrors (saved, so keyed by
+/// its uuid) for that code. With the SAME code its row held the slot the new
+/// shot's ignore had to move to, the move failed, and the old pin came back.
+fn reverse_and_back_keeps_an_unsaved_shots_ignore(
+    back_by_undo: bool,
+    mirror_code: Option<&str>,
+) -> Result<(), String> {
     let state = AppState::new().map_err(|e| e.to_string())?;
     state.execute(Command::CreateProject {
         name: "CaveA".to_owned(),
@@ -1298,19 +1316,32 @@ fn reverse_and_back_keeps_an_unsaved_shots_ignore(back_by_undo: bool) -> Result<
         .find(|(_, _, uuid)| before.by_uuid(uuid).is_none())
         .cloned()
         .ok_or("no new shot")?;
-    let shot_uuid = state
-        .shot_uuid_is_persisted(section_id, &new_uuid)
-        .then(|| new_uuid.clone());
-    state
-        .save_resolved_warning(&ResolvedWarning {
-            section_id,
-            shot_id: new_shot,
-            warning_code: "MISSING_LRUD".to_owned(),
-            resolved_at: Utc::now(),
-            resolved_comment: None,
-            shot_uuid,
-        })
-        .map_err(|e| e.to_string())?;
+    let mut want = BTreeSet::from([(new_uuid.clone(), "MISSING_LRUD".to_owned())]);
+    let mut ignores = vec![(new_shot, new_uuid.clone(), "MISSING_LRUD")];
+    if let Some(code) = mirror_code {
+        let (mirror_shot, mirror_uuid) =
+            mirror_of(&state, section_id, &new_uuid).ok_or("no mirrored shot")?;
+        if !state.shot_uuid_is_persisted(section_id, &mirror_uuid) {
+            return Err("the mirrored shot is not on disk".to_owned());
+        }
+        want.insert((mirror_uuid.clone(), code.to_owned()));
+        ignores.push((mirror_shot, mirror_uuid, code));
+    }
+    for (shot_id, uuid, code) in ignores {
+        let shot_uuid = state
+            .shot_uuid_is_persisted(section_id, &uuid)
+            .then_some(uuid);
+        state
+            .save_resolved_warning(&ResolvedWarning {
+                section_id,
+                shot_id,
+                warning_code: code.to_owned(),
+                resolved_at: Utc::now(),
+                resolved_comment: None,
+                shot_uuid,
+            })
+            .map_err(|e| e.to_string())?;
+    }
     let reverse = || {
         state.execute(Command::ReverseSection {
             section_id,
@@ -1333,24 +1364,108 @@ fn reverse_and_back_keeps_an_unsaved_shots_ignore(back_by_undo: bool) -> Result<
     }
     let reopened = open_fresh(&path).ok_or("reopen")?;
     let (sides, _) = side_tables_of(&reopened)?;
-    let on: Vec<&String> = sides.ignores.keys().map(|(uuid, _)| uuid).collect();
-    if on == [&new_uuid] {
+    let on: BTreeSet<(String, String)> = sides.ignores.into_keys().collect();
+    if on == want {
         Ok(())
     } else {
         Err(format!(
-            "the ignore on the new shot {new_uuid} is now on {on:?} (back by undo: {back_by_undo})"
+            "ignores after reopen {on:?}, want {want:?} (new shot {new_uuid}, back by undo: \
+             {back_by_undo}, mirrored shot ignored for {mirror_code:?})"
         ))
     }
+}
+
+/// The shot a reverse of `section_id` swaps with the one carrying `uuid`, as
+/// `(shot id, uuid)`; `None` when there is none, or it is that shot itself.
+fn mirror_of(state: &AppState, section_id: u32, uuid: &str) -> Option<(u32, String)> {
+    let project = state.get_project_state()?;
+    let shots = &project.sections.iter().find(|s| s.id == section_id)?.shots;
+    let at = shots.iter().position(|s| s.uuid.as_deref() == Some(uuid))?;
+    let mirror = shots.get(shots.len() - 1 - at)?;
+    let mirror_uuid = mirror.uuid.clone().filter(|u| u != uuid)?;
+    Some((mirror.id, mirror_uuid))
 }
 
 #[test]
 fn an_unsaved_shots_ignore_stays_on_it_across_a_reverse_and_back() {
     let _config = isolated_config();
-    let found: Vec<String> = [false, true]
-        .into_iter()
-        .filter_map(|by_undo| reverse_and_back_keeps_an_unsaved_shots_ignore(by_undo).err())
-        .collect();
+    let mut found = Vec::new();
+    // Only the new shot ignored; the shot it mirrors ignored for the same code;
+    // for another code.
+    for mirror_code in [None, Some("MISSING_LRUD"), Some("SHORT_SHOT")] {
+        for by_undo in [false, true] {
+            found
+                .extend(reverse_and_back_keeps_an_unsaved_shots_ignore(by_undo, mirror_code).err());
+        }
+    }
     assert!(found.is_empty(), "{found:#?}");
+}
+
+/// [#576 FZ-PERSIST-2] A directed session the gate runs beside its seeds, as the
+/// generator makes it too rarely to rely on: in a random project, a shot added
+/// since the save and the saved shot it mirrors are both ignored for ONE code,
+/// their section is reversed and brought back by a second reverse, then reversed
+/// and brought back by Undo, and the save is checked by the round-trip oracle -
+/// which holds the model's two ignores against the file.
+fn reverse_and_back_session(seed: u32) -> Vec<String> {
+    let mut rng = Rng::new(seed);
+    let mut session = Session::new(&mut rng);
+    let mut problems = Vec::new();
+    let first = session.next_path();
+    save_and_check(&mut session, Some(first), "first save", &mut problems);
+    let label = format!("directed seed {seed} (reverse and back, by reverse and by undo)");
+    let before = read_targets(&session.state);
+    let Some(&(section_id, _)) = before.sections.iter().max_by_key(|(_, shots)| shots.len()) else {
+        return vec![format!("{label}: no section")];
+    };
+    session.state.execute(Command::CreateShot {
+        section_id,
+        shot: random_shot(&mut rng),
+        after_shot_id: None,
+        before_shot_id: None,
+    });
+    let Some(new) = read_targets(&session.state)
+        .shot_uuids
+        .into_iter()
+        .find(|(_, _, uuid)| before.by_uuid(uuid).is_none())
+    else {
+        return vec![format!("{label}: no new shot")];
+    };
+    let Some((mirror_shot, mirror_uuid)) = mirror_of(&session.state, section_id, &new.2) else {
+        return vec![format!("{label}: no mirrored shot")];
+    };
+    let keys = [&new.2, &mirror_uuid].map(|uuid| (uuid.clone(), "MISSING_LRUD".to_owned()));
+    // Keyed by position and by uuid respectively, or this is not the case.
+    let on_disk = |uuid: &str| session.state.shot_uuid_is_persisted(section_id, uuid);
+    if on_disk(&new.2) || !on_disk(&mirror_uuid) {
+        return vec![format!(
+            "{label}: the new shot is on disk, or its mirror is not"
+        )];
+    }
+    for target in [new, (section_id, mirror_shot, mirror_uuid)] {
+        add_ignore(&mut session, target, "MISSING_LRUD".to_owned(), None);
+    }
+    if !keys
+        .iter()
+        .all(|key| session.model.ignores.contains_key(key))
+    {
+        return vec![format!("{label}: an ignore was refused")];
+    }
+    let reverse = || {
+        session
+            .state
+            .execute(Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            })
+            .success
+    };
+    let there_and_back = reverse() && reverse() && reverse() && session.state.undo().success;
+    if !there_and_back {
+        return vec![format!("{label}: a reverse or the undo was refused")];
+    }
+    save_and_check(&mut session, None, &label, &mut problems);
+    problems
 }
 
 // ===========================================================================
@@ -1381,6 +1496,7 @@ fn persist_roundtrip_fuzz_gate() {
     for &(seed, steps) in GATE_SEEDS {
         problems.extend(run_seed(seed, steps).0);
     }
+    problems.extend(reverse_and_back_session(11));
     assert!(
         problems.is_empty(),
         "round-trip fuzz found {} problem(s):\n{}",

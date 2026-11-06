@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, types::Value, Connection};
 use std::collections::HashMap;
 
 use super::{Database, ResolvedWarning};
@@ -399,35 +399,131 @@ impl Database {
         Ok(())
     }
 
-    /// [#576 FZ-PERSIST-2] Move position-keyed (NULL-uuid) ignores to new shot
-    /// ids: each `(section_id, from, to)` re-keys the rows at `from` to `to`, all
-    /// moves at once (a swap of two slots is a pair of moves). Rows keyed by a
-    /// uuid are not touched. One transaction: if any move cannot be made (its
-    /// target slot holds another ignore with the same code), none is, and the
-    /// error is returned. Returns how many rows moved.
-    pub fn rekey_position_resolved_warnings(&self, moves: &[(u32, u32, u32)]) -> Result<usize> {
+    /// [#576 FZ-PERSIST-2] Move the ignores of reversed sections to new shot
+    /// ids, all at once (a swap of two slots is a pair of moves).
+    ///
+    /// Each `(section_id, from, to)` re-keys the position-keyed (NULL-uuid) rows
+    /// at `from` to `to`. `shots` gives the uuid of the shot at each
+    /// `(section_id, shot id)` of those sections, and each uuid-keyed row of a
+    /// section in `moves` whose uuid names exactly one of them moves to that
+    /// shot's id. Such a row is matched by its uuid wherever it sits, but it
+    /// still holds its slot under UNIQUE(section_id, shot_id, warning_code):
+    /// left in place, the mirrored shot's ignore with the same code was in the
+    /// way of the position-keyed one, and the whole move failed. A uuid-keyed
+    /// row whose uuid names no such shot (an ignore of a deleted shot) is not
+    /// touched.
+    ///
+    /// One transaction. Every moving row is parked on a slot of its own that no
+    /// shot id can take, so no two of them meet the key half-way. Then the
+    /// position-keyed rows land on their targets: if one cannot (a row that does
+    /// not move holds its target), no row moves and the error is returned. Then
+    /// the uuid-keyed rows land, each on its shot's id or, where another row
+    /// already holds that slot with the same code (a second ignore of that
+    /// shot, or a row that does not move), back on its own slot; one that can
+    /// do neither fails the move the same way. Those whose own slot a
+    /// position-keyed row took land first, as their shot's id is the only place
+    /// left for them. Returns how many rows landed on their shot's id.
+    pub fn rekey_position_resolved_warnings(
+        &self,
+        moves: &[(u32, u32, u32)],
+        shots: &HashMap<(u32, u32), String>,
+    ) -> Result<usize> {
         let tx = self.conn.unchecked_transaction()?;
-        // Park every moving row on a slot no shot id can take (negative), so a
-        // swap never meets the UNIQUE(section_id, shot_id, warning_code) key
-        // half-way, then land each on its target.
-        let park = |id: u32| -1 - i64::from(id);
-        for &(section_id, from, _) in moves {
-            tx.execute(
-                "UPDATE resolved_warnings SET shot_id = ?3 \
+        // (row, target) of each position-keyed row that moves, and the
+        // (section, slot, code) it lands on.
+        let mut by_position: Vec<(i64, u32)> = Vec::new();
+        let mut landings: Vec<(u32, Value, Value)> = Vec::new();
+        for &(section_id, from, to) in moves {
+            let mut stmt = tx.prepare_cached(
+                "SELECT id, warning_code FROM resolved_warnings \
                  WHERE section_id = ?1 AND shot_id = ?2 AND shot_uuid IS NULL",
-                params![section_id, from, park(from)],
+            )?;
+            let rows = stmt.query_map(params![section_id, from], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Value>(1)?))
+            })?;
+            for row in rows {
+                let (id, code) = row?;
+                by_position.push((id, to));
+                landings.push((section_id, Value::Integer(i64::from(to)), code));
+            }
+        }
+        // The id of the shot each uuid names; `None` when two shots of its
+        // section carry it, as then it names neither.
+        let mut id_of: HashMap<(u32, &str), Option<u32>> = HashMap::new();
+        for (&(section_id, shot_id), uuid) in shots {
+            id_of
+                .entry((section_id, uuid.as_str()))
+                .and_modify(|id| *id = None)
+                .or_insert(Some(shot_id));
+        }
+        // (row, target, its own slot, whether a position-keyed row lands on
+        // that) of each uuid-keyed row that moves. The uuid is read the way
+        // `read_resolved_warnings` reads it.
+        let sections: std::collections::BTreeSet<u32> = moves.iter().map(|m| m.0).collect();
+        let mut by_uuid: Vec<(i64, u32, Value, bool)> = Vec::new();
+        for section_id in sections {
+            let mut stmt = tx.prepare_cached(
+                "SELECT id, shot_id, warning_code, shot_uuid FROM resolved_warnings \
+                 WHERE section_id = ?1 AND shot_uuid IS NOT NULL",
+            )?;
+            let rows = stmt.query_map(params![section_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Value>(1)?,
+                    r.get::<_, Value>(2)?,
+                    coerce_text(r.get_ref(3)?, MAX_RESOLVED_KEY_CHARS),
+                ))
+            })?;
+            for row in rows {
+                let (id, own_slot, code, uuid) = row?;
+                let target = uuid
+                    .as_deref()
+                    .and_then(|u| id_of.get(&(section_id, u)).copied().flatten());
+                if let Some(to) = target {
+                    let displaced = landings
+                        .iter()
+                        .any(|(s, slot, c)| *s == section_id && *slot == own_slot && *c == code);
+                    by_uuid.push((id, to, own_slot, displaced));
+                }
+            }
+        }
+        by_uuid.sort_by_key(|m| !m.3);
+        // Parking slots are -1, -2, ...: one per row, and never a shot id (a
+        // u32).
+        let moving = by_position
+            .iter()
+            .map(|m| m.0)
+            .chain(by_uuid.iter().map(|m| m.0));
+        for (slot, id) in (1_i64..).zip(moving) {
+            tx.execute(
+                "UPDATE resolved_warnings SET shot_id = ?2 WHERE id = ?1",
+                params![id, -slot],
             )?;
         }
-        let mut moved = 0;
-        for &(section_id, from, to) in moves {
-            moved += tx.execute(
-                "UPDATE resolved_warnings SET shot_id = ?3 \
-                 WHERE section_id = ?1 AND shot_id = ?2 AND shot_uuid IS NULL",
-                params![section_id, park(from), to],
+        let mut landed = 0;
+        for &(id, to) in &by_position {
+            landed += tx.execute(
+                "UPDATE resolved_warnings SET shot_id = ?2 WHERE id = ?1",
+                params![id, to],
             )?;
+        }
+        let land_if_free = "UPDATE OR IGNORE resolved_warnings SET shot_id = ?2 WHERE id = ?1";
+        let mut kept_out = Vec::new();
+        for (id, to, own_slot, _) in &by_uuid {
+            match tx.execute(land_if_free, params![id, to])? {
+                0 => kept_out.push((id, own_slot)),
+                n => landed += n,
+            }
+        }
+        for (id, own_slot) in kept_out {
+            if tx.execute(land_if_free, params![id, own_slot])? == 0 {
+                anyhow::bail!(
+                    "an ignore keyed by its shot's uuid found neither its shot's slot nor its own free"
+                );
+            }
         }
         tx.commit()?;
-        Ok(moved)
+        Ok(landed)
     }
 
     /// Upgrade legacy NULL-uuid resolved-warning rows to UUID keying using the

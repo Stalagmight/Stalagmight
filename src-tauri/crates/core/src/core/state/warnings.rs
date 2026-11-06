@@ -239,8 +239,11 @@ impl AppState {
     /// on disk are pinned to it. Pinning alone left the rows of a shot not saved yet
     /// where they were: one reverse moved its ignore to the mirrored shot, and reversing
     /// back (or Undo) then pinned it there for good - by the UUID of the mirrored shot,
-    /// which is on disk. If the move cannot be made (a target slot holds another ignore
-    /// with the same code), the rows stay and only the mirror pin is applied, as before.
+    /// which is on disk. The section's UUID-keyed rows move to their shots' ids in the
+    /// same transaction, so the mirrored shot's own ignore with the same code is out of
+    /// the way (left in place, it failed the move). If the move still cannot be
+    /// made (a target slot holds a row that does not move, such as an ignore of a deleted
+    /// shot), no row moves and only the mirror pin is applied, as before.
     ///
     /// The map is rebuilt from the CURRENT project on every call, so it is not "its own
     /// inverse" in any useful sense: what makes undo/redo of a reverse safe to re-run is
@@ -293,7 +296,7 @@ impl AppState {
         let pins = if moves.is_empty() {
             current
         } else {
-            match db.rekey_position_resolved_warnings(&moves) {
+            match db.rekey_position_resolved_warnings(&moves, &current) {
                 Ok(_) => current,
                 Err(e) => {
                     tracing::warn!(
