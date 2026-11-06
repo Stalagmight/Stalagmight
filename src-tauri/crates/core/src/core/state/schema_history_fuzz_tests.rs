@@ -1163,10 +1163,13 @@ fn upgraded(world: &World, from: i32) -> World {
             .filter(|s| s.flips)
             .map(|s| s.id)
             .collect();
+        // `0.0 - p`, not `-p`: the same negation for every non-zero pitch, but a
+        // level reading stays +0.0. A REAL column holds no signed zero (SQLite
+        // reads 0.0 back for a stored -0.0), so -0.0 is a value no file can hold.
         for section in out.sections.iter_mut().filter(|s| s.flips) {
             for shot in &mut section.shots {
-                shot.pitch_in = shot.pitch_in.map(|p| -p);
-                shot.pitch_out = shot.pitch_out.map(|p| -p);
+                shot.pitch_in = shot.pitch_in.map(|p| 0.0 - p);
+                shot.pitch_out = shot.pitch_out.map(|p| 0.0 - p);
             }
         }
         out.warnings.retain(|w| {
@@ -2415,7 +2418,11 @@ fn one_line(text: &str) -> String {
 
 /// Seeds a long run found failing, kept as regressions (`case_for` derives each
 /// one's case, as the run did).
-const REGRESSION_SEEDS: &[u32] = &[];
+const REGRESSION_SEEDS: &[u32] = &[
+    // Oracle: a level shot (pitch exactly 0.0) in a section the v12 migration
+    // flips; the model negated it to -0.0, which no file can hold.
+    4_000_574,
+];
 
 /// The CI gate: every era, stamped; a few eras unstamped; every other shape.
 fn gate_cases(current: i32) -> Vec<(u32, Case)> {
