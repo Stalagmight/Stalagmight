@@ -69,6 +69,21 @@ pub fn run(target: Target, data: &[u8]) -> Result<Outcome, Violation> {
     }
 }
 
+/// The files `target` imports for `data` (the rendered generator output, or
+/// the unpacked container), for triage: write them out and open them by hand.
+/// `None` for the `.stalx` targets, whose input is not a file set.
+pub fn files_of(target: Target, data: &[u8]) -> Option<FileSet> {
+    match target {
+        Target::Raw(format) => Some(FileSet::from_container(format.entry_name(), data)),
+        Target::Gen(format) => {
+            let mut src = ByteSource::new(data);
+            let _knobs = src.u8();
+            Some(gen::generate(format, &mut src))
+        }
+        Target::StalxSql | Target::StalxRaw => None,
+    }
+}
+
 /// Seed input number `seed` for `target`: generator decisions for the
 /// generator-driven targets, a rendered file (set) for the raw ones, a base
 /// project for the raw `.stalx` target. Synthetic and deterministic.
