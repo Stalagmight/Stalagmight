@@ -1846,6 +1846,10 @@ const GATE_REGRESSIONS: &[(u32, usize, bool)] = &[
     // to the edited section's surviving tail; 500089 holds an unaligned closure.
     (1016, 4, false),
     (500_089, 4, true),
+    // `a-failed-batch-is-a-no-op`, repeat 3 with closures: the same vacuous
+    // poisoned batch as GATE_SEEDS' 1272 (an empty-section reverse, every move
+    // refused by the datum guard), which used to read as a divergence.
+    (500_042, 4, true),
 ];
 
 /// THE METAMORPHIC GATE. Not `#[ignore]`d, so it runs on every `cargo test`.
