@@ -157,8 +157,10 @@ Commands now run **concurrently**, which makes three rules explicit:
   (`store/switchGate.ts`, `utils/projectTransition.ts`): a load, create or close
   waits for the saves and edits already sent; a save or an edit requested while a
   switch is under way is refused locally, with the same PROJECT_CHANGED text, until
-  it settles; and switches run one at a time - one still waiting when a newer one is
-  requested is dropped, and a running load is cancelled (latest wins). A load or a
+  the switch has put its project on screen (`SwitchTurn.committed`) or settled; and
+  switches run one at a time - one still waiting when a newer one is requested is
+  dropped, and a running load is cancelled (latest wins). A cancelled load keeps its
+  loading state until it ends: its answer can still commit. A load or a
   close first flushes the queued display-setting writes, so each lands in its own
   session; the wait is bounded by `PROJECT_SETTING_FLUSH_TIMEOUT_MS` (2 s), and a
   write still queued then is dropped unsent.

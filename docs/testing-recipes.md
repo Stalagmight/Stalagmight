@@ -486,7 +486,10 @@ pins it only while the generator is unchanged. The model mirrors the backend's
 switch guards too: a save or an edit naming another project is refused with
 `PROJECT_CHANGED`, a load whose file a save replaced answers
 `FILE_REPLACED_DURING_LOAD`, and a load re-checks `ALREADY_OPEN` and its cancel
-token at its commit. A command the stores start sending that the
+token at its commit. The `edit-lost` invariant accepts the switch gate's local
+refusal of an edit made while a switch is undecided (more than one in flight, or the
+only one not answered yet); a refusal after that is a failure. The generator never
+saves onto a path it loads, so no seed reaches `FILE_REPLACED_DURING_LOAD`. A command the stores start sending that the
 model does not know fails the gate (`unmodelled`): model it in `backendModel.ts`
 (mirroring the backend's guard, with file:line) or list it in `AMBIENT`.
 
