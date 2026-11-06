@@ -152,6 +152,16 @@ Commands now run **concurrently**, which makes three rules explicit:
   same lock, so no switch lands between the check and the write. `None` means "made
   with no project open". A source scan (`app_contract_tests.rs`) fails when a new
   mutation command does not declare, hand on, or put the identity on the wire.
+  The frontend captures the identity when the user issues the edit or the save
+  (`store/projectIssue.ts`) and keeps both apart from project switches
+  (`store/switchGate.ts`, `utils/projectTransition.ts`): a load, create or close
+  waits for the saves and edits already sent; a save or an edit requested while a
+  switch is under way is refused locally, with the same PROJECT_CHANGED text, until
+  it settles; and switches run one at a time - one still waiting when a newer one is
+  requested is dropped, and a running load is cancelled (latest wins). A load or a
+  close first flushes the queued display-setting writes, so each lands in its own
+  session; the wait is bounded by `PROJECT_SETTING_FLUSH_TIMEOUT_MS` (2 s), and a
+  write still queued then is dropped unsent.
 - **A read of the project is a settled read.** A command mutates the project and
   then settles it (orphan conversion, frame renormalisation, the reconcile, the undo
   push) under one `command_lock` span but several `project` acquisitions, so a read

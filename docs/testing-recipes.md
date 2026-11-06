@@ -476,11 +476,17 @@ FZ_INT_SHAPES=all FZ_INT_SEEDS=1000 \
 ```
 
 The gate leaves out the shapes of the findings still open (`KNOWN_OPEN_EXCLUDED`:
-overlapping switches, a save or an edit across a switch, a display write landing
-after a reload of its file); switch one back on when its fix lands, as Settings
-patching a gas field was (FZ-FZ-INT-3). A seed stands for whatever
-`generate` makes of it today, so pin a found bug as its shrunk TRACE in
-`REGRESSION_TRACES`, not as a seed. A command the stores start sending that the
+none at the moment); switch a shape back on when its fix lands. Overlapping
+switches, a save or an edit across a switch, a display write across a reload of
+its file (#576 FZ-FZ-INT-1/4/6/7) and Settings patching a gas field (FZ-FZ-INT-3)
+all run in the gate now that their fixes have landed. A seed stands for
+whatever `generate` makes of it today, so pin a found bug as its shrunk TRACE in
+`REGRESSION_TRACES`; a seed in `REGRESSION_SEEDS` (with the shapes that found it)
+pins it only while the generator is unchanged. The model mirrors the backend's
+switch guards too: a save or an edit naming another project is refused with
+`PROJECT_CHANGED`, a load whose file a save replaced answers
+`FILE_REPLACED_DURING_LOAD`, and a load re-checks `ALREADY_OPEN` and its cancel
+token at its commit. A command the stores start sending that the
 model does not know fails the gate (`unmodelled`): model it in `backendModel.ts`
 (mirroring the backend's guard, with file:line) or list it in `AMBIENT`.
 
