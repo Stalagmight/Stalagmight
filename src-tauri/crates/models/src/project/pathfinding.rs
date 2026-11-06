@@ -5,6 +5,9 @@ use crate::{Coordinates, Section, SectionId, Shot, Station, StationRef};
 
 use super::{HeapItem, PathEdge, PathStep, Project, StationPath};
 
+#[cfg(test)]
+mod path_length_tests;
+
 impl Project {
     /// Calculate the path length between two stations through shots, merges, and closures.
     /// Both merges and closures are zero-distance edges.
