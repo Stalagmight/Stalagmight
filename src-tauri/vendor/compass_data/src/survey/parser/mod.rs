@@ -4,7 +4,7 @@ use chrono::NaiveDate;
 use nom::{
     IResult, Parser,
     bytes::complete::{tag, take_till1},
-    character::complete::{multispace0, multispace1},
+    character::complete::multispace0,
     error::{Error, ErrorKind},
     combinator::opt,
     multi::many0,
@@ -52,9 +52,19 @@ fn parse_survey_date_line(input: &str) -> IResult<&str, (Date, Option<String>)> 
 }
 
 fn parse_survey_team(input: &str) -> IResult<&str, String> {
-    let (input, _) = (tag("SURVEY TEAM:"), multispace1).parse(input)?;
+    // (Stalagmight fork, #576 FZ-PARSE-6.) The team is on the line after the
+    // tag, and Compass leaves that line empty for a survey with no team.
+    // Upstream skipped `multispace1` here, which swallowed the empty team line
+    // too: the parameter line was read as the team and the survey (and every
+    // one after it) failed to parse. A team written on the tag's own line is
+    // still read from there.
+    let (input, _) = tag("SURVEY TEAM:")(input)?;
+    let (input, rest_of_tag_line) = recognize_line(input)?;
+    if !rest_of_tag_line.trim().is_empty() {
+        return Ok((input, rest_of_tag_line.trim_start().to_string()));
+    }
     let (input, team_line) = recognize_line(input)?;
-    Ok((input, team_line.to_string()))
+    Ok((input, team_line.trim_start().to_string()))
 }
 
 fn gobble_labels(input: &str) -> IResult<&str, &str> {
@@ -210,6 +220,35 @@ mod test {
                 survey.name
             );
         }
+    }
+
+    /// (Stalagmight fork, #576 FZ-PARSE-6.) Compass writes the team on the line
+    /// after `SURVEY TEAM:` and leaves that line empty for a survey with no
+    /// team, and so does this crate's own `serialize`. The empty line used to
+    /// be swallowed, the parameter line read as the team, and that survey and
+    /// every one after it dropped. A team on the tag's own line still reads.
+    #[test]
+    fn a_survey_with_no_team_reads_back() {
+        let text = "CAVE\r\nSURVEY NAME: A\r\nSURVEY DATE: 7 10 1979\r\nSURVEY TEAM:\r\n\
+                    Ann\r\nDECLINATION: 0.00\r\n\r\n\
+                    FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT\r\n\r\n\
+                    A1 A2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\x0c\r\n";
+        let (_, parsed) = parse_dat_file(text).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].team, "Ann");
+
+        let mut no_team = parsed[0].clone();
+        no_team.team = String::new();
+        let mut second = parsed[0].clone();
+        second.name = "B".to_string();
+        let file = format!("{}{}", no_team.serialize(), second.serialize());
+        let (_, back) = parse_dat_file(&file).unwrap();
+        assert_eq!(back, vec![no_team, second]);
+
+        let same_line = text.replace("SURVEY TEAM:\r\nAnn\r\n", "SURVEY TEAM: Ann\r\n");
+        let (_, parsed) = parse_dat_file(&same_line).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].team, "Ann");
     }
 
     #[test]

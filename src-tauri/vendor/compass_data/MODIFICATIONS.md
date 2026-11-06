@@ -59,5 +59,12 @@ Changes from upstream v0.0.7:
   (or in Stalagmight) uses it - the crate's own `UtmLocation` type is plain data
   - so it was compiled into the app and listed in the shipped third-party
   notices for nothing.
+- **`survey::parser`**: a survey with no team reads. Compass writes the team on
+  the line after `SURVEY TEAM:` and leaves it empty when there is none (so does
+  this crate's own `serialize`); upstream skipped `multispace1` after the tag,
+  which swallowed that empty line, read the `DECLINATION:` line as the team and
+  then failed on the survey, dropping it and every survey after it. The team is
+  now the next line (possibly empty), or the rest of the tag's own line when a
+  writer put it there. Found by Stalagmight's parser fuzzing (#576 FZ-PARSE-6).
 
 These should be contributed upstream where appropriate.
