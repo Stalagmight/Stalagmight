@@ -1460,8 +1460,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           set({ project: { ...project, file_path: result.saved_path }, speleoLinkUnreadable: false });
           // [#576 FZ-FZ-INT-9] A refresh read before the save moved the file still
           // names the old one, and landing after this it put the old path back. Drop
-          // every refresh issued so far and read the state once more, after the move.
-          refreshAppliedRequest = refreshRequestCounter;
+          // every refresh issued so far (each has a request below this; [#576 RVF-a-3]
+          // the counter itself is the newest one) and read the state once more, after the move.
+          refreshAppliedRequest = refreshRequestCounter + 1;
           await get().refreshProjectState();
         }
       }

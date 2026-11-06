@@ -147,6 +147,26 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
       'run(0.000) geom',
   },
   {
+    // Farm seeds (CI shapes): a state read issued before a Save As answered after it
+    // with the old file; the Save As's own re-read failed, so nothing put the new file
+    // back. Fixed by dropping every read issued before the move (#576 RVF-a-3).
+    id: 'FZ-FARM-1309526',
+    found: 'state',
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) fault(0.000) run(0.000) save grid ' +
+      'toggleGrid run(0.000) run(0.000) saveAs(29) save edit(32) run(0.844) run(0.000) grid exec(0.785) ' +
+      'fault(0.000) run(0.422) run(0.000) run(0.862) run(0.000) run(0.000) fault(0.535)',
+  },
+  {
+    id: 'FZ-FARM-1424528',
+    found: 'state',
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) gas(6) panel(282) run(0.000) tick run(0.000) refresh ' +
+      'run(0.744) refresh run(0.449) run(0.832) run(0.000) run(0.430) grid run(0.672) geom run(0.631) undo ' +
+      'run(0.944) exec(0.922) exec(0.928) exec(0.441) grid run(0.000) saveAs(53) run(0.469) run(0.870) ' +
+      'run(0.447) run(0.199) fault(0.328)',
+  },
+  {
     // Load A, load B while A is in flight, load A again: the backend applied A's
     // ALREADY_OPEN before B's load, the store kept A and dropped B's answer, the
     // backend had B open.
@@ -202,9 +222,21 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
  * `generate` makes of it TODAY (see FIXED_SEEDS), so these pin only as long as the
  * generator is unchanged; the shrunk traces above are the durable pin.
  */
+/** The CI shapes before FZ-FZ-INT-1, -4, -6 and -7 were fixed. */
+const FARM_SHAPES: Partial<RunOptions> = {
+  overlapSwitches: false,
+  saveAcrossSwitch: false,
+  crossSessionDisplay: false,
+  editAcrossSwitch: false,
+};
+
 const REGRESSION_SEEDS: Array<{ id: string; seed: number; options: Partial<RunOptions> }> = [
   { id: 'FZ-FZ-INT-4', seed: 182, options: { saveAcrossSwitch: true } },
   { id: 'FZ-FZ-INT-7', seed: 30, options: { editAcrossSwitch: true } },
+  // The farm job fzint-vitest-ci-shapes ("state: store vs backend: file vs file"), with
+  // the shapes CI ran when it found them (8062377e2).
+  { id: 'FZ-FARM-1309526', seed: 1309526, options: FARM_SHAPES },
+  { id: 'FZ-FARM-1424528', seed: 1424528, options: FARM_SHAPES },
   // The switch gate held edits until the load's whole aftermath ran (FZ-W22-GATE).
   { id: 'FZ-W22-GATE', seed: 53, options: {} },
 ];
