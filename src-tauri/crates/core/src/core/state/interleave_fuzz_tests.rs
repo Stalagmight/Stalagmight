@@ -21,6 +21,13 @@
 //!   settled reads racing loads of three files (two of them copies of one project:
 //!   same `created_at`, other path) and closes. Half of these cases are load
 //!   storms: every thread opens with a load of a file that is not open.
+//! - `Reads`: `Edits` without crashes, plus the IPC read `distance_field_checked`
+//!   (`Measure`) next to the settled reads;
+//! - `Sessions`: `Lifecycle` plus File > New (`Create`, the first save deferred
+//!   or not) and `Measure`.
+//!
+//! An autosave is the same backend save as Ctrl+S (`is_autosave` only names the
+//! trigger in the log), so `Save` stands for both.
 //!
 //! The seed also picks the scheduling strategy (`models::interleave`): a biased
 //! random walk, or random thread priorities with a few change points (PCT), which
@@ -36,26 +43,40 @@
 //! 3. Every acknowledged edit is in the final project unless an acknowledged undo
 //!    took it (`markers = created - undone + redone`, `markers` within `created`),
 //!    and after a final save the file read back from disk holds exactly the
-//!    in-memory sections (`Edits`; `Lifecycle` checks the read-back only).
+//!    in-memory sections (`Edits`, `Reads`; the others check the read-back only).
 //! 4. Display settings: the last acknowledged write of each key is the live value
 //!    and is on disk after a final save; a write made for the open project is never
-//!    refused while no switch happens (`Edits`); a write lands only in the file it
-//!    was made for, never in another project or another copy (`Lifecycle`).
+//!    refused while no switch happens (`Edits`, `Reads`); a write lands only in the
+//!    file it was made for, never in another project or another copy (`Lifecycle`,
+//!    `Sessions`).
 //! 5. Poison policy: after an injected crash in `command_lock`, `project` or
 //!    `undo_stack`, every later undo/redo is refused with
 //!    `REFUSED_AFTER_INTERNAL_ERROR` and nothing else is refused for that reason;
 //!    the final save still succeeds; the internal-error notice is raised.
-//! 6. Loads commit in the order they started (`Lifecycle`, no successful close):
-//!    the open project at the end is the file of the successful load whose
-//!    `start_new_load` came last, the one the frontend shows.
+//! 6. Loads (and creates) commit in the order they started (`Lifecycle`,
+//!    `Sessions`, no successful close): the open project at the end is the file of
+//!    the successful load or create whose `start_new_load` came last, the one the
+//!    frontend shows.
+//! 7. On the lock order alone: a settled read (`SettledRead`, `SettledSnapshot`,
+//!    `Measure`) never takes `project` after another thread's edit passed the
+//!    `park_after_mutation` seam and before it pushed its undo entry, so a read
+//!    that does not wait is caught even when its answer looks the same.
+//! 8. Edit homes (`Lifecycle`, `Sessions`): every marker in every file and in the
+//!    open project was made while that file was the open one - a command applies
+//!    to the project open when it took `command_lock`, never to one a later load,
+//!    create or close committed.
+//! 9. The open project's database handle is its file: a probe write through it
+//!    succeeds and is in the file at the project's path (a stale handle).
 //!
 //! # Running
 //!
 //! The CI seeds (`ci_seeds_*`) run in the normal `cargo test` job. On demand:
 //! `FZ_INT_SEEDS=<n>` (from `FZ_INT_FIRST`, default 1000) or `FZ_INT_SECS=<s>`
-//! runs a campaign in `on_demand_campaign`; `FZ_INT_SEED=<s>` runs one seed of
-//! both modes with its trace. A failure prints the seed, the shrunk op lists and
-//! the schedule; add the seed to `REGRESSION_SEEDS`.
+//! runs a campaign in `on_demand_campaign` (`FZ_INT_MODES=Edits,Reads` narrows
+//! the modes, `FZ_INT_STOP_AFTER=<n>` stops at the n-th failing seed);
+//! `FZ_INT_SEED=<s>` runs one seed of every mode with its trace. A failure prints
+//! the seed, the oracle class, the shrunk op lists and the schedule; add the seed
+//! to `REGRESSION_SEEDS`.
 //!
 //! All data is synthetic, built in code.
 
@@ -991,7 +1012,9 @@ fn handle_is_file(state: &AppState, open: Option<&Project>) -> Vec<String> {
     }
     let probe = "fzProbe";
     if let Err(e) = state.save_display_setting(probe, "probe") {
-        return vec![format!("the post-run probe display write failed: {e}")];
+        return vec![format!(
+            "a probe write through the open project's database handle failed ({e}): a stale handle (SQLite refuses a write to a file replaced since it was opened)"
+        )];
     }
     let on_disk = Database::open_readonly(&path)
         .and_then(|db| db.load_display_settings())
@@ -1250,7 +1273,8 @@ fn check_seed(mode: Mode, seed: u64, seen: &mut Tally) -> Result<usize, String> 
     let (small, choices, small_violations, small_outcome) =
         shrink(&case, outcome.choices, Duration::from_mins(2));
     let mut report = format!(
-        "FZ-INT {mode:?} seed {seed} FAILED:\n  {}\n  original: {} ops on {} threads\n  shrunk to:\n",
+        "FZ-INT {mode:?} seed {seed} FAILED (class {}):\n  {}\n  original: {} ops on {} threads\n  shrunk to:\n",
+        violations.first().map_or("other", |v| class_of(v)),
         violations.join("\n  "),
         case.threads.iter().map(Vec::len).sum::<usize>(),
         case.threads.len(),
@@ -1440,17 +1464,31 @@ fn on_demand_campaign() {
         return;
     }
     let deadline = secs.map(|s| Instant::now() + Duration::from_secs(s));
+    // `FZ_INT_MODES=Edits,Reads` runs those modes only; `FZ_INT_STOP_AFTER=<n>`
+    // ends the campaign at its n-th failing seed (a plant hunt, a farm slice).
+    let modes: Vec<Mode> = match std::env::var("FZ_INT_MODES") {
+        Ok(list) => Mode::ALL
+            .into_iter()
+            .filter(|m| list.split(',').any(|name| name.trim() == format!("{m:?}")))
+            .collect(),
+        Err(_) => Mode::ALL.to_vec(),
+    };
+    let stop_after = env_u64("FZ_INT_STOP_AFTER")
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(usize::MAX);
     let started = Instant::now();
     let mut failures = Vec::new();
     let mut seen = Tally::new();
     let (mut cases, mut points) = (0usize, 0usize);
     let mut seed = first;
     loop {
-        if count.is_some_and(|n| seed >= first + n) || deadline.is_some_and(|d| Instant::now() >= d)
+        if count.is_some_and(|n| seed >= first + n)
+            || deadline.is_some_and(|d| Instant::now() >= d)
+            || failures.len() >= stop_after
         {
             break;
         }
-        for mode in Mode::ALL {
+        for &mode in &modes {
             let (c, p, f) = run_seeds(std::iter::once((mode, seed)), &mut seen);
             cases += c;
             points += p;
