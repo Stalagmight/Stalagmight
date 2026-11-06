@@ -458,13 +458,29 @@ pub(super) fn edit(state: &AppState, rng: &mut Rng) {
                     correction: rng.float(-20.0, 20.0),
                     source: *rng.pick(&[CorrectionSource::Unknown, CorrectionSource::FileDeclared]),
                 });
-                state.update_project_settings(
-                    format!("Cave {}", rng.range(0, 99)),
-                    validation,
-                    reference,
-                );
+                // Drawn after the reference, as the call's first argument was.
+                let name = format!("Cave {}", rng.range(0, 99));
+                // [#576 FZP3 triage] Traced like every other edit: it returns before
+                // the trace push below, so a seed's trace never showed this call.
+                let described = tracing().then(|| {
+                    format!(
+                        "UpdateProjectSettings {{ name: {name:?}, validation: {validation:?}, \
+                         reference: {reference:?} }}"
+                    )
+                });
+                let result = state.update_project_settings(name, validation, reference);
+                if let Some(described) = described {
+                    trace(|| format!("edit {} -> {}", described, result.success));
+                }
             } else {
-                state.set_surface_elevation(rng.chance(70).then(|| rng.float(-50.0, 3000.0)));
+                let elevation = rng.chance(70).then(|| rng.float(-50.0, 3000.0));
+                let result = state.set_surface_elevation(elevation);
+                trace(|| {
+                    format!(
+                        "edit SetSurfaceElevation {{ elevation: {elevation:?} }} -> {}",
+                        result.success
+                    )
+                });
             }
             return;
         }
@@ -1191,6 +1207,50 @@ fn an_ignore_on_a_restored_shot_keeps_the_ignore_of_the_shot_in_its_slot() {
         kept(&rows, &uuid_b) && kept(&rows, &uuid_a),
         "B's ignore did not survive a save, or A's retried one is missing: {rows:?}"
     );
+}
+
+/// [#576 FZP3 triage] The settings edit - the project settings, or the surface
+/// elevation - is traced like every other edit. It returned before the trace
+/// push, so a seed's trace never showed it, which misled the FZ-PERSIST-3
+/// triage.
+#[test]
+fn the_settings_edit_is_traced_like_every_other_edit() {
+    let _config = isolated_config();
+    let state = AppState::new().expect("AppState::new");
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: "CaveA".to_owned(),
+                location: None,
+            })
+            .success
+    );
+    // A seed whose first edit draws the settings kind, and the sub-branch asked for.
+    let settings_seed = |project_settings: bool| {
+        (0..u32::MAX)
+            .find(|&seed| {
+                let mut probe = Rng::new(seed);
+                probe.below(17) == 16 && probe.chance(50) == project_settings
+            })
+            .expect("a seed that takes the settings edit")
+    };
+    let project_fields: &[&str] = &["name: ", "validation: ", "reference: "];
+    let elevation_fields: &[&str] = &["elevation: "];
+    for (project_settings, call, set) in [
+        (true, "UpdateProjectSettings", project_fields),
+        (false, "SetSurfaceElevation", elevation_fields),
+    ] {
+        let mut rng = Rng::new(settings_seed(project_settings));
+        trace_take(true);
+        edit(&state, &mut rng);
+        let lines = trace_take(false);
+        assert!(
+            lines.len() == 1
+                && lines[0].starts_with(&format!("edit {call} "))
+                && set.iter().all(|field| lines[0].contains(field)),
+            "the {call} edit is traced with what it set: {lines:?}"
+        );
+    }
 }
 
 /// [#576 FZ-PERSIST-2] (fault sweep seed 27349) An Ignore on a shot not yet saved
