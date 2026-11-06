@@ -47,8 +47,9 @@
 //! vertical shot it can at most be: no run (`h = 0`), so `L' = |dz|`, rounded
 //! up the same way. No station moves for it, so the shot after it is untouched.
 //! And an explicit `DepthIn` (a second reading of a station inside one
-//! section) is honoured as long as its shot keeps the bound and neither end
-//! moved.
+//! section) is no junction and is never averaged (TML-DEPTH-Q3-D1): it is
+//! honoured as long as its shot keeps the bound and neither end moved, and
+//! otherwise only that shot is refitted, from its parent's exported depth.
 
 use std::collections::{HashMap, VecDeque};
 

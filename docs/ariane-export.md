@@ -253,9 +253,15 @@ drop, `L' = |dz|`, rounded up the same way. No station moves for it, so the
 shot after it keeps its start and its tape. (This replaces an earlier clamp
 onto the tape, which moved the station the shot ends at.)
 
-A `DepthIn` written out explicitly (a second reading of a station inside one
-section) is kept while its shot still satisfies the bound against its parent
-and neither end moved; otherwise the shot is refitted the same way.
+A second reading of a station inside one section - a shot whose `DepthIn`
+differs from where the shot before it ended, so it is written out explicitly -
+is not a junction and is not averaged (decision TML-DEPTH-Q3-D1). It is kept
+while its shot still satisfies the bound against its parent and neither end
+moved. Otherwise that one shot is refitted the same way: it starts from its
+parent's exported depth (the `DepthIn` sentinel), keeps its true end depth,
+and takes the length that keeps its measured horizontal run. No station moves
+for it. The same goes for a part-way-merged section's forward block that
+starts from another depth than the one the section arrives with.
 
 ### ID assignment
 
