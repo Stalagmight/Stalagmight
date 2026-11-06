@@ -396,6 +396,47 @@ reads a worker that panicked as one that is stuck, so a known assert gets
 reported as a deadlock. Poll `JoinHandle::is_finished` instead, and cross-check
 that every unwound worker was seen by the panic hook.
 
+## The interleaving fuzzer (Rust tier)
+
+`src-tauri/crates/core/src/core/state/interleave_fuzz_tests.rs` is the
+concurrency gate made replayable. Every backend lock is a `RecoveringMutex`, and
+in test builds its `lock()` is a scheduling point of `models::interleave`: the
+threads of a run take turns at their locks under one seeded scheduler, so a seed
+names one interleaving, a failure replays, and a deadlock is found rather than
+waited out. A case is 2-4 threads of edits, undo/redo, Save and Save As (an
+autosave is the same backend save), display-setting writes, settled reads and the
+IPC read `distance_field_checked`, loads, creates, closes and injected crashes
+against one `AppState`, in four modes (`Edits`, `Lifecycle`, `Reads`,
+`Sessions`). The oracles are listed in the module doc; among them, a settled read
+never takes its snapshot inside another thread's edit (judged on the lock order,
+so a read that does not wait is caught even when its answer looks right), every
+acknowledged edit and display write is in the file after a later save and only
+in the file it was made for, loads commit in the order they started, and the
+poisoned-lock policy holds.
+
+```bash
+# The gate: 12 seeds per mode plus the regression seeds, about 6 s.
+cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib interleave_fuzz_tests
+
+# A campaign: FZ_INT_SECS=<s> or FZ_INT_SEEDS=<n> (from FZ_INT_FIRST); one
+# process is one core, so run several with disjoint FZ_INT_FIRST.
+FZ_INT_SECS=1800 FZ_INT_FIRST=1000000 \
+  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
+  interleave_fuzz_tests::on_demand -- --nocapture --test-threads=1
+
+# One seed with its trace; FZ_INT_MODES=Edits,Reads narrows a campaign and
+# FZ_INT_STOP_AFTER=1 stops it at the first failing seed (a plant hunt).
+FZ_INT_SEED=56 cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib interleave_fuzz_tests::on_demand -- --nocapture
+```
+
+A failure prints the seed, the case shrunk to the ops that still fail the same
+oracle, and the schedule as runs of one thread (`t0x5 t1x2 ...`); add the seed
+to `REGRESSION_SEEDS`. Seeds name schedules of this generator and scheduler: a
+change to either, or one more lock on a path, moves them, so a regression seed
+is re-derived by reverting its fix and keeping a failing seed of a campaign.
+
 ## Determinism
 
 Every engine above compares two STATES or two ROUTES; none of them compares a
