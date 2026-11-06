@@ -92,10 +92,16 @@ struct ExportShot {
     depth_in: f64,
     /// Emit the `-1.0` "same as the previous shot" sentinel for `DepthIn`.
     depth_in_same_as_prev: bool,
-    /// The first row of a block hung off ANOTHER section's station (its
-    /// `FromID` resolved from a station merge), so its `depth_in` is that
-    /// section's own reading of the junction. See `junction_depths`.
-    branch_start: bool,
+    /// On the first row of a block hung off ANOTHER section's station (its
+    /// `FromID` resolved from a station merge): the section the block belongs
+    /// to, whose reading of the junction is its `depth_in`. A section merged
+    /// part-way along starts two blocks there and is still one reading. See
+    /// `junction_depths`.
+    branch_of: Option<SectionId>,
+    /// The shot walked against the way it was surveyed (`ExportShot::reversed`),
+    /// so a block it starts leaves its station with the depth the section
+    /// ARRIVED there with.
+    reversed: bool,
     inclination: f64,
     left: f64,
     right: f64,
@@ -155,7 +161,8 @@ impl ExportShot {
             depth,
             depth_in,
             depth_in_same_as_prev: false,
-            branch_start: false,
+            branch_of: None,
+            reversed: false,
             inclination: 0.0,
             left: 0.0,
             right: 0.0,
@@ -213,7 +220,8 @@ impl ExportShot {
             depth: shot.depth_out,
             depth_in: shot.depth_in,
             depth_in_same_as_prev: (shot.depth_in - prev_depth).abs() < 1e-9,
-            branch_start: false,
+            branch_of: None,
+            reversed: false,
             inclination: pitch_to_inclination(shot.pitch_in),
             left: shot.left.unwrap_or(0.0),
             right: shot.right.unwrap_or(0.0),
@@ -250,6 +258,7 @@ impl ExportShot {
             depth: shot.depth_in,
             depth_in: shot.depth_out,
             depth_in_same_as_prev: (shot.depth_out - prev_depth).abs() < 1e-9,
+            reversed: true,
             inclination: pitch_to_inclination(reversed_leg_pitch(shot)),
             left: forward.right,
             right: forward.left,
@@ -1269,7 +1278,7 @@ fn build_export_shots_with_report(
                 override_idx.unwrap_or(parent_link.child_station_index) as usize;
             if child_station_idx < blocks[i].shots.len() {
                 blocks[i].shots[child_station_idx].from_id = parent_ariane_id;
-                blocks[i].shots[child_station_idx].branch_start = true;
+                blocks[i].shots[child_station_idx].branch_of = Some(section_id);
             } else {
                 tracing::warn!(
                     child_section_id = section_id,
@@ -3731,7 +3740,8 @@ mod tests {
             depth,
             depth_in,
             depth_in_same_as_prev,
-            branch_start: false,
+            branch_of: None,
+            reversed: false,
             inclination: 0.0,
             left: 0.0,
             right: 0.0,
@@ -3789,7 +3799,7 @@ mod tests {
             geometry_shot(1, -1, 17.0, 17.0, 0.0, false),
             geometry_shot(2, 1, 12.21, 12.5, 10.0, true),
         ];
-        shots[1].branch_start = true;
+        shots[1].branch_of = Some(1);
 
         let junctions = enforce_ariane_geometry_invariants(&mut shots, TmlProfile::User);
 
@@ -3902,7 +3912,8 @@ mod tests {
                 depth: 0.0,
                 depth_in: 0.0,
                 depth_in_same_as_prev: false,
-                branch_start: false,
+                branch_of: None,
+                reversed: false,
                 inclination: 0.0,
                 left: 0.0,
                 right: 0.0,
@@ -3928,7 +3939,8 @@ mod tests {
                 depth: f64::NAN,
                 depth_in: -1.0,
                 depth_in_same_as_prev: true,
-                branch_start: false,
+                branch_of: None,
+                reversed: false,
                 inclination: f64::NEG_INFINITY,
                 left: 0.0,
                 right: 0.0,

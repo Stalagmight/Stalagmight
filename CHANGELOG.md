@@ -17,7 +17,7 @@ Update this file every time a new version is tagged.
 
 #### Ariane export
 
-- **A junction whose depths disagree is exported at their average** - where a branch starts at a different depth than the station it hangs off, the `.tml`/`.tmlu` export now writes that station at the mean of every reading of it (the main line's and each branch start's), keeps every other station at its true depth, and gives only the shots touching the junction a new length that keeps their horizontal run, so the plan stays put. Before, the branch was started at the main line's depth and every later shot on it was shifted by the whole mismatch. The export toast says how many junctions were averaged and the largest disagreement ([#576](https://github.com/Stalagmight/Stalagmight/issues/576))
+- **A junction whose depths disagree is exported at their average** - where a branch starts at a different depth than the station it hangs off, the `.tml`/`.tmlu` export now writes that station at the mean of its readings (the main line's, and one for each section hung there), keeps every other station at its true depth, and gives only the shots touching the junction a new length that keeps their horizontal run, so the plan stays put. Before, the branch was started at the main line's depth and every later shot on it was shifted by the whole mismatch. The export toast says how many junctions were averaged and the largest disagreement ([#576](https://github.com/Stalagmight/Stalagmight/issues/576))
 
 ## [0.5.0] - 2026-08-13
 

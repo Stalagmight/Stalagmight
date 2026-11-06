@@ -297,6 +297,62 @@ fn a_station_merged_across_sections_counts_every_section_hung_there() {
 }
 
 #[test]
+fn a_section_merged_part_way_along_is_one_reading_of_its_junction() {
+    // Mid is merged at its station 1, so it leaves the junction twice: a
+    // forward block (shot 22 onwards) and a reversed one (shot 21 walked
+    // back). Mid arrives there at 12.0 and leaves at 12.4, a second reading
+    // inside the section. The section counts once, with the depth it arrives
+    // with: (10 + 12) / 2, not (10 + 12.4 + 12) / 3.
+    let mut project = Project::new("CaveA".to_string(), None);
+    section(
+        &mut project,
+        "Main",
+        vec![shot(1, 0.0, 5.0, 9.0, 10.0), shot(2, 0.0, 5.0, 10.0, 10.0)],
+    );
+    section(
+        &mut project,
+        "Mid",
+        vec![
+            shot(21, 90.0, 3.0, 11.0, 12.0),
+            shot(22, 90.0, 3.0, 12.4, 11.5),
+            shot(23, 90.0, 3.0, 11.5, 11.0),
+        ],
+    );
+    merge(&mut project, (0, 1), (1, 1));
+
+    let out = Exported::of(&project);
+    let mean = f64::midpoint(10.0, 12.0);
+    assert_close("junction", out.row(1).depth, mean);
+    // The forward piece: 12.4 -> 11.5 measured, now from the mean.
+    assert_close("forward piece end", out.row(22).depth, 11.5);
+    assert_eq!(out.row(22).depth_in, DEPTH_IN_SAME_AS_PREVIOUS);
+    assert_keeps_run(
+        "forward piece",
+        out.row(22).length,
+        run_of(3.0, 12.4, 11.5),
+        11.5 - mean,
+    );
+    // The reversed piece: shot 21 walked back, 12.0 -> 11.0, now from the mean.
+    assert_close("reversed piece end", out.row(21).depth, 11.0);
+    assert_eq!(out.row(21).depth_in, DEPTH_IN_SAME_AS_PREVIOUS);
+    assert_keeps_run(
+        "reversed piece",
+        out.row(21).length,
+        run_of(3.0, 11.0, 12.0),
+        11.0 - mean,
+    );
+    // Further along, Mid keeps its true depths and its tape.
+    assert_close("later Mid shot", out.row(23).depth, 11.0);
+    assert_close("later Mid shot length", out.row(23).length, 3.0);
+    assert!(
+        out.notes
+            .contains(&"junction-depths-averaged?count=1&largest=2.00".to_string()),
+        "got {:?}",
+        out.notes
+    );
+}
+
+#[test]
 fn a_zero_length_tie_at_a_junction_takes_its_new_drop_as_its_length() {
     // A tie has no horizontal run (h = 0), so its new length is the whole
     // exported change: L' = |dz'|.

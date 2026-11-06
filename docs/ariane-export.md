@@ -209,10 +209,14 @@ they disagree the file still has to state one number (#576, decisions
 TML-DEPTH-D1 and D2):
 
 - **The junction is exported at the mean of its readings**: the main line's
-  depth, plus the start depth of every branch hung there - every section merged
-  at that station, however many merges deep. A section merged mid-way leaves
-  the junction in both directions, so it starts two blocks there and gives two
-  readings.
+  depth, plus one reading per section hung there - every section merged at
+  that station, however many merges deep. A section counts once however many
+  pieces it has there. One merged part-way along leaves the junction in both
+  directions, a forward block and a reversed one, and its reading is the depth
+  it arrives at the station with (the reversed block's start), as the main
+  line's is. If its forward block starts from another depth, that is a second
+  reading inside the section, and that block's first shot is refitted like any
+  other (below).
 - **Every other station keeps its true depth.** A shot after the first on a
   branch states its own absolute depth and carries no offset.
 - **Only the shots touching the junction change, and only their slope.** Each

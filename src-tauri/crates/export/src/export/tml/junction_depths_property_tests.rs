@@ -1,11 +1,13 @@
 //! [#576 TML-DEPTH-D1] The junction rule as a property over random shot trees:
 //! continuations, branch starts whose reading disagrees with the station they
-//! hang off (or agrees with it), explicit second readings, zero-length ties,
-//! second entrances and closures.
+//! hang off (or agrees with it), a section's second piece at the same station
+//! (a section merged part-way along), explicit second readings, zero-length
+//! ties, second entrances and closures.
 //!
 //! For every tree, in both profiles:
 //! - every station's exported depth is its true depth, except the junctions
-//!   whose readings disagree, and each of those is the mean of its readings;
+//!   whose readings disagree, and each of those is the mean of its readings,
+//!   one per section;
 //! - the receipt counts exactly those junctions and their widest spread;
 //! - `|Depth - parent.Depth| <= Length` holds on the values as written;
 //! - a shot keeps its tape unless it touches a moved station, and then its
@@ -24,6 +26,7 @@ use super::{
     as_written, enforce_ariane_geometry_invariants, round_as_written, schema, ExportShot,
     TmlProfile,
 };
+use crate::models::SectionId;
 
 /// splitmix64: deterministic and dependency-free.
 struct Rng(u64);
@@ -76,21 +79,43 @@ fn tree(rng: &mut Rng) -> Vec<ExportShot> {
             continue;
         }
         let parent = &shots[rng.below(shots.len())];
-        let (from, parent_depth) = (parent.id, parent.depth);
+        let (mut from, parent_depth) = (parent.id, parent.depth);
         let offset = if rng.chance(0.25) {
             0.0
         } else {
             rng.range(-3.0, 3.0)
         };
-        // (start, sentinel, branch start)
-        let (start, sentinel, branch) = match rng.below(10) {
-            0..=3 => (parent_depth, true, false),
-            4..=7 => (parent_depth + offset, true, true),
+        // (start, sentinel, branch start, reversed leg)
+        let (mut start, sentinel, branch, mut reversed) = match rng.below(10) {
+            0..=3 => (parent_depth, true, false, false),
+            4..=7 => (parent_depth + offset, true, true, false),
             // A second reading inside one section: an explicit DepthIn.
-            8 => (parent_depth + rng.range(-0.5, 0.5), false, false),
+            8 => (parent_depth + rng.range(-0.5, 0.5), false, false, false),
             // A reversed leg starting a branch with an explicit DepthIn.
-            _ => (parent_depth + offset, false, true),
+            _ => (parent_depth + offset, false, true, true),
         };
+        // The section a branch start belongs to: a new one, or - a section
+        // merged part-way along - the second piece of one already hung at that
+        // station, mostly its reversed block, starting from the same reading
+        // or (a second reading inside that section) another.
+        let mut section = id as SectionId;
+        if branch && rng.chance(0.3) {
+            let pieces: Vec<(i64, SectionId, f64)> = shots
+                .iter()
+                .filter_map(|s| s.branch_of.map(|of| (s.from_id, of, s.depth_in)))
+                .collect();
+            if !pieces.is_empty() {
+                let (at, of, reading) = pieces[rng.below(pieces.len())];
+                (from, section) = (at, of);
+                reversed = rng.chance(0.7);
+                let station_depth = shots.iter().find(|s| s.id == at).map_or(0.0, |s| s.depth);
+                start = if rng.chance(0.5) {
+                    reading
+                } else {
+                    station_depth + rng.range(-3.0, 3.0)
+                };
+            }
+        }
         let (length, change) = if rng.chance(0.1) {
             (0.0, 0.0) // a zero-length tie
         } else {
@@ -102,7 +127,8 @@ fn tree(rng: &mut Rng) -> Vec<ExportShot> {
         shot.length = length;
         shot.azimuth = rng.range(0.0, 360.0);
         shot.depth_in_same_as_prev = sentinel;
-        shot.branch_start = branch;
+        shot.branch_of = branch.then_some(section);
+        shot.reversed = reversed;
         shots.push(shot);
     }
     for _ in 0..rng.below(3) {
@@ -135,13 +161,24 @@ fn expected(shots: &[ExportShot]) -> (Vec<(f64, bool)>, usize, f64) {
         if station.shot_type == schema::TYPE_CLOSURE {
             continue;
         }
+        // One reading per section hung there: its first reversed piece's
+        // start (the depth it arrives with), else its first piece's.
         let mut readings = vec![station.depth];
-        readings.extend(
-            shots
+        let mut sections: Vec<SectionId> = Vec::new();
+        let pieces: Vec<&ExportShot> = shots
+            .iter()
+            .filter(|k| k.from_id == station.id && k.branch_of.is_some())
+            .collect();
+        for k in &pieces {
+            let Some(of) = k.branch_of.filter(|of| !sections.contains(of)) else {
+                continue;
+            };
+            sections.push(of);
+            let arriving = pieces
                 .iter()
-                .filter(|k| k.from_id == station.id && k.branch_start)
-                .map(|k| k.depth_in),
-        );
+                .find(|r| r.branch_of == Some(of) && r.reversed);
+            readings.push(arriving.unwrap_or(k).depth_in);
+        }
         let high = readings.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let low = readings.iter().copied().fold(f64::INFINITY, f64::min);
         if high - low > 1e-9 {

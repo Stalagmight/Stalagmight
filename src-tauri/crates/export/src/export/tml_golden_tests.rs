@@ -443,7 +443,7 @@ const GOLDEN_USER_TMLU: &str = r#"<?xml version="1.0" encoding="UTF-8" standalon
             <CM>station note
 junction note</CM>
             <DT>2024-03-05</DT>
-            <DP>2.166667</DP>
+            <DP>2.25</DP>
             <DPI>-1.0</DPI>
             <D>0.0</D>
             <EXC>false</EXC>
@@ -453,7 +453,7 @@ junction note</CM>
             <INC>0.0</INC>
             <LT>0.0</LT>
             <L>0.0</L>
-            <LG>6.225508</LG>
+            <LG>6.214902</LG>
             <LCK>false</LCK>
             <LGT>0.0</LGT>
             <NM></NM>
@@ -536,7 +536,7 @@ junction note</CM>
             <INC>0.0</INC>
             <LT>0.0</LT>
             <L>0.0</L>
-            <LG>2.048035</LG>
+            <LG>2.076656</LG>
             <LCK>false</LCK>
             <LGT>0.0</LGT>
             <NM></NM>
@@ -564,7 +564,7 @@ junction note</CM>
             <INC>0.0</INC>
             <LT>0.0</LT>
             <L>0.0</L>
-            <LG>2.962732</LG>
+            <LG>2.968586</LG>
             <LCK>false</LCK>
             <LGT>0.0</LGT>
             <NM></NM>
@@ -780,7 +780,7 @@ const GOLDEN_SIDECAR_TMLU: &str = r#"<?xml version="1.0" encoding="UTF-8" standa
             <CM>station note
 junction note</CM>
             <DT>2024-03-05</DT>
-            <DP>2.166667</DP>
+            <DP>2.25</DP>
             <DPI>-1.0</DPI>
             <D>0.0</D>
             <EXC>false</EXC>
@@ -790,7 +790,7 @@ junction note</CM>
             <INC>0.0</INC>
             <LT>0.0</LT>
             <L>0.0</L>
-            <LG>6.225508</LG>
+            <LG>6.214902</LG>
             <LCK>false</LCK>
             <LGT>0.0</LGT>
             <NM></NM>
@@ -872,7 +872,7 @@ junction note</CM>
             <INC>0.0</INC>
             <LT>0.0</LT>
             <L>0.0</L>
-            <LG>2.048035</LG>
+            <LG>2.076656</LG>
             <LCK>false</LCK>
             <LGT>0.0</LGT>
             <NM></NM>
@@ -899,7 +899,7 @@ junction note</CM>
             <INC>0.0</INC>
             <LT>0.0</LT>
             <L>0.0</L>
-            <LG>2.962732</LG>
+            <LG>2.968586</LG>
             <LCK>false</LCK>
             <LGT>0.0</LGT>
             <NM></NM>

@@ -6,11 +6,16 @@
 //! number, and the rule is:
 //!
 //! - The junction is exported at the MEAN of its readings: the depth of the row
-//!   that stands for the station (the main line's), plus the `depth_in` of every
-//!   branch start hung there - every block of another section whose `FromID`
-//!   resolved to it through a station merge, however many merges deep. A section
-//!   merged mid-way leaves the junction in both directions, so it starts two
-//!   blocks there and gives two readings.
+//!   that stands for the station (the main line's), plus ONE reading per section
+//!   hung there - the `depth_in` of that section's branch start, a block whose
+//!   `FromID` resolved to the station through a station merge, however many
+//!   merges deep. A section counts once however many pieces it has there. One
+//!   merged part-way along leaves the junction in both directions, a forward
+//!   block and a reversed one, and its reading is the depth it ARRIVES at the
+//!   station with - the reversed block's start - as the main line's is the
+//!   depth its row ends at. Where the forward block starts from another depth,
+//!   that is a second reading inside the section, and the block's first shot
+//!   is refitted to start from the junction's exported depth.
 //! - Every other station keeps its TRUE depth. A shot after the first on a
 //!   branch states its own absolute depth, so it carries no offset.
 //! - A shot whose exported depth change now differs from its measured one - the
@@ -46,6 +51,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use super::{as_written, length_covering_written_delta, schema, ExportShot};
+use crate::models::SectionId;
 
 /// Readings this close are one reading: the tolerance the same-as-previous flag
 /// is computed with (`ExportShot::forward`).
@@ -135,14 +141,29 @@ pub(super) fn settle(
         if shots[p].shot_type == schema::TYPE_CLOSURE {
             continue;
         }
+        // One reading per section hung there: the start of its reversed block
+        // where it has one (the depth it arrives at the station with), else
+        // of its first block.
         let mut readings = vec![shots[p].depth];
-        readings.extend(
-            children[p]
-                .iter()
-                .map(|&k| &shots[k])
-                .filter(|k| k.branch_start)
-                .map(|k| k.depth_in),
-        );
+        // Per reading after the main line's: its section, and whether it is
+        // that section's arriving one.
+        let mut sections: Vec<(SectionId, bool)> = Vec::new();
+        for k in children[p].iter().map(|&k| &shots[k]) {
+            let Some(section) = k.branch_of else {
+                continue;
+            };
+            match sections.iter().position(|&(s, _)| s == section) {
+                None => {
+                    sections.push((section, k.reversed));
+                    readings.push(k.depth_in);
+                }
+                Some(at) if k.reversed && !sections[at].1 => {
+                    sections[at].1 = true;
+                    readings[at + 1] = k.depth_in;
+                }
+                Some(_) => {}
+            }
+        }
         let (low, high) = readings
             .iter()
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), &r| {
