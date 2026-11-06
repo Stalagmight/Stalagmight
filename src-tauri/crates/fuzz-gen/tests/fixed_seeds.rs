@@ -14,7 +14,8 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use stalagmight_fuzz_gen::oracle::Format;
+use stalagmight_fuzz_gen::fileset::FileSet;
+use stalagmight_fuzz_gen::oracle::{self, Depth, Format, Knobs};
 use stalagmight_fuzz_gen::targets::{run, seed_input, Target};
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -125,6 +126,28 @@ fn open_findings() {
             f.into_iter()
                 .map(|line| format!("{}: {line}", target.name())),
         );
+    }
+    // FZ-PARSE-5, Compass case (minimised from a gen_mak artifact): a length
+    // correction near f64::MAX is accepted and applied to every shot, and the
+    // computed depths overflow to infinity.
+    let survey = "SYNTHETIC CAVE\r\nSURVEY NAME: B1\r\nSURVEY DATE: 2 20 1993\r\n\
+                  SURVEY TEAM:\r\nAnn\r\n\
+                  DECLINATION: 0.00  CORRECTIONS: 0.00 0.00 5.9e307\r\n\r\n\
+                  FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT\r\n\r\n\
+                  B1 B2 1.00 0.00 -60.00 0.00 0.00 0.00 0.00\r\n\
+                  B2 B3 1.00 0.00 -60.00 0.00 0.00 0.00 0.00\r\n\
+                  B3 B4 1.00 0.00 -60.00 0.00 0.00 0.00 0.00\r\n\
+                  B4 B5 1.00 0.00 -60.00 0.00 0.00 0.00 0.00\r\n\
+                  B5 B6 1.00 0.00 -60.00 0.00 0.00 0.00 0.00\r\n\
+                  B6 B7 1.00 0.00 -60.00 0.00 0.00 0.00 0.00\r\n\
+                  B7 B8 1.00 0.00 -60.00 0.00 0.00 0.00 0.00\r\n\
+                  B8 B9 1.00 0.00 -60.00 0.00 0.00 0.00 0.00\r\n\
+                  B9 B10 1.00 0.00 -60.00 0.00 0.00 0.00 0.00\r\n\x0c\r\n";
+    let files = FileSet::single(Format::Dat.entry_name(), survey.as_bytes().to_vec());
+    // Knob bit 3: the dialog's "apply corrections" control on.
+    match oracle::run(Format::Dat, &files, Knobs(0b1000), Depth::Apply) {
+        Err(v) => failures.push(format!("compass correction: {v}")),
+        Ok(outcome) => eprintln!("compass correction: {outcome:?}"),
     }
     assert!(
         failures.is_empty(),
