@@ -77,18 +77,24 @@ impl FileSet {
     }
 
     /// Write every file under `dir` (which must be empty) and return the path
-    /// of the opened file.
+    /// of the opened file. A linked file whose name collides with another
+    /// one's directory (`a.dat` and `a.dat/b.dat`) is left out, as if the
+    /// project linked a file that is not there; only the opened file must be
+    /// written.
     pub fn materialize(&self, dir: &Path) -> Result<PathBuf> {
         let mut entry = None;
         for (name, bytes) in &self.files {
             let path = dir.join(sanitize_name(name));
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("create {}", parent.display()))?;
-            }
-            std::fs::write(&path, bytes).with_context(|| format!("write {}", path.display()))?;
-            if entry.is_none() {
-                entry = Some(path);
+            let written = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&path, bytes));
+            match (written, entry.is_none()) {
+                (Ok(()), true) => entry = Some(path),
+                (_, false) => {}
+                (Err(e), true) => {
+                    return Err(e).with_context(|| format!("write {}", path.display()));
+                }
             }
         }
         entry.context("empty file set")
@@ -179,6 +185,7 @@ fn empty_dir(dir: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::{sanitize_name, FileSet};
 
@@ -193,5 +200,16 @@ mod tests {
         assert_eq!(sanitize_name("/abs/x.dat"), "abs/x.dat");
         assert_eq!(sanitize_name(".."), "f");
         assert_eq!(sanitize_name("C:\\dir\\x.dat"), "C/dir/x.dat");
+    }
+
+    #[test]
+    fn a_linked_name_colliding_with_a_directory_is_left_out() {
+        let mut set = FileSet::single("p.mak", b"#a.dat;".to_vec());
+        set.push("a.dat", b"x".to_vec());
+        set.push("a.dat/b.dat", b"y".to_vec());
+        let dir = tempfile::tempdir().unwrap();
+        let entry = set.materialize(dir.path()).unwrap();
+        assert!(entry.ends_with("p.mak"));
+        assert!(dir.path().join("a.dat").is_file());
     }
 }
