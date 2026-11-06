@@ -446,6 +446,78 @@ STALAGMIGHT_DETERMINISM_RUNS=2000 pnpm exec vitest run determinism
 The real-app replay mode for the agent-harness fuzzers is in
 [Agent Harness](agent-harness.md) (`STALAGMIGHT_FUZZ_DETERMINISM`).
 
+## Parser fuzzing (Rust tier)
+
+Every file the app reads from a user is untrusted input: the Ariane
+(`.tml`/`.tmlu`), mNemo (`.dmp`), Walls (`.srv`/`.wpj`), Compass (`.dat`/`.mak`,
+including the vendored `compass_data` reader) and GPX importers, and the
+`.stalx` open path. Two pieces cover them:
+
+- `src-tauri/crates/fuzz-gen` (stable, a workspace member, test-only): the
+  generators, the oracle and the targets. A target runs an input through the
+  same pipeline the import commands run - parse, preview, convert, and apply to
+  a fresh project through core - and fails on a panic, a preview that cannot be
+  serialised for IPC, or an ACCEPTED import that leaves a non-finite number or
+  station position in the project. A parser `Err` or a refused import is a
+  correct outcome. `raw_<fmt>` targets take the file bytes (multi-file formats
+  use a small container, see `fileset.rs`); `gen_<fmt>` targets feed the bytes
+  to a structure-aware generator that writes valid-ish files and bends the parts
+  that broke real files: units and unit-scaled "no value" sentinels (finding
+  HFI-1), number spellings, encodings and byte-order marks, declinations, huge
+  counts, deep nesting, truncation. `stalx_sql` corrupts a synthetic project at
+  the SQL level (wrong-typed cells, broken JSON, dangling ids, dropped tables,
+  odd schema versions) and opens it through `do_load_project_full`;
+  `stalx_raw` takes whole files.
+- `src-tauri/fuzz` (nightly, cargo-fuzz, NOT in the workspace): one libFuzzer
+  binary per target, a thin wrapper over `stalagmight_fuzz_gen::targets::run`.
+
+```bash
+# CI slice (stable, part of cargo test --workspace): 24 fixed seeds per target
+# (4 for stalx_raw) plus the seeds of past findings, a few seconds in all.
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-fuzz-gen
+
+# Longer stable runs, one target, with the reason each seed was rejected:
+STALAGMIGHT_FUZZ_SEEDS=5000 STALAGMIGHT_FUZZ_SEED_START=100000 \
+  STALAGMIGHT_FUZZ_TARGET=gen_wpj STALAGMIGHT_FUZZ_VERBOSE=1 \
+  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-fuzz-gen \
+  --test fixed_seeds -- --nocapture gen_wpj
+
+# Coverage-guided (needs nightly + cargo-fuzz; run it on a big box):
+rustup toolchain install nightly --profile minimal
+cargo +nightly install cargo-fuzz --locked
+src-tauri/fuzz/run.sh list
+FUZZ_FORKS=4 src-tauri/fuzz/run.sh fuzz gen_tml 1200     # 20 min, 4 workers
+src-tauri/fuzz/run.sh repro gen_tml <artifact>           # replay a crash
+src-tauri/fuzz/run.sh tmin gen_tml <artifact>            # minimise it
+
+# Replay a fuzzer artifact on stable (no nightly needed):
+STALAGMIGHT_FUZZ_REPLAY=gen_tml:<artifact> cargo test \
+  --manifest-path src-tauri/Cargo.toml -p stalagmight-fuzz-gen --test fixed_seeds replay
+```
+
+`run.sh` keeps corpora, crash artifacts and logs under `FUZZ_WORKDIR`
+(default `src-tauri/fuzz/work/`, gitignored) and limits each input to
+`FUZZ_TIMEOUT` seconds and each worker to `FUZZ_RSS_MB`; a slower or bigger input
+is a finding. It builds with overflow checks on and starts from a copy of
+`src-tauri/Cargo.lock`, so the fuzzed dependencies are the shipped versions.
+
+Two Ariane properties ride on the generator's model/renderer split
+(`tests/tml_roundtrip.rs`, same seed knobs): `metres_and_feet_import_alike`
+renders one survey in metres (often with the unit-scaled `-0.3048` "inherit"
+marker of finding HFI-1) and in feet and requires the same shots, and
+`export_round_trip_keeps_every_shot` imports, exports with `export_tml` and
+re-imports, modulo the losses [Ariane export](ariane-export.md) documents.
+
+No fixtures, ever: seeds are generated in code (`fuzz_seeds` example), corpus
+files carry no survey-file extension, and corpora and artifacts are never
+committed. A finding becomes a regression test built from the minimised input
+written out as a byte or string literal in the test, never as a file; the seed
+that found it joins `regression_seeds` in `tests/fixed_seeds.rs`. A finding
+still waiting on a decision keeps its seeds in the `#[ignore]`d
+`open_findings` test (`-- --ignored open_findings` reproduces all of them).
+On the fuzz farm the `fzparse-*` jobs run every target through `run.sh` and
+the fixed seeds on rolling windows.
+
 ## Corpus guidance, and why it is not wired into anything
 
 `fuzz_corpus_sweep` (`#[ignore]`d) measures whether remembering the shapes a

@@ -44,10 +44,30 @@ fn run_seeds(target: Target, default_count: u64) {
     }
     let start = env_u64("STALAGMIGHT_FUZZ_SEED_START", 0);
     let count = env_u64("STALAGMIGHT_FUZZ_SEEDS", default_count);
+    let regressions = regression_seeds(target).iter().copied();
+    let (parsed, failures) = replay_seeds(
+        target,
+        (start..start.saturating_add(count)).chain(regressions),
+    );
+    eprintln!(
+        "{}: {count} seeds from {start}, {parsed} parsed, {} failed",
+        target.name(),
+        failures.len()
+    );
+    assert!(
+        failures.is_empty(),
+        "{} failed on {} seed(s):\n{}",
+        target.name(),
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// Run `target` on each seed: how many parsed, and one line per failure.
+fn replay_seeds(target: Target, seeds: impl Iterator<Item = u64>) -> (u64, Vec<String>) {
     let mut failures = Vec::new();
     let mut parsed = 0u64;
-    let regressions = regression_seeds(target).iter().copied();
-    for seed in (start..start.saturating_add(count)).chain(regressions) {
+    for seed in seeds {
         let input = match seed_input(target, seed) {
             Ok(input) => input,
             Err(v) => panic!("{}: cannot build seed {seed}: {v}", target.name()),
@@ -79,16 +99,36 @@ fn run_seeds(target: Target, default_count: u64) {
             }
         }
     }
-    eprintln!(
-        "{}: {count} seeds from {start}, {parsed} parsed, {} failed",
-        target.name(),
-        failures.len()
-    );
+    (parsed, failures)
+}
+
+/// Seeds of findings that are still OPEN (reported, not fixed: they need a
+/// product decision). Ignored so the CI slice stays green; run them with
+/// `cargo test -p stalagmight-fuzz-gen --test fixed_seeds -- --ignored open_findings`.
+/// When a finding is fixed, move its seeds to `regression_seeds`.
+#[test]
+#[ignore = "open findings: fails until FZ-PARSE-5 is fixed"]
+fn open_findings() {
+    use stalagmight_fuzz_gen::oracle::Format::{Srv, Wpj};
+    // FZ-PARSE-5: Walls readings that are huge but finite (1e308) are accepted
+    // and the computed station positions overflow to infinity.
+    let open: &[(Target, &[u64])] = &[
+        (Target::Gen(Srv), &[105, 1149]),
+        (Target::Gen(Wpj), &[303]),
+        (Target::Raw(Srv), &[1952]),
+        (Target::Raw(Wpj), &[1426]),
+    ];
+    let mut failures = Vec::new();
+    for &(target, seeds) in open {
+        let (_, f) = replay_seeds(target, seeds.iter().copied());
+        failures.extend(
+            f.into_iter()
+                .map(|line| format!("{}: {line}", target.name())),
+        );
+    }
     assert!(
         failures.is_empty(),
-        "{} failed on {} seed(s):\n{}",
-        target.name(),
-        failures.len(),
+        "open findings still fail:\n{}",
         failures.join("\n")
     );
 }
