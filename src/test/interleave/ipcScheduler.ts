@@ -58,10 +58,12 @@ export class IpcScheduler {
   readonly faulted: Array<{ command: string; args: Record<string, unknown> | undefined }> = [];
   readonly trace: string[] = [];
   sent = 0;
-  /** Per command: the step of its last injected fault, and of its last answer delivered ok. */
-  private readonly lastFault = new Map<string, number>();
-  private readonly lastOk = new Map<string, number>();
-  private steps = 0;
+  /**
+   * Per command: its newest-issued call, the generation open when it was issued, and
+   * whether it was faulted. The stores apply a read only if no newer one of theirs has
+   * landed, so an OLDER answer delivered after the newest one faulted is not a fresh read.
+   */
+  private readonly lastIssued = new Map<string, { seq: number; gen: number | null; faulted: boolean }>();
 
   constructor(private readonly backend: BackendModel) {}
 
@@ -76,6 +78,7 @@ export class IpcScheduler {
     this.sent += 1;
     return new Promise((resolve, reject) => {
       const call: PendingCall = { seq: this.sent, command, args, phase: 'sent', resolve, reject };
+      this.lastIssued.set(command, { seq: call.seq, gen: this.backend.open?.gen ?? null, faulted: false });
       const { token, early } = FIXED[command] ? {} : this.backend.onSend(command, args);
       call.token = token;
       if (early) {
@@ -98,16 +101,15 @@ export class IpcScheduler {
     call.phase = 'executed';
   }
 
-  /** Whether `command`'s last answer was an injected fault (no good answer since). */
+  /** Whether `command`'s newest-issued call, issued in the project open now, was faulted. */
   staleAfterFault(command: string): boolean {
-    return (this.lastFault.get(command) ?? -1) > (this.lastOk.get(command) ?? -1);
+    const last = this.lastIssued.get(command);
+    return last !== undefined && last.faulted && last.gen === (this.backend.open?.gen ?? null);
   }
 
   private deliver(call: PendingCall): void {
     this.pending.splice(this.pending.indexOf(call), 1);
     const outcome = call.outcome!;
-    this.steps += 1;
-    if (outcome.ok) this.lastOk.set(call.command, this.steps);
     if (outcome.ok) call.resolve(outcome.value);
     else call.reject(outcome.error);
   }
@@ -142,8 +144,8 @@ export class IpcScheduler {
     if (!call) return false;
     this.pending.splice(this.pending.indexOf(call), 1);
     this.faulted.push({ command: call.command, args: call.args });
-    this.steps += 1;
-    this.lastFault.set(call.command, this.steps);
+    const last = this.lastIssued.get(call.command);
+    if (last?.seq === call.seq) last.faulted = true;
     this.trace.push(`FAULT ${this.describe(call)}`);
     call.reject(
       STRING_ERRORS.has(call.command)
