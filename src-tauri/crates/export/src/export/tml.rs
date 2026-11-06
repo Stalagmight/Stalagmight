@@ -1503,12 +1503,11 @@ fn build_export_shots_with_report(
         //   is minted after every `from_id` in the file has been assigned, so
         //   nothing hangs off it and no position propagates through it.
         //
-        // - `node_depth` is snapshotted BEFORE the geometry repair, so a connector
-        //   onto a node the repair later re-hangs names a depth that node no longer
-        //   has. The repair re-hangs the connector too if that breaks its own
-        //   bound, so the file stays readable either way; what stays stale is the
-        //   depth of that leaf, the one value here nobody reads. Refreshing it
-        //   would mean rebuilding the closures after the repair - for a phantom.
+        // - `node_depth` is snapshotted BEFORE the geometry repair, which can move
+        //   a node: a junction exported at the mean of its readings, or the end
+        //   of a clamped shot. `junction_depths::settle` re-derives a connector
+        //   touching a moved node - both depths and its length - so the file
+        //   states the depths the nodes are written at.
         let depth_a = node_depth.get(&from_id).copied().unwrap_or(0.0);
         let depth_b = node_depth.get(&to_id).copied().unwrap_or(0.0);
         closure_shots.push(ExportShot::closure(
