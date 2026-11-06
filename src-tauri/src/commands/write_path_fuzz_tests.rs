@@ -116,6 +116,16 @@ impl Stats {
             *self.0.entry(what.clone()).or_default() += n;
         }
     }
+
+    /// The counts of every name that starts with `prefix`, summed.
+    #[cfg(target_os = "linux")]
+    fn count(&self, prefix: &str) -> u64 {
+        self.0
+            .iter()
+            .filter(|(what, _)| what.starts_with(prefix))
+            .map(|(_, n)| n)
+            .sum()
+    }
 }
 
 impl fmt::Display for Stats {
@@ -167,6 +177,42 @@ fn write_path_fuzz_gate() {
         started.elapsed().as_secs_f64()
     );
     assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// Seeds that reproduce each finding reported and still open (its fix lies
+/// outside this module), with its id: see `disk::known_open`.
+#[cfg(target_os = "linux")]
+const KNOWN_OPEN_SEEDS: &[(u64, &str)] = &[
+    // FZ-PERSIST-fs-3: Save As into the managed cache, `notes.stalx.tmp` a
+    // dangling link into the system folder: the save creates its temp file
+    // through it.
+    (437, "fs-3"),
+    // FZ-PERSIST-fs-4: a create at `<cache>/nope/../speleodb/...` makes
+    // `<cache>/nope`.
+    (1801, "fs-4"),
+    (1808, "fs-4"),
+];
+
+/// The open findings still reproduce. When one no longer does - it was fixed -
+/// remove its matcher from `disk::known_open` and move its seeds into
+/// `GATE_SEEDS`.
+#[cfg(target_os = "linux")]
+#[test]
+fn write_path_fuzz_known_open() {
+    let mut gone = Vec::new();
+    for &(seed, id) in KNOWN_OPEN_SEEDS {
+        match one_seed(seed) {
+            Ok(stats) => {
+                let seen = stats.count(&format!("disk.known-open.{id}"));
+                println!("FZ-PERSIST KNOWN-OPEN fs seed={seed} {id} seen={seen}");
+                if seen == 0 {
+                    gone.push(format!("seed={seed} no longer reproduces {id}"));
+                }
+            }
+            Err(why) => gone.push(format!("seed={seed} {why}")),
+        }
+    }
+    assert!(gone.is_empty(), "{gone:#?}");
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -1367,20 +1413,24 @@ mod disk {
         }
     }
 
-    /// One question the policy was asked during an attempt.
+    /// The verdict oracle as an attempt sees it: the answer for a path as what
+    /// (`None`: the location rules alone), on the tree as it is at that moment.
+    type Oracle<'a> = dyn Fn(&Path, Option<Kind>) -> Expect + 'a;
+
+    /// One question the policy was asked during an attempt, with the answer the
+    /// oracle expected when it was asked (before anything was written).
     struct Asked {
         path: PathBuf,
-        /// `None`: the location rules alone (a load's upgrade).
-        kind: Option<Kind>,
+        expected: Expect,
         answer: Result<(), String>,
         said: Said,
     }
 
     impl Asked {
-        fn policy(path: &Path, kind: Kind, dirs: &AppDirs) -> Self {
+        fn policy(path: &Path, kind: Kind, dirs: &AppDirs, oracle: &Oracle<'_>) -> Self {
             Self {
                 path: path.to_path_buf(),
-                kind: Some(kind),
+                expected: oracle(path, Some(kind)),
                 answer: check_write_path_with(path, kind.target(), dirs),
                 said: Said::Policy,
             }
@@ -1470,9 +1520,14 @@ mod disk {
         clippy::too_many_lines,
         reason = "one arm per caller of the policy, each a few lines; split up they say less"
     )]
-    fn attempt(plan: &Plan, dirs: &AppDirs, state: &AppState) -> Result<Outcome, String> {
+    fn attempt(
+        plan: &Plan,
+        dirs: &AppDirs,
+        state: &AppState,
+        oracle: &Oracle<'_>,
+    ) -> Result<Outcome, String> {
         let path = &plan.path;
-        let project = |p: &Path| Asked::policy(p, Kind::Project, dirs);
+        let project = |p: &Path| Asked::policy(p, Kind::Project, dirs, oracle);
         let gate = |asked: Vec<Asked>, write: &dyn Fn()| {
             let refused = asked.iter().any(|a| a.answer.is_err());
             if !refused {
@@ -1596,7 +1651,7 @@ mod disk {
                 Outcome {
                     asked: vec![Asked {
                         path: path.clone(),
-                        kind: Some(kind),
+                        expected: oracle(path, Some(kind)),
                         answer,
                         said: Said::Policy,
                     }],
@@ -1605,6 +1660,7 @@ mod disk {
             }
             // `write_salvaged_data_with` itself.
             Caller::Salvage => {
+                let expected = oracle(path, Some(Kind::Json));
                 let wrote = write_salvaged_data_with(&plan.others[0], path, dirs);
                 let answer = match wrote {
                     Err(e) if refused_by_policy(&e.message) => Err(e.message),
@@ -1614,7 +1670,7 @@ mod disk {
                 Outcome {
                     asked: vec![Asked {
                         path: path.clone(),
-                        kind: Some(Kind::Json),
+                        expected,
                         answer,
                         said: Said::Policy,
                     }],
@@ -1623,6 +1679,7 @@ mod disk {
             }
             // `load_upgrade_refusal_with`, then the load the commands make with it.
             Caller::Load => {
+                let expected = oracle(path, None);
                 let refusal = load_upgrade_refusal_with(path, dirs);
                 let _ = state.do_load_project_full_with(path.clone(), refusal.as_ref());
                 if let Some(r) = &refusal {
@@ -1633,7 +1690,7 @@ mod disk {
                 Outcome {
                     asked: vec![Asked {
                         path: path.clone(),
-                        kind: None,
+                        expected,
                         answer: refusal
                             .as_ref()
                             .map_or(Ok(()), |r| Err(r.older_format.clone())),
@@ -1662,7 +1719,7 @@ mod disk {
             // The command's check, then its exporter (`export_csv`, `export_json`,
             // `export_tml`; the image and dive-profile exports write through
             // `write_atomic_bytes`).
-            Caller::Export(kind) => gate(vec![Asked::policy(path, kind, dirs)], &|| {
+            Caller::Export(kind) => gate(vec![Asked::policy(path, kind, dirs, oracle)], &|| {
                 ensure_open_project(state);
                 let Some(open) = state.settled_snapshot() else {
                     return;
@@ -1708,6 +1765,100 @@ mod disk {
         }
     }
 
+    /// [Oracle] The entry a path names: its folder as the kernel reaches it, its
+    /// own name not followed - where a write that replaces the name (a rename
+    /// over it) lands.
+    fn entry_of(path: &Path, jail: &Path) -> Option<PathBuf> {
+        let abs = absolute(path);
+        let (folder, name) = (abs.parent()?, abs.file_name()?);
+        match kernel_landing(folder, jail) {
+            Landing::At(at, Found::Folder | Found::Missing) => Some(at.join(name)),
+            _ => None,
+        }
+    }
+
+    /// The names a write keeps beside its file that this fuzzer links: the
+    /// save's temp file (`with_extension("stalx.tmp")`), and the `BESIDE` names.
+    fn beside_names(entry: &Path) -> Vec<(String, PathBuf)> {
+        let mut names = vec![(".stalx.tmp".to_owned(), entry.with_extension("stalx.tmp"))];
+        for suffix in BESIDE {
+            let mut name = entry.as_os_str().to_os_string();
+            name.push(suffix);
+            names.push(((*suffix).to_owned(), PathBuf::from(name)));
+        }
+        names
+    }
+
+    /// [Known open] Which reported, still-open finding explains a change at
+    /// `changed` in a protected folder, if one does:
+    ///
+    /// - `fs-3.<name>`: a link at a name a write keeps beside the file it writes
+    ///   (the save's `.stalx.tmp`, ...) that leads to `changed` - the write follows
+    ///   it, and the policy judges only the file's own name;
+    /// - `fs-4`: `changed` is a new empty folder the path names right before a
+    ///   `..` - `create_dir_all` makes it (`<cache>/nope/../speleodb/x.stalx`
+    ///   makes `<cache>/nope`), and the policy, which folds the `..`, never sees
+    ///   it.
+    fn known_open(
+        tree: &Tree,
+        before: &BTreeMap<PathBuf, Shot>,
+        after: &BTreeMap<PathBuf, Shot>,
+        plan: &Plan,
+        changed: &Path,
+    ) -> Option<String> {
+        let walks = walked(plan);
+        let new_empty_folder = !before.contains_key(changed)
+            && after.get(changed) == Some(&Shot::Folder)
+            && names_in(changed).is_empty();
+        if new_empty_folder {
+            let before_dot_dot = walks.iter().any(|path| {
+                let parts: Vec<Component<'_>> = path.components().collect();
+                (1..parts.len()).any(|i| {
+                    parts[i] == Component::ParentDir
+                        && matches!(
+                            kernel_landing(&absolute(&parts[..i].iter().collect::<PathBuf>()), &tree.jail),
+                            Landing::At(at, _) if at.as_path() == changed
+                        )
+                })
+            });
+            if before_dot_dot {
+                return Some("fs-4".to_owned());
+            }
+        }
+        for written in walks.iter().filter_map(|p| entry_of(p, &tree.jail)) {
+            for (suffix, beside) in beside_names(&written) {
+                if let Some(Shot::Link(target)) = before.get(&beside) {
+                    let naive = beside.parent().map(|f| folded(&f.join(target)));
+                    let lands = kernel_landing(&beside, &tree.jail);
+                    let leads = naive.as_deref() == Some(changed)
+                        || matches!(&lands, Landing::At(at, _) if at.as_path() == changed);
+                    if leads {
+                        return Some(format!("fs-3{suffix}"));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// The links (as they were before an attempt) that lead to `entry`, for a
+    /// report: `link -> target`.
+    fn links_to(tree: &Tree, before: &BTreeMap<PathBuf, Shot>, entry: &Path) -> Vec<String> {
+        before
+            .iter()
+            .filter_map(|(link, shot)| {
+                let Shot::Link(target) = shot else {
+                    return None;
+                };
+                let naive = folded(&link.parent()?.join(target));
+                let lands = kernel_landing(link, &tree.jail);
+                let leads = naive == entry
+                    || matches!(&lands, Landing::At(land, _) if land.as_path() == entry);
+                leads.then(|| format!("{} -> {}", tree.show(link), target.display()))
+            })
+            .collect()
+    }
+
     /// Every path an attempt walks, for the escape guard.
     fn walked(plan: &Plan) -> Vec<PathBuf> {
         let mut walks = vec![plan.path.clone(), with_stalx_extension(plan.path.clone())];
@@ -1731,16 +1882,16 @@ mod disk {
         stats.bump("disk.seeds");
         for i in 0..probes {
             let plan = plan(&tree, &mut rng);
+            let lands = match kernel_landing(&absolute(&plan.path), &jail) {
+                Landing::At(land, found) => format!("{} ({found:?})", tree.show(&land)),
+                other => format!("{other:?}"),
+            };
             let fail = |why: String| {
                 format!(
-                    "probe {i} {:?} {} (others {:?}): {why}; lands {}",
+                    "probe {i} {:?} {} (others {:?}): {why}; landed (before) {lands}",
                     plan.caller,
                     tree.show(&plan.path),
                     plan.others.iter().map(|p| tree.show(p)).collect::<Vec<_>>(),
-                    match kernel_landing(&absolute(&plan.path), &jail) {
-                        Landing::At(land, found) => format!("{} ({found:?})", tree.show(&land)),
-                        other => format!("{other:?}"),
-                    }
                 )
             };
             if walked(&plan)
@@ -1780,13 +1931,18 @@ mod disk {
                     }
                 }
             }
+            let oracle = |p: &Path, kind: Option<Kind>| expect(p, kind, &tree.guarded, &jail);
             let before = snapshot(&jail);
-            let outcome = attempt(&plan, &tree.dirs, &state).map_err(fail)?;
+            let outcome = attempt(&plan, &tree.dirs, &state, &oracle).map_err(fail)?;
             let after = snapshot(&jail);
             for asked in &outcome.asked {
-                let expected = expect(&asked.path, asked.kind, &tree.guarded, &jail);
-                judge(&asked.path, &expected, as_str(&asked.answer), asked.said)
-                    .map_err(|why| fail(format!("asked {}: {why}", tree.show(&asked.path))))?;
+                judge(
+                    &asked.path,
+                    &asked.expected,
+                    as_str(&asked.answer),
+                    asked.said,
+                )
+                .map_err(|why| fail(format!("asked {}: {why}", tree.show(&asked.path))))?;
             }
             // [Effect] A refusal changed nothing; an allowed write changed nothing
             // in a protected folder (a project in the managed cache excepted).
@@ -1802,7 +1958,22 @@ mod disk {
                     Some(Place::Managed) => !plan.caller.writes_project(),
                     Some(Place::App | Place::System) => true,
                 })
-                .map(|p| tree.show(p))
+                .filter(|p| match known_open(&tree, &before, &after, &plan, p) {
+                    Some(id) => {
+                        stats.bump(&format!("disk.known-open.{id}"));
+                        false
+                    }
+                    None => true,
+                })
+                .map(|p| {
+                    format!(
+                        "{} ({:?} -> {:?}; links to it: {:?})",
+                        tree.show(p),
+                        before.get(p),
+                        after.get(p),
+                        links_to(&tree, &before, p)
+                    )
+                })
                 .collect();
             if !protected.is_empty() {
                 return Err(fail(format!(
