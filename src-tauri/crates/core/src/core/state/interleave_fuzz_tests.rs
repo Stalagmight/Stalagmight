@@ -852,7 +852,7 @@ fn load_order(ctx: &Ctx, records: &[Record], outcome: &Outcome) -> Vec<String> {
     let Some((_, r)) = newest else {
         return Vec::new();
     };
-    let expected = slot_file(ctx, r).flatten();
+    let expected = slot_file(ctx, r);
     let open = ctx
         .state
         .project_snapshot()
@@ -920,13 +920,16 @@ fn settled_windows(records: &[Record], outcome: &Outcome) -> Vec<String> {
     found
 }
 
-/// The file a project-slot op leaves open when it succeeds: `Some(None)` for a
-/// close, `None` for an op that is not one.
-fn slot_file(ctx: &Ctx, r: &Record) -> Option<Option<PathBuf>> {
+/// A load, create or close: an op that commits the project slot.
+fn commits_the_slot(op: &Op) -> bool {
+    matches!(op, Op::Load(_) | Op::Create(_) | Op::Close)
+}
+
+/// The file a project-slot op leaves open when it succeeds (`None` after a close).
+fn slot_file(ctx: &Ctx, r: &Record) -> Option<PathBuf> {
     match r.op {
-        Op::Load(file) => Some(ctx.files.get(file).cloned()),
-        Op::Create(n) => Some(Some(new_file(&ctx.dir, r.thread, n))),
-        Op::Close => Some(None),
+        Op::Load(file) => ctx.files.get(file).cloned(),
+        Op::Create(n) => Some(new_file(&ctx.dir, r.thread, n)),
         _ => None,
     }
 }
@@ -945,7 +948,10 @@ fn edit_homes(ctx: &Ctx, records: &[Record], outcome: &Outcome) -> Vec<String> {
         .iter()
         .filter(|r| r.answer == Answer::Ok)
         .filter_map(|r| {
-            let file = slot_file(ctx, r)?;
+            if !commits_the_slot(&r.op) {
+                return None;
+            }
+            let file = slot_file(ctx, r);
             let at = outcome
                 .acquired
                 .iter()
@@ -1285,9 +1291,15 @@ fn check_seed(mode: Mode, seed: u64, seen: &mut Tally) -> Result<usize, String> 
     }
     let (small, choices, small_violations, small_outcome) =
         shrink(&case, outcome.choices, Duration::from_mins(2));
+    // The class a finding is keyed on: the first violation's, unless the shrunk
+    // case shows a stale handle - the cause behind a lost display write then.
+    let class = if small_violations.iter().any(|v| class_of(v) == "handle") {
+        "handle"
+    } else {
+        violations.first().map_or("other", |v| class_of(v))
+    };
     let mut report = format!(
-        "FZ-INT {mode:?} seed {seed} FAILED (class {}):\n  {}\n  original: {} ops on {} threads\n  shrunk to:\n",
-        violations.first().map_or("other", |v| class_of(v)),
+        "FZ-INT {mode:?} seed {seed} FAILED (class {class}):\n  {}\n  original: {} ops on {} threads\n  shrunk to:\n",
         violations.join("\n  "),
         case.threads.iter().map(Vec::len).sum::<usize>(),
         case.threads.len(),
