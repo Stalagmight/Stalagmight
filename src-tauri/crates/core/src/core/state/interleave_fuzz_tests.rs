@@ -110,16 +110,26 @@ const REGRESSION_SEEDS: &[(Mode, u64)] = &[
     // a save holds the handle is lost (shrinks to one Save and one write).
     (Mode::Edits, 127),
     // RV6b-2: `save_display_setting_for` without `command_lock` - a load commits
-    // between the identity check and the write, which lands in CaveB.
+    // between the identity check and the write, which lands in another file
+    // (shrinks to a write made for CaveA landing in a new project's file).
+    (Mode::Sessions, 47),
+    // A1: a load committing without `command_lock` - an edit that took the lock
+    // while CaveA was open lands in the loaded file (shrinks to one load and one
+    // edit). CI seed Sessions 7 catches it too.
     (Mode::Lifecycle, 97),
     // (C2: `settled_read` without `command_lock` - a read inside a command sees
     // the edit's section without its undo entry - is caught by CI seed Edits 11.)
+    // RV5-4: `distance_field_checked` on `project_snapshot` - the IPC read takes
+    // the project inside another thread's edit (oracle 7; shrinks to one Measure
+    // and one edit).
+    (Mode::Reads, 56),
     // RV4-R-C2: no cancellation re-check once a load holds `command_lock` - an
     // older load commits after a newer one (shrinks to two loads).
     (Mode::Lifecycle, 251),
     // FZ-FZ-INT-R1, found by the first long campaign: a second load of the open
     // file committed a session on the file a save had replaced (see
-    // `a_second_load_of_the_open_file_does_not_commit_a_stale_session`).
+    // `a_second_load_of_the_open_file_does_not_commit_a_stale_session`). Of the
+    // campaign's three seeds, 11102349 still fails with the fix reverted.
     (Mode::Lifecycle, 1_101_510),
     (Mode::Lifecycle, 11_102_349),
     (Mode::Lifecycle, 13_100_691),
@@ -924,9 +934,12 @@ fn slot_file(ctx: &Ctx, r: &Record) -> Option<Option<PathBuf>> {
 /// Oracle 8 (`Lifecycle`, `Sessions`): a command applies to the project that was
 /// open when it took `command_lock`, never to one a load, create or close
 /// committed after it started. Each acknowledged edit's home is the file the
-/// last slot commit before its `command_lock` left open (a commit is the slot
-/// op's last `command_lock`); every marker in every file of the world, and in the
-/// open project, must have been made while that file was the open one.
+/// last slot commit before its `command_lock` left open; every marker in every
+/// file of the world, and in the open project, must have been made while that
+/// file was the open one. A commit is placed at the slot op's last `project`
+/// lock - the slot swap, or a later point of the same `command_lock` span - not
+/// at its `command_lock`, so a commit that stopped taking that lock is still
+/// placed where it happened.
 fn edit_homes(ctx: &Ctx, records: &[Record], outcome: &Outcome) -> Vec<String> {
     let mut commits: Vec<(usize, Option<PathBuf>)> = records
         .iter()
@@ -939,7 +952,7 @@ fn edit_homes(ctx: &Ctx, records: &[Record], outcome: &Outcome) -> Vec<String> {
                 .enumerate()
                 .take(r.locks.1)
                 .skip(r.locks.0)
-                .filter(|(_, (thread, cell))| *thread == r.thread && *cell == "command_lock")
+                .filter(|(_, (thread, cell))| *thread == r.thread && *cell == "project")
                 .map(|(at, _)| at)
                 .next_back()?;
             Some((at, file))
