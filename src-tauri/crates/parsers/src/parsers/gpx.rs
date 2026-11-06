@@ -323,6 +323,11 @@ fn read_text(reader: &mut GpxReader<'_>) -> Result<String> {
             Event::Text(ref e) => {
                 text.push_str(&e.unescape().context("Invalid text content")?);
             }
+            // [#576 FZ-PARSE-4] CDATA is character data like any other text
+            // (GPS tools wrap names and comments in it); taken verbatim.
+            Event::CData(ref e) => {
+                text.push_str(&e.decode().context("Invalid CDATA content")?);
+            }
             Event::End(_) | Event::Eof => break,
             Event::Start(_) => {
                 // Nested element - skip it entirely
@@ -1165,6 +1170,47 @@ fn resolve_placement(
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
 mod tests {
     use super::*;
+
+    /// [#576 FZ-PARSE-4] A CDATA section is character data like any other text:
+    /// GPS tools commonly wrap names and comments in `<![CDATA[...]]>`, and the
+    /// reader dropped them (and a CDATA elevation, which then read as missing
+    /// and was filled in from the neighbouring points). Found by the `gen_gpx`
+    /// fuzz generator.
+    #[test]
+    fn cdata_text_reads_like_the_same_plain_text() {
+        let gpx = |name: &str, cmt: &str, ele: &str| {
+            format!(
+                r#"<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1">
+<metadata><name>{name}</name></metadata>
+<wpt lat="45.5" lon="-90.5"><name>{name}</name><cmt>{cmt}</cmt><ele>{ele}</ele></wpt>
+<trk><name>{name}</name><trkseg><trkpt lat="45.5" lon="-90.5"><ele>{ele}</ele></trkpt></trkseg></trk>
+</gpx>"#
+            )
+        };
+        let plain = parse_gpx_str(&gpx("Cave A &amp; B", "Main entrance", "350.2")).unwrap();
+        let cdata = parse_gpx_str(&gpx(
+            "<![CDATA[Cave A & B]]>",
+            "Main <![CDATA[entrance]]>",
+            "<![CDATA[350.2]]>",
+        ))
+        .unwrap();
+        let summary = |g: &GpxFile| {
+            let w = &g.waypoints[0];
+            let t = &g.tracks[0];
+            (
+                g.name.clone(),
+                w.name.clone(),
+                w.comment.clone(),
+                w.elevation,
+                t.name.clone(),
+                t.segments[0].points[0].elevation,
+            )
+        };
+        println!("plain text: {:?}", summary(&plain));
+        println!("CDATA:      {:?}", summary(&cdata));
+        assert_eq!(summary(&cdata), summary(&plain));
+        assert_eq!(cdata.waypoints[0].name.as_deref(), Some("Cave A & B"));
+    }
 
     const SIMPLE_GPX: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="test"
