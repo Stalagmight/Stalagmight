@@ -91,8 +91,15 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
       case 'speleodb_take_remote':
         // Returns the reloaded .stalx path (#198); no e2e spec drives it yet.
         return '/mock/project.stalx' satisfies MockReply<'speleodb_take_remote'>;
-      case 'speleodb_logout':
+      // [#576 FZ-SDB-5] The move out of the cache answers with the copy's SaveOutcome:
+      // the app loads `saved_path` next, so it names a path under the mock documents dir.
       case 'speleodb_unlink':
+        return {
+          saved_path: '/mock/documents/stalagmight/unlinked.stalx',
+          unlinked_copy_path: null,
+          warnings: [],
+        } satisfies MockReply<'speleodb_unlink'>;
+      case 'speleodb_logout':
       // Strip half of the managed-file prompt: deletes a foreign copy's
       // speleo_link row. No payload; specs assert the invocation itself.
       case 'speleodb_remove_link_at':
@@ -109,7 +116,6 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
       case 'speleodb_release_current_lock':
       case 'speleodb_delete_project':
         return null satisfies MockReply<'speleodb_logout'> &
-          MockReply<'speleodb_unlink'> &
           MockReply<'speleodb_remove_link_at'> &
           MockReply<'speleodb_release_all_locks'> &
           MockReply<'speleodb_release_lock'> &

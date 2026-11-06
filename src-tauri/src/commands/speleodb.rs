@@ -547,15 +547,31 @@ pub async fn speleodb_open_file_flags<R: tauri::Runtime>(
     crate::commands::pool::run(app, |state| Ok(state.open_file_flags())).await
 }
 
-/// Detach the open project from SpeleoDB, turning it into a plain unmanaged
-/// `.stalx` (T2/#204): drop the `speleo_link` row and open the edit gate. Used to
-/// keep a copy the server refuses us access to, or locally-edited work after a
-/// divergence. Nothing is pushed or released - the managed copy is abandoned (a
-/// later Open-from-SpeleoDB re-pulls the server tip). The caller typically saves
-/// the project to a new path first so the user's edits land somewhere permanent.
+/// Detach the open project from SpeleoDB by MOVING its copy out of the SpeleoDB
+/// cache to `destination` (T2/#204, #576 FZ-SDB-5): the copy is written there
+/// unlinked, the session on the cache file is closed, the cache file removed and a
+/// held lock handed back. Used to keep a copy the server refuses us access to,
+/// locally-edited work after a divergence, and an unlinked copy an earlier Unlink
+/// left in the cache. Answers where the copy landed (`saved_path`), which the
+/// frontend then loads, and what the save could not keep. Nothing is pushed.
+///
+/// `destination` passes the write-path policy first, like every save target.
 #[tauri::command]
-pub async fn speleodb_unlink(app: AppHandle) -> Result<(), CommandError> {
-    run_blocking(app, AppState::speleodb_unlink).await
+pub async fn speleodb_unlink(
+    app: AppHandle,
+    destination: std::path::PathBuf,
+) -> Result<crate::core::outcome::SaveOutcome, CommandError> {
+    crate::commands::write_path::check_write_path(
+        &destination,
+        crate::commands::write_path::WriteTarget::Project,
+    )
+    .map_err(|why| {
+        crate::speleodb::contract::dto_for_error(
+            crate::speleodb::contract::Endpoint::User,
+            &crate::speleodb::SpeleoDbError::refused(why),
+        )
+    })?;
+    run_blocking(app, move |s| s.speleodb_unlink(destination)).await
 }
 
 /// Remove the `speleo_link` row from a CLOSED foreign `.stalx` so it can be

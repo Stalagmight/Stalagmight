@@ -4087,10 +4087,18 @@
       "name": "speleodb_unlink",
       "module": "speleodb",
       "async": true,
-      "args": [],
+      "args": [
+        {
+          "name": "destination",
+          "key": "destination",
+          "rust": "std::path::PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
       "result": {
-        "rust": "()",
-        "ts": "null"
+        "rust": "crate::core::outcome::SaveOutcome",
+        "ts": "SaveOutcome"
       },
       "error": {
         "rust": "CommandError",

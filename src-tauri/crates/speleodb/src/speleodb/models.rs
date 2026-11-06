@@ -1071,6 +1071,12 @@ pub struct UnpushedLocalEdits {
     /// When it was last edited (RFC-3339), when known. `None` for an older copy
     /// that never recorded one.
     pub last_edit_at: Option<String>,
+    /// [#576 FZ-SDB-5-D3] The file is a `.stalx` with NO SpeleoDB link sitting at
+    /// the project's cache path - a copy an Unlink made before Unlink moved its copy
+    /// out of the cache. Nothing can say whether it holds work, so the replace is
+    /// refused like un-pushed edits; "keep local" then moves it out of the cache
+    /// (Save As, then `speleodb_unlink`) instead of opening it in place.
+    pub unlinked: bool,
 }
 
 #[cfg(test)]

@@ -6,6 +6,8 @@ import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoAdoptConfirm } from './SpeleoAdoptConfirm';
+import { chooseUnlinkDestination, unlinkOpenProjectTo } from '../../utils/speleoUnlink';
+import { getErrorMessage } from '../../utils/ipc';
 import type { SpeleoProjectSummary, UnpushedLocalEdits } from '../../types/ipc.generated';
 
 /**
@@ -89,16 +91,43 @@ export default function SpeleoUnpushedLocalDialog() {
       ? t('speleodb.unpushedLocal.lastEdited', { when: parsed.toLocaleString() })
       : t('speleodb.unpushedLocal.lastEditedUnknown');
 
+  // [#576 FZ-SDB-5-D3] The refused file is a link-less copy an Unlink made before
+  // Unlink moved copies out of the cache. Keeping it moves it out now.
+  const unlinked = unpushedLocal.unlinked === true;
+
   // Safe branch: open the local copy, no SpeleoDB call. A failed load surfaces its
   // own error through loadProject (the prompt has already handed off by then).
+  //
+  // A link-less copy (`unlinked`) is then moved out of the cache, the same move
+  // `convertToUnmanagedStalx` makes: the Save As is asked FIRST, so its Cancel leaves
+  // this prompt up with nothing opened and nothing called. The copy is opened through
+  // `keepLocalCopy` all the same, for its hand-back guard on the project on screen;
+  // its seed does not survive the load, which resolves a link-less file to local.
   const handleKeepLocal = async () => {
     setBusy(true);
     setError(null);
+    let destination: string | null = null;
+    if (unlinked) {
+      try {
+        destination = await chooseUnlinkDestination(summary.name);
+      } catch (e) {
+        setError(getErrorMessage(e));
+        setBusy(false);
+        return;
+      }
+      if (!destination) {
+        setBusy(false);
+        return;
+      }
+    }
     const outcome = await keepLocalCopy(summary, unpushedLocal.local_path);
     if (outcome.status === 'error') {
       setError(outcome.message);
       setBusy(false);
+      return;
     }
+    // The prompt has closed (onBeforeLoad), so a failed move surfaces on its own.
+    if (destination && outcome.status === 'opened') await unlinkOpenProjectTo(destination);
   };
 
   // Destructive branch. A failed re-pull keeps this prompt open with the reason on
@@ -187,6 +216,11 @@ export default function SpeleoUnpushedLocalDialog() {
           {lastEditedLine}
         </p>
         <p className="text-xs text-text-secondary">{t('speleodb.unpushedLocal.keepHint')}</p>
+        {unlinked && (
+          <p className="text-xs text-text-secondary" data-testid="speleodb-unpushed-local-unlinked-hint">
+            {t('speleodb.unpushedLocal.unlinkedHint')}
+          </p>
+        )}
 
         {discardArmed && (
           <div

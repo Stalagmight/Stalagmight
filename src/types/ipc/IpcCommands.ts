@@ -275,7 +275,7 @@ export interface IpcCommands {
   speleodb_set_undo_mode: { args: { mode: UndoMode }; result: null; error: CommandError };
   speleodb_start_editing: { args: { resumeHeldLock?: boolean | null }; result: StartEditingResult; error: CommandError };
   speleodb_take_remote: { args: Record<string, never>; result: string; error: CommandError };
-  speleodb_unlink: { args: Record<string, never>; result: null; error: CommandError };
+  speleodb_unlink: { args: { destination: string }; result: SaveOutcome; error: CommandError };
   speleodb_unwind_target: { args: Record<string, never>; result: SpeleoUnwindTarget | null; error: CommandError };
   speleodb_update: { args: Record<string, never>; result: UpdateResult; error: CommandError };
   split_shot_at_distance: { args: { sectionId: number; shotId: number; distance: number }; result: ShotCreated; error: CommandError };

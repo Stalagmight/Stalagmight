@@ -264,9 +264,29 @@ impl AppState {
                 project_id: project_id.to_owned(),
                 local_path: dest.to_string_lossy().into_owned(),
                 last_edit_at: None,
+                unlinked: false,
             });
         };
         if !local.has_unpushed_edits {
+            // [#576 FZ-SDB-5-D3] A link-less `.stalx` at the destination: an Unlink
+            // made before Unlink moved its copy out of the cache left it here, and
+            // the user may have gone on editing it as a plain local project. Nothing
+            // records whether they did, so it counts as possible un-pushed work and
+            // the replace is refused; the prompt's "keep local" moves it out.
+            if self.unlinked_copy_at(project_id, dest) {
+                tracing::info!(
+                    project_id = %project_id,
+                    path = %dest.display(),
+                    purpose = "keep an unlinked copy left in the cache (#576 FZ-SDB-5)",
+                    "speleodb: refusing to replace a .stalx with no SpeleoDB link"
+                );
+                return Err(SpeleoDbError::WouldDiscardLocalEdits {
+                    project_id: project_id.to_owned(),
+                    local_path: dest.to_string_lossy().into_owned(),
+                    last_edit_at: None,
+                    unlinked: true,
+                });
+            }
             return Ok(());
         }
         tracing::info!(
@@ -280,6 +300,7 @@ impl AppState {
             project_id: project_id.to_owned(),
             local_path: dest.to_string_lossy().into_owned(),
             last_edit_at: local.last_edit_at,
+            unlinked: false,
         })
     }
 

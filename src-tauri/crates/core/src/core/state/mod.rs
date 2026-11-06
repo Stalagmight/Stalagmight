@@ -40,6 +40,7 @@ mod speleodb_pull;
 mod speleodb_push;
 mod speleodb_revisions;
 mod speleodb_session;
+mod speleodb_unlink;
 mod undo;
 mod undo_capture;
 mod undo_policy;
@@ -565,6 +566,14 @@ mod sdb_silent_release_claim_tests;
               values are the evidence a run captures"
 )]
 mod sdb_swap_gate_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              answers are the evidence a run captures"
+)]
+mod sdb_unlink_move_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,

@@ -4220,6 +4220,7 @@
       "lastEdited": "Local copy last edited: {{when}}",
       "lastEditedUnknown": "We could not tell when the local copy was last edited.",
       "keepHint": "Keeping the local copy downloads nothing and overwrites nothing: it opens exactly as you left it, with your changes intact, and you can upload them to SpeleoDB later.",
+      "unlinkedHint": "This copy is not linked to SpeleoDB: an earlier Unlink left it in the SpeleoDB cache. Keeping it asks where to save it, then moves it out of the cache.",
       "keepLocal": "Keep the local copy & open it",
       "takeRemote": "Take the server copy & discard my changes",
       "discardWarning": "Taking the server copy permanently deletes the changes made to \"{{name}}\" on this computer. They are not on SpeleoDB, so there is no other copy and this cannot be undone.",

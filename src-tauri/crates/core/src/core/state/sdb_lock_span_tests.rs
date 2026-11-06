@@ -261,7 +261,7 @@ fn link_writers_wait_for_a_command_in_flight() {
     });
 
     let unlink = waits_for_command_lock(&state, || {
-        assert!(state.speleodb_unlink().is_ok());
+        assert!(state.speleodb_unlink_in_place().is_ok());
     });
 
     println!("publish's relocation + stamp waits for command_lock: {publish}");

@@ -358,8 +358,8 @@ impl AppState {
             ),
         )
         .map_err(|e| dto_for_error(client::spec::DELETE_PROJECT.category, &e))?;
-        // Now local-only: drop the persisted link + reopen the edit gate (reuses the
-        // shared unlink path so it can't drift from the menu Unlink action).
-        self.speleodb_unlink()
+        // Now local-only: drop the persisted link + reopen the edit gate, in place
+        // (the project stays open where it is; see `speleodb_unlink_in_place`).
+        self.speleodb_unlink_in_place()
     }
 }

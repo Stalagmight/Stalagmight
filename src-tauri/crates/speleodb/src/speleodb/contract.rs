@@ -263,10 +263,12 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
             project_id,
             local_path,
             last_edit_at,
+            unlinked,
         } => Some(UnpushedLocalEdits {
             project_id: project_id.clone(),
             local_path: local_path.clone(),
             last_edit_at: last_edit_at.clone(),
+            unlinked: *unlinked,
         }),
         _ => None,
     };

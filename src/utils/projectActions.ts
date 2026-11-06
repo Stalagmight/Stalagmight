@@ -18,8 +18,6 @@ import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { needsSpeleoHandBackPrompt } from './quit';
 import { saveFailureOf, surfaceSaveFailure } from './saveFeedback';
-import i18n from '../i18n';
-import { invokeIpc } from './ipc';
 import {
   ensureExtension,
   projectSaveFilters,
@@ -27,7 +25,8 @@ import {
   PROJECT_EXTENSION,
 } from './fileDialogs';
 import { extractFilename } from './path';
-import { resolveSavePath, saveTargetPresence } from './overwriteGuard';
+import { saveTargetPresence } from './overwriteGuard';
+import { chooseUnlinkDestination, unlinkOpenProjectTo } from './speleoUnlink';
 import type { CommandOutcome } from '../store/commandResult';
 import type { SaveOutcome } from '../types/ipc/SaveOutcome';
 
@@ -128,78 +127,31 @@ export async function saveProjectAs(opts?: {
  * plain unmanaged `.stalx` at a path they pick (#204 - the shared action behind
  * the no-permission prompt (10) and the divergence "keep my copy" path (11)).
  *
- * Order is the data-safety argument:
+ * [#576 FZ-SDB-5-D1/D2] The copy MOVES out of the SpeleoDB cache:
  *
- * 1. Save first. On a linked project an explicit destination writes a detached
- *    UNLINKED copy (`unlinked_copy_path`; the session stays on the managed
- *    file). The copy carries the survey data, settings and undo history - the
- *    user's work is durable at `finalPath` before anything is given up. If the
- *    dialog is cancelled or the save fails, NOTHING has changed.
- * 2. Only then `speleodb_unlink`: the ABANDONING lock release + gate reset for
- *    the open (managed) project. Its link-row delete lands on the cache copy,
- *    which is the right end state - an abandoned cache file is plain debris the
- *    next pull replaces, instead of a linked-and-dirty leftover that nags the
- *    next Open-from-SpeleoDB.
- * 3. Load the copy, so the session actually lands on the file the user chose
- *    (the save no longer relocates it there).
+ * 1. Ask where, with a Save As that starts in the default projects folder with the
+ *    project name filled in, then the overwrite ask for a rewritten name (D35).
+ *    Cancelling either changes NOTHING and calls nothing.
+ * 2. `speleodb_unlink` writes the unlinked copy there, closes the backend session
+ *    on the cache file, deletes the cache file and releases a held lock
+ *    best-effort. On any error nothing has changed.
+ * 3. Re-seed the link, tell what the copy went without, and load the copy: the
+ *    backend session is closed, so the session lands on it only through this load
+ *    (`unlinkOpenProjectTo`).
  *
  * Returns true once converted; the caller keys only on the boolean.
  */
 export async function convertToUnmanagedStalx(): Promise<boolean> {
   const { openDialog } = useUIStore.getState();
-  let finalPath: string;
-  let wroteDetachedCopy: boolean;
+  let destination: string | null;
   try {
-    const selected = await saveDialog({ filters: projectSaveFilters() });
-    if (!selected) return false;
-    // [#576 D35] The copy lands on the NORMALISED name, which the OS overwrite
-    // prompt never saw when it differs from the answer - and the backend's
-    // copy-only branch renames over whatever is there. Ask first; declining
-    // changes nothing, like a cancelled picker.
-    const resolved = await resolveSavePath(selected, PROJECT_EXTENSION);
-    if (!resolved) return false;
-    finalPath = resolved;
-    const result = await useProjectStore.getState().saveProject(finalPath);
-    if (!result || !result.success) {
-      surfaceSaveFailure(result, openDialog, useProjectStore.getState());
-      return false;
-    }
-    wroteDetachedCopy = Boolean(result.unlinked_copy_path);
+    destination = await chooseUnlinkDestination(useProjectStore.getState().project?.name ?? '');
   } catch (e) {
     surfaceSaveFailure(saveFailureOf(e, 'Failed to save a local copy'), openDialog, useProjectStore.getState(), {
       skipIntegrityRouting: true,
     });
     return false;
   }
-
-  // The project turned out not to be linked: the save was an ordinary Save As
-  // that already relocated the session to finalPath, and there is nothing to
-  // detach. Degenerate, but keep the old contract for it.
-  if (!wroteDetachedCopy) {
-    await useSpeleoStore.getState().refreshLinkStatus();
-    return true;
-  }
-
-  // The copy is safe on disk - now drop the SpeleoDB link and re-seed the shell as
-  // a plain local project (link_status returns is_remote:false → link cleared). The
-  // unlink can still reject (e.g. a poisoned database lock); guard it so it can't
-  // escape as an unhandled rejection that leaves the dialog open while the project is
-  // silently still SpeleoDB-linked though the user was told it converted (fix 6).
-  try {
-    await invokeIpc('speleodb_unlink');
-  } catch (e) {
-    surfaceSaveFailure(
-      saveFailureOf(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
-      openDialog,
-      useProjectStore.getState(),
-      { skipIntegrityRouting: true, title: i18n.t('dialogs.saveFailure.detachTitle') },
-    );
-    return false;
-  }
-  await useSpeleoStore.getState().refreshLinkStatus();
-  // Land the session on the file the user chose. A failed load surfaces its own
-  // error through loadProject; the conversion itself already happened, so still
-  // report success (the copy exists and the project is detached).
-  await useProjectStore.getState().loadProject(finalPath);
-  return true;
+  if (!destination) return false;
+  return unlinkOpenProjectTo(destination);
 }

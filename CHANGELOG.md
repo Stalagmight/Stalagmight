@@ -27,6 +27,12 @@ Update this file every time a new version is tagged.
 - **A GPX track with a repeated point imports** - a GPS standing still logs the same point again, and each repeat became a zero-length shot that made the whole track fail to import. A point at the same position and elevation as the one before it is now skipped, and the import receipt counts them ("N repeated GPS points skipped").
 - **A negative Compass LRUD reads as missing** - Compass marks an unmeasured passage dimension with a negative number, but only `-1` and below were read that way, so a marker that went through a unit conversion (`-0.30`, -1 ft written in metres) imported as a negative passage dimension and was then flagged by validation. Any negative LRUD now reads as not measured, as in Walls.
 
+### Fixed
+
+#### SpeleoDB
+
+- **Convert to a local file no longer leaves the project in the SpeleoDB cache** - "Convert to a local file" (no-access prompt) and "Save my version as an unmanaged file" (divergence prompt) now ask where to save, starting in your projects folder with the project name filled in; Cancel changes nothing. The copy is written there unlinked, with its survey, settings and undo history, the cache copy is removed, the recent-projects entry and the open session follow the new path, and a held write lock is handed back. A destination inside the SpeleoDB cache is refused. Before, the link-less file stayed at the cache path and the next Open of the same project from SpeleoDB silently replaced it, local edits included. A link-less file found at a cache path (left by an earlier Unlink) now stops that Open with the "Changes on this computer are not on SpeleoDB" prompt: keeping the local copy asks where to save it and moves it out of the cache, taking the server copy discards it as before. Delete project (admin) still unlinks the open copy in place. ([#576](https://github.com/Stalagmight/Stalagmight/issues/576))
+
 ## [0.5.0] - 2026-08-13
 
 The first release with builds for all three platforms. The headline additions are

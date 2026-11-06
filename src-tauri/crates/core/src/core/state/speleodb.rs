@@ -2201,20 +2201,24 @@ impl AppState {
             .ok_or(SpeleoDbError::NoRemoteProject)
     }
 
-    /// Convert the open managed project into a plain, unmanaged `.stalx` (T2/#204):
+    /// Convert the open managed project into a plain, unmanaged `.stalx` IN PLACE:
     /// drop its `speleo_link` row so it is no longer tied to SpeleoDB, then open the
-    /// edit gate. Two callers reach this: (10) a project the server refused us access
-    /// to (`access_denied`), and (11) keeping locally-edited work after a divergence
-    /// by saving it elsewhere. Nothing is pushed - the SpeleoDB copy is abandoned (a
-    /// fresh Open-from-SpeleoDB re-pulls the server tip), so the managed side stays
-    /// clean. No-op-safe: a `None` delete over an absent row is fine.
+    /// edit gate. Nothing is pushed. No-op-safe: a `None` delete over an absent row
+    /// is fine.
+    ///
+    /// [#576 FZ-SDB-5] Not the Unlink any more: Unlink MOVES the copy out of the
+    /// cache (`speleodb_unlink`, in `speleodb_unlink.rs`), because a link-less file
+    /// left at the cache path was replaced by the next Open from SpeleoDB, local
+    /// edits and all. The one caller left is `speleodb_delete_project`, after the
+    /// server project is gone; the copy it leaves in the cache is a link-less
+    /// `.stalx` the download guard now refuses to replace (FZ-SDB-5-D3).
     ///
     /// A held write lock IS released first (best-effort, mirroring logout - the lock
     /// needs the token, so before we drop the link): abandoning the project while
     /// still holding its server mutex would strand it locked for every other editor.
     /// Unlike logout the token is kept - the user stays signed in, they just walk
     /// away from this one project.
-    pub fn speleodb_unlink(&self) -> Result<(), SpeleoErrorDto> {
+    pub(super) fn speleodb_unlink_in_place(&self) -> Result<(), SpeleoErrorDto> {
         // Release the server lock if this is a held remote edit session, so we don't
         // leave it stranded. Best-effort: an offline / no-access release just no-ops.
         // The ABANDONING variant: un-pushed edits do not veto this release the way
@@ -3351,13 +3355,13 @@ mod tests {
     fn replace_cache_stalx_closes_preserves_and_swaps_atomically() {
         // The chokepoint every download-replace goes through: preserve the local
         // view toggles, drop the live handle to the destination, then swap in the
-        // downloaded copy via temp+rename.
+        // downloaded copy via temp+rename. The destination is a clean managed copy
+        // of the project: a link-less file there is refused (#576 FZ-SDB-5-D3).
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("cache.stalx");
+        seed_linked_stalx(&dest, GUARD_ID, false);
         {
-            let mut db = Database::open(&dest).expect("open local cache");
-            db.save_project(&Project::new("Cache".to_owned(), None))
-                .expect("save project");
+            let db = Database::open(&dest).expect("open local cache");
             db.save_display_setting("grid", "off").expect("save grid");
         }
 
@@ -3508,6 +3512,7 @@ mod tests {
                 project_id,
                 local_path,
                 last_edit_at,
+                unlinked: false,
             } => Some((project_id, local_path, last_edit_at)),
             _ => None,
         };
@@ -3534,6 +3539,7 @@ mod tests {
             project_id: GUARD_ID.to_owned(),
             local_path: "/cache/speleodb/p/project.stalx".to_owned(),
             last_edit_at: Some("2026-07-26T09:00:00Z".to_owned()),
+            unlinked: false,
         });
         assert_eq!(
             dto.action,
@@ -3553,9 +3559,8 @@ mod tests {
 
     #[test]
     fn guard_allows_a_clean_or_absent_local_copy() {
-        // No behaviour change when there is nothing to lose: a clean cached copy,
-        // an unmanaged `.stalx` with no link row, and a first pull into an empty
-        // cache all replace exactly as before.
+        // No behaviour change when there is nothing to lose: a clean cached copy and
+        // a first pull into an empty cache replace exactly as before.
         let temp = TempDir::new().expect("temp dir");
         let state = AppState::new().expect("state");
 
@@ -3563,14 +3568,56 @@ mod tests {
         seed_linked_stalx(&clean, GUARD_ID, false);
         assert!(state.guard_local_edits(GUARD_ID, &clean).is_ok());
 
-        let unlinked = temp.path().join("unlinked.stalx");
-        seed_stalx(&unlinked, "Unlinked");
-        assert!(state.guard_local_edits(GUARD_ID, &unlinked).is_ok());
-
         let missing = temp.path().join("not-pulled-yet.stalx");
         assert!(
             state.guard_local_edits(GUARD_ID, &missing).is_ok(),
             "a first pull has nothing to protect"
+        );
+    }
+
+    /// [#576 FZ-SDB-5-D3] A `.stalx` with no link row where the replace would land -
+    /// the copy an Unlink left in the cache before Unlink moved it out - is
+    /// possible un-pushed work: the guard refuses with the keep-local / take-remote
+    /// refusal, flagged `unlinked` so keep-local moves it out of the cache. It used
+    /// to read as clean and be replaced without a word, edits and all.
+    #[test]
+    fn guard_refuses_an_unlinked_copy_at_the_destination() {
+        let temp = TempDir::new().expect("temp dir");
+        let state = AppState::new().expect("state");
+        let unlinked = temp.path().join("unlinked.stalx");
+        seed_stalx(&unlinked, "Unlinked");
+
+        let err = state
+            .guard_local_edits(GUARD_ID, &unlinked)
+            .expect_err("an unlinked copy must not be replaced without asking");
+        let seen = match &err {
+            SpeleoDbError::WouldDiscardLocalEdits {
+                project_id,
+                local_path,
+                unlinked,
+                ..
+            } => Some((project_id.clone(), local_path.clone(), *unlinked)),
+            _ => None,
+        };
+        println!("[FZ-SDB-5-D3] guard over an unlinked copy -> {err:?}");
+        assert_eq!(
+            seen,
+            Some((
+                GUARD_ID.to_owned(),
+                unlinked.to_string_lossy().into_owned(),
+                true
+            )),
+            "the keep-local / take-remote refusal, naming the copy and flagged unlinked"
+        );
+        let dto = local_dto(err);
+        assert_eq!(
+            dto.unpushed_local.map(|p| p.unlinked),
+            Some(true),
+            "the flag crosses IPC"
+        );
+        assert!(
+            unlinked.exists(),
+            "the guard writes nothing: the copy is still there"
         );
     }
 
@@ -4395,7 +4442,7 @@ mod tests {
                     }
                 }
                 drop(listener);
-                state.speleodb_unlink().expect("unlink mid-flight");
+                state.speleodb_unlink_in_place().expect("unlink mid-flight");
                 let body = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote"}"#;
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
@@ -9181,6 +9228,7 @@ mod tests {
             project_id: REMOTE_ID.to_owned(),
             local_path: "/cache/project.stalx".to_owned(),
             last_edit_at: None,
+            unlinked: false,
         };
         let corrupt = SpeleoDbError::Parse("not a zip".to_owned());
         let cases = [

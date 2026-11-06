@@ -207,6 +207,9 @@ pub enum SpeleoDbError {
         project_id: String,
         local_path: String,
         last_edit_at: Option<String>,
+        /// [#576 FZ-SDB-5-D3] The copy at `local_path` has no SpeleoDB link (an
+        /// Unlink from before Unlink moved the copy out of the cache).
+        unlinked: bool,
     },
 }
 

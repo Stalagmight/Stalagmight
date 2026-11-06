@@ -85,19 +85,24 @@ enum LocalRead {
     /// The file EXISTS but could not be read, so nothing is known about it - in
     /// particular NOT that it is free of un-pushed edits.
     Unreadable,
+    /// [#576 FZ-SDB-5-D3] A readable `.stalx` with NO link row. At a cache path that
+    /// is what an Unlink left behind before Unlink moved its copy out of the cache:
+    /// a plain local project the user may have kept editing. The listing has
+    /// nothing to act on for it; the guard refuses to replace it.
+    Unlinked,
 }
 
 /// Read one cached `.stalx`'s SpeleoDB link state, read-only and best-effort.
 ///
 /// A missing file is `Known` (there is nothing on disk to lose); an unlinked one is
-/// `Known` too (a `.stalx` in the cache that is not a managed project has nothing
-/// to push). Only a file that is present and unreadable is `Unreadable`.
+/// `Unlinked` (nothing to push, but maybe work to keep). Only a file that is
+/// present and unreadable is `Unreadable`.
 fn read_local_state_at(path: &Path) -> LocalRead {
     let link = match Database::open_for_metadata(path).and_then(|db| db.load_speleo_link()) {
         Ok(Some(link)) => link,
         // No link row: a `.stalx` sitting in the cache that is not a managed
-        // project. Nothing to report, and nothing to push.
-        Ok(None) => return LocalRead::Known(SpeleoLocalProjectState::default()),
+        // project. Nothing to push, but not nothing to lose (#576 FZ-SDB-5-D3).
+        Ok(None) => return LocalRead::Unlinked,
         Err(e) => {
             // `try_exists` rather than `exists`: an Err there (a permission denial
             // on a parent component) is itself "cannot tell", and must not be
@@ -149,6 +154,7 @@ fn unknown_local_state() -> SpeleoLocalProjectState {
 fn local_state_at(path: &Path) -> SpeleoLocalProjectState {
     match read_local_state_at(path) {
         LocalRead::Known(state) => state,
+        LocalRead::Unlinked => SpeleoLocalProjectState::default(),
         LocalRead::Unreadable => unknown_local_state(),
     }
 }
@@ -228,6 +234,9 @@ impl AppState {
             });
         let on_disk = match read {
             LocalRead::Known(state) => state,
+            // Nothing un-pushed in it; whether it may be replaced is
+            // `unlinked_copy_at`'s question, asked by the guard.
+            LocalRead::Unlinked => SpeleoLocalProjectState::default(),
             LocalRead::Unreadable => {
                 // Nothing readable and nothing entitled to stand in for it: genuinely
                 // unknown, so the guard fails closed.
@@ -251,6 +260,23 @@ impl AppState {
             is_open: true,
             state_unknown: false,
         })
+    }
+
+    /// [#576 FZ-SDB-5-D3] Whether `dest` holds a readable `.stalx` with NO SpeleoDB
+    /// link, which the open project's live link does not speak for: the copy an
+    /// Unlink left at the cache path before Unlink moved its copy out. The guard in
+    /// front of a download-replace refuses over it, because nothing can say whether
+    /// the user kept working in it.
+    pub(super) fn unlinked_copy_at(&self, project_id: &str, dest: &Path) -> bool {
+        let live_speaks = self
+            .speleodb_open_link()
+            .ok()
+            .filter(|l| l.project_id == project_id)
+            .is_some_and(|_| {
+                self.open_project_path()
+                    .is_some_and(|open| super::project_io::same_file(&open, dest))
+            });
+        !live_speaks && matches!(read_local_state_at(dest), LocalRead::Unlinked)
     }
 
     /// [`Self::speleodb_local_project_states`] against an explicit cache root

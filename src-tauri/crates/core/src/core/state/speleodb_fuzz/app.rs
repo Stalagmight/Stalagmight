@@ -323,17 +323,14 @@ impl App {
             }
             Act::Unlink => {
                 let held = self.held_here();
-                match self.state.speleodb_unlink() {
-                    Ok(()) => {
-                        out.note("unlink -> Ok");
-                        out.claims.push(Claim::LinkDropped);
-                        // Unlink hands a held lock back best-effort (it abandons the link,
-                        // so nothing could release it from this copy again).
-                        if let Some(project_id) = held {
-                            out.claims.push(Claim::LockReleaseBestEffort { project_id });
-                        }
+                // [#576 FZ-SDB-5] Unlink moves the copy out of the cache, to the path
+                // the Save As answered; the frontend then loads it.
+                if self.unlink_to_a_copy("unlink", out) {
+                    // Unlink hands a held lock back best-effort (it abandons the link,
+                    // so nothing could release it from this copy again).
+                    if let Some(project_id) = held {
+                        out.claims.push(Claim::LockReleaseBestEffort { project_id });
                     }
-                    Err(e) => out.refused("unlink", &e),
                 }
             }
             Act::SaveLocalCopy => self.save_local_copy(out),
@@ -930,28 +927,34 @@ impl App {
         self.restart();
     }
 
+    /// [#576 FZ-SDB-5] The keep-my-copy flows (no access, divergence): the same
+    /// move out of the cache as Unlink, since the copy the user picks IS the move.
     fn save_local_copy(&mut self, out: &mut Outcome) {
+        self.unlink_to_a_copy("save_local_copy", out);
+    }
+
+    /// Unlink to the next copy path and load it, as the frontend does after its Save
+    /// As. Returns whether the unlink answered Ok.
+    fn unlink_to_a_copy(&mut self, what: &str, out: &mut Outcome) -> bool {
         if self.open_path().is_none() {
-            out.note("save_local_copy: nothing open");
-            return;
+            out.note(format!("{what}: nothing open"));
+            return false;
         }
         self.copies += 1;
         let path = self.copies_dir.join(format!("copy-{}.stalx", self.copies));
-        let r = self.state.execute(Command::SaveProject {
-            path: Some(path.clone()),
-        });
-        if !r.success {
-            out.note(format!("save_as -> refused {:?} {:?}", r.code, r.error));
-            return;
-        }
-        self.unsaved = false;
-        match self.state.speleodb_unlink() {
-            Ok(()) => {
-                out.note("save_as + unlink -> Ok");
+        match self.state.speleodb_unlink(path.clone()) {
+            Ok(_) => {
+                out.note(format!("{what}: unlink to a copy -> Ok"));
                 out.claims.push(Claim::LinkDropped);
+                // The copy holds everything the session held; the session is closed.
+                self.unsaved = false;
                 self.load(&path, out);
+                true
             }
-            Err(e) => out.refused("unlink", &e),
+            Err(e) => {
+                out.refused("unlink", &e);
+                false
+            }
         }
     }
 
