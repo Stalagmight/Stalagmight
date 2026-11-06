@@ -272,17 +272,7 @@ impl App {
             Act::Restore { back, discard } => self.revision(*back, true, *discard, out),
             Act::Unwind => self.unwind(out),
             Act::Rewind => self.rewind(out),
-            Act::Poll => match self.state.speleodb_link_status() {
-                Ok(s) => out.note(format!(
-                    "link_status -> remote={} edit={} dirty={} state={:?} holder={:?}",
-                    s.is_remote,
-                    s.edit_enabled,
-                    s.has_unpushed_edits,
-                    s.remote_state,
-                    s.lock_holder
-                )),
-                Err(e) => out.refused("link_status", &e),
-            },
+            Act::Poll => self.poll(out),
             Act::ReleaseCurrentLock => {
                 let pid = self.open_link().map(|l| l.project_id);
                 match self.state.speleodb_release_current_lock() {
@@ -355,18 +345,32 @@ impl App {
         }
     }
 
-    /// The frontend's full load after an open: a no-op when that file is already
-    /// the open project (the backend answers `ALREADY_OPEN`, which the frontend
-    /// treats as success and swaps the tree in place).
+    /// The status poll (`speleodb_link_status`, the frontend's `refreshLinkStatus`).
+    fn poll(&self, out: &mut Outcome) {
+        match self.state.speleodb_link_status() {
+            Ok(s) => out.note(format!(
+                "link_status -> remote={} edit={} dirty={} state={:?} holder={:?}",
+                s.is_remote, s.edit_enabled, s.has_unpushed_edits, s.remote_state, s.lock_holder
+            )),
+            Err(e) => out.refused("link_status", &e),
+        }
+    }
+
+    /// The frontend's full load after an open (`projectStore.ts` `loadProject`): no
+    /// tree is fetched when that file is already the open project (the backend
+    /// answers `ALREADY_OPEN`, which the frontend treats as success and swaps the
+    /// tree in place). Both branches end in `refreshLinkStatus`, the status poll.
     fn load(&mut self, path: &Path, out: &mut Outcome) {
         if self.open_path().as_deref() == Some(path) {
             out.note("load -> already open (in-place swap)");
+            self.poll(out);
             return;
         }
         match self.state.do_load_project_full(path.to_path_buf()) {
             Ok(_) => {
                 self.unsaved = false;
                 out.note(format!("load {} -> Ok", short(path)));
+                self.poll(out);
             }
             Err(e) => {
                 out.refusals.push(Refusal {
