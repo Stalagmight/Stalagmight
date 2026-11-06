@@ -56,6 +56,13 @@ mod compass_import_tests;
 mod expected_project_tests;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point (moved out of \
+              command_tests.rs unchanged)"
+)]
+mod export_command_tests;
+#[cfg(test)]
+#[expect(
     clippy::print_stdout,
     reason = "test module: the printed values are the evidence a run captures"
 )]

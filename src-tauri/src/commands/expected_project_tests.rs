@@ -93,7 +93,7 @@ fn an_undo_for_another_project_is_refused_through_the_command() {
     assert_eq!(code(&undo), Some(CommandErrorCode::ProjectChanged));
     assert_eq!(section_names(&app), ["ToUndo"], "nothing was undone");
     assert!(run(history::undo(h(&app), made_for(&app))).is_ok());
-    assert!(section_names(&app).is_empty());
+    assert_eq!(section_names(&app), Vec::<String>::new(), "the undo ran");
 }
 
 #[test]
