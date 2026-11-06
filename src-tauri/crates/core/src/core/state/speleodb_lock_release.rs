@@ -86,6 +86,34 @@ pub(super) struct LockReleaseParams {
     pub(super) project_id: String,
 }
 
+/// [#576 FZ-SDB-6-D1] What re-reading the holder says after a lock verb failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AfterLockVerb {
+    /// The server answered the verb (a 4xx, a refusal, no session): it did not
+    /// happen, and there is nothing to re-read.
+    Answered,
+    /// The reply may have been lost, and the re-read says the lock is this
+    /// account's.
+    Ours,
+    /// The reply may have been lost, and the re-read says the lock is free (`None`)
+    /// or another account's.
+    NotOurs(Option<String>),
+    /// The reply may have been lost and the re-read failed too (offline, server
+    /// down). The caller keeps what it has; the next successful poll reconciles.
+    Unknown,
+}
+
+/// Whether `err` can hide a reply the server applied: the connection failed or
+/// timed out after the request may have gone out, the body was unreadable, or a
+/// server or gateway error (5xx) stood in for the answer.
+pub(super) fn reply_may_be_lost(err: &SpeleoDbError) -> bool {
+    match err {
+        SpeleoDbError::Transport { .. } | SpeleoDbError::Parse(_) => true,
+        SpeleoDbError::Status { status, .. } => *status >= 500,
+        _ => false,
+    }
+}
+
 /// Whether a release may proceed over un-pushed local edits.
 ///
 /// The same distinction [`super::speleodb_cache::LocalEditsPolicy`] draws for a
@@ -257,6 +285,48 @@ impl AppState {
             insecure_http: self.speleodb_insecure_http(),
             project_id: link.project_id,
         })
+    }
+
+    /// [#576 FZ-SDB-6-D1] After a lock verb (a release, Done's release, an acquire)
+    /// failed, re-read who holds `project_id`'s lock AT ONCE when the reply may have
+    /// been lost - the server can have applied the verb and lost only the answer, and
+    /// the app's gate and claim must follow what the server did, not what the reply
+    /// said. A failure the server answered is [`AfterLockVerb::Answered`], with no
+    /// second request.
+    ///
+    /// The caller decides from the answer: a successful re-read is authoritative
+    /// (gone or someone else's: edit mode closes; ours right after our own acquire:
+    /// the claim is recorded), and a failed one keeps edit mode and the claim as
+    /// they are, for the next successful status poll to reconcile.
+    pub(super) fn speleodb_reread_after_lock_verb(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        project_id: &str,
+        err: &SpeleoDbError,
+    ) -> AfterLockVerb {
+        if !reply_may_be_lost(err) {
+            return AfterLockVerb::Answered;
+        }
+        let me = self.speleodb.lock().email.clone();
+        match self.speleodb_lock_holder_checked(endpoint, token, insecure_http, project_id) {
+            Ok(holder) if super::speleodb::lock_held_by_me(holder.as_deref(), me.as_deref()) => {
+                AfterLockVerb::Ours
+            }
+            Ok(holder) => AfterLockVerb::NotOurs(holder),
+            Err(reread) => {
+                tracing::info!(
+                    project_id,
+                    error = %err,
+                    reread = %reread,
+                    purpose = "re-read the lock holder after a lost reply (#576 FZ-SDB-6)",
+                    "speleodb: the lock verb's reply was lost and the holder could not be \
+                     re-read; keeping the edit session as it is until the next poll"
+                );
+                AfterLockVerb::Unknown
+            }
+        }
     }
 
     /// Record that the OPEN project's lock is being held past this close ON

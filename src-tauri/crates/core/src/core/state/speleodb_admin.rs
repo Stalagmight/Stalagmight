@@ -11,6 +11,7 @@
 //! survey `.stalx`).
 
 use super::speleodb::validate_project_id;
+use super::speleodb_lock_release::AfterLockVerb;
 use super::AppState;
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
@@ -315,11 +316,39 @@ impl AppState {
     /// closed and reopened.
     pub fn speleodb_release_current_lock(&self) -> Result<(), SpeleoErrorDto> {
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
-        self.speleodb_handle_auth(
+        if let Err(e) = self.speleodb_handle_auth(
             client::spec::RELEASE.category,
             client::release_lock(&endpoint, &token, insecure_http, &link.project_id),
-        )
-        .map_err(|e| dto_for_error(client::spec::RELEASE.category, &e))?;
+        ) {
+            // [#576 FZ-SDB-6-D1] A lost reply: the server may have released it anyway,
+            // so ask who holds it now. Free, or another account's while we were
+            // editing under our own lock: the release landed, and the gate follows
+            // below exactly as on a confirmed release. Still ours, the server
+            // answered, or the re-read failed: the release is reported as failed,
+            // and the gate and claim stay for a retry (or the next poll).
+            let was_ours = self.edit_enabled()
+                && !self.force_editing()
+                && self
+                    .speleodb_open_link()
+                    .is_ok_and(|open| open.project_id == link.project_id);
+            match self.speleodb_reread_after_lock_verb(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link.project_id,
+                &e,
+            ) {
+                AfterLockVerb::NotOurs(None) => {}
+                AfterLockVerb::NotOurs(Some(_)) if was_ours => {}
+                _ => return Err(dto_for_error(client::spec::RELEASE.category, &e)),
+            }
+            tracing::info!(
+                project_id = %link.project_id,
+                error = %e,
+                purpose = "follow a release whose reply was lost (#576 FZ-SDB-6)",
+                "speleodb release: the reply was lost, but the lock is no longer ours"
+            );
+        }
         if self.edit_enabled()
             && !self.force_editing()
             && self

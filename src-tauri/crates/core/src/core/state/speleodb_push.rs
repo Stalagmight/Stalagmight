@@ -491,11 +491,34 @@ impl AppState {
                 // read-only. Drop the edit gate only after a confirmed release -
                 // if release fails the lock is still held, so a retry of Done
                 // (now a no-op push, dirty already cleared) re-attempts it.
-                self.speleodb_handle_auth(
+                if let Err(e) = self.speleodb_handle_auth(
                     Endpoint::Release,
                     client::release_lock(&endpoint, &token, insecure_http, &link.project_id),
-                )
-                .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+                ) {
+                    // [#576 FZ-SDB-6-D1] A lost reply: re-read the holder at once. Not
+                    // ours any more: the release landed, so Done finishes as Released.
+                    // Still ours, answered, or unreadable: keep editing and the claim
+                    // so a retry of Done re-attempts it (the next poll reconciles).
+                    match self.speleodb_reread_after_lock_verb(
+                        &endpoint,
+                        &token,
+                        insecure_http,
+                        &link.project_id,
+                        &e,
+                    ) {
+                        super::speleodb_lock_release::AfterLockVerb::NotOurs(holder) => {
+                            tracing::info!(
+                                project_id = %link.project_id,
+                                error = %e,
+                                holder = ?holder,
+                                purpose = "follow a release whose reply was lost (#576 FZ-SDB-6)",
+                                "speleodb done: the release reply was lost, but the lock \
+                                 is no longer ours"
+                            );
+                        }
+                        _ => return Err(dto_for_error(Endpoint::Release, &e)),
+                    }
+                }
                 self.set_edit_enabled(false);
                 // The lock this process took is back with the server; the edit session
                 // it licensed is over. This project's claim, not the account's whole

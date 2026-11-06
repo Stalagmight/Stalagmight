@@ -2011,7 +2011,29 @@ impl AppState {
                     &link.project_id,
                 ));
             }
-            Err(e) => return Err(dto_for_error(Endpoint::Acquire, &e)),
+            // [#576 FZ-SDB-6-D1] A lost reply: re-read the holder at once. Ours right
+            // after our own acquire means the acquire landed, so Start Editing goes on
+            // as if the reply had arrived, and the probe's verdict decides the claim
+            // exactly as on an answered acquire (taken here: recorded; inherited:
+            // not). Anything else stays the failed acquire.
+            Err(e) => {
+                if self.speleodb_reread_after_lock_verb(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &link.project_id,
+                    &e,
+                ) != super::speleodb_lock_release::AfterLockVerb::Ours
+                {
+                    return Err(dto_for_error(Endpoint::Acquire, &e));
+                }
+                tracing::info!(
+                    project_id = %link.project_id,
+                    error = %e,
+                    purpose = "follow an acquire whose reply was lost (#576 FZ-SDB-6)",
+                    "speleodb start editing: the acquire reply was lost, but the lock is ours"
+                );
+            }
         }
 
         // We hold the lock. Resolve the true HEAD from the revision topology and

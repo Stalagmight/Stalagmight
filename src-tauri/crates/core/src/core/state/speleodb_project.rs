@@ -415,11 +415,38 @@ impl AppState {
         //    dirty remote project and the user completes the upload via the normal Start
         //    editing → Done (which surfaces a genuine push error, in context, if any).
         let mut pre_push_lost = Vec::new();
-        match self.speleodb_handle_auth(
+        let acquired = match self.speleodb_handle_auth(
             Endpoint::Acquire,
             client::acquire_lock(&endpoint, &token, insecure_http, &project_id),
         ) {
-            Ok(_) => {
+            Ok(_) => Ok(()),
+            // [#576 FZ-SDB-6-D1] A lost reply: re-read the holder at once. Ours right
+            // after our own acquire means the acquire landed, so the claim is
+            // recorded and the initial push goes ahead as if the reply had arrived
+            // (its release hands the lock back). Anything else stays the failed
+            // acquire below.
+            Err(e) => match self.speleodb_reread_after_lock_verb(
+                &endpoint,
+                &token,
+                insecure_http,
+                &project_id,
+                &e,
+            ) {
+                super::speleodb_lock_release::AfterLockVerb::Ours => {
+                    tracing::info!(
+                        project_id = %project_id,
+                        error = %e,
+                        purpose = "follow an acquire whose reply was lost (#576 FZ-SDB-6)",
+                        "speleodb_publish: the acquire reply was lost, but the lock is ours"
+                    );
+                    self.speleodb_note_lock_acquired(Some(&project_id));
+                    Ok(())
+                }
+                _ => Err(e),
+            },
+        };
+        match acquired {
+            Ok(()) => {
                 let upload = self.speleodb_upload(
                     &endpoint,
                     &token,
