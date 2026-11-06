@@ -155,6 +155,10 @@ mod fuzz_undo_tests;
               captures"
 )]
 mod geometry_query_tests;
+// [#576 FZ-PARSE-5-D1] an import that computes a station at infinity is refused.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod import_finite_positions_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod import_pipeline_tests;

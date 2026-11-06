@@ -1329,6 +1329,50 @@ impl AppState {
             }
         }
 
+        // [#576 FZ-PARSE-5-D1] The backstop for a reading no importer bounds:
+        // finite readings can still add up to a station position that is not
+        // finite (two lengths near f64::MAX), which every shot-level finiteness
+        // check above accepts. Refuse the import whole, naming the section,
+        // rather than land a station at infinity. Only the imported sections
+        // are checked, so a project that already held such a station does not
+        // block every later import.
+        let non_finite_section = {
+            let imported: HashSet<SectionId> = all_section_ids.iter().copied().collect();
+            let proj_guard = self.project.lock();
+            proj_guard.as_ref().and_then(|project| {
+                project
+                    .compute_station_coordinates()
+                    .into_iter()
+                    .find(|station| {
+                        let c = &station.coordinates;
+                        imported.contains(&station.station_ref.section_id)
+                            && !(c.x.is_finite() && c.y.is_finite() && c.z.is_finite())
+                    })
+                    .map(|station| station.station_ref.section_id)
+            })
+        };
+        if let Some(section_id) = non_finite_section {
+            let name = sections
+                .iter()
+                .find(|config| created_ids.get(&config.section_index) == Some(&section_id))
+                .and_then(|config| config.name.as_deref())
+                .map_or_else(
+                    || "unnamed".to_string(),
+                    |n| crate::models::sanitize_display_text(n, 64),
+                );
+            self.rollback_project(&before_snapshot);
+            tracing::warn!(
+                section_id,
+                purpose = "refuse non-finite station positions",
+                "Import would place a station at a non-finite position; rolled back"
+            );
+            return CommandResult::failure(format!(
+                "Import refused: section \"{name}\" places a station at a position that is not \
+                 finite (a reading in the file is too large to compute with). Nothing was \
+                 imported."
+            ));
+        }
+
         // [#576 A4] The shared forward epilogue: the frame check and the reconcile of
         // derived offsets, then - inside `record` - the corruption check, the
         // entrance-elevation merge, the after-snapshot and one undo entry covering
