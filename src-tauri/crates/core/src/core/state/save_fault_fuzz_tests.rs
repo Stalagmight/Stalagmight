@@ -955,8 +955,10 @@ const GATE_SEEDS: std::ops::RangeInclusive<u32> = 1..=24;
 /// uuid-keyed ignore at a stale position), 27349 (FZ-PERSIST-2: an unsaved shot's
 /// ignore moved to another shot by a reverse and back), 35039 (FZ-PERSIST-3: a
 /// 0.04 degree north-reference change opened a merge by 4 mm, under the
-/// reconcile's 1 cm gate, and the reopen closed it).
-const REGRESSION_SEEDS: &[u32] = &[196, 285, 6268, 27349, 35039];
+/// reconcile's 1 cm gate, and the reopen closed it), 3121675 (W27: a reverse
+/// could not move a position-keyed ignore onto the slot a uuid-keyed one of the
+/// same code was leaving, and the save gave it the other shot's uuid).
+const REGRESSION_SEEDS: &[u32] = &[196, 285, 6268, 27349, 35039, 3121675];
 
 #[test]
 fn save_fault_fuzz_gate() {

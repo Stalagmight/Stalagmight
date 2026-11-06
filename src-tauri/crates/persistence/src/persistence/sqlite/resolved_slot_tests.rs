@@ -246,3 +246,48 @@ fn uuid_keyed_ignores_move_with_their_shots_out_of_the_way() {
         ]
     );
 }
+
+/// [#576 W27] (fault sweep seed 3121675) A reverse moves a position-keyed ignore
+/// onto the slot a uuid-keyed ignore of the same code is leaving. The uuid-keyed
+/// row used to stay in that slot, so the move failed whole, the position-keyed
+/// row stayed at an id that now names the other shot, and the next save gave it
+/// that shot's uuid - replacing that shot's own ignore and losing its own.
+#[test]
+fn a_reverse_moves_a_position_keyed_ignore_onto_the_slot_a_uuid_keyed_one_leaves() {
+    let db = database_with_one_section();
+    let at = |shot_id: u32, shot_uuid: Option<&str>, comment: &str| ResolvedWarning {
+        shot_id,
+        ..ignore(shot_uuid, comment)
+    };
+    // Shot B (on disk) holds id 1, shot A (not saved yet) id 3.
+    db.save_resolved_warning(&at(1, Some("uuid-b"), "B's"))
+        .unwrap();
+    db.save_resolved_warning(&at(3, None, "A's")).unwrap();
+
+    // The reverse puts A at id 1 and B at id 3.
+    let after = HashMap::from([((0, 1), "uuid-a".to_owned()), ((0, 3), "uuid-b".to_owned())]);
+    let moved = db.rekey_position_resolved_warnings(&[(0, 1, 3), (0, 3, 1)], &after);
+
+    let mut rows: Vec<(u32, Option<String>, String)> = db
+        .load_resolved_warnings()
+        .unwrap()
+        .into_iter()
+        .map(|r| {
+            (
+                r.shot_id,
+                r.shot_uuid,
+                r.resolved_comment.unwrap_or_default(),
+            )
+        })
+        .collect();
+    rows.sort();
+    assert!(moved.is_ok(), "the move failed: {moved:?}, rows {rows:?}");
+    assert_eq!(
+        rows,
+        vec![
+            (1, None, "A's".to_owned()),
+            (3, Some("uuid-b".to_owned()), "B's".to_owned())
+        ],
+        "each ignore is at the id its shot holds after the reverse"
+    );
+}
