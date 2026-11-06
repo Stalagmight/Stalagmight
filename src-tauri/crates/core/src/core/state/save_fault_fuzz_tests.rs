@@ -619,11 +619,17 @@ fn check_kill(
 /// The CI seed list. Seeds that ever failed are added here as regressions.
 const GATE_SEEDS: std::ops::RangeInclusive<u32> = 1..=24;
 
+/// Seeds the sweep once failed on, kept as regressions: 196 (display settings a
+/// save could not keep are gone for the session too), 285 (a kill leaves an
+/// ignore for a shot that only existed in memory), 6268 (a kill leaves a
+/// uuid-keyed ignore at a stale position).
+const REGRESSION_SEEDS: &[u32] = &[196, 285, 6268];
+
 #[test]
 fn save_fault_fuzz_gate() {
     let _config = isolated_config();
     let mut problems = Vec::new();
-    for seed in GATE_SEEDS {
+    for seed in GATE_SEEDS.chain(REGRESSION_SEEDS.iter().copied()) {
         problems.extend(run_seed(seed).0);
     }
     assert!(

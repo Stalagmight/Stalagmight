@@ -664,12 +664,19 @@ pub(super) fn observe_state(state: &AppState) -> Observed {
 }
 
 /// What a file's side tables hold, read the way the app reads them, and the
-/// ignore rows that name no shot of the file ("dead" rows, one line each).
+/// IRREGULAR ignore rows, one line each.
 ///
-/// A dead row is what an Ignore leaves in the open file for a shot that exists
-/// only in memory (created since the last save, its ignore keyed by position):
-/// a file a save COMPLETED never holds one (`carry_resolved_warnings` drops
-/// them), but a file a kill interrupted can, and the next save drops it.
+/// An ignore is matched the way `compute_project_warnings` matches it: a
+/// uuid-keyed row by `(section, uuid)`, wherever that shot now is; a legacy
+/// position-keyed row by `(section, shot id)`. A row is irregular when it names
+/// no shot of the file (a position row for a shot that only ever existed in
+/// memory, a uuid row for a deleted shot), or when a uuid row's stored position
+/// is not where its shot is: the open file is written with the session's shot
+/// ids, which drift from the file's positions after an insert and a save. A file
+/// a save COMPLETED holds none (`carry_resolved_warnings` re-keys and drops);
+/// a file a kill interrupted can, the guarded upsert (`save_resolved_warning`)
+/// keeps a stale slot from overwriting another shot's ignore, and the next save
+/// re-keys or drops them.
 pub(super) fn side_tables_of(state: &AppState) -> Result<(SideModel, Vec<String>), String> {
     let display = state
         .load_display_settings()
@@ -683,28 +690,27 @@ pub(super) fn side_tables_of(state: &AppState) -> Result<(SideModel, Vec<String>
         .load_resolved_warnings()
         .map_err(|e| format!("ignores unreadable: {e}"))?
     {
-        // The shot at the row's saved position; a uuid on the row must agree.
-        let at_position = project
-            .sections
-            .iter()
-            .find(|s| s.id == row.section_id)
+        let section = project.sections.iter().find(|s| s.id == row.section_id);
+        let at_position = section
             .and_then(|s| s.shots.iter().find(|sh| sh.id == row.shot_id))
             .and_then(|sh| sh.uuid.clone());
-        let uuid = match (&row.shot_uuid, at_position) {
-            (Some(stored), Some(found)) if *stored == found => found,
-            (None, None) => {
-                dead.push(format!(
-                    "{} on section {} shot {}",
-                    row.warning_code, row.section_id, row.shot_id
-                ));
-                continue;
+        let in_section = |uuid: &str| {
+            section.is_some_and(|s| s.shots.iter().any(|sh| sh.uuid.as_deref() == Some(uuid)))
+        };
+        let described = format!(
+            "{} on section {} shot {} (row uuid {:?}, shot there {at_position:?})",
+            row.warning_code, row.section_id, row.shot_id, row.shot_uuid
+        );
+        let uuid = match (row.shot_uuid, at_position) {
+            (Some(stored), Some(found)) if stored == found => found,
+            (Some(stored), _) if in_section(&stored) => {
+                dead.push(format!("stale position: {described}"));
+                stored
             }
-            (stored, found) => {
-                return Err(format!(
-                    "ignore {} on section {} shot {} does not name its shot: row uuid {stored:?}, \
-                     shot there {found:?}",
-                    row.warning_code, row.section_id, row.shot_id
-                ))
+            (None, Some(found)) => found,
+            (Some(_) | None, _) => {
+                dead.push(format!("names no shot: {described}"));
+                continue;
             }
         };
         if ignores
@@ -806,7 +812,7 @@ pub(super) fn check_file(path: &Path, expected: &Observed, model: &SideModel) ->
         Ok((sides, dead)) => {
             if !dead.is_empty() {
                 problems.push(format!(
-                    "a completed save left ignore rows that name no shot: {dead:?}"
+                    "a completed save left irregular ignore rows: {dead:?}"
                 ));
             }
             if sides.display != model.display {
