@@ -1385,21 +1385,31 @@ impl Database {
         if has_table == 0 {
             return Ok(None);
         }
+        // Read by reference [#576 FZ-PARSE-2]: rusqlite's conversion to an owned
+        // `Value` panics on TEXT that is not UTF-8, and a file can hold such
+        // bytes. Text that is not UTF-8 is a malformed value like any other.
         let value = self
             .conn
             .query_row(
                 "SELECT value FROM project_settings WHERE key = ?1",
                 [key],
-                |row| row.get::<_, rusqlite::types::Value>(0),
+                |row| {
+                    Ok(match row.get_ref(0)? {
+                        rusqlite::types::ValueRef::Text(bytes) => std::str::from_utf8(bytes)
+                            .map(str::to_string)
+                            .map_err(|_| "text that is not UTF-8".to_string()),
+                        other => Err(other.data_type().to_string()),
+                    })
+                },
             )
             .optional()?;
         Ok(match value {
             None => None,
-            Some(rusqlite::types::Value::Text(text)) => Some(text),
-            Some(other) => {
+            Some(Ok(text)) => Some(text),
+            Some(Err(found)) => {
                 tracing::warn!(
                     key,
-                    value_type = %other.data_type(),
+                    value_type = %found,
                     "stored project setting is not text; reading it as not set"
                 );
                 None
