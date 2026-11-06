@@ -30,6 +30,7 @@ import {
   suggestiveDmpSpec,
 } from './surveyFileSpecs';
 import { dmpFileBytes, endOfSectionBytes, escapeXmlText, writeTmluXml } from './surveyFileWriters';
+import { seedWindow } from './seedWindow';
 
 /**
  * A local copy of `scenarios/framework.ts`'s `mulberry32`.
@@ -67,7 +68,8 @@ function countSections(bytes: readonly number[], version: number): number {
   return found;
 }
 
-const SEEDS = Array.from({ length: 120 }, (_unused, index) => index + 1);
+/** 1..120, or the window the STALAGMIGHT_VITEST_SEED_* knobs ask for (seedWindow.ts). */
+const SEEDS = seedWindow(1, 120);
 
 describe('randomDmpSpec (valid)', () => {
   it('never lets a shot record terminate its own section', () => {

@@ -19,9 +19,11 @@
  *
  * Seeds: every file runs a FIXED seed list in CI - its regression seeds first,
  * then `1..STALAGMIGHT_DETERMINISM_RUNS` (default {@link DEFAULT_DETERMINISM_RUNS}).
- * Raise the env knob for a long run, e.g.
+ * Raise the env knob for a long run, and move the window's first seed with
+ * `STALAGMIGHT_DETERMINISM_FIRST` (default 1) to roll it over fresh seeds, e.g.
  *
  *     STALAGMIGHT_DETERMINISM_RUNS=2000 pnpm exec vitest run determinism
+ *     STALAGMIGHT_DETERMINISM_FIRST=10001 STALAGMIGHT_DETERMINISM_RUNS=2000 pnpm exec vitest run determinism
  *
  * A failure message always starts with `seed=<n>` and names the first differing
  * path / byte, so it is a repro on its own. All data here is synthetic.
@@ -39,6 +41,8 @@ import { GlyphAtlas, SDF_BUFFER, type RasterizedGlyph } from '../components/Map/
 export const DETERMINISM_RUNS_ENV = 'STALAGMIGHT_DETERMINISM_RUNS';
 /** Seeds per file when the knob is unset - small enough for the CI vitest job. */
 export const DEFAULT_DETERMINISM_RUNS = 8;
+/** Env knob: the first generated seed (default 1), so a long run can roll its window. */
+export const DETERMINISM_FIRST_ENV = 'STALAGMIGHT_DETERMINISM_FIRST';
 
 /** A seeded PRNG in [0, 1) (mulberry32). Same seed, same sequence, everywhere. */
 export function mulberry32(seed: number): () => number {
@@ -72,13 +76,24 @@ export function determinismRuns(): number {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_DETERMINISM_RUNS;
 }
 
+/** The first generated seed `STALAGMIGHT_DETERMINISM_FIRST` asks for (default 1). */
+export function determinismFirst(): number {
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+  const raw = env?.[DETERMINISM_FIRST_ENV];
+  if (raw === undefined || raw === '') return 1;
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n < 0) throw new Error(`${DETERMINISM_FIRST_ENV}=${raw}: expected an integer >= 0`);
+  return n;
+}
+
 /** The fixed seed list: regression seeds first (a seed that once failed stays in
- *  the CI set), then `1..determinismRuns()`. */
+ *  the CI set), then `determinismRuns()` seeds from `determinismFirst()`. */
 export function determinismSeeds(regressionSeeds: readonly number[] = []): number[] {
   const out = [...regressionSeeds];
   const seen = new Set(out);
+  const first = determinismFirst();
   const runs = determinismRuns();
-  for (let s = 1; s <= runs; s++) if (!seen.has(s)) out.push(s);
+  for (let s = first; s < first + runs; s++) if (!seen.has(s)) out.push(s);
   return out;
 }
 

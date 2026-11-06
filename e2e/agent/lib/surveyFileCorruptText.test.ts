@@ -35,6 +35,7 @@ import {
   randomSurveyFileSpec,
   renderSurveyFiles,
 } from './surveyFileSpecs';
+import { seedWindow } from './seedWindow';
 
 /** `scenarios/framework.ts`'s `mulberry32`, copied for the same reason as elsewhere. */
 function mulberry32(seed: number): Rng {
@@ -48,7 +49,8 @@ function mulberry32(seed: number): Rng {
   };
 }
 
-const SEEDS = Array.from({ length: 260 }, (_unused, index) => index + 1);
+/** 1..260, or the window the STALAGMIGHT_VITEST_SEED_* knobs ask for (seedWindow.ts). */
+const SEEDS = seedWindow(1, 260);
 
 const TEXT_FORMATS: readonly SurveyFileFormat[] = ['dat', 'mak', 'srv', 'wpj', 'gpx'];
 

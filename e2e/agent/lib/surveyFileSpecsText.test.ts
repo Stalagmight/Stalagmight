@@ -50,6 +50,7 @@ import {
   writeWallsSrv,
   writeWallsWpj,
 } from './surveyFileWritersText';
+import { seedWindow } from './seedWindow';
 
 /** `scenarios/framework.ts`'s `mulberry32`, copied for the same reason it is in `surveyFileSpecs.test.ts`. */
 function mulberry32(seed: number): Rng {
@@ -63,7 +64,8 @@ function mulberry32(seed: number): Rng {
   };
 }
 
-const SEEDS = Array.from({ length: 220 }, (_unused, index) => index + 1);
+/** 1..220, or the window the STALAGMIGHT_VITEST_SEED_* knobs ask for (seedWindow.ts). */
+const SEEDS = seedWindow(1, 220);
 
 // ---------------------------------------------------------------------------
 // Mirrors

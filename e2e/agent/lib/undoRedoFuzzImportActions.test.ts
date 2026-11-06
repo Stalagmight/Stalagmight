@@ -40,6 +40,7 @@ import {
   weightedNamesFor,
   type FuzzAction,
 } from '../scenarios/undoRedoFuzzActions';
+import { seedWindow } from './seedWindow';
 
 /** Enough of a `ScenarioContext` for a generator, and nothing more. */
 function stubContext(seed: number): ScenarioContext {
@@ -79,10 +80,11 @@ const DIGEST: TargetingDigest = {
   c: [7],
 };
 
-/** Every action the group can build over a spread of seeds. */
+/** Every action the group can build over a spread of seeds (1..`seeds`, or the
+ *  window the STALAGMIGHT_VITEST_SEED_* knobs ask for). */
 function drawAll(seeds: number): FuzzAction[] {
   const out: FuzzAction[] = [];
-  for (let seed = 1; seed <= seeds; seed++) {
+  for (const seed of seedWindow(1, seeds)) {
     for (const generator of IMPORT_ACTION_GENERATORS) {
       const action = generator.build(stubContext(seed * 7919 + 13), DIGEST);
       if (action) out.push(action);

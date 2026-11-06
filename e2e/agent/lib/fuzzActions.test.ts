@@ -9,6 +9,7 @@ import {
   type TargetingDigest,
 } from '../scenarios/undoRedoFuzzActions';
 import type { ScenarioContext } from '../scenarios/framework';
+import { seedWindow } from './seedWindow';
 
 /** A deterministic ScenarioContext stub: only the draw surface is exercised. */
 function fakeCtx(seed: number): ScenarioContext {
@@ -52,7 +53,7 @@ describe('buildBatch', () => {
       'merge_stations',
     ]);
 
-    for (let seed = 1; seed <= 40; seed++) {
+    for (const seed of seedWindow(1, 40)) {
       const batch = buildBatch(fakeCtx(seed), digest);
       if (!batch) continue;
       expect(batch.commands.length).toBeGreaterThanOrEqual(1);
@@ -68,7 +69,7 @@ describe('buildBatch', () => {
 
   it('sometimes poisons the LAST sub-command to exercise batch rollback', () => {
     let poisoned = 0;
-    for (let seed = 1; seed <= 60; seed++) {
+    for (const seed of seedWindow(1, 60)) {
       const batch = buildBatch(fakeCtx(seed), digest);
       if (batch?.label.endsWith('POISON')) {
         poisoned += 1;
@@ -85,7 +86,7 @@ describe('buildBatch', () => {
     const empty: TargetingDigest = { s: [], st: [], m: [], z: [], c: [] };
 
     // No sections and no stations: every sub-command generator declines.
-    for (let seed = 1; seed <= 10; seed++) {
+    for (const seed of seedWindow(1, 10)) {
       const batch = buildBatch(fakeCtx(seed), empty);
       if (batch) expect(batch.commands.length).toBeGreaterThan(0);
     }

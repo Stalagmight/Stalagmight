@@ -520,7 +520,34 @@ does too. CI runs the regression seeds plus 8 generated ones per file:
 
 ```bash
 STALAGMIGHT_DETERMINISM_RUNS=2000 pnpm exec vitest run determinism
+STALAGMIGHT_DETERMINISM_FIRST=10001 STALAGMIGHT_DETERMINISM_RUNS=2000 \
+  pnpm exec vitest run determinism
 ```
+
+### Seed-range knobs (vitest)
+
+Every seeded vitest suite takes a first seed and a count from the environment,
+so a long run (the fuzz farm) can roll a window over fresh seeds. Unset, each
+runs exactly the seeds it always did; pinned regression seeds and traces run
+either way.
+
+| Suite | First seed | Count | Default |
+|-------|------------|-------|---------|
+| Renderer differential (`src/components/Map/__tests__/rendererIncrementalDifferential.test.ts`) | `RENDER_DIFF_FIRST` | `RENDER_DIFF_SEEDS` (`RENDER_DIFF_STEPS` steps each) | 1..32 + regression seeds |
+| Interleaving fuzzer (`src/store/__tests__/interleave.fuzz.test.ts`, `-t "fixed seeds"`) | `FZ_INT_SEED_START` | `FZ_INT_SEEDS` | 1..100 + the FZ-FZ-INT-3 seeds |
+| `*.determinism.test.ts` (`src/test/determinism.ts`) | `STALAGMIGHT_DETERMINISM_FIRST` | `STALAGMIGHT_DETERMINISM_RUNS` | regression seeds + 1..8 |
+| Harness property suites (`e2e/agent/lib/surveyFileSpecs.test.ts`, `surveyFileSpecsText.test.ts`, `surveyFileCorruptText.test.ts`, `fuzzActions.test.ts`, `undoRedoFuzzImportActions.test.ts`) and the custom renderer's colour fast path (`customRender.test.ts`) | `STALAGMIGHT_VITEST_SEED_FIRST` | `STALAGMIGHT_VITEST_SEED_COUNT` | each loop's own range |
+
+```bash
+STALAGMIGHT_VITEST_SEED_FIRST=50001 STALAGMIGHT_VITEST_SEED_COUNT=500 \
+  pnpm exec vitest run e2e/agent/lib/surveyFileSpecs.test.ts
+```
+
+The last row's knobs (`seedWindow` in `src/test/seedWindow.ts` and
+`e2e/agent/lib/seedWindow.ts`) move every seeded loop in those files to the
+same window; a check of the generator's pool (which swarm profiles exist) keeps
+its own seeds. A knob that is not an integer (or a count below 1) fails the
+file instead of running no seeds.
 
 The real-app replay mode for the agent-harness fuzzers is in
 [Agent Harness](agent-harness.md) (`STALAGMIGHT_FUZZ_DETERMINISM`).

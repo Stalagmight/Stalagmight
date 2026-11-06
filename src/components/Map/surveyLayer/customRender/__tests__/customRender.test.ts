@@ -31,6 +31,7 @@ import {
 } from '../../../../../types/survey-data';
 import { lngLatToMercator } from '../../mercatorCoords';
 import { metersToMapCoords } from '../../../../../utils/coordinates';
+import { seedWindow } from '../../../../../test/seedWindow';
 
 /**
  * Minimal fixture: two sections.
@@ -1037,7 +1038,7 @@ describe('color-only fast path (recomputeLine/CircleColors byte-identity)', () =
   }
 
   it('recomputeLineColors rewrites colorFrom/colorTo to a full-rebuild byte-for-byte', () => {
-    for (let seed = 1; seed <= 40; seed++) {
+    for (const seed of seedWindow(1, 40)) {
       const rng = mulberry32(seed);
       const d = randomSurvey(rng);
       const lookup = buildStationLookup(d);
@@ -1067,7 +1068,7 @@ describe('color-only fast path (recomputeLine/CircleColors byte-identity)', () =
   });
 
   it('recomputeCircleColors rewrites fill/stroke to a full-rebuild byte-for-byte', () => {
-    for (let seed = 101; seed <= 140; seed++) {
+    for (const seed of seedWindow(101, 40)) {
       const rng = mulberry32(seed);
       const d = randomSurvey(rng);
       const rel = projectStationsRel(d, null, 0, 0);
