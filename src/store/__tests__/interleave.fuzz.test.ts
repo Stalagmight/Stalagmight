@@ -215,6 +215,26 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
     found: 'edit-lost',
     actions: 'load("/caves/CaveA.stalx") run(0.000) run(0.000) run(0.000) edit(16)',
   },
+  {
+    // A superseded load's cancel cleared the loading state of a load still running (its
+    // own, or the next one's): the UI took the project as open, the user changed a
+    // display setting, and the load's commit then put its older snapshot on screen
+    // over it. Found by the 20-min campaign once the switch shapes were on (W22).
+    id: 'FZ-W22-SUPERSEDED-LOADING',
+    found: 'display-shown',
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) close fault(0.000) grid ' +
+      'load("/caves/CaveB.stalx") reloadConfig run(0.663) fault(0.000) grid close run(0.525) panel(305) ' +
+      'refresh run(0.132) exec(0.497) run(0.000) refresh run(0.774) load("/caves/CaveB.stalx") geom',
+  },
+  {
+    id: 'FZ-W22-SUPERSEDED-LOADING-grid',
+    found: 'display-shown',
+    actions:
+      'load("/caves/CaveA.stalx") load("/caves/CaveA copy.stalx") run(0.000) run(0.604) run(0.856) ' +
+      'fault(0.000) run(0.747) load("/caves/CaveB.stalx") run(0.506) run(0.350) run(0.968) exec(0.000) ' +
+      'refresh run(0.000) reloadConfig toggleGrid toggleGrid run(0.588) toggleGrid',
+  },
 ];
 
 /**

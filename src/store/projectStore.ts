@@ -1212,7 +1212,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         }
         // [#576 FZ-FZ-INT-1] A newer switch was requested (and cancelled this load): its
         // failure is about a file nobody is opening now. The newer one owns the action source.
-        if (turn.superseded) return { success: false, superseded: true };
+        // The loading state is still this load's (the newer switch waits for it): end it here.
+        if (turn.superseded) {
+          if (get().loading.clientOpId === clientOpId) get().resetLoading();
+          return { success: false, superseded: true };
+        }
 
         // Handle a permission denial - folder-access guidance, not a corruption/error.
         // Checked before CORRUPT so a denial doesn't masquerade as corruption.
@@ -1266,7 +1270,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }, {
       dedupKey: path,
       dropped: () => ({ success: false, superseded: true }),
-      onSuperseded: () => void get().cancelLoading(), // stop the backend's work at once
+      // Stop the backend's work at once, but leave the loading state to this load's own
+      // ending: its answer may still commit, and the reset arrived after a newer load had
+      // started, or while this one still ran, showing a project open with no load running.
+      onSuperseded: () =>
+        void invokeIpc('cancel_loading', undefined, { purpose: 'cancel project loading' }).catch(() => undefined),
       flushDisplayWrites: true, // [#576 FZ-FZ-INT-6]
     }),
 
