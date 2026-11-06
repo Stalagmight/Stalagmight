@@ -242,7 +242,7 @@ export const ALL_SHAPES: RunOptions = {
 
 /** What CI runs: every shape except those of the open findings. */
 export const KNOWN_OPEN_EXCLUDED: RunOptions = {
-  overlapSwitches: false,
+  overlapSwitches: true,
   saveAcrossSwitch: true,
   gasFieldPatches: true,
   crossSessionDisplay: false,

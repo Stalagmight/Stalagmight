@@ -180,7 +180,7 @@ export class BackendModel {
         if (this.activeLoad) this.activeLoad.cancelled = true;
         return { early: ok(null) };
       case 'load_project_full_binary': {
-        // project_load.rs:389-400: ALREADY_OPEN, then start_new_load, before the file is read.
+        // project_load.rs:397-409: ALREADY_OPEN, then start_new_load, before the file is read.
         const path = String(args?.path);
         if (this.open && this.open.filePath === path) return { early: err('ALREADY_OPEN', 'already open') };
         return { token: this.startLoad() };
@@ -315,7 +315,8 @@ export class BackendModel {
   }
 
   private load(path: string, token: LoadToken): Outcome {
-    // project_load.rs:1015-1021: re-checked under command_lock before the commit.
+    // project_load.rs:1033-1039: re-checked under command_lock before the commit
+    // (and again at :1080, which this atomic model cannot tell apart).
     if (token.cancelled) {
       this.finishLoad(token);
       return err('CANCELLED', 'Loading cancelled');
@@ -323,6 +324,9 @@ export class BackendModel {
     this.finishLoad(token);
     const file = this.files.get(path);
     if (!file) return err('NOT_FOUND', `no such file: ${path}`);
+    // project_load.rs:1044-1060: "already open" once more under command_lock - a load
+    // of this file that started earlier can have committed since this one was sent.
+    if (this.open && this.open.filePath === path) return err('ALREADY_OPEN', 'Project already open');
     const content = cloneContent(file.content);
     this.commitGen({
       gen: 0,

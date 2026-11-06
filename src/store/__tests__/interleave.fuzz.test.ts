@@ -146,6 +146,15 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
       'run(0.000) geom',
   },
   {
+    // Load A, load B while A is in flight, load A again: the backend applied A's
+    // ALREADY_OPEN before B's load, the store kept A and dropped B's answer, the
+    // backend had B open.
+    id: 'FZ-FZ-INT-1',
+    found: 'state',
+    options: { overlapSwitches: true },
+    actions: 'load("/caves/CaveA.stalx") run(0.000) exec(0.000) load("/caves/CaveB.stalx") load("/caves/CaveA.stalx")',
+  },
+  {
     // A Save As of CaveA issued while a reload of it was in flight: its answer
     // re-pointed the reloaded session at the Save As file.
     id: 'FZ-FZ-INT-4',

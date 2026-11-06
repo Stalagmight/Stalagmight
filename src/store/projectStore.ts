@@ -465,13 +465,6 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   ) => Promise<PlacementSuggestion[]>;
 }
 
-/**
- * Tracks in-flight `loadProject(path)` calls so concurrent requests for the
- * same path share one execution. Each entry is removed when the underlying
- * promise settles. See loadProject for rationale.
- */
-const inFlightLoads = new Map<string, Promise<{ success: boolean }>>();
-
 // The rule lives in `projectIssue.ts`; re-exported for the callers that always imported it from here.
 export { projectSwitched } from './projectIssue';
 
@@ -961,24 +954,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // features in two workers, even though all but the last result are
   // discarded by the clientOpId race check. The thrown-away allocations
   // churn JSC's bmalloc slabs and leave committed (but unused) memory
-  // behind. The dedup map ensures the heavy path runs exactly once.
-  loadProject: (path: string) => {
-    const existing = inFlightLoads.get(path);
-    if (existing) return existing;
-
-    // Drop in-flight entries for OTHER paths: this load is about to
-    // call `cancelLoading()` which will bump the clientOpId, dooming
-    // any in-flight load for a different path to return
-    // `{success: false}` from its clientOpId check.  If we kept those
-    // entries around, a user re-click for one of those paths would
-    // receive the now-doomed promise instead of starting a fresh load.
-    // The same-path entry below would have short-circuited above; this
-    // only clears stale ones.
-    for (const key of [...inFlightLoads.keys()]) {
-      if (key !== path) inFlightLoads.delete(key);
-    }
-
-    const promise: Promise<LoadProjectOutcome> = runProjectSwitch(async (turn) => {
+  // behind. The dedup (`dedupKey`) ensures the heavy path runs exactly once.
+  //
+  // [#576 FZ-FZ-INT-1] A load is a switch: it waits for the previous one's answer,
+  // and one still waiting when a newer switch is requested is dropped (SUPERSEDED).
+  loadProject: (path: string) =>
+    runProjectSwitch<LoadProjectOutcome>(async (turn) => {
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
@@ -1154,7 +1135,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             { purpose: 'resolve unreadable shot kinds' }
           );
           const st = get();
-          if (st.project !== null && st.loading.clientOpId === clientOpId && found.length > 0) {
+          if (st.project !== null && st.loading.clientOpId === clientOpId && !turn.superseded && found.length > 0) {
             useUIStore.getState().openDialog('unrecognised-shot-kind', { shots: found });
           }
         } catch {
@@ -1180,6 +1161,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           if (get().loading.clientOpId !== clientOpId) {
             clearProjectActionSource();
             return { success: false, superseded: true };
+          }
+          // [#576 RVF-a-2] The backend has `path` open, but the store may not show it: the
+          // backend re-checks "already open" at its commit, after a load of `path` whose
+          // answer was not applied. Read what the backend has, as a new session.
+          if (get().project?.file_path !== path) {
+            noteProjectSessionChanged();
+            await get().refreshProjectState();
           }
           // #270 (hardening): resolve the edit gate SYNCHRONOUSLY when nothing has
           // resolved it, mirroring the success path's `syncProjectLink` before the
@@ -1216,6 +1204,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           void speleoState()?.refreshLinkStatus();
           return { success: true };
         }
+        // [#576 FZ-FZ-INT-1] A newer switch was requested (and cancelled this load): its
+        // failure is about a file nobody is opening now. The newer one owns the action source.
+        if (turn.superseded) return { success: false, superseded: true };
 
         // Handle a permission denial - folder-access guidance, not a corruption/error.
         // Checked before CORRUPT so a denial doesn't masquerade as corruption.
@@ -1266,14 +1257,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         clearProjectActionSource();
         return { success: false };
       }
-    });
-
-    inFlightLoads.set(path, promise);
-    void promise.finally(() => {
-      if (inFlightLoads.get(path) === promise) inFlightLoads.delete(path);
-    });
-    return promise;
-  },
+    }, {
+      dedupKey: path,
+      dropped: () => ({ success: false, superseded: true }),
+      onSuperseded: () => void get().cancelLoading(), // stop the backend's work at once
+    }),
 
   // Project operations - uses consolidated create_project_full command
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) =>
@@ -1390,12 +1378,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // mis-attribute a later, unrelated project command. Mirrors loadProject.
       clearProjectActionSource();
       const message = getErrorMessage(e);
-      if (get().loading.clientOpId === clientOpId) {
+      // [#576 FZ-FZ-INT-1] Not when a newer switch is waiting: nobody is creating this one now.
+      if (get().loading.clientOpId === clientOpId && !turn.superseded) {
         get().setLoadingError(message, commandErrorOf(e)?.details);
       }
       return emptyCommandResult(false, message);
     }
-    }),
+    }, { dropped: () => emptyCommandResult(false, 'Cancelled') }), // the superseded create's answer
 
   // [#576 FZ-FZ-INT-4] Refused while a project switch is under way, else tracked until it
   // settles, so a switch requested meanwhile waits for it (`switchGate.ts`).
@@ -1614,6 +1603,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       } finally {
         set({ isClosing: false });
       }
+    }, {
+      // [#576 FZ-FZ-INT-1] Dropped for a newer switch (latest wins): refused like a second close.
+      dropped: () => {
+        set({ isClosing: false });
+        return refusedLocally('Already closing');
+      },
     });
   },
 
