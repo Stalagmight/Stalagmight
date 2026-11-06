@@ -839,20 +839,43 @@ fn filled_elevations(points: &[(f64, f64, Option<f64>)]) -> (Vec<f64>, usize) {
     (elevations, filled)
 }
 
-/// Convert GPS point pairs into virtual `ShotData`, and say how many points
-/// had their elevation filled in ([`filled_elevations`]).
+/// What one track segment's or route's points convert to.
+struct PointShots {
+    shots: Vec<ShotData>,
+    /// Kept points whose missing elevation was filled in
+    /// ([`filled_elevations`]).
+    filled: usize,
+    /// Points dropped because they repeat the point before them (#576
+    /// FZ-PARSE-1).
+    repeated: usize,
+    /// The station each input point became: a repeated point is the station
+    /// of the point it repeats. Placements name stations by point index (the
+    /// placement dialog lists points), so they are renumbered through this.
+    station_of: Vec<u32>,
+}
+
+/// Convert GPS point pairs into virtual `ShotData`.
 ///
 /// Elevation is converted to relative depth (first point = depth 0).
 /// Shot length is slope distance incorporating elevation change.
 ///
+/// A point at the same position and elevation as the one before it (a GPS
+/// standing still logs one every second) would make a zero-length shot, which
+/// the model cannot hold and the core refuses for the whole section. It is
+/// dropped and counted for the receipt instead (#576 FZ-PARSE-1-D1), the way
+/// the Walls importer handles a degenerate leg.
+///
 /// When `depth_inverted` is false (default): lower elevation = deeper (surface GPS tracks).
 /// When `depth_inverted` is true: higher elevation = deeper (elevation stores positive depth).
-fn shots_from_points(
-    points: &[(f64, f64, Option<f64>)],
-    depth_inverted: bool,
-) -> (Vec<ShotData>, usize) {
+fn shots_from_points(points: &[(f64, f64, Option<f64>)], depth_inverted: bool) -> PointShots {
+    let mut out = PointShots {
+        shots: Vec::new(),
+        filled: 0,
+        repeated: 0,
+        station_of: vec![0; points.len()],
+    };
     if points.len() < 2 {
-        return (Vec::new(), 0);
+        return out;
     }
 
     // Depths relative to the first point's (filled) elevation.
@@ -868,35 +891,90 @@ fn shots_from_points(
             }
         })
         .collect();
+    // `filled_elevations` fills every point without an elevation, unless no
+    // point has one; only the kept ones are counted.
+    let was_filled = |i: usize| filled > 0 && points[i].2.is_none();
+    out.filled = usize::from(was_filled(0));
 
-    let shots = points
-        .windows(2)
-        .enumerate()
-        .map(|(i, pair)| {
-            let (lat1, lon1, _) = pair[0];
-            let (lat2, lon2, _) = pair[1];
+    // The last kept point: each shot runs from it to the next point.
+    let mut from = 0usize;
+    for to in 1..points.len() {
+        let (lat1, lon1, _) = points[from];
+        let (lat2, lon2, _) = points[to];
+        let horiz = haversine_distance(lat1, lon1, lat2, lon2);
+        let dz = depths[to] - depths[from];
+        let length = (horiz * horiz + dz * dz).sqrt();
+        if length == 0.0 {
+            out.repeated += 1;
+            out.station_of[to] = out.station_of[from];
+            continue;
+        }
+        let azimuth = initial_bearing(lat1, lon1, lat2, lon2);
+        out.shots.push(ShotData {
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            length,
+            depth_in: depths[from],
+            depth_out: depths[to],
+            // A GPS track is a surface trace, never a swum cave leg, so it
+            // seeds as Reference. The chain classifier can still promote it
+            // to a Jump if it turns out to bridge real survey on both ends
+            // (#27 q10).
+            kind: ShotKind::Reference,
+            ..Default::default()
+        });
+        out.station_of[to] = out.shots.len() as u32;
+        out.filled += usize::from(was_filled(to));
+        from = to;
+    }
+    out
+}
 
-            let horiz = haversine_distance(lat1, lon1, lat2, lon2);
-            let dz = depths[i + 1] - depths[i];
-            let length = (horiz * horiz + dz * dz).sqrt();
-            let azimuth = initial_bearing(lat1, lon1, lat2, lon2);
-
-            ShotData {
-                azimuth_in: azimuth,
-                azimuth_out: azimuth,
-                length,
-                depth_in: depths[i],
-                depth_out: depths[i + 1],
-                // A GPS track is a surface trace, never a swum cave leg, so it
-                // seeds as Reference. The chain classifier can still promote it
-                // to a Jump if it turns out to bridge real survey on both ends
-                // (#27 q10).
-                kind: ShotKind::Reference,
-                ..Default::default()
-            }
-        })
-        .collect();
-    (shots, filled)
+/// `placement` with its import-side station renumbered from a point index to
+/// the station that point became ([`PointShots::station_of`]). An index past
+/// the last point is left as it is, for the core to refuse as before.
+fn renumber_placement(placement: ImportPlacement, station_of: &[u32]) -> ImportPlacement {
+    let station = |i: u32| station_of.get(i as usize).copied().unwrap_or(i);
+    match placement {
+        ImportPlacement::Origin => ImportPlacement::Origin,
+        ImportPlacement::ZeroDatum {
+            coordinates,
+            station_index,
+        } => ImportPlacement::ZeroDatum {
+            coordinates,
+            station_index: station(station_index),
+        },
+        ImportPlacement::FromExisting {
+            import_station,
+            existing_station,
+        } => ImportPlacement::FromExisting {
+            import_station: station(import_station),
+            existing_station,
+        },
+        ImportPlacement::FromImporting {
+            import_station,
+            target_section_index,
+            target_station_index,
+        } => ImportPlacement::FromImporting {
+            import_station: station(import_station),
+            target_section_index,
+            target_station_index,
+        },
+        ImportPlacement::Manual {
+            align_station_index,
+            offset,
+        } => ImportPlacement::Manual {
+            align_station_index: station(align_station_index),
+            offset,
+        },
+        ImportPlacement::ManualSnap {
+            align_station_index,
+            snapped_to_station,
+        } => ImportPlacement::ManualSnap {
+            align_station_index: station(align_station_index),
+            snapped_to_station,
+        },
+    }
 }
 
 /// Convert waypoints into zero-datum import configs.
@@ -950,23 +1028,34 @@ pub fn waypoints_to_import_configs(
     Ok(configs)
 }
 
-/// Convert a track segment into an import config, with the number of points
-/// whose elevation was filled in.
-fn track_segment_to_config(
-    seg: &GpxTrackSegment,
+/// What converting one track segment or route reported for the receipt.
+#[derive(Default)]
+struct PointCounts {
+    /// Points whose elevation was filled in.
+    filled: usize,
+    /// Repeated points dropped (#576 FZ-PARSE-1).
+    repeated: usize,
+}
+
+/// Convert one track segment's or route's points into an import config,
+/// `None` when no shot is left (every point repeats the first), with what it
+/// counted for the receipt.
+fn points_to_config(
+    points: &[(f64, f64, Option<f64>)],
     section_index: u32,
     name: Option<String>,
     color: &str,
     placement: ImportPlacement,
     depth_inverted: bool,
-) -> (ImportSectionConfig, usize) {
-    let points: Vec<(f64, f64, Option<f64>)> = seg
-        .points
-        .iter()
-        .map(|p| (p.latitude, p.longitude, p.elevation))
-        .collect();
-    let (shots, filled) = shots_from_points(&points, depth_inverted);
-
+) -> (Option<ImportSectionConfig>, PointCounts) {
+    let converted = shots_from_points(points, depth_inverted);
+    let counts = PointCounts {
+        filled: converted.filled,
+        repeated: converted.repeated,
+    };
+    if converted.shots.is_empty() {
+        return (None, counts);
+    }
     let config = ImportSectionConfig {
         reverse: false,
         section_index,
@@ -976,45 +1065,59 @@ fn track_segment_to_config(
         color: color.to_string(),
         direction: None,
         quality: 1.0,
-        shots,
-        placement,
+        shots: converted.shots,
+        placement: renumber_placement(placement, &converted.station_of),
         station_comments: Vec::new(),
         azimuth_reference: Some(GPX_AZIMUTH_REFERENCE),
     };
-    (config, filled)
+    (Some(config), counts)
 }
 
-/// Convert a route into an import config, with the number of points whose
-/// elevation was filled in.
+/// Convert a track segment into an import config ([`points_to_config`]).
+fn track_segment_to_config(
+    seg: &GpxTrackSegment,
+    section_index: u32,
+    name: Option<String>,
+    color: &str,
+    placement: ImportPlacement,
+    depth_inverted: bool,
+) -> (Option<ImportSectionConfig>, PointCounts) {
+    let points: Vec<(f64, f64, Option<f64>)> = seg
+        .points
+        .iter()
+        .map(|p| (p.latitude, p.longitude, p.elevation))
+        .collect();
+    points_to_config(
+        &points,
+        section_index,
+        name,
+        color,
+        placement,
+        depth_inverted,
+    )
+}
+
+/// Convert a route into an import config ([`points_to_config`]).
 fn route_to_config(
     rte: &GpxRoute,
     section_index: u32,
     color: &str,
     placement: ImportPlacement,
     depth_inverted: bool,
-) -> (ImportSectionConfig, usize) {
+) -> (Option<ImportSectionConfig>, PointCounts) {
     let points: Vec<(f64, f64, Option<f64>)> = rte
         .points
         .iter()
         .map(|p| (p.latitude, p.longitude, p.elevation))
         .collect();
-    let (shots, filled) = shots_from_points(&points, depth_inverted);
-
-    let config = ImportSectionConfig {
-        reverse: false,
+    points_to_config(
+        &points,
         section_index,
-        name: rte.name.clone(),
-        surveyor: None,
-        date: None,
-        color: color.to_string(),
-        direction: None,
-        quality: 1.0,
-        shots,
+        rte.name.clone(),
+        color,
         placement,
-        station_comments: Vec::new(),
-        azimuth_reference: Some(GPX_AZIMUTH_REFERENCE),
-    };
-    (config, filled)
+        depth_inverted,
+    )
 }
 
 /// Convert a GPX file into import configs.
@@ -1027,7 +1130,8 @@ fn route_to_config(
 ///
 /// Returns the configs and the converter's warnings for the import receipt:
 /// one line counting the track/route points whose missing elevation was
-/// filled in (#576 B34), when there are any.
+/// filled in (#576 B34), and one counting the repeated points dropped (#576
+/// FZ-PARSE-1), when there are any.
 pub fn convert_gpx_to_import_configs(
     gpx: &GpxFile,
     import_waypoints: bool,
@@ -1038,7 +1142,7 @@ pub fn convert_gpx_to_import_configs(
 ) -> Result<(Vec<ImportSectionConfig>, Vec<String>)> {
     let mut configs = Vec::new();
     let mut section_index = 0u32;
-    let mut filled_points = 0usize;
+    let mut counted = PointCounts::default();
 
     // Waypoints → zero-datum sections
     if import_waypoints {
@@ -1070,7 +1174,7 @@ pub fn convert_gpx_to_import_configs(
                         }
                     })?;
 
-                let (config, filled) = track_segment_to_config(
+                let (config, counts) = track_segment_to_config(
                     seg,
                     section_index,
                     sec_name,
@@ -1078,8 +1182,9 @@ pub fn convert_gpx_to_import_configs(
                     placement,
                     depth_inverted,
                 );
-                configs.push(config);
-                filled_points += filled;
+                configs.extend(config);
+                counted.filled += counts.filled;
+                counted.repeated += counts.repeated;
                 section_index += 1;
             }
         }
@@ -1106,26 +1211,40 @@ pub fn convert_gpx_to_import_configs(
                     rte.name.clone()
                 })?;
 
-            let (config, filled) =
+            let (config, counts) =
                 route_to_config(rte, section_index, &color, placement, depth_inverted);
-            configs.push(config);
-            filled_points += filled;
+            configs.extend(config);
+            counted.filled += counts.filled;
+            counted.repeated += counts.repeated;
             section_index += 1;
         }
     }
 
-    let warnings = match filled_points {
-        0 => Vec::new(),
-        1 => vec![
+    let mut warnings = Vec::new();
+    match counted.filled {
+        0 => {}
+        1 => warnings.push(
             "1 GPS point had no elevation; it was filled in from the nearest points along \
              the track that have one."
                 .to_string(),
-        ],
-        n => vec![format!(
+        ),
+        n => warnings.push(format!(
             "{n} GPS points had no elevation; they were filled in from the nearest points \
              along the track that have one."
-        )],
-    };
+        )),
+    }
+    match counted.repeated {
+        0 => {}
+        1 => warnings.push(
+            "1 repeated GPS point skipped: it was at the same position and elevation as the \
+             point before it."
+                .to_string(),
+        ),
+        n => warnings.push(format!(
+            "{n} repeated GPS points skipped: each was at the same position and elevation as \
+             the point before it."
+        )),
+    }
     Ok((configs, warnings))
 }
 
@@ -1932,3 +2051,8 @@ mod tests {
         }
     }
 }
+
+// #576 FZ-PARSE-1: a point identical to the one before it is dropped.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout, clippy::panic)]
+mod repeated_point_tests;

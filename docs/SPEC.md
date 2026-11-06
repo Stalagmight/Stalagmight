@@ -2450,6 +2450,23 @@ section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out
 taped - and `0.0` always means a wall measured at zero, matching the empty
 CSV cell. A shot with no LRUD at all has no `lrud` key.
 
+
+### 17.4 Import Reading Rules
+
+What every survey importer does with a reading the model cannot hold. Each
+rule is reported where the user sees it: on the import dialog's preview
+before Import is pressed, or on the import receipt after.
+
+- **GPX repeated points.** A track or route point at the same position and
+  elevation as the point before it (a GPS standing still) is dropped, since it
+  would make a zero-length shot, and the receipt counts them in one line
+  ("N repeated GPS points skipped"). A station the placement step chose by
+  point index is renumbered past the dropped points. A track whose points all
+  repeat the first imports nothing.
+- **Compass LRUD.** Any negative passage dimension is the "not measured"
+  marker, not only `-1` and below, so a marker that went through a unit
+  conversion (`-0.30`) does not import as a negative dimension.
+
 ---
 
 ## 18. Technical Stack

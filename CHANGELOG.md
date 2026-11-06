@@ -23,6 +23,7 @@ Update this file every time a new version is tagged.
 
 #### Import
 
+- **A GPX track with a repeated point imports** - a GPS standing still logs the same point again, and each repeat became a zero-length shot that made the whole track fail to import. A point at the same position and elevation as the one before it is now skipped, and the import receipt counts them ("N repeated GPS points skipped").
 - **A negative Compass LRUD reads as missing** - Compass marks an unmeasured passage dimension with a negative number, but only `-1` and below were read that way, so a marker that went through a unit conversion (`-0.30`, -1 ft written in metres) imported as a negative passage dimension and was then flagged by validation. Any negative LRUD now reads as not measured, as in Walls.
 
 ## [0.5.0] - 2026-08-13

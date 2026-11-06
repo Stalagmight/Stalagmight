@@ -156,6 +156,28 @@ fn open_findings() {
     );
 }
 
+/// FZ-PARSE-1 (minimised from the gen_gpx sweep, where it refused about a
+/// fifth of well-formed files): a GPS standing still logs the same point
+/// twice. The repeat used to become a zero-length shot and the core refused
+/// the whole track; it is now dropped and the track imports.
+#[test]
+fn a_gpx_track_with_a_repeated_point_imports() {
+    let gpx = r#"<?xml version="1.0"?><gpx version="1.1"><trk><name>T</name><trkseg>
+        <trkpt lat="20.5" lon="-87.3"><ele>10</ele></trkpt>
+        <trkpt lat="20.5001" lon="-87.3"><ele>10</ele></trkpt>
+        <trkpt lat="20.5001" lon="-87.3"><ele>10</ele></trkpt>
+        </trkseg></trk></gpx>"#;
+    let files = FileSet::single(Format::Gpx.entry_name(), gpx.as_bytes().to_vec());
+    // Knobs 0: waypoints, tracks and routes all imported, depth not inverted.
+    let outcome = match oracle::run(Format::Gpx, &files, Knobs(0), Depth::Apply) {
+        Ok(outcome) => outcome,
+        Err(v) => panic!("violation: {v}"),
+    };
+    eprintln!("repeated GPX point: {outcome:?}");
+    assert!(outcome.applied, "the track must import: {outcome:?}");
+    assert_eq!(outcome.shots, 1, "3 points, 1 repeat: 1 shot");
+}
+
 macro_rules! seed_tests {
     ($($name:ident => $target:expr, $count:expr;)*) => {
         $(
