@@ -2262,6 +2262,12 @@ export default class SurveyLayer {
 
     // Rebuild the survey from cache so the custom renderer + labels + measured-path
     // tint (which embed theme colors) repaint with the new theme.
+    // [#576 FZ-ORACLE-R-1] Not when an update() is already pending: its flush reads
+    // the new theme anyway, and re-sending the PREVIOUS flush's cached args here
+    // would replace that update's newer ones (last call wins) - a theme change
+    // committed with a GPS-origin or depth-colour change dropped the latter until
+    // the next update.
+    if (this.pendingUpdateArgs) return;
     if (this.cachedSections.length > 0 || this.cachedStations.length > 0) {
       this.update(
         this.cachedSections, this.cachedStations, this.cachedLoopClosures, this.gpsOrigin,

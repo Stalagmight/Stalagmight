@@ -33,9 +33,8 @@
  * exclusions, and the interact-overlay / loop-closure GeoJSON sources.
  *
  * Knobs: RENDER_DIFF_SEED=<seed> replays one seed; RENDER_DIFF_SEEDS=<count>,
- * RENDER_DIFF_FIRST=<first seed>, RENDER_DIFF_STEPS=<steps per seed>;
- * RENDER_DIFF_RAW=1 drops the FZ-ORACLE-R-1 split. The default is the CI set
- * (CI_SEEDS from seed 1, plus REGRESSION_SEEDS).
+ * RENDER_DIFF_FIRST=<first seed>, RENDER_DIFF_STEPS=<steps per seed>. The
+ * default is the CI set (CI_SEEDS from seed 1, plus REGRESSION_SEEDS).
  */
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -108,30 +107,18 @@ import {
 const CI_SEEDS = 32;
 const CI_STEPS = 50;
 /** Every seed that ever failed, kept as a permanent regression seed.
- *  12: FZ-ORACLE-R-1 (see KNOWN_BUG_R1_SPLIT).
+ *  12: FZ-ORACLE-R-1 (fixed: a theme change committed with a gps-origin or
+ *  depth-colour change dropped the latter; see the two theme-commit tests).
  *  102, 125, 167: driver-model gaps found while building this (a cleared gas
  *  origin flags the field failed; a non-interactive tool drops the hover; the
  *  app never passes an undefined precision) - kept so the model stays right. */
 const REGRESSION_SEEDS: readonly number[] = [12, 102, 125, 167];
 
-/**
- * KNOWN BUG FZ-ORACLE-R-1 (open, not fixed here): SurveyLayer.applyThemeColors
- * re-calls `update()` with the PREVIOUS flush's cached args (SurveyLayer.ts
- * applyThemeColors), and update() is last-call-wins (`pendingUpdateArgs`), so a
- * commit that changes the theme together with the gps origin / depth gradient /
- * depth range / precision / severity / warnings loses those changes until the
- * next update(): the renderer stays on the old datum or colours. While true, the
- * driver applies exactly that commit shape as two commits (everything else, then
- * the theme) and says so in the trace; the `it.fails` repro below pins the bug.
- * RENDER_DIFF_RAW=1 turns the split off.
- */
-const KNOWN_BUG_R1_SPLIT = true;
 
 const envNum = (k: string): number | undefined => {
   const v = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[k];
   return v === undefined || v === '' ? undefined : Number(v);
 };
-const SPLIT_R1 = KNOWN_BUG_R1_SPLIT && envNum('RENDER_DIFF_RAW') !== 1;
 const ONE_SEED = envNum('RENDER_DIFF_SEED');
 const FIRST = envNum('RENDER_DIFF_FIRST') ?? 1;
 const COUNT = envNum('RENDER_DIFF_SEEDS') ?? CI_SEEDS;
@@ -216,7 +203,7 @@ async function settle(): Promise<void> {
 const effDepth = (x: Snap): boolean => x.display.depthOn && !x.display.severityOn;
 
 /** The display-valued args of SurveyLayer.update() changed between two commits
- *  (what applyThemeColors' re-update overwrites, FZ-ORACLE-R-1). */
+ *  (what applyThemeColors' re-update used to overwrite, FZ-ORACLE-R-1). */
 function updateArgsChanged(a: Snap, b: Snap): boolean {
   const x = a.display;
   const y = b.display;
@@ -433,24 +420,11 @@ async function runSeed(seed: number, steps: number, total: Tally): Promise<SeedF
       const next = snapOf(store, model.display, snap);
       cam.gps = model.display.gpsOrigin;
       setStore(next);
-      const split = SPLIT_R1 && next.theme !== snap.theme && updateArgsChanged(snap, next);
-      if (split) {
-        // FZ-ORACLE-R-1: everything but the theme, then the theme alone.
-        const mid: Snap = {
-          ...next,
-          theme: snap.theme,
-          display: { ...next.display, theme: snap.display.theme, themeEpoch: snap.display.themeEpoch },
-        };
-        runEffects(inc.layer, snap, mid);
-        await settle();
-        runEffects(inc.layer, mid, next);
-      } else {
-        runEffects(inc.layer, snap, next);
-      }
+      runEffects(inc.layer, snap, next);
       await settle();
       snap = next;
       t.steps++;
-      trace.push(`[${tierTag(before, t)}] ${res.desc}${split ? ' (split commit: known bug FZ-ORACLE-R-1)' : ''}`);
+      trace.push(`[${tierTag(before, t)}] ${res.desc}`);
 
       const active = selectActiveSurveyData(useProjectStore.getState(), useUIStore.getState().geometryMode);
       const gotInc = captureRenderState(inc.layer, active);
@@ -525,7 +499,7 @@ describe('custom renderer: incremental updates equal a fresh build (#576 FZ-ORAC
     Math.max(60_000, SEEDS.length * STEPS * 60),
   );
 
-  /** One commit changing the theme AND `change` (no split), then the differential. */
+  /** One commit changing the theme AND `change`, then the differential. */
   async function themeCommit(change: (d: Display) => void): Promise<void> {
     const model = initialModel(new Rng(12));
     const cam: Camera = { zoom: 18, viewport: false, cx: 0, cy: 0, half: 100, gps: null };
@@ -547,15 +521,15 @@ describe('custom renderer: incremental updates equal a fresh build (#576 FZ-ORAC
     expect(diff, JSON.stringify(diff)).toBeNull();
   }
 
-  // KNOWN BUG FZ-ORACLE-R-1 (see KNOWN_BUG_R1_SPLIT). `it.fails` passes while the
-  // bug is there; once fixed these fail - flip them to `it` and drop the split.
-  it.fails('KNOWN BUG FZ-ORACLE-R-1: a gps-origin change committed with a theme change is dropped', async () => {
+  // FZ-ORACLE-R-1: applyThemeColors re-sent the previous flush's args over this
+  // commit's pending update() (last call wins), dropping its change until the next one.
+  it('FZ-ORACLE-R-1: a gps-origin change committed with a theme change is drawn', async () => {
     await themeCommit((d) => {
       d.gpsOrigin = { latitude: -35.1, longitude: 53.1 };
     });
   });
 
-  it.fails('KNOWN BUG FZ-ORACLE-R-1: a depth-gradient toggle committed with a theme change is dropped', async () => {
+  it('FZ-ORACLE-R-1: a depth-gradient toggle committed with a theme change is drawn', async () => {
     await themeCommit((d) => {
       d.depthOn = true;
     });
