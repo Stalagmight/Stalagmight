@@ -173,9 +173,24 @@ fn is_ariane_tml(path: &str) -> bool {
 /// for a process death but not for a power loss. Callers that go on to `rename`
 /// this file over a destination they must not destroy need the stronger promise -
 /// see `Dump::extract_entry_to`.
+///
+/// [#576 RVF-b-1] As a NEW file: `File::create` opened `path` through a link left
+/// at that name, creating the file a dangling one named or overwriting the one it
+/// led to, and the rename then moved the link itself into place. Whatever is at
+/// the name (a temp a killed run left, or a link, which `remove_file` removes
+/// itself) is removed first; one that cannot be removed fails the write.
 fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
-    let mut file = std::fs::File::create(path)?;
+    if path.symlink_metadata().is_ok() {
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
     file.write_all(bytes)?;
     file.sync_all()
 }
@@ -949,5 +964,41 @@ mod tests {
             b"ORIGINAL",
             "the destination must be untouched when the extract fails"
         );
+    }
+
+    /// [#576 RVF-b-1] A link left at the staging name, dangling or to an existing
+    /// file, never receives the extracted bytes: the staged write created the
+    /// file the link named (or overwrote the one it led to), and the rename then
+    /// put the link itself at `dest`.
+    #[cfg(unix)]
+    #[test]
+    fn extract_entry_to_never_writes_through_a_link_at_the_staging_name() {
+        for existing in [false, true] {
+            let zip = make_zip(&[("misc/project.stalx", b"NEW")]);
+            let dir = tempfile::tempdir().expect("tempdir");
+            let elsewhere = tempfile::tempdir().expect("tempdir");
+            let dest = dir.path().join("project.stalx");
+            let target = elsewhere.path().join("config.toml");
+            if existing {
+                std::fs::write(&target, b"KEEP").expect("seed the link target");
+            }
+            std::os::unix::fs::symlink(&target, download_temp_path(&dest))
+                .expect("plant a link at the staging name");
+
+            let mut dump = Dump::open(&zip).expect("valid zip opens");
+            dump.extract_entry_to("misc/project.stalx", &dest)
+                .expect("extract");
+
+            assert_eq!(
+                std::fs::read(&target).ok(),
+                existing.then(|| b"KEEP".to_vec()),
+                "existing={existing}: the extract was written through the link"
+            );
+            assert!(
+                dest.symlink_metadata().is_ok_and(|m| m.is_file()),
+                "existing={existing}: dest is a real file, not the planted link"
+            );
+            assert_eq!(std::fs::read(&dest).expect("dest readable"), b"NEW");
+        }
     }
 }
