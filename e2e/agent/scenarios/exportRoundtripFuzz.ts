@@ -55,7 +55,10 @@
  *   X5  convergence: T1 -> fresh project -> T2 -> fresh project -> T3, and
  *       T2 == T3.
  *   X6  shot multiset + uuid identity across the first re-import, and no
- *       surviving duplicate uuid after importing the same file twice.
+ *       surviving duplicate uuid after importing the same file twice. X6c:
+ *       per shot by uuid, every station at its true depth except an averaged
+ *       junction (the mean of one reading per section), the length bound, and
+ *       the plan (`junctionDepthOracle.ts`).
  *   X7  hostile comments survive a CSV export neutralised, and a TML export
  *       intact.
  *   X8  the modal's options and the panel's do not leak into each other, and
@@ -339,6 +342,19 @@
  *         in how often the exporter re-hangs stays visible instead of silently
  *         not mattering.
  *
+ *         SUPERSEDED (2026-11, #576 TML-DEPTH-D1, Q1-D1, Q2-D1): the exporter
+ *         no longer re-hangs or clamps. A junction whose readings disagree is
+ *         written at the mean of one reading per section, every other station
+ *         at its true depth, and the shots touching the junction take the
+ *         length that keeps their run - so their descent and tape change. A
+ *         shot whose drop exceeds its tape keeps both depths and goes out
+ *         vertical, its drop as its length. A descent key would report those as
+ *         lost and gained, so X6 now keys heading and LRUD only, and X6c
+ *         (`junctionDepthOracle.ts`) asserts the rule per shot by uuid.
+ *         `clampedDescent`, `strictShotKey` and the absolute-depth metric are
+ *         gone; `x6:averagedJunctions`, `x6:refittedShots` and
+ *         `x6:brokenShots` count what the rule changed.
+ *
  *    NET: X6 IS GREEN ON naharon. 198 geometry keys -> 0, and no comment losses.
  *
  *    ONE CORRECTION TO (c) THAT THE FIX ITSELF PRODUCED. Keeping comments on
@@ -460,7 +476,6 @@ import {
   finalizeExportPath,
   multisetDelta,
   newToastKeys,
-  strictShotKey,
   naturalExtension,
   PROJECT_OWNED_SHAPES,
   type ExportAttempt,
@@ -471,6 +486,12 @@ import {
   type SectionAzimuthReference,
   type ShotIdentity,
 } from '../lib/exportOracles';
+import {
+  checkJunctionDepths,
+  junctionDepthReport,
+  type StationedShot,
+  type StationMergeWire,
+} from '../lib/junctionDepthOracle';
 import {
   callProjectAction,
   clickAndAnswerSave,
@@ -617,7 +638,14 @@ function straysIn(dir: string, expected: readonly string[]): string[] {
 interface ProjectDigest {
   open: boolean;
   sections: number;
-  shots: ShotIdentity[];
+  /** Each shot with its section id and index, which X6c reads. */
+  shots: (ShotIdentity & StationedShot)[];
+  /**
+   * The station merges as `[sectionA, stationA, sectionB, stationB]`. X6c reads
+   * the RE-IMPORTED project's: they are the file's `FromID` links, so they say
+   * which stations the export wrote as one node.
+   */
+  merges: StationMergeWire[];
   /**
    * Each shot's section reference, PARALLEL to `shots`, resolved the way
    * `Project::azimuth_reference_for` does. X6 needs it to know what the TML
@@ -663,7 +691,7 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
     const state = await core.invoke('get_project_state');
     const project = state && state.project ? state.project : state;
     if (!project || !Array.isArray(project.sections)) {
-      return { open: false, sections: 0, shots: [], shotReferences: [], uuids: [], uuidsBySection: [], commentParts: [], missingUuids: 0, duplicateUuids: 0, filePath: null };
+      return { open: false, sections: 0, shots: [], merges: [], shotReferences: [], uuids: [], uuidsBySection: [], commentParts: [], missingUuids: 0, duplicateUuids: 0, filePath: null };
     }
     // A section's azimuth reference, resolved as Project::azimuth_reference_for
     // does: the section's own, else the project default, else nothing recorded
@@ -708,7 +736,8 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
       const reference = resolveReference(
         section.azimuth_reference != null ? section.azimuth_reference : project.default_azimuth_reference,
       );
-      for (const shot of section.shots) {
+      for (let index = 0; index < section.shots.length; index++) {
+        const shot = section.shots[index];
         shotReferences.push(reference);
         const uuid = typeof shot.uuid === 'string' ? shot.uuid : '';
         if (uuid === '') missing += 1;
@@ -726,6 +755,8 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
           // useful - before it, a round trip re-minted the uuids that matter.
           // (No backticks: this is inside a template literal.)
           uuid: uuid,
+          section: Number(section.id),
+          index: index,
           length: Number(shot.length) || 0,
           azimuthIn: drawnBearing(Number(shot.azimuth_in) || 0, Number(shot.azimuth_out) || 0),
           depthIn: Number(shot.depth_in) || 0,
@@ -738,6 +769,15 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
           ],
         });
       }
+    }
+    // Station merges, as StationMerge's wire shape (station_a / station_b, each
+    // a section_id and a station_index). X6c reads the re-imported project's.
+    const merges = [];
+    for (const merge of (project.station_merges || [])) {
+      const a = merge && merge.station_a;
+      const b = merge && merge.station_b;
+      if (!a || !b) continue;
+      merges.push([Number(a.section_id), Number(a.station_index), Number(b.section_id), Number(b.station_index)]);
     }
     // Station comments: serde renders a HashMap with a struct key as an array of
     // [key, value] pairs, and the binary loader calls the same field
@@ -760,6 +800,7 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
       open: true,
       sections: project.sections.length,
       shots: shots,
+      merges: merges,
       shotReferences: shotReferences,
       uuids: uuids,
       uuidsBySection: uuidsBySection,
@@ -1435,12 +1476,20 @@ export const exportRoundtripFuzz: Scenario = {
         (delta) => delta.after > delta.before,
       );
       if (commentGains.length > 0) ctx.metric('x6:commentTextsGained', commentGains.length);
-      // The re-hangs the key deliberately does NOT see, kept countable so a
-      // change in how often the exporter moves a branch's datum shows up in the
-      // metrics rather than silently not mattering. `clampedDescent` states why
-      // this is a metric and not an assertion.
-      const datumShifts = multisetDelta(exported.shots, afterFirst.shots, strictShotKey);
-      if (datumShifts.length > 0) ctx.metric('x6:absoluteDepthShifts', datumShifts.length);
+      // X6c: the depths, tapes and plan the multiset key does not see, per shot
+      // by uuid, under the junction rule (#576 TML-DEPTH-D1, Q1-D1, Q2-D1,
+      // Q3-D1): every station at its true depth except an averaged junction, at
+      // the mean of one reading per section; the length bound; the plan. Which
+      // stations are one node comes from the RE-IMPORTED merges - see
+      // `junctionDepthOracle.ts`. The counts stay visible as metrics, so a change
+      // in how often the export averages or refits shows up.
+      const depths = junctionDepthReport(exported.shots, afterFirst);
+      guarded(() => checkJunctionDepths(depths, reproduce));
+      ctx.metric('x6:depthRule');
+      if (depths.averagedJunctions > 0) ctx.metric('x6:averagedJunctions', depths.averagedJunctions);
+      if (depths.refittedShots > 0) ctx.metric('x6:refittedShots', depths.refittedShots);
+      if (depths.brokenShots > 0) ctx.metric('x6:brokenShots', depths.brokenShots);
+      if (depths.unmatched > 0) ctx.metric('x6:depthRuleUnmatched', depths.unmatched);
 
       // X6b: importing the SAME file again must not leave two shots on one
       // uuid. The second import carries the first's foreign uuids verbatim, so

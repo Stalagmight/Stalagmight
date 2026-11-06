@@ -37,7 +37,6 @@ import {
   parseCsvRows,
   PATH_SHAPES,
   shotKey,
-  strictShotKey,
   asExportedToTml,
   tmlAzimuthPlan,
   type ExportAttempt,
@@ -697,12 +696,12 @@ describe('X6 shot multiset', () => {
 
   it('keys on geometry values, not on order', () => {
     expect(shotKey(shot())).toBe(shotKey(shot()));
-    expect(shotKey(shot({ length: 6 }))).not.toBe(shotKey(shot()));
+    expect(shotKey(shot({ azimuthIn: 91 }))).not.toBe(shotKey(shot()));
     expect(shotKey(shot({ lrud: [1, 1, 1, null] }))).not.toBe(shotKey(shot()));
   });
 
   it('rounds to the precision the format carries, so formatting is not data loss', () => {
-    expect(shotKey(shot({ length: 5.0000001 }))).toBe(shotKey(shot({ length: 5 })));
+    expect(shotKey(shot({ azimuthIn: 90.0000001 }))).toBe(shotKey(shot({ azimuthIn: 90 })));
   });
 
   it("reads Ariane's 0.0 LRUD as the absent sentinel it is, per field", () => {
@@ -744,64 +743,22 @@ describe('X6 shot multiset', () => {
     expect(shotKey(out)).not.toBe(
       shotKey(shot({ azimuthIn: 271, depthIn: 8, depthOut: 5, lrud: [2, 1, 3, 4] })),
     );
-    // depths not swapped
-    expect(shotKey(out)).not.toBe(
-      shotKey(shot({ azimuthIn: 270, depthIn: 5, depthOut: 8, lrud: [2, 1, 3, 4] })),
-    );
-    // a depth that moved
-    expect(shotKey(out)).not.toBe(
-      shotKey(shot({ azimuthIn: 270, depthIn: 8.1, depthOut: 5, lrud: [2, 1, 3, 4] })),
-    );
-    // length changed
-    expect(shotKey(out)).not.toBe(
-      shotKey(shot({ length: 6, azimuthIn: 270, depthIn: 8, depthOut: 5, lrud: [2, 1, 3, 4] })),
-    );
     // LRUD not mirrored (up/down swapped instead of left/right)
     expect(shotKey(out)).not.toBe(
       shotKey(shot({ azimuthIn: 270, depthIn: 8, depthOut: 5, lrud: [1, 2, 4, 3] })),
     );
   });
 
-  it('keys the DESCENT, not the absolute depths - a datum re-hang is invisible', () => {
-    // `enforce_ariane_geometry_invariants` re-hangs a branch whose junction
-    // depth Ariane cannot represent and moves the rest of the branch with it,
-    // so a round trip may change where a branch HANGS. It may not change what a
-    // shot MEASURES. Measured on the survey that found this: of the 24 shots
-    // whose depths moved, length changed on 0, azimuth on 0, LRUD on 0.
+  it('does not key depths or the tape - the junction rule may change them, and X6c checks it', () => {
+    // #576 TML-DEPTH-D1, Q2-D1: a junction whose readings disagree is written
+    // at their mean and the shots touching it take the length that keeps their
+    // run; a shot whose drop exceeds its tape goes out vertical. Both change a
+    // depth or a tape legitimately, so junctionDepthOracle.ts asserts them per
+    // shot by uuid (junctionDepthOracle.test.ts), not this multiset.
     expect(shotKey(shot({ depthIn: 1, depthOut: 3 }))).toBe(shotKey(shot({ depthIn: 11, depthOut: 13 })));
-    expect(shotKey(shot({ depthIn: 1, depthOut: 3 }))).toBe(shotKey(shot({ depthIn: -4, depthOut: -2 })));
-  });
-
-  it('still fails a shot whose DESCENT changed within its tape', () => {
-    // The half the transform does not get to touch.
-    expect(shotKey(shot({ length: 5, depthIn: 1, depthOut: 3 }))).not.toBe(
-      shotKey(shot({ length: 5, depthIn: 1, depthOut: 4 })),
+    expect(shotKey(shot({ length: 0.15, depthIn: 13, depthOut: 16.0001 }))).toBe(
+      shotKey(shot({ length: 3.0001, depthIn: 13, depthOut: 16.0001 })),
     );
-    expect(shotKey(shot({ length: 5, depthIn: 11, depthOut: 14 }))).not.toBe(
-      shotKey(shot({ length: 5, depthIn: 1, depthOut: 3 })),
-    );
-  });
-
-  it('clamps an IMPOSSIBLE source descent to the tape, so the clamp folds', () => {
-    // A 0.150 m tape carrying a 2.350 m depth change is not a survey the world
-    // contains; the exporter pins it to exactly -0.150. Both sides clamp to the
-    // same value, so the one shot on the fixture that hits this keys equal.
-    const impossible = shot({ length: 0.15, depthIn: 12.21, depthOut: 9.86 });
-    const pinned = shot({ length: 0.15, depthIn: 16.92, depthOut: 16.77 });
-    expect(shotKey(impossible)).toBe(shotKey(pinned));
-    // And the clamp is not a blanket excuse: a shot inside its tape is compared
-    // exactly, and one clamped to the OTHER end of the bound still differs.
-    expect(shotKey(impossible)).not.toBe(shotKey(shot({ length: 0.15, depthIn: 16.77, depthOut: 16.92 })));
-  });
-
-  it('strictShotKey keeps the absolute depths, so re-hangs stay countable', () => {
-    expect(strictShotKey(shot({ depthIn: 1, depthOut: 3 }))).not.toBe(
-      strictShotKey(shot({ depthIn: 11, depthOut: 13 })),
-    );
-    expect(multisetDelta([shot({ depthIn: 1, depthOut: 3 })], [shot({ depthIn: 11, depthOut: 13 })])).toEqual([]);
-    expect(
-      multisetDelta([shot({ depthIn: 1, depthOut: 3 })], [shot({ depthIn: 11, depthOut: 13 })], strictShotKey),
-    ).toHaveLength(2);
   });
 
   it('folds ONLY that equivalence - a real LRUD change still differs', () => {
@@ -843,7 +800,7 @@ describe('X6 shot multiset', () => {
   });
 
   it('fails when a shot GEOMETRY value changed', () => {
-    const deltas = multisetDelta([shot()], [shot({ length: 6 })]);
+    const deltas = multisetDelta([shot()], [shot({ lrud: [1, 1, 1, 2] })]);
     expect(deltas).toHaveLength(2);
     expect(() =>
       checkShotMultiset({ deltas, uuidsBefore: ['u1'], uuidsAfter: ['u1'], countBefore: 1, countAfter: 1 }, REPRO),
@@ -953,7 +910,12 @@ describe('X6 folds the TML mixed-declination rotation (#576 HFI-8, decision HFI-
 
   it('is the HFI-8 false positive without the fold: every shot reads as lost and gained', () => {
     const unfolded = multisetDelta(before, reimported);
-    expect(unfolded).toHaveLength(12);
+    // No key survives: all six shots lost, all six gained. (Counted by shot,
+    // not by key: the 90 and the 270 legs key equal, heading and LRUD being
+    // all the key holds - a leg and its reciprocal.)
+    expect(unfolded.every((d) => d.before === 0 || d.after === 0)).toBe(true);
+    expect(unfolded.reduce((n, d) => n + d.before, 0)).toBe(6);
+    expect(unfolded.reduce((n, d) => n + d.after, 0)).toBe(6);
     expect(() => x6(unfolded)).toThrow(/X6 the shot set changed/);
   });
 
@@ -964,10 +926,14 @@ describe('X6 folds the TML mixed-declination rotation (#576 HFI-8, decision HFI-
     expect(() => x6(multisetDelta(exported.shots, wrong), exported.plan)).toThrow(/already rotated into true north/);
   });
 
-  it('still fails any other change - a length that moved', () => {
-    const changed = reimported.map((s, index) => (index === 0 ? { ...s, length: 5.5 } : s));
+  it('still fails any other change - an LRUD that moved', () => {
+    const changed = reimported.map((s, index) => (index === 0 ? { ...s, lrud: [1, 1, 1, 2] as ShotIdentity['lrud'] } : s));
     const exported = asExportedToTml(before, references);
     expect(() => x6(multisetDelta(exported.shots, changed), exported.plan)).toThrow(/X6 the shot set changed/);
+    // A length is X6c's (junctionDepthOracle.ts), which the junction rule may
+    // change; the multiset no longer keys it.
+    const longer = reimported.map((s, index) => (index === 0 ? { ...s, length: 5.5 } : s));
+    expect(() => x6(multisetDelta(exported.shots, longer), exported.plan)).not.toThrow();
   });
 
   it('leaves the shots untouched on every plan that writes the readings as stored', () => {

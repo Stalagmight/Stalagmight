@@ -1181,11 +1181,37 @@ reversal (X6's key is now direction-agnostic, which is a fact about the key),
 exporter re-hanging branch depths to fit the format - which is designed,
 tested behaviour and needs a product call rather than an oracle change.
 
-All three are now closed - the depth family turned out to be the exporter
+All three were then closed - the depth family turned out to be the exporter
 re-hanging a branch's datum while preserving every measurement (matched by uuid:
 of 24 shots, length changed on 0, azimuth on 0, LRUD on 0, descent on 1, and
-that one shot's source descent exceeds its own tape), so X6 keys the descent
-rather than the absolute depths and counts the re-hangs as a metric.
+that one shot's source descent exceeds its own tape), so X6 keyed the descent
+rather than the absolute depths and counted the re-hangs as a metric.
+
+The exporter no longer re-hangs (#576, decisions TML-DEPTH-D1, Q1-D1, Q2-D1 and
+Q3-D1; `docs/ariane-export.md`, "Junction depths"). A junction whose readings
+disagree is written at the mean of one reading per section, every other station
+keeps its true depth, and only the shots touching the junction change - their
+tape, to the length that keeps their horizontal run. A shot whose drop exceeds
+its tape keeps both depths and goes out vertical, its drop as its length; a
+second reading inside a section refits that one shot. So a refitted shot's
+descent and tape legitimately change, and a descent key would report it as lost
+and gained. X6's multiset now keys heading and LRUD only, and **X6c**
+(`e2e/agent/lib/junctionDepthOracle.ts`) asserts the rule per shot, matched by
+uuid:
+
+- every station comes back at one of its own section's readings, except an
+  averaged junction, which comes back at one depth: the mean of its readings
+  with one reading per section (any one, where a section's own readings
+  disagree, since which one depends on the direction the export walks it);
+- `|depth change| <= length` holds, as written;
+- each shot keeps its heading and its horizontal run, within what the six
+  decimals and the micrometre round-up can move a run by, so the plan stays put.
+
+Which stations are one node comes from the re-imported project's merges (the
+file's `FromID` links), not the original's: a merge the export does not take as
+a parent link leaves two nodes. The metrics `x6:averagedJunctions`,
+`x6:refittedShots` and `x6:brokenShots` count what the rule changed, and
+`x6:depthRuleUnmatched` the shots it could not match by uuid.
 
 Closing them let X5 run on that fixture for the first time, and finding 6 is its
 own correction: the chain settles at the THIRD export there, not the second,

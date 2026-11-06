@@ -1046,7 +1046,7 @@ function lrudSentinel(value: number | null): string {
 }
 
 /**
- * A multiset key for one shot.
+ * A multiset key for one shot: its heading and its LRUD.
  *
  * Numbers are rounded to the precision the TML actually carries so a formatting
  * round trip is not reported as data loss.
@@ -1054,7 +1054,21 @@ function lrudSentinel(value: number | null): string {
  * LRUD goes through `lrudSentinel`, which reads Ariane's `0.0` as the absent
  * sentinel it is - see that function for why this is a documented format
  * semantic rather than a tolerance, and for the two doc sections that own the
- * claim. Every other field is compared as measured.
+ * claim. The heading is compared as measured.
+ *
+ * DEPTHS AND THE TAPE ARE NOT IN THE KEY, and that is the junction rule rather
+ * than a weakening (#576 TML-DEPTH-D1, Q1-D1, Q2-D1; docs/ariane-export.md,
+ * "Junction depths"). The export writes a junction whose readings disagree at
+ * their mean and gives every shot touching it the length that keeps its run,
+ * and it writes a shot whose drop exceeds its tape vertical, its drop as its
+ * length - so a round trip legitimately changes some depths and some tapes.
+ * What it may change, and what it may not, is asserted per shot BY UUID in
+ * `junctionDepthOracle.ts` (X6c): every station at its true depth except an
+ * averaged junction, at the mean of one reading per section; the length bound;
+ * the plan. The cost: two different legs with reciprocal headings and mirrored
+ * LRUD now share a key, so the multiset counts them under one key twice - a
+ * shot lost or gained still changes the count, and the uuid set and X6c see
+ * which.
  *
  * The key is also DIRECTION-AGNOSTIC: a leg and its reciprocal produce the same
  * key, because the exporter genuinely writes some legs backwards and a shot
@@ -1076,22 +1090,6 @@ function lrudSentinel(value: number | null): string {
  * (`commentMultisetDelta`), which asks the question that survives the move.
  */
 export function shotKey(shot: ShotIdentity): string {
-  return keyWith(shot, false);
-}
-
-/**
- * The same shot keyed on its ABSOLUTE depths as well.
- *
- * Not an oracle - a metric. `shotKey` deliberately keys the descent rather than
- * the depths (see `clampedDescent`), which makes a datum re-hang invisible to
- * it; this keeps the re-hangs COUNTABLE so a change in how often the exporter
- * moves a branch shows up in the metrics instead of silently not mattering.
- */
-export function strictShotKey(shot: ShotIdentity): string {
-  return keyWith(shot, true);
-}
-
-function keyWith(shot: ShotIdentity, absoluteDepths: boolean): string {
   const n = (value: number | null): string => (value === null ? '-' : value.toFixed(3));
   const oriented = (s: ShotIdentity): string =>
     [
@@ -1099,52 +1097,13 @@ function keyWith(shot: ShotIdentity, absoluteDepths: boolean): string {
       // one heading, and keying them apart would report a shot as lost and
       // gained for pointing due north.
       n(normalizeHeading(s.azimuthIn)),
-      n(clampedDescent(s)),
-      ...(absoluteDepths ? [n(s.depthIn), n(s.depthOut)] : []),
       s.lrud.map(lrudSentinel).join('/'),
     ].join('|');
   // DIRECTION-AGNOSTIC: a leg and the same leg walked the other way key equal.
   // See `reciprocal` for why that is a correctness fix and not a fold.
   const forward = oriented(shot);
   const backward = oriented(reciprocal(shot));
-  return [n(shot.length), forward < backward ? forward : backward].join('|');
-}
-
-/**
- * The shot's own DESCENT, pinned to its tape - what the export transform
- * contracts to preserve, where the absolute depths are not.
- *
- * `enforce_ariane_geometry_invariants` (`export/tml.rs:1608`) does two things to
- * geometry Ariane cannot represent, and its own test family names them:
- * `a_junction_depth_discontinuity_is_re_hung_rather_than_exported_impossible`
- * and `a_re_hang_moves_the_rest_of_the_branch_with_it` move a whole branch's
- * DATUM, and `a_shot_exactly_on_the_bound_is_left_alone_and_one_past_it_is_
- * clamped` pins a shot whose depth change exceeds its tape back onto the bound.
- * So a round trip is entitled to change where a branch HANGS, and not what any
- * shot MEASURES.
- *
- * That is exactly what this keys. Absolute depths are out (a re-hang moves
- * them, by design, and `strictShotKey` keeps them countable); the descent is in,
- * clamped to `[-length, +length]` so the one shot whose source descent is
- * already impossible keys the same on both sides.
- *
- * MEASURED, ON THE SURVEY THAT FOUND THIS, matching all 532 shots BY UUID -
- * which only 5a made possible. Of the 24 shots whose depths moved: length
- * changed on 0, azimuth on 0, LRUD on 0, and descent on exactly 1 - a 0.150 m
- * tape carrying a 2.350 m depth change, which is not a survey the world
- * contains, and which the exporter pinned to exactly -0.150. Its clamp is the
- * whole of that one difference. See finding 5 in `exportRoundtripFuzz.ts`.
- *
- * THIS IS NOT A TOLERANCE, and the difference is the same one `lrudSentinel`
- * draws: a tolerance would be a threshold chosen to quiet a red. This asserts
- * the property the transform contracts to preserve and drops the one it
- * contracts to change - so a re-hang that altered a shot's descent, its tape or
- * its heading is still a red, and the tests pin each of those.
- */
-function clampedDescent(shot: ShotIdentity): number {
-  const descent = shot.depthOut - shot.depthIn;
-  const tape = Math.abs(shot.length);
-  return Math.max(-tape, Math.min(tape, descent));
+  return forward < backward ? forward : backward;
 }
 
 /**
@@ -1169,9 +1128,10 @@ function clampedDescent(shot: ShotIdentity): number {
  * paired exactly with a gained key under this transform - 150 of 198 residual
  * deltas, all of them reversed legs. See finding 5 in `exportRoundtripFuzz.ts`.
  *
- * What it does NOT excuse: the transform is exact. A length that changed, a
- * heading off by anything but 180, a depth that moved, an LRUD that is not the
- * mirror - all still differ, and the unit tests pin each one.
+ * What it does NOT excuse: the transform is exact. A heading off by anything
+ * but 180, an LRUD that is not the mirror - both still differ, and the unit
+ * tests pin each one. (A length or a depth is X6c's, which turns each re-imported
+ * leg to its original's direction before it compares them.)
  */
 function normalizeHeading(azimuth: number): number {
   return ((azimuth % 360) + 360) % 360;
@@ -1292,20 +1252,23 @@ export function tmlAzimuthPlan(references: readonly SectionAzimuthReference[]): 
  * and gained (#576 HFI-8).
  *
  * THIS IS THE FORMAT'S DOCUMENTED LOSS, NOT A TOLERANCE - the same distinction
- * `lrudSentinel` and `clampedDescent` draw. `docs/ariane-export.md` ("Round-trip
+ * `lrudSentinel` draws. `docs/ariane-export.md` ("Round-trip
  * cost of that third case") states that the per-section corrections are gone
  * after such a round trip and the azimuth multiset legitimately differs, and
  * decision HFI-8-D1 keeps the rotation (the declination review is #600). The
  * fold applies exactly that rotation, per section, and nothing else: a bearing
- * rotated by the wrong section's correction, a length, a descent or an LRUD that
- * changed - all still fail X6.
+ * rotated by the wrong section's correction or an LRUD that changed still fails
+ * X6, and a length or a depth outside the junction rule fails X6c.
+ *
+ * Generic so the caller's extra fields (a shot's section and index, which X6c
+ * reads) ride along.
  *
  * `references[i]` is the resolved reference of `shots[i]`'s section.
  */
-export function asExportedToTml(
-  shots: readonly ShotIdentity[],
+export function asExportedToTml<T extends ShotIdentity>(
+  shots: readonly T[],
   references: readonly SectionAzimuthReference[],
-): { shots: ShotIdentity[]; plan: TmlAzimuthPlan; rotated: number } {
+): { shots: T[]; plan: TmlAzimuthPlan; rotated: number } {
   if (references.length !== shots.length) {
     // A harness bug, not an oracle verdict: the two lists come from one digest.
     throw new Error(`asExportedToTml: ${shots.length} shot(s) but ${references.length} reference(s)`);
@@ -1373,7 +1336,8 @@ export function commentMultisetDelta(
  * multiset; `uuidDelta` is `shotSetDelta`'s answer for identity. Both are
  * reported together because they fail differently: identical geometry with a
  * changed uuid set is a re-mint, and a changed multiset with an intact uuid set
- * is a value being rewritten under a stable identity.
+ * is a value being rewritten under a stable identity. Depths and tapes, which
+ * the junction rule may change, are X6c's (`junctionDepthOracle.ts`).
  */
 export function checkShotMultiset(
   args: {
@@ -1414,9 +1378,8 @@ export function checkShotMultiset(
   if (args.deltas.length > 0) {
     lines.push(
       `    ${args.deltas.length} GEOMETRY key(s) differ ` +
-        `(length|azimuth|descent-clamped-to-the-tape|LRUD, direction-agnostic, with Ariane's ` +
-        `0.0 absent-sentinel folded onto null - see docs/ariane-export.md, and \`clampedDescent\` ` +
-        `for why the absolute depths are a metric rather than a key):`,
+        `(azimuth|LRUD, direction-agnostic, with Ariane's 0.0 absent-sentinel folded onto ` +
+        `null - see docs/ariane-export.md; depths and tapes are X6c's, see \`shotKey\`):`,
     );
     if (args.azimuthPlan === 'mixed-to-true') {
       lines.push(
