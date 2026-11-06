@@ -92,7 +92,8 @@ fn view_is_not_a_survey_change_and_is_not_refused_by_the_workspace() {
 /// handing the lock claim back, the next status poll forgot the claim, and the
 /// quit-time silent release then left the lock held (fuzzer: ResumeHeldLock ->
 /// View -> Quit). Refused before anything is touched: no request, gate and claim
-/// kept, the project still open.
+/// kept, the project still open. [#576 RVF-b] The refusal reads this session's
+/// claim, which is local state, so deciding it needs no request either.
 #[test]
 fn view_is_refused_while_editing_under_the_write_lock() {
     let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
@@ -144,6 +145,55 @@ fn view_is_refused_while_editing_under_the_write_lock() {
             .speleodb_open_link()
             .is_ok_and(|link| link.project_id == REMOTE_ID),
         "the linked project is still open"
+    );
+}
+
+/// [#576 RVF-b] The FZ-SDB-4 refusal reads this session's claim on the open
+/// project's lock, the question the silent releases ask, not the gate alone. An
+/// inherited edit session (the status poll's inherited-lock reopen, or a gate left
+/// open over a lock this session no longer claims) has no release a View's reload
+/// could cancel, so it is not refused with the release-the-lock message. The
+/// recording stub answers the download with a JSON body, not a dump, so the View
+/// goes past the refusal to the download and fails later, on the archive.
+#[test]
+fn view_is_not_refused_over_a_lock_this_session_does_not_claim() {
+    let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+    let (_temp, state) = editing_fixture(&base);
+    let _ = state.speleodb_forget_lock_acquired_for(REMOTE_ID);
+    let gate_open = state.edit_enabled() && !state.force_editing();
+    let claimed = state.speleodb_lock_acquired_here(REMOTE_ID);
+    println!("precondition: gate open: {gate_open}; claim held here: {claimed}");
+    assert!(
+        gate_open && !claimed,
+        "precondition: an edit gate open over a lock this session does not claim"
+    );
+
+    let result = state
+        .speleodb_restore_revision(
+            REMOTE_ID.to_owned(),
+            "Remote".to_owned(),
+            SHA.to_owned(),
+            false,
+            false,
+            None,
+            false,
+            false,
+            false,
+        )
+        .map(|_| ())
+        .map_err(CommandError::from);
+
+    let requests = seen.lock().expect("request log").clone();
+    println!("View without the claim -> {result:?}; requests sent: {requests:?}");
+    if let Err(e) = &result {
+        assert!(
+            !e.message.contains("release the write lock"),
+            "a View over an unclaimed lock is not refused as a lock holder's: {e:?}"
+        );
+    }
+    assert!(
+        requests.iter().any(|r| r.contains("/download/dump/")),
+        "the View went past the refusal to the download: {requests:?}"
     );
 }
 

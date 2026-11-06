@@ -632,7 +632,15 @@ impl AppState {
         // lock; this holds for a direct IPC call too, and refuses before anything is
         // captured or closed. (Below the Keep refusal so a View asking to keep history
         // is still told what it asked for.)
-        if !restore && self.edit_enabled() {
+        //
+        // [#576 RVF-b] The refusal reads this session's claim on the open project's
+        // lock, the same question the silent releases ask, not the gate alone: the
+        // poll's inherited-lock reopen opens the gate without a claim, and there a
+        // View strands nothing, since no release was ever going to hand that lock back.
+        if !restore
+            && self.edit_enabled()
+            && self.speleodb_lock_acquired_here(&open_link.project_id)
+        {
             return Err(local_dto(SpeleoDbError::refused(
                 "release the write lock (or restore) before viewing a revision".to_owned(),
             )));
