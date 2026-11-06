@@ -77,6 +77,10 @@ const GATE_SEEDS: &[u64] = &[
     // temp name (`notes.stalx.tmp` into the system folder, 437; an alias of the
     // settings folder, 10402): the save created its temp database through it.
     437, 10402,
+    // W27: a load opened a project with a link planted at its `-wal` (5076236) or
+    // `-journal` (5172404); SQLite removed that entry, its own recovery on open,
+    // and the effect oracle failed the load for it.
+    5076236, 5172404,
 ];
 
 /// A deterministic PRNG (SplitMix64): every decision of a seed comes from here,
@@ -723,6 +727,30 @@ mod disk {
                 .cloned(),
         );
         out
+    }
+
+    /// [#576 W27] Whether `entry`, gone after an attempt, was a SQLite journal of a
+    /// database the attempt OPENED (`opened`: where each one lands): a
+    /// `-journal`, `-wal` or `-shm` beside it. SQLite takes any entry at those
+    /// names for the database's own - a hot journal it rolls back, a WAL it
+    /// checkpoints - and its open removes it, a link a tree planted there
+    /// included; the entry goes, never what a link leads to. That is the one
+    /// write an open makes (`Database::open_existing_to_read`,
+    /// `speleodb_foreign`), it happens on reading the file at all, and no write
+    /// policy decides it.
+    fn removed_by_sqlite_on_open(
+        entry: &Path,
+        opened: &[PathBuf],
+        after: &BTreeMap<PathBuf, Shot>,
+    ) -> bool {
+        if after.contains_key(entry) {
+            return false;
+        }
+        let name = entry.as_os_str().to_string_lossy();
+        ["-journal", "-wal", "-shm"].iter().any(|suffix| {
+            name.strip_suffix(suffix)
+                .is_some_and(|db| opened.iter().any(|o| o.as_os_str() == db))
+        })
     }
 
     /// The project files a tree is seeded with: one this build saved, and the same
@@ -1893,6 +1921,19 @@ mod disk {
                 }
             }
             let oracle = |p: &Path, kind: Option<Kind>| expect(p, kind, &tree.guarded, &jail);
+            // The databases the attempt opens to read: the load's file, the merge's
+            // sources.
+            let opened: Vec<PathBuf> = match plan.caller {
+                Caller::Load => vec![plan.path.clone()],
+                Caller::Merge | Caller::MergeArchiving => plan.others.clone(),
+                _ => Vec::new(),
+            }
+            .iter()
+            .filter_map(|p| match kernel_landing(&absolute(p), &jail) {
+                Landing::At(real, Found::File) => Some(real),
+                _ => None,
+            })
+            .collect();
             let before = snapshot(&jail);
             let outcome = attempt(&plan, &tree.dirs, &state, &oracle).map_err(fail)?;
             let after = snapshot(&jail);
@@ -1907,7 +1948,10 @@ mod disk {
             }
             // [Effect] A refusal changed nothing; an allowed write changed nothing
             // in a protected folder (a project in the managed cache excepted).
-            let changes = changed(&before, &after);
+            let changes: Vec<PathBuf> = changed(&before, &after)
+                .into_iter()
+                .filter(|p| !removed_by_sqlite_on_open(p, &opened, &after))
+                .collect();
             let shown: Vec<String> = changes.iter().map(|p| tree.show(p)).collect();
             if std::env::var_os("STALAGMIGHT_RUST_PERSIST_TRACE").is_some() {
                 println!(
