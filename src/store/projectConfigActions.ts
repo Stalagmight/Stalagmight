@@ -53,11 +53,13 @@ export interface ProjectConfigActions {
    */
   patchConfig: (patches: ConfigPatch[]) => Promise<CommandResult>;
   /**
-   * Persist ONLY the `[gas]` block. Plan-mode gas controls must not go through
-   * `updateConfig`: a whole-`Config` save from this store's snapshot silently
-   * reverted any other partial save that landed in between (#357 item 2).
+   * Persist ONLY the given `[gas]` fields, each as a `[gas, field]` patch. Plan-mode
+   * gas controls must not go through `updateConfig`: a whole-`Config` save from this
+   * store's snapshot silently reverted any other partial save that landed in between
+   * (#357 item 2) - and the whole `[gas]` block did the same to a gas field Settings
+   * had just saved (#576 FZ-INT-3-D1).
    */
-  updateGasConfig: (gas: GasConfig) => Promise<CommandResult>;
+  updateGasConfig: (gas: Partial<GasConfig>) => Promise<CommandResult>;
   /** Update config state without persisting to disk */
   setConfig: (config: Config) => void;
 }
@@ -221,10 +223,19 @@ export function createProjectConfigActions(
         invokeIpc('patch_config', { patches }, { purpose: 'persist user settings' }),
       ),
 
-    updateGasConfig: async (gas: GasConfig) => {
+    updateGasConfig: async (gas: Partial<GasConfig>) => {
+      // [#576 FZ-INT-3-D1] Only the fields given, as `patch_config` patches the way
+      // Settings saves, applied onto the backend's live config. The whole block from
+      // this store's copy put back a gas field another save had changed since. The
+      // backend checks each value as it does the whole block (the patched config is
+      // read back as a whole, then normalized) - nothing here relied on sending more.
+      const patches: ConfigPatch[] = Object.entries(gas)
+        .filter(([, value]) => value !== undefined)
+        .map(([field, value]) => ({ path: ['gas', field], value }));
+      if (patches.length === 0) return emptyCommandResult(true, null);
       try {
         const routingBefore = get().config?.gas.include_reference_legs;
-        await invokeIpc('update_gas_config', { gas }, { purpose: 'persist gas planning settings' });
+        await invokeIpc('patch_config', { patches }, { purpose: 'persist gas planning settings' });
         // Re-fetch to pick up the backend-normalized values, same as updateConfig -
         // in the config chain [#576 NF-W8FE-4]: issued while a settings save is in
         // flight, this read could answer after that save's re-read and put back a

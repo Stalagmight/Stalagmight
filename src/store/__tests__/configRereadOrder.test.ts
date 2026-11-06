@@ -36,7 +36,15 @@ beforeEach(() => {
         const answer = structuredClone(backend);
         return new Promise<Config>((resolve) => pendingReads.push({ answer, release: () => resolve(answer) }));
       }
-      case 'patch_config':
+      case 'patch_config': {
+        // The gas writer's field patches (#576 FZ-INT-3-D1) land at once.
+        const patches = (args as { patches: Array<{ path: string[]; value: unknown }> }).patches;
+        if (patches.every((p) => p.path[0] === 'gas')) {
+          const gas: Record<string, unknown> = { ...backend.gas };
+          for (const p of patches) gas[p.path[1]!] = p.value;
+          backend = { ...backend, gas: gas as unknown as Config['gas'] };
+          return Promise.resolve({ keychain_residue: null, persistent_residue: null });
+        }
         // The save is slow: it lands only when the test releases it.
         return new Promise((resolve) => {
           releasePatch = () => {
@@ -44,6 +52,7 @@ beforeEach(() => {
             resolve({ keychain_residue: null, persistent_residue: null });
           };
         });
+      }
       case 'update_gas_config':
         backend = { ...backend, gas: (args as { gas: Config['gas'] }).gas };
         return Promise.resolve(undefined);

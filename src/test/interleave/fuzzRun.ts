@@ -224,7 +224,7 @@ export interface RunOptions {
   overlapSwitches: boolean;
   /** FZ-FZ-INT-4: start a switch while a save is in flight, or a save while a switch is. */
   saveAcrossSwitch: boolean;
-  /** FZ-FZ-INT-3: patch a [gas] field from Settings (the Plan-mode gas writer sends the whole block). */
+  /** FZ-FZ-INT-3 (fixed): patch a [gas] field from Settings while the Plan-mode gas writer writes another. */
   gasFieldPatches: boolean;
   /** FZ-FZ-INT-6: count a display write made in one session that lands after a reload of its file. */
   crossSessionDisplay: boolean;
@@ -244,7 +244,7 @@ export const ALL_SHAPES: RunOptions = {
 export const KNOWN_OPEN_EXCLUDED: RunOptions = {
   overlapSwitches: false,
   saveAcrossSwitch: false,
-  gasFieldPatches: false,
+  gasFieldPatches: true,
   crossSessionDisplay: false,
   editAcrossSwitch: false,
 };
@@ -622,10 +622,18 @@ export async function runActions(actions: Action[], options: RunOptions = DEFAUL
     }
 
     // Config: the last value set per field, on disk and in the store.
+    // The Plan-mode gas writer sends `patch_config` too (FZ-INT-3-D1): a faulted patch
+    // excuses the writer whose field it carried.
+    const gasWriterPatch = (args: Record<string, unknown> | undefined) =>
+      ((args?.patches as Array<{ path: string[] }> | undefined) ?? []).some(
+        (p) => p.path.join('.') === 'gas.swim_speed_m_per_min',
+      );
     const faultedWriters = new Set(
-      sched.faulted.map((f) => ({ patch_config: 'patch', update_gas_config: 'gas', update_panel_sizes: 'panel' })[
-        f.command as 'patch_config'
-      ]),
+      sched.faulted.map((f) =>
+        f.command === 'patch_config' && gasWriterPatch(f.args)
+          ? 'gas'
+          : ({ patch_config: 'patch', update_gas_config: 'gas', update_panel_sizes: 'panel' })[f.command as 'patch_config'],
+      ),
     );
     const read = (root: unknown, path: string) =>
       path.split('.').reduce<unknown>((at, part) => (at as Record<string, unknown> | undefined)?.[part], root);

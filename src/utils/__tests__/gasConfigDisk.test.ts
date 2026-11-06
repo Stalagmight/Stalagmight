@@ -10,6 +10,10 @@
  * gas-vs-gas but nothing else, because the payload was a whole `Config` spread from a store
  * snapshot - so a data-table column resize landing inside a gas field's debounce window was
  * reverted by this module's stale copy of `panels`.
+ *
+ * A fourth (#576 FZ-INT-3-D1): within `[gas]` too, the write carries only the fields queued
+ * here. The whole block spread from the store's copy put back a gas field Settings had just
+ * saved.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -32,10 +36,11 @@ beforeEach(async () => {
   await flushGasConfigWrite();
   useProjectStore.setState({
     config: structuredClone(defaultConfig) as Config,
-    updateGasConfig: vi.fn(async (gas: GasConfig) => {
+    updateGasConfig: vi.fn(async (gas: Partial<GasConfig>) => {
       // Simulate the real updateGasConfig's post-IPC `loadConfig()`: the saved config only
       // reflects the write once the round trip completes.
-      useProjectStore.setState({ config: { ...useProjectStore.getState().config!, gas } });
+      const config = useProjectStore.getState().config!;
+      useProjectStore.setState({ config: { ...config, gas: { ...config.gas, ...gas } } });
       return OK;
     }),
   });
@@ -50,9 +55,8 @@ describe('queueGasConfigWrite', () => {
 
     const updateGasConfig = useProjectStore.getState().updateGasConfig as ReturnType<typeof vi.fn>;
     expect(updateGasConfig).toHaveBeenCalledTimes(1);
-    const written = updateGasConfig.mock.calls[0]?.[0] as GasConfig;
-    expect(written.swim_speed_m_per_min).toBe(12);
-    expect(written.dpv).toEqual(RIG);
+    const written = updateGasConfig.mock.calls[0]?.[0] as Partial<GasConfig>;
+    expect(written).toEqual({ swim_speed_m_per_min: 12, dpv: RIG });
   });
 
   it('writes through the gas-only command, never a whole-Config write (#357 item 2)', async () => {
@@ -86,17 +90,22 @@ describe('queueGasConfigWrite', () => {
     expect(updateGasConfig).not.toHaveBeenCalled();
   });
 
-  it('a write queued while another is in flight merges against the first write LANDING, not the stale snapshot', async () => {
+  it('a write queued while another is in flight goes after it LANDS and cannot carry the first one back', async () => {
     let releaseFirst = () => {};
     const gate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
-    const applied: GasConfig[] = [];
+    const applied: Array<Partial<GasConfig>> = [];
+    let landed = 0;
     useProjectStore.setState({
-      updateGasConfig: vi.fn(async (gas: GasConfig) => {
+      updateGasConfig: vi.fn(async (gas: Partial<GasConfig>) => {
+        // The second write starts only once the first has fully landed.
+        expect(landed).toBe(applied.length);
         applied.push(gas);
         if (applied.length === 1) await gate; // hold the first round trip open
-        useProjectStore.setState({ config: { ...useProjectStore.getState().config!, gas } });
+        const config = useProjectStore.getState().config!;
+        useProjectStore.setState({ config: { ...config, gas: { ...config.gas, ...gas } } });
+        landed += 1;
         return OK;
       }),
     });
@@ -111,9 +120,11 @@ describe('queueGasConfigWrite', () => {
     await all;
 
     expect(applied).toHaveLength(2);
-    // The clobber shape this guards: a second writer reading the pre-write snapshot would
-    // carry swim_speed's DEFAULT here and silently revert the first write on disk.
-    expect(applied[1]?.swim_speed_m_per_min).toBe(42);
-    expect(applied[1]?.dpv).toEqual(RIG);
+    // The clobber shape this guarded: a second writer reading the pre-write snapshot
+    // carried swim_speed's DEFAULT and silently reverted the first write on disk. Now it
+    // carries only its own field, so there is nothing in it to revert anything with.
+    expect(applied[1]).toEqual({ dpv: RIG });
+    expect(useProjectStore.getState().config?.gas.swim_speed_m_per_min).toBe(42);
+    expect(useProjectStore.getState().config?.gas.dpv).toEqual(RIG);
   });
 });

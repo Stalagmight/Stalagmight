@@ -15,7 +15,8 @@ import type { GasConfig } from '../types/ipc.generated';
  *   `getState().config` inside that window merges against the pre-write snapshot and silently
  *   reverts the first writer's field. Here every write joins one promise chain and reads the
  *   saved config at EXECUTION time, after the previous write has fully landed, and patches
- *   queued while a write is pending are merged into a single later write.
+ *   queued while a write is pending are merged into a single later write. (The write now
+ *   carries only the queued fields - see below - so nothing is read back into it.)
  *
  * The chaining above only ever solved that for gas-vs-gas. Against a writer in ANOTHER
  * module it did nothing, because the payload was a whole `Config` spread from this store's
@@ -24,6 +25,12 @@ import type { GasConfig } from '../types/ipc.generated';
  * table keeps rendering its own state and only reverts on the next launch. So the write now
  * goes through `updateGasConfig`, which posts ONLY the `[gas]` block (#357 item 2). Ordering
  * could never have fixed that; not sending the other fields is what does.
+ *
+ * [#576 FZ-INT-3-D1] The same held one level down: the whole `[gas]` block, spread from this
+ * store's copy, put back a `[gas]` field Settings had just saved (its patch landed, its
+ * re-read had not, or landed after this write was built). So the write now carries only the
+ * fields queued here, each as its own `[gas, field]` patch - the way Settings saves - and a
+ * field this module never touched cannot be reverted by it.
  *
  * Fire-and-forget by design (a failed write logs inside the store action and keeps the working
  * copy authoritative for the session) - same contract the swim-speed writer always had.
@@ -41,9 +48,8 @@ function fire(): void {
   if (!patch) return;
   chain = chain.then(async () => {
     const store = useProjectStore.getState();
-    const saved = store.config;
-    if (!saved) return;
-    await store.updateGasConfig({ ...saved.gas, ...patch });
+    if (!store.config) return;
+    await store.updateGasConfig(patch);
   });
 }
 

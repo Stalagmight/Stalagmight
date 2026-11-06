@@ -147,6 +147,38 @@ describe('same-setting writes land in the order they were made', () => {
     await settled(2);
     expect(applied.get('gas.swim_speed_m_per_min')).toBe(13);
   });
+
+  it('a [gas] field Settings saved is not put back by a Plan-mode gas write (#576 FZ-INT-3)', async () => {
+    // Settings' patch has landed on the backend; its re-read has not reached the store,
+    // whose copy still holds the old value - the window the gas writer's whole [gas]
+    // block, spread from that copy, put the old value back in.
+    const backendGas: Record<string, unknown> = { ...savedConfig.gas, conservative_tank_gas: false };
+    const storeConfig = structuredClone(defaultConfig) as Config;
+    useProjectStore.setState({ config: { ...storeConfig, gas: { ...storeConfig.gas, conservative_tank_gas: true } } });
+    vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
+      const a = (args ?? {}) as Record<string, unknown>;
+      if (cmd === 'get_config') return { ...structuredClone(savedConfig), gas: { ...backendGas } };
+      if (cmd === 'patch_config') {
+        for (const p of a.patches as Array<{ path: string[]; value: unknown }>) {
+          if (p.path[0] === 'gas' && p.path.length === 2) backendGas[p.path[1]!] = p.value;
+        }
+        return { keychain_residue: null, persistent_residue: null };
+      }
+      if (cmd === 'update_gas_config') Object.assign(backendGas, a.gas as Record<string, unknown>);
+      return undefined;
+    });
+
+    queueGasConfigWrite({ swim_speed_m_per_min: 20 });
+    await flushGasConfigWrite();
+
+    console.log('backend gas after the Plan-mode write:', JSON.stringify({
+      conservative_tank_gas: backendGas.conservative_tank_gas,
+      swim_speed_m_per_min: backendGas.swim_speed_m_per_min,
+    }));
+    expect(backendGas.swim_speed_m_per_min).toBe(20);
+    expect(backendGas.conservative_tank_gas).toBe(false);
+    expect(useProjectStore.getState().config?.gas.conservative_tank_gas).toBe(false);
+  });
 });
 
 describe('chainSettingWrite', () => {

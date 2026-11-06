@@ -60,6 +60,16 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
       'load("/caves/CaveA copy.stalx") edit(38) edit(39)',
   },
   {
+    // A [gas] field set in Settings was put back by a Plan-mode gas write that posted
+    // the whole [gas] block from the store's copy (FZ-INT-3-D1: field patches now).
+    id: 'FZ-FZ-INT-3',
+    found: 'config-lost',
+    options: { gasFieldPatches: true },
+    actions:
+      'load("/caves/CaveA.stalx") run(0.000) run(0.000) gas(13) run(0.000) run(0.000) geom run(0.000) saveAs(19) ' +
+      'edit(20) toggleGrid gasFlush run(0.000) patch("conservative_tank_gas", 275) save run(0.825)',
+  },
+  {
     // A new project showed the previous project's Undo as available.
     id: 'FZ-FZ-INT-5',
     found: 'state',
@@ -142,7 +152,13 @@ const REGRESSION_TRACES: Array<{ id: string; found: InvariantId; options?: Parti
  * The CI sweep. A seed stands for the list `generate` makes of it today, so a change
  * to the generator moves every seed: pin a found bug as its trace above, not as a seed.
  */
-const FIXED_SEEDS = Array.from({ length: 100 }, (_, i) => 1 + i);
+const FIXED_SEEDS = [
+  ...Array.from({ length: 100 }, (_, i) => 1 + i),
+  // FZ-FZ-INT-3: the seeds of 1..1000 that lost a Settings [gas] field to a Plan-mode
+  // gas write, with the generator of 8062377e2 (41, 63 and 76 are in the range above).
+  ...[178, 195, 264, 273, 282, 299, 308, 329, 401, 413, 425, 631, 637, 666, 686, 700, 701, 764, 769, 797, 853, 864],
+  ...[873, 921, 947, 958],
+];
 
 function shapes(): RunOptions {
   const wanted = env.FZ_INT_SHAPES;
