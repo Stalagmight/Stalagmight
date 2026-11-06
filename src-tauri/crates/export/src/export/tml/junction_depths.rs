@@ -42,11 +42,13 @@
 //! both, so a junction's mean and a later shot's true absolute depth need no
 //! other spelling, in `.tml` or `.tmlu`.
 //!
-//! Two older guards stay. A shot whose OWN drop already exceeds its own tape is
-//! broken data and is clamped onto the tape, which moves the station it ends
-//! at; the next shot takes that up like any shot touching a moved station. And
-//! an explicit `DepthIn` (a second reading of a station inside one section) is
-//! honoured as long as its shot keeps the bound and neither end moved.
+//! A shot whose OWN drop already exceeds its own tape is broken data
+//! (TML-DEPTH-Q2-D1). Both its depths stay true, and it goes out as the
+//! vertical shot it can at most be: no run (`h = 0`), so `L' = |dz|`, rounded
+//! up the same way. No station moves for it, so the shot after it is untouched.
+//! And an explicit `DepthIn` (a second reading of a station inside one
+//! section) is honoured as long as its shot keeps the bound and neither end
+//! moved.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -179,7 +181,7 @@ pub(super) fn settle(
     }
 
     let mut refitted = 0usize;
-    let mut clamped = 0usize;
+    let mut broken = 0usize;
     for &k in &order {
         let end = exported[k];
         let Some(p) = parent[k] else {
@@ -222,13 +224,11 @@ pub(super) fn settle(
                 if measured.abs() <= shot.length {
                     continue;
                 }
-                // Broken data: its own drop is longer than its tape.
-                let end = start + measured.clamp(-shot.length, shot.length);
-                shot.depth_in = start;
-                shot.depth = end;
-                exported[k] = end;
-                moved[k] = true;
-                clamped += 1;
+                // Broken data: its own drop is longer than its tape. Both
+                // depths stay true; it goes out as the vertical shot it can at
+                // most be, no run (h = 0) and its drop as its length.
+                refit(shot, start, end);
+                broken += 1;
                 continue;
             }
         } else if !moved[p] && !moved[k] && (shot.depth - start).abs() <= shot.length {
@@ -253,11 +253,11 @@ pub(super) fn settle(
              took a new length that keeps their plan"
         );
     }
-    if clamped > 0 {
+    if broken > 0 {
         tracing::warn!(
-            shots = clamped,
-            "Ariane export: clamped shots whose own depth change exceeds their length \
-             (broken data) onto their tape"
+            shots = broken,
+            "Ariane export: shots whose own depth change exceeds their length (broken \
+             data) were exported vertical, with that depth change as their length"
         );
     }
     (junctions, reached)

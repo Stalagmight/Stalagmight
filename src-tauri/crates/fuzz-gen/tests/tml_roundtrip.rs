@@ -140,12 +140,12 @@ enum Depths {
     /// [#576 TML-DEPTH-D1] A shot the Ariane export may have refitted: one
     /// touching a junction whose depth readings disagree (exported at their
     /// mean), one starting away from where the file's chain puts it, or broken
-    /// data (a drop longer than its tape, clamped onto it). Depth readings are
-    /// true, so its END depth still comes back exactly unless `end_may_move`
-    /// (its end station is such a junction, or the clamp moved it), and its
-    /// horizontal run - the plan - always comes back; its start and its tape
-    /// follow from the depth change the file now states (docs/ariane-export.md,
-    /// "Junction depths").
+    /// data (a drop longer than its tape, exported vertical with its drop as
+    /// its length, TML-DEPTH-Q2-D1). Depth readings are true, so its END depth
+    /// still comes back exactly unless `end_may_move` (its end station is such
+    /// a junction), and its horizontal run - the plan - always comes back; its
+    /// start and its tape follow from the depth change the file now states
+    /// (docs/ariane-export.md, "Junction depths").
     Refitted { end_may_move: bool },
 }
 
@@ -535,10 +535,11 @@ fn make_continuous(model: &mut TmlModel) {
 /// - a merged station whose readings (every arriving and departing depth of
 ///   every station merged into it) disagree is a junction that may be
 ///   exported at their mean;
-/// - a shot dropping further than its tape is broken data and may be clamped
-///   onto it, which moves its end station;
+/// - a shot dropping further than its tape is broken data and may be
+///   exported vertical, its drop as its length; both its depths, and so the
+///   next shot, stay as measured (TML-DEPTH-Q2-D1);
 /// - a shot that does not start where the one before it ended (a second
-///   reading inside its section, or after a clamped shot) may be refitted.
+///   reading inside its section) may be refitted.
 ///
 /// Everything else - every station of an ordinary chain - must come back
 /// exactly: depths, tape and all.
@@ -569,8 +570,8 @@ fn expected_depths(project: &Project) -> HashMap<(SectionId, usize), Depths> {
         group.entry(rb).or_insert(rb);
     }
     let broken = |shot: &Shot| (shot.depth_out - shot.depth_in).abs() > shot.length + 1e-9;
-    // Per merge group: (lowest reading, highest reading, a broken shot arrives).
-    let mut readings: HashMap<Station, (f64, f64, bool)> = HashMap::new();
+    // Per merge group: (lowest reading, highest reading).
+    let mut readings: HashMap<Station, (f64, f64)> = HashMap::new();
     let members: Vec<Station> = group.keys().copied().collect();
     for station in members {
         let Some(section) = project.sections.iter().find(|s| s.id == station.0) else {
@@ -582,7 +583,7 @@ fn expected_depths(project: &Project) -> HashMap<(SectionId, usize), Depths> {
         let key = root(&mut group, station);
         let entry = readings
             .entry(key)
-            .or_insert((f64::INFINITY, f64::NEG_INFINITY, false));
+            .or_insert((f64::INFINITY, f64::NEG_INFINITY));
         for depth in [arriving.map(|s| s.depth_out), departing.map(|s| s.depth_in)]
             .into_iter()
             .flatten()
@@ -590,33 +591,31 @@ fn expected_depths(project: &Project) -> HashMap<(SectionId, usize), Depths> {
             entry.0 = entry.0.min(depth);
             entry.1 = entry.1.max(depth);
         }
-        entry.2 |= arriving.is_some_and(broken);
     }
-    let mut status = |station: Station| -> (bool, bool, bool) {
-        // (merged, its readings disagree, a broken shot arrives there)
+    // Whether a station is a merged one whose readings disagree.
+    let mut disagrees = |station: Station| -> bool {
         if !group.contains_key(&station) {
-            return (false, false, false);
+            return false;
         }
         let key = root(&mut group, station);
-        let (low, high, broken_arrival) = readings.get(&key).copied().unwrap_or((0.0, 0.0, false));
-        (true, high - low > 1e-9, broken_arrival)
+        let (low, high) = readings.get(&key).copied().unwrap_or((0.0, 0.0));
+        high - low > 1e-9
     };
     let mut out = HashMap::new();
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
-            let (_, from_disagrees, from_broken) = status((section.id, i as u32));
-            let (_, to_disagrees, _) = status((section.id, i as u32 + 1));
+            let from_disagrees = disagrees((section.id, i as u32));
+            let to_disagrees = disagrees((section.id, i as u32 + 1));
             let follows_chain = match i.checked_sub(1).and_then(|k| section.shots.get(k)) {
-                Some(before) => (before.depth_out - shot.depth_in).abs() < 1e-9 && !broken(before),
+                Some(before) => (before.depth_out - shot.depth_in).abs() < 1e-9,
                 None => true,
             };
-            let plain =
-                !from_disagrees && !to_disagrees && !from_broken && !broken(shot) && follows_chain;
+            let plain = !from_disagrees && !to_disagrees && !broken(shot) && follows_chain;
             let depths = if plain {
                 Depths::Absolute
             } else {
                 Depths::Refitted {
-                    end_may_move: to_disagrees || broken(shot),
+                    end_may_move: to_disagrees,
                 }
             };
             out.insert((section.id, i), depths);

@@ -2,17 +2,19 @@
 //! continuations, branch starts whose reading disagrees with the station they
 //! hang off (or agrees with it), a section's second piece at the same station
 //! (a section merged part-way along), explicit second readings, zero-length
-//! ties, second entrances and closures.
+//! ties, broken data (a drop longer than its tape), second entrances and
+//! closures.
 //!
 //! For every tree, in both profiles:
 //! - every station's exported depth is its true depth, except the junctions
 //!   whose readings disagree, and each of those is the mean of its readings,
-//!   one per section;
+//!   one per section. No other exception: a broken shot's end keeps its true
+//!   depth too (TML-DEPTH-Q2-D1);
 //! - the receipt counts exactly those junctions and their widest spread;
 //! - `|Depth - parent.Depth| <= Length` holds on the values as written;
-//! - a shot keeps its tape unless it touches a moved station, and then its
-//!   length is `sqrt(h^2 + dz'^2)` for its measured run `h`, rounded up by at
-//!   most the written micrometre;
+//! - a shot keeps its tape unless it touches a moved station or is broken, and
+//!   then its length is `sqrt(h^2 + dz'^2)` for its measured run `h` (none for
+//!   a broken shot, so its drop), rounded up by at most the written micrometre;
 //! - plan positions, read back the way our importer reads the file, are
 //!   unchanged. The bound allows only what that micrometre round-up can move a
 //!   run by: `sqrt(h^2 + 2 L' e) - h` for a round-up `e`, which is about a
@@ -118,6 +120,11 @@ fn tree(rng: &mut Rng) -> Vec<ExportShot> {
         }
         let (length, change) = if rng.chance(0.1) {
             (0.0, 0.0) // a zero-length tie
+        } else if rng.chance(0.06) {
+            // Broken data: its own drop is longer than its tape.
+            let length = rng.range(0.1, 5.0);
+            let sign = if rng.chance(0.5) { 1.0 } else { -1.0 };
+            (length, sign * rng.range(1.0001, 3.0) * length)
         } else {
             let length = rng.range(0.5, 20.0);
             (length, rng.range(-0.9, 0.9) * length)
@@ -256,7 +263,9 @@ fn check(seed: u64, profile: TmlProfile) {
             !orig.depth_in_same_as_prev && (orig.depth - input[p].depth).abs() > orig.length;
         let off_parent =
             orig.depth_in_same_as_prev && (orig.depth_in - input[p].depth).abs() >= 1e-9;
-        let touched = !closure && (want[p].1 || want[i].1 || explicit_breaks || off_parent);
+        let broken = orig.depth_in_same_as_prev && (orig.depth - orig.depth_in).abs() > orig.length;
+        let touched =
+            !closure && (want[p].1 || want[i].1 || explicit_breaks || off_parent || broken);
         let holds = if rewritten || touched || profile == TmlProfile::SpeleoDbSidecar {
             strict(got.depth, shots[p].depth, got.length)
         } else {
@@ -329,17 +338,25 @@ fn check(seed: u64, profile: TmlProfile) {
 
 #[test]
 fn junctions_average_and_nothing_else_moves() {
-    let (mut averaged, mut trees) = (0usize, 0u64);
+    let (mut averaged, mut broken, mut trees) = (0usize, 0usize, 0u64);
     for seed in 0..500u64 {
         let input = tree(&mut Rng(seed));
         averaged += expected(&input).1;
+        broken += input
+            .iter()
+            .filter(|s| s.depth_in_same_as_prev && (s.depth - s.depth_in).abs() > s.length)
+            .count();
         trees += 1;
         check(seed, TmlProfile::User);
         check(seed, TmlProfile::SpeleoDbSidecar);
     }
-    // The generator has to keep producing the case under test.
+    // The generator has to keep producing the cases under test.
     assert!(
         averaged > trees as usize,
         "only {averaged} averaged junctions in {trees} trees"
+    );
+    assert!(
+        broken > trees as usize / 4,
+        "only {broken} broken shots in {trees} trees"
     );
 }

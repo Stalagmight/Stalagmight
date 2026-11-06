@@ -1513,8 +1513,8 @@ fn build_export_shots_with_report(
         //   nothing hangs off it and no position propagates through it.
         //
         // - `node_depth` is snapshotted BEFORE the geometry repair, which can move
-        //   a node: a junction exported at the mean of its readings, or the end
-        //   of a clamped shot. `junction_depths::settle` re-derives a connector
+        //   a node: a junction exported at the mean of its readings, the only
+        //   node it moves. `junction_depths::settle` re-derives a connector
         //   touching a moved node - both depths and its length - so the file
         //   states the depths the nodes are written at.
         let depth_a = node_depth.get(&from_id).copied().unwrap_or(0.0);
@@ -3824,16 +3824,18 @@ mod tests {
     }
 
     #[test]
-    fn a_shot_exactly_on_the_bound_is_left_alone_and_one_past_it_is_clamped() {
+    fn a_shot_exactly_on_the_bound_is_left_alone_and_one_past_it_goes_out_vertical() {
         // `|Depth - parent.Depth| == Length` is a legal, perfectly vertical shot,
         // not a violation - moving it would invent a horizontal component. One
-        // ten-thousandth over is broken data whichever way it is read, so the
-        // repair clamps it back onto the tape rather than exporting an impossible
-        // shot.
+        // ten-thousandth over is broken data whichever way it is read
+        // (TML-DEPTH-Q2-D1): both its depths stay true and it goes out as the
+        // vertical shot it can at most be, its drop as its length. No station
+        // moves, so the shot after it keeps its start and its tape.
         let mut shots = vec![
             geometry_shot(1, -1, 0.0, 10.0, 0.0, false),
             geometry_shot(2, 1, 10.0, 13.0, 3.0, true),
             geometry_shot(3, 2, 13.0, 16.0001, 3.0, true),
+            geometry_shot(4, 3, 16.0001, 17.0001, 2.0, true),
         ];
 
         enforce_ariane_geometry_invariants(&mut shots, TmlProfile::User);
@@ -3844,9 +3846,21 @@ mod tests {
             shots[1].depth
         );
         assert!(
-            (shots[2].depth - 16.0).abs() < 1e-9,
-            "the over-bound shot is clamped to its own length, got {}",
+            (shots[2].depth - 16.0001).abs() < 1e-9,
+            "the over-bound shot keeps its true end depth, got {}",
             shots[2].depth
+        );
+        assert!(
+            shots[2].length >= 3.0001 && shots[2].length <= 3.0001 + 2e-6,
+            "the over-bound shot's length is its drop, 3.0001 m, got {}",
+            shots[2].length
+        );
+        assert!(shots[2].depth_in_same_as_prev, "it starts at its parent");
+        assert!(
+            (shots[3].depth - 17.0001).abs() < 1e-9 && (shots[3].length - 2.0).abs() < 1e-12,
+            "the shot after it is untouched, got depth {} length {}",
+            shots[3].depth,
+            shots[3].length
         );
         assert_ariane_chain_is_representable(&shots);
     }
