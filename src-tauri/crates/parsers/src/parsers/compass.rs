@@ -801,8 +801,15 @@ fn length_missing(raw: f64) -> bool {
 
 /// A stored LRUD in meters. A `.DAT` stores LRUDs in decimal feet whatever the
 /// FORMAT's passage unit says (#576 B28).
+///
+/// Any negative value is the missing marker (#576 FZ-PARSE-7-D1), not only
+/// `-1` and below: the vendored parser hands the column over raw, and a marker
+/// that went through a unit conversion (`-0.30`, -1 ft written in metres)
+/// would otherwise import as a negative passage dimension. Walls drops
+/// negative LRUDs the same way.
 fn lrud_meters(raw: f64) -> Option<f64> {
-    if !raw.is_finite() || raw <= -1.0 || raw >= MISSING_VALUE_THRESHOLD {
+    // Not finite, negative, or at the +990 sentinel: not measured.
+    if !(0.0..MISSING_VALUE_THRESHOLD).contains(&raw) {
         return None;
     }
     let value = raw * FEET_TO_METERS;
@@ -4473,3 +4480,8 @@ mod graph_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod lrud_tests;
+
+// #576 FZ-PARSE-7: any negative LRUD reads as missing.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod negative_lrud_tests;

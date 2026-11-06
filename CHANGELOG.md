@@ -19,6 +19,12 @@ Update this file every time a new version is tagged.
 
 - **A junction whose depths disagree is exported at their average** - where a branch starts at a different depth than the station it hangs off, the `.tml`/`.tmlu` export now writes that station at the mean of its readings (the main line's, and one for each section hung there), keeps every other station at its true depth, and gives only the shots touching the junction a new length that keeps their horizontal run, so the plan stays put. Before, the branch was started at the main line's depth and every later shot on it was shifted by the whole mismatch. The export toast says how many junctions were averaged and the largest disagreement ([#576](https://github.com/Stalagmight/Stalagmight/issues/576))
 
+### Fixed
+
+#### Import
+
+- **A negative Compass LRUD reads as missing** - Compass marks an unmeasured passage dimension with a negative number, but only `-1` and below were read that way, so a marker that went through a unit conversion (`-0.30`, -1 ft written in metres) imported as a negative passage dimension and was then flagged by validation. Any negative LRUD now reads as not measured, as in Walls.
+
 ## [0.5.0] - 2026-08-13
 
 The first release with builds for all three platforms. The headline additions are
