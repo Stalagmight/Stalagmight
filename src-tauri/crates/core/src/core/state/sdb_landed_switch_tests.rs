@@ -30,7 +30,7 @@ use super::speleodb::{
     authed_session_at, local_dto, recording_stub, HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
 };
 use super::speleodb_push::UploadMadeFor;
-use super::switch_identity_tests::{identity_of, saved};
+use super::switch_identity_tests::{identity_of, new_section, saved};
 use super::{for_project, AppState, ProjectIdentity};
 use crate::core::Command;
 use crate::models::{CommandErrorCode, SpeleoLink};
@@ -127,23 +127,50 @@ fn record_landing_made_for(
     made_for_a: Option<ProjectIdentity>,
     push_start: &str,
 ) -> Option<CommandErrorCode> {
-    let landed = state.speleodb_revision_landed(REMOTE_ID);
-    let made_for = UploadMadeFor {
-        file: a,
-        link: link_a,
+    let world = MadeFor {
+        state,
+        a,
+        link_a,
+        made_for_a,
     };
-    for_project(made_for_a, || {
-        state.speleodb_record_landed_upload(
-            &landed,
-            &made_for,
-            Some(LANDED),
-            push_start,
-            push_start,
-            None,
-        )
-    })
-    .err()
-    .map(|e| local_dto(e).code)
+    world.record(push_start, push_start, None)
+}
+
+/// What a push read when it was made for CaveA, and the state it records into.
+struct MadeFor<'a> {
+    state: &'a AppState,
+    a: &'a Path,
+    link_a: &'a SpeleoLink,
+    made_for_a: Option<ProjectIdentity>,
+}
+
+impl MadeFor<'_> {
+    /// The push's bookkeeping after a landed upload, with the push's undo cutoff and
+    /// the newest undo stamp its snapshot carried.
+    fn record(
+        self,
+        push_start: &str,
+        undo_cutoff: &str,
+        captured_through: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Option<CommandErrorCode> {
+        let landed = self.state.speleodb_revision_landed(REMOTE_ID);
+        let made_for = UploadMadeFor {
+            file: self.a,
+            link: self.link_a,
+        };
+        for_project(self.made_for_a, || {
+            self.state.speleodb_record_landed_upload(
+                &landed,
+                &made_for,
+                Some(LANDED),
+                push_start,
+                undo_cutoff,
+                captured_through,
+            )
+        })
+        .err()
+        .map(|e| local_dto(e).code)
+    }
 }
 
 /// [#576 SDB-ACCT-D1] The app's managed state, lent to a detached release the way the
@@ -408,4 +435,140 @@ fn a_file_that_now_holds_another_project_is_left_alone() {
     assert_eq!(code, Some(CommandErrorCode::ProjectChanged));
     assert_eq!(a_link.base_commit_sha.as_deref(), Some(OLD_BASE));
     assert!(a_link.has_unpushed_edits);
+}
+
+/// The undo stamps of `path`'s persisted undo stack (oldest first), and how many redo
+/// rows it holds.
+fn history_on_disk(path: &Path) -> (Vec<Option<String>>, usize) {
+    let db = Database::open_for_metadata(path).expect("open for metadata");
+    let undo = db
+        .load_undo_stack_with_timestamps()
+        .expect("undo rows")
+        .into_iter()
+        .map(|(_, _, _, stamp)| stamp)
+        .collect();
+    let redo = db
+        .load_redo_stack_with_timestamps()
+        .expect("redo rows")
+        .len();
+    (undo, redo)
+}
+
+/// What [`landed_after_switch_with_history`] saw.
+struct HistoryOutcome {
+    code: Option<CommandErrorCode>,
+    on_disk_before: (Vec<Option<String>>, usize),
+    on_disk_after: (Vec<Option<String>>, usize),
+    undo_cutoff: chrono::DateTime<chrono::Utc>,
+    open_can_undo: bool,
+}
+
+/// [#303] CaveA edited under its lock - `before` sections created and saved, as the
+/// push's pre-push save leaves its file - then the push starts (its cutoff and the
+/// newest stamp its snapshot carried), `after` more sections are created and saved,
+/// and the session switches to CaveB. Records the landing made for CaveA.
+fn landed_after_switch_with_history(before: usize, after: usize) -> HistoryOutcome {
+    let temp = TempDir::new().expect("temp");
+    let a = saved(temp.path(), "CaveA.stalx", "CaveA");
+    let b = saved(temp.path(), "CaveB.stalx", "CaveB");
+    link_dirty(&a, EDITED_BEFORE);
+    let state = state_with_null_sink();
+    state.do_load_project_full(a.clone()).expect("open CaveA");
+    state.set_edit_enabled(true);
+    let made_for_a = identity_of(&state);
+    let link_a = state.speleodb_open_link().expect("CaveA's link");
+    let edit_and_save = |n: usize, tag: &str| {
+        for i in 0..n {
+            let created = state.execute(new_section(&format!("{tag}{i}")));
+            assert!(created.success, "{:?}", created.error);
+        }
+        let saved = state.execute(Command::SaveProject { path: None });
+        assert!(saved.success, "{:?}", saved.error);
+    };
+    edit_and_save(before, "pushed");
+    std::thread::sleep(Duration::from_millis(5));
+    // The push's two instants, as `speleodb_upload` takes them from its snapshot.
+    let push_start = chrono::Utc::now();
+    let captured_through = Database::open_for_metadata(&a)
+        .expect("snapshot")
+        .newest_undo_timestamp()
+        .expect("newest stamp");
+    let undo_cutoff = captured_through.map_or(push_start, |newest| newest.max(push_start));
+    std::thread::sleep(Duration::from_millis(5));
+    edit_and_save(after, "later");
+    let on_disk_before = history_on_disk(&a);
+    state.do_load_project_full(b).expect("open CaveB");
+    let code = MadeFor {
+        state: &state,
+        a: &a,
+        link_a: &link_a,
+        made_for_a,
+    }
+    .record(
+        &push_start.to_rfc3339(),
+        &undo_cutoff.to_rfc3339(),
+        captured_through,
+    );
+    HistoryOutcome {
+        code,
+        on_disk_before,
+        on_disk_after: history_on_disk(&a),
+        undo_cutoff,
+        open_can_undo: state.can_undo(),
+    }
+}
+
+#[test]
+fn a_push_switched_away_from_drops_the_history_it_carried_from_that_file() {
+    // The landed commit carries CaveA's two edits; left in CaveA's file, the next
+    // push of CaveA carried them again (#303 duplication).
+    let outcome = landed_after_switch_with_history(2, 0);
+    println!(
+        "[#303] landed push made for CaveA, CaveB open -> refusal {:?}; CaveA's undo rows \
+         before {} (redo {}), after {} (redo {}); CaveB can undo {}",
+        outcome.code,
+        outcome.on_disk_before.0.len(),
+        outcome.on_disk_before.1,
+        outcome.on_disk_after.0.len(),
+        outcome.on_disk_after.1,
+        outcome.open_can_undo
+    );
+    assert_eq!(outcome.code, Some(CommandErrorCode::ProjectChanged));
+    assert_eq!(
+        outcome.on_disk_before.0.len(),
+        2,
+        "premise: the edits are in the file"
+    );
+    assert!(
+        outcome.on_disk_after.0.is_empty() && outcome.on_disk_after.1 == 0,
+        "the history the commit carried is gone from CaveA's file, redo with it"
+    );
+    assert!(!outcome.open_can_undo, "CaveB's history is not touched");
+}
+
+#[test]
+fn an_edit_made_after_the_push_started_keeps_its_history_in_that_file() {
+    // The later edit is not in the commit: its undo entry stays, as on the open copy.
+    let outcome = landed_after_switch_with_history(1, 1);
+    let kept: Vec<String> = outcome.on_disk_after.0.iter().flatten().cloned().collect();
+    println!(
+        "[#303] landed push, an edit after its start -> CaveA's undo rows before {}, after \
+         {kept:?}; cutoff {}",
+        outcome.on_disk_before.0.len(),
+        outcome.undo_cutoff.to_rfc3339()
+    );
+    assert_eq!(
+        outcome.on_disk_before.0.len(),
+        2,
+        "premise: both edits are in the file"
+    );
+    assert_eq!(kept.len(), 1, "only the later edit's entry is left");
+    let stamp = kept
+        .first()
+        .and_then(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).ok())
+        .map(|stamp| stamp.with_timezone(&chrono::Utc));
+    assert!(
+        stamp.is_some_and(|stamp| stamp > outcome.undo_cutoff),
+        "and it is the later one: {stamp:?}"
+    );
 }

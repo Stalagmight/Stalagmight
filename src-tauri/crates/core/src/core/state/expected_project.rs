@@ -41,7 +41,8 @@
 //! (through `refused_by` for a SpeleoDB verb) with nothing written. [#576
 //! Q-W44-6-D1] The push's link write after a landed upload is the one exception: it
 //! still records the landing in the link of the file it was made from, never the open
-//! one (`speleodb_record_landed_upload`).
+//! one, and drops the undo history the commit carried from that file
+//! (`speleodb_record_landed_upload`).
 //!
 //! [#576 RVF-c-C2] What the identity does NOT tell apart: two sessions of the SAME
 //! file. After load A, load B, load A (or a close and reopen of A), a request made

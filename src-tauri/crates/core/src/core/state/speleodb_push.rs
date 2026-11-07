@@ -74,13 +74,13 @@ fn record_landing(link: &mut crate::models::SpeleoLink, new_base: Option<&str>, 
 }
 
 /// [#576 Q-W44-6-D1] [`record_landing`] in the link row of `made_for.file`, through a
-/// handle of its own: the link as written, or `Ok(None)` when that file holds no link,
-/// or a link to another project or deployment than the push read.
+/// handle of its own: that handle and the link as written, or `Ok(None)` when that
+/// file holds no link, or a link to another project or deployment than the push read.
 fn record_landing_in_file(
     made_for: &UploadMadeFor<'_>,
     new_base: Option<&str>,
     push_start: &str,
-) -> Result<Option<crate::models::SpeleoLink>, String> {
+) -> Result<Option<(crate::persistence::Database, crate::models::SpeleoLink)>, String> {
     let db =
         crate::persistence::Database::open_existing(made_for.file).map_err(|e| e.to_string())?;
     let Some(mut link) = db.load_speleo_link().map_err(|e| e.to_string())? else {
@@ -95,7 +95,7 @@ fn record_landing_in_file(
     record_landing(&mut link, new_base, push_start);
     db.save_speleo_link(Some(&link))
         .map_err(|e| e.to_string())?;
-    Ok(Some(link))
+    Ok(Some((db, link)))
 }
 
 /// Sanitize a push SNAPSHOT copy before upload: clear the dirty bit and strip the
@@ -1545,7 +1545,13 @@ impl AppState {
         let _commands = self.hold_commands();
         // [#576 RVF-c-C1] Never into the link of a project a switch opened meanwhile.
         if let Err(refusal) = self.refuse_other_project("Recording the upload") {
-            self.speleodb_record_landed_upload_in_file(made_for, new_base, push_start);
+            self.speleodb_record_landed_upload_in_file(
+                made_for,
+                new_base,
+                push_start,
+                undo_cutoff,
+                captured_through,
+            );
             return Err(super::speleodb::refused_by(refusal));
         }
         self.speleodb_mutate_link(|l| record_landing(l, new_base, push_start))?;
@@ -1564,9 +1570,10 @@ impl AppState {
     /// any more), or when it cannot be opened. Best-effort: the verb is answered
     /// `PROJECT_CHANGED` either way, and a failure is logged.
     ///
-    /// Only the link: the undo history the commit carried stays in that file (its
-    /// stack is not the one in memory), as after a crash between the upload and the
-    /// local bookkeeping.
+    /// [#303] And the undo history the commit carried, cut from that file's history
+    /// by the rule a landed push applies to the open copy's
+    /// ([`Self::speleodb_drop_pushed_history_in_file`]). It used to stay in the file,
+    /// so the next push of that project carried it a second time.
     ///
     /// [#576 SDB-ACCT-D1] And the lock: the switch's (or close's) silent release ran
     /// while this copy was still dirty, so the un-pushed-edits veto kept the lock.
@@ -1581,6 +1588,8 @@ impl AppState {
         made_for: &UploadMadeFor<'_>,
         new_base: Option<&str>,
         push_start: &str,
+        undo_cutoff: &str,
+        captured_through: Option<chrono::DateTime<chrono::Utc>>,
     ) {
         let open = self.project.lock();
         if open
@@ -1596,6 +1605,16 @@ impl AppState {
             return;
         }
         let recorded = record_landing_in_file(made_for, new_base, push_start);
+        // [#576 Q-W44-6-D1, #303] The undo history the commit carried, cut from that file's
+        // history as the open copy's is (`speleodb_clear_undo_after_push`), still
+        // under `project`: the file is not open, and no open can read it meanwhile.
+        let history = match &recorded {
+            Ok(Some((db, _))) => {
+                Some(self.speleodb_drop_pushed_history_in_file(db, undo_cutoff, captured_through))
+            }
+            _ => None,
+        };
+        let recorded = recorded.map(|landed| landed.map(|(_db, link)| link));
         let kept_lock = match &recorded {
             Ok(Some(link)) if !link.has_unpushed_edits => {
                 self.speleodb_take_claim_kept_for_unpushed_edits(&link.project_id, &link.endpoint)
@@ -1603,6 +1622,23 @@ impl AppState {
             _ => None,
         };
         drop(open);
+        match history {
+            Some(Ok(dropped)) => tracing::info!(
+                path = %made_for.file.display(),
+                dropped,
+                purpose = "avoid duplicating pushed history in the next commit (#303)",
+                "speleodb: dropped the undo history the landed push carried from the file it \
+                 was made for"
+            ),
+            Some(Err(e)) => tracing::warn!(
+                error = %e,
+                path = %made_for.file.display(),
+                purpose = "avoid duplicating pushed history in the next commit (#303)",
+                "speleodb: could not drop the undo history the landed push carried from the \
+                 file it was made for; the next push may carry it again"
+            ),
+            None => {}
+        }
         if let Some((params, claim)) = kept_lock {
             tracing::info!(
                 project_id = %params.project_id,
@@ -1636,6 +1672,67 @@ impl AppState {
                  made for; its next open reconciles"
             ),
         }
+    }
+
+    /// [#303] [`Self::speleodb_clear_undo_after_push`] for the file a landed push was
+    /// made from when the session has switched away from it (#576 Q-W44-6-D1): that
+    /// file's history - which its pre-push save and any later save wrote - is loaded
+    /// as an open would load it, the entries the commit carried and the whole redo
+    /// stack are dropped by the same cut ([`crate::core::UndoStack::drop_pushed_entries`],
+    /// same `undo_cutoff` and `captured_through`), what remains is written back the way
+    /// the push writes the open copy's, and the Unwind chain pointer and the
+    /// inherited-history watermark are cleared as the push clears them. Returns how
+    /// many undo entries went.
+    ///
+    /// No crash rule here: it guards the history of THIS session's in-memory stack,
+    /// and this file's history was written by the session that had it open, whose
+    /// saves applied that rule. A replay mark (`UndoEntry::replayed_at`) is not
+    /// persisted, so an entry redone while the upload ran, and saved by the switch, is
+    /// cut as one the commit carried.
+    fn speleodb_drop_pushed_history_in_file(
+        &self,
+        db: &crate::persistence::Database,
+        undo_cutoff: &str,
+        captured_through: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<usize, String> {
+        let cutoff = chrono::DateTime::parse_from_rfc3339(undo_cutoff)
+            .map_err(|e| format!("could not parse the undo cutoff: {e}"))?
+            .with_timezone(&chrono::Utc);
+        let link = db.load_speleo_link().map_err(|e| e.to_string())?;
+        let budget = crate::persistence::Database::load_history_budget();
+        let row_cap = self.history_load_row_cap(link.as_ref());
+        let rows = |loaded: Vec<(i64, String, String, Option<String>)>| {
+            loaded
+                .into_iter()
+                .map(|(_, command, undo, stamp)| (command, undo, stamp))
+                .collect::<Vec<_>>()
+        };
+        let undo = db
+            .load_undo_stack_with_timestamps_within(row_cap, &budget)
+            .map_err(|e| e.to_string())?;
+        let redo = db
+            .load_redo_stack_with_timestamps_within(row_cap, &budget)
+            .map_err(|e| e.to_string())?;
+        let watermark = db
+            .load_speleo_undo_watermark()
+            .map_err(|e| e.to_string())?
+            .and_then(|stamp| chrono::DateTime::parse_from_rfc3339(&stamp).ok())
+            .map(|stamp| stamp.with_timezone(&chrono::Utc));
+        // The bound, the watermark, then the entries: the order the open installs
+        // them in (`commit_open_session_into`).
+        let mut stack =
+            crate::core::UndoStack::new_with_limit(self.undo_stack.lock().history_limit());
+        super::undo_policy::arm_undo_depth_limit(&mut stack, self.undo_policy_for(link.as_ref()));
+        stack.set_inherited_through(watermark);
+        stack.load_from_persisted_with_timestamps(rows(undo), rows(redo));
+        let dropped = stack.drop_pushed_entries(cutoff, captured_through);
+        if !self.persist_locked_undo_stacks_into(db, &stack) {
+            return Err("could not write the remaining history back".to_owned());
+        }
+        db.save_speleo_undo_chain(None).map_err(|e| e.to_string())?;
+        db.save_speleo_undo_watermark(None)
+            .map_err(|e| e.to_string())?;
+        Ok(dropped)
     }
 
     /// [#303] Clear-on-push (q8 / Q25): after a CONFIRMED push, drop the undo entries
