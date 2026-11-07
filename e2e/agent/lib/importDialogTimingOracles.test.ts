@@ -14,15 +14,19 @@
  *   when the grid first measures its box. It now compares the grid's data row
  *   count (`aria-rowcount`).
  *
- * The bridge's in-page code runs here as shipped: `routeFile` through
- * `evalInApp` against jsdom, `HELPERS` evaluated as the page evaluates it, and
- * the screen digest itself. Everything on screen is synthetic.
+ * And the picker doors' readings (#576 W62-NF1): the parse gate and the
+ * refusal toast, read on the click's or the keystroke's own tick for IMPORT
+ * GATE's refusal half.
+ *
+ * The bridge's in-page code runs here as shipped: `routeFile` and the picker
+ * doors through `evalInApp` against jsdom, `HELPERS` evaluated as the page
+ * evaluates it, and the screen digest itself. Everything on screen is synthetic.
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Browser } from 'webdriverio';
 
 import type { ScenarioContext } from '../scenarios/framework';
-import { HELPERS, routeFile } from '../scenarios/importDialogBridge';
+import { answerFileDialogInPage, answerKeyboardFileDialog, HELPERS, routeFile } from '../scenarios/importDialogBridge';
 import { checkFrozenDelete, ImportOracleError, importGateRefusalSeen, toastKeysRaised, type ToastLike } from './importFlowOracles';
 import { computeImportScreenDigest, IMPORT_SCREEN_GLOBAL } from './importScreenDigest';
 import { evalInApp } from './page';
@@ -153,6 +157,98 @@ describe('HFI2-F3: the import-gate refusal is read when the route returns', () =
       { id: 3, revision: 0, key: GATE, leaving: false },
     ];
     expect(injected(before, after)).toEqual([GATE]);
+  });
+});
+
+/**
+ * An app whose picker doors run `pickAndRoute`'s parse gate (#576 W62-NF1):
+ * while a file parses, the toast and no picker; otherwise the picker takes the
+ * armed answer. The toast fades `fadeMs` later, before the bridge's wait for the
+ * answer ends.
+ */
+function appWithPickerDoors(parsing: boolean, fadeMs = 30): void {
+  let state = {
+    activeDialog: null,
+    placementMode: null,
+    dataTableFullScreen: false,
+    importParse: parsing ? { path: '/tmp/first.dmp', token: 1 } : null,
+    dialogData: {},
+    toasts: [] as ToastLike[],
+  };
+  const testApi: Record<string, unknown> = {
+    uiStore: { getState: () => state },
+    projectStore: { getState: () => ({ project: null }) },
+    fileDialogAnswers: { open: [] as { id: string }[], save: [] },
+    fileDialogConsumptions: {} as Record<string, string>,
+  };
+  testWindow().__E2E_TEST__ = testApi;
+  const pickAndRoute = (): void => {
+    if (state.importParse !== null) {
+      state = { ...state, toasts: [...state.toasts, { id: 9, revision: 0, key: GATE, leaving: false }] };
+      setTimeout(() => (state = { ...state, toasts: [] }), fadeMs);
+      return;
+    }
+    const answer = (testApi.fileDialogAnswers as { open: { id: string }[] }).open[0];
+    if (answer) (testApi.fileDialogConsumptions as Record<string, string>)[answer.id] = 'open';
+  };
+  document.body.innerHTML = '<button data-testid="global-open-import-button">Open / Import</button>';
+  const button = document.querySelector('button') as HTMLButtonElement;
+  // jsdom lays nothing out; the bridge clicks only what has a box.
+  button.getBoundingClientRect = () => ({ left: 0, top: 0, width: 80, height: 24 }) as DOMRect;
+  button.addEventListener('click', pickAndRoute);
+  document.onkeydown = (event) => {
+    if (event.ctrlKey && event.key === 'o') pickAndRoute();
+  };
+}
+
+describe('W62-NF1: a picker door reads its parse gate and its toast on its own tick', () => {
+  const settleCap = process.env.STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS;
+  const events = { PointerEvent: globalThis.PointerEvent, MouseEvent: globalThis.MouseEvent };
+  beforeEach(() => {
+    process.env.STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS = '200';
+    // jsdom refuses this environment's `window` as an event's `view`; the bridge's click passes it.
+    const Mouse = events.MouseEvent;
+    globalThis.MouseEvent = class extends Mouse {
+      constructor(type: string, init: MouseEventInit = {}) {
+        super(type, { ...init, view: null });
+      }
+    };
+    (globalThis as Record<string, unknown>).PointerEvent = undefined;
+  });
+  afterEach(() => {
+    if (settleCap === undefined) delete process.env.STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS;
+    else process.env.STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS = settleCap;
+    Object.assign(globalThis, events);
+    document.onkeydown = null;
+  });
+
+  it('reports the refusal a click raised, though it faded before the answer wait ended', async () => {
+    (globalThis as Record<string, unknown>)[IMPORT_SCREEN_GLOBAL] = { digest: computeImportScreenDigest };
+    appWithPickerDoors(true);
+    const clicked = await answerFileDialogInPage(ctx, 'global-open-import-button', 'open', '/tmp/second.dmp');
+    appWithPickerDoors(true);
+    const pressed = await answerKeyboardFileDialog(ctx, 'Ctrl+O', '/tmp/second.dmp');
+
+    for (const outcome of [clicked, pressed]) {
+      expect(outcome).toMatchObject({
+        performed: true,
+        consumed: false,
+        parseAtDispatch: true,
+        dialogAtDispatch: null,
+        placementAtDispatch: false,
+        fullscreenAtDispatch: false,
+        toastsRaised: [GATE],
+      });
+      expect(outcome.digest.toast).toEqual([]);
+    }
+  });
+
+  it('reads no parse and no toast when the door opened the picker', async () => {
+    (globalThis as Record<string, unknown>)[IMPORT_SCREEN_GLOBAL] = { digest: computeImportScreenDigest };
+    appWithPickerDoors(false);
+    const clicked = await answerFileDialogInPage(ctx, 'global-open-import-button', 'open', '/tmp/second.dmp');
+
+    expect(clicked).toMatchObject({ performed: true, consumed: true, parseAtDispatch: false, toastsRaised: [] });
   });
 });
 

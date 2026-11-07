@@ -628,6 +628,43 @@ describe('checkGateRefusalToast (IMPORT GATE, refusal half)', () => {
       expect(check({ handoff, gates, toastsRaised: [GATE] })).toBe('said');
     }
   });
+
+  /**
+   * A picker door (`pickAndRoute`: Open / Import, Import, Ctrl+O / Ctrl+I) has
+   * its own parse gate (#576 W62-NF1): the same toast, raised before the picker
+   * opens, so nothing is routed and the move scores `unconsumed`.
+   */
+  describe('a picker door used while a file parses', () => {
+    const door = { ...parsing, fullscreenAtDispatch: false };
+    const picked = (over: Partial<Parameters<typeof checkGateRefusalToast>[0]> = {}) =>
+      check({ picker: true, handoff: 'unconsumed', gates: door, ...over });
+
+    it('passes a picker door the parse gate refused that raised the toast', () => {
+      expect(picked({ toastsRaised: [GATE] })).toBe('said');
+      // The digest is the fallback only when the door's own reading is missing.
+      expect(picked({ toastsRaised: null, digestToasts: [GATE] })).toBe('said');
+    });
+
+    it('THE REGRESSION: fails a picker door the parse gate refused that raised no toast', () => {
+      expect(() => picked()).toThrow(ImportOracleError);
+      expect(() => picked()).toThrow(/^IMPORT GATE: a picker door the parse gate refused did not say so/);
+      expect(() => picked()).toThrow(/activeDialog=null placement=false parsing=true fullscreen=false/);
+      // Up in the digest from an earlier refusal; this click raised nothing.
+      expect(() => picked({ digestToasts: [GATE] })).toThrow(/did not say so/);
+      // A picker that opened while the file parsed did not refuse on its own tick either.
+      expect(() => picked({ handoff: 'accepted' })).toThrow(/did not say so/);
+    });
+
+    it('does not judge a picker door with no parse in flight, or one a gate in front of it held', () => {
+      expect(picked({ gates: { ...door, parseAtDispatch: false } })).toBe('not-refused');
+      // The dispatcher swallows the chord, and a modal makes the buttons under it inert.
+      expect(picked({ gates: { ...door, dialogAtDispatch: 'import-as-new-project' } })).toBe('not-refused');
+      expect(picked({ gates: { ...door, placementAtDispatch: true } })).toBe('not-refused');
+      expect(picked({ gates: { ...door, fullscreenAtDispatch: true } })).toBe('not-refused');
+      // Not a picker door: an unconsumed answer is not a refusal.
+      expect(check({ handoff: 'unconsumed', gates: door })).toBe('not-refused');
+    });
+  });
 });
 
 /**

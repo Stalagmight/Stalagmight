@@ -727,8 +727,50 @@ export interface DialogOutcome {
   reason: SkipReason | null;
   /** Did the app's picker consume the answer within the settle budget? */
   consumed: boolean;
+  /**
+   * What the door's gates read, IMMEDIATELY BEFORE the click or the keystroke:
+   * `uiStore.importParse !== null` (`pickAndRoute`'s parse gate, #576 W62-NF1),
+   * `activeDialog`, `placementMode !== null` and `dataTableFullScreen` (the
+   * gates in front of the door). `pickAndRoute` reads the first one tick later,
+   * before its first await. False and null when nothing was dispatched.
+   */
+  parseAtDispatch: boolean;
+  dialogAtDispatch: string | null;
+  placementAtDispatch: boolean;
+  fullscreenAtDispatch: boolean;
+  /**
+   * Keys of the toasts the click or the keystroke raised or refreshed, read the
+   * moment it returned (`RouteOutcome.toastsRaised`'s reading): `pickAndRoute`
+   * raises its refusal before its first await, and the consumption wait after
+   * it can outlast the toast. Null when the store has no toast stack, or when
+   * nothing was dispatched.
+   */
+  toastsRaised: string[] | null;
   digest: ImportScreenDigest;
 }
+
+/**
+ * In-page: the gates a picker door reads and the toast stack, for
+ * `answerFileDialogInPage` and `answerKeyboardFileDialog` (`DialogOutcome`).
+ */
+const PICKER_DOOR = `
+  const toastKeysRaised = ${toastKeysRaised.toString()};
+  const doorStore = () => (window.__E2E_TEST__ && window.__E2E_TEST__.uiStore ? window.__E2E_TEST__.uiStore.getState() : null);
+  const doorToasts = () => {
+    const ui = doorStore();
+    return ui && Array.isArray(ui.toasts) ? ui.toasts : null;
+  };
+  const doorGates = () => {
+    const ui = doorStore();
+    return {
+      parseAtDispatch: !!(ui && ui.importParse),
+      dialogAtDispatch: ui && ui.activeDialog !== undefined && ui.activeDialog !== null ? ui.activeDialog : null,
+      placementAtDispatch: !!(ui && ui.placementMode),
+      fullscreenAtDispatch: !!(ui && ui.dataTableFullScreen),
+    };
+  };
+  const noDoorGates = { parseAtDispatch: false, dialogAtDispatch: null, placementAtDispatch: false, fullscreenAtDispatch: false };
+`;
 
 /**
  * Answer a native file dialog, entirely IN PAGE.
@@ -766,6 +808,7 @@ export async function answerFileDialogInPage(
     const spec = args[3];
     const capMs = args[4];
     ${HELPERS}
+    ${PICKER_DOOR}
 
     const testApi = window.__E2E_TEST__;
     const queue = testApi && testApi.fileDialogAnswers && testApi.fileDialogAnswers[kind];
@@ -778,6 +821,8 @@ export async function answerFileDialogInPage(
     else if (!isVisible(el) || isOff(el)) reason = 'not-actionable';
 
     let consumed = false;
+    let gates = noDoorGates;
+    let toastsRaised = null;
     if (reason === null) {
       const id = 'fuzz-' + Date.now() + '-' + Math.floor(Math.random() * 1e9);
       const entry = { id: id, value: value, triggerTestId: trigger, armed: false };
@@ -787,7 +832,12 @@ export async function answerFileDialogInPage(
         testApi.activeFileDialogTriggerTestId = trigger;
       }, { capture: true, once: true });
       try {
+        // The door's gates and the toast stack, on the click's own tick (DialogOutcome).
+        gates = doorGates();
+        const before = doorToasts();
         dispatchClick(el, false, false);
+        const after = doorToasts();
+        toastsRaised = before && after ? toastKeysRaised(before, after) : null;
         const deadline = Date.now() + capMs;
         for (;;) {
           const seen = testApi.fileDialogConsumptions && testApi.fileDialogConsumptions[id];
@@ -808,6 +858,8 @@ export async function answerFileDialogInPage(
       performed: reason === null,
       reason: reason,
       consumed: consumed,
+      ...gates,
+      toastsRaised: toastsRaised,
       digest: await SCREEN.digest(spec),
     };
   `,
@@ -859,6 +911,7 @@ export async function answerKeyboardFileDialog(
     const spec = args[2];
     const capMs = args[3];
     ${HELPERS}
+    ${PICKER_DOOR}
 
     const testApi = window.__E2E_TEST__;
     const queue = testApi && testApi.fileDialogAnswers && testApi.fileDialogAnswers.open;
@@ -873,6 +926,8 @@ export async function answerKeyboardFileDialog(
     testApi.activeFileDialogTriggerTestId = trigger;
 
     let consumed = false;
+    let gates = noDoorGates;
+    let toastsRaised = null;
     try {
       const target = document.activeElement || document.body;
       const init = {
@@ -885,7 +940,12 @@ export async function answerKeyboardFileDialog(
         cancelable: true,
         composed: true,
       };
+      // The gates the dispatcher and pickAndRoute read, and the toast stack, on the keydown's own tick.
+      gates = doorGates();
+      const before = doorToasts();
       target.dispatchEvent(new KeyboardEvent('keydown', init));
+      const after = doorToasts();
+      toastsRaised = before && after ? toastKeysRaised(before, after) : null;
       target.dispatchEvent(new KeyboardEvent('keyup', init));
       const deadline = Date.now() + capMs;
       for (;;) {
@@ -909,6 +969,8 @@ export async function answerKeyboardFileDialog(
       performed: true,
       reason: null,
       consumed: consumed,
+      ...gates,
+      toastsRaised: toastsRaised,
       digest: await SCREEN.digest(spec),
     };
   `,

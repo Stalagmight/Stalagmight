@@ -131,7 +131,8 @@
  *   IMPORT GATE      a second file routed into a screen an import owns must be
  *                    refused (#411's `importFlowOwnsScreen`), and every route
  *                    the gate refused - the parse gate's too, with no import
- *                    screen up - must say so (`checkGateRefusalToast`)
+ *                    screen up - must say so (`checkGateRefusalToast`), as
+ *                    must a picker door used while a file parses
  *   EXPORT CHORD     Ctrl+E must be inert while a dialog owns the screen -
  *                    judged on the dialog the DISPATCHER saw, not the digest
  *   CLOSE            closing the project at idle must leave nothing behind
@@ -507,6 +508,13 @@ const RECEIPT_TOAST_KEY = 'import-receipt';
  * `routeOpenedFile` raises when `importFlowOwnsScreen` refuses a second file.
  */
 const IMPORT_GATE_TOAST_KEY = 'import-in-progress';
+/**
+ * Trigger ids whose click is a `pickAndRoute` door (#576 W62-NF1): the Global
+ * View's Open / Import (`GlobalView.tsx`, `openOrImport`) and the project
+ * toolbar's Import (`Toolbar.tsx`, `handleImportDmp`). Every `ARMABLE_KEYS`
+ * chord is one too (`runFileShortcutAction`).
+ */
+const PICKER_DOOR_TRIGGERS: ReadonlySet<string> = new Set(['global-open-import-button', 'toolbar-import-button']);
 /** Times an `idle` screen is re-observed before a flow is called finished. */
 const IDLE_CONFIRMATIONS = 3;
 /** Grace between those observations. One IPC round trip is tens of ms. */
@@ -1099,25 +1107,31 @@ export const importDialogFuzz: Scenario = {
       /**
        * The dialog the app's own gate saw: for a `key:` chord, what
        * `useKeyboardShortcuts` read; for a `route`, what `importFlowOwnsScreen`
-       * read. Null for every other move, and whenever no dialog was up.
+       * read; for a picker door (a trigger's picker, Ctrl+O / Ctrl+I), what was
+       * up in front of it (`DialogOutcome`). Null for every other move, and
+       * whenever no dialog was up.
        */
       dialogAtDispatch: string | null;
       /**
        * `placementMode !== null` at the same instant: on a `route`, what
        * `importFlowOwnsScreen` read; on a `key:` chord, one of the three gates
-       * `useKeyboardShortcuts` reads. Null on every other move.
+       * `useKeyboardShortcuts` reads; on a picker door, the same. Null on every
+       * other move.
        */
       placementAtDispatch: boolean | null;
-      /** `dataTableFullScreen` at the same instant. `key:` chords only. */
+      /** `dataTableFullScreen` at the same instant. `key:` chords and picker doors only. */
       fullscreenAtDispatch: boolean | null;
       /**
-       * `importParse !== null` at the same instant (`RouteOutcome.parseAtDispatch`):
-       * the parse gate. Routes only; null on every other move.
+       * `importParse !== null` at the same instant (`RouteOutcome.parseAtDispatch`,
+       * `DialogOutcome.parseAtDispatch`): the parse gate. Routes and picker doors
+       * only; null on every other move.
        */
       parseAtDispatch: boolean | null;
       /**
        * On a `route`, the toasts it raised, read when it returned
-       * (`RouteOutcome.toastsRaised`, #576 HFI2-F3). Null on every other move.
+       * (`RouteOutcome.toastsRaised`, #576 HFI2-F3); on a picker door, the toasts
+       * its click or keystroke raised (`DialogOutcome.toastsRaised`). Null on
+       * every other move.
        */
       toastsRaisedAtDispatch: string[] | null;
       /**
@@ -1223,6 +1237,8 @@ export const importDialogFuzz: Scenario = {
             skip = answered.reason;
             digest = answered.digest;
             handoff = answered.consumed ? 'accepted' : 'unconsumed';
+            ({ dialogAtDispatch, placementAtDispatch, fullscreenAtDispatch, parseAtDispatch } = answered);
+            toastsRaisedAtDispatch = answered.toastsRaised;
             if (performed && !answered.consumed) ctx.metric('dialogAnswerUnconsumed');
             if (record && performed) recordMove(move);
           }
@@ -1245,6 +1261,8 @@ export const importDialogFuzz: Scenario = {
           // dialog is open) leaves the answer unconsumed. That is the app's
           // documented gate, so it is counted rather than asserted.
           handoff = answered.consumed ? 'accepted' : 'unconsumed';
+          ({ dialogAtDispatch, placementAtDispatch, fullscreenAtDispatch, parseAtDispatch } = answered);
+          toastsRaisedAtDispatch = answered.toastsRaised;
           ctx.metric(answered.consumed ? 'keyPickerConsumed' : 'keyPickerSwallowed');
           if (record && performed) recordMove(move);
         }
@@ -1264,6 +1282,8 @@ export const importDialogFuzz: Scenario = {
         performed = answered.performed;
         skip = answered.reason;
         digest = answered.digest;
+        ({ dialogAtDispatch, placementAtDispatch, fullscreenAtDispatch, parseAtDispatch } = answered);
+        toastsRaisedAtDispatch = answered.toastsRaised;
         if (record && performed) recordMove(move);
       } else if (move.kind === 'mapClick') {
         const live = move;
@@ -2462,9 +2482,20 @@ export const importDialogFuzz: Scenario = {
           // sees. A route that branch judged keeps its verdict
           // (`checkGateRefusalToast`), and the toast is read from the same
           // window, the route's own return tick (#576 HFI2-F3).
+          //
+          // A picker door is `pickAndRoute`'s, whose own parse gate refuses
+          // before the picker opens, so its move scores `unconsumed`: it is
+          // judged on the parse gate at dispatch instead, and its toast read
+          // off the click or keystroke's own tick (#576 W62-NF1).
+          const pickerDoor =
+            outcome.performed &&
+            (move.kind === 'keyFile' ||
+              ((move.kind === 'cancelDialog' || (move.kind === 'openFile' && move.via === 'dialog')) &&
+                PICKER_DOOR_TRIGGERS.has(move.trigger)));
           const refusal = guarded(() =>
             checkGateRefusalToast({
               handoff: outcome.handoff,
+              picker: pickerDoor,
               importGateJudged,
               toastsRaised: outcome.toastsRaisedAtDispatch,
               digestToasts: digest.toast,
@@ -2473,10 +2504,11 @@ export const importDialogFuzz: Scenario = {
                 dialogAtDispatch: outcome.dialogAtDispatch,
                 placementAtDispatch: outcome.placementAtDispatch === true,
                 parseAtDispatch: outcome.parseAtDispatch === true,
+                fullscreenAtDispatch: outcome.fullscreenAtDispatch === true,
               },
             }),
           );
-          if (refusal === 'said') ctx.metric('gateRefusalSaid');
+          if (refusal === 'said') ctx.metric(pickerDoor ? 'pickerRefusalSaid' : 'gateRefusalSaid');
         };
 
         for (;;) {

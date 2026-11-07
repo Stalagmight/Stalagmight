@@ -238,11 +238,11 @@ export const GROUP: SiteGroup = {
       'escapeFrom: ESCAPE_BUDGET': 'the number 6 (importDialogModel.ts:507 ESCAPE_BUDGET)',
       'err.message': ORACLE_ERROR,
       "verdict.gates.join(' + ')":
-        "exportChordVerdict's gates (lib/importFlowOracles.ts:392-394): the literals 'placementMode active' and " +
+        "exportChordVerdict's gates (lib/importFlowOracles.ts:420-422): the literals 'placementMode active' and " +
         "'dataTableFullScreen', and `activeDialog=\"<shareableTestId>\"`",
       'move.testid':
         'a test id from a fixed set: orphanMove is move.testid only when ORPHAN_ACCEPTS / ORPHAN_DECLINES has it ' +
-        '(importDialogFuzz.ts:663-664), and wizardCommit requires INCOMPLETE_GUARDED_MOVES to have it (:637)',
+        '(importDialogFuzz.ts:671-672), and wizardCommit requires INCOMPLETE_GUARDED_MOVES to have it (:645)',
       'move.value':
         "overlapMode, printed only in the fail() detail (a later line, withheld) and as a metric key behind " +
         'OVERLAP_MODES.includes(overlapMode) (importDialogModel.ts:356; the scanner does not see the check)',
@@ -258,7 +258,7 @@ export const GROUP: SiteGroup = {
         "'close-refused', 'map-unavailable', 'undo-refused' / 'redo-refused', 'save-refused' (importDialogFuzz.ts execute)",
       'work.reason':
         "a NoWorkReason: 'not-eligible' | 'not-performed' | 'cancel' | 'unconsumed' | 'gate-refused' " +
-        '(lib/importFlowOracles.ts:184-187, s4WorkStarted)',
+        '(lib/importFlowOracles.ts:185-188, s4WorkStarted)',
       'drawInterjection(interjectRng)':
         "drawInterjection's literal kind: escape | route | undo | redo | save (importDialogGenerators.ts drawInterjection)",
       'drawAuxInterjection(auxRng)':
@@ -271,7 +271,7 @@ export const GROUP: SiteGroup = {
         "a number: countUnanchoredComponents' in-page script returns a component count, -1 or -2 (importDialogFuzz.ts)",
       'guarded: what()':
         "guarded(fn) returns fn(): at its one print, the f1Pushed metric key (importDialogFuzz.ts runEpisodes), fn is " +
-        'checkPushed, which returns a number (lib/importFlowOracles.ts:648-653)',
+        'checkPushed, which returns a number (lib/importFlowOracles.ts:676-681)',
       "ctx.metrics['file:shape:suggestive']": METRIC_COUNT,
     },
     'e2e/agent/scenarios/importDialogTrace.ts': {

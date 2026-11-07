@@ -112,7 +112,8 @@ export interface ToastLike {
  * stack: an `id` not there before, or a `revision` bumped (a de-duplicated
  * repeat of a key). Leaving toasts are not counted.
  *
- * SELF-CONTAINED: `routeFile` injects it into the webview by its source text.
+ * SELF-CONTAINED: `routeFile` and the picker doors' `PICKER_DOOR` inject it into
+ * the webview by its source text.
  */
 export function toastKeysRaised(before: readonly ToastLike[], after: readonly ToastLike[]): string[] {
   const seen = new Set(before.map((t) => `${t.id}:${t.revision}`));
@@ -213,7 +214,8 @@ export function routeHandoff(gates: RouteGates): FileHandoff {
 
 /**
  * What `checkGateRefusalToast` did with a move: `not-refused` (not a route the
- * gate refused), `import-gate` (left to IMPORT GATE's screen half), `said`.
+ * gate refused, nor a picker door the parse gate refused), `import-gate` (left
+ * to IMPORT GATE's screen half), `said`.
  */
 export type GateRefusalCheck = 'not-refused' | 'import-gate' | 'said';
 
@@ -241,32 +243,58 @@ export type GateRefusalCheck = 'not-refused' | 'import-gate' | 'said';
  * from the toasts the route raised, on the tick it returned (#576 HFI2-F3), and
  * not the settled digest, which a wizard calculation can hold past the toast's
  * life. The digest is the fallback only when that reading is missing.
+ *
+ * A PICKER DOOR (`picker`) has a parse gate of its own (#576 W62-NF1).
+ * `pickAndRoute`, behind the Open / Import and Import buttons, the hamburger's
+ * rows and Ctrl+O / Ctrl+I, raises the same toast and returns while an import's
+ * file is still parsing, before it opens the picker. Nothing reaches the
+ * router and the picker is never answered (`unconsumed`), so the handoff
+ * cannot tell that refusal from a chord the dispatcher swallowed: a picker move
+ * is judged on the parse gate read at dispatch instead, when the door was open:
+ * no dialog, placement off, the data table not full screen. The shortcut
+ * dispatcher swallows the chord behind any of the three and a modal makes the
+ * buttons under it inert, so a door behind one never reached `pickAndRoute`.
+ * Its toast is read off the click or keystroke's own tick
+ * (`DialogOutcome.toastsRaised`).
  */
 export function checkGateRefusalToast(input: {
   /** What a file entry point did with the path (`routeHandoff` on a route); null for other moves. */
   handoff: FileHandoff | null;
+  /** The move used a picker door (`pickAndRoute`) and was performed; judged on `gates`, not `handoff`. */
+  picker?: boolean;
   /** IMPORT GATE's screen half judged this route itself. */
   importGateJudged: boolean;
-  /** `RouteOutcome.toastsRaised`; null when the route's reading is missing. */
+  /** `RouteOutcome.toastsRaised` (`DialogOutcome.toastsRaised` on a picker door); null when the reading is missing. */
   toastsRaised: readonly string[] | null | undefined;
   /** The toast keys of the digest settled after the move: the fallback only. */
   digestToasts: readonly string[];
   /** `TOAST_KEYS.IMPORT_IN_PROGRESS`. */
   key: string;
-  /** What the gates read at dispatch, for the failure detail. */
-  gates: RouteGates;
+  /** What the gates read at dispatch: the failure detail, and on a picker door the verdict. */
+  gates: RouteGates & { fullscreenAtDispatch?: boolean };
 }): GateRefusalCheck {
-  if (input.handoff !== 'gate-refused') return 'not-refused';
+  const { dialogAtDispatch, placementAtDispatch, parseAtDispatch, fullscreenAtDispatch = false } = input.gates;
+  const picker = input.picker === true;
+  const refused = picker
+    ? parseAtDispatch && dialogAtDispatch === null && !placementAtDispatch && !fullscreenAtDispatch
+    : input.handoff === 'gate-refused';
+  if (!refused) return 'not-refused';
   if (input.importGateJudged) return 'import-gate';
   if (importGateRefusalSeen(input.toastsRaised, input.digestToasts, input.key)) return 'said';
-  const { dialogAtDispatch, placementAtDispatch, parseAtDispatch } = input.gates;
-  fail('IMPORT GATE: a route the gate refused did not say so', [
-    `gates at dispatch: activeDialog=${JSON.stringify(dialogAtDispatch)} placement=${placementAtDispatch} ` +
-      `parsing=${parseAtDispatch}`,
-    `toasts raised by the route: ${JSON.stringify(input.toastsRaised ?? null)}; ` +
-      `after settle: ${JSON.stringify(input.digestToasts)}`,
-    `routeOpenedFile must raise ${input.key} on every refusal (#411, #576 Q-W27-1-D1)`,
-  ]);
+  fail(
+    picker
+      ? 'IMPORT GATE: a picker door the parse gate refused did not say so'
+      : 'IMPORT GATE: a route the gate refused did not say so',
+    [
+      `gates at dispatch: activeDialog=${JSON.stringify(dialogAtDispatch)} placement=${placementAtDispatch} ` +
+        `parsing=${parseAtDispatch}${picker ? ` fullscreen=${fullscreenAtDispatch}` : ''}`,
+      `toasts raised by the ${picker ? 'picker door' : 'route'}: ${JSON.stringify(input.toastsRaised ?? null)}; ` +
+        `after settle: ${JSON.stringify(input.digestToasts)}`,
+      picker
+        ? `pickAndRoute must raise ${input.key} instead of opening the picker while a file parses (#576 W62-NF1)`
+        : `routeOpenedFile must raise ${input.key} on every refusal (#411, #576 Q-W27-1-D1)`,
+    ],
+  );
 }
 
 /**
