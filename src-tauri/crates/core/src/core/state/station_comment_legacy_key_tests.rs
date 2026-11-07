@@ -362,6 +362,70 @@ fn undoing_a_comment_change_restores_the_legacy_key_it_replaced() {
     }
 }
 
+/// [#576 PR #594 review] `StationCommentRows` names its station by position
+/// (`station_ref`), and the undo history is saved with the project. Here a
+/// set records one (a legacy `Index` key names the station), a shot is then
+/// prepended or appended, and the project is saved and reopened: undoing the
+/// shot and then the set, from the reopened history, puts the replaced rows
+/// back under their own keys, and the comment back on the station the set
+/// changed, not on one the added shot moved there.
+#[test]
+fn recorded_comment_rows_land_on_their_station_after_a_shot_a_save_and_a_reopen() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let (path, sid) = file_with_comment_rows(temp.path(), &[(1, "comment on station 1")]);
+    let station = StationRef::new(sid, 3);
+    let shows = |state: &AppState| -> Vec<Option<String>> {
+        (0..5)
+            .map(|i| shown_comment(state, StationRef::new(sid, i)))
+            .collect()
+    };
+    let adds: [(&str, fn(&AppState, u32)); 2] =
+        [("prepend", prepend_shot), ("append", append_shot)];
+    for (label, add_shot) in adds {
+        let state = state_with_null_sink();
+        state.do_load_project_full(path.clone()).unwrap();
+        seed_legacy_comment_rows(&state, sid, &[(3, "comment past the end")]);
+        append_shot(&state, sid);
+        let before_set = (stored_rows(&state), shows(&state));
+        let set = state.execute(Command::SetStationComment {
+            station_ref: station,
+            comment: Some("comment set in the app".to_string()),
+        });
+        assert!(set.success, "{label}: set: {:?}", set.error);
+        let recorded = state
+            .undo_stack
+            .lock()
+            .peek_undo_data()
+            .map(crate::core::UndoData::variant_name);
+        add_shot(&state, sid);
+        let saved = temp.path().join(format!("{label}.stalx"));
+        let save = state.save_project(Some(saved.clone()));
+        assert!(save.success, "{label}: save: {:?}", save.error);
+
+        let reopened = state_with_null_sink();
+        reopened.do_load_project_full(saved).unwrap();
+        let at_reopen = shows(&reopened);
+        undo(&reopened);
+        undo(&reopened);
+        let after_undo = (stored_rows(&reopened), shows(&reopened));
+        println!("{label}: the set recorded {recorded:?}");
+        println!("{label}: before the set   {before_set:?}");
+        println!("{label}: at the reopen    {at_reopen:?}");
+        println!("{label}: undo the {label}, undo the set {after_undo:?}");
+
+        assert_eq!(
+            recorded,
+            Some("StationCommentRows"),
+            "{label}: fixture: the set records the rows it replaced"
+        );
+        assert_eq!(
+            after_undo, before_set,
+            "{label}: the reopened undo puts every row back under its own key, on its station"
+        );
+    }
+}
+
 /// The comment rows a file holds, as `(section_id, station_index, comment)`.
 fn file_rows(path: &std::path::Path) -> Vec<(u32, u32, String)> {
     let conn = rusqlite::Connection::open(path).unwrap();
