@@ -607,11 +607,26 @@ export async function routeOpenedFile(
  * Shared by the toolbar "Open / Import" button, the in-project import button,
  * and the Ctrl+I keyboard shortcut (GlobalView + in-project), which differ only
  * in the picker filters and the error-dialog title.
+ *
+ * [#576 W62-NF1] While an import's file is still parsing, the router refuses any
+ * second file (one import at a time), so the picker is not opened at all: the
+ * user gets the router's in-progress toast now rather than after choosing a file
+ * it then drops. The router's other refusals need no such check here - a dialog
+ * makes these doors unreachable (the shortcut dispatcher returns early, and a
+ * modal makes the buttons underneath inert), and placement mode lets none of
+ * these chords through.
  */
 export async function pickAndRoute(
   filters: Array<{ name: string; extensions: string[] }>,
   errorTitle = 'Open Failed',
 ): Promise<void> {
+  const ui = useUIStore.getState();
+  if (ui.importParse !== null) {
+    clearProjectActionSource();
+    ui.showToast(i18n.t('importGate.inProgress'), TOAST_KEYS.IMPORT_IN_PROGRESS, 'warning');
+    return;
+  }
+
   let selected: string | string[] | null;
   try {
     selected = await openDialog({ multiple: false, filters });
