@@ -3,7 +3,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection, Transaction};
 use std::path::Path;
 
-use super::open::{connect_for_vacuum_into, scratch_spelling, VacuumTarget};
+use super::open::{connect_for_vacuum_into, is_link_refusal, scratch_spelling, VacuumTarget};
 use super::{BackupInfo, BackupKind, Database, RestoreOutcome, SalvagedData, SalvagedSection};
 
 /// [#576 C15] Where a restore stages the candidate before installing it: beside
@@ -629,6 +629,22 @@ impl Database {
             .and_then(|into| Ok(conn.execute("VACUUM INTO ?1", params![VacuumTarget(&into)])?));
         if let Err(e) = vacuumed {
             let _ = std::fs::remove_file(&compacted);
+            // [#576 W42-NF1] A link refused there is no full disk: it is said as
+            // the write-path policy words a refusal. Any other failure keeps the guess.
+            if is_link_refusal(&e) {
+                let name_of = |path: &Path| {
+                    path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |n| n.to_string_lossy().into_owned(),
+                    )
+                };
+                return Err(e.context(format!(
+                    "Refused to change {}: {} beside it, the name its compacted copy is \
+                     written under first, is a link; refusing to upload it",
+                    name_of(snapshot),
+                    name_of(&compacted)
+                )));
+            }
             return Err(e.context(format!(
                 "could not compact the push snapshot into {} (most likely not enough \
                  free disk space there for a second copy of the project); refusing to \

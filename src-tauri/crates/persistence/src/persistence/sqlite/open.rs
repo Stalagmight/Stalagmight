@@ -150,6 +150,15 @@ pub(super) fn scratch_flags() -> rusqlite::OpenFlags {
     }
 }
 
+/// [#576 W42-NF1] Whether `e` is SQLite refusing a link on its walk to a name
+/// opened with [`scratch_flags`] (`SQLITE_CANTOPEN_SYMLINK`), told from the
+/// error's extended code - not a file SQLite could not create or write.
+pub(super) fn is_link_refusal(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<rusqlite::Error>()
+        .and_then(rusqlite::Error::sqlite_error)
+        .is_some_and(|e| e.extended_code == rusqlite::ffi::SQLITE_CANTOPEN_SYMLINK)
+}
+
 /// [#576 W25-NF1] A connection on the existing database `path` for a
 /// `VACUUM INTO` a scratch name. `VACUUM INTO` opens its target with the source
 /// connection's flags, so the source is opened with [`scratch_flags`] too, which

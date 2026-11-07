@@ -157,6 +157,58 @@ fn a_compaction_never_follows_a_link_planted_at_its_staging_name_after_the_clear
     assert!(problems.is_empty(), "{problems:#?}");
 }
 
+/// [#576 W42-NF1] The compaction's refusal of that link says it refused a link,
+/// worded as the write-path policy words a refusal; it said "most likely not
+/// enough free disk space", the guess for every failed `VACUUM INTO`. Any other
+/// failure there (here: a file put at the staging name since the clear) keeps
+/// that guess. What a push shows is the outermost message (`{e}`).
+#[test]
+fn a_compaction_refused_over_a_link_says_so_not_that_the_disk_is_full() {
+    let mut problems = Vec::new();
+    let dir = TempDir::new().expect("dir");
+    let elsewhere = TempDir::new().expect("a folder the compaction must not write");
+    let live = project_at(&dir.path().join("CaveA.stalx"));
+    let snapshot = dir.path().join("snapshot.stalx");
+    let staging = sibling(&snapshot, ".vacuum.tmp");
+
+    Database::vacuum_snapshot(&live, &snapshot).expect("snapshot");
+    let over_link = {
+        let _seam = PlantAfterClear::new(staging.clone(), elsewhere.path().join("planted.toml"));
+        Database::sanitize_push_snapshot(&snapshot, false, None)
+            .expect_err("the compaction refuses the link")
+    };
+    let shown = over_link.to_string();
+    println!("[W42-NF1] over a link: {shown:?}\n  chain: {over_link:#}");
+    if shown.contains("disk space") {
+        problems.push(format!("the link refusal claims low disk space: {shown:?}"));
+    }
+    if !shown.starts_with("Refused to change snapshot.stalx: ") || !shown.contains("is a link") {
+        problems.push(format!("the link refusal does not say so: {shown:?}"));
+    }
+
+    let _ = std::fs::remove_file(&staging);
+    let _ = std::fs::remove_file(&snapshot);
+    Database::vacuum_snapshot(&live, &snapshot).expect("snapshot");
+    AFTER_SCRATCH_CLEARED.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move |cleared: &Path| {
+            if cleared == staging {
+                std::fs::write(cleared, b"not a database").expect("a file at the staging name");
+            }
+        }));
+    });
+    let other = Database::sanitize_push_snapshot(&snapshot, false, None);
+    AFTER_SCRATCH_CLEARED.with(|hook| hook.borrow_mut().take());
+    let other = other.expect_err("the compaction fails over a file at its staging name");
+    let shown = other.to_string();
+    println!("[W42-NF1] over a file: {shown:?}\n  chain: {other:#}");
+    if !shown.contains("most likely not enough free disk space") {
+        problems.push(format!(
+            "another failure lost the disk-space wording: {shown:?}"
+        ));
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
 #[test]
 fn a_repair_never_follows_a_link_planted_at_its_staging_name_after_the_clear() {
     let mut problems = Vec::new();
