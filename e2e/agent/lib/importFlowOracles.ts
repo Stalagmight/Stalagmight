@@ -174,10 +174,12 @@ function fail(headline: string, detail: string[] = []): never {
  * - `unconsumed`: the picker was never answered. A Ctrl+O the shortcut
  *   dispatcher swallowed (a dialog was open), or a trigger click that opened no
  *   picker at all. Read from the app's own consumption record, not inferred.
- * - `gate-refused`: `routeOpenedFile` refused the file. Both of its refusals
- *   (`importFlowOwnsScreen(ui)`, and any other `ui.activeDialog`) raise
- *   `TOAST_KEYS.IMPORT_IN_PROGRESS` and `return` before anything is parsed, so
- *   between them they are exactly "a dialog was up, or placement was on".
+ * - `gate-refused`: `routeOpenedFile` refused the file. Both of its gates
+ *   (`importFlowOwnsScreen(ui)`, then any other `ui.activeDialog`) raise
+ *   `TOAST_KEYS.IMPORT_IN_PROGRESS` and `return` before anything is parsed, and
+ *   between them they refuse exactly when a dialog was up, placement was on, or
+ *   an import's file was still parsing (`uiStore.importParse`, #576
+ *   Q-W27-1-D1) - the last with nothing on screen yet. See `routeHandoff`.
  */
 export type FileHandoff = 'accepted' | 'unconsumed' | 'gate-refused';
 
@@ -185,6 +187,29 @@ export type FileHandoff = 'accepted' | 'unconsumed' | 'gate-refused';
 export type NoWorkReason = 'not-eligible' | 'not-performed' | 'cancel' | Exclude<FileHandoff, 'accepted'>;
 
 export type S4Work = { started: true; reason: null } | { started: false; reason: NoWorkReason };
+
+/** What `routeOpenedFile`'s gates read, on the tick a route called it (`RouteOutcome`). */
+export interface RouteGates {
+  /** `activeDialog`; null when no dialog was up. */
+  dialogAtDispatch: string | null;
+  /** `placementMode !== null`. */
+  placementAtDispatch: boolean;
+  /** `importParse !== null`: an import's file was still parsing. */
+  parseAtDispatch: boolean;
+}
+
+/**
+ * A routed file's `FileHandoff`. `routeOpenedFile` returns void, so whether it
+ * refused is read off the values its gates consulted on the same tick: any one
+ * of them on is a refusal (see `gate-refused`). The parse gate is the one with
+ * nothing on screen (#576 W67-NF3): read without it, a route refused during a
+ * parse scored `accepted`, so S4 exempted its step and re-opened grace.
+ */
+export function routeHandoff(gates: RouteGates): FileHandoff {
+  return gates.dialogAtDispatch !== null || gates.placementAtDispatch || gates.parseAtDispatch
+    ? 'gate-refused'
+    : 'accepted';
+}
 
 /**
  * Did this move hand work to something that can fail? S4's ONE question.

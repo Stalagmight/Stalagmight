@@ -238,7 +238,7 @@ export const GROUP: SiteGroup = {
       'escapeFrom: ESCAPE_BUDGET': 'the number 6 (importDialogModel.ts:507 ESCAPE_BUDGET)',
       'err.message': ORACLE_ERROR,
       "verdict.gates.join(' + ')":
-        "exportChordVerdict's gates (lib/importFlowOracles.ts:309-311): the literals 'placementMode active' and " +
+        "exportChordVerdict's gates (lib/importFlowOracles.ts:334-336): the literals 'placementMode active' and " +
         "'dataTableFullScreen', and `activeDialog=\"<shareableTestId>\"`",
       'move.testid':
         'a test id from a fixed set: orphanMove is move.testid only when ORPHAN_ACCEPTS / ORPHAN_DECLINES has it ' +
@@ -258,7 +258,7 @@ export const GROUP: SiteGroup = {
         "'close-refused', 'map-unavailable', 'undo-refused' / 'redo-refused', 'save-refused' (importDialogFuzz.ts execute)",
       'work.reason':
         "a NoWorkReason: 'not-eligible' | 'not-performed' | 'cancel' | 'unconsumed' | 'gate-refused' " +
-        '(lib/importFlowOracles.ts:181-184, s4WorkStarted)',
+        '(lib/importFlowOracles.ts:184-187, s4WorkStarted)',
       'drawInterjection(interjectRng)':
         "drawInterjection's literal kind: escape | route | undo | redo | save (importDialogGenerators.ts drawInterjection)",
       'drawAuxInterjection(auxRng)':

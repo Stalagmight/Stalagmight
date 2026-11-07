@@ -969,6 +969,13 @@ export interface RouteOutcome {
   dialogAtDispatch: string | null;
   placementAtDispatch: boolean;
   /**
+   * `uiStore.importParse !== null`, read on the same tick: an import's file was
+   * still parsing, which `importFlowOwnsScreen` also refuses on (#576
+   * Q-W27-1-D1) with no dialog up and placement off. Classified by
+   * `routeHandoff` (#576 W67-NF3).
+   */
+  parseAtDispatch: boolean;
+  /**
    * Keys of the toasts the route raised or refreshed, read from
    * `uiStore.toasts` on the tick it returned (#576 HFI2-F3); null when the
    * store has no toast stack. The router's refusal IS its toast, and a toast
@@ -992,6 +999,7 @@ export async function routeFile(ctx: ScenarioContext, absolutePath: string): Pro
       routed: false,
       dialogAtDispatch: ui && ui.activeDialog !== undefined && ui.activeDialog !== null ? ui.activeDialog : null,
       placementAtDispatch: !!(ui && ui.placementMode),
+      parseAtDispatch: !!(ui && ui.importParse),
       toastsRaised: null,
     };
     if (typeof route !== 'function') return out;

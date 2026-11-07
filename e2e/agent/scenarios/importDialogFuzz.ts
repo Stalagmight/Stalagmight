@@ -428,6 +428,7 @@ import {
   leftoverTempNames,
   captureReceipt,
   nextErrorGrace,
+  routeHandoff,
   s4WorkStarted,
   type CountedProject,
   type FileHandoff,
@@ -1197,15 +1198,11 @@ export const importDialogFuzz: Scenario = {
             dialogAtDispatch = routed.dialogAtDispatch;
             placementAtDispatch = routed.placementAtDispatch;
             toastsRaisedAtDispatch = routed.toastsRaised;
-            // `routeOpenedFile` returns void, so acceptance is read off the two
-            // values its guards consulted on the same tick. Those guards are
-            // `importFlowOwnsScreen(ui)` (an import-flow dialog, or placement)
-            // and `ui.activeDialog && !swapConfirmed` (any other dialog, and the
-            // E2E hook never passes opts) - between them exactly "a dialog was
-            // up, or placement was on". Both raise the import-gate toast and
-            // return before anything is parsed.
-            handoff =
-              routed.dialogAtDispatch !== null || routed.placementAtDispatch ? 'gate-refused' : 'accepted';
+            // `routeOpenedFile` returns void, so acceptance is read off the
+            // values its guards consulted on the same tick: a dialog, placement,
+            // or an import's file still parsing (`routeHandoff`). The E2E hook
+            // never passes opts, so no re-entry exception applies.
+            handoff = routeHandoff(routed);
             if (record) recordMove(move);
             digest = await observeScreen(ctx);
           } else {

@@ -39,6 +39,7 @@ import {
   leftoverTempNames,
   parseReceiptSummary,
   receiptClaimFrom,
+  routeHandoff,
   type FlowBounds,
   type ReceiptClaim,
 } from './importFlowOracles';
@@ -457,7 +458,8 @@ describe('s4WorkStarted', () => {
 
   it('is NOT work on a GATE-REFUSED route', () => {
     // `routeOpenedFile` raises the import-gate toast and returns before parsing
-    // whenever a dialog is up or placement is on. The harness sets
+    // whenever a dialog is up, placement is on, or an import's file is still
+    // parsing (`routeHandoff`). The harness sets
     // `performed = true` unconditionally on a route, so only the handoff can
     // tell this from an import that started.
     expect(s4WorkStarted({ eligible: true, performed: true, cancel: false, handoff: 'gate-refused' })).toEqual({
@@ -497,6 +499,54 @@ describe('s4WorkStarted', () => {
       for (const cancel of [false, true]) {
         for (const performed of [false, true]) {
           expect(s4WorkStarted({ eligible: true, performed, cancel, handoff }).started).toBe(false);
+        }
+      }
+    }
+  });
+});
+
+/**
+ * A routed file's handoff, read off what `routeOpenedFile`'s gates consulted on
+ * the tick it was called (`RouteOutcome`). The router returns void, so these
+ * readings are the only account of whether it refused.
+ *
+ * #576 W67-NF3: the one-import-at-a-time gate also refuses while an import's
+ * file is still parsing (`uiStore.importParse`), with no dialog up and
+ * placement off. The rule read only the other two, so a route the parse gate
+ * refused was scored `accepted`: S4 exempted its step and re-opened grace.
+ */
+describe('routeHandoff', () => {
+  const idle = { dialogAtDispatch: null, placementAtDispatch: false, parseAtDispatch: false };
+
+  it('is accepted when none of the gates was on', () => {
+    expect(routeHandoff(idle)).toBe('accepted');
+  });
+
+  it('is gate-refused when a dialog was up, or placement was on', () => {
+    expect(routeHandoff({ ...idle, dialogAtDispatch: 'tml-import' })).toBe('gate-refused');
+    expect(routeHandoff({ ...idle, dialogAtDispatch: 'settings' })).toBe('gate-refused');
+    expect(routeHandoff({ ...idle, placementAtDispatch: true })).toBe('gate-refused');
+  });
+
+  it('THE REGRESSION (W67-NF3): is gate-refused while an import file is still parsing', () => {
+    // Nothing on screen yet - no dialog, no placement - and the router still
+    // refuses: `importFlowOwnsScreen` returns true on `importParse !== null`.
+    const handoff = routeHandoff({ ...idle, parseAtDispatch: true });
+    expect(handoff).toBe('gate-refused');
+    expect(s4WorkStarted({ eligible: true, performed: true, cancel: false, handoff })).toEqual({
+      started: false,
+      reason: 'gate-refused',
+    });
+  });
+
+  it('is accepted only when every gate was off', () => {
+    for (const dialogAtDispatch of [null, 'dmp-import-new']) {
+      for (const placementAtDispatch of [false, true]) {
+        for (const parseAtDispatch of [false, true]) {
+          const anyOn = dialogAtDispatch !== null || placementAtDispatch || parseAtDispatch;
+          expect(routeHandoff({ dialogAtDispatch, placementAtDispatch, parseAtDispatch })).toBe(
+            anyOn ? 'gate-refused' : 'accepted',
+          );
         }
       }
     }
