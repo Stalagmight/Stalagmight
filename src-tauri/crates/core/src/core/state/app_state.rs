@@ -63,6 +63,14 @@ pub(super) fn adjusted_config_hash(ca: &ClosureAdjustmentConfig) -> u64 {
     h.finish()
 }
 
+/// The load in progress (`AppState::active_loading`): its cancellation token, and
+/// the name the frontend gave it when it started it [#576 W44-NF3] - `None` for a
+/// load the backend started on its own. `cancel_loading` cancels it only by that name.
+pub(super) struct ActiveLoad {
+    pub(super) cancel: Arc<AtomicBool>,
+    load_token: Option<String>,
+}
+
 /// [#576 RV4-R-NITS C-4] What a parked `execute` signals on and waits for (see
 /// `AppState::park_after_mutation`).
 #[cfg(test)]
@@ -172,7 +180,7 @@ pub struct AppState {
     /// Sink for emitting events to the host application (set during app setup)
     pub(super) event_sink: RecoveringMutex<Option<Arc<dyn crate::core::events::EventSink>>>,
     /// Active loading cancellation token (if any load operation is in progress)
-    pub(super) active_loading: RecoveringMutex<Option<Arc<AtomicBool>>>,
+    pub(super) active_loading: RecoveringMutex<Option<ActiveLoad>>,
     /// Shots a load found carrying a `kind` byte this build does not recognise
     /// (#27), tagged with the `loading_id` of the load that found them. Never
     /// persisted - the fix is the user's answer, applied as an ordinary
@@ -493,17 +501,31 @@ impl AppState {
 
     /// Start a new loading operation, cancelling any existing one.
     /// Returns the cancellation token for the new operation.
+    ///
+    /// A load started here has no name, so [`Self::cancel_loading`] never reaches
+    /// it: only a newer load cancels it. A load the frontend starts is
+    /// [`Self::start_named_load`].
     pub fn start_new_load(&self) -> Arc<AtomicBool> {
+        self.start_named_load(None)
+    }
+
+    /// [`Self::start_new_load`] for a load the frontend started and named
+    /// (`load_token`, #576 W44-NF3): a Cancel it makes for this load names it too,
+    /// and [`Self::cancel_loading`] cancels the active load only when the names match.
+    pub fn start_named_load(&self, load_token: Option<&str>) -> Arc<AtomicBool> {
         let mut guard = self.active_loading.lock();
 
         // Cancel any existing load
-        if let Some(old_token) = guard.take() {
-            old_token.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(old) = guard.take() {
+            old.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
         }
 
         // Create new token
         let token = Arc::new(AtomicBool::new(false));
-        *guard = Some(Arc::clone(&token));
+        *guard = Some(ActiveLoad {
+            cancel: Arc::clone(&token),
+            load_token: load_token.map(str::to_owned),
+        });
         token
     }
 
@@ -514,7 +536,7 @@ impl AppState {
         {
             let mut guard = self.active_loading.lock();
             if let Some(ref current) = *guard {
-                if Arc::ptr_eq(current, expected_token) {
+                if Arc::ptr_eq(&current.cancel, expected_token) {
                     *guard = None;
                 }
             }
@@ -758,12 +780,23 @@ impl AppState {
         })
     }
 
-    /// Cancel any active loading operation (idempotent - safe to call anytime)
-    pub fn cancel_loading(&self) {
+    /// Cancel the load named `load_token`, if it is the active one (idempotent -
+    /// safe to call anytime).
+    ///
+    /// [#576 W44-NF3] A Cancel is made for one load, but its IPC can run after that
+    /// load ended and a newer one started; this used to cancel whatever load was
+    /// active, so it cancelled the newer one. A name that is not the active load's
+    /// (an ended load's, an unknown one) and `None` cancel nothing, and a load the
+    /// backend started unnamed ([`Self::start_new_load`]) is never cancelled here.
+    pub fn cancel_loading(&self, load_token: Option<&str>) {
         {
             let guard = self.active_loading.lock();
-            if let Some(token) = guard.as_ref() {
-                token.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(active) = guard.as_ref() {
+                if load_token.is_some() && active.load_token.as_deref() == load_token {
+                    active
+                        .cancel
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                }
             }
         }
         // No error if no active load - cancel_loading is idempotent

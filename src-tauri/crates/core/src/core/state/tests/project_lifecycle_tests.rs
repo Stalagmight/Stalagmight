@@ -667,11 +667,57 @@ fn test_start_new_load_cancels_previous_and_clear_is_identity_safe() {
     state.clear_active_load(&first);
     let guard = state.active_loading.lock();
     assert!(guard.as_ref().is_some());
-    assert!(Arc::ptr_eq(guard.as_ref().unwrap(), &second));
+    assert!(Arc::ptr_eq(&guard.as_ref().unwrap().cancel, &second));
     drop(guard);
 
     state.clear_active_load(&second);
     assert!(state.active_loading.lock().is_none());
+}
+
+/// [#576 W44-NF3] A Cancel cancels only the load it names. It used to cancel
+/// whatever load was active when it ran, so one made for load A that reached the
+/// backend after load B had started (A superseded) cancelled B.
+#[test]
+fn test_cancel_loading_cancels_only_the_load_it_names() {
+    let state = AppState::new().unwrap();
+
+    let a = state.start_named_load(Some("load-a"));
+    let b = state.start_named_load(Some("load-b"));
+    assert!(a.load(Ordering::SeqCst), "starting B supersedes A");
+
+    // A's Cancel arrives after B started; then a name no load has, and no name.
+    state.cancel_loading(Some("load-a"));
+    let after_a = b.load(Ordering::SeqCst);
+    state.cancel_loading(Some("no-such-load"));
+    let after_unknown = b.load(Ordering::SeqCst);
+    state.cancel_loading(None);
+    let after_none = b.load(Ordering::SeqCst);
+    println!(
+        "load B cancelled after A's Cancel: {after_a}; after an unknown name: \
+         {after_unknown}; after no name: {after_none}"
+    );
+    assert!(
+        !after_a && !after_unknown && !after_none,
+        "only B's own Cancel may cancel B"
+    );
+
+    // B's own Cancel cancels it; a second one is a no-op.
+    state.cancel_loading(Some("load-b"));
+    state.cancel_loading(Some("load-b"));
+    assert!(b.load(Ordering::SeqCst), "B's Cancel cancels B");
+
+    // A load the backend starts unnamed is never cancelled by a Cancel, named or
+    // not; only a newer load supersedes it.
+    state.clear_active_load(&b);
+    let unnamed = state.start_new_load();
+    state.cancel_loading(None);
+    state.cancel_loading(Some("load-b"));
+    assert!(
+        !unnamed.load(Ordering::SeqCst),
+        "no Cancel names an unnamed load"
+    );
+    let _newer = state.start_named_load(Some("load-c"));
+    assert!(unnamed.load(Ordering::SeqCst), "a newer load supersedes it");
 }
 
 #[test]

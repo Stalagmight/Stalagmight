@@ -105,7 +105,9 @@ fn both_load_commands_hand_the_location_to_the_load() {
             .and_then(|rest| rest.split("\n}\n").next())
             .unwrap_or_default();
         let refusal = body.find("load_upgrade_refusal(&path)");
-        let load = body.find("do_load_project_full_with(path, upgrade_refusal.as_ref())");
+        let load = body.find(
+            "do_load_project_full_with(path, upgrade_refusal.as_ref(), load_token.as_deref())",
+        );
         println!("{command}: refusal at {refusal:?}, load at {load:?}");
         assert!(
             refusal.is_some() && refusal < load,

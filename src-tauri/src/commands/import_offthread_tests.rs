@@ -167,6 +167,8 @@ fn cases(dir: &TempDir) -> Vec<ImportCase> {
 fn body_for(case: &ImportCase, app: &App<MockRuntime>) -> Value {
     let mut body = case.args.clone();
     body["path"] = json!(case.path);
+    // [#576 W44-NF3] The name the dialog gives its import; its Cancel names it too.
+    body["loadToken"] = json!(case.command);
     // [#576 FZ-FZ-INT-7] What the frontend sends with an edit: the open project.
     body["expectedProject"] = match made_for(app) {
         Some(open) => json!({ "createdAt": open.created_at, "filePath": open.file_path }),
@@ -223,7 +225,10 @@ fn run_with_cancel_in_read_phase(case: &ImportCase) -> Observed {
     );
 
     // ...and the user presses Cancel: the main thread dispatches it.
-    let cancel = dispatch(&window, request("cancel_loading", json!({})));
+    let cancel = dispatch(
+        &window,
+        request("cancel_loading", json!({ "loadToken": case.command })),
+    );
     cancel
         .recv_timeout(Duration::from_secs(5))
         .expect("cancel_loading answers");

@@ -1,7 +1,7 @@
 //! [#576 NF-FIX3A-2] The loading overlay's Cancel stops a file import between
 //! its phases, with nothing committed.
 //!
-//! `cancel_loading` flips the token of the active load, and only a project open
+//! `cancel_loading` flips the token of the active load it names, and only a project open
 //! or create ever registered one: an import ran on regardless, so Cancel cleared
 //! the overlay while the import went on and landed anyway. The import runner now
 //! registers its own token and checks it between phases; past the point the
@@ -58,6 +58,7 @@ fn import_cancelling_during(state: &AppState, during_convert: bool) -> crate::co
     run_file_import(
         state,
         Arc::new(SilentSink),
+        Some("import"),
         &TEST_IMPORT,
         Path::new("/tmp/synthetic.dat"),
         None,
@@ -65,13 +66,13 @@ fn import_cancelling_during(state: &AppState, during_convert: bool) -> crate::co
         |_| {
             if !during_convert {
                 // The user presses the overlay's Cancel while the file is read.
-                state.cancel_loading();
+                state.cancel_loading(Some("import"));
             }
             Ok(())
         },
         |()| {
             if during_convert {
-                state.cancel_loading();
+                state.cancel_loading(Some("import"));
             }
             Ok(one_section())
         },
@@ -142,6 +143,7 @@ fn an_import_nobody_cancels_still_lands_and_frees_its_token() {
     let result = run_file_import(
         &state,
         Arc::new(SilentSink),
+        Some("import"),
         &TEST_IMPORT,
         Path::new("/tmp/synthetic.dat"),
         None,
@@ -157,10 +159,11 @@ fn an_import_nobody_cancels_still_lands_and_frees_its_token() {
 
     // The import's token is released: a Cancel pressed afterwards reaches no one,
     // and the next import is not born cancelled.
-    state.cancel_loading();
+    state.cancel_loading(Some("import"));
     let again = run_file_import(
         &state,
         Arc::new(SilentSink),
+        Some("import"),
         &TEST_IMPORT,
         Path::new("/tmp/synthetic.dat"),
         None,

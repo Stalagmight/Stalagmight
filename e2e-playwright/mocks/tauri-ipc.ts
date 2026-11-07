@@ -1100,7 +1100,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'cancel_loading': {
-            // Idempotent - does nothing but shouldn't error
+            // Idempotent - does nothing but shouldn't error. It names the load it cancels
+            // (`loadToken`, #576 W44-NF3); the mock's loads answer at once, so none is in progress.
             return null satisfies MockReply<'cancel_loading'>;
           }
 

@@ -512,10 +512,18 @@ fn a_create_checks_the_file_it_opens_and_never_opens_a_link() {
             .map_err(|e| e.message);
         let pre_ran_on = checked.borrow().clone();
         checked.borrow_mut().clear();
-        let created =
-            create_project_full_checked(&state, &policy, "Cave".into(), None, dir, file, false)
-                .map(|c| c.project.file_path.unwrap_or_default())
-                .map_err(|e| e.message);
+        let created = create_project_full_checked(
+            &state,
+            &policy,
+            None,
+            "Cave".into(),
+            None,
+            dir,
+            file,
+            false,
+        )
+        .map(|c| c.project.file_path.unwrap_or_default())
+        .map_err(|e| e.message);
         let ran_on = checked.borrow().clone();
         let in_app: Vec<String> = std::fs::read_dir(app.path())
             .expect("app dir")

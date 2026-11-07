@@ -68,6 +68,11 @@ export class IpcScheduler {
    * landed, so an OLDER answer delivered after the newest one faulted is not a fresh read.
    */
   private readonly lastIssued = new Map<string, { seq: number; gen: number | null; faulted: boolean }>();
+  /**
+   * [#576 W44-NF3] Each load's random `loadToken`, as the trace shows it: numbered in the
+   * order the loads were sent, so a replay of a seed prints the same trace.
+   */
+  private readonly loadNames = new Map<string, string>();
 
   constructor(private readonly backend: BackendModel) {}
 
@@ -80,6 +85,10 @@ export class IpcScheduler {
       return Promise.resolve(undefined);
     }
     this.sent += 1;
+    const loadToken = args?.loadToken;
+    if (typeof loadToken === 'string' && !this.loadNames.has(loadToken)) {
+      this.loadNames.set(loadToken, `load-${this.loadNames.size + 1}`);
+    }
     return new Promise((resolve, reject) => {
       const call: PendingCall = { seq: this.sent, command, args, phase: 'sent', resolve, reject };
       this.lastIssued.set(command, { seq: call.seq, gen: this.backend.open?.gen ?? null, faulted: false });
@@ -119,7 +128,9 @@ export class IpcScheduler {
   }
 
   private describe(call: PendingCall): string {
-    const args = call.args === undefined ? '' : JSON.stringify(call.args);
+    const loadToken = call.args?.loadToken;
+    const shown = typeof loadToken === 'string' ? { ...call.args, loadToken: this.loadNames.get(loadToken) ?? 'load-?' } : call.args;
+    const args = shown === undefined ? '' : JSON.stringify(shown);
     return `#${call.seq} ${call.command}${args.length > 120 ? `${args.slice(0, 117)}...` : args}`;
   }
 

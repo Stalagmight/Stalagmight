@@ -123,7 +123,7 @@ export interface IpcCommands {
   calculate_file_hash: { args: { path: string }; result: string; error: CommandError };
   can_redo: { args: Record<string, never>; result: boolean; error: CommandError };
   can_undo: { args: Record<string, never>; result: boolean; error: CommandError };
-  cancel_loading: { args: Record<string, never>; result: null; error: CommandError };
+  cancel_loading: { args: { loadToken?: string | null }; result: null; error: CommandError };
   check_create_target: { args: { name: string; saveDirectory?: string | null; savePath?: string | null }; result: null; error: CommandError };
   check_duplicate_import: { args: { hash: string }; result: boolean; error: CommandError };
   check_merge_connectivity: { args: { stationA: StationRef; stationB: StationRef }; result: ConnectivityResult; error: CommandError };
@@ -134,7 +134,7 @@ export interface IpcCommands {
   compute_gas_reach_field: { args: { origin?: StationRef | null; endpoint?: StationRef | null; waypoints: Array<StationRef>; segments: Array<PlanSegment>; diver: Diver; cylinders: Array<Cylinder>; gasConfig: GasConfig; stageDropOverrides: Array<StationRef | null> }; result: GasReachField | null; error: CommandError };
   count_unanchored_sections: { args: { newlyImportedSectionIds: Array<number> }; result: number; error: CommandError };
   create_loop_closure: { args: { expectedProject?: ProjectIdentity | null; stationA: StationRef; stationB: StationRef; closureStrategy: ClosureStrategy }; result: EditOutcome; error: CommandError };
-  create_project_full: { args: { name: string; projectLocation?: string | null; saveDirectory?: string | null; savePath?: string | null; deferInitialSave?: boolean | null }; result: CreateProjectFullResult; error: CommandError };
+  create_project_full: { args: { name: string; projectLocation?: string | null; saveDirectory?: string | null; savePath?: string | null; deferInitialSave?: boolean | null; loadToken?: string | null }; result: CreateProjectFullResult; error: CommandError };
   create_section: { args: { expectedProject?: ProjectIdentity | null; name?: string | null; surveyor?: string | null; date?: string | null; color: string; direction?: SurveyDirection | null; shots: Array<ShotData> }; result: SectionCreated; error: CommandError };
   create_section_and_merge: { args: { expectedProject?: ProjectIdentity | null; name?: string | null; surveyor?: string | null; date?: string | null; color: string; direction?: SurveyDirection | null; shots: Array<ShotData>; importStationIndex: number; targetStation: StationRef; closureStrategy: ClosureStrategy }; result: SectionCreated; error: CommandError };
   create_shot: { args: { expectedProject?: ProjectIdentity | null; sectionId: number; shot: ShotData; afterShotId?: number | null; beforeShotId?: number | null }; result: ShotCreated; error: CommandError };
@@ -148,10 +148,10 @@ export interface IpcCommands {
   delete_shot_range_shift: { args: { expectedProject?: ProjectIdentity | null; sectionId: number; startShotId: number; endShotId: number }; result: EditOutcome; error: CommandError };
   delete_shot_range_split: { args: { expectedProject?: ProjectIdentity | null; sectionId: number; startShotId: number; endShotId: number; nameA: string; nameB: string }; result: SectionCreated; error: CommandError };
   execute_batch: { args: { expectedProject?: ProjectIdentity | null; commands: Array<Command> }; result: BatchOutcome; error: CommandError };
-  execute_compass_import: { args: { expectedProject?: ProjectIdentity | null; path: string; fileHash?: string | null; includeExcluded: boolean; applyCorrections: boolean; commentsOnStations: boolean }; result: ImportOutcome; error: CommandError };
-  execute_gpx_import: { args: { expectedProject?: ProjectIdentity | null; path: string; fileHash?: string | null; importWaypoints: boolean; importTracks: boolean; importRoutes: boolean; sectionPlacements: Array<GpxSectionPlacement>; depthInverted: boolean }; result: ImportOutcome; error: CommandError };
-  execute_tml_import: { args: { expectedProject?: ProjectIdentity | null; path: string; fileHash?: string | null; includeExcluded: boolean; commentsOnStations: boolean; virtualShotMode?: VirtualShotMode | null; selectedSections?: Array<number> | null; rootPlacement?: TmlRootPlacement | null }; result: ImportOutcome; error: CommandError };
-  execute_walls_import: { args: { expectedProject?: ProjectIdentity | null; path: string; fileHash?: string | null; commentsOnStations: boolean; includeSplays: boolean; selectedSurveys?: Array<number> | null }; result: ImportOutcome; error: CommandError };
+  execute_compass_import: { args: { expectedProject?: ProjectIdentity | null; path: string; fileHash?: string | null; includeExcluded: boolean; applyCorrections: boolean; commentsOnStations: boolean; loadToken?: string | null }; result: ImportOutcome; error: CommandError };
+  execute_gpx_import: { args: { expectedProject?: ProjectIdentity | null; path: string; fileHash?: string | null; importWaypoints: boolean; importTracks: boolean; importRoutes: boolean; sectionPlacements: Array<GpxSectionPlacement>; depthInverted: boolean; loadToken?: string | null }; result: ImportOutcome; error: CommandError };
+  execute_tml_import: { args: { expectedProject?: ProjectIdentity | null; path: string; fileHash?: string | null; includeExcluded: boolean; commentsOnStations: boolean; virtualShotMode?: VirtualShotMode | null; selectedSections?: Array<number> | null; rootPlacement?: TmlRootPlacement | null; loadToken?: string | null }; result: ImportOutcome; error: CommandError };
+  execute_walls_import: { args: { expectedProject?: ProjectIdentity | null; path: string; fileHash?: string | null; commentsOnStations: boolean; includeSplays: boolean; selectedSurveys?: Array<number> | null; loadToken?: string | null }; result: ImportOutcome; error: CommandError };
   export_csv: { args: { path: string }; result: null; error: CommandError };
   export_dive_profile: { args: { path: string; format: string; request: DiveProfileRequest }; result: null; error: CommandError };
   export_image: { args: { path: string; options: ExportImageOptions }; result: null; error: CommandError };
@@ -194,8 +194,8 @@ export interface IpcCommands {
   list_recent_projects: { args: Record<string, never>; result: Array<ProjectMetadata>; error: CommandError };
   load_display_settings: { args: Record<string, never>; result: Record<string, string>; error: string };
   load_dive_plan: { args: { id: number }; result: DivePlan; error: CommandError };
-  load_project_full: { args: { path: string }; result: LoadProjectFullResult; error: CommandError };
-  load_project_full_binary: { args: { path: string }; result: ArrayBuffer; error: CommandError };
+  load_project_full: { args: { path: string; loadToken?: string | null }; result: LoadProjectFullResult; error: CommandError };
+  load_project_full_binary: { args: { path: string; loadToken?: string | null }; result: ArrayBuffer; error: CommandError };
   merge_projects: { args: { sourcePaths: Array<string>; outputPath: string; outputName: string; archiveOriginals: boolean }; result: ProjectFileOutcome; error: CommandError };
   merge_stations: { args: { expectedProject?: ProjectIdentity | null; stationA: StationRef; stationB: StationRef }; result: EditOutcome; error: CommandError };
   move_comment: { args: { expectedProject?: ProjectIdentity | null; source: CommentHolder; target: CommentHolder; swap: boolean }; result: EditOutcome; error: CommandError };

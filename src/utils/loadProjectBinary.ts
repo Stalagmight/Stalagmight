@@ -241,13 +241,14 @@ function isAlreadyOpen(e: unknown): boolean {
 /**
  * Invoke `load_project_full_binary` and decode the response into the same
  * shape `load_project_full` returned. The frontend can swap one call for
- * the other without touching consumers.
+ * the other without touching consumers. `loadToken`: the load's name, which its
+ * Cancel names (#576 W44-NF3, `utils/loadToken.ts`).
  */
-export async function loadProjectFullBinary(path: string): Promise<LoadProjectFullResultWithSoa> {
+export async function loadProjectFullBinary(path: string, loadToken?: string): Promise<LoadProjectFullResultWithSoa> {
   const tInvoke = performance.now();
   let raw: ArrayBuffer | Uint8Array | unknown;
   try {
-    raw = await invoke<ArrayBuffer>('load_project_full_binary', { path });
+    raw = await invoke<ArrayBuffer>('load_project_full_binary', { path, loadToken });
   } catch (e) {
     // Still rethrown either way - only the level changes, so the expected
     // short-circuit stops masquerading as a load failure in the debug log.

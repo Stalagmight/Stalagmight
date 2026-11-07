@@ -75,61 +75,15 @@ import { runProjectSwitch } from '../utils/projectTransition';
 import { expectedProjectOf, issuedAgainstOf, lostProjectOf, type IssuedAgainst } from './projectIssue';
 import { issueSave, refuseDuringSwitch } from './switchGate';
 import { loadRetryingReplacedFile } from './loadRetry';
+import { newLoadToken } from '../utils/loadToken';
+import { createProjectLoadingActions, initialLoadingState, type LoadingState, type ProjectLoadingActions } from './projectLoadingState';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
 
-/**
- * Structured loading state for project load/create operations.
- * Tracks progress phases, current/total counts, and error states.
- */
-export interface LoadingState {
-  /**
-   * Backend loading ID for filtering stale progress events.
-   * Set from the first progress event or result.loadingId.
-   * Value of 0 means "accept events until we learn the backend ID".
-   */
-  loadingId: number;
-  /**
-   * Client operation ID for race detection (local to frontend).
-   * Incremented on each load start. Used to detect if a newer load started.
-   */
-  clientOpId: number;
-  /** Whether a load operation is currently in progress */
-  isLoading: boolean;
-  /** Name of the project being loaded */
-  projectName?: string | undefined;
-  /** Path to the project file (for retry functionality) */
-  projectPath?: string | undefined;
-  /** Current phase enum value (snake_case from backend) */
-  phase?: string | undefined;
-  /** Index of current phase (0-based) */
-  phaseIndex?: number | undefined;
-  /** Total number of phases */
-  phaseCount?: number | undefined;
-  /** Current phase progress percentage (0-100), undefined for indeterminate */
-  phaseProgress?: number | undefined;
-  /** Current item count in phase */
-  phaseCurrent?: number | undefined;
-  /** Total items in phase */
-  phaseTotal?: number | undefined;
-  /** Overall loading progress percentage (0-100) */
-  overallProgress: number;
-  /** Error information if load failed */
-  error?: { message: string; details?: string | undefined } | undefined;
-  /** Timestamp of last event (for timeout detection) */
-  lastEventTime?: number | undefined;
-}
+// The loading state and its actions live in projectLoadingState.ts.
+export type { LoadingState } from './projectLoadingState';
 
-const initialLoadingState: LoadingState = {
-  loadingId: 0,
-  clientOpId: 0,
-  isLoading: false,
-  overallProgress: 0,
-};
-
-// Separate client operation ID for race detection (independent of backend loading ID)
-let clientOpIdCounter = 0;
 let projectTreeGenerationCounter = 0;
 
 function nextProjectTreeGeneration(): number {
@@ -180,7 +134,7 @@ export interface LoadProjectOutcome {
   superseded?: boolean;
 }
 
-export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectLoadRepairsActions, ProjectLoadRepairsState, ProjectIntegrityActions, ProjectExportActions {
+export interface ProjectStore extends ProjectConfigActions, ProjectLoadingActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectLoadRepairsActions, ProjectLoadRepairsState, ProjectIntegrityActions, ProjectExportActions {
   // State
   project: Project | null;
   /**
@@ -266,18 +220,6 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   isClosing: boolean;
 
   // Actions (loadConfig / updateConfig / updateGasConfig / setConfig: see ProjectConfigActions)
-
-  // Loading state actions
-  /** Start a new loading operation, returns the loadingId */
-  startLoading: (projectName: string, projectPath: string) => number;
-  /** Update loading progress state */
-  setLoadingProgress: (progress: Partial<LoadingState>) => void;
-  /** Reset loading state to initial */
-  resetLoading: () => void;
-  /** Set loading error (keeps modal open) */
-  setLoadingError: (message: string, details?: string) => void;
-  /** Cancel any in-progress loading operation */
-  cancelLoading: () => Promise<void>;
 
   /** Load a project using the consolidated load_project_full command */
   loadProject: (path: string) => Promise<LoadProjectOutcome>;
@@ -597,6 +539,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     noteProjectDirtied();
     set({ isDirty: true });
   };
+  /**
+   * [#576 W44-NF3] A file import's name, sent with its command: the dialog shows the
+   * import's progress from the loading state, and its Cancel (`ImportCancelButton`)
+   * names the load that state is for.
+   */
+  const nameImport = (): string => {
+    const loadToken = newLoadToken();
+    set((state) => ({ loading: { ...state.loading, loadToken } }));
+    return loadToken;
+  };
   /** Shared helper: invoke IPC command, refresh state on success, mark dirty. */
   const executeCommand = async <K extends MutationCommand>(
     command: K,
@@ -888,63 +840,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   ...createProjectIntegrityActions(set, get),
   // exportCsv / exportJson / exportTml / exportImage live in projectExportActions.ts
   ...createProjectExportActions(),
-
-  // Loading state actions
-  startLoading: (projectName: string, projectPath: string) => {
-    clientOpIdCounter += 1;
-    const newClientOpId = clientOpIdCounter;
-    set({
-      loading: {
-        ...initialLoadingState,
-        loadingId: 0, // Will be set from first progress event or result
-        clientOpId: newClientOpId,
-        isLoading: true,
-        projectName,
-        projectPath,
-        phase: 'opening_database',
-        lastEventTime: Date.now(),
-      },
-      autosaveFailure: null, // A new project's autosave state starts clean
-      autosaveFailureKind: null,
-    });
-    return newClientOpId;
-  },
-
-  setLoadingProgress: (progress: Partial<LoadingState>) =>
-    set((state) => ({
-      loading: {
-        ...state.loading,
-        ...progress,
-        lastEventTime: Date.now(),
-      },
-    })),
-
-  resetLoading: () =>
-    set((state) => ({
-      loading: { ...initialLoadingState, clientOpId: state.loading.clientOpId },
-    })),
-
-  setLoadingError: (message: string, details?: string) =>
-    set((state) => ({
-      loading: {
-        ...state.loading,
-        isLoading: true, // Keep modal open for error display
-        error: { message, details },
-      },
-    })),
-
-  cancelLoading: async () => {
-    // Safe to call even when no load is active - backend is idempotent
-    try {
-      await invokeIpc('cancel_loading', undefined, {
-        purpose: 'cancel project loading',
-      });
-    } catch {
-      // Ignore errors - might be called when no load active
-    }
-    // Always reset loading state
-    get().resetLoading();
-  },
+  // startLoading / setLoadingProgress / resetLoading / setLoadingError / cancelLoading
+  // live in projectLoadingState.ts
+  ...createProjectLoadingActions(set, get),
 
   // Load project using the consolidated load_project_full command
   //
@@ -959,8 +857,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   //
   // [#576 FZ-FZ-INT-1] A load is a switch: it waits for the previous one's answer,
   // and one still waiting when a newer switch is requested is dropped (SUPERSEDED).
-  loadProject: (path: string) =>
-    runProjectSwitch<LoadProjectOutcome>(async (turn) => {
+  loadProject: (path: string) => {
+    // [#576 W44-NF3] This load's name: its backend load carries it, and the Cancels
+    // made for it (the loading modal's, the superseded cancel below) name it.
+    const loadToken = newLoadToken();
+    return runProjectSwitch<LoadProjectOutcome>(async (turn) => {
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
@@ -972,12 +873,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       useGlobalViewStore.getState().clearGeometryCache();
 
       // ALWAYS cancel first - NO isLoading guard
-      // cancel_loading is idempotent on backend
+      // cancel_loading is idempotent on backend; it names the store's previous load
       await get().cancelLoading();
 
       // Use cross-platform path splitting for project name extraction
       const initialName = extractFilename(path, /\.stalx$/i) || 'Project';
-      const clientOpId = get().startLoading(initialName, path);
+      const clientOpId = get().startLoading(initialName, path, loadToken);
 
       try {
         const tIpcStart = performance.now();
@@ -989,7 +890,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // [#576 FZ-FZ-INT-R2] Repeated once, silently, when a save replaced the file mid-read.
         // [#576 RVF-c-A2-1] Never after the user cancelled it (Cancel resets the loading
         // state, keeping clientOpId): the repeat is a new backend load that cancel never reached.
-        const result = await loadRetryingReplacedFile(() => loadProjectFullBinary(path), () => {
+        const result = await loadRetryingReplacedFile(() => loadProjectFullBinary(path, loadToken), () => {
           if (turn.superseded || get().loading.clientOpId !== clientOpId) return false;
           if (!get().loading.isLoading) return false;
           get().setLoadingProgress({ loadingId: 0 }); // the repeat's progress events carry a new id
@@ -1276,12 +1177,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Stop the backend's work at once, but leave the loading state to this load's own
       // ending: its answer may still commit, and the reset arrived after a newer load had
       // started, or while this one still ran, showing a project open with no load running.
-      // [#576 RVF-c-C3] Returned: the next switch waits for it to answer, so it cannot
-      // reach the backend after that switch's own load started and cancel it instead.
+      // [#576 RVF-c-C3] Returned: the next switch waits for it to answer before it starts.
+      // [#576 W44-NF3] It names this load, so it cancels nothing else whenever it runs.
       onSuperseded: () =>
-        invokeIpc('cancel_loading', undefined, { purpose: 'cancel project loading' }).catch(() => undefined),
+        invokeIpc('cancel_loading', { loadToken }, { purpose: 'cancel project loading' }).catch(() => undefined),
       flushDisplayWrites: true, // [#576 FZ-FZ-INT-6]
-    }),
+    });
+  },
 
   // Project operations - uses consolidated create_project_full command
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) =>
@@ -1306,7 +1208,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
 
-    const clientOpId = get().startLoading(name, '');
+    // [#576 W44-NF3] This create's name: the loading modal's Cancel names it.
+    const loadToken = newLoadToken();
+    const clientOpId = get().startLoading(name, '', loadToken);
     // A deferred initial save reserves file_path but leaves the backend database
     // unopened, so DB-backed actions (e.g. ignoring a warning) can't run yet.
     const deferred = options?.deferInitialSave ?? !options?.savePath;
@@ -1324,6 +1228,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           saveDirectory: options?.saveDirectory,
           savePath: options?.savePath,
           deferInitialSave: deferred,
+          loadToken,
         },
         { purpose: 'create new project workspace', fields: { name } }
       );
@@ -2210,6 +2115,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // the way you always did", so an older caller behaves unchanged.
           selectedSections: selectedSections ?? null,
           rootPlacement: rootPlacement ?? null,
+          loadToken: nameImport(),
         },
         { purpose: 'import Ariane TML/TMLU', fields: { path } }
       );
@@ -2239,6 +2145,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           includeExcluded: includeExcluded ?? false,
           applyCorrections: applyCorrections ?? true,
           commentsOnStations: commentsOnStations ?? true,
+          loadToken: nameImport(),
         },
         { purpose: 'import Compass', fields: { path } }
       );
@@ -2274,6 +2181,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // `null` ⇒ import every survey; an array picks specific survey indices
           // (into the preview's `surveys`, 1:1 with the parser order).
           selectedSurveys: selectedSurveys ?? null,
+          loadToken: nameImport(),
         },
         { purpose: 'import Walls', fields: { path } }
       );
@@ -2333,6 +2241,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           importRoutes,
           sectionPlacements,
           depthInverted,
+          loadToken: nameImport(),
         },
         { purpose: 'import GPX file', fields: { path } }
       );

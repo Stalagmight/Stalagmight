@@ -42,10 +42,10 @@ fn a_load_cancelled_after_its_first_lock_check_does_not_commit() {
                     wait.recv().unwrap();
                 }));
             });
-            state.do_load_project_full(b.clone())
+            state.do_load_project_full_with(b.clone(), None, Some("load-b"))
         });
         reached.recv().unwrap();
-        state.cancel_loading();
+        state.cancel_loading(Some("load-b"));
         go.send(()).unwrap();
         load.join().unwrap()
     });
@@ -147,11 +147,11 @@ fn a_cancelled_load_whose_file_was_also_replaced_is_answered_cancelled() {
                     wait.recv().unwrap();
                 }));
             });
-            state.do_load_project_full(a.clone())
+            state.do_load_project_full_with(a.clone(), None, Some("load-a"))
         });
         reached.recv().unwrap();
         // Both at once: the user cancels, and another session saves the file.
-        state.cancel_loading();
+        state.cancel_loading(Some("load-a"));
         other.do_load_project_full(a.clone()).unwrap();
         assert!(other.execute(new_section("SavedByTheOtherSession")).success);
         assert!(other.execute(Command::SaveProject { path: None }).success);

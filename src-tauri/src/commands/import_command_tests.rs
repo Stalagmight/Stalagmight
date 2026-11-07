@@ -102,6 +102,7 @@ fn tml_import(
         None,
         sections,
         None,
+        None,
     ));
     (app, result)
 }
@@ -188,6 +189,7 @@ fn compass_import(
         include_excluded,
         true,
         false,
+        None,
     ));
     (app, result)
 }
@@ -248,6 +250,7 @@ fn walls_import(
         false,
         include_splays,
         None,
+        None,
     ));
     (app, result)
 }
@@ -288,6 +291,7 @@ fn the_walls_command_honours_include_splays_and_records_the_file() {
         false,
         false,
         Some(Vec::new()),
+        None,
     ));
     receipt_of(&result);
     assert_eq!(shots_in(&none), 0, "selected_surveys reaches the converter");

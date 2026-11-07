@@ -1769,7 +1769,7 @@ fn open(
     Result<crate::core::loading::LoadProjectFullResult, crate::core::loading::LoadError>,
 ) {
     let state = state_with_null_sink();
-    let loaded = state.do_load_project_full_with(path.to_path_buf(), upgrade_refusal);
+    let loaded = state.do_load_project_full_with(path.to_path_buf(), upgrade_refusal, None);
     (state, loaded)
 }
 

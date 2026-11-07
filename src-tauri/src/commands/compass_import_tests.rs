@@ -53,6 +53,7 @@ fn a_compass_file_imports_its_surveys_into_the_open_project() {
         let result = execute_compass_import_impl(
             &state,
             Arc::new(NullEventSink),
+            None,
             &path,
             Some("synthetic-hash".to_owned()),
             &CompassImportOptions {

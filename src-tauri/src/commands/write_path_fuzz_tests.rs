@@ -1612,6 +1612,7 @@ mod disk {
                 let created = create_project_full_checked(
                     state,
                     &check,
+                    None,
                     "Cave".to_owned(),
                     None,
                     folder,
@@ -1708,7 +1709,7 @@ mod disk {
             Caller::Load => {
                 let expected = oracle(path, None);
                 let refusal = load_upgrade_refusal_with(path, dirs);
-                let _ = state.do_load_project_full_with(path.clone(), refusal.as_ref());
+                let _ = state.do_load_project_full_with(path.clone(), refusal.as_ref(), None);
                 if let Some(r) = &refusal {
                     if reason_of(&r.older_format) != reason_of(&r.unstamped) {
                         return Err(format!("the two load refusals differ: {r:?}"));

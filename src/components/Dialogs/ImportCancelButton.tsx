@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../utils/ipc';
+import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 
 /**
@@ -18,6 +19,8 @@ import { Button } from '../common/Button';
  * It invokes `cancel_loading` itself rather than `projectStore.cancelLoading()`,
  * which also resets the loading state: that would hide the dialog's progress line
  * (and stop listening for its progress) while the import is still running.
+ * [#576 W44-NF3] It names the import that state is for (the name the store sent
+ * with the import), so a cancel that runs after the import ended stops nothing else.
  *
  * Render it in place of the dialog's idle Cancel only while the import runs; the
  * pressed state then goes with the run, so a later import starts from Cancel.
@@ -37,7 +40,8 @@ export function ImportCancelButton({
     setRequested(true);
     // Idempotent and answers nothing; if the request itself fails, the import
     // simply runs to its end and the dialog handles that result as usual.
-    invokeIpc('cancel_loading', undefined, { purpose: 'cancel the running file import' }).catch(() => {});
+    const loadToken = useProjectStore.getState().loading.loadToken ?? null;
+    invokeIpc('cancel_loading', { loadToken }, { purpose: 'cancel the running file import' }).catch(() => {});
   };
 
   return (

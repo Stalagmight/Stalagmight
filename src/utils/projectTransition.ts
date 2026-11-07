@@ -53,8 +53,9 @@ export interface SwitchOptions<T> {
   /**
    * Called once if a newer switch is requested while this one runs. [#576 RVF-c-C3] What
    * it returns (a load: its `cancel_loading` IPC) is waited for before the newer switch
-   * starts: `cancel_loading` cancels whatever load is active when it runs, so one still
-   * on its way could cancel the newer switch's load instead.
+   * starts. That cancel names the load it was made for ([#576 W44-NF3]); before it did,
+   * it cancelled whatever load was active when it ran, so one still on its way could
+   * cancel the newer switch's load instead.
    */
   onSuperseded?: () => unknown;
   /** Flush the queued display-setting writes before the work starts (load, close). */

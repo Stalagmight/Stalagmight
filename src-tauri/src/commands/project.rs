@@ -443,10 +443,14 @@ fn serialize_project_snapshot<S: serde::Serializer>(
 /// Note: Uses AppHandle instead of State<'_, AppState> because Tauri's State<'_, T>
 /// wraps a reference (&'r Arc<T>) that cannot outlive the function body. For spawn_blocking,
 /// we need 'static ownership, which AppHandle provides via app_handle.state::<T>().
+///
+/// [#576 W44-NF3] `load_token` is the name the webview gave this load; its Cancel
+/// (`cancel_loading`) names it too, and cancels nothing else.
 #[tauri::command]
 pub async fn load_project_full(
     app_handle: tauri::AppHandle,
     path: PathBuf,
+    load_token: Option<String>,
 ) -> Result<LoadProjectFullResult, CommandError> {
     // [perf-debug] Log when the Rust handler is about to return so we can
     // subtract that from the JS-side IPC wait time and isolate IPC
@@ -459,7 +463,7 @@ pub async fn load_project_full(
     let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
-            state.do_load_project_full_with(path, upgrade_refusal.as_ref())
+            state.do_load_project_full_with(path, upgrade_refusal.as_ref(), load_token.as_deref())
         })
         .await;
     let handler_elapsed = t_start.elapsed();
@@ -484,11 +488,12 @@ pub async fn load_project_full(
 /// removes the synchronous `serde_json::to_string` + `JSON.parse` cost from
 /// both threads. See [`crate::core::load_binary`] for the wire format. The
 /// JSON variant is kept for back-compat and tests; new callers should use
-/// this one.
+/// this one. `load_token`: as for `load_project_full`.
 #[tauri::command]
 pub async fn load_project_full_binary(
     app_handle: tauri::AppHandle,
     path: PathBuf,
+    load_token: Option<String>,
 ) -> Result<tauri::ipc::Response, CommandError> {
     let t_start = std::time::Instant::now();
     // [#576 RV4-R-M3-OPEN] Opens anywhere; only the in-place upgrade of an
@@ -497,7 +502,7 @@ pub async fn load_project_full_binary(
     let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
-            state.do_load_project_full_with(path, upgrade_refusal.as_ref())
+            state.do_load_project_full_with(path, upgrade_refusal.as_ref(), load_token.as_deref())
         })
         .await;
     let handler_elapsed = t_start.elapsed();
@@ -523,12 +528,20 @@ pub async fn load_project_full_binary(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// Cancel any active loading operation.
+/// Cancel the load named `load_token` (the name the webview gave the open, create
+/// or file import it started), if it is the one in progress.
 /// Idempotent - safe to call anytime, even when no load is active.
+///
+/// [#576 W44-NF3] A Cancel names its load: one that runs after its load ended and
+/// a newer one started must not cancel the newer one. A name that is not the
+/// active load's, and no name, cancel nothing.
 #[tauri::command]
-pub async fn cancel_loading<R: Runtime>(app: tauri::AppHandle<R>) -> Result<(), CommandError> {
-    pool::run(app, |state| {
-        state.cancel_loading();
+pub async fn cancel_loading<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    load_token: Option<String>,
+) -> Result<(), CommandError> {
+    pool::run(app, move |state| {
+        state.cancel_loading(load_token.as_deref());
         Ok(())
     })
     .await
@@ -642,6 +655,9 @@ pub async fn set_workspace_mode<R: Runtime>(
 /// `<folder>/project.stalx` for a folder, and the named file before any rename,
 /// so a link at the name really opened was never judged. The default location
 /// (neither named) is not the webview's to choose and is not checked, as before.
+///
+/// `load_token` [#576 W44-NF3]: the name the webview gave this create, which its
+/// Cancel (`cancel_loading`) names.
 #[expect(
     clippy::result_large_err,
     reason = "the LoadError every create path returns; boxing it is a repo-wide change"
@@ -649,6 +665,7 @@ pub async fn set_workspace_mode<R: Runtime>(
 pub(crate) fn create_project_full_checked(
     state: &AppState,
     check: &dyn Fn(&std::path::Path) -> Result<(), String>,
+    load_token: Option<&str>,
     name: String,
     project_location: Option<String>,
     save_directory: Option<PathBuf>,
@@ -656,7 +673,8 @@ pub(crate) fn create_project_full_checked(
     defer_initial_save: bool,
 ) -> Result<CreateProjectFullResult, LoadError> {
     if save_path.is_none() && save_directory.is_none() {
-        return state.do_create_project_full(
+        return state.do_create_project_full_named(
+            load_token,
             name,
             project_location,
             None,
@@ -666,6 +684,7 @@ pub(crate) fn create_project_full_checked(
     }
     state.do_create_project_full_checked(
         check,
+        load_token,
         name,
         project_location,
         save_directory,
@@ -682,6 +701,7 @@ pub async fn create_project_full(
     save_directory: Option<PathBuf>,
     save_path: Option<PathBuf>,
     defer_initial_save: Option<bool>,
+    load_token: Option<String>,
 ) -> Result<CreateProjectFullResult, CommandError> {
     // Use AppHandle to access state inside spawn_blocking
     // (State<'_, T> cannot be moved due to lifetime constraints)
@@ -690,6 +710,7 @@ pub async fn create_project_full(
             create_project_full_checked(
                 &app_handle.state::<AppState>(),
                 &check_project_target,
+                load_token.as_deref(),
                 name,
                 project_location,
                 save_directory,

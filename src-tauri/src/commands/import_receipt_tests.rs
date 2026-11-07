@@ -235,6 +235,7 @@ fn test_execute_gpx_import_decorates_receipt() {
             false,
             Vec::new(),
             false,
+            None,
         ));
         assert_success(&result);
         let receipt = result

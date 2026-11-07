@@ -111,9 +111,9 @@ describe('runProjectSwitch', () => {
   });
 
   it('starts the next switch only after the superseded one\'s cancel has answered (#576 RVF-c-C3)', async () => {
-    // `cancel_loading` cancels whatever load is active when it RUNS. Sent when a load
-    // is superseded, it must not still be on its way when the next switch starts its
-    // own load, or it cancels that one instead.
+    // `cancel_loading` once cancelled whatever load was active when it RAN (it names its
+    // load since #576 W44-NF3). Sent when a load is superseded, it must not still be on
+    // its way when the next switch starts its own load, which it could cancel instead.
     const trace: string[] = [];
     const running = deferred();
     const cancelAnswered = deferred();

@@ -238,7 +238,7 @@ fn a_snapshot_is_the_project_as_it_was_when_taken() {
 fn cancel_is_never_queued_behind_a_running_command() {
     let (state, a, _) = merged_pair();
     let state = Arc::new(state);
-    let token = state.start_new_load();
+    let token = state.start_named_load(Some("load"));
     let parked = settle_gate::park(&state);
     let editor = {
         let state = Arc::clone(&state);
@@ -247,7 +247,7 @@ fn cancel_is_never_queued_behind_a_running_command() {
     assert!(parked.wait_entered(Duration::from_secs(10)));
     // The edit holds `command_lock` at the gate; Cancel must not wait for it.
     let started = Instant::now();
-    state.cancel_loading();
+    state.cancel_loading(Some("load"));
     let took = started.elapsed();
     let cancelled = token.load(std::sync::atomic::Ordering::SeqCst);
     parked.release();

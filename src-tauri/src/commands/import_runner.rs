@@ -64,7 +64,8 @@ pub(crate) enum ApplyPath {
 ///
 /// `mode` is the virtual-shot classification: Ariane passes its dialog's
 /// choice, the others `Auto` (decision C10-D1: no dialog of theirs offers an
-/// override).
+/// override). `load_token` is the name the dialog gave this import [#576
+/// W44-NF3]: its Cancel (`cancel_loading`) names it, and cancels nothing else.
 #[expect(
     clippy::too_many_arguments,
     reason = "the importer's identity, its file and its two steps; a struct \
@@ -73,6 +74,7 @@ pub(crate) enum ApplyPath {
 pub(crate) fn run_file_import<P>(
     state: &AppState,
     sink: Arc<dyn EventSink>,
+    load_token: Option<&str>,
     kind: &ImportKind,
     path: &Path,
     file_hash: Option<String>,
@@ -87,7 +89,7 @@ pub(crate) fn run_file_import<P>(
     // [#576 NF-FIX3A-2] This import is the active load, so the loading overlay's
     // Cancel (`cancel_loading`) reaches it; checked between the phases, up to the
     // apply. Released on every way out.
-    let active = ActiveImport::register(state);
+    let active = ActiveImport::register(state, load_token);
     let mut emitter = ProgressEmitter::new_for_import(sink, Arc::clone(&active.token));
 
     emitter.start_phase(LoadingPhase::ImportParsing);
@@ -203,8 +205,8 @@ fn cancelled(label: &str) -> CommandResult {
     ))
 }
 
-/// An import registered as the app's active load (`AppState::start_new_load`), so
-/// `cancel_loading` flips its token; cleared when it ends, however it ends
+/// An import registered as the app's active load (`AppState::start_named_load`), so
+/// `cancel_loading` naming it flips its token; cleared when it ends, however it ends
 /// (`clear_active_load` only clears its own token, never a newer load's).
 struct ActiveImport<'a> {
     state: &'a AppState,
@@ -212,10 +214,10 @@ struct ActiveImport<'a> {
 }
 
 impl<'a> ActiveImport<'a> {
-    fn register(state: &'a AppState) -> Self {
+    fn register(state: &'a AppState, load_token: Option<&str>) -> Self {
         Self {
             state,
-            token: state.start_new_load(),
+            token: state.start_named_load(load_token),
         }
     }
 }

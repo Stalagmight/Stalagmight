@@ -343,7 +343,8 @@ pub async fn parse_tml(path: PathBuf) -> Result<TmlFile, CommandError> {
 /// [#576 NF-FIX3A-2 / C2] Runs on the blocking pool (`pool::run`), so the main
 /// thread stays free while the file is read and converted: the progress events
 /// reach the dialog as they are emitted, and the dialog's Cancel
-/// (`cancel_loading`) reaches the import between its phases.
+/// (`cancel_loading`) reaches the import between its phases - by its name,
+/// `load_token`, which the dialog gave it [#576 W44-NF3].
 #[tauri::command]
 #[expect(
     clippy::too_many_arguments,
@@ -360,6 +361,7 @@ pub async fn execute_tml_import<R: Runtime>(
     virtual_shot_mode: Option<VirtualShotMode>,
     selected_sections: Option<Vec<u32>>,
     root_placement: Option<TmlRootPlacement>,
+    load_token: Option<String>,
 ) -> Result<ImportOutcome, CommandError> {
     let sink = tauri_sink(app.clone());
     pool::run_mutation(app, expected_project, move |state| {
@@ -377,6 +379,7 @@ pub async fn execute_tml_import<R: Runtime>(
         run_file_import(
             state,
             sink,
+            load_token.as_deref(),
             &TML_IMPORT,
             &path,
             file_hash,
@@ -459,6 +462,7 @@ pub async fn execute_compass_import<R: Runtime>(
     include_excluded: bool,
     apply_corrections: bool,
     comments_on_stations: bool,
+    load_token: Option<String>,
 ) -> Result<ImportOutcome, CommandError> {
     let sink = tauri_sink(app.clone());
     pool::run_mutation(app, expected_project, move |state| {
@@ -467,7 +471,7 @@ pub async fn execute_compass_import<R: Runtime>(
             apply_corrections,
             comments_on_stations,
         };
-        execute_compass_import_impl(state, sink, &path, file_hash, &opts)
+        execute_compass_import_impl(state, sink, load_token.as_deref(), &path, file_hash, &opts)
             .into_outcome::<ImportOutcome>()
     })
     .await
@@ -479,6 +483,7 @@ pub async fn execute_compass_import<R: Runtime>(
 pub(crate) fn execute_compass_import_impl(
     state: &AppState,
     sink: std::sync::Arc<dyn crate::core::events::EventSink>,
+    load_token: Option<&str>,
     path: &std::path::Path,
     file_hash: Option<String>,
     opts: &CompassImportOptions,
@@ -486,6 +491,7 @@ pub(crate) fn execute_compass_import_impl(
     run_file_import(
         state,
         sink,
+        load_token,
         &COMPASS_IMPORT,
         path,
         file_hash,
@@ -563,6 +569,7 @@ pub async fn execute_gpx_import<R: Runtime>(
     import_routes: bool,
     section_placements: Vec<GpxSectionPlacement>,
     depth_inverted: bool,
+    load_token: Option<String>,
 ) -> Result<ImportOutcome, CommandError> {
     let sink = tauri_sink(app.clone());
     pool::run_mutation(app, expected_project, move |state| {
@@ -583,6 +590,7 @@ pub async fn execute_gpx_import<R: Runtime>(
         run_file_import(
             state,
             sink,
+            load_token.as_deref(),
             &GPX_IMPORT,
             &path,
             file_hash,
@@ -811,6 +819,7 @@ pub async fn execute_walls_import<R: Runtime>(
     comments_on_stations: bool,
     include_splays: bool,
     selected_surveys: Option<Vec<u32>>,
+    load_token: Option<String>,
 ) -> Result<ImportOutcome, CommandError> {
     let sink = tauri_sink(app.clone());
     pool::run_mutation(app, expected_project, move |state| {
@@ -825,6 +834,7 @@ pub async fn execute_walls_import<R: Runtime>(
         run_file_import(
             state,
             sink,
+            load_token.as_deref(),
             &WALLS_IMPORT,
             &path,
             file_hash,
@@ -1232,6 +1242,7 @@ mod receipt_tests {
         let parse_panics = run_file_import(
             &state,
             std::sync::Arc::<RecordingSink>::clone(&sink),
+            None,
             &TEST_IMPORT,
             Path::new("/tmp/synthetic.dat"),
             None,
@@ -1252,6 +1263,7 @@ mod receipt_tests {
         let convert_panics = run_file_import(
             &state,
             sink,
+            None,
             &TEST_IMPORT,
             Path::new("/tmp/synthetic.dat"),
             None,
@@ -1279,6 +1291,7 @@ mod receipt_tests {
         let result = run_file_import(
             &state,
             std::sync::Arc::<RecordingSink>::clone(&sink),
+            None,
             &TEST_IMPORT,
             Path::new("/tmp/synthetic.dat"),
             None,
@@ -1374,6 +1387,7 @@ mod receipt_tests {
         let runner = run_file_import(
             &state,
             std::sync::Arc::new(RecordingSink::default()),
+            None,
             &COMPASS_IMPORT,
             &path,
             Some("hash".to_string()),
@@ -1439,6 +1453,7 @@ mod receipt_tests {
         let runner = run_file_import(
             &state,
             std::sync::Arc::new(RecordingSink::default()),
+            None,
             &WALLS_IMPORT,
             &path,
             None,
@@ -1510,6 +1525,7 @@ mod receipt_tests {
         let runner = run_file_import(
             &state,
             std::sync::Arc::new(RecordingSink::default()),
+            None,
             &TML_IMPORT,
             &path,
             None,
@@ -1583,6 +1599,7 @@ mod receipt_tests {
         let runner = run_file_import(
             &state,
             std::sync::Arc::<RecordingSink>::clone(&sink),
+            None,
             &GPX_IMPORT,
             &path,
             None,

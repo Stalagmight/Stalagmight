@@ -77,7 +77,15 @@
       "name": "cancel_loading",
       "module": "project",
       "async": true,
-      "args": [],
+      "args": [
+        {
+          "name": "load_token",
+          "key": "loadToken",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
       "result": {
         "rust": "()",
         "ts": "null"
@@ -428,6 +436,13 @@
           "key": "deferInitialSave",
           "rust": "Option<bool>",
           "ts": "boolean | null",
+          "optional": true
+        },
+        {
+          "name": "load_token",
+          "key": "loadToken",
+          "rust": "Option<String>",
+          "ts": "string | null",
           "optional": true
         }
       ],
@@ -1038,6 +1053,13 @@
           "rust": "bool",
           "ts": "boolean",
           "optional": false
+        },
+        {
+          "name": "load_token",
+          "key": "loadToken",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
         }
       ],
       "result": {
@@ -1109,6 +1131,13 @@
           "rust": "bool",
           "ts": "boolean",
           "optional": false
+        },
+        {
+          "name": "load_token",
+          "key": "loadToken",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
         }
       ],
       "result": {
@@ -1180,6 +1209,13 @@
           "rust": "Option<TmlRootPlacement>",
           "ts": "TmlRootPlacement | null",
           "optional": true
+        },
+        {
+          "name": "load_token",
+          "key": "loadToken",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
         }
       ],
       "result": {
@@ -1236,6 +1272,13 @@
           "key": "selectedSurveys",
           "rust": "Option<Vec<u32>>",
           "ts": "Array<number> | null",
+          "optional": true
+        },
+        {
+          "name": "load_token",
+          "key": "loadToken",
+          "rust": "Option<String>",
+          "ts": "string | null",
           "optional": true
         }
       ],
@@ -2133,6 +2176,13 @@
           "rust": "PathBuf",
           "ts": "string",
           "optional": false
+        },
+        {
+          "name": "load_token",
+          "key": "loadToken",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
         }
       ],
       "result": {
@@ -2155,6 +2205,13 @@
           "rust": "PathBuf",
           "ts": "string",
           "optional": false
+        },
+        {
+          "name": "load_token",
+          "key": "loadToken",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
         }
       ],
       "result": {

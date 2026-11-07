@@ -128,9 +128,11 @@ function displayAnswer(stored: Map<string, StoredDisplay>): Record<string, unkno
   };
 }
 
-/** A load's cancellation token (`AppState::start_new_load`). */
+/** A load's cancellation token (`AppState::start_named_load`). */
 interface LoadToken {
   cancelled: boolean;
+  /** The name the frontend gave the load (`loadToken`, #576 W44-NF3); a Cancel names it. */
+  name: unknown;
   /** A load's stamp of its file, taken as it opens it (project_load.rs:491-493); unset for a create. */
   stamp?: number | null;
 }
@@ -182,14 +184,16 @@ export class BackendModel {
   onSend(command: string, args: Record<string, unknown> | undefined): { token?: LoadToken; early?: Outcome } {
     switch (command) {
       case 'cancel_loading':
-        // app_state.rs cancel_loading: flags the active load, takes no lock.
-        if (this.activeLoad) this.activeLoad.cancelled = true;
+        // app_state.rs cancel_loading: flags the active load if it names it, takes no lock.
+        if (this.activeLoad && typeof args?.loadToken === 'string' && this.activeLoad.name === args.loadToken) {
+          this.activeLoad.cancelled = true;
+        }
         return { early: ok(null) };
       case 'load_project_full_binary': {
         // project_load.rs:397-409: ALREADY_OPEN, then start_new_load, before the file is read.
         const path = String(args?.path);
         if (this.open && this.open.filePath === path) return { early: err('ALREADY_OPEN', 'already open') };
-        const token = this.startLoad();
+        const token = this.startLoad(args?.loadToken);
         // project_load.rs:491-493: the stamp of the file the load opens, which its
         // commit compares (load_file_stamp.rs). Taken here, at the send: the earliest
         // the real load can take it, so every save the backend applies after the send
@@ -199,15 +203,15 @@ export class BackendModel {
       }
       case 'create_project_full':
         // project_create.rs: a create starts a load too (its cancel token).
-        return { token: this.startLoad() };
+        return { token: this.startLoad(args?.loadToken) };
       default:
         return {};
     }
   }
 
-  private startLoad(): LoadToken {
+  private startLoad(name: unknown): LoadToken {
     if (this.activeLoad) this.activeLoad.cancelled = true;
-    const token = { cancelled: false };
+    const token: LoadToken = { cancelled: false, name };
     this.activeLoad = token;
     return token;
   }

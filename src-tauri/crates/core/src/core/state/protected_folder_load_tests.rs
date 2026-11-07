@@ -93,7 +93,7 @@ fn a_current_project_where_nothing_may_be_written_opens_and_is_not_written() {
     let before = std::fs::read(&path).expect("read");
 
     let state = state_with_null_sink();
-    let loaded = state.do_load_project_full_with(path.clone(), Some(&refusal()));
+    let loaded = state.do_load_project_full_with(path.clone(), Some(&refusal()), None);
     let after = std::fs::read(&path).expect("read");
     println!(
         "current-format project, upgrade refused here: opened={} shots={:?}; file unchanged: {}; folder: {:?}",
@@ -121,7 +121,7 @@ fn an_older_project_where_nothing_may_be_written_is_refused_untouched() {
     let before = std::fs::read(&path).expect("read");
 
     let state = state_with_null_sink();
-    let Err(error) = state.do_load_project_full_with(path.clone(), Some(&refusal())) else {
+    let Err(error) = state.do_load_project_full_with(path.clone(), Some(&refusal()), None) else {
         panic!("an older file must not be upgraded there");
     };
     let after = std::fs::read(&path).expect("read");
@@ -156,7 +156,7 @@ fn without_a_refusal_the_same_older_project_is_upgraded_as_before() {
     let path = write_project(dir.path(), OLDER_FORMAT);
 
     let state = state_with_null_sink();
-    let loaded = state.do_load_project_full_with(path, None);
+    let loaded = state.do_load_project_full_with(path, None, None);
     println!(
         "older-format project in a user folder: opened={}; folder: {:?}",
         loaded.is_ok(),
@@ -182,7 +182,7 @@ fn an_unstamped_project_where_nothing_may_be_written_is_not_called_older() {
     let before = std::fs::read(&path).expect("read");
 
     let state = state_with_null_sink();
-    let Err(error) = state.do_load_project_full_with(path.clone(), Some(&refusal())) else {
+    let Err(error) = state.do_load_project_full_with(path.clone(), Some(&refusal()), None) else {
         panic!("an unstamped file is not completed in place there either");
     };
     let after = std::fs::read(&path).expect("read");
@@ -283,7 +283,7 @@ fn a_load_where_nothing_may_be_written_keeps_its_repairs_in_memory() {
         let control_dir = TempDir::new().expect("dir");
         let control = file_needing_a_repair(control_dir.path(), surgery);
         let control_before = std::fs::read(&control).expect("read");
-        let opened = state_with_null_sink().do_load_project_full_with(control.clone(), None);
+        let opened = state_with_null_sink().do_load_project_full_with(control.clone(), None, None);
         assert!(opened.is_ok(), "{what}: the control opens");
         let control_written = std::fs::read(&control).expect("read") != control_before;
 
@@ -292,7 +292,7 @@ fn a_load_where_nothing_may_be_written_keeps_its_repairs_in_memory() {
         let before = std::fs::read(&path).expect("read");
         let state = state_with_null_sink();
         let loaded = state
-            .do_load_project_full_with(path.clone(), Some(&refusal()))
+            .do_load_project_full_with(path.clone(), Some(&refusal()), None)
             .unwrap_or_else(|e| panic!("{what}: it must open: {} {}", e.code, e.message));
         let unchanged = std::fs::read(&path).expect("read") == before;
         let shots = &loaded.project.sections[0].shots;

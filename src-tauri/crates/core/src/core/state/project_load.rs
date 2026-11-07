@@ -375,10 +375,15 @@ impl AppState {
     /// in place, with its `unstamped` message (#576 RV6b-R3). `None` everywhere a
     /// user keeps projects.
     ///
+    /// [#576 W44-NF3] `load_token` is the name the frontend gave this load: a Cancel
+    /// made for it names it too (`cancel_loading`). `None` for a load the backend
+    /// starts on its own, which only a newer load cancels.
+    ///
     pub fn do_load_project_full_with(
         &self,
         path: PathBuf,
         upgrade_refusal: Option<&crate::persistence::UpgradeRefusal>,
+        load_token: Option<&str>,
     ) -> Result<crate::core::loading::LoadProjectFullResult, crate::core::loading::LoadError> {
         use crate::core::loading::{
             DisplaySettings, LoadError, LoadProjectFullResult, LoadingPhase, ProgressEmitter,
@@ -406,7 +411,7 @@ impl AppState {
 
         // Start new load - cancels any existing load
         // Store the token for identity-safe clearing later
-        let cancel_token = self.start_new_load();
+        let cancel_token = self.start_named_load(load_token);
         let mut progress = ProgressEmitter::new_for_open(sink, Arc::clone(&cancel_token));
 
         // Helper macro for early return with identity-safe token clearing
@@ -1184,6 +1189,6 @@ impl AppState {
         &self,
         path: PathBuf,
     ) -> Result<crate::core::loading::LoadProjectFullResult, crate::core::loading::LoadError> {
-        self.do_load_project_full_with(path, None)
+        self.do_load_project_full_with(path, None, None)
     }
 }

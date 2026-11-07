@@ -185,8 +185,8 @@ fn sweep(state: &AppState, sid: u32, dir: &Path, refusing: bool) -> Vec<(&'stati
         "adjusted view",
         matches!(state.adjusted_stations_checked(), Ok(Some(ref s)) if !s.is_empty()),
     ));
-    let token = state.start_new_load();
-    state.cancel_loading();
+    let token = state.start_named_load(Some("load"));
+    state.cancel_loading(Some("load"));
     state.clear_active_load(&token);
     out.push((
         "load token",

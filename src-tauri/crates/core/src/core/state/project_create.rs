@@ -397,10 +397,12 @@ impl AppState {
     /// tests) reads the first full-create definition in this file.
     ///
     /// `check_target` [#576 RV13-1]: see [`Self::do_create_project_full_checked`].
+    /// `load_token` [#576 W44-NF3]: see [`Self::do_create_project_full_named`].
     fn do_create_project_full_with(
         &self,
         held: Option<&CommandsHeld<'_>>,
         check_target: Option<&dyn Fn(&std::path::Path) -> Result<(), String>>,
+        load_token: Option<&str>,
         name: String,
         project_location: Option<String>,
         save_directory: Option<PathBuf>,
@@ -444,7 +446,7 @@ impl AppState {
         }
 
         // Start new load - cancels any existing load
-        let cancel_token = self.start_new_load();
+        let cancel_token = self.start_named_load(load_token);
         let mut progress = ProgressEmitter::new_for_create(sink, Arc::clone(&cancel_token));
 
         // Helper macro for early return with identity-safe token clearing
@@ -654,6 +656,7 @@ impl AppState {
         self.do_create_project_full_with(
             None,
             None,
+            None,
             name,
             project_location,
             save_directory,
@@ -669,6 +672,7 @@ impl AppState {
     /// `create_project_full` command's entry when the webview names a file or a
     /// folder - checking a name of its own instead (the folder's
     /// `project.stalx`) let a link at the name the create really opens through.
+    /// `load_token`: as for [`Self::do_create_project_full_named`].
     #[expect(
         clippy::result_large_err,
         reason = "the LoadError every create path returns; this only delegates to the body \
@@ -677,6 +681,7 @@ impl AppState {
     pub fn do_create_project_full_checked(
         &self,
         check_target: &dyn Fn(&std::path::Path) -> Result<(), String>,
+        load_token: Option<&str>,
         name: String,
         project_location: Option<String>,
         save_directory: Option<PathBuf>,
@@ -687,6 +692,38 @@ impl AppState {
         self.do_create_project_full_with(
             None,
             Some(check_target),
+            load_token,
+            name,
+            project_location,
+            save_directory,
+            save_path,
+            defer_initial_save,
+        )
+    }
+
+    /// [`Self::do_create_project_full`] for a create the frontend started and named
+    /// [#576 W44-NF3]: a Cancel made for it names it too (`cancel_loading`), and
+    /// cancels it only by that name. The `create_project_full` command's entry when
+    /// the webview names neither a file nor a folder.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the LoadError every create path returns; this only delegates to the body \
+                  above, and boxing the error type is a repo-wide change outside NF-W4C-3"
+    )]
+    pub fn do_create_project_full_named(
+        &self,
+        load_token: Option<&str>,
+        name: String,
+        project_location: Option<String>,
+        save_directory: Option<PathBuf>,
+        save_path: Option<PathBuf>,
+        defer_initial_save: bool,
+    ) -> Result<crate::core::loading::CreateProjectFullResult, crate::core::loading::LoadError>
+    {
+        self.do_create_project_full_with(
+            None,
+            None,
+            load_token,
             name,
             project_location,
             save_directory,
@@ -715,6 +752,7 @@ impl AppState {
     {
         self.do_create_project_full_with(
             Some(commands),
+            None,
             None,
             name,
             project_location,
@@ -1041,6 +1079,7 @@ mod tests {
         };
         let refused = state.do_create_project_full_checked(
             &refuse,
+            None,
             "Cave".into(),
             None,
             Some(dir.path().to_path_buf()),
@@ -1105,6 +1144,7 @@ mod tests {
         let refused_create = state
             .do_create_project_full_checked(
                 &refuse,
+                None,
                 "Cave".into(),
                 None,
                 Some(dir.path().to_path_buf()),
