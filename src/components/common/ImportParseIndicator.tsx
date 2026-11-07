@@ -15,7 +15,14 @@ import { extractFilename } from '../../utils/path';
  * Shown only while no dialog is up: a dialog owns the screen, and the one that
  * stays up during a parse (`ImportAsNewProjectDialog`) shows its own progress
  * line. Pointer events pass through, so it never blocks a control.
+ *
+ * It floats fully above the status bar both views end in, the bar's own height
+ * (`py-2`, a `text-sm` line, `border-t`) plus the usual `bottom-6` clearance
+ * (#576 W62 item 5): anchored at `bottom-6` from the window edge, it straddled
+ * the bar's top border.
  */
+/** The status bar's height (`py-2` twice, `text-sm`'s line, its `border-t`), then the `bottom-6` gap. */
+const ABOVE_STATUS_BAR = 'bottom-[calc(theme(spacing.4)+theme(lineHeight.5)+1px+theme(spacing.6))]';
 export function ImportParseIndicator() {
   const { t } = useTranslation();
   const importParse = useUIStore((s) => s.importParse);
@@ -23,7 +30,7 @@ export function ImportParseIndicator() {
   if (importParse === null || activeDialog !== null) return null;
   return (
     <div
-      className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-sm text-text-secondary shadow-lg pointer-events-none"
+      className={`fixed ${ABOVE_STATUS_BAR} left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-sm text-text-secondary shadow-lg pointer-events-none`}
       role="status"
       data-testid="import-parse-indicator"
     >
