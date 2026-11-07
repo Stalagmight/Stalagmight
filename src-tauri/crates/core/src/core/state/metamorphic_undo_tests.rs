@@ -1493,8 +1493,11 @@ fn pair_poisoned_batch_is_a_no_op(
 ) -> Option<Comparison> {
     let mut commands = batch_commands(&twins.left, rng)?;
     let before = mask_timestamps(&canonical_snapshot(&twins.left, false));
-    // A section id that cannot exist. Placed LAST so everything before it
-    // succeeds and there is something real to roll back.
+    // A section id that cannot exist, placed LAST so the batch fails however the
+    // commands before it fare. Those need not succeed - the datum guard refuses
+    // a MoveSection whose rigid group holds a datum - and the batch then fails
+    // there instead, never reaching this one. Either way the rollback is checked; the
+    // single route below tells whether there was anything real to roll back.
     commands.push(Command::MoveSection {
         section_id: 999_999,
         offset: crate::models::Coordinates::new(1.0, 1.0, 1.0),
@@ -1541,10 +1544,18 @@ fn pair_poisoned_batch_is_a_no_op(
             applied += 1;
         }
     }
-    if applied == 0 {
-        return None;
-    }
-    if problems.is_empty() && mask_timestamps(&canonical_snapshot(&twins.right, false)) == before {
+    let right_moved =
+        applied > 0 && mask_timestamps(&canonical_snapshot(&twins.right, false)) != before;
+    poisoned_batch_verdict(problems, right_moved)
+}
+
+/// One poisoned-batch draw's verdict. `problems` are what the left twin's
+/// rollback checks found; `right_moved` is whether the single route changed the
+/// right twin (false when no command succeeded singly, or none that did changed
+/// anything). A draw that found nothing and moved nothing is vacuous, a SKIP;
+/// one whose rollback went wrong is reported however vacuous it was.
+fn poisoned_batch_verdict(problems: Vec<String>, right_moved: bool) -> Option<Comparison> {
+    if problems.is_empty() && !right_moved {
         return None;
     }
     Some(Comparison {
@@ -1871,7 +1882,7 @@ const GATE_REGRESSIONS: &[(u32, usize, bool)] = &[
 fn metamorphic_gate() {
     let _config = isolated_config();
     let mut problems = Vec::new();
-    let mut built = 0;
+    let mut built: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut shapes: BTreeMap<&'static str, usize> = BTreeMap::new();
     let runs = GATE_SEEDS
@@ -1881,8 +1892,8 @@ fn metamorphic_gate() {
     for (seed, repeats, closures) in runs {
         let outcomes = run_pairs(seed, repeats, closures, GATE_PRELUDE);
         println!("{}", summarize(seed, &outcomes));
-        for outcome in outcomes.values() {
-            built += outcome.built;
+        for (&id, outcome) in &outcomes {
+            *built.entry(id).or_insert(0) += outcome.built;
             problems.extend(outcome.problems.iter().cloned());
             for (id, count) in &outcome.hits {
                 *total.entry(id).or_insert(0) += count;
@@ -1894,15 +1905,11 @@ fn metamorphic_gate() {
     }
     println!("metamorphic gate classified totals: {total:?}");
     println!("metamorphic gate shape totals: {shapes:?}");
+    println!("metamorphic gate built per pair: {built:?}");
     // A run that built nothing passes vacuously, which is the failure mode a
     // skip-heavy generator invites. Every pair has to have been reached.
-    assert!(
-        built >= GATE_SEEDS.len() * PAIRS.len(),
-        "the metamorphic gate built only {built} pair instance(s) over {} seed(s) x {} pair(s): \
-         the generators are not reaching the shapes the pairs need",
-        GATE_SEEDS.len(),
-        PAIRS.len()
-    );
+    let shortfalls = gate_coverage_shortfalls(&built);
+    assert!(shortfalls.is_empty(), "{}", shortfalls.join("\n"));
     // Same argument, one level down. `range-shift-is-n-single-deletes` asserts
     // one thing on a range that removes a merge and a different thing on a range
     // that does not; a run that only ever drew the second half never exercised
@@ -1919,6 +1926,86 @@ fn metamorphic_gate() {
         "{} metamorphic divergence(s):\n\n{}",
         problems.len(),
         problems.join("\n\n")
+    );
+}
+
+/// The pairs the gate built fewer than once per gate seed, each as a line, from
+/// `built` (instances per pair id over the whole run). Per pair: a total over
+/// all pairs let the others' surplus hide one that had become always vacuous,
+/// which then showed only as skips.
+fn gate_coverage_shortfalls(built: &BTreeMap<&'static str, usize>) -> Vec<String> {
+    PAIRS
+        .iter()
+        .filter_map(|pair| {
+            let count = built.get(pair.id).copied().unwrap_or(0);
+            (count < GATE_SEEDS.len()).then(|| {
+                format!(
+                    "the metamorphic gate built `{}` only {count} time(s) over {} seed(s): its \
+                     generator is not reaching the shapes the pair needs",
+                    pair.id,
+                    GATE_SEEDS.len()
+                )
+            })
+        })
+        .collect()
+}
+
+/// [#576 W26-NF4] The coverage floor holds per pair: one pair never built fails
+/// the gate even when the others' instances add up past the old total.
+#[test]
+fn the_gate_coverage_floor_is_per_pair() {
+    let mut built: BTreeMap<&'static str, usize> = PAIRS
+        .iter()
+        .map(|pair| (pair.id, 3 * GATE_SEEDS.len()))
+        .collect();
+    let starved = PAIRS[0].id;
+    built.insert(starved, 0);
+    let shortfalls = gate_coverage_shortfalls(&built);
+    println!("[W26-NF4] built {built:?}\n  shortfalls: {shortfalls:?}");
+    assert_eq!(shortfalls.len(), 1, "{shortfalls:?}");
+    assert!(shortfalls[0].contains(starved), "{shortfalls:?}");
+    // A pair missing from the run's map counts as never built.
+    built.remove(starved);
+    assert_eq!(gate_coverage_shortfalls(&built).len(), 1);
+    built.insert(starved, GATE_SEEDS.len());
+    assert_eq!(gate_coverage_shortfalls(&built), Vec::<String>::new());
+}
+
+/// [#576 W26-NF1] A poisoned-batch draw where no command succeeded singly is
+/// vacuous, but a rollback problem the left twin's checks found is still
+/// reported. The stand-in for a rollback that pushed an entry: an undo entry
+/// already on the left twin (the check expects the failed batch to leave the
+/// stack empty), and a right twin with no project, so nothing applies singly.
+#[test]
+fn a_vacuous_poisoned_batch_still_reports_its_rollback_problem() {
+    let _config = isolated_config();
+    let twins = Twins::build(1, false, GATE_PRELUDE);
+    assert!(twins.is_some(), "no twins for seed 1");
+    let Some(mut twins) = twins else { return };
+    let sections = read_targets(&twins.left).sections;
+    let pushed = sections.iter().any(|&(section_id, _)| {
+        twins
+            .left
+            .execute(Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            })
+            .success
+            && !twins.left.get_undo_stack().is_empty()
+    });
+    assert!(pushed, "no section of seed 1 reversed with an undo entry");
+    let empty = AppState::new();
+    assert!(empty.is_ok(), "no app state");
+    let Ok(empty) = empty else { return };
+    // No project: every command the right twin is given fails.
+    twins.right = empty;
+    let found =
+        pair_poisoned_batch_is_a_no_op(&twins, &mut Rng::new(1), "a-failed-batch-is-a-no-op");
+    let problems = found.map(|c| c.problems).unwrap_or_default();
+    println!("[W26-NF1] problems reported: {problems:?}");
+    assert!(
+        problems.iter().any(|p| p.contains("undo entry")),
+        "the rollback problem was dropped as a vacuous draw: {problems:?}"
     );
 }
 
