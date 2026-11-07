@@ -97,6 +97,8 @@ export const TOAST_KEYS = {
   SPELEODB_KEYCHAIN_RESIDUE: 'speleodb-keychain-residue',
   // [#576 Q-W61-3-D1] A logout signed out but could not release a held write lock.
   SPELEODB_LOGOUT_LOCKS_HELD: 'speleodb-logout-locks-held',
+  // [#576 NF-W72-1] A sign-in replaced a session but could not release its write lock.
+  SPELEODB_SIGNIN_LOCKS_HELD: 'speleodb-signin-locks-held',
   SPELEODB_TOKEN_RESIDUE: 'speleodb-token-residue',
   SPELEODB_ENABLE_RENDERING_ERROR: 'speleodb-enable-rendering-error',
   SPELEODB_PROJECT_DIALOG_STALE: 'speleodb-project-dialog-stale',

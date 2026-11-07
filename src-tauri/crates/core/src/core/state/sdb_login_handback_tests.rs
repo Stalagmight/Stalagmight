@@ -373,3 +373,112 @@ fn a_same_account_re_login_with_the_server_spelled_differently_keeps_the_edit_se
         assert_eq!(claims_after, vec![REMOTE_ID.to_owned()], "the claim stays");
     });
 }
+
+/// Server A, but every lock release is answered 502 (fuzz seed 615006's shape, as
+/// for the logout); every other read names our account on the lock.
+fn server_a_release_fails(line: &str) -> (u16, &'static str) {
+    if line.starts_with("POST ") && line.contains("/release/") {
+        (502, r#"{"detail":"Bad gateway"}"#)
+    } else {
+        server_a(line)
+    }
+}
+
+/// What a sign-in to B over a live editing session on A left.
+struct SignInOverA {
+    replaced_session: bool,
+    /// The answer's locks left held, as (project id, project name).
+    left_held: Vec<(String, String)>,
+    /// The release requests server A saw.
+    releases: Vec<String>,
+    session: (Option<String>, Option<String>),
+    gate: bool,
+    b_base: String,
+}
+
+/// Sign in to B over a live editing session on A, A answered by `server`.
+fn sign_in_to_b_over_a(server: fn(&str) -> (u16, &'static str), tag: &str) -> SignInOverA {
+    let (a_base, _a_listener, a_seen) = routing_stub(server);
+    let (b_base, _b_listener, _b_seen) = routing_stub(server_b);
+    let (_temp, state) = editing_fixture(&a_base);
+    let result = state
+        .speleodb_login(Some(b_base.clone()), None, None, Some("tok-b".to_owned()))
+        .map_err(|e| e.message)
+        .expect("the paste login to B succeeds");
+    let out = SignInOverA {
+        replaced_session: result.replaced_session,
+        left_held: result
+            .locks_left_held
+            .iter()
+            .map(|left| (left.project_id.clone(), left.project_name.clone()))
+            .collect(),
+        releases: a_seen
+            .lock()
+            .expect("A's request log")
+            .iter()
+            .filter(|r| r.contains("/release/"))
+            .cloned()
+            .collect(),
+        session: session_of(&state),
+        gate: state.edit_enabled(),
+        b_base,
+    };
+    println!(
+        "[NF-W72-1] {tag}: replaced_session {}; locks left held {:?}; A's releases \
+         {:?}; session {:?}; gate {}",
+        out.replaced_session, out.left_held, out.releases, out.session, out.gate
+    );
+    out
+}
+
+/// [#576 NF-W72-1] A sign-in that replaces a live session whose lock release the old
+/// server refuses still signs in, and its answer names the project still locked, for
+/// the frontend's warning (as logout does, Q-W61-3-D1). It used to be only logged.
+#[test]
+fn a_sign_in_whose_hand_back_release_fails_signs_in_and_names_the_lock_left_held() {
+    crate::test_helpers::with_isolated_config(|| {
+        let out = sign_in_to_b_over_a(server_a_release_fails, "A's release answered 502");
+        assert!(
+            out.replaced_session,
+            "the sign-in replaces the live session"
+        );
+        assert!(!out.releases.is_empty(), "the hand-back tried the release");
+        assert_eq!(
+            out.left_held,
+            vec![(REMOTE_ID.to_owned(), "Remote".to_owned())],
+            "the answer names the project whose lock is still held"
+        );
+        assert_eq!(
+            out.session,
+            (Some(out.b_base.clone()), Some("v@y".to_owned())),
+            "the sign-in still happened"
+        );
+        assert!(!out.gate, "and the old session's edit gate is shut");
+    });
+}
+
+/// Control: a hand-back whose release lands names no lock.
+#[test]
+fn a_sign_in_whose_hand_back_release_lands_names_no_lock() {
+    crate::test_helpers::with_isolated_config(|| {
+        let out = sign_in_to_b_over_a(server_a, "A's release answered 200");
+        assert!(
+            out.replaced_session,
+            "the sign-in replaces the live session"
+        );
+        assert_eq!(
+            out.releases,
+            vec![release_line()],
+            "one release, answered 200"
+        );
+        assert!(
+            out.left_held.is_empty(),
+            "no lock is named: {:?}",
+            out.left_held
+        );
+        assert_eq!(
+            out.session,
+            (Some(out.b_base.clone()), Some("v@y".to_owned()))
+        );
+    });
+}

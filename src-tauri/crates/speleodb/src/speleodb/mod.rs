@@ -58,11 +58,12 @@ pub use contract::{SpeleoDbAction, TransportCause};
 pub use models::{
     AdoptUpload, DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult,
     RemoteState, SpeleoAdoptResult, SpeleoCollaborator, SpeleoCollaborators, SpeleoDumpCandidate,
-    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoTeamGrant,
-    SpeleoTeamOption, SpeleoUnwindTarget, SpeleoUserSuggestion, StartEditingResult, TokenStorage,
-    UnpushedLocalEdits, UpdateResult, Visibility,
+    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLockLeftHeld,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
+    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
+    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUnwindTarget,
+    SpeleoUserSuggestion, StartEditingResult, TokenStorage, UnpushedLocalEdits, UpdateResult,
+    Visibility,
 };
 
 /// Errors from the SpeleoDB client and dump handling.

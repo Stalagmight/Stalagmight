@@ -83,6 +83,7 @@ describe('speleoStore', () => {
         keychain: 'available',
         needs_storage_choice: false,
         replaced_session: false,
+        locks_left_held: [],
       });
 
       expect(speleoProjectSessionStillCurrent(issuedFor)).toBe(false);
@@ -224,6 +225,7 @@ describe('speleoStore', () => {
           keychain: 'available',
           needs_storage_choice: false,
           replaced_session: false,
+          locks_left_held: [],
         });
       useSpeleoStore.getState().clearSession();
       const s = useSpeleoStore.getState();
@@ -275,6 +277,7 @@ describe('speleoStore', () => {
           keychain: 'available',
           needs_storage_choice: false,
           replaced_session: false,
+          locks_left_held: [],
         });
       useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
       invokeIpcMock.mockRejectedValue({
@@ -337,6 +340,7 @@ describe('speleoStore', () => {
               keychain: 'available',
               needs_storage_choice: false,
               replaced_session,
+              locks_left_held: [],
             };
           // The re-seed: never answers, so what is asserted is the reset, not a status.
           if (cmd === 'speleodb_link_status') return new Promise(() => {});
@@ -392,6 +396,7 @@ describe('speleoStore', () => {
               storage: 'memory',
               keychain: 'unavailable',
               needs_storage_choice,
+              locks_left_held: [],
             }
           : [],
       );

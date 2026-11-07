@@ -423,6 +423,21 @@ pub struct SpeleoLoginResult {
     /// was released best-effort with its token, the edit gate was shut and the
     /// claim forgotten. The frontend mirrors that locally, as it does a logout.
     pub replaced_session: bool,
+    /// [#576 NF-W72-1] The projects whose write lock that hand-back could not
+    /// release (the server answered the release with an error, or did not answer).
+    /// The sign-in happened either way; the frontend warns, naming each project, as
+    /// it does after a logout. Empty when nothing was handed back or every release
+    /// landed.
+    pub locks_left_held: Vec<SpeleoLockLeftHeld>,
+}
+
+/// One project whose write lock a logout (`SpeleoLogoutReport`, #576 Q-W61-3-D1) or
+/// a replacing sign-in's hand-back ([`SpeleoLoginResult`], #576 NF-W72-1) could not
+/// hand back.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoLockLeftHeld {
+    pub project_id: String,
+    pub project_name: String,
 }
 
 /// Where the API key is being kept. Mirrors `auth::TokenTier` across the IPC
@@ -1105,6 +1120,7 @@ mod tests {
             keychain: KeychainReport::Available,
             needs_storage_choice: false,
             replaced_session: false,
+            locks_left_held: Vec::new(),
         })
         .expect("serialize login result");
         let status = serde_json::to_string(&SpeleoSessionStatus {

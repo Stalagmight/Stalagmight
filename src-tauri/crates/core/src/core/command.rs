@@ -580,12 +580,9 @@ pub struct SpeleoLogoutReport {
 }
 
 /// One project whose write lock a logout could not hand back (see
-/// [`SpeleoLogoutReport`]).
-#[derive(Debug, Clone, Serialize, TS)]
-pub struct SpeleoLockLeftHeld {
-    pub project_id: String,
-    pub project_name: String,
-}
+/// [`SpeleoLogoutReport`]). [#576 NF-W72-1] Defined beside `SpeleoLoginResult`,
+/// whose replacing sign-in names them too.
+pub use crate::speleodb::SpeleoLockLeftHeld;
 
 impl CommandResult {
     pub fn success() -> Self {

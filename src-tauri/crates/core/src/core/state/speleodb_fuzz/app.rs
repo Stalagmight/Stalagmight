@@ -241,9 +241,13 @@ impl App {
                 // stranded unless handed back, as a logout hands it back.
                 let clean = !self.hint_bits().2;
                 let held = self.held_here();
-                let logged_in = self.login(&self.other_url.clone(), out);
-                if let (true, true, Some(project_id)) = (logged_in, clean, held) {
-                    out.claims.push(Claim::LockReleaseBestEffort { project_id });
+                let warned = self.login(&self.other_url.clone(), out);
+                // [#576 NF-W72-1] A release the sign-in reports as failed is not
+                // silent: the user is warned and told how to release it.
+                if let (Some(warned), true, Some(project_id)) = (warned, clean, held) {
+                    if !warned.contains(&project_id) {
+                        out.claims.push(Claim::LockReleaseBestEffort { project_id });
+                    }
                 }
             }
             Act::Logout => {
@@ -361,8 +365,9 @@ impl App {
         }
     }
 
-    /// Sign in as the owner at `endpoint`; whether it succeeded.
-    fn login(&self, endpoint: &str, out: &mut Outcome) -> bool {
+    /// Sign in as the owner at `endpoint`; on success, the projects its answer names
+    /// as still locked by the session it replaced (#576 NF-W72-1).
+    fn login(&self, endpoint: &str, out: &mut Outcome) -> Option<Vec<String>> {
         match self.state.speleodb_login(
             Some(endpoint.to_owned()),
             Some(self.owner.email.clone()),
@@ -370,12 +375,20 @@ impl App {
             None,
         ) {
             Ok(r) => {
-                out.note(format!("login {} -> Ok", r.endpoint));
-                true
+                let warned: Vec<String> = r
+                    .locks_left_held
+                    .into_iter()
+                    .map(|left| left.project_id)
+                    .collect();
+                out.note(format!(
+                    "login {} -> Ok, locks left held {warned:?}",
+                    r.endpoint
+                ));
+                Some(warned)
             }
             Err(e) => {
                 out.refused("login", &e);
-                false
+                None
             }
         }
     }

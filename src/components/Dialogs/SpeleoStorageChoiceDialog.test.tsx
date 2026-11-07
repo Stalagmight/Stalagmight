@@ -316,6 +316,7 @@ describe('SpeleoStorageChoiceDialog - a dismissal cannot escape the retry', () =
       keychain: 'available',
       needs_storage_choice: false,
       replaced_session: false,
+      locks_left_held: [],
     });
 
   it('does not re-raise over the account that signed in while the move was wedged', async () => {

@@ -676,7 +676,9 @@
         "tryLogin": "Log in now",
         "tryingLogin": "Logging in…",
         "locksLeftHeld_one": "Signed out, but {{projects}} is still locked on SpeleoDB. Release it on the SpeleoDB website, or sign in and close it.",
-        "locksLeftHeld_other": "Signed out, but {{projects}} are still locked on SpeleoDB. Release them on the SpeleoDB website, or sign in and close them."
+        "locksLeftHeld_other": "Signed out, but {{projects}} are still locked on SpeleoDB. Release them on the SpeleoDB website, or sign in and close them.",
+        "locksLeftHeldOnSignIn_one": "Signed in, but {{projects}} is still locked on SpeleoDB by the previous session. Release it on the SpeleoDB website, or sign back in to that account and close it.",
+        "locksLeftHeldOnSignIn_other": "Signed in, but {{projects}} are still locked on SpeleoDB by the previous session. Release them on the SpeleoDB website, or sign back in to that account and close them."
       },
       "credentials": {
         "title": "Credential storage",

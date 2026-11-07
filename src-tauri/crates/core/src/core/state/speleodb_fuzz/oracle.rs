@@ -20,7 +20,8 @@
 //!   account too (the second client took it as the owner, and the app's gate opened
 //!   over it): only a change to the owner's access or a delete excuses I2b.
 //!   [#576 Q-W61-3-D1] A logout whose answer names the project as still locked is
-//!   not silent (the user is warned), so it makes no I2b claim.
+//!   not silent (the user is warned), so it makes no I2b claim; [#576 NF-W72-1] nor
+//!   does a sign-in that replaced the session and names it.
 //! - **I3 BASE is real.** A linked copy's `base_commit_sha` names a commit in the
 //!   server's history of that project.
 //! - **I4 the un-pushed mark matches the real difference.** A linked copy marked

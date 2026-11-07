@@ -23,6 +23,7 @@ function signedInWithLogoutPending() {
     keychain: 'available',
     needs_storage_choice: false,
     replaced_session: false,
+    locks_left_held: [],
   });
   useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
 }

@@ -360,20 +360,23 @@ impl AppState {
     ///
     /// Only the gate half: the login goes on to forget the old credential itself, and
     /// writes the new account record in place of logout's clear.
+    ///
+    /// [#576 NF-W72-1] The sign-in goes on either way, and, as logout does
+    /// (Q-W61-3-D1), answers the project whose lock the hand-back could not release,
+    /// for the frontend's warning. It used to be only logged.
     pub(super) fn speleodb_hand_back_replaced_session<'s>(
         &self,
         lock_ops: &'s super::speleodb_session::LockOpsHeld<'s>,
-    ) {
+    ) -> Option<crate::core::SpeleoLockLeftHeld> {
         let (_gates_dropped, left_held) = self.speleodb_logout_drop_gates(lock_ops);
-        // The sign-in goes on either way; the log is where a lock the hand-back could
-        // not release is recorded (the release logged the failure itself).
-        if let Some(left) = left_held {
+        if let Some(left) = &left_held {
             tracing::info!(
                 project_id = %left.project_id,
                 purpose = "hand back a session a sign-in replaces (#576 FZ-SDB-3-D1)",
                 "speleodb: the replaced session's write lock is still held on the server"
             );
         }
+        left_held
     }
 
     /// [#576 A8] Drop the session (token, keychain entry, plaintext) - inside the

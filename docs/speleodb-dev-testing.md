@@ -203,7 +203,9 @@ lock this session took was released and a session whose gate the reopen had open
 left it with the account (Done's former `LockHeldElsewhere` answer, gone with the
 poll's "finished here" guard it needed). A logout whose release the server refuses
 (or does not answer) still signs out, and its answer names the project, which the
-frontend warns about with how to release it (#576 Q-W61-3-D1). An acquire whose reply was lost and whose
+frontend warns about with how to release it (#576 Q-W61-3-D1); a sign-in that replaces
+the session does the same for its hand-back: it signs in, and its answer names the
+project (#576 NF-W72-1). An acquire whose reply was lost and whose
 holder re-read failed is marked unconfirmed in every case and settled by the next
 poll (#576 SDB-POLL-D1). An adopted claim is marked as resumed: it licenses the
 release only, not the authorship self-heal above (#576 RV4-R-S3), since the other

@@ -960,6 +960,20 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         if (r.replaced_session) get().clearSession();
         get().setSessionFromLogin(r);
         if (r.replaced_session) void get().refreshLinkStatus();
+        // [#576 NF-W72-1] Signed in, but a write lock that hand-back tried to release
+        // is still held on the server: say which project, and how to release it, as
+        // after a logout (Q-W61-3-D1). A warning toast - the sign-in succeeded with a
+        // caveat, and the new session cannot show the old session's lock.
+        if (r.locks_left_held.length > 0) {
+          useUIStore.getState().showToast(
+            i18n.t('settings.speleodb.account.locksLeftHeldOnSignIn', {
+              count: r.locks_left_held.length,
+              projects: r.locks_left_held.map((left) => `"${left.project_name}"`).join(', '),
+            }),
+            TOAST_KEYS.SPELEODB_SIGNIN_LOCKS_HELD,
+            'warning',
+          );
+        }
         // The keychain failed on THIS login and the user has not already settled
         // where the key should go, so ask now, while the failure is in context and
         // the token is still in hand. Raised from here so BOTH login paths reach it

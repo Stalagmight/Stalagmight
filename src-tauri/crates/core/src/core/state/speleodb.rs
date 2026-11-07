@@ -1629,13 +1629,16 @@ impl AppState {
                 (_, None) => false,
             }
         };
+        // [#576 NF-W72-1] A lock the hand-back could not release is named in the
+        // answer: the sign-in goes on, and the frontend warns, as after a logout.
+        let mut locks_left_held = Vec::new();
         if replaced_session {
             tracing::info!(
                 purpose = "hand back the session a sign-in replaces (#576 FZ-SDB-3)",
                 "speleodb login: replacing a live session; handing its lock and edit \
                  gate back first"
             );
-            self.speleodb_hand_back_replaced_session(&lock_ops);
+            locks_left_held.extend(self.speleodb_hand_back_replaced_session(&lock_ops));
         }
         let (tier, keychain_state, has_token) = {
             let mut session = self.speleodb.lock();
@@ -1755,6 +1758,7 @@ impl AppState {
             // check is on the failure itself.
             needs_storage_choice: keychain == KeychainReport::Unavailable && !previously_declined,
             replaced_session,
+            locks_left_held,
         })
     }
 
