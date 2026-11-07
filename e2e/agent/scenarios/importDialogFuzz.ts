@@ -1135,6 +1135,12 @@ export const importDialogFuzz: Scenario = {
        */
       toastsRaisedAtDispatch: string[] | null;
       /**
+       * On a picker chord (Ctrl+O / Ctrl+I), whether its keydown came back
+       * default-prevented (`DialogOutcome.keydownPrevented`): false is a chord a
+       * gate swallowed before `runFileShortcutAction`. Null on every other move.
+       */
+      keydownPrevented: boolean | null;
+      /**
        * What a file entry point did with the path. Null for every other move.
        *
        * The distinction S4's grace window turns on - see `errorGraceVerdict`.
@@ -1177,6 +1183,7 @@ export const importDialogFuzz: Scenario = {
       let fullscreenAtDispatch: boolean | null = null;
       let parseAtDispatch: boolean | null = null;
       let toastsRaisedAtDispatch: string[] | null = null;
+      let keydownPrevented: boolean | null = null;
       let handoff: FileHandoff | null = null;
       let digest: ImportScreenDigest;
 
@@ -1261,7 +1268,7 @@ export const importDialogFuzz: Scenario = {
           // dialog is open) leaves the answer unconsumed. That is the app's
           // documented gate, so it is counted rather than asserted.
           handoff = answered.consumed ? 'accepted' : 'unconsumed';
-          ({ dialogAtDispatch, placementAtDispatch, fullscreenAtDispatch, parseAtDispatch } = answered);
+          ({ dialogAtDispatch, placementAtDispatch, fullscreenAtDispatch, parseAtDispatch, keydownPrevented } = answered);
           toastsRaisedAtDispatch = answered.toastsRaised;
           ctx.metric(answered.consumed ? 'keyPickerConsumed' : 'keyPickerSwallowed');
           if (record && performed) recordMove(move);
@@ -1349,6 +1356,7 @@ export const importDialogFuzz: Scenario = {
         fullscreenAtDispatch,
         parseAtDispatch,
         toastsRaisedAtDispatch,
+        keydownPrevented,
         handoff,
       };
     };
@@ -2485,8 +2493,9 @@ export const importDialogFuzz: Scenario = {
           //
           // A picker door is `pickAndRoute`'s, whose own parse gate refuses
           // before the picker opens, so its move scores `unconsumed`: it is
-          // judged on the parse gate at dispatch instead, and its toast read
-          // off the click or keystroke's own tick (#576 W62-NF1).
+          // judged on the parse gate at dispatch instead, a chord only when
+          // its keydown was taken, and its toast read off the click or
+          // keystroke's own tick (#576 W62-NF1).
           const pickerDoor =
             outcome.performed &&
             (move.kind === 'keyFile' ||
@@ -2505,6 +2514,7 @@ export const importDialogFuzz: Scenario = {
                 placementAtDispatch: outcome.placementAtDispatch === true,
                 parseAtDispatch: outcome.parseAtDispatch === true,
                 fullscreenAtDispatch: outcome.fullscreenAtDispatch === true,
+                keydownPrevented: outcome.keydownPrevented,
               },
             }),
           );

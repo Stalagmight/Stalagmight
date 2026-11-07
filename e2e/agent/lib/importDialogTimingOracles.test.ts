@@ -27,7 +27,14 @@ import type { Browser } from 'webdriverio';
 
 import type { ScenarioContext } from '../scenarios/framework';
 import { answerFileDialogInPage, answerKeyboardFileDialog, HELPERS, routeFile } from '../scenarios/importDialogBridge';
-import { checkFrozenDelete, ImportOracleError, importGateRefusalSeen, toastKeysRaised, type ToastLike } from './importFlowOracles';
+import {
+  checkFrozenDelete,
+  checkGateRefusalToast,
+  ImportOracleError,
+  importGateRefusalSeen,
+  toastKeysRaised,
+  type ToastLike,
+} from './importFlowOracles';
 import { computeImportScreenDigest, IMPORT_SCREEN_GLOBAL } from './importScreenDigest';
 import { evalInApp } from './page';
 
@@ -164,9 +171,10 @@ describe('HFI2-F3: the import-gate refusal is read when the route returns', () =
  * An app whose picker doors run `pickAndRoute`'s parse gate (#576 W62-NF1):
  * while a file parses, the toast and no picker; otherwise the picker takes the
  * armed answer. The toast fades `fadeMs` later, before the bridge's wait for the
- * answer ends.
+ * answer ends. Its shortcut dispatcher takes Ctrl+O (`preventDefault`, then the
+ * door) unless `swallowChord`, a gate in front of the door, returns first.
  */
-function appWithPickerDoors(parsing: boolean, fadeMs = 30): void {
+function appWithPickerDoors(parsing: boolean, fadeMs = 30, swallowChord = false): void {
   let state = {
     activeDialog: null,
     placementMode: null,
@@ -197,7 +205,9 @@ function appWithPickerDoors(parsing: boolean, fadeMs = 30): void {
   button.getBoundingClientRect = () => ({ left: 0, top: 0, width: 80, height: 24 }) as DOMRect;
   button.addEventListener('click', pickAndRoute);
   document.onkeydown = (event) => {
-    if (event.ctrlKey && event.key === 'o') pickAndRoute();
+    if (swallowChord || !(event.ctrlKey && event.key === 'o')) return;
+    event.preventDefault();
+    pickAndRoute();
   };
 }
 
@@ -241,6 +251,29 @@ describe('W62-NF1: a picker door reads its parse gate and its toast on its own t
       });
       expect(outcome.digest.toast).toEqual([]);
     }
+    // The dispatcher took the chord; a click has no keydown.
+    expect({ clicked: clicked.keydownPrevented, pressed: pressed.keydownPrevented }).toEqual({
+      clicked: null,
+      pressed: true,
+    });
+  });
+
+  it('reads a chord a gate swallowed as not taken, and IMPORT GATE does not judge it', async () => {
+    (globalThis as Record<string, unknown>)[IMPORT_SCREEN_GLOBAL] = { digest: computeImportScreenDigest };
+    appWithPickerDoors(true, 30, true);
+    const pressed = await answerKeyboardFileDialog(ctx, 'Ctrl+O', '/tmp/second.dmp');
+
+    expect(pressed).toMatchObject({ performed: true, parseAtDispatch: true, keydownPrevented: false, toastsRaised: [] });
+    const verdict = checkGateRefusalToast({
+      handoff: 'unconsumed',
+      picker: true,
+      importGateJudged: false,
+      toastsRaised: pressed.toastsRaised,
+      digestToasts: pressed.digest.toast,
+      key: GATE,
+      gates: pressed,
+    });
+    expect(verdict).toBe('not-refused');
   });
 
   it('reads no parse and no toast when the door opened the picker', async () => {

@@ -254,8 +254,11 @@ export type GateRefusalCheck = 'not-refused' | 'import-gate' | 'said';
  * no dialog, placement off, the data table not full screen. The shortcut
  * dispatcher swallows the chord behind any of the three and a modal makes the
  * buttons under it inert, so a door behind one never reached `pickAndRoute`.
- * Its toast is read off the click or keystroke's own tick
- * (`DialogOutcome.toastsRaised`).
+ * A chord is judged only when its keydown was taken (`keydownPrevented`): both
+ * dispatchers call `preventDefault()` right before `runFileShortcutAction`, and
+ * the gates the store does not show (a screen occupant, the Global View's
+ * context menu or input focus) return before it. Its toast is read off the
+ * click or keystroke's own tick (`DialogOutcome.toastsRaised`).
  */
 export function checkGateRefusalToast(input: {
   /** What a file entry point did with the path (`routeHandoff` on a route); null for other moves. */
@@ -271,12 +274,14 @@ export function checkGateRefusalToast(input: {
   /** `TOAST_KEYS.IMPORT_IN_PROGRESS`. */
   key: string;
   /** What the gates read at dispatch: the failure detail, and on a picker door the verdict. */
-  gates: RouteGates & { fullscreenAtDispatch?: boolean };
+  gates: RouteGates & { fullscreenAtDispatch?: boolean; keydownPrevented?: boolean | null };
 }): GateRefusalCheck {
   const { dialogAtDispatch, placementAtDispatch, parseAtDispatch, fullscreenAtDispatch = false } = input.gates;
   const picker = input.picker === true;
+  // A chord's keydown nothing prevented was swallowed in front of the door; a click has no keydown (null).
+  const chordSwallowed = input.gates.keydownPrevented === false;
   const refused = picker
-    ? parseAtDispatch && dialogAtDispatch === null && !placementAtDispatch && !fullscreenAtDispatch
+    ? parseAtDispatch && dialogAtDispatch === null && !placementAtDispatch && !fullscreenAtDispatch && !chordSwallowed
     : input.handoff === 'gate-refused';
   if (!refused) return 'not-refused';
   if (input.importGateJudged) return 'import-gate';

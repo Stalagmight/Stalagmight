@@ -653,6 +653,8 @@ describe('checkGateRefusalToast (IMPORT GATE, refusal half)', () => {
       expect(() => picked({ digestToasts: [GATE] })).toThrow(/did not say so/);
       // A picker that opened while the file parsed did not refuse on its own tick either.
       expect(() => picked({ handoff: 'accepted' })).toThrow(/did not say so/);
+      // A chord whose keydown the dispatcher took reached the door.
+      expect(() => picked({ gates: { ...door, keydownPrevented: true } })).toThrow(/did not say so/);
     });
 
     it('does not judge a picker door with no parse in flight, or one a gate in front of it held', () => {
@@ -661,6 +663,8 @@ describe('checkGateRefusalToast (IMPORT GATE, refusal half)', () => {
       expect(picked({ gates: { ...door, dialogAtDispatch: 'import-as-new-project' } })).toBe('not-refused');
       expect(picked({ gates: { ...door, placementAtDispatch: true } })).toBe('not-refused');
       expect(picked({ gates: { ...door, fullscreenAtDispatch: true } })).toBe('not-refused');
+      // A chord nothing prevented: a gate the store does not show swallowed it (an occupant, input focus).
+      expect(picked({ gates: { ...door, keydownPrevented: false } })).toBe('not-refused');
       // Not a picker door: an unconsumed answer is not a refusal.
       expect(check({ handoff: 'unconsumed', gates: door })).toBe('not-refused');
     });
