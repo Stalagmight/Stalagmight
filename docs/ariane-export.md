@@ -223,7 +223,10 @@ TML-DEPTH-D1 and D2):
   shot into or out of an averaged junction, on the main line and on every
   branch, gets the length that keeps its measured horizontal run:
   `L' = sqrt(h^2 + dz'^2)`, with `h` from its own length and depth change. The
-  plan stays where it is. `L'` is rounded up to the next written micrometre and
+  plan stays where it is. A shot with a recorded pitch has its `Inclination`
+  rewritten to the new slope (`h` over `dz'`), so the file never states a pitch
+  its own `Depth` and `Length` contradict (#576 RVF-d-8); an unrecorded one
+  stays 0. `L'` is rounded up to the next written micrometre and
   never below the depth change as written, so `|Depth - parent.Depth| <=
   Length` holds on the file's six decimals in both profiles. A zero-length tie
   has no run, so its new length is its whole new depth change.

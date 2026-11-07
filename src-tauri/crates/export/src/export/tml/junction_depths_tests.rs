@@ -436,3 +436,48 @@ fn a_vertical_shot_is_written_with_its_drop_as_its_tape_and_no_run() {
     assert_eq!(row.length, 3.2, "written with its 3.2 m drop as its tape");
     assert_eq!(back.horizontal_length(), 0.0, "comes back vertical");
 }
+
+/// [#576 RVF-d-8] A refitted shot with a recorded pitch states its new slope.
+/// The main-line shot out of junction A (10.0 -> 11.0 on a 5 m tape, pitched
+/// 11.537 degrees down, as its own geometry says) is refitted to 12.0 -> 11.0
+/// when A goes out at its mean: same run, now climbing. It kept its old
+/// Inclination, so the re-import read it as pitched down while its depths
+/// climb, 23 degrees apart, which the validator flags as
+/// INCLINATION_DEPTH_MISMATCH (15). A refitted shot with no pitch keeps none.
+#[test]
+fn a_refitted_shot_with_a_recorded_pitch_is_written_with_its_new_slope() {
+    let mut project = Project::new("CaveA".to_string(), None);
+    let pitch = crate::models::implied_pitch_deg(5.0, 10.0, 11.0);
+    section(
+        &mut project,
+        "Main",
+        vec![
+            shot(1, 0.0, 4.0, 9.0, 10.0),
+            shot(2, 90.0, 5.0, 10.0, 11.0).with_pitches(Some(pitch), Some(pitch)),
+        ],
+    );
+    section(
+        &mut project,
+        "Branch",
+        vec![shot(11, 180.0, 2.0, 14.0, 14.5)],
+    );
+    merge(&mut project, (0, 1), (1, 0));
+
+    let out = Exported::of(&project);
+    let back = out.imported(2);
+    let implied = crate::models::implied_pitch_deg(back.length, back.depth_in, back.depth_out);
+    println!(
+        "[RVF-d-8] refitted shot: {} -> {} over {}, pitch {:?}, implied {implied}",
+        back.depth_in, back.depth_out, back.length, back.pitch_in
+    );
+    assert_close("refitted start", back.depth_in, 12.0);
+    assert_close("refitted end", back.depth_out, 11.0);
+    let written = back.pitch_in.unwrap();
+    assert!(
+        (written - implied).abs() < 1e-3,
+        "the refitted shot states a pitch of {written} where its depths and tape imply {implied}"
+    );
+    assert!(implied < 0.0, "the refitted shot climbs");
+    // Refitted too (9.0 -> 12.0), with no pitch recorded: still none.
+    assert_eq!(out.imported(1).pitch_in, None);
+}

@@ -22,7 +22,8 @@
 //!   shots into and out of an averaged junction, on the main line and on every
 //!   branch - gets the length that keeps its measured horizontal run,
 //!   `L' = sqrt(h^2 + dz'^2)` with `h` from its own length and depth change. The
-//!   plan stays where it is; only the slope changes. `L'` is rounded up with
+//!   plan stays where it is; only the slope changes, and a recorded pitch is
+//!   written as that new slope (#576 RVF-d-8). `L'` is rounded up with
 //!   `length_covering_written_delta`, so `|Depth - parent.Depth| <= Length`
 //!   holds on the file's decimals.
 //!
@@ -56,8 +57,8 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use super::{as_written, length_covering_written_delta, schema, ExportShot};
-use crate::models::SectionId;
+use super::{as_written, length_covering_written_delta, pitch_to_inclination, schema, ExportShot};
+use crate::models::{pitch_from_components, SectionId};
 
 /// Readings this close are one reading: the tolerance the same-as-previous flag
 /// is computed with (`ExportShot::forward`).
@@ -276,6 +277,13 @@ pub(super) fn settle(
 fn refit(shot: &mut ExportShot, start: f64, end: f64) {
     let run = horizontal_run(shot.length, shot.depth - shot.depth_in);
     shot.length = covering_length(run.hypot(end - start), start, end);
+    // [#576 RVF-d-8] A recorded pitch takes the slope the shot is now written
+    // with, its kept run over its new depth change: the old one contradicts the
+    // new Depth and Length (it can even point the other way), which a re-import
+    // flags as INCLINATION_DEPTH_MISMATCH. None recorded (the wire's 0) stays so.
+    if shot.inclination != 0.0 {
+        shot.inclination = pitch_to_inclination(Some(pitch_from_components(run, end - start)));
+    }
     shot.depth_in = start;
     shot.depth = end;
     shot.depth_in_same_as_prev = true;

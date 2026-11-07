@@ -194,11 +194,13 @@ fn differences(want: &Measured, got: &Measured, tol: f64, depths: Depths) -> Vec
     for (name, a, b) in [
         ("azimuth_in", want.azimuth.0, got.azimuth.0),
         ("azimuth_out", want.azimuth.1, got.azimuth.1),
-        ("pitch", want.pitch, got.pitch),
     ] {
         if circular_gap(a, b) > 1e-5 {
             out.push(format!("{name} {a} vs {b}"));
         }
+    }
+    if !pitch_comes_back(want, got, depths) {
+        out.push(format!("pitch {} vs {}", want.pitch, got.pitch));
     }
     for ((name, a), b) in LRUD_NAMES.iter().zip(&want.lrud).zip(&got.lrud) {
         let same = match (a, b) {
@@ -217,6 +219,25 @@ fn differences(want: &Measured, got: &Measured, tol: f64, depths: Depths) -> Vec
         out.push(format!("comment {:?} vs {:?}", want.comment, got.comment));
     }
     out
+}
+
+/// Whether `got` comes back with `want`'s pitch, or - on a shot the export may
+/// have refitted, with a pitch recorded - with the slope a refit writes: its
+/// measured run over the depth change the file now states (#576 RVF-d-8). A
+/// refit leaves an unrecorded pitch unrecorded.
+fn pitch_comes_back(want: &Measured, got: &Measured, depths: Depths) -> bool {
+    if circular_gap(want.pitch, got.pitch) <= 1e-5 {
+        return true;
+    }
+    if !matches!(depths, Depths::Refitted { .. }) || want.pitch == 0.0 {
+        return false;
+    }
+    let run = horizontal_run(want.length, want.depth_out - want.depth_in);
+    let slope = stalagmight_models::pitch_from_components(run, got.depth_out - got.depth_in);
+    // Six decimals on both depths move the change by up to 2e-6 m, which turns
+    // the slope by at most that over the tape.
+    let tolerance = (2e-6 / got.length.max(1e-9)).to_degrees() + 1e-5;
+    circular_gap(slope, got.pitch) <= tolerance
 }
 
 /// Every imported shot by its identity: (section, index in it, measurements).
