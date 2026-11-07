@@ -263,3 +263,68 @@ describe('the in-flight mark is set for the parse and always cleared (#576 Q-W27
     expect(useUIStore.getState().activeDialog).toBe('error');
   });
 });
+
+describe('a recents entry that is not a project, during a parse (#576 W62-NF2)', () => {
+  // A hand-edited or legacy recents entry: recents open with `allow:
+  // 'project-only'`, which refuses anything but a `.stalx` with an error dialog.
+  const LEGACY_ENTRY = '/cave/legacy.dat';
+  const openRecent = () => routeOpenedFile(LEGACY_ENTRY, 'Open Failed', { allow: 'project-only' });
+  const unsupportedErrorShowing = (): boolean => {
+    const ui = useUIStore.getState();
+    return (
+      ui.activeDialog === 'error' &&
+      String((ui.dialogData as { message?: unknown }).message) === 'Unsupported file type: legacy.dat'
+    );
+  };
+
+  it.each(FIRST)(
+    '%s parsing: the entry is refused like any second file, and the parse result then opens the first file',
+    async (path, _parser, parsed) => {
+      const first = routeOpenedFile(path);
+      await settle();
+
+      await openRecent();
+      // Refused before its error could go up, so the parse's late result has no
+      // error dialog to replace.
+      expect.soft(showToast).toHaveBeenCalledWith(expect.any(String), TOAST_KEYS.IMPORT_IN_PROGRESS, 'warning');
+      expect(useUIStore.getState().activeDialog).toBeNull();
+
+      held[0]!.resolve(parsed);
+      await first;
+      expect(useUIStore.getState().activeDialog).toBe('new-project-for-import');
+      expect(dialogFilePath()).toBe(path);
+    },
+  );
+
+  it.each(FIRST)(
+    '%s: an entry routed past the gate shows its error, and the older parse succeeding late does not replace it',
+    async (path, _parser, parsed) => {
+      const first = routeOpenedFile(path);
+      await settle();
+      useUIStore.setState({ importParse: null });
+
+      await openRecent();
+      expect(unsupportedErrorShowing()).toBe(true);
+
+      held[0]!.resolve(parsed);
+      await first;
+      expect(unsupportedErrorShowing()).toBe(true);
+    },
+  );
+
+  it.each(FIRST)(
+    '%s: an entry routed past the gate shows its error, and the older parse failing late does not replace it',
+    async (path) => {
+      const first = routeOpenedFile(path);
+      await settle();
+      useUIStore.setState({ importParse: null });
+
+      await openRecent();
+      expect(unsupportedErrorShowing()).toBe(true);
+
+      held[0]!.reject(new Error('No valid sections found'));
+      await first;
+      expect(unsupportedErrorShowing()).toBe(true);
+    },
+  );
+});

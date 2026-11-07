@@ -308,14 +308,6 @@ export async function routeOpenedFile(
   let handedOff = false;
 
   try {
-    if (opts?.allow === 'project-only' && !lowerPath.endsWith('.stalx')) {
-      ui.openDialog('error', {
-        title: errorTitle,
-        message: `Unsupported file type: ${unsupportedFileDisplayName(path)}`,
-      });
-      return;
-    }
-
     // One import at a time (#411). Drag-drop routes unconditionally - the drop
     // listener has no modal check (Ctrl+O/Ctrl+I do: useKeyboardShortcuts returns
     // early for every non-Escape key while a dialog is open) - so a second file
@@ -357,6 +349,20 @@ export async function routeOpenedFile(
 
     // Past the gates: this is now the user's latest pick (see `latestRouteToken`).
     token = ++latestRouteToken;
+
+    // A recents entry that is not a project (`allow: 'project-only'`) is refused
+    // with an error dialog - but only past the gates and the token (#576
+    // W62-NF2): before them, it raised its error during another import's parse,
+    // and that parse, still the latest route, then replaced the error with its
+    // own late result. Now the parse refuses it like any second file, and an
+    // older parse that a route past the gate supersedes drops its result.
+    if (opts?.allow === 'project-only' && !lowerPath.endsWith('.stalx')) {
+      ui.openDialog('error', {
+        title: errorTitle,
+        message: `Unsupported file type: ${unsupportedFileDisplayName(path)}`,
+      });
+      return;
+    }
 
     // `importContext` tells `saveAfterImport` whether the completion handlers must
     // write the .stalx (a brand-new project's initial save is deferred) or only mark
