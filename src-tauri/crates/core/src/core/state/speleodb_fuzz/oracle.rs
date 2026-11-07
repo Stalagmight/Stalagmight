@@ -16,6 +16,9 @@
 //!   **I2b** the same after a silent best-effort release (logout, close, quit)
 //!   over a CLEAN copy: the documented veto keeps a lock only over un-pushed
 //!   edits, so a lock left with nothing to protect was stranded without a word.
+//!   [#576 SDB-ACCT-D1, SDB-QUIT-D1] That holds for a lock the app ADOPTED from the
+//!   account too (the second client took it as the owner, and the app's gate opened
+//!   over it): only a change to the owner's access or a delete excuses I2b.
 //! - **I3 BASE is real.** A linked copy's `base_commit_sha` names a commit in the
 //!   server's history of that project.
 //! - **I4 the un-pushed mark matches the real difference.** A linked copy marked
@@ -112,6 +115,11 @@ pub(super) struct Ghost {
     /// Projects whose lock / access the second client touched since the app last
     /// took the lock (I11 does not apply to them).
     pub(super) interference: HashSet<String>,
+    /// [#576 SDB-ACCT-D1] Projects whose owner's ACCESS the second client changed, or
+    /// that it deleted, since the app last took the lock: the only interference that
+    /// excuses I2b. A lock the owner account took elsewhere is the app's to hand back
+    /// once it edits under it.
+    pub(super) access_interference: HashSet<String>,
 }
 
 /// Every file under `dir`, recursively.
@@ -241,7 +249,7 @@ pub(super) fn check(
         after,
         server,
         owner,
-        &ghost.interference,
+        &ghost.access_interference,
         cache_root,
         &mut v,
     );
@@ -529,10 +537,11 @@ fn check_claims(
                     }
                 }
             }
-            // Not when the second client touched this project's lock or the owner's
-            // access since the app took the lock (as for I11): a lock another session
-            // took is not the app's to hand back, and a release the server refuses
-            // after the owner's access was lowered is that change's doing.
+            // Not when the second client changed the owner's access to this project
+            // (or deleted it) since the app took the lock: a release the server
+            // refuses after the owner's access was lowered is that change's doing.
+            // [#576 SDB-ACCT-D1, SDB-QUIT-D1] A lock the owner account took in another
+            // session no longer excuses it: the app hands back any lock it edits under.
             Claim::LockReleaseBestEffort { project_id }
                 if holder_is_owner(project_id) && !interference.contains(project_id) =>
             {

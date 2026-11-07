@@ -238,6 +238,7 @@ impl Harness {
                     .any(|l| l.contains("Ok(Editing)") || l.contains("FastForwarded"))
             {
                 ghost.interference.clear();
+                ghost.access_interference.clear();
             }
             let after = self.snap(&app, &projects);
             let violations = check(
@@ -374,6 +375,7 @@ impl Harness {
             }
             Act::ActorDelete { p } => pick(*p).map_or(Ok(String::new()), |proj| {
                 ghost.interference.insert(proj.id.clone());
+                ghost.access_interference.insert(proj.id.clone());
                 let admin = admin_of.get(&proj.id).copied().unwrap_or(Who::Owner);
                 s.delete(admin, &proj.id)
                     .map(|()| format!("{admin:?} deleted {}", proj.name))
@@ -385,6 +387,7 @@ impl Harness {
             }),
             Act::ActorSetOwnerAccess { p, level } => pick(*p).map_or(Ok(String::new()), |proj| {
                 ghost.interference.insert(proj.id.clone());
+                ghost.access_interference.insert(proj.id.clone());
                 let admin = admin_of.get(&proj.id).copied().unwrap_or(Who::Owner);
                 if admin == Who::Owner {
                     return Ok("owner administers it; access unchanged".to_owned());

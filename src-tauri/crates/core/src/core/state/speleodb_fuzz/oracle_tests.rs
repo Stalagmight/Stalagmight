@@ -255,10 +255,18 @@ fn a_released_lock_still_held_is_i2_and_a_false_delete_is_i9() {
     }]);
     let v = ids(&silent, &s, &s, &mut Ghost::default());
     assert!(v.contains(&"I2b".to_owned()), "{v:?}");
-    // The second client touched the lock or the owner's access: excused, as for I11.
+    // [#576 SDB-ACCT-D1, SDB-QUIT-D1] The owner account took the lock in another
+    // session (the second client): the app edits under it, so a silent release that
+    // left it held is still I2b.
     let mut other_session = Ghost::default();
     other_session.interference.insert("p1".to_owned());
     let v = ids(&silent, &s, &s, &mut other_session);
+    assert!(v.contains(&"I2b".to_owned()), "{v:?}");
+    // The second client changed the owner's access (or deleted the project): excused.
+    let mut access_changed = Ghost::default();
+    access_changed.interference.insert("p1".to_owned());
+    access_changed.access_interference.insert("p1".to_owned());
+    let v = ids(&silent, &s, &s, &mut access_changed);
     assert!(!v.contains(&"I2b".to_owned()), "{v:?}");
 }
 

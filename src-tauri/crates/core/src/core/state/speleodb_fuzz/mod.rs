@@ -88,7 +88,45 @@ const REGRESSION_SEEDS: &[(u64, usize, u64)] = &[
 /// Directed step lists, replayed by [`speleodb_fuzz_regression_seeds`] beside the
 /// seeds: shapes the generator cannot draw, because it arms one fault per step.
 fn directed_steps() -> Vec<(&'static str, Vec<Step>)> {
-    vec![("sdb-poll-d1", sdb_poll_d1_steps())]
+    vec![
+        ("sdb-poll-d1", sdb_poll_d1_steps()),
+        ("sdb-acct-d1-poll", sdb_acct_d1_steps(model::Act::Poll)),
+        (
+            "sdb-acct-d1-start",
+            sdb_acct_d1_steps(model::Act::StartEditing),
+        ),
+    ]
+}
+
+/// [#576 SDB-ACCT-D1, SDB-QUIT-D1] The owner ACCOUNT takes the lock in another session
+/// (the second client, as the website or another computer would) while the app has
+/// the project open read-only; the app then edits under it - through the status
+/// poll's inherited-lock reopen (`Act::Poll`) or a plain Start Editing
+/// (`Act::StartEditing`) - and the quit over the clean copy must hand that lock back
+/// (I2b): a lock the account holds is the user's, and the quit releases any lock the
+/// session edits under. It used to keep it (no claim of this session's).
+fn sdb_acct_d1_steps(adopt: model::Act) -> Vec<Step> {
+    use model::{Act, LeaveMode, OnUnpushed};
+    let plain = |act| Step {
+        act,
+        fault: None,
+        then: Vec::new(),
+    };
+    vec![
+        plain(Act::Login),
+        plain(Act::Open {
+            p: 0,
+            on_unpushed: OnUnpushed::KeepLocal,
+        }),
+        plain(Act::ActorLock {
+            who: world::Who::Owner,
+            p: 0,
+        }),
+        plain(adopt),
+        plain(Act::Quit {
+            mode: LeaveMode::KeepLock,
+        }),
+    ]
 }
 
 /// [#576 SDB-POLL-D1] Start Editing's acquire lands with its reply lost (a 502 after
@@ -145,14 +183,38 @@ const SDB_POLL_D1_REPLAY: &str = r#"[
   {"act": {"Quit": {"mode": "KeepLock"}}, "fault": null}
 ]"#;
 
-/// [#576 SDB-POLL-D1] Offline: the directed list is the saved list the replay entry
-/// point reads, so a replay of that file runs exactly the regression set's steps.
+/// The SDB-ACCT-D1 directed lists as saved step lists, for `speleodb_fuzz_replay`.
+const SDB_ACCT_D1_POLL_REPLAY: &str = r#"[
+  {"act": "Login", "fault": null},
+  {"act": {"Open": {"p": 0, "on_unpushed": "KeepLocal"}}, "fault": null},
+  {"act": {"ActorLock": {"who": "Owner", "p": 0}}, "fault": null},
+  {"act": "Poll", "fault": null},
+  {"act": {"Quit": {"mode": "KeepLock"}}, "fault": null}
+]"#;
+const SDB_ACCT_D1_START_REPLAY: &str = r#"[
+  {"act": "Login", "fault": null},
+  {"act": {"Open": {"p": 0, "on_unpushed": "KeepLocal"}}, "fault": null},
+  {"act": {"ActorLock": {"who": "Owner", "p": 0}}, "fault": null},
+  {"act": "StartEditing", "fault": null},
+  {"act": {"Quit": {"mode": "KeepLock"}}, "fault": null}
+]"#;
+
+/// [#576 SDB-POLL-D1, SDB-ACCT-D1] Offline: each directed list is the saved list the
+/// replay entry point reads, so a replay of that file runs exactly the regression
+/// set's steps.
 #[test]
 fn the_directed_list_is_its_saved_replay() {
     let lists = directed_steps();
-    let (name, steps) = lists.first().expect("one directed list");
-    let saved: Vec<Step> = serde_json::from_str(SDB_POLL_D1_REPLAY).expect("parse");
-    assert_eq!((*name, steps), ("sdb-poll-d1", &saved));
+    let saved = [
+        ("sdb-poll-d1", SDB_POLL_D1_REPLAY),
+        ("sdb-acct-d1-poll", SDB_ACCT_D1_POLL_REPLAY),
+        ("sdb-acct-d1-start", SDB_ACCT_D1_START_REPLAY),
+    ];
+    assert_eq!(lists.len(), saved.len(), "one saved list per directed list");
+    for ((name, steps), (saved_name, json)) in lists.iter().zip(saved) {
+        let saved_steps: Vec<Step> = serde_json::from_str(json).expect("parse");
+        assert_eq!((*name, steps), (saved_name, &saved_steps));
+    }
 }
 
 fn env_or(name: &str, default: &str) -> String {
