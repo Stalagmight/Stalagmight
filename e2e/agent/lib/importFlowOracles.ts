@@ -254,11 +254,11 @@ export type GateRefusalCheck = 'not-refused' | 'import-gate' | 'said';
  * no dialog, placement off, the data table not full screen. The shortcut
  * dispatcher swallows the chord behind any of the three and a modal makes the
  * buttons under it inert, so a door behind one never reached `pickAndRoute`.
- * A chord is judged only when its keydown was taken (`keydownPrevented`): both
- * dispatchers call `preventDefault()` right before `runFileShortcutAction`, and
- * the gates the store does not show (a screen occupant, the Global View's
- * context menu or input focus) return before it. Its toast is read off the
- * click or keystroke's own tick (`DialogOutcome.toastsRaised`).
+ * A chord is judged only when a dispatcher took it (`keydownPrevented`): both
+ * call `preventDefault()` right before `runFileShortcutAction`, and the gates
+ * the store does not show (a screen occupant, the Global View's context menu,
+ * input focus, a key a focused component took) return before it. Its toast is
+ * read off the click or keystroke's own tick (`DialogOutcome.toastsRaised`).
  */
 export function checkGateRefusalToast(input: {
   /** What a file entry point did with the path (`routeHandoff` on a route); null for other moves. */
@@ -278,7 +278,7 @@ export function checkGateRefusalToast(input: {
 }): GateRefusalCheck {
   const { dialogAtDispatch, placementAtDispatch, parseAtDispatch, fullscreenAtDispatch = false } = input.gates;
   const picker = input.picker === true;
-  // A chord's keydown nothing prevented was swallowed in front of the door; a click has no keydown (null).
+  // A chord no dispatcher prevented was swallowed in front of the door; a click has no keydown (null).
   const chordSwallowed = input.gates.keydownPrevented === false;
   const refused = picker
     ? parseAtDispatch && dialogAtDispatch === null && !placementAtDispatch && !fullscreenAtDispatch && !chordSwallowed

@@ -1135,9 +1135,10 @@ export const importDialogFuzz: Scenario = {
        */
       toastsRaisedAtDispatch: string[] | null;
       /**
-       * On a picker chord (Ctrl+O / Ctrl+I), whether its keydown came back
-       * default-prevented (`DialogOutcome.keydownPrevented`): false is a chord a
-       * gate swallowed before `runFileShortcutAction`. Null on every other move.
+       * On a picker chord (Ctrl+O / Ctrl+I), whether a shortcut dispatcher
+       * prevented its keydown (`DialogOutcome.keydownPrevented`): false is a
+       * chord a gate or a focused component swallowed before
+       * `runFileShortcutAction`. Null on every other move.
        */
       keydownPrevented: boolean | null;
       /**
@@ -2494,7 +2495,7 @@ export const importDialogFuzz: Scenario = {
           // A picker door is `pickAndRoute`'s, whose own parse gate refuses
           // before the picker opens, so its move scores `unconsumed`: it is
           // judged on the parse gate at dispatch instead, a chord only when
-          // its keydown was taken, and its toast read off the click or
+          // a dispatcher took its keydown, and its toast read off the click or
           // keystroke's own tick (#576 W62-NF1).
           const pickerDoor =
             outcome.performed &&

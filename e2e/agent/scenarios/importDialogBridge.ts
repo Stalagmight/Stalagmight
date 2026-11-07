@@ -747,12 +747,17 @@ export interface DialogOutcome {
    */
   toastsRaised: string[] | null;
   /**
-   * On a chord (`answerKeyboardFileDialog`), whether its keydown came back
-   * default-prevented: both shortcut dispatchers call `preventDefault()` right
-   * before `runFileShortcutAction`, so an unprevented keydown is a chord a gate
-   * swallowed (a dialog, a screen occupant, the Global View's context menu or
-   * input focus). A component that took the key first prevented it itself, so
-   * that chord still reads as taken. Null on a click.
+   * On a chord (`answerKeyboardFileDialog`), whether a shortcut dispatcher
+   * prevented its keydown: it came back default-prevented, and was not yet
+   * prevented when it bubbled up to `<html>`. Both dispatchers listen above
+   * `<html>` (`useGlobalViewShortcuts` on `document`, `useKeyboardShortcuts` on
+   * `window`) and call `preventDefault()` right before `runFileShortcutAction`,
+   * so false is a chord a gate swallowed (a dialog, a screen occupant, the
+   * Global View's context menu or input focus). A focused component that took
+   * the key first prevented it below `<html>` (React listens on `#root`,
+   * `#dialog-root` and `body`), and both dispatchers return on
+   * `defaultPrevented`, so that chord reads false too, as does one stopped
+   * before `<html>`. Null on a click.
    */
   keydownPrevented: boolean | null;
   digest: ImportScreenDigest;
@@ -939,6 +944,14 @@ export async function answerKeyboardFileDialog(
     let gates = noDoorGates;
     let toastsRaised = null;
     let keydownPrevented = false;
+    // The keydown's defaultPrevented as it bubbled up to <html>, below both
+    // dispatchers; null while it has not got there (DialogOutcome.keydownPrevented).
+    const html = document.documentElement;
+    let keydown = null;
+    let preventedBelowDispatchers = null;
+    const atHtml = (event) => {
+      if (event === keydown) preventedBelowDispatchers = event.defaultPrevented;
+    };
     try {
       const target = document.activeElement || document.body;
       const init = {
@@ -954,8 +967,11 @@ export async function answerKeyboardFileDialog(
       // The gates the dispatcher and pickAndRoute read, and the toast stack, on the keydown's own tick.
       gates = doorGates();
       const before = doorToasts();
-      // dispatchEvent is false when a listener called preventDefault (the event is cancelable).
-      keydownPrevented = !target.dispatchEvent(new KeyboardEvent('keydown', init));
+      // dispatchEvent is false when a listener called preventDefault (the event is
+      // cancelable); a dispatcher's call is one made after the keydown left <html>.
+      keydown = new KeyboardEvent('keydown', init);
+      html.addEventListener('keydown', atHtml);
+      keydownPrevented = !target.dispatchEvent(keydown) && preventedBelowDispatchers === false;
       const after = doorToasts();
       toastsRaised = before && after ? toastKeysRaised(before, after) : null;
       target.dispatchEvent(new KeyboardEvent('keyup', init));
@@ -967,6 +983,7 @@ export async function answerKeyboardFileDialog(
         await new Promise((resolve) => setTimeout(resolve, 40));
       }
     } finally {
+      html.removeEventListener('keydown', atHtml);
       const index = queue.findIndex((candidate) => candidate.id === id);
       if (index >= 0) queue.splice(index, 1);
       if (testApi.activeFileDialogTriggerTestId === trigger) {

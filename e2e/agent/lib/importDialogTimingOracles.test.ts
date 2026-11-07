@@ -171,8 +171,10 @@ describe('HFI2-F3: the import-gate refusal is read when the route returns', () =
  * An app whose picker doors run `pickAndRoute`'s parse gate (#576 W62-NF1):
  * while a file parses, the toast and no picker; otherwise the picker takes the
  * armed answer. The toast fades `fadeMs` later, before the bridge's wait for the
- * answer ends. Its shortcut dispatcher takes Ctrl+O (`preventDefault`, then the
- * door) unless `swallowChord`, a gate in front of the door, returns first.
+ * answer ends. Its shortcut dispatcher, on `document` like the Global View's,
+ * takes Ctrl+O (`preventDefault`, then the door) unless `swallowChord`, a gate
+ * in front of the door, returns first, or a focused component already took the
+ * key (`defaultPrevented`, as both real dispatchers read it).
  */
 function appWithPickerDoors(parsing: boolean, fadeMs = 30, swallowChord = false): void {
   let state = {
@@ -205,11 +207,37 @@ function appWithPickerDoors(parsing: boolean, fadeMs = 30, swallowChord = false)
   button.getBoundingClientRect = () => ({ left: 0, top: 0, width: 80, height: 24 }) as DOMRect;
   button.addEventListener('click', pickAndRoute);
   document.onkeydown = (event) => {
-    if (swallowChord || !(event.ctrlKey && event.key === 'o')) return;
+    if (event.defaultPrevented || swallowChord || !(event.ctrlKey && event.key === 'o')) return;
     event.preventDefault();
     pickAndRoute();
   };
 }
+
+/** A focused grid that handles Ctrl+O itself, as the docked data-table grid takes its own keys. */
+function focusComponentTakingCtrlO(stopPropagation: boolean): void {
+  const grid = document.createElement('div');
+  grid.tabIndex = 0;
+  grid.dataset.testid = 'synthetic-grid';
+  grid.addEventListener('keydown', (event) => {
+    if (!(event.ctrlKey && event.key === 'o')) return;
+    event.preventDefault();
+    if (stopPropagation) event.stopPropagation();
+  });
+  document.body.appendChild(grid);
+  grid.focus();
+}
+
+/** IMPORT GATE's refusal half on a Ctrl+O the bridge pressed while a file parsed. */
+const judgeChord = (pressed: Awaited<ReturnType<typeof answerKeyboardFileDialog>>) =>
+  checkGateRefusalToast({
+    handoff: 'unconsumed',
+    picker: true,
+    importGateJudged: false,
+    toastsRaised: pressed.toastsRaised,
+    digestToasts: pressed.digest.toast,
+    key: GATE,
+    gates: pressed,
+  });
 
 describe('W62-NF1: a picker door reads its parse gate and its toast on its own tick', () => {
   const settleCap = process.env.STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS;
@@ -274,6 +302,44 @@ describe('W62-NF1: a picker door reads its parse gate and its toast on its own t
       gates: pressed,
     });
     expect(verdict).toBe('not-refused');
+  });
+
+  it('reads a chord a focused component took first as not taken, and IMPORT GATE does not judge it', async () => {
+    (globalThis as Record<string, unknown>)[IMPORT_SCREEN_GLOBAL] = { digest: computeImportScreenDigest };
+    for (const stopPropagation of [false, true]) {
+      // The dispatcher would take this chord; the grid prevented it first, so it returned.
+      appWithPickerDoors(true);
+      focusComponentTakingCtrlO(stopPropagation);
+      expect(document.activeElement?.getAttribute('data-testid')).toBe('synthetic-grid');
+      const pressed = await answerKeyboardFileDialog(ctx, 'Ctrl+O', '/tmp/second.dmp');
+
+      expect({ stopPropagation, ...pressed }).toMatchObject({
+        stopPropagation,
+        performed: true,
+        parseAtDispatch: true,
+        keydownPrevented: false,
+        toastsRaised: [],
+      });
+      expect(judgeChord(pressed)).toBe('not-refused');
+    }
+  });
+
+  it('still judges a chord prevented where a dispatcher listens, and fails it without the toast', async () => {
+    (globalThis as Record<string, unknown>)[IMPORT_SCREEN_GLOBAL] = { digest: computeImportScreenDigest };
+    // The `document` dispatcher stands aside; one on `window` (useKeyboardShortcuts') takes the chord, no toast.
+    appWithPickerDoors(true, 30, true);
+    const silentDoor = (event: KeyboardEvent): void => {
+      if (event.ctrlKey && event.key === 'o') event.preventDefault();
+    };
+    window.addEventListener('keydown', silentDoor);
+    try {
+      const pressed = await answerKeyboardFileDialog(ctx, 'Ctrl+O', '/tmp/second.dmp');
+
+      expect(pressed).toMatchObject({ performed: true, parseAtDispatch: true, keydownPrevented: true, toastsRaised: [] });
+      expect(() => judgeChord(pressed)).toThrow(/^IMPORT GATE: a picker door the parse gate refused did not say so/);
+    } finally {
+      window.removeEventListener('keydown', silentDoor);
+    }
   });
 
   it('reads no parse and no toast when the door opened the picker', async () => {
