@@ -18,6 +18,8 @@
 import { PROJECT_CHANGED_REFUSAL, refusedLocally, type CommandRefused } from './commandResult';
 
 let switchesUnsettled = 0;
+/** One per switch requested and not yet released (committed, settled or dropped). */
+const undecided = new Set<Promise<void>>();
 
 /** Whether a project switch has been requested and has not settled yet. */
 export function switchUnderWay(): boolean {
@@ -35,12 +37,28 @@ export function refuseDuringSwitch(): CommandRefused | null {
 /** Called when a switch is requested; the returned function is called once when it settles (or is dropped). */
 export function noteSwitchRequested(): () => void {
   switchesUnsettled += 1;
+  let decide!: () => void;
+  const decided = new Promise<void>((resolve) => {
+    decide = resolve;
+  });
+  undecided.add(decided);
   let released = false;
   return () => {
     if (released) return;
     released = true;
     switchesUnsettled -= 1;
+    undecided.delete(decided);
+    decide();
   };
+}
+
+/**
+ * [#576 W50-NF2] Settles once every switch requested SO FAR has committed its project
+ * or settled (the moment the gate lets saves and edits through for it); never rejects.
+ * Switches requested later are not waited for.
+ */
+export function switchesSoFarDecided(): Promise<void> {
+  return Promise.all([...undecided]).then(() => undefined);
 }
 
 const savesInFlight = new Set<Promise<unknown>>();

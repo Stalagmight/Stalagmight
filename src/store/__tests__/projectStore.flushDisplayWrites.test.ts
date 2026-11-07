@@ -135,6 +135,59 @@ describe('a close or a load first flushes the queued display writes (#576 FZ-FZ-
 
     expect(sent.filter((s) => s.startsWith('gridSpacing=')), `sent: ${sent.join(', ')}`).toEqual(['gridSpacing=20']);
   });
+
+  // [#576 W50-NF2] Made AFTER the flush gave up, while the reload is still loading: it
+  // queues behind the wedged write too, and the reload of the same file would take it.
+  it('drops a write made once the flush timed out, before the reload committed', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    useUIStore.getState().setGridSpacing(20); // wedged
+    await vi.waitFor(() => expect(releaseFirst).not.toBeNull());
+    const reload = useProjectStore.getState().loadProject(CAVE_A); // the same file
+    await vi.advanceTimersByTimeAsync(PROJECT_SETTING_FLUSH_TIMEOUT_MS + 5); // the flush gives up
+    await vi.waitFor(() => expect(loads).toHaveLength(1)); // the reload is on its way
+    useUIStore.getState().setGridSpacing(50); // made during the switch, after the timeout
+
+    loads[0]?.resolve(reloadResult());
+    expect(await reload).toMatchObject({ success: true });
+    releaseFirst?.(); // the wedged write answers only after the reload committed
+    await vi.advanceTimersByTimeAsync(10);
+
+    const writes = sent.filter((s) => s.startsWith('gridSpacing='));
+    console.log(`[W50-NF2] display writes sent: ${writes.join(', ')}`);
+    expect(writes, `sent: ${sent.join(', ')}`).toEqual(['gridSpacing=20']);
+  });
+
+  // The same write, when the switch started no new session (the backend answered that
+  // the file is already open): it lands in the session it was made in, so it is sent.
+  it('sends a write made during the switch once the switch kept the session', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    useUIStore.getState().setGridSpacing(20); // wedged
+    await vi.waitFor(() => expect(releaseFirst).not.toBeNull());
+    const reload = useProjectStore.getState().loadProject(CAVE_A);
+    await vi.advanceTimersByTimeAsync(PROJECT_SETTING_FLUSH_TIMEOUT_MS + 5);
+    await vi.waitFor(() => expect(loads).toHaveLength(1));
+    useUIStore.getState().setGridSpacing(50);
+
+    loads[0]?.reject({ code: 'ALREADY_OPEN', message: 'Project is already open' });
+    await reload;
+    releaseFirst?.();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(sent.filter((s) => s.startsWith('gridSpacing=')), `sent: ${sent.join(', ')}`).toEqual([
+      'gridSpacing=20',
+      'gridSpacing=50',
+    ]);
+  });
+
+  it('still sends a write made once the reload committed', async () => {
+    const reload = useProjectStore.getState().loadProject(CAVE_A);
+    await vi.waitFor(() => expect(loads).toHaveLength(1));
+    loads[0]?.resolve(reloadResult());
+    expect(await reload).toMatchObject({ success: true });
+
+    useUIStore.getState().setGridSpacing(50);
+    await vi.waitFor(() => expect(sent).toContain('gridSpacing=50'));
+  });
 });
 
 /** The load answer for a reload of CaveA (the same project, a new session). */

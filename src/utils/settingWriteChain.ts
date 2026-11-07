@@ -24,6 +24,7 @@
  */
 
 import { openProjectIdentity, projectSessionEpoch } from '../store/projectSession';
+import { switchesSoFarDecided } from '../store/switchGate';
 import type { DisplaySettingTarget } from '../types/ipc.generated';
 
 const tails = new Map<string, Promise<void>>();
@@ -31,6 +32,11 @@ const tails = new Map<string, Promise<void>>();
 /** Every project-setting write queued so far, numbered, and the newest one a timed-out flush dropped. */
 let projectWritesQueued = 0;
 let droppedUpTo = 0;
+/**
+ * [#576 W50-NF2] Set from the start of a switch's flush until the switches requested
+ * by then have decided ({@link switchesSoFarDecided}): it settles at that moment.
+ */
+let flushedSwitchesDecided: Promise<void> | null = null;
 /** The chain keys `chainProjectSettingWrite` has used. */
 const projectSettingKeys = new Set<string>();
 
@@ -70,6 +76,14 @@ export function chainSettingWrite<T>(key: string, write: () => Promise<T>): Prom
  * the project the write was made in, so the write is still sent - as one already
  * in flight would land. Only a write made with no project open falls back to the
  * session, because "no project" names nothing to compare.
+ *
+ * [#576 W50-NF2] A write MADE once a load's or a close's flush has started, before
+ * that switch decided (committed its project, or settled without), is not one the
+ * flush covers: queued behind a write the flush gave up on, or sent while the load
+ * runs, it could land after a reload of the same file and in the reopened session.
+ * It waits for the switch to decide, as the store's switch gate holds saves and
+ * edits (`store/switchGate.ts`), and is dropped unsent when a new session started
+ * meanwhile; when none did (the switch failed or was dropped), it is sent.
  */
 export function chainProjectSettingWrite<T>(
   key: string,
@@ -77,14 +91,16 @@ export function chainProjectSettingWrite<T>(
 ): Promise<T | undefined> {
   const session = projectSessionEpoch();
   const madeFor = openProjectIdentity();
+  const madeDuringSwitch = flushedSwitchesDecided;
   projectWritesQueued += 1;
   const queued = projectWritesQueued;
   projectSettingKeys.add(key);
-  return chainSettingWrite(key, () =>
-    queued > droppedUpTo && stillTheProjectItWasMadeIn(madeFor, session)
-      ? write(madeFor)
-      : Promise.resolve(undefined),
-  );
+  return chainSettingWrite(key, async () => {
+    if (madeDuringSwitch) await madeDuringSwitch;
+    if (queued <= droppedUpTo) return undefined;
+    if (madeDuringSwitch && session !== projectSessionEpoch()) return undefined;
+    return stillTheProjectItWasMadeIn(madeFor, session) ? write(madeFor) : undefined;
+  });
 }
 
 /**
@@ -108,6 +124,12 @@ export const PROJECT_SETTING_FLUSH_TIMEOUT_MS = 2000;
  * unsent; one already sent lands as it would have. With nothing queued it returns at once and arms no timer.
  */
 export function flushProjectSettingWrites(timeoutMs = PROJECT_SETTING_FLUSH_TIMEOUT_MS): Promise<void> {
+  // [#576 W50-NF2] From here until the switch decides, a write made waits for it.
+  const decided = switchesSoFarDecided();
+  flushedSwitchesDecided = decided;
+  void decided.then(() => {
+    if (flushedSwitchesDecided === decided) flushedSwitchesDecided = null;
+  });
   const pending = [...projectSettingKeys].flatMap((key) => {
     const tail = tails.get(key);
     return tail ? [tail] : [];
