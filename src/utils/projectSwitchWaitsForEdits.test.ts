@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { runSerialized } from '../store/mutationQueue';
+import { switchUnderWay } from '../store/switchGate';
 import { runProjectSwitch } from './projectTransition';
 import { deferred, microtasks } from '../test/factories/async';
 
@@ -76,5 +77,36 @@ describe('runProjectSwitch', () => {
     });
     await expect(failing).rejects.toThrow('edit refused');
     await expect(runProjectSwitch(async () => 'switched')).resolves.toBe('switched');
+  });
+
+  it('releases the switch gate when superseding the running switch throws (#576 RVF-c-A1-3)', async () => {
+    const running = deferred();
+    const first = runProjectSwitch(
+      async () => {
+        await running.promise;
+        return 'first';
+      },
+      {
+        onSuperseded: () => {
+          throw new Error('onSuperseded failed');
+        },
+      },
+    );
+    await microtasks(10); // the first switch is running (started)
+
+    let thrown: unknown = null;
+    try {
+      await runProjectSwitch(async () => 'second');
+    } catch (e) {
+      thrown = e;
+    }
+    running.resolve();
+    await first;
+    await microtasks(10);
+
+    expect(String(thrown)).toContain('onSuperseded failed');
+    // Every later save and edit is refused while a switch is "under way"; a throw
+    // must not leave that state behind.
+    expect(switchUnderWay(), 'the gate is released').toBe(false);
   });
 });

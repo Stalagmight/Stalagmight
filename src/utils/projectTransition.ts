@@ -83,7 +83,14 @@ export function runProjectSwitch<T>(
   if (options.dedupKey !== undefined && newest?.key === options.dedupKey) return newest.promise as Promise<T>;
 
   const release = noteSwitchRequested();
-  for (const earlier of [...unsettled]) if (!earlier.drop()) earlier.supersede();
+  // [#576 RVF-c-A1-3] A throw from an earlier switch's `dropped` / `onSuperseded` must not
+  // leave this switch's gate held: every later save and edit would be refused for good.
+  try {
+    for (const earlier of [...unsettled]) if (!earlier.drop()) earlier.supersede();
+  } catch (e) {
+    release();
+    throw e;
+  }
   const before = Promise.all([replacementTail, mutationsSettled(), savesSettled(), switchTail]);
 
   let superseded = false;
