@@ -86,13 +86,54 @@ fn a_point_that_only_changes_elevation_is_kept() {
     assert!(warnings.is_empty(), "{warnings:?}");
 }
 
+/// [#576 RVF-d-5] It says so by name, not only by counting the repeats: on the
+/// file's notes, which the selection dialog lists before the import, and so
+/// first on the receipt.
 #[test]
 fn a_track_of_one_repeated_point_imports_nothing_and_says_so() {
     let gpx = track(&[(0.0, Some(1.0)), (0.0, Some(1.0)), (0.0, Some(1.0))]);
+    println!("[RVF-d-5] preview lines: {:?}", gpx.warnings);
     let (configs, warnings) = convert(&gpx, &[]);
+    println!("[RVF-d-5] receipt lines: {warnings:?}");
     assert!(configs.is_empty(), "{configs:?}");
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].starts_with("2 repeated GPS points skipped"));
+    let said = "Track 'T' imports nothing: all 3 of its points are at the same position and \
+                elevation.";
+    assert_eq!(gpx.warnings.as_deref(), Some(&[said.to_string()][..]));
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    assert_eq!(warnings[0], said);
+    assert!(warnings[1].starts_with("2 repeated GPS points skipped"));
+}
+
+/// [#576 RVF-d-5] Each track segment and route that imports nothing is named
+/// where the file has it, and only those.
+#[test]
+fn every_segment_and_route_that_imports_nothing_is_named() {
+    let still = r#"<trkpt lat="0" lon="0"><ele>5</ele></trkpt>"#.repeat(2);
+    let moving = r#"<trkpt lat="0" lon="0"/><trkpt lat="0" lon="0.0001"/>"#;
+    let xml = format!(
+        r#"<?xml version="1.0"?><gpx version="1.1">
+        <trk><name>Long</name><trkseg>{moving}</trkseg></trk>
+        <trk><name>Entrance</name><trkseg>{moving}</trkseg><trkseg>{still}</trkseg></trk>
+        <trk><trkseg>{still}</trkseg></trk>
+        <rte><rtept lat="1" lon="1"><ele>2</ele></rtept><rtept lat="1" lon="1"><ele>2</ele></rtept></rte>
+        </gpx>"#
+    );
+    let gpx = parse_gpx_str(&xml).unwrap();
+    println!("[RVF-d-5] preview lines: {:?}", gpx.warnings);
+    let lines: Vec<&str> = gpx
+        .warnings
+        .iter()
+        .flatten()
+        .map(|line| line.split(':').next().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "Track 'Entrance' segment 2 imports nothing",
+            "Track 3 imports nothing",
+            "Route 1 imports nothing"
+        ]
+    );
 }
 
 #[test]

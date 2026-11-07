@@ -2504,7 +2504,10 @@ before Import is pressed, or on the import receipt after.
   would make a zero-length shot, and the receipt counts them in one line
   ("N repeated GPS points skipped"). A station the placement step chose by
   point index is renumbered past the dropped points. A track whose points all
-  repeat the first imports nothing.
+  repeat the first imports nothing, and the file's notes name it ("Track 'T'
+  imports nothing: all N of its points are at the same position and
+  elevation."), so the selection step lists the line before the import and
+  the receipt leads with it.
 - **Compass LRUD.** Any negative passage dimension is the "not measured"
   marker, not only `-1` and below, so a marker that went through a unit
   conversion (`-0.30`) does not import as a negative dimension.

@@ -281,7 +281,86 @@ pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
     }
 
     bound_elevations(&mut gpx);
+    note_lines_that_import_nothing(&mut gpx);
     Ok(gpx)
+}
+
+/// How a note names a waypoint, track or route: its name, else its place in
+/// the file.
+fn named(kind: &str, name: Option<&String>, index: usize) -> String {
+    match name {
+        Some(n) => format!("{kind} '{}'", crate::models::sanitize_display_text(n, 64)),
+        None => format!("{kind} {}", index + 1),
+    }
+}
+
+/// The most tracks and routes [`note_lines_that_import_nothing`] names one by
+/// one; the rest are counted in one more line.
+const MAX_IMPORTS_NOTHING_NOTES: usize = 20;
+
+/// [#576 RVF-d-5] A track segment or route whose every point repeats the one
+/// before it (a GPS left logging at a cave entrance) converts to no shot, so it
+/// imports nothing. The file's notes say so, which the selection dialog shows
+/// and the import receipt leads with, rather than the dialog listing the track
+/// and the import dropping it unsaid. The test is the converter's own
+/// ([`shots_from_points`]), so the note and the import cannot disagree.
+fn note_lines_that_import_nothing(gpx: &mut GpxFile) {
+    let imports_nothing = |points: Vec<(f64, f64, Option<f64>)>| {
+        points.len() >= 2 && shots_from_points(&points, false).shots.is_empty()
+    };
+    let mut nothing: Vec<(String, usize)> = Vec::new();
+    for (ti, trk) in gpx.tracks.iter().enumerate() {
+        for (si, seg) in trk.segments.iter().enumerate() {
+            let points = seg
+                .points
+                .iter()
+                .map(|p| (p.latitude, p.longitude, p.elevation))
+                .collect();
+            if imports_nothing(points) {
+                let track = named("Track", trk.name.as_ref(), ti);
+                let at = if trk.segments.len() > 1 {
+                    format!("{track} segment {}", si + 1)
+                } else {
+                    track
+                };
+                nothing.push((at, seg.points.len()));
+            }
+        }
+    }
+    for (ri, rte) in gpx.routes.iter().enumerate() {
+        let points = rte
+            .points
+            .iter()
+            .map(|p| (p.latitude, p.longitude, p.elevation))
+            .collect();
+        if imports_nothing(points) {
+            nothing.push((named("Route", rte.name.as_ref(), ri), rte.points.len()));
+        }
+    }
+    if nothing.is_empty() {
+        return;
+    }
+    let more = nothing.len().saturating_sub(MAX_IMPORTS_NOTHING_NOTES);
+    let mut lines: Vec<String> = nothing
+        .into_iter()
+        .take(MAX_IMPORTS_NOTHING_NOTES)
+        .map(|(at, points)| {
+            let all = if points == 2 {
+                "both".to_string()
+            } else {
+                format!("all {points}")
+            };
+            format!(
+                "{at} imports nothing: {all} of its points are at the same position and elevation."
+            )
+        })
+        .collect();
+    if more > 0 {
+        lines.push(format!(
+            "{more} more tracks or routes import nothing for the same reason."
+        ));
+    }
+    gpx.warnings.get_or_insert_with(Vec::new).extend(lines);
 }
 
 /// An elevation beyond the limit no real survey reaches reads as missing
@@ -295,10 +374,6 @@ fn bound_elevations(gpx: &mut GpxFile) {
         *ele = None;
         Some(e)
     }
-    let named = |kind: &str, name: Option<&String>, index: usize| match name {
-        Some(n) => format!("{kind} '{}'", crate::models::sanitize_display_text(n, 64)),
-        None => format!("{kind} {}", index + 1),
-    };
     let mut notes = BoundNotes::default();
     let missing = "read as missing";
     for (i, wpt) in gpx.waypoints.iter_mut().enumerate() {
