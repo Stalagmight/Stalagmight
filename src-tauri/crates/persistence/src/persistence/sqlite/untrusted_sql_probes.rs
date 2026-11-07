@@ -132,7 +132,11 @@ pub fn refusal_failures(conn: &Connection, label: &str) -> Vec<String> {
         // authorizer's code is SQLITE_AUTH, except for a function call: SQLite
         // reports that refusal as SQLITE_ERROR (resolve.c sets it over
         // SQLITE_AUTH when it writes the message). SQLITE_ERROR is also what a
-        // table or function this SQLite lacks gets.
+        // table or function this SQLite lacks gets, and what a call that cannot
+        // prepare anywhere gets (a wrong argument count, which SQLite reports
+        // before it asks the authorizer). So where this SQLite has the
+        // function, the same SQL must prepare on a plain connection: only then
+        // is the failure here the authorizer's.
         let outcome = match conn.prepare(sql) {
             Ok(_) => Ok(run(conn, sql)),
             Err(e) => Err(e),
@@ -144,7 +148,8 @@ pub fn refusal_failures(conn: &Connection, label: &str) -> Vec<String> {
             .is_some_and(|code| {
                 code == ErrorCode::AuthorizationForStatementDenied
                     || (code == ErrorCode::Unknown
-                        && (!present || matches!(needs, Needs::Function(_))))
+                        && (!present
+                            || (matches!(needs, Needs::Function(_)) && plain_prepares(sql))))
             });
         let what = if refused { "refused" } else { "NOT REFUSED" };
         let has = match needs {
@@ -177,6 +182,11 @@ fn code_of(e: &rusqlite::Error) -> Option<ErrorCode> {
         }
         _ => None,
     }
+}
+
+/// Whether `sql` prepares on a plain connection, with no authorizer.
+fn plain_prepares(sql: &str) -> bool {
+    Connection::open_in_memory().unwrap().prepare(sql).is_ok()
 }
 
 /// Whether a plain connection, with no authorizer, has `needs`.
