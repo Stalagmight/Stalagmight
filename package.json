@@ -41,6 +41,8 @@
     "coverage:merge": "node scripts/merge-coverage.mjs",
     "gen:ipc-types": "cargo run --manifest-path src-tauri/Cargo.toml --features ipc-typegen --example gen_ipc_types",
     "gen:third-party": "node scripts/gen-third-party-licenses.mjs",
+    "gen:updater-manifest": "node scripts/gen-updater-manifest.mjs",
+    "gen:updater-manifest:test": "node scripts/gen-updater-manifest.test.mjs",
     "test:all": "pnpm test && pnpm test:ui",
     "release": "./scripts/release.sh",
     "typecheck:agent": "tsc -p tsconfig.agent.json",

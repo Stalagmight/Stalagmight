@@ -737,6 +737,92 @@ printf '%s\n' '# Changelog' '' '## [Unreleased]' '' > "$WORK/empty.md"
 assert "empty changelog still produces a body" \
   bash -c 'CHANGELOG='"$WORK"'/empty.md bash '"$NOTES"' v1.2.3 | grep -q "Release v1.2.3"'
 
+echo "== case 20: a weekly-shaped tag is refused, not hand-tagged =="
+D=$(fresh_clone case20)
+CUR=$(version_of "$D")
+if out=$("$D/scripts/release-tag.sh" "v${CUR}-weekly.20260817" 2>&1); then
+  fail "tagged a weekly-shaped tag by hand"
+else
+  pass "refused a weekly-shaped tag"
+  assert "message names weekly tags as reserved for the automated pipeline" \
+    bash -c 'printf "%s" "$1" | grep -q "automated weekly pipeline"' _ "$out"
+  refute "no tag created" has_tag "$D" "v${CUR}-weekly.20260817"
+fi
+
+# next_patch X.Y.Z -> X.Y.(Z+1), for fixturing a weekly tag with a base
+# strictly above the version under test.
+next_patch() {
+  local maj min patch
+  read -r maj min patch <<<"$(printf '%s' "$1" | tr . ' ')"
+  printf '%s.%s.%s' "$maj" "$min" "$((patch + 1))"
+}
+
+echo "== case 21: a stable tag warns when a STRICTLY HIGHER weekly tag exists =="
+D=$(fresh_clone case21)
+CUR=$(version_of "$D")
+NEXT=$(next_patch "$CUR")
+git -C "$D" tag "v${NEXT}-weekly.20260817"
+if out=$("$D/scripts/release-tag.sh" "v$CUR" --dry-run 2>&1); then
+  assert "warns about the higher weekly tag" \
+    bash -c 'printf "%s" "$1" | grep -q "weekly tag v'"$NEXT"'-weekly.20260817 already carries"' _ "$out"
+  assert "explains weekly-track users will not be offered it" \
+    bash -c 'printf "%s" "$1" | grep -q "will not be offered"' _ "$out"
+else
+  fail "a stable tag with a higher weekly tag was refused outright"
+fi
+
+echo "== case 21-equal: an EQUAL-base weekly tag does not warn (convergence, not supersession) =="
+D=$(fresh_clone case21equal)
+CUR=$(version_of "$D")
+git -C "$D" tag "v${CUR}-weekly.20260817"
+if out=$("$D/scripts/release-tag.sh" "v$CUR" --dry-run 2>&1); then
+  refute "no supersession warning at an equal base" \
+    bash -c 'printf "%s" "$1" | grep -q "already carries"' _ "$out"
+else
+  fail "a stable tag with only an equal-base weekly tag was refused outright"
+fi
+
+echo "== case 21b: a stable tag stays silent when no weekly tag supersedes it =="
+D=$(fresh_clone case21b)
+CUR=$(version_of "$D")
+if out=$("$D/scripts/release-tag.sh" "v$CUR" --dry-run 2>&1); then
+  refute "no supersession warning with no weekly tags at all" \
+    bash -c 'printf "%s" "$1" | grep -q "already carries"' _ "$out"
+else
+  fail "a stable tag with no weekly tags was refused outright"
+fi
+
+echo "== case 21c: a lower weekly tag does not trigger the supersession warning =="
+D=$(fresh_clone case21c)
+CUR=$(version_of "$D")
+git -C "$D" tag "v0.0.1-weekly.20260101"
+if out=$("$D/scripts/release-tag.sh" "v$CUR" --dry-run 2>&1); then
+  refute "no supersession warning from a lower weekly tag" \
+    bash -c 'printf "%s" "$1" | grep -q "already carries"' _ "$out"
+else
+  fail "a stable tag with only a lower weekly tag was refused outright"
+fi
+
+echo "== case 22: the 9->10 boundary is compared numerically, not lexically =="
+# All three pre-PR reviewers flagged this: a lexical `sort` (or a lexical
+# comparison anywhere in the scan) puts "0.5.10" ahead of "0.5.9" for the
+# wrong reason (a leading '1' sorts before '9'), which can either miss a
+# genuinely higher weekly base or short-circuit on the wrong tag first.
+# Pins the exact scenario: weekly base 0.5.10 exists, tagging stable v0.5.9
+# must still warn.
+D=$(fresh_clone case22)
+if ! "$D/scripts/release.sh" 0.5.9 --no-edit --no-tag >/dev/null 2>&1; then
+  fail "could not fixture the tree at 0.5.9 to set up case 22"
+else
+  git -C "$D" tag "v0.5.10-weekly.20260817"
+  if out=$("$D/scripts/release-tag.sh" v0.5.9 --dry-run 2>&1); then
+    assert "warns about the numerically (not lexically) higher weekly base" \
+      bash -c 'printf "%s" "$1" | grep -q "weekly tag v0.5.10-weekly.20260817 already carries"' _ "$out"
+  else
+    fail "v0.5.9 with a v0.5.10-weekly tag present was refused outright"
+  fi
+fi
+
 echo
 echo "release tooling: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

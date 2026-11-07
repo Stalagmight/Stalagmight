@@ -51,6 +51,15 @@ jobs:
         run: |
           node scripts/check-updater-pubkey.test.mjs
           node scripts/check-updater-pubkey.mjs
+      # scripts/gen-updater-manifest.mjs has no live-repo invariant to check
+      # (it runs against release artifacts that only exist later in this same
+      # workflow), so unlike the pubkey gate above there is only a fixture
+      # test to run here - but it has to run here regardless: a tag push must
+      # not reach the paid build matrix carrying a broken generator, only to
+      # fail once the `release` job finally invokes it after every platform
+      # has already built.
+      - name: Updater manifest generator - fixture test
+        run: node scripts/gen-updater-manifest.test.mjs
       - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
@@ -299,14 +308,16 @@ jobs:
           $SUM * > "$RUNNER_TEMP/sums"
           mv "$RUNNER_TEMP/sums" "SHA256SUMS-${{ matrix.name }}"
           cat "SHA256SUMS-${{ matrix.name }}"
-      # Job-internal record of which macOS signing path ran, logged now for
-      # the run's own record. Not consumed by anything yet - the
-      # updater-manifest generation step (a later PR in the #579 arc) will
-      # read it to decide whether the macOS build enters the manifest at
-      # all. Written after the checksum step on purpose: it must not appear
-      # in SHA256SUMS-macos (nothing downloads it, so it has no checksum to
-      # verify), and the release job deletes it before `gh release create
-      # release-artifacts/*` so it never becomes a published asset.
+      # Job-internal record of which macOS signing path ran. Consumed by the
+      # release job's "Publish updater manifest" step: only "developer-id"
+      # lets the macOS build into the updater manifest at all - "adhoc" is
+      # excluded outright, never treated as a lesser-but-acceptable variant,
+      # because the updater channel is trusted and an ad-hoc build carries no
+      # verifiable identity. Written after the checksum step on purpose: it
+      # must not appear in SHA256SUMS-macos (nothing downloads it, so it has
+      # no checksum to verify), and the release job deletes it before
+      # `gh release create release-artifacts/*` so it never becomes a
+      # published asset.
       - name: Record macOS signing marker
         if: matrix.os == 'macos-latest'
         shell: bash
@@ -346,6 +357,33 @@ jobs:
             echo "on=true" >> "$GITHUB_OUTPUT"
           else
             echo "on=false" >> "$GITHUB_OUTPUT"
+          fi
+      # Preflight (#579), runs BEFORE `gh release create` below makes this
+      # tag's own release public. The "Publish updater manifest" step's own
+      # `gh release view updater` check runs far too late to prevent the bad
+      # outcome: by the time it fires, the versioned release is already live,
+      # so a missing/renamed rolling `updater` release then strands a public
+      # release with no manifest update - and a re-run dies on `gh release
+      # create` refusing a tag that already exists. Checking here means
+      # nothing has been published yet if `updater` needs recreating.
+      - name: Preflight rolling updater release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATER_ON: ${{ steps.updater.outputs.on }}
+        run: |
+          if [ "$UPDATER_ON" != "true" ]; then
+            exit 0
+          fi
+          TAG="${GITHUB_REF_NAME}"
+          # Same strict shapes the publish step below derives a track from:
+          # a tag that matches neither publishes no manifest, so there is
+          # nothing to preflight for it.
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-weekly\.[0-9]{8}$ ]] || [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            if ! gh release view updater >/dev/null 2>&1; then
+              echo "::error::the rolling 'updater' GitHub release does not exist, but tag $TAG will publish an updater manifest. See docs/releasing.md (Updater manifests) to create it once, then re-run - before anything else in this job becomes public."
+              exit 1
+            fi
           fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -391,21 +429,30 @@ jobs:
         env:
           UPDATER_ON: ${{ steps.updater.outputs.on }}
       # Job-internal: records which macOS signing path the build job used
-      # (see "Record macOS signing marker" above). Logged for the release
-      # run's own record - not consumed by anything yet, that lands with the
-      # updater-manifest generation step in a later PR of the #579 arc.
-      # Deleted here regardless, so it never rides along with
+      # (see "Record macOS signing marker" above). Captured into this step's
+      # own output BEFORE the file is removed - the "Publish updater
+      # manifest" step below is the consumer, deciding --include-darwin by
+      # whether the value is EXACTLY "developer-id" (never merely
+      # non-empty: "adhoc" must exclude the macOS build, not include it).
+      # A missing marker is only a warning here, unconditionally - the
+      # publish step is what turns that into a hard failure, and only when
+      # updater artifacts are actually enabled for this tag; see there.
+      # Deleted regardless, so it never rides along with
       # `gh release create release-artifacts/*` below - it is not an
       # installable artifact and nobody downloads it.
       - name: Consume macOS signing marker
+        id: macos-signing
         shell: bash
         working-directory: release-artifacts
         run: |
           if [ -f MACOS-SIGNED ]; then
-            echo "macOS signing mode: $(cat MACOS-SIGNED)"
+            MODE="$(cat MACOS-SIGNED)"
+            echo "macOS signing mode: $MODE"
+            echo "mode=$MODE" >> "$GITHUB_OUTPUT"
             rm MACOS-SIGNED
           else
             echo "::warning::MACOS-SIGNED marker missing from release artifacts"
+            echo "mode=" >> "$GITHUB_OUTPUT"
           fi
       # Same script you can run locally to preview the body before tagging, so
       # what gets published is never a surprise.
@@ -430,3 +477,109 @@ jobs:
             --notes-file "$RUNNER_TEMP/release-body.md" \
             "${PRERELEASE[@]}" \
             release-artifacts/*
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      # Updater manifests (#579): the rolling `updater` GitHub release carries
+      # latest-stable.json / latest-weekly.json, each overwritten on every
+      # publish of that track. An -rc* tag is a candidate, never a track, so it
+      # updates neither file - see docs/releasing.md (Updater manifests) for the
+      # full flow, including how to repoint or roll one back.
+      - name: Publish updater manifest
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATER_ON: ${{ steps.updater.outputs.on }}
+          MACOS_MODE: ${{ steps.macos-signing.outputs.mode }}
+        run: |
+          if [ "$UPDATER_ON" != "true" ]; then
+            echo "::notice::updater artifacts are disabled (no plugins.updater.pubkey committed yet - issue #579) - skipping updater manifest publish."
+            exit 0
+          fi
+          TAG="${GITHUB_REF_NAME}"
+          # Strict, anchored shapes - not a `*-weekly.*` substring match, which
+          # let a malformed tag like v0.5.1-weekly.oops still clobber
+          # latest-weekly.json. A tag matching neither shape publishes to
+          # neither track.
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-weekly\.[0-9]{8}$ ]]; then
+            TRACK=weekly
+          elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            TRACK=stable
+          else
+            echo "::notice::no manifest for tag $TAG (matches neither the strict weekly nor the strict stable shape)."
+            exit 0
+          fi
+          VERSION="${TAG#v}"
+          # The manifest version has to match what was actually baked into
+          # these artifacts, or updater clients loop forever: version-baking
+          # from the tag currently comes from whatever the tree already said
+          # at build time (proper version-baking lands via workflow_call in a
+          # later PR), so a directly-pushed weekly tag can build, say, 0.5.0
+          # while this manifest claims 0.5.1-weekly.<date>. An updater on
+          # that 0.5.0-baked "weekly" install would see 0.5.1-weekly.<date>
+          # as newer, download it, and relaunch the exact same 0.5.0 build -
+          # forever. Parse the version actually baked into the artifacts
+          # (their filenames encode it, e.g. Stalagmight_0.5.1_amd64.AppImage
+          # - the same pattern the completeness check above globs) and
+          # refuse to publish on any mismatch, rather than trusting the tag.
+          ARTIFACT_VERSIONS=$(find release-artifacts -maxdepth 1 -type f -name 'Stalagmight_*' \
+            | sed -E 's#.*/Stalagmight_([0-9]+\.[0-9]+\.[0-9]+)_.*#\1#' \
+            | sort -u)
+          ARTIFACT_VERSION_COUNT=$(printf '%s\n' "$ARTIFACT_VERSIONS" | grep -c . || true)
+          if [ "${ARTIFACT_VERSION_COUNT:-0}" -eq 0 ]; then
+            echo "::error::could not parse a built app version from any release artifact filename (expected Stalagmight_X.Y.Z_...)."
+            exit 1
+          fi
+          if [ "$ARTIFACT_VERSION_COUNT" -gt 1 ]; then
+            echo "::error::release artifacts disagree on their built version: $(printf '%s, ' $ARTIFACT_VERSIONS)"
+            exit 1
+          fi
+          ARTIFACT_VERSION="$ARTIFACT_VERSIONS"
+          if [ "$TRACK" = "weekly" ]; then
+            TAG_BASE="${TAG%-weekly.*}"
+            TAG_BASE="${TAG_BASE#v}"
+            if [ "$TAG_BASE" != "$ARTIFACT_VERSION" ]; then
+              echo "::error::weekly tag $TAG has base $TAG_BASE but the built artifacts are version $ARTIFACT_VERSION - refusing to publish a mismatched weekly manifest (see the comment above for the update loop this prevents)."
+              exit 1
+            fi
+          elif [ "$VERSION" != "$ARTIFACT_VERSION" ]; then
+            echo "::error::tag $TAG is version $VERSION but the built artifacts are version $ARTIFACT_VERSION - refusing to publish a mismatched manifest."
+            exit 1
+          fi
+          # Only a Developer ID build enters the manifest. "adhoc" is not a
+          # lesser flavor of the same trust level - it is what every macOS
+          # build gets when no signing identity is configured, and shipping
+          # it through the trusted updater channel would let the updater
+          # replace a notarized install with an ad-hoc one on every existing
+          # user's machine. An empty MODE (see below) is refused outright,
+          # never silently treated as "no macOS build".
+          if [ -z "$MACOS_MODE" ]; then
+            echo "::error::UPDATER_ON is true but the MACOS-SIGNED marker never reached this job - the build job either did not run the macOS leg or something is structurally wrong. Refusing to guess; a silent default here would publish a manifest with no macOS entry (or the wrong one) on an otherwise-green run."
+            exit 1
+          fi
+          INCLUDE_DARWIN=false
+          if [ "$MACOS_MODE" = "developer-id" ]; then
+            INCLUDE_DARWIN=true
+          else
+            echo "::warning::macOS build was ad-hoc signed (not Developer ID) - excluding it from the updater manifest. Ad-hoc artifacts must never reach the trusted update channel."
+          fi
+          OUT="release-artifacts/latest-${TRACK}.json"
+          node scripts/gen-updater-manifest.mjs \
+            --version "$VERSION" \
+            --tag "$TAG" \
+            --dir release-artifacts \
+            --notes-file "$RUNNER_TEMP/release-body.md" \
+            --out "$OUT" \
+            --include-darwin "$INCLUDE_DARWIN"
+          # The rolling release is created once, by hand, per issue #579 - this
+          # workflow only ever uploads to it, never creates it, so a missing
+          # release fails loudly instead of silently doing nothing useful.
+          # Already checked by the "Preflight rolling updater release" step
+          # above, before `gh release create` made this tag's release public -
+          # this is a backup for the race where it disappears in between.
+          if ! gh release view updater >/dev/null 2>&1; then
+            echo "::error::the rolling 'updater' GitHub release does not exist. See docs/releasing.md (Updater manifests) to create it once, then re-run this job."
+            exit 1
+          fi
+          gh release upload updater "$OUT" --clobber
+          echo "Published $OUT to the 'updater' release (${TRACK} track)."
