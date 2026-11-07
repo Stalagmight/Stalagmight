@@ -43,22 +43,22 @@ const METRIC_COUNT = 'a metric value: ctx.metric / ctx.setMetric only ever store
 /** A skip reason from an in-page step script of exportFuzzActions.ts. */
 const EXPORT_SKIP =
   "an ExportSkip word: exportFuzzActions.ts's in-page scripts return only the literals of `ExportSkip` " +
-  "(exportFuzzActions.ts:319-326: absent, not-actionable, option-absent, no-change, ..., unconsumed) or null";
+  "(exportFuzzActions.ts:327-334: absent, not-actionable, option-absent, no-change, ..., unconsumed) or null";
 
 /** A screen id from the in-page screen digest. */
 const SCREEN_ID =
   "a ScreenId: lib/importScreenDigest.ts's in-page classifier assigns only its own literals (importScreenDigest.ts " +
-  ':319-355, idle ... unknown), never a store or DOM value';
+  ':327-363, idle ... unknown), never a store or DOM value';
 
 /** A verdict from the undo fuzzers' in-page step script. */
 const STEP_VERDICT =
   "a step verdict: undoRedoFuzzBridge.ts's in-page step script sets only 'recorded' | 'equal' | 'differ' | " +
-  "'unexpected' (undoRedoFuzzBridge.ts:201, 366-406)";
+  "'unexpected' (undoRedoFuzzBridge.ts:202, 367-407)";
 
 /** A trace step's kind, validated by `readTrace`. */
 const STEP_KIND =
   "a trace step's kind after readTrace (via openReplay): lib/fuzzTrace.ts validateStep refuses any kind not in " +
-  'STEP_KINDS (fuzzTrace.ts:938), so it is one of that set';
+  'STEP_KINDS (fuzzTrace.ts:942), so it is one of that set';
 
 /** A message an oracle error class carries: its own construction site is checked in lib/. */
 const ORACLE_ERROR =
@@ -106,7 +106,7 @@ export const GROUP: SiteGroup = {
       'checkpoint: name':
         'a checkpoint name: every ctx.checkpoint call passes a string literal (shareableRunnerOutput.test.ts checks it)',
       'path.join(shotsDir, `${name}.png`)':
-        'the checkpoint screenshot path <session>/journeys/<journey>/<literal name>.png (framework.ts:64, 83): the ' +
+        'the checkpoint screenshot path <session>/journeys/<journey>/<literal name>.png (framework.ts:65, 83): the ' +
         'progress line prints through shareableProgressLine -> foldLocalPaths',
     },
     'e2e/agent/journeys/newProjectFromDmp.ts': {
@@ -116,7 +116,7 @@ export const GROUP: SiteGroup = {
         "a move label `click <test id>` built from primaryAction's literal test ids (newProjectFromDmp.ts:75-121)",
       'outcome.reason':
         "a SkipReason word: importDialogBridge.ts's in-page step script sets only the literals of SkipReason " +
-        '(importDialogBridge.ts:309-315, 600-690) or null',
+        '(importDialogBridge.ts:311-317, 545-690) or null',
     },
     // ---- scenarios ----------------------------------------------------------
     'e2e/agent/scenarios/common.ts': {
@@ -139,11 +139,11 @@ export const GROUP: SiteGroup = {
         'number (exportRoundtripFuzz.ts assertIntegrity callers)',
       'afterLoad.appMode':
         "uiStore.appMode, typed AppMode = 'survey' | 'plan' | 'export' (src/store/uiStore.ts:56), read by " +
-        "readModeSnapshot (exportFuzzActions.ts:460-485, 'survey' when null)",
+        "readModeSnapshot (exportFuzzActions.ts:461-486, 'survey' when null)",
       'JSON.stringify(options)': JSON_AFTER_COLON,
       'JSON.stringify(leftover.slice(0, 8))': JSON_AFTER_COLON,
       "enabledFormats().join(',')":
-        'enabledFormats keeps only entries of ALL_FORMATS and refuses any other (exportFuzzActions.ts:60-79)',
+        'enabledFormats keeps only entries of ALL_FORMATS and refuses any other (exportFuzzActions.ts:61-80)',
       'readImageOptions: name': 'an OracleName: runOracle dispatches on ORACLE_NAMES members only (oracleFromStep checks a trace\'s)',
       'readExtension: name': 'an OracleName: runOracle dispatches on ORACLE_NAMES members only (oracleFromStep checks a trace\'s)',
       "ORACLE_NAMES.join(', ')": "the scenario's own oracle table (exportRoundtripFuzz.ts ORACLE_NAMES)",
@@ -163,9 +163,9 @@ export const GROUP: SiteGroup = {
       'outcome.reason': EXPORT_SKIP,
       'color.reason': EXPORT_SKIP,
       'answered.reason': EXPORT_SKIP,
-      'applyFormControls: testid': 'a test id from the literal `checkboxes` table (exportRoundtripFuzz.ts:933-940)',
+      'applyFormControls: testid': 'a test id from the literal `checkboxes` table (exportRoundtripFuzz.ts:975-982)',
       'performExport: skipped':
-        "runStoreExport's skip word: 'no-dive-route' or 'preview-has-no-store-route' (exportRoundtripFuzz.ts:953-983)",
+        "runStoreExport's skip word: 'no-dive-route' or 'preview-has-no-store-route' (exportRoundtripFuzz.ts:994-1028)",
       'draw.format':
         'an ExportFormat: drawExport draws from ALL_FORMATS, and drawFromStep refuses a trace format isExportFormat ' +
         'rejects (#576 W51)',
@@ -186,7 +186,7 @@ export const GROUP: SiteGroup = {
     'e2e/agent/scenarios/fractalStress.ts': {
       'checkBudget: phase':
         "a phase label: every caller passes a literal or `<literal> (<index>/<count>)` with numbers (fractalStress.ts " +
-        '71, 83, 87, 129, 132, 135, 160)',
+        '72, 84, 88, 131, 134, 137, 162)',
       'run: iterations': ITERATIONS,
       'sections.reduce((n, s) => n + s.shots.length, 0)': 'a sum of array lengths (the generated survey\'s shot count)',
       'run: index': LOOP_COUNT,
@@ -195,9 +195,9 @@ export const GROUP: SiteGroup = {
         '(fractal.ts:112, 158)',
       'sections[index]?.name': 'the generated name `S<n>` the store was expected to hold (e2e/lib/fractal.ts:112, 158)',
       'path.join(saveDir, `fractal-iter${iterations}.stalx`)':
-        "the scenario's own temp file <os.tmpdir()>/fractal-stress-XXXXXX/fractal-iter<N>.stalx (fractalStress.ts:142-143); " +
+        "the scenario's own temp file <os.tmpdir()>/fractal-stress-XXXXXX/fractal-iter<N>.stalx (fractalStress.ts:144-145); " +
         'the error prints through scenarioFailOutput -> shareableFailureText -> foldLocalPaths',
-      'verifyAgainstBackend: expectedSections': 'a count: the caller passes sections.length (fractalStress.ts:134)',
+      'verifyAgainstBackend: expectedSections': 'a count: the caller passes sections.length (fractalStress.ts:136)',
       "missing.slice(0, 3).join('; ')":
         'merge keys `<int>-<int>-<int>-<int>` (e2e/lib/fractal.ts normalizeMergeKey:249-260) of integer ids and indices',
       "extra.slice(0, 3).join('; ')":
@@ -238,11 +238,11 @@ export const GROUP: SiteGroup = {
       'escapeFrom: ESCAPE_BUDGET': 'the number 6 (importDialogModel.ts:507 ESCAPE_BUDGET)',
       'err.message': ORACLE_ERROR,
       "verdict.gates.join(' + ')":
-        "exportChordVerdict's gates (lib/importFlowOracles.ts:334-336): the literals 'placementMode active' and " +
+        "exportChordVerdict's gates (lib/importFlowOracles.ts:392-394): the literals 'placementMode active' and " +
         "'dataTableFullScreen', and `activeDialog=\"<shareableTestId>\"`",
       'move.testid':
         'a test id from a fixed set: orphanMove is move.testid only when ORPHAN_ACCEPTS / ORPHAN_DECLINES has it ' +
-        '(importDialogFuzz.ts:654-655), and wizardCommit requires INCOMPLETE_GUARDED_MOVES to have it (:631)',
+        '(importDialogFuzz.ts:663-664), and wizardCommit requires INCOMPLETE_GUARDED_MOVES to have it (:637)',
       'move.value':
         "overlapMode, printed only in the fail() detail (a later line, withheld) and as a metric key behind " +
         'OVERLAP_MODES.includes(overlapMode) (importDialogModel.ts:356; the scanner does not see the check)',
@@ -266,12 +266,12 @@ export const GROUP: SiteGroup = {
       'generator.name': "a generator's literal name from importDialogGenerators.ts's table (`start:picker`, ...)",
       'outcome.skip': "execute's skip word (see `execute: skip`), or the literal 'unknown'",
       'step.kind': STEP_KIND,
-      'digest.ctx': "uiStore.importContext as the digest reads it: 'new-project' | 'existing-project' (importScreenDigest.ts:144)",
+      'digest.ctx': "uiStore.importContext as the digest reads it: 'new-project' | 'existing-project' (importScreenDigest.ts:151)",
       [UNANCHORED_PROBE]:
         "a number: countUnanchoredComponents' in-page script returns a component count, -1 or -2 (importDialogFuzz.ts)",
       'what()':
         "guarded(fn) returns fn(): at its one print, the f1Pushed metric key, fn is checkPushed, which returns a number " +
-        '(lib/importFlowOracles.ts:590-595)',
+        '(lib/importFlowOracles.ts:648-653)',
       "ctx.metrics['file:shape:suggestive']": METRIC_COUNT,
     },
     'e2e/agent/scenarios/importDialogTrace.ts': {
@@ -285,9 +285,9 @@ export const GROUP: SiteGroup = {
     },
     'e2e/agent/scenarios/index.ts': {
       'runScenario: name':
-        'a scenario name: the prints at index.ts:72 and :76 follow the REGISTRY check (the unknown name prints as ' +
+        'a scenario name: the prints at index.ts:96 and :100 follow the REGISTRY check (the unknown name prints as ' +
         'valueShape)',
-      "listScenarios().join(', ')": "the registry's scenario names (index.ts:38-41)",
+      "listScenarios().join(', ')": "the registry's scenario names (index.ts:41-44)",
     },
     'e2e/agent/scenarios/mapStorm.ts': {
       'run: i': LOOP_COUNT,
@@ -321,7 +321,7 @@ export const GROUP: SiteGroup = {
       'run: totalEntries': LOOP_COUNT,
       "[...seen.entries()].map(([v, c]) => `${v}=${c}`).sort().join(' ')":
         'UndoVariant names from VARIANT_BY_COMMAND_TYPE values (undoPersistenceCoverage.ts:80) with their counts',
-      'run: variant': 'an UndoVariant: a VARIANT_BY_COMMAND_TYPE value (undoPersistenceFuzz.ts runIteration :889-894)',
+      'run: variant': 'an UndoVariant: a VARIANT_BY_COMMAND_TYPE value (undoPersistenceFuzz.ts runIteration :894-904)',
       'runIteration: variant': 'an UndoVariant from PLANNED_VARIANTS (undoPersistenceCoverage.ts:860)',
       'runIteration: iteration': LOOP_COUNT,
       'runIteration: top': LOOP_COUNT,
@@ -330,10 +330,10 @@ export const GROUP: SiteGroup = {
       'Object.values(stripped.cleared).reduce((sum, n) => sum + n, 0)':
         'a sum of the row counts stripUndoHistory deleted (lib/fixtures.ts stripUndoHistory, Number(before.count))',
       'readUndoPersistLimit(ctx)':
-        "a number: the config's undo_persist_limit when typeof number, else 20 (lib/undoFuzzHarness.ts:57-63)",
+        "a number: the config's undo_persist_limit when typeof number, else 20 (lib/undoFuzzHarness.ts:58-64)",
       'applyMutation: stepName':
         'a COVERAGE_STEPS name, or `replay:<action>` after assertReplayableMutation checked the action against ' +
-        'REPLAYABLE_MUTATIONS (undoPersistenceFuzz.ts:684, 821-824; lib/undoFuzzHarness.ts:81-88)',
+        'REPLAYABLE_MUTATIONS (undoPersistenceFuzz.ts:691, 830-833; lib/undoFuzzHarness.ts:82-89)',
       'res.verdict': STEP_VERDICT,
       'plan.name': "a COVERAGE_STEPS entry's literal name (undoPersistenceCoverage.ts:399)",
       'plan.variant': "a COVERAGE_STEPS entry's literal UndoVariant (undoPersistenceCoverage.ts:399)",
@@ -348,20 +348,20 @@ export const GROUP: SiteGroup = {
     },
     'e2e/agent/scenarios/undoRedoFuzz.ts': {
       'JSON.stringify(importContext.value)':
-        "uiStore.importContext, typed 'new-project' | 'existing-project' | null (src/store/uiStore.ts:807)",
+        "uiStore.importContext, typed 'new-project' | 'existing-project' | null (src/store/uiStore.ts:817)",
       'fuzzFixture()': FIXTURE,
       'Object.values(stripped.cleared).reduce((sum, n) => sum + n, 0)':
         'a sum of the row counts stripUndoHistory deleted (lib/fixtures.ts stripUndoHistory, Number(before.count))',
-      'init.undoLen': "get_undo_stack's length (undoRedoFuzzBridge.ts:264)",
-      'init.redoLen': "get_redo_stack's length (undoRedoFuzzBridge.ts:265)",
+      'init.undoLen': "get_undo_stack's length (undoRedoFuzzBridge.ts:265)",
+      'init.redoLen': "get_redo_stack's length (undoRedoFuzzBridge.ts:266)",
       'JSON.stringify(stripped.cleared)':
         'UNDO_HISTORY_TABLES names with row counts (lib/fixtures.ts stripUndoHistory: keys from the frozen table list)',
       'JSON.stringify(stripped.missing)': 'UNDO_HISTORY_TABLES names (lib/fixtures.ts stripUndoHistory)',
       'path.resolve(filesRoot)': SESSION_DIR,
       'resolveFileArgs: action': 'a FILE_ARG_ACTIONS member: resolveFileArgs returns before the throw for any other action',
-      'applyTraceStep: tag': '`T<index>` from lib/undoFuzzHarness.ts replayTrace (:141)',
+      'applyTraceStep: tag': '`T<index>` from lib/undoFuzzHarness.ts replayTrace (:144)',
       'walk: direction': "walk's 'undo' | 'redo' parameter",
-      'walk: jumpSteps': 'a number: Math.min(traceStep.steps, reach) or drawJump (undoRedoFuzz.ts:1430, 1459)',
+      'walk: jumpSteps': 'a number: Math.min(traceStep.steps, reach) or drawJump (undoRedoFuzz.ts:1433, 1463)',
       'walk: cursor': LOOP_COUNT,
       'res.verdict': STEP_VERDICT,
       'action.action':
@@ -371,16 +371,16 @@ export const GROUP: SiteGroup = {
       'runFuzz: cursor': LOOP_COUNT,
       [UNDO_TRACE]: TRACE_PATH,
       'runFuzz: replayPath': TRACE_PATH,
-      'streamName()': "streamName's literal 'v1' | 'v2' | 'v3' (undoRedoFuzz.ts:645-648)",
-      'swarm.name': "swarmProfileFor's literal profile name (undoRedoFuzzActions.ts:577-594, 622-628)",
+      'streamName()': "streamName's literal 'v1' | 'v2' | 'v3' (undoRedoFuzz.ts:646-649)",
+      'swarm.name': "swarmProfileFor's literal profile name (undoRedoFuzzActions.ts:577-596, 608-609, 622-628)",
       'ctx.seed': SEED,
       'ctx.metrics.mutations': METRIC_COUNT,
       'ctx.metrics.undos': METRIC_COUNT,
       'ctx.metrics.redos': METRIC_COUNT,
       'ctx.metrics.rejected': METRIC_COUNT,
       'ctx.metrics.noops': METRIC_COUNT,
-      'runFuzz: deepest': 'Math.max of the cursor (undoRedoFuzz.ts:996)',
-      'runFuzz: maxBytes': "Math.max of the in-page snapshot's byte length (undoRedoFuzz.ts:995)",
+      'runFuzz: deepest': 'Math.max of the cursor (undoRedoFuzz.ts:1002)',
+      'runFuzz: maxBytes': "Math.max of the in-page snapshot's byte length (undoRedoFuzz.ts:1001)",
     },
     // ---- e2e/lib ------------------------------------------------------------
     'e2e/lib/env.ts': {
