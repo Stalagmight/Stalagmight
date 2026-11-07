@@ -899,6 +899,11 @@ pub struct OpenFileFlags {
     /// ([`LoadProjectFullResult::unreadable_project_settings`]): each refuses
     /// every save until set again. Empty when they were all read.
     pub unreadable_project_settings: Vec<String>,
+    /// [#576 W81-1] The open project holds changes this file does not
+    /// ([`crate::core::AppState::has_unsaved_changes`]). The frontend's re-read of a
+    /// project the backend kept open (after a webview reload) takes its unsaved mark
+    /// from this, so the close and quit prompts still guard those changes.
+    pub has_unsaved_changes: bool,
 }
 
 // ============================================================================

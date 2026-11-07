@@ -317,6 +317,11 @@ beforeEach(() => {
     if (command === 'load_display_settings') return { ...CAVE_B_ROWS };
     // The displaced origin's station is gone: its anchor names nothing.
     if (command === 'plan_refs_for_anchors') return [null];
+    // [#576 W81-1] The re-read takes the unsaved mark from the backend: CaveB's session
+    // holds nothing its file does not (and CaveB's file has no flags).
+    if (command === 'speleodb_open_file_flags') {
+      return { newerSchemaVersion: null, speleoLinkUnreadable: false, unreadableProjectSettings: [], hasUnsavedChanges: false };
+    }
     return undefined;
   });
   useProjectStore.setState({

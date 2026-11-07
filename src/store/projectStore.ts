@@ -561,21 +561,27 @@ function openedProjectCleared(): Partial<ProjectStore> {
  * reads the backend session's own cells), for the ALREADY_OPEN re-read, which has no
  * load answer. Empty when the read fails: the store keeps what it shows, as the in-place
  * tree swap does (`speleoTreeReplacement.ts`).
+ *
+ * [#576 W81-1] And the unsaved mark: the backend may hold edits its file does not (a
+ * webview reload keeps the project open in the backend, edits and all), so the re-read
+ * takes `isDirty` from it rather than starting clean, and the close and quit prompts
+ * stay armed. A failed read cannot tell, so it leaves the project marked unsaved.
  */
 async function readOpenFileFlags(): Promise<Partial<ProjectStore>> {
   try {
     const flags = await invokeIpc('speleodb_open_file_flags', undefined, {
       purpose: 're-read the open file flags for a project the store did not show',
     });
-    if (!flags) return {};
+    if (!flags) return { isDirty: true };
     return {
       newerSchemaVersion: flags.newerSchemaVersion,
       speleoLinkUnreadable: flags.speleoLinkUnreadable,
       unreadableProjectSettings: flags.unreadableProjectSettings,
+      isDirty: flags.hasUnsavedChanges,
     };
   } catch (e) {
     console.error('Failed to read the open file flags for the ALREADY_OPEN re-read:', e);
-    return {};
+    return { isDirty: true };
   }
 }
 
@@ -1148,6 +1154,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             await get().refreshProjectState();
             // [#576 W71-NF3] And every other reset a load runs for the project it opens,
             // through the same two helpers; the backend has `path` open from its file.
+            // [#576 W81-1] The unsaved mark is the backend's (`flags.isDirty`), counted
+            // like any other (see saveProject).
+            if (flags.isDirty) noteProjectDirtied();
             set({ databaseOpen: true, ...openedProjectCleared(), ...LOAD_REPAIRS_CLEARED, ...flags });
             resetUiForOpenedProject(displaySettings);
           }

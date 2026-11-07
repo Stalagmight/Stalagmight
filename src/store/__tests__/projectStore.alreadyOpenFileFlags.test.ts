@@ -22,6 +22,7 @@ import { invokeIpcMock } from '../../test/factories/ipc';
 import { makeProject } from '../../test/factories/survey';
 import type { OpenFileFlags } from '../../types/ipc.generated';
 import type { Project } from '../../types/project';
+import { guardQuit } from '../../utils/quit';
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 
@@ -39,7 +40,10 @@ const CAVE_B_PROJECT = makeProject({ name: 'CaveB', created_at: '2026-07-01T10:0
 
 const ALREADY_OPEN = { code: 'ALREADY_OPEN', message: 'already open' };
 
-const CLEAN: OpenFileFlags = { newerSchemaVersion: null, speleoLinkUnreadable: false, unreadableProjectSettings: [] };
+/** The file's own flags; the unsaved mark (`hasUnsavedChanges`) is `backendUnsaved`. */
+type FileFlags = Omit<OpenFileFlags, 'hasUnsavedChanges'>;
+
+const CLEAN: FileFlags = { newerSchemaVersion: null, speleoLinkUnreadable: false, unreadableProjectSettings: [] };
 
 /** The backend's state, as `get_project_state_binary` decodes it. */
 const stateOf = (project: Project) => ({
@@ -51,7 +55,9 @@ const stateOf = (project: Project) => ({
 });
 
 /** What `speleodb_open_file_flags` answers for the file the backend has open. */
-let openFileFlags: OpenFileFlags | Error = CLEAN;
+let openFileFlags: FileFlags | Error = CLEAN;
+/** [#576 W81-1] Whether the backend's session holds changes its file does not. */
+let backendUnsaved = false;
 
 const flagsOf = () => {
   const s = useProjectStore.getState();
@@ -66,7 +72,7 @@ interface FieldCase {
   /** The field, as the test title names it. */
   name: string;
   /** CaveB's file has it. */
-  flagged: Partial<OpenFileFlags>;
+  flagged: Partial<FileFlags>;
 }
 
 const FIELDS: FieldCase[] = [
@@ -78,6 +84,7 @@ const FIELDS: FieldCase[] = [
 beforeEach(() => {
   vi.clearAllMocks();
   openFileFlags = CLEAN;
+  backendUnsaved = false;
   loadBinaryMock.mockRejectedValue(ALREADY_OPEN);
   fetchStateMock.mockResolvedValue(stateOf(CAVE_B_PROJECT));
   invokeIpcMock.mockImplementation(async (command: string) => {
@@ -85,7 +92,7 @@ beforeEach(() => {
     if (command === 'load_display_settings') return {};
     if (command === 'speleodb_open_file_flags') {
       if (openFileFlags instanceof Error) throw openFileFlags;
-      return { ...openFileFlags };
+      return { ...openFileFlags, hasUnsavedChanges: backendUnsaved } satisfies OpenFileFlags;
     }
     return undefined;
   });
@@ -163,5 +170,67 @@ describe('a failed flags read', () => {
     expect(useProjectStore.getState().newerSchemaVersion).toBe(7);
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
+  });
+});
+
+/**
+ * [#576 W81-1] The unsaved mark. A webview reload keeps the project open in the
+ * backend with whatever edits it holds; the re-read started the session clean, so
+ * the close and quit prompts let those edits go. It now takes the mark from the
+ * backend (`hasUnsavedChanges`). The reload shape: a fresh page, no project shown.
+ */
+describe('the unsaved mark after a webview reload (#576 W81-1)', () => {
+  beforeEach(() => {
+    useProjectStore.setState({ project: null, databaseOpen: false, isDirty: false });
+    useUIStore.setState({ view: 'global', activeDialog: null, dialogData: null } as never);
+  });
+
+  it('keeps the session unsaved when the backend holds unsaved changes, and the quit guard asks', async () => {
+    backendUnsaved = true;
+
+    const outcome = await useProjectStore.getState().loadProject(CAVE_B);
+
+    expect(outcome).toEqual({ success: true });
+    expect(useProjectStore.getState().project?.file_path).toBe(CAVE_B);
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    // The close and quit flows' guard: it asks before the app goes.
+    expect(guardQuit()).toBe(true);
+    expect(useUIStore.getState().activeDialog).toBe('unsaved-changes');
+  });
+
+  it('starts clean when the backend holds none (the control)', async () => {
+    backendUnsaved = false;
+
+    const outcome = await useProjectStore.getState().loadProject(CAVE_B);
+
+    expect(outcome).toEqual({ success: true });
+    expect(useProjectStore.getState().project?.file_path).toBe(CAVE_B);
+    expect(useProjectStore.getState().isDirty).toBe(false);
+    expect(guardQuit()).toBe(false);
+    expect(useUIStore.getState().activeDialog).toBeNull();
+  });
+
+  it('keeps the session unsaved when the flags cannot be read', async () => {
+    openFileFlags = new Error('synthetic IPC failure');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const outcome = await useProjectStore.getState().loadProject(CAVE_B);
+
+    expect(outcome).toEqual({ success: true });
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    expect(guardQuit()).toBe(true);
+    consoleError.mockRestore();
+  });
+
+  it("does not keep CaveA's mark over CaveB's clean session", async () => {
+    useProjectStore.setState({ project: CAVE_A_PROJECT, databaseOpen: true, isDirty: true });
+    useUIStore.setState({ view: 'single' } as never);
+    backendUnsaved = false;
+
+    const outcome = await useProjectStore.getState().loadProject(CAVE_B);
+
+    expect(outcome).toEqual({ success: true });
+    expect(useProjectStore.getState().project?.file_path).toBe(CAVE_B);
+    expect(useProjectStore.getState().isDirty).toBe(false);
   });
 });

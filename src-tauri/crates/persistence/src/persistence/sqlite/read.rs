@@ -19,6 +19,23 @@ use super::Database;
 const MAX_SHOTS_PER_SECTION: usize = (FEATURE_ID_STRIDE - 1) as usize;
 
 impl Database {
+    /// The `modified_at` stamp the file holds: the one its last save wrote (the
+    /// in-memory project's own stamp at that save, `save_project`), which a load
+    /// reads back as the project's. One small read of the `project` row, parsed
+    /// as the load parses it, so a project opened from this file and not edited
+    /// since compares equal.
+    pub fn stored_modified_at(&self) -> Result<chrono::DateTime<Utc>> {
+        let raw: String = self
+            .conn
+            .query_row("SELECT modified_at FROM project LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .context("Failed to read the stored modified_at")?;
+        Ok(chrono::DateTime::parse_from_rfc3339(&raw)
+            .context("Failed to parse the stored modified_at")?
+            .with_timezone(&Utc))
+    }
+
     /// Load a project from the database
     /// Load only the metadata needed to populate `ProjectMetadata` - no
     /// per-shot deserialization. Uses SQL COUNT/SUM aggregates and a

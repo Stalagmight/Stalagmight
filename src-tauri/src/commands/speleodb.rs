@@ -636,12 +636,17 @@ pub async fn speleodb_link_status(app: AppHandle) -> Result<SpeleoLinkStatus, Co
 /// A peek, like `history_discarded`: cheap, local, no network.
 ///
 /// On the blocking pool like every command (#576 C2): it reads the open
-/// database's link row.
+/// database's link row. [#576 W81-1] Between commands (`settled_read`), since it also
+/// compares the open project's stamp with its file's (`has_unsaved_changes`),
+/// which a save in flight is about to rename over.
 #[tauri::command]
 pub async fn speleodb_open_file_flags<R: tauri::Runtime>(
     app: AppHandle<R>,
 ) -> Result<crate::core::loading::OpenFileFlags, CommandError> {
-    crate::commands::pool::run(app, |state| Ok(state.open_file_flags())).await
+    crate::commands::pool::run(app, |state| {
+        Ok(state.settled_read(|| state.open_file_flags()))
+    })
+    .await
 }
 
 /// Detach the open project from SpeleoDB by MOVING its copy out of the SpeleoDB

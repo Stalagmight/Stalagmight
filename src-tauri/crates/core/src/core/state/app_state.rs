@@ -1442,6 +1442,35 @@ impl AppState {
             speleo_link_unreadable,
             // [#576 RV4-R-S5] The list the slot commit set for the file open now.
             unreadable_project_settings: self.unreadable_project_settings(),
+            has_unsaved_changes: self.has_unsaved_changes(),
+        }
+    }
+
+    /// [#576 W81-1] Whether the open project holds changes its file does not: its
+    /// `modified_at`, which every edit stamps (`Project::touch`, the "marks the
+    /// project dirty" the edit paths speak of), is not the stamp the file stores -
+    /// the one its last save wrote and the open read back
+    /// (`Database::stored_modified_at`).
+    ///
+    /// Only the frontend kept an unsaved mark before, and a webview reload drops
+    /// the page while the backend keeps the project open with its edits: the
+    /// re-read of it (`speleodb_open_file_flags`) takes the mark from here.
+    ///
+    /// A project open with no database, or whose stored stamp cannot be read, has
+    /// no file this session can show holds it, so it reads as unsaved. No project
+    /// open reads as clean.
+    pub fn has_unsaved_changes(&self) -> bool {
+        let in_memory = self.project.lock().as_ref().map(|p| p.modified_at);
+        let Some(in_memory) = in_memory else {
+            return false;
+        };
+        let database = self.database.lock();
+        let Some(db) = database.as_ref() else {
+            return true;
+        };
+        match db.stored_modified_at() {
+            Ok(stored) => stored != in_memory,
+            Err(_) => true,
         }
     }
 

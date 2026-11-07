@@ -743,6 +743,14 @@ mod unreadable_settings_lift_tests;
     reason = "test module: panics on a failed assumption are the point, and the printed \
               values are the evidence a run captures"
 )]
+mod unsaved_changes_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
 mod upgrade_copy_refusal_tests;
 #[cfg(test)]
 #[expect(

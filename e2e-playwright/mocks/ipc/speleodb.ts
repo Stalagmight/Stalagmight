@@ -74,10 +74,12 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
         // [#576 NF-W2F-1] The open file's flags, re-asked after an in-place tree swap.
         // The mock never swaps a tree in place, so the open file is whatever the last
         // open said: an ordinary current-format file unless a spec overrides it.
+        // [#576 W81-1] And no changes the file does not hold, unless a spec says so.
         return {
           newerSchemaVersion: null,
           speleoLinkUnreadable: false,
           unreadableProjectSettings: [],
+          hasUnsavedChanges: false,
           ...((window as unknown as Record<string, unknown>)
             .__openFileFlagsOverrides as Record<string, unknown> | undefined),
         } satisfies MockReply<'speleodb_open_file_flags'>;
