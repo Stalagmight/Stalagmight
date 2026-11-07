@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, Station, StationRef } from '../../types/project';
 import type { GpsOrigin } from '../../types/config';
 import type { ProjectStore } from '../../store/projectStore';

@@ -1,11 +1,18 @@
 /**
  * A MapLibre stand-in rich enough for `new SurveyLayer(map)` under node, for the
- * lifecycle tests (#576). It is shaped like maplibre-gl 5.16 where lifecycle bugs
- * live: every style-backed call goes through `this.style`, and `remove()` deletes
- * it (Map.remove() -> setStyle(null) does exactly that), so a call that lands
- * after the map is gone throws the same "Cannot read properties of undefined"
- * TypeError the app logged. `loseStyle()` / `restoreStyle()` model a WebGL context
- * loss, during which MapLibre also has no style (it sets `this.style = null`).
+ * lifecycle tests (#576). Every style-backed call goes through `this.style`, and
+ * `remove()` deletes it (Map.remove() -> setStyle(null) does exactly that), so a
+ * call that lands after the map is gone throws the "Cannot read properties of
+ * undefined" TypeError the app logged. `loseStyle()` / `restoreStyle()` model a
+ * WebGL context loss, during which MapLibre also has no style (it sets
+ * `this.style = null`); `restoreStyleLoading()` / `finishStyleLoad()` model the
+ * frame after the restore, when the rebuilt style is in place but refuses writes.
+ *
+ * Stricter than maplibre-gl 6.16 on purpose: there `getLayer`, `getSource`,
+ * `setPaintProperty` and `setFilter` read the style with `?.` and so survive a
+ * missing style, while `addLayer`, `removeLayer`, `addSource`, `removeSource` and
+ * `setLayoutProperty` still throw. Here they all throw, so a test catches a call
+ * that reaches a missing style at all, not only the calls that crash today.
  *
  * Anything the tests do not care about is a no-op: the map is a Proxy whose
  * unknown members resolve to a function returning undefined.
@@ -73,6 +80,18 @@ export interface FakeSurveyMap {
   loseStyle(): void;
   /** Context restore: the serialized style (custom layers excluded) comes back. */
   restoreStyle(): void;
+  /**
+   * Context restore as MapLibre 6 really does it: `setStyle` puts a NEW style in
+   * place that loads one frame later. Until {@link finishStyleLoad} it is empty
+   * (`getLayer` / `getSource` find nothing, `getLayersOrder` is `[]`) and refuses
+   * every write with "Style is not done loading." (`Style._checkLoaded`).
+   */
+  restoreStyleLoading(): void;
+  /** The frame after {@link restoreStyleLoading}: the serialized style is in place
+   *  and accepts writes, and `style.load` fires. */
+  finishStyleLoad(): void;
+  /** True while the style is in place but has not loaded yet. */
+  styleLoading(): boolean;
   /** Ids of the custom layers currently on the map. */
   customLayers(): string[];
   /** The last value `setPaintProperty` wrote for a layer's paint property. */
@@ -94,6 +113,15 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
   const custom = new Set<string>();
   const rejected: string[] = [];
   let serialized: FakeStyle | null = null;
+  /** The style a {@link FakeSurveyMap.restoreStyleLoading} restore loads next frame. */
+  let loading: FakeStyle | null = null;
+  /** The last loss hit a style that had not loaded: there is no snapshot to restore. */
+  let nothingSerialized = false;
+  const takeNothingSerialized = (): boolean => {
+    const was = nothingSerialized;
+    nothingSerialized = false;
+    return was;
+  };
 
   const newStyle = (): FakeStyle => ({
     layers: [],
@@ -110,7 +138,15 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
       s.sources.has(id) ? { type: 'geojson', setData: (d: unknown) => void s.data.set(id, d) } : undefined,
   });
 
-  type StyleRef = ReturnType<typeof styleApi> & { _s: FakeStyle };
+  /** `_loaded` mirrors MapLibre's `Style._loaded`, the flag `_checkLoaded` reads. */
+  type StyleRef = ReturnType<typeof styleApi> & { _s: FakeStyle; _loaded: boolean };
+  /** The style a write lands on. Like MapLibre 6's `Style._checkLoaded`, a style
+   *  that has not loaded yet refuses it. */
+  const writable = (): FakeStyle => {
+    const style = target.style!;
+    if (!style._loaded) throw new Error('Style is not done loading.');
+    return style._s;
+  };
   const target = {
     // Optional so remove() can `delete` it, as MapLibre does.
     style: undefined as StyleRef | null | undefined,
@@ -121,13 +157,13 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
       return target.style!.getSource(id);
     },
     addSource(id: string) {
-      target.style!._s.sources.add(id);
+      writable().sources.add(id);
     },
     removeSource(id: string) {
-      target.style!._s.sources.delete(id);
+      writable().sources.delete(id);
     },
     addLayer(layer: { id: string; type?: string; onAdd?: (m: unknown, gl: unknown) => void }, beforeId?: string) {
-      const s = target.style!._s;
+      const s = writable();
       const at = beforeId !== undefined ? s.layers.indexOf(beforeId) : -1;
       // Like MapLibre's Style.addLayer (maplibre-gl 5.16): a beforeId that is not
       // on the map is an ErrorEvent, and the layer is NOT added.
@@ -143,7 +179,7 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
       }
     },
     removeLayer(id: string) {
-      const s = target.style!._s;
+      const s = writable();
       s.layers = s.layers.filter((l) => l !== id);
       custom.delete(id);
     },
@@ -154,16 +190,16 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
       return target.style!._s.layout.get(id);
     },
     setLayoutProperty(id: string, _name: string, value: string) {
-      target.style!._s.layout.set(id, value);
+      writable().layout.set(id, value);
     },
     setPaintProperty(id: string, name: string, value: unknown) {
-      target.style!._s.paint.set(`${id}|${name}`, value);
+      writable().paint.set(`${id}|${name}`, value);
     },
     getFilter(id: string) {
       return target.style!._s.filters.get(id);
     },
     setFilter(id: string, filter: unknown) {
-      const f = target.style!._s.filters;
+      const f = writable().filters;
       if (filter === null || filter === undefined) f.delete(id);
       else f.set(id, filter);
     },
@@ -198,7 +234,7 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
   };
 
   const s0 = newStyle();
-  target.style = { ...styleApi(s0), _s: s0 };
+  target.style = { ...styleApi(s0), _s: s0, _loaded: true };
 
   const proxy = new Proxy(target, {
     get(t, prop) {
@@ -222,23 +258,48 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
       delete (target as { style?: StyleRef | null }).style;
     },
     loseStyle: () => {
-      const s = target.style!._s;
-      serialized = {
-        layers: s.layers.filter((id) => !custom.has(id)),
-        sources: new Set(s.sources),
-        layout: new Map(s.layout),
-        paint: new Map(s.paint),
-        filters: new Map(s.filters),
-        data: new Map(s.data),
-      };
+      const style = target.style!;
+      const s = style._s;
+      // A style that has not loaded serializes to nothing (MapLibre's
+      // `Style.serialize` returns undefined), and destroying it aborts its load:
+      // a loss inside a restore's loading frame leaves nothing to restore.
+      nothingSerialized = !style._loaded;
+      loading = null;
+      serialized = nothingSerialized
+        ? null
+        : {
+          layers: s.layers.filter((id) => !custom.has(id)),
+          sources: new Set(s.sources),
+          layout: new Map(s.layout),
+          paint: new Map(s.paint),
+          filters: new Map(s.filters),
+          data: new Map(s.data),
+        };
       custom.clear();
       target.style = null;
     },
     restoreStyle: () => {
+      if (takeNothingSerialized()) return;
       const s = serialized ?? newStyle();
       serialized = null;
-      target.style = { ...styleApi(s), _s: s };
+      target.style = { ...styleApi(s), _s: s, _loaded: true };
     },
+    restoreStyleLoading: () => {
+      // `_restoreStyleSnapshot` returns early without a snapshot: the map keeps no style.
+      if (takeNothingSerialized()) return;
+      loading = serialized ?? newStyle();
+      serialized = null;
+      const empty = newStyle();
+      target.style = { ...styleApi(empty), _s: empty, _loaded: false };
+    },
+    finishStyleLoad: () => {
+      if (!loading) return;
+      const s = loading;
+      loading = null;
+      target.style = { ...styleApi(s), _s: s, _loaded: true };
+      fire('style.load');
+    },
+    styleLoading: () => target.style?._loaded === false,
     customLayers: () => [...custom],
     paint: (layerId, property) => target.style?._s.paint.get(`${layerId}|${property}`),
     rejectedAdds: () => [...rejected],

@@ -1,3 +1,9 @@
+//! Stalagmight's survey data model.
+//!
+//! Internal to the Stalagmight app. It is published to crates.io only because
+//! `stalx-reader` depends on it, and makes no semver promise: depend on
+//! `stalx-reader`, whose API is the supported one.
+
 pub mod angle;
 pub mod app_dirs;
 pub mod azimuth_reference;

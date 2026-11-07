@@ -106,6 +106,14 @@ pub enum CommandErrorCode {
     NotFound,
     /// The project file is corrupt; `details` carries its path.
     Corrupt,
+    /// [#608] The open was refused because the file's database schema holds
+    /// something the app never creates, so opening it could run SQL the file
+    /// chose: anything the persistence schema guard's `check_schema` refuses -
+    /// a view, trigger or virtual table, an object named like a SQLite pragma,
+    /// a CHECK the app never writes, a generated column, an expression or
+    /// partial index, or a `DEFAULT (expr)` (#576 RV18-6). `details` carries
+    /// its path.
+    UnsafeFile,
     /// [#576 FZ-FZ-INT-R2] The open was refused because a save renamed a new file
     /// over the path while the open was reading it: what it read is a file that is
     /// no longer there. Nothing was committed. Retryable: the same open again reads
@@ -161,7 +169,7 @@ pub enum CommandErrorCode {
 impl CommandErrorCode {
     /// Every code, in declaration order, for the wire-name tests. A new variant
     /// gets a wire name from the exhaustive [`Self::as_str`]; list it here too.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 43] = [
         Self::Failed,
         Self::InternalError,
         Self::RefusedAfterInternalError,
@@ -187,6 +195,7 @@ impl CommandErrorCode {
         Self::Cancelled,
         Self::NotFound,
         Self::Corrupt,
+        Self::UnsafeFile,
         Self::FileReplacedDuringLoad,
         Self::SpeleodbManaged,
         Self::Database,
@@ -234,6 +243,7 @@ impl CommandErrorCode {
             Self::Cancelled => "CANCELLED",
             Self::NotFound => "NOT_FOUND",
             Self::Corrupt => "CORRUPT",
+            Self::UnsafeFile => "UNSAFE_FILE",
             Self::FileReplacedDuringLoad => "FILE_REPLACED_DURING_LOAD",
             Self::SpeleodbManaged => "SPELEODB_MANAGED",
             Self::Database => "DATABASE",

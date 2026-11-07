@@ -89,6 +89,7 @@ git status --porcelain src-tauri/bindings                 # must print nothing a
 pnpm gen:ipc-types                                        # regenerate the frontend IPC types from the Rust types
 git status --porcelain src/types/ipc src/types/ipc.generated.ts   # must print nothing after gen:ipc-types (the generated frontend IPC types are committed)
 cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml   # workspace-excluded vendored crate; no telemetry feature/env
+cargo package --no-verify --manifest-path src-tauri/Cargo.toml -p stalagmight-models -p stalagmight-persistence -p stalx-reader   # crates.io packaging check; each package must also list LICENSE
 # --- smoke job (e2e-smoke.yml) ---
 pnpm lint:e2e-parallel:test && pnpm lint:e2e-parallel     # Playwright parallel-safety
 pnpm lint:e2e-no-sleep:test && pnpm lint:e2e-no-sleep     # no unannotated waitForTimeout in Playwright specs
@@ -122,7 +123,10 @@ pass locally while CI fails. For fast iteration on one
 crate use `-p`, e.g.
 `cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib fuzz_undo`
 (`--features telemetry` only applies to the packages that define the feature:
-`stalagmight`, `stalagmight-telemetry`). On
+`stalagmight`, `stalagmight-telemetry`). Run cargo from inside the clone: the
+bundled-SQLite build flags live in the repo's `.cargo/config.toml`, which cargo
+reads from its working directory, not from `--manifest-path`, and the
+persistence tests fail without them ([docs/toolchain.md](docs/toolchain.md)). On
 **Windows**, use `./scripts/test.ps1` instead (a bare `cargo test` aborts at
 startup with `STATUS_ENTRYPOINT_NOT_FOUND`). All explained in
 [docs/testing-recipes.md](docs/testing-recipes.md).

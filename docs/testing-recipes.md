@@ -870,8 +870,8 @@ when building with that feature.
 #### Running one crate
 
 The backend is a cargo workspace: the `stalagmight` app package at `src-tauri/`
-plus seven members under `src-tauri/crates/` (`stalagmight-models`,
-`-telemetry`, `-parsers`, `-persistence`, `-export`, `-speleodb`, `-core`).
+plus eight members under `src-tauri/crates/` (`stalagmight-models`,
+`-telemetry`, `-parsers`, `-persistence`, `-export`, `-speleodb`, `-core`, and `stalx-reader`).
 Select one with `-p` for fast iteration:
 
 ```bash
@@ -1170,7 +1170,7 @@ Specs live in `e2e-playwright/`, flat, one file per feature area, alongside:
 e2e-playwright/
 ├── helpers/app.ts          # shared setup + waiters (import from here)
 ├── mocks/tauri-ipc.ts      # the mocked Tauri IPC backend (its core)
-├── mocks/ipc/*.ts          # its command families (config, Plan mode, DMP, tiles, SpeleoDB)
+├── mocks/ipc/*.ts          # its command families (config, Plan mode, DMP, tiles, SpeleoDB, imports, exports, ...)
 ├── fixtures/coverage.ts    # the test fixture every spec imports `test` from
 ├── fixtures/*.dmp          # binary survey files. Nothing reads them: the mock
 │                           #   fabricates data and never parses a file
@@ -1398,7 +1398,9 @@ tests.
 
 Its own `switch (cmd)` handles the project lifecycle, load and edit commands.
 The command families under `mocks/ipc/` (config, Plan mode, the DMP parse, tile
-cache, SpeleoDB, history, recovery - #576 E8, E3) each own their commands and
+cache, SpeleoDB, history, recovery - #576 E8, E3; the recent-projects list,
+placement suggestions, the Walls / GPX / TML previews, exports, display settings
+and the read-only survey queries among others - #576 AFK-D3) each own their commands and
 the state only they use; the core asks them in turn about any command its
 switch does not handle. A family runs in the page like the core, serialized
 with `Function.prototype.toString`, so it may use only its `ctx` argument

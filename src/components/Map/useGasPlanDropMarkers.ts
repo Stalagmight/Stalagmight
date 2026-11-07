@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import { useTranslation } from 'react-i18next';
 
 import { useGasPlanStore } from '../../store/gasPlanStore';

@@ -4,12 +4,15 @@
 import './utils/debugLockup';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { setWorkerUrl } from 'maplibre-gl';
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
+// MapLibre's own stylesheet (control, marker and canvas positioning), bundled at
+// the version actually installed so the map lays out offline (#576 C12, #606).
+// Before App so every app stylesheet cascades over MapLibre's own rules, which
+// some of them override at equal specificity.
+import 'maplibre-gl/dist/maplibre-gl.css';
 import App from './App';
 import './i18n';
-// MapLibre's own stylesheet (control, marker and canvas positioning), bundled at
-// the version actually installed so the map lays out offline. Before the app CSS,
-// which overrides some of its control rules at equal specificity.
-import 'maplibre-gl/dist/maplibre-gl.css';
 import './index.css';
 import { installConsoleCapture } from './utils/consoleCapture';
 import { installGlobalErrorCapture } from './utils/globalErrorCapture';
@@ -61,6 +64,8 @@ initInputModalityTracking();
 // change: Plan and Export are read-only, and the backend refuses survey edits
 // there as the backstop to the UI's own gating (docs/app-modes.md).
 startWorkspaceModeSync();
+
+setWorkerUrl(maplibreWorkerUrl);
 
 // The frame-gap freeze detector is no longer started automatically - it
 // was producing a stream of `freeze #N` entries in the memory probe for

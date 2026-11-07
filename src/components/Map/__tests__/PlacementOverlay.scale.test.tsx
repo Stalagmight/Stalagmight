@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render } from '@testing-library/react';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import PlacementOverlay from '../PlacementOverlay';
 import { pixelsPerMeterAt } from '../placementScale';
 import { useProjectStore } from '../../../store/projectStore';

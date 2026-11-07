@@ -4,7 +4,7 @@ use crate::commands::pool;
 use crate::commands::save_target::file_name;
 use crate::commands::write_path::{check_write_path, check_write_path_with, AppDirs, WriteTarget};
 use crate::core::CommandError;
-use crate::persistence::{BackupInfo, Database, RepairResult, SalvagedData};
+use crate::persistence::{BackupInfo, Database, RepairResult, SalvageWriteResult, SalvagedData};
 
 /// Attempt to repair a corrupt database file.
 ///
@@ -124,8 +124,15 @@ pub async fn export_salvageable_data(path: PathBuf) -> Result<SalvagedData, Comm
 /// is replaced atomically, as every export's is (`export::write_atomic_bytes`);
 /// the damaged project is only read, and naming it as the destination is
 /// refused.
+///
+/// [#576 W30-5] It answers the counts and warnings of the salvage it wrote, for
+/// the dialog to report: those of the dialog's own earlier read need not be
+/// what this second read found, since a damaged file can read differently twice.
 #[tauri::command]
-pub async fn write_salvaged_data(path: PathBuf, dest_path: PathBuf) -> Result<(), CommandError> {
+pub async fn write_salvaged_data(
+    path: PathBuf,
+    dest_path: PathBuf,
+) -> Result<SalvageWriteResult, CommandError> {
     pool::run_stateless(move || write_salvaged_data_with(&path, &dest_path, &AppDirs::current()))
         .await
 }
@@ -135,7 +142,7 @@ pub(crate) fn write_salvaged_data_with(
     path: &Path,
     dest_path: &Path,
     dirs: &AppDirs,
-) -> Result<(), CommandError> {
+) -> Result<SalvageWriteResult, CommandError> {
     tracing::info!(path = ?path, dest = ?dest_path, "IPC: write_salvaged_data");
     check_write_path_with(dest_path, WriteTarget::Json, dirs)?;
     let name = file_name(dest_path);
@@ -151,6 +158,12 @@ pub(crate) fn write_salvaged_data_with(
 
     let salvaged = Database::export_salvageable(path)
         .map_err(|e| CommandError::failed(format!("Salvage failed: {e}")))?;
+    let written = SalvageWriteResult {
+        section_count: salvaged.section_count,
+        shot_count: salvaged.shot_count,
+        merge_count: salvaged.merge_count,
+        errors: salvaged.errors,
+    };
     let content = salvaged
         .full_project_json
         .or(salvaged.sections_json)
@@ -160,5 +173,6 @@ pub(crate) fn write_salvaged_data_with(
     crate::export::write_atomic_bytes(dest_path, content.as_bytes()).map_err(|e| {
         tracing::error!(dest = ?dest_path, error = %e, "Writing the salvaged data failed");
         CommandError::failed(format!("Could not write {name}: {e:#}"))
-    })
+    })?;
+    Ok(written)
 }

@@ -25,7 +25,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | Doc | Contents |
 |-----|----------|
 | [project-structure.md](project-structure.md) | Directory tree and tech stack. |
-| [architecture.md](architecture.md) | The 8-crate workspace layout, state flow (Zustand -> IPC -> Rust command executor), the command pattern, key files, backend idioms. |
+| [architecture.md](architecture.md) | The 9-crate workspace layout, state flow (Zustand -> IPC -> Rust command executor), the command pattern, key files, backend idioms. |
 | [SPEC.md](SPEC.md) | Data model, UI, workflows, file formats, validation rules. Defers to code for the enums, schema, and config keys. |
 | [roadmap.md](roadmap.md) | Historical record of the v1.0 scope; live work is in the issue tracker. |
 

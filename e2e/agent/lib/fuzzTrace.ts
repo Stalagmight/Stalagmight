@@ -110,6 +110,7 @@ import { createHash } from 'crypto';
 
 import { shortId } from './crc32';
 import { detProbe } from './fuzzDeterminismProbe';
+import { shareableFailureText } from './shareableFailure';
 
 /** Current trace schema. Bumped when a step shape changes incompatibly. */
 export const TRACE_VERSION = 4;
@@ -808,8 +809,15 @@ export function writeTrace(filePath: string, trace: FuzzTrace): string {
         `rather than as <dir>/${CORPUS_ENTRY_SEGMENT}, and a trace is an artifact people attach to bug reports`,
     );
   }
+  // A trace is attached to issues, so its failure is the shareable form -
+  // codes, counts and code locations - with the signature OF that form; the
+  // full text is in the session's actions.jsonl (#576 W21-NF1).
+  const failure =
+    trace.failure === null
+      ? null
+      : { message: shareableFailureText(trace.failure.message), signature: shareableSignature(trace.failure.message) };
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(trace, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(filePath, `${JSON.stringify({ ...trace, failure }, null, 2)}\n`, 'utf8');
   return filePath;
 }
 
@@ -1119,6 +1127,17 @@ export function failureSignature(message: string): FailureSignature {
   }
 
   return { headline, path: firstPath, error, classifiers: [...classifiers].sort() };
+}
+
+/**
+ * The signature a SHAREABLE artifact carries - a written trace, `fuzz-shrink`'s
+ * output: `failureSignature` over `shareableFailureText`, so it names only what
+ * that text keeps (headline, diff path, classifiers) and is the same for the
+ * full message and for its shareable form. A shrink still compares the FULL
+ * signature in memory.
+ */
+export function shareableSignature(message: string): FailureSignature {
+  return failureSignature(shareableFailureText(message));
 }
 
 function normalizeNumbers(text: string): string {

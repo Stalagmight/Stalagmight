@@ -48,6 +48,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{SectionId, ShotKind, StationRef};
 
+use super::union_find::UnionFind;
 use super::Project;
 
 /// Which sections a classification pass is allowed to *write* to.
@@ -72,36 +73,6 @@ impl ClassifyScope<'_> {
         match self {
             ClassifyScope::WholeProject => true,
             ClassifyScope::Sections(ids) => ids.contains(&section_id),
-        }
-    }
-}
-
-/// Minimal union-find over station slots, used to collapse merges/closures into
-/// one canonical station and then to group virtual shots into components.
-struct UnionFind {
-    parent: Vec<usize>,
-}
-
-impl UnionFind {
-    fn new(n: usize) -> Self {
-        Self {
-            parent: (0..n).collect(),
-        }
-    }
-
-    fn find(&mut self, mut x: usize) -> usize {
-        while self.parent[x] != x {
-            // Path halving: keeps find near-constant without a second pass.
-            self.parent[x] = self.parent[self.parent[x]];
-            x = self.parent[x];
-        }
-        x
-    }
-
-    fn union(&mut self, a: usize, b: usize) {
-        let (ra, rb) = (self.find(a), self.find(b));
-        if ra != rb {
-            self.parent[rb] = ra;
         }
     }
 }

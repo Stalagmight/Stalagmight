@@ -1,0 +1,15 @@
+# Cargo settings for every cargo command run inside this clone. Cargo looks for
+# this file from its WORKING DIRECTORY upward, not from --manifest-path, so it
+# covers both the repo-root `cargo ... --manifest-path src-tauri/Cargo.toml`
+# that CI and CLAUDE.md use and `pnpm tauri build`/`dev`, which run cargo
+# inside src-tauri. Keep per-machine settings (target-dir, linker) out of it:
+# they belong in $CARGO_HOME/config.toml or CARGO_TARGET_DIR (docs/toolchain.md).
+
+[env]
+# Build the bundled SQLite without FTS3/4/5, RTREE, DBSTAT and extension
+# loading, so a hostile .stalx cannot reach them (#608). libsqlite3-sys reads
+# this when it compiles the amalgamation; `force` lets no shell value weaken it.
+# Pinned by the stalagmight-persistence test
+# bundled_sqlite_omits_virtual_table_modules_and_extension_loading, which every
+# `cargo test --workspace` runs.
+LIBSQLITE3_FLAGS = { value = "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION", force = true }

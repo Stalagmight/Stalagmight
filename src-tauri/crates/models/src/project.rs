@@ -45,12 +45,19 @@ mod offsets;
 mod relationships;
 mod reverse;
 mod stats;
+mod union_find;
 
 #[cfg(test)]
 mod anchor_fuzz;
 #[cfg(test)]
 #[expect(clippy::print_stdout)]
 mod cache_coherence_tests;
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod closure_determinism_tests;
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod component_pass_tests;
 #[cfg(test)]
 mod lookup_parity_tests;
 #[cfg(test)]
@@ -1852,8 +1859,7 @@ impl Project {
     /// whose anchor no longer resolves are dropped (surfaced by integrity).
     ///
     /// [#576 NF-W12BE-4] Of two keys naming one station, the one that sorts first
-    /// wins - the station-comment rule (NF-W12BE-3), and the one
-    /// [`Self::station_offset_for_ref`] follows. The winner used to be the last
+    /// wins - the rule [`Self::station_offset_for_ref`] follows. The winner used to be the last
     /// key in the map's iteration order here and the first one there, so the two
     /// could disagree, and either could change from one map to the next.
     fn resolved_station_offsets(&self) -> HashMap<StationRef, (f64, f64, f64)> {
@@ -1893,7 +1899,7 @@ impl Project {
     /// Station comment for a positional ref, found by resolving each stored key
     /// (sound for any anchor kind). For callers/tests that hold a positional ref
     /// rather than a stored key. Of two keys naming the station, the one that
-    /// sorts first wins, as the station's own comment does (#576 NF-W12BE-3).
+    /// sorts first wins; the station's own comment joins them (#576 W30-6).
     #[cfg(any(test, feature = "test-support"))]
     pub fn station_comment_for_ref(&self, sr: StationRef) -> Option<&String> {
         self.station_comments

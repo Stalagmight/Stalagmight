@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use rusqlite::{params, Connection, DatabaseName, Transaction, TransactionBehavior};
+use rusqlite::{params, Connection, Transaction, TransactionBehavior, MAIN_DB};
 
 use crate::models::FEATURE_ID_STRIDE;
 
@@ -1372,7 +1372,7 @@ impl Database {
         // depths).
         if claimed_only
             && current == SCHEMA_VERSION
-            && self.conn.is_readonly(DatabaseName::Main).unwrap_or(false)
+            && self.conn.is_readonly(MAIN_DB).unwrap_or(false)
         {
             tracing::warn!(
                 claimed = current,

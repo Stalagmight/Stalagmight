@@ -10,7 +10,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { MutableRefObject } from 'react';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 
 import { useSurveyLayerSync } from '../useSurveyLayerSync';
 import type SurveyLayer from '../SurveyLayer';
@@ -91,5 +91,40 @@ describe('useSurveyLayerSync: theme vs a context restore (#576 RV4-FE-SL-4)', ()
     rerender(options({ ...base, styleEpoch: 1, resolvedTheme: 'light' }));
     expect(calls('applyThemeColors')).toBe(2);
     expect(backgroundWrites()).toBe(3);
+  });
+
+  // #576 RV18-MAP-1: in the frame before a rebuilt style loads, MapLibre 6's
+  // setPaintProperty reaches a style that refuses the write and throws out of the
+  // effect. The write waits for the epoch the loaded style brings.
+  it('a theme change in the frame before a rebuilt style loads waits for it', () => {
+    const { layer } = fakeSurveyLayer();
+    const style = { _loaded: true };
+    const setPaintProperty = vi.fn(() => {
+      if (!style._loaded) throw new Error('Style is not done loading.');
+    });
+    const map = { current: { style, setPaintProperty } as unknown as maplibregl.Map };
+    const surveyLayerRef = { current: layer } as MutableRefObject<SurveyLayer | null>;
+    const base = { map, surveyLayerRef, toolCallbacks: {} as Options['toolCallbacks'], precision: {} as Options['precision'] };
+    const backgroundWrites = () =>
+      setPaintProperty.mock.calls.filter((c: unknown[]) => c[0] === 'background').length;
+    const { rerender } = renderHook((props: Options) => useSurveyLayerSync(props), {
+      initialProps: options({ ...base, styleEpoch: 0 }),
+    });
+    expect(backgroundWrites()).toBe(1);
+
+    style._loaded = false; // restored, loading next frame
+    let thrown: string | null = null;
+    try {
+      rerender(options({ ...base, styleEpoch: 0, resolvedTheme: 'light' }));
+    } catch (e) {
+      thrown = (e as Error).message;
+    }
+    console.log('[RV18-MAP-1] background effect in the loading frame threw:', thrown);
+    expect(thrown).toBeNull();
+    expect(backgroundWrites()).toBe(1);
+
+    style._loaded = true; // style.load: the epoch moves
+    rerender(options({ ...base, styleEpoch: 1, resolvedTheme: 'light' }));
+    expect(backgroundWrites()).toBe(2);
   });
 });

@@ -48,7 +48,8 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
 
   // GPS per station: the backend only stores coordinates on zero-datum
   // stations, so derive the rest from local meters through the same
-  // conversion and origin the map uses (utils/coordinates.xyToGps).
+  // conversion and origin the map uses (utils/coordinates.xyToGps). Blank
+  // beyond the horizon, where no point on the earth has those coordinates.
   const stationGps = (r: Station): GpsCoordinates | null => {
     if (r.gps_coordinates) return r.gps_coordinates;
     if (!ctx.gpsOrigin) return null;

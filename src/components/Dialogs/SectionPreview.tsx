@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { DmpSection, DmpShot } from '../../types/commands';
 import type { Section, Station, Shot } from '../../types/project';
 import type { AzimuthReference } from '../../types/ipc/AzimuthReference';
@@ -12,6 +12,7 @@ import { getTileConfig } from '../../utils/tileConfig';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
 import { MapAttribution } from '../Map/MapAttribution';
 import { createSurveyMap, SATELLITE_SOURCE_ID } from '../Map/createSurveyMap';
+import { MapUnavailable } from '../Map/MapUnavailable';
 import type { GpsOrigin } from '../../types/config';
 
 /**
@@ -196,6 +197,7 @@ export default function SectionPreview({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [webgl2Unavailable, setWebgl2Unavailable] = useState(false);
   const onStationClickRef = useRef(onStationClick);
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
 
@@ -268,6 +270,10 @@ export default function SectionPreview({
       keyboard: true,
       boxZoom: true,
     });
+    if (!map) {
+      setWebgl2Unavailable(true);
+      return;
+    }
 
     // Store map ref immediately for cleanup support
     mapRef.current = map;
@@ -1145,6 +1151,7 @@ export default function SectionPreview({
     >
       {/* Map container is always mounted for proper lifecycle */}
       <div ref={containerRef} className="w-full h-full" data-testid="section-preview-map" />
+      {webgl2Unavailable && <MapUnavailable testId="section-preview-webgl2-unavailable" />}
 
       {/* Imagery attribution, forced compact. This preview is a few hundred
           pixels square and the whole point of it is the geometry underneath, so

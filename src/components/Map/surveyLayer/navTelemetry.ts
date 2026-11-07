@@ -3,7 +3,7 @@
  * user zoom or pan. Programmatic camera moves carry no `originalEvent` and are
  * tracked by their trigger functions instead.
  */
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import { trackNav } from '../../../utils/telemetry';
 
 /** Track user-initiated zoom (scroll wheel, pinch, double-click). Skip programmatic zooms. */

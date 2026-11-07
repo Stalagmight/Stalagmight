@@ -1,121 +1,38 @@
 import { Page } from '@playwright/test';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve as pathResolve } from 'node:path';
-import { createRequire } from 'node:module';
 import type { CommandError } from '../../src/types/ipc/CommandError';
 import type { RemoteLinkBits } from '../../src/types/ipc/RemoteLinkBits';
-import type { TmlFile } from '../../src/types/ipc/TmlFile';
-import type { TmlShot } from '../../src/types/ipc/TmlShot';
 import type { MockCommandFamily, MockCommandName, MockIpcContext, MockReply } from './ipc/types';
 import { defaultConfig } from '../../src/types/ipc/defaultConfig';
 import { compassImportCommands } from './ipc/compassImport';
 import { configCommands } from './ipc/config';
+import { deletePreviewCommands } from './ipc/deletePreviews';
+import { diagnosticsCommands } from './ipc/diagnostics';
+import { displaySettingsCommands } from './ipc/displaySettings';
 import { dmpImportCommands } from './ipc/dmpImport';
+import { exportCommands } from './ipc/export';
 import { gasPlanCommands } from './ipc/gasPlan';
 import { historyCommands } from './ipc/history';
+import { historyDiscardedCommands } from './ipc/historyDiscarded';
+import { importPreviewCommands } from './ipc/importPreviews';
+import { moveToolCommands } from './ipc/moveTools';
+import { placementCommands } from './ipc/placement';
+import { recentProjectsCommands } from './ipc/recentProjects';
 import { recoveryCommands } from './ipc/recovery';
 import { saveTargetCommands } from './ipc/saveTarget';
 import { speleodbCommands } from './ipc/speleodb';
+import { surveyQueryCommands } from './ipc/surveyQueries';
 import { tileCacheCommands } from './ipc/tileCache';
+import { wallsImportCommands } from './ipc/wallsImport';
 import { buildMockShot } from './ipc/shots';
 import { INERT_COMMANDS } from './ipc/inert';
 import { openerMockSource, type OpenerMock } from './ipc/opener';
+import { loadMsgpackUmd } from './ipc/msgpackUmd';
 
 declare global {
   interface Window {
     /** Installed by this mock; the app's IPC bridge. Also used to emit events. */
     __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
   }
-}
-
-// ----------------------------------------------------------------------------
-// msgpack UMD bundle loader.
-//
-// The production frontend hits `load_project_full_binary` and expects a
-// msgpack-encoded `BinaryEnvelope` (see src/utils/loadProjectBinary.ts).
-// The mock runs inside the browser via `addInitScript` and can't import
-// from npm, so before the mock attaches we inject the @msgpack/msgpack
-// UMD bundle, which exposes `window.MessagePack.encode`.  The mock
-// handler for `load_project_full_binary` builds the same fixture as
-// `load_project_full`, repacks it into the binary wire format, and
-// encodes it - exercising the real decoder end-to-end with no
-// production-code fallbacks.
-// ----------------------------------------------------------------------------
-let cachedMsgpackUmd: string | null = null;
-function loadMsgpackUmd(): string {
-  if (cachedMsgpackUmd !== null) return cachedMsgpackUmd;
-  const req = createRequire(import.meta.url);
-  const cjsPath = req.resolve('@msgpack/msgpack');
-  // dist.cjs/index.cjs → ../dist.umd/msgpack.min.js
-  const pkgRoot = dirname(dirname(cjsPath));
-  const umdPath = pathResolve(pkgRoot, 'dist.umd/msgpack.min.js');
-  cachedMsgpackUmd = readFileSync(umdPath, 'utf8');
-  return cachedMsgpackUmd;
-}
-
-/**
- * Mock data types matching the Stalagmight Rust backend models.
- */
-interface MockProject {
-  id: string;
-  name: string;
-  sections: MockSection[];
-  station_merges: unknown[];
-  zero_datums: unknown[];
-  section_offsets: Record<string, [number, number]>;
-}
-
-interface MockSection {
-  id: string;
-  name: string;
-  surveyor: string;
-  date: string;
-  color: string;
-  shots: MockShot[];
-}
-
-interface MockShot {
-  id: number;
-  azimuth: number;
-  length: number;
-  depth: number;
-  left?: number;
-  right?: number;
-  up?: number;
-  down?: number;
-  pitch_in?: number;
-  pitch_out?: number;
-  comment?: string;
-}
-
-/**
- * Create a mock project with optional custom data.
- */
-function createMockProject(overrides?: Partial<MockProject>): MockProject {
-  return {
-    id: 'mock-project-001',
-    name: 'Test Project',
-    sections: [],
-    station_merges: [],
-    zero_datums: [],
-    section_offsets: {},
-    ...overrides,
-  };
-}
-
-/**
- * Create a mock section with optional custom data.
- */
-function createMockSection(overrides?: Partial<MockSection>): MockSection {
-  return {
-    id: 'mock-section-001',
-    name: 'Test Section',
-    surveyor: 'Test Surveyor',
-    date: new Date().toISOString().split('T')[0] ?? '',
-    color: '#3b82f6',
-    shots: [],
-    ...overrides,
-  };
 }
 
 /** The command families split out of this mock (#576 E8); see ./ipc/types.ts. */
@@ -129,6 +46,17 @@ const MOCK_COMMAND_FAMILIES: MockCommandFamily[] = [
   historyCommands,
   recoveryCommands,
   saveTargetCommands,
+  recentProjectsCommands,
+  placementCommands,
+  wallsImportCommands,
+  importPreviewCommands,
+  displaySettingsCommands,
+  diagnosticsCommands,
+  surveyQueryCommands,
+  moveToolCommands,
+  exportCommands,
+  deletePreviewCommands,
+  historyDiscardedCommands,
 ];
 
 /**
@@ -162,8 +90,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
   // stubbed above (the mock's arcgisonline url_template has no fetching
   // consumer). The #417 local-red/CI-green console noise was the dev-only
   // agent bridge's /__agent/token probe, now gated off under VITE_E2E in
-  // main.tsx. The maplibre CSS, once fetched from unpkg.com, is bundled since
-  // #576 C12, so the page makes no external fetch at all.
+  // main.tsx. The maplibre CSS, once fetched from unpkg.com, is bundled from the
+  // installed package since #576 C12 / #606, so the page makes no external fetch
+  // at all.
 
   // Inject the msgpack UMD bundle first so the load_project_full_binary
   // mock can encode its result the same way the real backend does.
@@ -586,25 +515,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         return MessagePack.encode(envelope).slice().buffer;
       };
 
-      // Geometry loading mock control
-      // Paths listed here will fail geometry loading (throw error instead of returning data)
-      const geometryErrorPaths = new Set<string>();
-      // Paths listed here will delay geometry loading (resolve after delay ms)
-      const geometryDelayPaths = new Map<string, number>();
-
-      (window as unknown as Record<string, unknown>).__MOCK_SET_GEOMETRY_ERROR__ = (path: string) => {
-        geometryErrorPaths.add(path);
-      };
-      (window as unknown as Record<string, unknown>).__MOCK_CLEAR_GEOMETRY_ERROR__ = (path: string) => {
-        geometryErrorPaths.delete(path);
-      };
-      (window as unknown as Record<string, unknown>).__MOCK_SET_GEOMETRY_DELAY__ = (path: string, delayMs: number) => {
-        geometryDelayPaths.set(path, delayMs);
-      };
-      (window as unknown as Record<string, unknown>).__MOCK_CLEAR_GEOMETRY_DELAY__ = (path: string) => {
-        geometryDelayPaths.delete(path);
-      };
-
       // Duplicate import mock state - configurable for hash-tracking tests
       let mockCheckDuplicateResult = false; // Default: no duplicate
       let mergeStationCalls: Array<{
@@ -615,21 +525,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         stationA: { section_id: number; station_index: number };
         stationB: { section_id: number; station_index: number };
       }> = [];
-      let mockOrphanPlacementSuggestions: MockReply<'suggest_orphan_placements'> = [];
-      let mockImportPlacementSuggestions: MockReply<'suggest_all_import_placements'> = [];
-      // Records execute_walls_import args (esp. selectedSurveys) so the Walls
-      // import dialog spec can assert the select-all→null / explicit-index path.
-      let wallsImportCalls: Array<Record<string, unknown>> = [];
       // Records execute_tml_import args (includeExcluded, virtualShotMode, …) so
       // the Ariane import spec can assert what the dialog's toggles actually sent.
       let tmlImportCalls: Array<Record<string, unknown>> = [];
 
       (window as unknown as Record<string, unknown>).__MOCK_SET_CHECK_DUPLICATE_RESULT__ = (result: boolean) => {
         mockCheckDuplicateResult = result;
-      };
-      (window as unknown as Record<string, unknown>).__MOCK_GET_WALLS_IMPORT_CALLS__ = () => [...wallsImportCalls];
-      (window as unknown as Record<string, unknown>).__MOCK_RESET_WALLS_IMPORT_CALLS__ = () => {
-        wallsImportCalls = [];
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_TML_IMPORT_CALLS__ = () => [...tmlImportCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_TML_IMPORT_CALLS__ = () => {
@@ -715,20 +616,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_RESET_DIALOG_OPEN_COUNT__ = () => {
         dialogOpenCount = 0;
       };
-      (window as unknown as Record<string, unknown>).__MOCK_SET_ORPHAN_SUGGESTIONS__ = (suggestions: unknown[]) => {
-        // shape not checked: spec-seeded suggestions, passed through as given
-        mockOrphanPlacementSuggestions = (Array.isArray(suggestions) ? [...suggestions] : []) as MockReply<'suggest_orphan_placements'>;
-      };
-      (window as unknown as Record<string, unknown>).__MOCK_RESET_ORPHAN_SUGGESTIONS__ = () => {
-        mockOrphanPlacementSuggestions = [];
-      };
-      (window as unknown as Record<string, unknown>).__MOCK_SET_IMPORT_PLACEMENT_SUGGESTIONS__ = (suggestions: unknown[]) => {
-        // shape not checked: spec-seeded suggestions, passed through as given
-        mockImportPlacementSuggestions = (Array.isArray(suggestions) ? [...suggestions] : []) as MockReply<'suggest_all_import_placements'>;
-      };
-      (window as unknown as Record<string, unknown>).__MOCK_RESET_IMPORT_PLACEMENT_SUGGESTIONS__ = () => {
-        mockImportPlacementSuggestions = [];
-      };
 
       // Station comments set via set_station_comment, keyed
       // "sectionId:stationIndex". get_project_state derives its station array
@@ -738,12 +625,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
       // Track last export_image call for test assertions
       let lastExportImageArgs: Record<string, unknown> | null = null;
-
-      // Per-path project-name overrides applied by set_project_name_for_path,
-      // so list_recent_projects reflects renames within a test; and the paths
-      // delete_project removed, which drop out of it as the backend's do.
-      const recentNameOverrides: Record<string, string> = {};
-      const deletedProjectPaths = new Set<string>();
 
       // Structural-integrity issues returned by check_project_integrity. Tests
       // seed these via __MOCK_SET_INTEGRITY_ISSUES__; repair fixes all but the
@@ -771,25 +652,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         mockIntegrityRemaining = Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
       };
 
-      // [#473] Whether the loaded project's undo/redo history was unreadable and
-      // discarded. Default false - every existing spec opens a project whose
-      // history loads fine, and a banner appearing over them would be a false
-      // failure. Seeded by __MOCK_SET_HISTORY_DISCARDED__.
-      let mockHistoryDiscarded = false;
-      // How many times the app has ASKED. A spec asserting the banner is absent needs
-      // this: `toHaveCount(0)` passes on its first poll, so without a positive signal
-      // that the post-load effect has actually run, the assertion is satisfied by the
-      // effect not having happened yet and can never fail.
-      let mockHistoryDiscardedCalls = 0;
-      (window as unknown as Record<string, unknown>).__MOCK_SET_HISTORY_DISCARDED__ = (
-        discarded: boolean
-      ) => {
-        mockHistoryDiscarded = !!discarded;
-        mockHistoryDiscardedCalls = 0;
-      };
-      (window as unknown as Record<string, unknown>).__MOCK_HISTORY_DISCARDED_CALLS__ = () =>
-        mockHistoryDiscardedCalls;
-
       // Expose currentProject setter for E2E tests (allows injecting test fixtures)
       (window as unknown as Record<string, unknown>).__E2E_MOCKS__ = {
         setCurrentProject: (project: typeof currentProject) => {
@@ -798,162 +660,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         getCurrentProject: () => currentProject,
         getLastExportImageArgs: () => lastExportImageArgs,
         clearLastExportImageArgs: () => { lastExportImageArgs = null; },
-      };
-
-      // Display settings persistence - in-memory storage for testing reload behavior
-      const mockDisplaySettings: Record<string, string> = {
-        showStations: 'true',
-        showShots: 'true',
-        showSectionNames: 'true',
-        showDepthGradient: 'false',
-      };
-
-      const buildMockGpxFile = (path: string | null | undefined) => {
-        const normalized = (path ?? '').toLowerCase();
-        const now = new Date();
-        const iso = now.toISOString();
-
-        const waypointOnlyFile = {
-          name: 'Waypoint Check Dive',
-          waypoints: [
-            { name: 'Entry Bell', comment: 'Main entry', latitude: 24.55, longitude: -81.78, elevation: 1.2, time: iso },
-            { name: 'Jump Reel', comment: null, latitude: 24.5504, longitude: -81.7794, elevation: 3.4, time: iso },
-          ],
-          tracks: [],
-          routes: [],
-        };
-
-        if (normalized.includes('waypoints-only')) {
-          return waypointOnlyFile;
-        }
-
-        return {
-          name: 'Reef Traverse',
-          waypoints: waypointOnlyFile.waypoints,
-          tracks: [
-            {
-              name: 'Main Line',
-              comment: 'Primary track',
-              segments: [
-                {
-                  points: [
-                    { latitude: 24.55, longitude: -81.78, elevation: 2.0, time: iso },
-                    { latitude: 24.5502, longitude: -81.7798, elevation: 2.6, time: iso },
-                    { latitude: 24.55045, longitude: -81.7795, elevation: 3.1, time: iso },
-                  ],
-                },
-              ],
-            },
-          ],
-          routes: [
-            {
-              name: 'Exit Route',
-              comment: null,
-              points: [
-                { name: 'Route Start', latitude: 24.55045, longitude: -81.7795, elevation: 3.1, time: iso },
-                { name: 'Route Mid', latitude: 24.55065, longitude: -81.7792, elevation: 2.8, time: iso },
-                { name: 'Route End', latitude: 24.5508, longitude: -81.7789, elevation: 2.5, time: iso },
-              ],
-            },
-          ],
-        };
-      };
-
-      // Synthetic Ariane TML preview (#411). Fully in-memory - no .tml fixture
-      // is read - carrying one of each shot flavour the import dialog's optional
-      // controls key off: an excluded shot, a commented shot and a virtual shot.
-      const buildMockTmlShot = (
-        id: number,
-        fromId: number,
-        section: string,
-        depth: number,
-        overrides: Partial<TmlShot> = {}
-      ): TmlShot => ({
-        id,
-        from_id: fromId,
-        shot_type: 'Real',
-        azimuth: (id * 30) % 360,
-        length: 10,
-        depth,
-        depth_in: depth - 1,
-        inclination: 0,
-        left: 1,
-        right: 1,
-        up: 1,
-        down: 1,
-        comment: null as string | null,
-        explorer: 'Synthetic Surveyor',
-        date: '2026-01-02',
-        color: '#3b82f6',
-        excluded: false,
-        latitude: 0,
-        longitude: 0,
-        closure_to_id: 0,
-        section,
-        ...overrides,
-      });
-
-      // A path containing "imperial" yields a file whose unit is Imperial, so a spec can
-      // drive the "converted from feet" branch of the dialog. [#576 E3] Canned: the same
-      // shots either way. The real parser converts ft->m before it returns the preview and
-      // extracts the closures from the Closure rows (`apply_unit_conversion`,
-      // `extract_closures`; parsers tml tests `test_imperial_conversion`,
-      // `test_closure_mapping`); the closure below is written out, not derived.
-      const buildMockTmlFile = (path: string | null | undefined): TmlFile => {
-        const imperial = (path ?? '').toLowerCase().includes('imperial');
-        const sections: TmlFile['sections'] = [
-          {
-            name: 'Main Line',
-            shots: [
-              buildMockTmlShot(1, 0, 'Main Line', 2),
-              buildMockTmlShot(2, 1, 'Main Line', 4, { comment: 'Restriction at the T' }),
-              buildMockTmlShot(3, 2, 'Main Line', 6, { excluded: true }),
-            ],
-            surveyor: 'Synthetic Surveyor',
-            date: '2026-01-02',
-            color: '#3b82f6',
-            is_branch_split: false,
-            start_ariane_id: 0,
-            end_ariane_id: 3,
-            start_depth: 0,
-          },
-          {
-            name: 'Side Passage',
-            shots: [
-              buildMockTmlShot(4, 1, 'Side Passage', 3),
-              buildMockTmlShot(5, 4, 'Side Passage', 5, { shot_type: 'Virtual' }),
-              // The loop closure, as the real format stores it: a Closure-type
-              // ROW near the end of the file. from_id=1 (Main Line station 1)
-              // and closure_to_id=4 (Side Passage station 1) keep the previous
-              // round's by-construction exclusion-safety: neither endpoint is
-              // the excluded shot (id 3, Main Line's terminal) nor preceded by
-              // it, so import-space indices agree under BOTH states of the
-              // excluded-shots toggle.
-              buildMockTmlShot(6, 1, 'Side Passage', 0, {
-                shot_type: 'Closure',
-                closure_to_id: 4,
-                length: 0,
-              }),
-            ],
-            surveyor: 'Synthetic Surveyor',
-            date: '2026-01-03',
-            color: '#22c55e',
-            is_branch_split: true,
-            start_ariane_id: 1,
-            end_ariane_id: 5,
-            start_depth: 2,
-          },
-        ];
-        return {
-          cave_name: 'Synthetic Cavern',
-          unit: imperial ? 'Imperial' : 'Metric',
-          use_magnetic_azimuth: true,
-          first_start_absolute_elevation: 0,
-          geo_coding: null,
-          sections,
-          // The Closure row (Side Passage raw row 2) ties back to shot 4 (its raw row 0).
-          closures: [{ from_section_index: 1, from_station_index: 2, to_section_index: 1, to_station_index: 0 }],
-        };
       };
 
       // The command families split out of this file (#576 E8, ./ipc/): each owns its
@@ -1398,33 +1104,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return null satisfies MockReply<'cancel_loading'>;
           }
 
-          case 'get_recent_logs':
-            // DebugDialog expects string[] log lines prefixed with a level.
-            return ['INFO [mock] app started', 'DEBUG [mock] project loaded'] satisfies MockReply<'get_recent_logs'>;
-
-          // The debug memory probe: an idle backend and no WebKit children to enumerate.
-          case 'get_memory_stats':
-            return {
-              backend: {
-                pid: 1,
-                name: 'stalagmight',
-                rss_kb: 0,
-                vm_size_kb: 0,
-                vm_peak_kb: 0,
-                vm_rss_anon_kb: 0,
-                vm_rss_file_kb: 0,
-                vm_rss_shmem_kb: 0,
-                role: 'backend',
-              },
-              webkit_processes: [],
-              total_rss_kb: 0,
-              webkit_enumeration_supported: false,
-            } satisfies MockReply<'get_memory_stats'>;
-
-          case 'get_internal_error_status':
-            // [#576 RV5-PI-3] No crash in a mocked session: no banner to raise.
-            return null satisfies MockReply<'get_internal_error_status'>;
-
           case 'get_project_state': {
             // [#576 NF-W5I-1] No project open: the backend resolves the whole reply null
             // (ProjectState | null), not a state whose project is null.
@@ -1572,58 +1251,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             } satisfies MockReply<'get_project_state'>;
           }
 
-          case 'get_adjusted_stations': {
-            // Closure-adjusted geometry view. The mock has no real least-squares
-            // solver, so the adjusted geometry is identical to measured: reuse the
-            // station array get_project_state builds.
-            // shape not checked: mockHandler returns unknown; the get_project_state case checks this value
-            const state = mockHandler('get_project_state', args) as MockReply<'get_project_state'>;
-            return (state?.stations ?? []) satisfies MockReply<'get_adjusted_stations'>;
-          }
-
-          case 'get_station_distances_from': {
-            // Distance-gradient field (#34). No real graph in the mock - synthesize
-            // distances from each station's mock x-coordinate (origin at x=0) so the
-            // overlay + legend have finite values to render. `from` is ignored.
-            const state = mockHandler('get_project_state', args) as
-              | {
-                  stations?: Array<{
-                    station_ref: { section_id: number; station_index: number };
-                    coordinates: { x: number; y: number; z: number };
-                  }>;
-                }
-              | null;
-            const stations = state?.stations ?? [];
-            let max = 0;
-            const distances = stations.map((s) => {
-              const d = Math.abs(s.coordinates.x);
-              if (d > max) max = d;
-              return d;
-            });
-            return {
-              distances,
-              station_refs: stations.map((s) => s.station_ref),
-              max_reachable: max,
-            } satisfies MockReply<'get_station_distances_from'>;
-          }
-
-          case 'get_along_line_distance': {
-            // Ruler along-line distance (#26). No real survey graph in the mock -
-            // return a deterministic distance and tint the first couple of shots
-            // of endpoint `a`'s section so the readout + tint have something to show.
-            const endpointA = (args?.a ?? null) as { section_id?: number } | null;
-            const sections = (currentProject?.sections ?? []) as Array<{ id: number; shots: Array<{ id: number }> }>;
-            const sec = sections.find((s) => s.id === endpointA?.section_id) ?? sections[0];
-            const path_shots = sec
-              ? (sec.shots ?? []).slice(0, 2).map((sh) => ({ section_id: sec.id, shot_id: sh.id }))
-              : [];
-            // Stations bounding those shots (one more than the shot count).
-            const path_stations = sec
-              ? Array.from({ length: path_shots.length + 1 }, (_, i) => ({ section_id: sec.id, station_index: i }))
-              : [];
-            return { along_line: 12.34, path_shots, path_stations } satisfies MockReply<'get_along_line_distance'>;
-          }
-
           case 'create_section': {
             sectionCounter++;
             const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];
@@ -1718,65 +1345,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             } satisfies MockReply<'import_sections'>;
           }
 
-          case 'execute_walls_import': {
-            // Record the import args (selectedSurveys, includeSplays, …) for
-            // assertions, then return a one-section success so the dialog runs
-            // its "imported" exit path (not the "nothing imported" branch).
-            wallsImportCalls.push({ ...(args ?? {}) });
-            const wallsPath = (args?.path as string | undefined) ?? '';
-            const wallsFileName = wallsPath.split('/').pop() ?? wallsPath;
-            return {
-              warnings: [],
-              remote_link: remoteLink(),
-              section_ids: [1],
-              import_receipt: {
-                source_format: 'Walls',
-                file_name: wallsFileName,
-                sections_found: 1,
-                sections_imported: 1,
-                shot_count: 0,
-                closures_requested: 0,
-                closures_created: 0,
-                unit_conversion: null,
-                warnings: [],
-                info: [],
-                zero_datum_created: null,
-              },
-            } satisfies MockReply<'execute_walls_import'>;
-          }
-
-          // A one-survey Walls project, canned: what the parser reads out of a real file
-          // is pinned by the parsers crate's Walls tests.
-          case 'parse_walls':
-            return {
-              project_name: 'CaveA',
-              book_count: 1,
-              survey_count: 1,
-              resolved_survey_count: 1,
-              shot_count: 3,
-              splay_count: 0,
-              has_georeference: false,
-              datum: null,
-              utm_zone: null,
-              fixed_station_count: 0,
-              missing_file_count: 0,
-              skipped_attachment_count: 0,
-              any_feet_units: false,
-              surveys: [
-                {
-                  name: 'A1',
-                  title: 'Survey A1',
-                  date: '2024-03-01',
-                  segment: '',
-                  shot_count: 3,
-                  splay_count: 0,
-                  fixed_station_count: 0,
-                  resolved: true,
-                },
-              ],
-              warnings: [],
-            } satisfies MockReply<'parse_walls'>;
-
           // File hash tracking for duplicate detection
           case 'calculate_file_hash':
             // Return a mock SHA256 hash based on path for consistency
@@ -1785,10 +1353,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'check_duplicate_import':
             // Configurable via __MOCK_SET_CHECK_DUPLICATE_RESULT__
             return mockCheckDuplicateResult satisfies MockReply<'check_duplicate_import'>;
-
-          case 'parse_gpx': {
-            return buildMockGpxFile(args?.path as string | undefined) satisfies MockReply<'parse_gpx'>;
-          }
 
           case 'execute_gpx_import': {
             // [#576 E3] Canned: the file's two waypoints, its track and its route land as
@@ -1864,9 +1428,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
             } satisfies MockReply<'execute_gpx_import'>;
           }
-
-          case 'parse_tml':
-            return buildMockTmlFile(args?.path as string | undefined) satisfies MockReply<'parse_tml'>;
 
           case 'execute_tml_import': {
             // [#576 E3] Recorded (every option the dialog sent, for the spec to assert), and
@@ -2219,38 +1780,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'unmerge_station_pair'>;
           }
 
-          case 'move_segment': {
-            // Record the dispatched offset for commit-assertion tests. These handlers
-            // don't mutate currentProject (refreshProjectState refetches generated
-            // coords), so tests assert on the committed offset, not a coord read-back.
-            console.log('[Mock IPC] move_segment called with:', args);
-            const win = window as unknown as Record<string, unknown>;
-            const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
-            calls.push({ command: 'move_segment', args: args ?? null });
-            win.__MOCK_MOVE_CALLS__ = calls;
-            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'move_segment'>;
-          }
-
-          case 'move_section': {
-            // Record the dispatched offset (mirrors move_segment/move_station) so
-            // commit-assertion tests can check the offset that reached the backend.
-            console.log('[Mock IPC] move_section called with:', args);
-            const win = window as unknown as Record<string, unknown>;
-            const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
-            calls.push({ command: 'move_section', args: args ?? null });
-            win.__MOCK_MOVE_CALLS__ = calls;
-            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'move_section'>;
-          }
-
-          case 'move_station': {
-            console.log('[Mock IPC] move_station called with:', args);
-            const win = window as unknown as Record<string, unknown>;
-            const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
-            calls.push({ command: 'move_station', args: args ?? null });
-            win.__MOCK_MOVE_CALLS__ = calls;
-            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'move_station'>;
-          }
-
           case 'get_anchored_section_ids':
             // Return section IDs that have zero datums
             console.log('[Mock IPC] get_anchored_section_ids called');
@@ -2378,110 +1907,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return hashes.map(() => false) satisfies MockReply<'check_section_hashes'>;
           }
 
-          case 'suggest_import_placement':
-            return [] satisfies MockReply<'suggest_import_placement'>;
-
-          case 'suggest_all_import_placements':
-            return [...mockImportPlacementSuggestions] satisfies MockReply<'suggest_all_import_placements'>;
-
-          case 'suggest_orphan_placements':
-            return [...mockOrphanPlacementSuggestions] satisfies MockReply<'suggest_orphan_placements'>;
-
-          case 'count_unanchored_sections':
-            return 0 satisfies MockReply<'count_unanchored_sections'>;
-
-          case 'get_segment_geometry':
-            return {
-              sections: [
-                {
-                  section_id: (args?.sectionId as number | undefined) ?? 1,
-                  color: '#4a90d9',
-                  shot_lines: [[[0, 0], [10, 0]]],
-                },
-              ],
-            } satisfies MockReply<'get_segment_geometry'>;
-
-          case 'list_recent_projects':
-            // `station_count: 0` / `is_remote: false` are what the UI read (`?? 0`, falsy)
-            // while these rows omitted the two fields the backend always sends.
-            return ([
-              {
-                name: 'Cave System Alpha',
-                location: 'Yucatan, Mexico',
-                file_path: '/projects/cave-alpha.stalx',
-                modified_at: new Date().toISOString(),
-                section_count: 5,
-                total_length: 1250.5,
-                station_count: 0,
-                is_remote: false,
-                gps_center: [-87.4631, 20.2137],
-                gps_bounds: {
-                  north: 20.2200,
-                  south: 20.2074,
-                  east: -87.4568,
-                  west: -87.4694,
-                },
-              },
-              {
-                name: 'Underwater Cave Beta',
-                location: 'Florida, USA',
-                file_path: '/projects/cave-beta.stalx',
-                modified_at: new Date(Date.now() - 86400000).toISOString(),
-                section_count: 3,
-                total_length: 820.0,
-                station_count: 0,
-                is_remote: false,
-                gps_center: [-82.4584, 29.6516],
-                gps_bounds: {
-                  north: 29.6550,
-                  south: 29.6482,
-                  east: -82.4521,
-                  west: -82.4647,
-                },
-              },
-              {
-                name: 'Deep Cave Gamma',
-                location: 'Bahamas',
-                file_path: '/projects/cave-gamma.stalx',
-                modified_at: new Date(Date.now() - 172800000).toISOString(),
-                section_count: 8,
-                total_length: 2100.3,
-                station_count: 0,
-                is_remote: false,
-                gps_center: [-77.3963, 25.0343],
-                gps_bounds: null,
-              },
-              {
-                name: 'Local Survey (No GPS)',
-                location: 'Unknown',
-                file_path: '/projects/local-survey.stalx',
-                modified_at: new Date(Date.now() - 259200000).toISOString(),
-                section_count: 2,
-                total_length: 350.0,
-                station_count: 0,
-                is_remote: false,
-                gps_center: null,
-                gps_bounds: null,
-              },
-            ] satisfies MockReply<'list_recent_projects'>).filter((p) => !deletedProjectPaths.has(p.file_path)).map((p) =>
-              recentNameOverrides[p.file_path]
-                ? { ...p, name: recentNameOverrides[p.file_path]! }
-                : p
-            ) satisfies MockReply<'list_recent_projects'>;
-
           case 'get_project_warnings':
             return [] satisfies MockReply<'get_project_warnings'>;
 
           case 'check_project_integrity':
             return { messages: mockIntegrityIssues, save_blocked: mockIntegritySaveBlocked } satisfies MockReply<'check_project_integrity'>;
-
-          case 'history_discarded':
-            // #473: whether the open project's edit history was unreadable and
-            // replaced by an empty stack. A peek, not a take - the real command
-            // keeps answering the same thing while the project is open, so the
-            // mock must too or a re-render would clear the banner.
-            mockHistoryDiscardedCalls += 1;
-            return mockHistoryDiscarded satisfies MockReply<'history_discarded'>;
 
           case 'repair_project_integrity': {
             // #576 D39(a): a read-only project refuses Repair with the coded error the
@@ -2510,43 +1940,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // `changed: false` is what the store read (falsy) while the mock omitted it:
             // the mock records no undo entry, so nothing marks the project dirty.
             return { fixed, remaining, changed: false, remote_link: remoteLink() } satisfies MockReply<'repair_project_integrity'>;
-          }
-
-          case 'remove_from_recent_projects':
-            // Mock remove from recent - just return success
-            console.log('[Mock IPC] remove_from_recent_projects called with:', args);
-            return { warnings: [] } satisfies MockReply<'remove_from_recent_projects'>;
-
-          case 'delete_project':
-            // Mock destructive delete: like the backend, the file leaves the
-            // recents list. Per-page state, so nothing leaks into another test.
-            deletedProjectPaths.add(String(args?.path ?? ''));
-            // `session_closed: false`: the mock never tears down the open session on a
-            // delete (the reply before #576 C4 left the field out, which read as false).
-            return { session_closed: false, warnings: [] } satisfies MockReply<'delete_project'>;
-
-          case 'set_project_name_for_path': {
-            const p = String(args?.path ?? '');
-            const name = String(args?.name ?? '').trim();
-            if (!name) return Promise.reject({ code: 'FAILED', message: 'Project name cannot be empty' } satisfies CommandError);
-            recentNameOverrides[p] = name;
-            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'set_project_name_for_path'>;
-          }
-
-          // Display settings (per-project) - uses in-memory storage for persistence testing
-          case 'load_display_settings':
-            // Return current display settings from in-memory storage
-            return { ...mockDisplaySettings } satisfies MockReply<'load_display_settings'>;
-
-          case 'save_display_setting': {
-            // Persist setting to in-memory storage
-            const key = args?.key as string;
-            const value = args?.value as string;
-            if (key && value !== undefined) {
-              mockDisplaySettings[key] = value;
-              console.log(`[Mock IPC] save_display_setting: ${key}=${value}`);
-            }
-            return null satisfies MockReply<'save_display_setting'>;
           }
 
           // Window plugin commands
@@ -2605,50 +1998,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // The opener plugin's commands are answered in `default` by `./ipc/opener.ts`.
 
           // Export commands
-          case 'export_csv':
-            console.log('[Mock IPC] export_csv called with:', args);
-            return null satisfies MockReply<'export_csv'>;
-
-          case 'export_json':
-            console.log('[Mock IPC] export_json called with:', args);
-            return null satisfies MockReply<'export_json'>;
-
-          // The Ariane writer's notes (#576 E3): none. What lands in the file is pinned by
-          // the export crate's TML tests; a spec asserts the call and its path.
-          case 'export_tml':
-            return [] satisfies MockReply<'export_tml'>;
-
-          // Dive-profile export (#299). Records the call so a spec can assert the plan INPUTS
-          // reached the backend - the real command recomputes the reach field from them rather
-          // than trusting a client-held one, so sending them is the contract under test.
-          case 'export_dive_profile': {
-            const win = window as unknown as Record<string, unknown>;
-            const calls = (win.__MOCK_DIVE_PROFILE_EXPORTS__ as unknown[]) ?? [];
-            calls.push({ path: args?.path, format: args?.format, request: args?.request });
-            win.__MOCK_DIVE_PROFILE_EXPORTS__ = calls;
-            return null satisfies MockReply<'export_dive_profile'>;
-          }
-
-          case 'render_dive_profile_text':
-            return [
-              'Mock Cave - planned dive profile',
-              'Planned penetration profile from Stalagmight. NOT a decompression schedule.',
-              '',
-              '   Dist(m)   Depth(m)   Runtime      Gas(L)  Leg',
-              '       0.0        0.0      0:00           0  in',
-            ].join('\n') satisfies MockReply<'render_dive_profile_text'>;
-
-          case 'preview_svg_export': {
-            // Stick-map preview lives in the same backend command pipeline; the
-            // mock returns a tiny but valid SVG so the preview component can
-            // render without hitting Rust during e2e tests.
-            const opts = args?.options as Record<string, unknown> | undefined;
-            const threshold = (opts?.branching_threshold as number | undefined) ?? 0;
-            // Encode the threshold in a data attribute so tests can verify
-            // the preview re-fetches when the slider changes.
-            return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" data-threshold="${threshold}"><rect width="100" height="100" fill="#ffffff"/><line x1="10" y1="50" x2="90" y2="50" stroke="#000000" stroke-width="1"/></svg>` satisfies MockReply<'preview_svg_export'>;
-          }
-
           case 'export_image': {
             console.log('[Mock IPC] export_image called with:', args);
             // Store args for test assertions via __E2E_MOCKS__.getLastExportImageArgs()
@@ -2776,67 +2125,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] delete_last_shot_and_section called with:', args);
             return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'delete_last_shot_and_section'>;
 
-          case 'preview_delete_shot': {
-            console.log('[Mock IPC] preview_delete_shot called with:', args);
-            const sectionId = (args?.sectionId as number | undefined) ?? 1;
-            return {
-              removed_station: { section_id: sectionId, station_index: 0 },
-              removed_merges: [
-                {
-                  station_a: { section_id: sectionId, station_index: 0 },
-                  station_b: { section_id: sectionId, station_index: 1 },
-                },
-              ],
-              removed_closures: [
-                {
-                  closure_id: 1,
-                  station_a: { section_id: sectionId, station_index: 0 },
-                  station_b: { section_id: sectionId, station_index: 2 },
-                },
-              ],
-              replacement_merges: [],
-              replacement_closure_updates: [],
-              closure_to_merge: [],
-              merge_rewire_skipped: false,
-              closure_rewire_skipped: true,
-              shift_blocked: false,
-              shift_blocked_reasons: [],
-            } satisfies MockReply<'preview_delete_shot'>;
-          }
-
           case 'delete_shot_and_split':
             console.log('[Mock IPC] delete_shot_and_split called with:', args);
             // `section_id` is section B's: the id the backend's `next_section_id` would give
             // it. The mock does not model the split, so no section lands under that id.
             return { section_id: sectionCounter + 1, warnings: [], remote_link: remoteLink() } satisfies MockReply<'delete_shot_and_split'>;
-
-          case 'preview_delete_shot_range': {
-            console.log('[Mock IPC] preview_delete_shot_range called with:', args);
-            const sectionId = (args?.sectionId as number | undefined) ?? 1;
-            return {
-              section_id: sectionId,
-              start_pos: 1,
-              end_pos: 2,
-              kind: 'interior',
-              removed_stations: [{ section_id: sectionId, station_index: 2 }],
-              removed_merges: [
-                {
-                  station_a: { section_id: sectionId, station_index: 1 },
-                  station_b: { section_id: sectionId, station_index: 2 },
-                },
-              ],
-              removed_closures: [],
-              replacement_merges: [],
-              replacement_closure_updates: [],
-              closure_to_merge: [],
-              merge_rewire_skipped: false,
-              closure_rewire_skipped: false,
-              shift_blocked: false,
-              shift_blocked_reasons: [],
-              removed_datums: [],
-              removed_comments: [],
-            } satisfies MockReply<'preview_delete_shot_range'>;
-          }
 
           case 'delete_shot_range_split':
             console.log('[Mock IPC] delete_shot_range_split called with:', args);
@@ -3117,33 +2410,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return undefined;
           }
 
-          case 'get_survey_geometry_for_file': {
-            const filePath = args?.path as string;
-            console.log('[Mock IPC] get_survey_geometry_for_file called for:', filePath);
-
-            // Check if this path should simulate an error
-            if (geometryErrorPaths.has(filePath)) {
-              throw new Error(`Failed to load geometry for ${filePath}`);
-            }
-
-            // Check if this path should be delayed
-            const delay = geometryDelayPaths.get(filePath);
-            // Return a SurveyGeometry-conformant payload matching src/types/survey.ts
-            const mockGeometry: MockReply<'get_survey_geometry_for_file'> = {
-              origin: [-82.46, 24.93] as [number, number],
-              shots: [
-                { from: [-82.46, 24.93] as [number, number], to: [-82.4599, 24.9301] as [number, number], kind: 'Normal', section_id: 1 },
-                { from: [-82.4599, 24.9301] as [number, number], to: [-82.4598, 24.9302] as [number, number], kind: 'Normal', section_id: 1 },
-              ],
-            };
-
-            if (delay && delay > 0) {
-              return new Promise((resolve) => setTimeout(() => resolve(mockGeometry), delay)) satisfies Promise<MockReply<'get_survey_geometry_for_file'>>;
-            }
-
-            return mockGeometry satisfies MockReply<'get_survey_geometry_for_file'>;
-          }
-
           case 'take_pending_launch_files':
             // #424: no OS handed this browser-hosted app a file. Present so the
             // startup drain resolves to an empty list instead of falling through
@@ -3306,5 +2572,5 @@ export async function setupTauriMocks(page: Page): Promise<void> {
   });
 }
 
-export { createMockProject, createMockSection };
-export type { MockProject, MockSection, MockShot };
+export { createMockProject, createMockSection } from './ipc/mockProject';
+export type { MockProject, MockSection, MockShot } from './ipc/mockProject';

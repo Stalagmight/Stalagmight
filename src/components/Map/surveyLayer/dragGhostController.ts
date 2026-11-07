@@ -23,8 +23,8 @@
 // originals, the interact-overlay follow, and the commit/flash sequencing; this
 // controller only drives the ghost geometry.
 
-import type maplibregl from 'maplibre-gl';
-import { hasLiveStyle } from '../mapUtils';
+import type * as maplibregl from 'maplibre-gl';
+import { canWriteStyle, hasLiveStyle } from '../mapUtils';
 import { GhostFollow } from './dragGhostFollow';
 import {
   DRAG_PREVIEW_SOURCE,
@@ -39,6 +39,12 @@ import {
   type Projector,
 } from './dragPreviewSource';
 import { SurveyGhostLayer, type GhostRenderData } from './customRender/surveyGhostLayer';
+import {
+  addCustomLayer,
+  isStyleRestoring,
+  reAddCustomLayer,
+  removeCustomLayer,
+} from './customRender/styleRestore';
 
 /** Which ghost path is live for the current drag. */
 export type GhostMode = 'idle' | 'custom' | 'stock';
@@ -148,7 +154,7 @@ export class DragGhostController {
     // preview layer with it, is already gone (#576 NF-MAP-5).
     if (hasLiveStyle(this.map)) {
       removeDragPreviewLayers(this.map);
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      removeCustomLayer(this.map, this.layer);
     }
     this.layer = null;
     this.set = null;
@@ -174,17 +180,21 @@ export class DragGhostController {
   }
 
   /**
-   * Re-add a live custom ghost after a WebGL context restore (MapLibre never
-   * re-adds custom layers; see glContextRecovery.ts). The stock ghost needs
-   * nothing: its source and layers are in the restored style. A re-add that
-   * cannot draw falls back to the stock ghost, as a mid-drag self-disable does.
+   * Re-add a live custom ghost after MapLibre rebuilt the style without it (a
+   * WebGL context restore or a worker restart; see glContextRecovery.ts).
+   * reAddCustomLayer first frees what a worker restart left behind; without a
+   * `beforeId` the ghost goes on top, as on start. The stock ghost needs nothing:
+   * its source and layers are in the restored style. A re-add that cannot draw
+   * falls back to the stock ghost, as a mid-drag self-disable does.
    */
-  reattach(beforeId: string | undefined): void {
+  reattach(beforeId?: string): void {
     const layer = this.layer;
     if (this.mode !== 'custom' || !layer) return;
-    this.map.addLayer(layer, beforeId);
-    if (layer.isDisabled()) this.handleSelfDisable(layer.getDisabledReason() ?? 'unknown');
-    else this.map.triggerRepaint();
+    if (!reAddCustomLayer(this.map, layer, beforeId)) {
+      this.handleSelfDisable(layer.getDisabledReason() ?? 'unknown');
+      return;
+    }
+    this.map.triggerRepaint();
   }
 
   /** Create + add the custom ghost layer. Returns false (so begin falls back to
@@ -195,9 +205,9 @@ export class DragGhostController {
       const layer = new SurveyGhostLayer(this.layerId, data, (reason) => this.handleSelfDisable(reason));
       // No beforeId: the ghost draws on top (above geometry + labels), matching
       // the stock drag-preview layers' stacking.
-      this.map.addLayer(layer);
+      addCustomLayer(this.map, layer);
       if (layer.isDisabled()) {
-        if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+        removeCustomLayer(this.map, layer);
         console.warn(
           `[dragGhost] custom ghost failed to initialize (${layer.getDisabledReason() ?? 'unknown'}); ` +
             'using stock drag preview',
@@ -222,7 +232,8 @@ export class DragGhostController {
    * the preview never vanishes. Idempotent + re-entrancy-safe.
    */
   private handleSelfDisable(reason: string): void {
-    if (this.mode !== 'custom' || this.selfDisableScheduled) return;
+    // A lost context fails every GL call; the restore's re-add rebuilds the layer.
+    if (this.mode !== 'custom' || this.selfDisableScheduled || isStyleRestoring(this.map)) return;
     this.selfDisableScheduled = true;
     const gen = this.dragGeneration; // pin this drag; a later begin/end invalidates it
     console.warn(`[dragGhost] custom ghost self-disabled (${reason}); falling back to stock drag preview`);
@@ -231,12 +242,13 @@ export class DragGhostController {
       this.selfDisableScheduled = false;
       if (this.mode !== 'custom' || !this.set) return;
       // The WebGL context was lost before this deferred fallback ran: there is no
-      // style to drop the layer from or build the stock ghost in, and getLayer
-      // reads the missing style and throws (#576 RV4-FE-MF-6, the NF-MAP-3 race).
-      // Leave the dead custom ghost in place: the restore's reattach() re-adds it,
-      // finds it disabled and runs this fallback again on a live style.
-      if (!hasLiveStyle(this.map)) return;
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      // style to build the stock ghost in, and addSource / addLayer read the
+      // missing style and throw (#576 RV4-FE-MF-6, the NF-MAP-3 race); a rebuilt
+      // style that has not loaded yet refuses them (RV18-MAP-1). Leave the dead
+      // custom ghost in place: the restore's reattach() re-adds it, finds it
+      // disabled and runs this fallback again on a live style.
+      if (!canWriteStyle(this.map)) return;
+      removeCustomLayer(this.map, this.layer);
       this.layer = null;
       this.mode = 'stock';
       this.startStock();

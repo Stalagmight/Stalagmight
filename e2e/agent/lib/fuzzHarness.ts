@@ -20,6 +20,7 @@
  * other two scenarios do not.
  */
 import type { ScenarioContext } from '../scenarios/framework';
+import { redactCorpusText } from './fixtureCorpus';
 import { TraceRecorder, defaultTracePath, readTrace, writeTrace, type FuzzTrace } from './fuzzTrace';
 import { replayTracePath, traceOutPath } from './fuzzKnobs';
 
@@ -234,13 +235,16 @@ export function describeRunError(err: unknown, inFlight: string | null): RunErro
   const first = (lines[0] ?? '').trim();
   if (isWebDriverStall(err)) {
     const command = /when running "([^"]+)"/.exec(message)?.[1] ?? 'a WebDriver call';
+    // Folded BEFORE the cut (#576 RV18-W23-6): the in-page script can quote a
+    // corpus copy, and a name cut in two is a stub no later fold recognises.
+    const error = redactCorpusText(first);
     return {
       stall: true,
       headline: `STALL: ${command} did not return within the WebDriver budget - the page stopped answering`,
       detail: [
         `  stalled move: ${inFlight ?? '(none in flight - the stall came between moves)'}`,
         // Bounded: webdriver appends the in-page script to the message.
-        `  error: ${first.length > 240 ? `${first.slice(0, 240)}...` : first}`,
+        `  error: ${error.length > 240 ? `${error.slice(0, 240)}...` : error}`,
       ].join('\n'),
     };
   }

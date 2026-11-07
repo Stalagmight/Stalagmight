@@ -30,6 +30,7 @@ import { useUIStore } from '../../store/uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import i18n from '../../i18n';
 import { invokeIpcMock, stubGetErrorMessage } from '../../test/factories/ipc';
+import type { ValidationWarning } from '../../types/ipc/ValidationWarning';
 
 /** `speleodb_publish`'s answer as the wire carries it (`SpeleoPublishReport`, #576
  *  RV6a-6): the outcome and what its saves could not keep (nothing here). */
@@ -101,7 +102,7 @@ describe('PublishToSpeleoDbDialog', () => {
     invokeIpcMock.mockResolvedValue({
       result: { project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' },
       save_warnings: [
-        { code: 'DISPLAY_SETTINGS_NOT_SAVED', message: 'display settings not kept', severity: 'Warning' },
+        { code: 'DISPLAY_SETTINGS_NOT_SAVED', message: 'display settings not kept', severity: 'warning' } satisfies ValidationWarning,
       ],
     });
     render(<PublishToSpeleoDbDialog />);

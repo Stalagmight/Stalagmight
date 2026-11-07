@@ -189,9 +189,10 @@ export function autosaveFailureMessage(failure: SaveFailure | null | undefined):
 
 /**
  * What a SUCCESSFUL save could not keep, by the code the backend stamps on
- * `SaveOutcome.warnings` (`save_sidecars.rs` / `project_io.rs`).
+ * `SaveOutcome.warnings` (the `*_CODE` consts in `save_sidecars.rs`). Exported
+ * for saveWarningCodes.parity.test.ts, which holds it to those consts.
  */
-const SAVE_WARNING_TEXT: Record<string, string> = {
+export const SAVE_WARNING_TEXT: Readonly<Record<string, string>> = {
   // The undo history could not be written and was removed from the saved file.
   UNDO_HISTORY_DROPPED: 'saveWarnings.undoHistoryDropped',
   // The project's display settings could not be carried into the saved file.

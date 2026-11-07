@@ -1,8 +1,10 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import {
+  seedNavigationTools,
   setupMockedPage,
   createProject,
   waitForNoDialogs,
+  waitForActiveTool,
   seedProjectWithSections,
   createSectionViaStore,
   waitForDrawnShots,
@@ -452,6 +454,73 @@ test.describe('A WebGL context that does not come back (#576 D38-LOST)', () => {
     expect(after.lng).toBeCloseTo(before.lng, 6);
     expect(after.lat).toBeCloseTo(before.lat, 6);
     expect(after.zoom).toBeCloseTo(before.zoom, 6);
+  });
+
+  // [#576 W26-NF2] Under Pan, the section row the pointer rests on kept its hover
+  // in the store across the rebuild, but the rebuilt map painted none: on load
+  // MapCanvas's tool effect runs AFTER MapHoverSync pushed the hover in (a child's
+  // effects run first), and SurveyLayer.setActiveTool drops section hover under
+  // Pan/Zoom. Reload is pressed from the keyboard so the pointer stays on the row.
+  test('survey map: under Pan, Reload map keeps the hovered section row highlighted', async ({ page }) => {
+    await seedNavigationTools(page);
+    await openSeededAndZoom(page, 'Context Lost Pan Hover');
+    await page.keyboard.press('p');
+    await waitForActiveTool(page, 'pan');
+    const sectionId = await page.evaluate(() =>
+      (window as unknown as {
+        __E2E_TEST__: { projectStore: { getState: () => { project: { sections: Array<{ id: number }> } } } };
+      }).__E2E_TEST__.projectStore.getState().project.sections[0]!.id,
+    );
+    // Hover grows the station discs 1.5x, so the 21 px blocks around them hold more ink.
+    const discInk = async (): Promise<number> => {
+      const bg = await readCanvasPixel(page, 6, 6);
+      let total = 0;
+      for (const s of (await getDrawnGeometry(page)).stations) total += await countCanvasInk(page, s.x, s.y, bg, 21);
+      return total;
+    };
+    // Read once every tile is in and two reads agree, so a tile still loading (its
+    // bare background counts as ink) or a label fading in cannot pass for hover.
+    const settledDiscInk = async (): Promise<number> => {
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            (window as unknown as { __stalagmight_map__: { loaded: () => boolean } }).__stalagmight_map__.loaded(),
+          ),
+        )
+        .toBe(true);
+      let ink = -1;
+      await expect
+        .poll(async () => {
+          const previous = ink;
+          ink = await discInk();
+          return ink === previous;
+        })
+        .toBe(true);
+      return ink;
+    };
+    const baseInk = await settledDiscInk();
+    await page.getByTestId(`section-row-${sectionId}`).hover();
+    await expect.poll(discInk).toBeGreaterThan(baseInk);
+    const hoverInk = await settledDiscInk();
+
+    await tagMap(page, '__stalagmight_map__');
+    await loseContext(page);
+    const toast = page.locator(LOST_TOAST);
+    await expect(toast).toBeVisible({ timeout: 10000 });
+    await toast.getByTestId('map-context-lost-reload').focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => mapIsRebuilt(page, '__stalagmight_map__'), { timeout: 10000 }).toBe(true);
+    await waitForDrawnShots(page, 3);
+    await waitForActiveTool(page, 'pan');
+
+    const hovered = await page.evaluate(() =>
+      (window as unknown as {
+        __E2E_TEST__: { uiStore: { getState: () => { hoveredSectionId: number | null } } };
+      }).__E2E_TEST__.uiStore.getState().hoveredSectionId,
+    );
+    expect(hovered).toBe(sectionId);
+    // Painted at the hover level, not the bare one (measured 892 vs 484 ink).
+    expect(await settledDiscInk()).toBeGreaterThan((baseInk + hoverInk) / 2);
   });
 
   test('survey map: the toast clears itself when the context comes back after all', async ({ page }) => {

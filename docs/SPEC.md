@@ -335,6 +335,9 @@ When a zero datum is set with GPS coordinates, a coordinate transformation conve
 The transformation is implemented in `src-tauri/crates/models/src/geo.rs` with:
 - `geodetic_to_ecef(lat, lon, alt)` - WGS84 to ECEF
 - `gps_to_local(gps, origin)` - Main entry point returning (east, north) meters
+- `local_to_gps(east, north, origin)` - its exact inverse, the one local-to-GPS
+  algorithm (the frontend's `enuToGps` runs the same solve); see
+  [Architecture](architecture.md#coordinate-transformation-zero-datum)
 
 ### 4.4 Computed Values
 

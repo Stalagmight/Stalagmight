@@ -12,7 +12,7 @@
 //!
 //! Driven against a loopback stub that answers like SpeleoDB and keeps the server's
 //! state across the exchange: the mutex (unheld until the adoption acquires it, freed
-//! by the release), the project type (`ariane` until a PATCH says `other`) and the
+//! by the release), the project type (`ariane` until a PATCH says `stalagmight`) and the
 //! revision history (the Ariane tip, then the pushed `.stalx` on top of it). The dump
 //! at the tip holds one `ariane.tml`, a synthetic survey built in this test. After
 //! the verb: the upload landed and is reported `Pushed`, the type flipped, the lock
@@ -113,7 +113,7 @@ type Seen = Arc<Mutex<Vec<String>>>;
 
 /// A loopback stub answering each request from [`Server`] and updating it the way
 /// SpeleoDB does: an acquire takes the mutex for our account, a release frees it, a
-/// PATCH retypes the project `other`, the upload lands [`PUSHED_SHA`]. The dump is
+/// PATCH retypes the project `stalagmight`, the upload lands [`PUSHED_SHA`]. The dump is
 /// `zip`. Records every request line. Keep the listener bound for the whole test.
 fn adoption_stub(zip: Vec<u8>) -> (String, std::net::TcpListener, Seen, Arc<Mutex<Server>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
@@ -165,7 +165,7 @@ fn adoption_stub(zip: Vec<u8>) -> (String, std::net::TcpListener, Seen, Arc<Mute
                     } else if line.starts_with("POST ") && path.ends_with("/release/") {
                         server.holder = None;
                     } else if line.starts_with("PATCH ") {
-                        server.kind = "other";
+                        server.kind = "stalagmight";
                     }
                     ("application/json", project_json(&server).into_bytes())
                 }
@@ -309,7 +309,7 @@ fn adoption_body_in_a_process_of_its_own() {
     assert_eq!(holder, None, "the server's mutex is free");
     assert!(!claim_kept, "and no claim on it is left");
     assert!(adopted.type_flipped, "the server type is reported flipped");
-    assert_eq!(kind, "other", "and it is `other` on the server");
+    assert_eq!(kind, "stalagmight", "and it is `stalagmight` on the server");
     assert_eq!(
         link,
         Some((Some(PUSHED_SHA.to_owned()), false)),

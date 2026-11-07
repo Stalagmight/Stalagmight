@@ -19,13 +19,20 @@ Update this file every time a new version is tagged.
 
 - **A junction whose depths disagree is exported at their average** - where a branch starts at a different depth than the station it hangs off, the `.tml`/`.tmlu` export now writes that station at the mean of its readings (the main line's, and one for each section hung there), keeps every other station at its true depth, and gives only the shots touching the junction a new length that keeps their horizontal run, so the plan stays put. Before, the branch was started at the main line's depth and every later shot on it was shifted by the whole mismatch. The export toast says how many junctions were averaged and the largest disagreement ([#576](https://github.com/Stalagmight/Stalagmight/issues/576))
 
+#### Saving on Windows
+
+- **Writes to Windows paths that are not a plain file are refused** - on Windows, a save, export or other file write to a device or volume path (`\\?\GLOBALROOT\...`, `\\.\pipe\...`, `\??\...`), a path relative to a drive's current folder (`C:x.stalx`), an alternate data stream (`notes.txt:x.stalx`), a device name such as `NUL.stalx`, `COM1.stalx`, `LPT0.stalx`, `COM¹.stalx` or `CONOUT$.stalx`, or this computer reached as a network share (`\\localhost\C$\...`, `\\127.0.0.1\...`, also spelled `\\127.1\...`, `\\2130706433\...` or `\\0x7f000001\...`) is now refused with the reason, as a write into a system folder is; so is opening an older project at such a path, which would upgrade it in place. A network path spelled `\\?\unc\...` or `\\.\UNC\...`, and a folder name with a trailing dot (`C:\Windows.\`), now count as the folder they name ([#576](https://github.com/Stalagmight/Stalagmight/issues/576))
+
 ### Fixed
+
+- **SpeleoDB:** projects Stalagmight publishes or adopts are now typed `stalagmight` on SpeleoDB instead of `other`, a type SpeleoDB never builds maps for. Projects already adopted as `other` are relabelled on their next push. Their maps update once SpeleoDB generates maps for Stalagmight projects.
 
 #### Import
 
 - **A huge reading in an imported file no longer places stations at infinity** - a length, depth, elevation, passage dimension, length correction or angle that was finite but absurdly large (1e308) was accepted, and the computed station positions overflowed to infinity; a Walls rectangular vector that large passed the import preview and the import then failed. Walls, Compass, Ariane and GPX imports now read any such length beyond 10,000 km, or angle beyond 1,000,000 degrees, as missing and name it, with its line, shot or point, on the import preview and the receipt. As a backstop, an import whose station positions still come out non-finite is refused whole, naming the section.
 - **A GPX track with a repeated point imports** - a GPS standing still logs the same point again, and each repeat became a zero-length shot that made the whole track fail to import. A point at the same position and elevation as the one before it is now skipped, and the import receipt counts them ("N repeated GPS points skipped").
 - **A negative Compass LRUD reads as missing** - Compass marks an unmeasured passage dimension with a negative number, but only `-1` and below were read that way, so a marker that went through a unit conversion (`-0.30`, -1 ft written in metres) imported as a negative passage dimension and was then flagged by validation. Any negative LRUD now reads as not measured, as in Walls.
+- **An excluded shot no longer moves the depth of the shot after it** - with excluded shots left out of an Ariane import, a shot recorded as starting at the depth before it now starts at the depth the file gives the end of the excluded shot, as it already did when the excluded shot started its section. It used to take the depth of the shot before the excluded one, so the same survey could import a few centimetres differently in metres and in feet.
 
 #### SpeleoDB
 
@@ -33,7 +40,10 @@ Update this file every time a new version is tagged.
 - **Signing in over a live session releases the old session's lock** - signing in as another account, or on another server, while a session is live now does what logging out does for the old session: the lock it holds is released with the old token (the un-pushed-edits check still applies), edit mode is closed and the claim forgotten. Before, the old lock stayed held on the server and edit mode carried over to the new account. ([#576](https://github.com/Stalagmight/Stalagmight/issues/576))
 - **A lost reply to a lock request no longer leaves edit mode out of step** - when the reply to Release lock (project SpeleoDB settings), Done's release, Start Editing's lock acquire or Publish's lock acquire is lost, the app now re-reads who holds the lock at once. If the lock is gone or someone else holds it, edit mode closes (and Done finishes as released); if it is ours right after our own acquire, the claim is recorded: Start Editing opens edit mode and Publish's initial upload goes ahead, and a later quit or logout hands the lock back. If the re-read fails too (offline, server down), edit mode and the claim stay and the next successful status poll reconciles; after a Start Editing or Publish whose acquire went unanswered this way, the first status poll that finds your account holding the lock records the claim, so a quit hands the lock back, and a poll that finds the lock free or someone else's, or closing the project, drops the question. ([#576](https://github.com/Stalagmight/Stalagmight/issues/576))
 
-- **An excluded shot no longer moves the depth of the shot after it** - with excluded shots left out of an Ariane import, a shot recorded as starting at the depth before it now starts at the depth the file gives the end of the excluded shot, as it already did when the excluded shot started its section. It used to take the depth of the shot before the excluded one, so the same survey could import a few centimetres differently in metres and in feet.
+### Security
+
+- **Bundled SQLite updated from 3.45.0 to 3.54.1** - `.stalx` project files are SQLite databases you may be sent by others, and this picks up the upstream memory-safety fixes since January 2024, including several for crafted database files ([#598](https://github.com/Stalagmight/Stalagmight/issues/598))
+- **Bundled SQLite built without full-text search, R-tree, DBSTAT and extension loading** - Stalagmight uses none of them, and leaving them out means a crafted `.stalx` cannot reach their code ([#608](https://github.com/Stalagmight/Stalagmight/issues/608))
 
 ## [0.5.0] - 2026-08-13
 

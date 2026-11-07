@@ -148,16 +148,15 @@ class FakeGlobalSurveyLayer {
 
 export const fakeGlobalView = { state, FakeMap, FakeMarker, FakePopup, FakeBounds, Noop };
 
-/** What `vi.mock('maplibre-gl', ...)` resolves to. */
+/** What `vi.mock('maplibre-gl', ...)` resolves to. maplibre-gl 6 is ESM-only
+ *  with named exports (`import * as maplibregl`), so there is no `default`. */
 export const maplibreModule = {
-  default: {
-    Map: FakeMap,
-    Marker: FakeMarker,
-    Popup: FakePopup,
-    LngLatBounds: FakeBounds,
-    NavigationControl: Noop,
-    ScaleControl: Noop,
-  },
+  Map: FakeMap,
+  Marker: FakeMarker,
+  Popup: FakePopup,
+  LngLatBounds: FakeBounds,
+  NavigationControl: Noop,
+  ScaleControl: Noop,
 };
 
 /** What `vi.mock('<rel>/GlobalSurveyLayer', ...)` resolves to. */

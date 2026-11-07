@@ -126,6 +126,12 @@ export const SHELL_GATE_STEPS = [
     checklist: 'git status --porcelain src/types/ipc src/types/ipc.generated.ts',
     why: 'the frontend IPC types are written by pnpm gen:ipc-types; CI fails on modified or untracked files under them',
   },
+  {
+    workflow: '.github/workflows/ci.yml',
+    step: 'crates.io packaging check (stalx-reader)',
+    checklist: 'cargo package --no-verify --manifest-path src-tauri/Cargo.toml -p stalagmight-models -p stalagmight-persistence -p stalx-reader',
+    why: 'a shell loop over the three published crates: cargo package, then a LICENSE check on each package listing',
+  },
 ];
 
 // Actions that gate nothing: runner setup, caches and report uploads. Matched

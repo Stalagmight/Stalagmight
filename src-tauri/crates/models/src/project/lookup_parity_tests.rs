@@ -329,17 +329,27 @@ fn datums_and_comments_land_where_the_station_scan_put_them() {
         }
     }
     // The scan applied the comments in the map's order, the last one winning; the
-    // rule since #576 NF-W12BE-3 is that the key sorting first wins, so the scan
-    // here applies them last-sorting first.
-    let mut comments: Vec<(&StationKey, &String)> = project.station_comments.iter().collect();
-    comments.sort_by(|a, b| b.0.cmp(a.0));
-    for (key, comment) in comments {
-        let Some(sr) = project.resolve_key(key) else {
-            continue;
-        };
+    // rule since #576 W30-6 is the save's: every key's comment on the station,
+    // joined - the canonical key's first, then the others in key order - so the
+    // scan here joins them in that order.
+    let mut comments: Vec<((SectionId, u32, bool, &StationKey), &String)> = project
+        .station_comments
+        .iter()
+        .filter_map(|(key, comment)| {
+            let sr = project.resolve_key(key)?;
+            let positional = project.key_for_ref(sr).as_ref() != Some(key);
+            Some(((sr.section_id, sr.station_index, positional, key), comment))
+        })
+        .collect();
+    comments.sort_by(|a, b| a.0.cmp(&b.0));
+    for ((section_id, station_index, _, _), comment) in comments {
+        let sr = StationRef::new(section_id, station_index);
         for station in &mut scanned {
             if station.station_ref == sr {
-                station.comment = Some(comment.clone());
+                match &mut station.comment {
+                    Some(kept) => crate::join_station_comment(kept, comment.clone()),
+                    None => station.comment = Some(comment.clone()),
+                }
             }
         }
     }
@@ -363,13 +373,10 @@ fn datums_and_comments_land_where_the_station_scan_put_them() {
         .gps_coordinates
         .is_some_and(|g| (g.latitude - 3.0).abs() < 1e-12)));
     assert_eq!(stations.iter().filter(|s| s.comment.is_some()).count(), 3);
-    // Of the two, the canonical key's comment shows, never the positional one's.
+    // The two show joined, the canonical key's first - what the save writes.
     assert!(stations
         .iter()
-        .any(|s| s.comment.as_deref() == Some("after shot 0")));
-    assert!(!stations
-        .iter()
-        .any(|s| s.comment.as_deref() == Some("by index")));
+        .any(|s| s.comment.as_deref() == Some("after shot 0\nby index")));
 }
 
 /// A small deterministic generator (xorshift64*), so a corpus is a list of seeds.
@@ -861,11 +868,12 @@ fn closure_refs_over_the_layout_match_the_station_scan() {
 /// [#576 NF-W12BE-3] Two stored keys naming one station - the canonical key and a
 /// legacy positional `Index` beside it - each with its own comment. Which one the
 /// station showed came out of the comment map's iteration order, so a project
-/// rebuilt with the same content could show the other one. The rule: the key
-/// that sorts first wins, and a canonical anchor sorts before a positional one.
+/// rebuilt with the same content could show the other one. The rule since #576
+/// W30-6 is the save's: the station shows both, joined, the canonical key's
+/// first, on every rebuild.
 #[test]
-#[expect(clippy::print_stdout, reason = "the test prints the winners it saw")]
-fn colliding_comment_keys_pick_one_documented_winner() {
+#[expect(clippy::print_stdout, reason = "the test prints the comments it saw")]
+fn colliding_comment_keys_show_both_in_one_order() {
     let mut winners: BTreeSet<(u32, String)> = BTreeSet::new();
     for _ in 0..64 {
         let mut project = Project::new("collide".to_string(), None);
@@ -897,10 +905,10 @@ fn colliding_comment_keys_pick_one_documented_winner() {
     assert_eq!(
         winners.into_iter().collect::<Vec<_>>(),
         vec![
-            (0, "canonical key 0".to_string()),
-            (1, "canonical key 1".to_string())
+            (0, "canonical key 0\nindex key 0".to_string()),
+            (1, "canonical key 1\nindex key 1".to_string())
         ],
-        "each station shows its canonical key's comment, every time"
+        "each station shows both comments, its canonical key's first, every time"
     );
 }
 
@@ -1147,7 +1155,7 @@ fn resolved_offsets_match_the_single_station_lookup() {
 
 /// [#576 NF-W12BE-4] Two keys naming one station, each with its own offset: the
 /// station lands by the key that sorts first (the canonical one), on every
-/// rebuild - the comment rule of NF-W12BE-3.
+/// rebuild.
 #[test]
 #[expect(clippy::print_stdout, reason = "the test prints the positions it saw")]
 fn colliding_offset_keys_pick_one_documented_winner() {

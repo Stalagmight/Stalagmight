@@ -40,9 +40,15 @@ export const recoveryCommands: MockCommandFamily = (ctx) => {
           errors: [],
         } satisfies MockReply<'export_salvageable_data'>;
 
-      // [#576 HFI-3] The salvage file is written by the backend; the mock writes nothing.
+      // [#576 HFI-3] The salvage file is written by the backend; the mock writes
+      // nothing, and answers the counts of what it wrote: none (#576 W30-5).
       case 'write_salvaged_data':
-        return null satisfies MockReply<'write_salvaged_data'>;
+        return {
+          sectionCount: 0,
+          shotCount: 0,
+          mergeCount: 0,
+          errors: [],
+        } satisfies MockReply<'write_salvaged_data'>;
 
       default:
         return ctx.unhandled;

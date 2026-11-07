@@ -54,13 +54,20 @@ describe('failureDetail', () => {
   it('falls back to the tail of ALL output when the child printed no FAIL line', () => {
     // A crash, a timeout or a driver that never attached: stderr is the only
     // account there is, and stdout has no FAIL line to anchor on.
+    // The tail is shareable (#576 W23-NF1): stack frames - code locations -
+    // print as they are, anything else is counted.
     const outLines = ['session ready', ''];
-    const allLines = [...outLines, ...Array.from({ length: 40 }, (_unused, i) => `stderr ${i}`)];
+    const allLines = [...outLines, ...Array.from({ length: 40 }, (_unused, i) => `    at f${i} (/x/y.ts:${i}:1)`)];
     const detail = failureDetail({ outLines, allLines });
     const lines = detail.split('\n');
     expect(lines).toHaveLength(TAIL_LINES);
-    expect(lines[lines.length - 1]).toBe('stderr 39');
+    expect(lines[lines.length - 1]).toBe('    at f39 (/x/y.ts:39:1)');
     expect(detail).not.toContain('\n\n');
+    const text = failureDetail({ outLines, allLines: [...allLines, 'stderr 40', 'stderr 41'] }).split('\n');
+    expect(text.slice(-2)).toEqual([
+      '    at f39 (/x/y.ts:39:1)',
+      "  (2 line(s) withheld: they can quote the app's text - the matrix does not keep them)",
+    ]);
   });
 
   it('anchors on the FIRST FAIL line when a run printed more than one', () => {

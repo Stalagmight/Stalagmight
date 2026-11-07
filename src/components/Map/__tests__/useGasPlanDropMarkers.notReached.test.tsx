@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, renderHook } from '@testing-library/react';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 
 vi.mock('maplibre-gl', () => {
   class Marker {
@@ -34,7 +34,7 @@ vi.mock('maplibre-gl', () => {
       this.el.remove();
     }
   }
-  return { default: { Marker } };
+  return { Marker };
 });
 
 import '../../../i18n';

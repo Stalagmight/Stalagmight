@@ -43,6 +43,10 @@ impl PlnxStore {
     /// [`ensure_identity`](Self::ensure_identity).
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).context("Failed to open dive-plan file")?;
+        // [#576 RV18-4] A `.plnx` is input like a `.stalx`: refuse a schema that
+        // could run SQL the file chose before anything else touches it (#608).
+        // A new file is empty, so this passes it.
+        super::sqlite::check_schema(&conn)?;
         // Crash-safe in-place writes; ignore pragma failures (defaults are already safe).
         let _ = conn.pragma_update(None, "journal_mode", "DELETE");
         let _ = conn.pragma_update(None, "synchronous", "FULL");
@@ -115,9 +119,12 @@ impl PlnxStore {
     /// initialized - a pre-schema or brand-new file) or no row 1 in it (a `Fresh` file
     /// that reached [`init_schema`](Self::init_schema) but not
     /// [`ensure_identity`](Self::ensure_identity)). Only the "no such table" case is
-    /// swallowed; any other SQLite error (corruption, I/O, permissions) propagates.
+    /// swallowed; any other SQLite error (corruption, I/O, permissions) propagates,
+    /// as does a schema the guard refuses (#608, #576 RV18-4).
     pub fn probe_stored_project_created_at(path: &Path) -> Result<Option<String>> {
         let conn = Connection::open(path).context("Failed to open dive-plan file")?;
+        // [#576 RV18-4] The same schema guard as [`Self::open`], before the read.
+        super::sqlite::check_schema(&conn)?;
         match conn.query_row(
             "SELECT project_created_at FROM plnx_meta WHERE id = 1",
             [],
@@ -126,15 +133,14 @@ impl PlnxStore {
             Ok(v) => Ok(v),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             // No `plnx_meta` table yet (schema was never initialized on this file) - not
-            // owned by anyone. rusqlite surfaces "no such table" as a SqliteFailure whose
-            // extended code is SQLITE_ERROR with no more specific sub-code, so match on the
-            // message rather than the code (verified against rusqlite 0.31 in the guard test
-            // below); any other SqliteFailure message (corruption, I/O) still propagates.
-            Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
-                if msg.contains("no such table") =>
-            {
-                Ok(None)
-            }
+            // owned by anyone. "No such table" has the bare SQLITE_ERROR code, so match on
+            // the message. rusqlite reports it as SqliteFailure, or as SqlInputError when
+            // SQLite also gives a byte offset into the SQL; accept both (guard test below,
+            // rusqlite 0.41 / SQLite 3.54). Any other failure (corruption, I/O) propagates.
+            Err(
+                rusqlite::Error::SqliteFailure(_, Some(ref msg))
+                | rusqlite::Error::SqlInputError { ref msg, .. },
+            ) if msg.contains("no such table") => Ok(None),
             Err(e) => Err(e.into()),
         }
     }
@@ -251,7 +257,9 @@ impl PlnxStore {
 mod tests {
     #![expect(
         clippy::unwrap_used,
-        reason = "tests build from known-valid literals; a failed unwrap should fail the test"
+        clippy::print_stdout,
+        reason = "tests build from known-valid literals; a failed unwrap should fail the test, \
+                  and the printed values are the evidence a run captures"
     )]
     use super::*;
 
@@ -425,5 +433,64 @@ mod tests {
         }
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// [#576 RV18-4] A `.plnx` is a file from outside like a `.stalx` (#244 treats
+    /// it as hand-editable input), so it gets the same schema guard (#608): both
+    /// openers refuse a file whose schema defines a trigger, a view or a CHECK the
+    /// app never writes, before a plan save could fire the trigger. A planted
+    /// trigger used to run on the next save, with the file's schema trusted.
+    #[test]
+    fn a_plan_file_with_a_hostile_schema_is_refused_before_a_save_fires_it() {
+        let mut wrong = Vec::new();
+        for (sql, what) in [
+            (
+                "CREATE TRIGGER t AFTER INSERT ON dive_plans \
+                 BEGIN INSERT INTO pwn VALUES (length(hex(zeroblob(1000)))); END;",
+                "a trigger",
+            ),
+            ("CREATE VIEW v AS SELECT 1;", "a view"),
+            (
+                "CREATE TABLE c (x CHECK (length(zeroblob(10)) > 0));",
+                "a table with a CHECK constraint the app never writes",
+            ),
+        ] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let path = dir.path().join("CaveA.plnx");
+            PlnxStore::open(&path)
+                .unwrap()
+                .ensure_identity("2026-01-01T00:00:00Z", "CaveA")
+                .unwrap();
+            Connection::open(&path)
+                .unwrap()
+                .execute_batch(&format!("CREATE TABLE pwn (n INTEGER); {sql}"))
+                .unwrap();
+
+            let refused = |result: Result<()>| {
+                result.err().and_then(|e| {
+                    e.chain()
+                        .find_map(|c| c.downcast_ref::<crate::persistence::RefusedSchemaObject>())
+                        .map(|r| r.what)
+                })
+            };
+            let probed = refused(PlnxStore::probe_stored_project_created_at(&path).map(drop));
+            // What a plan save does once the open lets it through.
+            let opened = refused(PlnxStore::open(&path).and_then(|store| {
+                store.insert("PlanA", "2026-07-06T10:00:00Z", 1, "{}")?;
+                Ok(())
+            }));
+            let fired: i64 = Connection::open(&path)
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM pwn", [], |r| r.get(0))
+                .unwrap();
+            println!(
+                "{what}: probe refused as {probed:?}; open + save refused as {opened:?}; \
+                 rows the file's own SQL wrote: {fired}"
+            );
+            if probed != Some(what) || opened != Some(what) || fired != 0 {
+                wrong.push(what);
+            }
+        }
+        assert!(wrong.is_empty(), "not refused: {wrong:?}");
     }
 }

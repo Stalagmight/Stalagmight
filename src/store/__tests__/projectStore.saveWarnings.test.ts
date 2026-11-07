@@ -5,6 +5,7 @@ import { useUIStore } from '../uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { invokeIpcMock } from '../../test/factories/ipc';
+import type { ValidationWarning } from '../../types/ipc/ValidationWarning';
 
 vi.mock('../../utils/ipc');
 
@@ -45,10 +46,11 @@ describe('saveProject surfaces what a successful save went without', () => {
     );
   };
 
-  const warning = (code: string, message = `${code} message`) => ({
+  // Typed, so tsc holds `severity` to the wire's lower-case WarningSeverity.
+  const warning = (code: string, message = `${code} message`): ValidationWarning => ({
     code,
     message,
-    severity: 'Warning',
+    severity: 'warning',
   });
 
   it.each([

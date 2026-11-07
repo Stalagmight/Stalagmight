@@ -302,20 +302,24 @@ fn gps_placement(section: &TmlSection, input: &PlacementInput<'_>) -> Option<Imp
     };
     let (east, north) =
         dropped_lead_offset(section, input.include_excluded, input.azimuth_reference);
+    // `local_to_gps` returns a storable fix (longitude in [-180, 180]); it is
+    // `None` only beyond the horizon, which the same fallback covers.
     let coordinates = if east == 0.0 && north == 0.0 {
         measured
     } else {
-        let (latitude, longitude) = crate::models::local_to_gps(east, north, &measured);
-        GpsCoordinates::new(latitude, longitude, 0.0).unwrap_or_else(|reason| {
-            tracing::warn!(
-                section = %section.name,
-                %reason,
-                purpose = "import Ariane TML/TMLU",
-                "Could not carry the GPS anchor past the excluded shots; anchoring the \
-                 first imported station at the file's coordinates"
-            );
-            measured
-        })
+        crate::models::local_to_gps(east, north, &measured)
+            .ok_or_else(|| format!("({east}, {north}) m is beyond the horizon"))
+            .and_then(|(latitude, longitude)| GpsCoordinates::new(latitude, longitude, 0.0))
+            .unwrap_or_else(|reason| {
+                tracing::warn!(
+                    section = %section.name,
+                    %reason,
+                    purpose = "import Ariane TML/TMLU",
+                    "Could not carry the GPS anchor past the excluded shots; anchoring the \
+                     first imported station at the file's coordinates"
+                );
+                measured
+            })
     };
     Some(ImportPlacement::ZeroDatum {
         coordinates,
@@ -1133,7 +1137,7 @@ mod root_and_coordinate_tests {
     /// Where 10 m due east of the file's GPS is.
     fn ten_metres_east() -> (f64, f64) {
         let measured = GpsCoordinates::new(20.5, -87.3, 0.0).unwrap();
-        crate::models::local_to_gps(10.0, 0.0, &measured)
+        crate::models::local_to_gps(10.0, 0.0, &measured).unwrap()
     }
 
     fn assert_close(actual: (f64, f64), expected: (f64, f64)) {
@@ -1206,6 +1210,28 @@ mod root_and_coordinate_tests {
         assert_eq!(configs[0].shots.len(), 3);
         assert_close(datum_of(&configs[0]), (20.5, -87.3));
     }
+
+    /// GEO-D1: carried across the antimeridian, the datum is still the fix 10 m
+    /// east of the file's. From 179.99995 E that is -179.9999541; the #576
+    /// `local_to_gps` returned it as the continuous 180.0000459, which
+    /// `GpsCoordinates::new` refuses, so the import anchored the first imported
+    /// station at the file's own fix instead, 10 m short of where it is.
+    #[test]
+    fn a_dropped_first_shot_carries_the_gps_across_the_antimeridian() {
+        let mut tml = gps_on_an_excluded_first_shot(true);
+        tml.sections[0].shots[0].longitude = 179.999_95;
+        let (configs, warnings) = convert(&tml, &TmlImportOptions::default());
+        let (lat, lon) = datum_of(&configs[0]);
+        let measured = GpsCoordinates::new(20.5, 179.999_95, 0.0).unwrap();
+        let datum = GpsCoordinates::new(lat, lon, 0.0).unwrap();
+        let (east, north) = crate::models::gps_to_local(&datum, &measured);
+        assert!(
+            (east - 10.0).hypot(north) < 1e-6,
+            "datum at ({lat}, {lon}): ({east:.3}, {north:.3}) m from the file's fix, \
+             expected (10, 0)"
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
 }
 
 // ============================================================================
@@ -1262,8 +1288,9 @@ mod magnetic_datum_tests {
         let measured = GpsCoordinates::new(lat, lon, 0.0).unwrap();
         let bearing = reference.to_true(90.0).to_radians();
         let expected =
-            crate::models::local_to_gps(10.0 * bearing.sin(), 10.0 * bearing.cos(), &measured);
-        let unrotated = crate::models::local_to_gps(10.0, 0.0, &measured);
+            crate::models::local_to_gps(10.0 * bearing.sin(), 10.0 * bearing.cos(), &measured)
+                .unwrap();
+        let unrotated = crate::models::local_to_gps(10.0, 0.0, &measured).unwrap();
         let actual = match &configs[0].placement {
             ImportPlacement::ZeroDatum {
                 coordinates,

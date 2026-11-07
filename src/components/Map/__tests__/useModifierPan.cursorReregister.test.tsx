@@ -13,7 +13,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import { useModifierPan } from '../useModifierPan';
 import { mapCursorFor } from '../mapCursor';
 import type { ToolType } from '../../../store/uiStore';

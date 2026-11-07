@@ -336,6 +336,20 @@ describe('generate-repro-report.mjs', () => {
     expect(md).toContain('[OS-level]');
   });
 
+  // docs/agent-harness.md marks actions.jsonl and tauri-driver.log "not for
+  // sharing": they hold the full text the report withholds. The Evidence list
+  // still points at them for whoever triages the run, and says so (#576 RV18-W23-7).
+  it('labels the action log and the driver log as local triage only, not for sharing', () => {
+    execFileSync(process.execPath, [reportGen, sessionDir], { encoding: 'utf8' });
+    const evidence = fs
+      .readFileSync(path.join(sessionDir, 'report.md'), 'utf8')
+      .split('## Evidence')[1]
+      .split('## Notes')[0];
+
+    expect(evidence).toContain('- Action log: `actions.jsonl` (local triage only, not for sharing:');
+    expect(evidence).toContain('- Driver log: `tauri-driver.log` (local triage only, not for sharing)');
+  });
+
   // The bug this replaced: the step list came from a hand-maintained name list
   // that nobody updated as tools were added, so a repro whose decisive step was
   // a drag or a native-dialog answer rendered WITHOUT that step. The recorder
@@ -508,5 +522,78 @@ describe('generate-repro-report.mjs', () => {
         .split('## Steps to reproduce')[1]
         .split('Automated replay')[0];
     }
+  });
+
+  // An ipc / store_action call's arguments and typed text are the project's own
+  // data - station and section names - and the report is pasted into public
+  // issues, which keep only codes, counts and code locations (#576 RV18-W23-3).
+  describe('steps give argument shapes, never their values', () => {
+    let argsDir: string;
+
+    beforeAll(() => {
+      argsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-args-'));
+      const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+      const lines = [
+        record({ type: 'session-start', v: 1, sessionId: 'args-fixture', startedAt: ts(0) }),
+        record({
+          type: 'action', v: 1, seq: 1, ts: ts(1), tool: 'ipc', mutating: true,
+          params: { command: 'rename_station', args: { oldName: 'StationA1', newName: 'StationZ9' } },
+          outcome: { ok: false, durationMs: 1, error: 'station not found' },
+        }),
+        record({
+          type: 'action', v: 1, seq: 2, ts: ts(2), tool: 'store_action', mutating: true,
+          params: { store: 'project', action: 'renameSection', args: ['CaveA North', 3, false] },
+          outcome: { ok: true, durationMs: 1 },
+        }),
+        record({
+          type: 'action', v: 1, seq: 3, ts: ts(3), tool: 'type_text', mutating: true,
+          params: { text: 'CaveA entrance', testid: 'station-name-input' },
+          outcome: { ok: true, durationMs: 1 },
+        }),
+        // Nested values, a coordinate, and keys that are themselves names: a
+        // map keyed by stations would otherwise print them as its keys.
+        record({
+          type: 'action', v: 1, seq: 4, ts: ts(4), tool: 'ipc', mutating: true,
+          params: {
+            command: 'update_section',
+            args: {
+              sectionId: 7,
+              patch: { name: 'CaveA', visible: true, depths: [12.5, 31.25], anchor: { lat: 20.5, lng: -87.25 } },
+              colors: { StationA1: 'tealA1', 'StationB2 junction': 'amberB2' },
+              tags: [],
+            },
+          },
+          outcome: { ok: true, durationMs: 1 },
+        }),
+      ];
+      fs.writeFileSync(path.join(argsDir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+      execFileSync(process.execPath, [reportGen, argsDir], { encoding: 'utf8' });
+    });
+
+    afterAll(() => fs.rmSync(argsDir, { recursive: true, force: true }));
+
+    const steps = (): string =>
+      fs
+        .readFileSync(path.join(argsDir, 'report.md'), 'utf8')
+        .split('## Steps to reproduce')[1]
+        .split('Automated replay')[0];
+
+    it('prints no argument value or typed text', () => {
+      const md = fs.readFileSync(path.join(argsDir, 'report.md'), 'utf8');
+      for (const value of ['StationA1', 'StationZ9', 'StationB2', 'CaveA', '12.5', '31.25', '20.5', '-87.25', 'tealA1', 'amberB2']) {
+        expect(md).not.toContain(value);
+      }
+    });
+
+    it('keeps the tool, the command or action, the failed marker and each argument shape', () => {
+      const md = steps();
+      expect(md).toContain('1. `ipc` rename_station({oldName: string(9), newName: string(9)}) **(failed)**');
+      expect(md).toContain('2. `store_action` project.renameSection(string(11), number, false)');
+      expect(md).toContain('3. `type_text` string(14) into station-name-input');
+      expect(md).toContain(
+        '4. `ipc` update_section({sectionId: number, patch: {name: string(5), visible: true, ' +
+          'depths: array(2) of number, anchor: object(2 keys)}, colors: {2 key(s) withheld}, tags: array(0)})',
+      );
+    });
   });
 });

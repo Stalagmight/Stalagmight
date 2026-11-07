@@ -17,7 +17,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render } from '@testing-library/react';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 
 // maplibre-gl touches `window.URL.createObjectURL` at module init (worker
 // setup), which jsdom lacks. GridOverlay imports it for types only.

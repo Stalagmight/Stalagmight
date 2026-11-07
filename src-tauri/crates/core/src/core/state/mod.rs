@@ -676,6 +676,22 @@ mod sidecar_key_coverage_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              comments are the evidence a run captures"
+)]
+mod station_comment_display_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              comments are the evidence a run captures"
+)]
+mod station_comment_legacy_key_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
     clippy::float_cmp,

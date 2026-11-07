@@ -467,6 +467,9 @@ impl Database {
     pub fn clear_undo_history_at(path: &std::path::Path) -> Result<()> {
         let conn = rusqlite::Connection::open(path)
             .with_context(|| format!("open {} to clear inherited undo", path.display()))?;
+        // The file may come from a server: refuse a hostile schema before a
+        // DELETE fires a trigger it carries (#608).
+        super::check_schema(&conn)?;
         let tx = conn
             .unchecked_transaction()
             .with_context(|| format!("begin inherited-history cleanup in {}", path.display()))?;

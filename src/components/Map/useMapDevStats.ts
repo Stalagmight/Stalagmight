@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import type { TFunction } from 'i18next';
 import { invokeIpc } from '../../utils/ipc';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import { getTileFetchStats, type TileFetchStats } from '../../utils/tileProtocol';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useNetworkStore } from '../../store/networkStore';

@@ -21,6 +21,7 @@ import { invokeInApp, evalInApp } from './page';
 import { readStore } from './stores';
 import { isErrorLine, isWarnLine } from './logs';
 import { redactCorpusText, redactCorpusValue } from './fixtureCorpus';
+import { shareableFinding } from '../../../scripts/lib/shareable-finding.mjs';
 
 export type Severity = 'fatal' | 'error' | 'warning';
 
@@ -181,6 +182,22 @@ function isAllowedWarn(line: string): boolean {
   return WARN_ALLOWLIST.some((s) => line.includes(s));
 }
 
+/**
+ * `text` through the corpus fold, THEN cut to `limit` (#576 RV17-2). Cut first,
+ * a corpus name straddling the limit was no longer whole, no fold matched it,
+ * and its beginning stayed in the finding.
+ */
+function cutAfterFold(text: string, limit: number): string {
+  return redactCorpusText(text).slice(0, limit);
+}
+
+/**
+ * How much of the error-boundary text the page hands back: far past the 300
+ * characters a finding keeps, so a name that straddles 300 reaches the fold
+ * whole (`cutAfterFold`), yet bounded, since the fallback can hold a stack.
+ */
+const PAGE_TEXT_CAP = 16384;
+
 interface LogsSince {
   entries: { seq: number; ts_ms: number; line: string }[];
   latest_seq: number;
@@ -219,7 +236,7 @@ export async function cheapSweep(target: OracleTarget, state: OracleState): Prom
         target.browser,
         `
         const el = document.querySelector('[data-testid="error-boundary-fallback"]');
-        return { errorBoundary: !!el, text: el ? (el.textContent || '').slice(0, 300) : undefined };
+        return { errorBoundary: !!el, text: el ? (el.textContent || '').slice(0, ${PAGE_TEXT_CAP}) : undefined };
       `,
       );
       const logs = await invokeInApp<LogsSince>(target.browser, 'get_recent_logs_since', {
@@ -233,7 +250,7 @@ export async function cheapSweep(target: OracleTarget, state: OracleState): Prom
         severity: 'error',
         kind: 'error-boundary',
         message: 'React error boundary is showing its fallback UI',
-        detail: probe.dom.text,
+        detail: probe.dom.text === undefined ? undefined : cutAfterFold(probe.dom.text, 300),
       });
     }
     if (probe.logs.dropped) {
@@ -245,9 +262,9 @@ export async function cheapSweep(target: OracleTarget, state: OracleState): Prom
     }
     for (const e of probe.logs.entries) {
       if (isErrorLine(e.line)) {
-        findings.push({ severity: 'error', kind: 'log-error', code: logLineCode(e.line), message: e.line.slice(0, 400) });
+        findings.push({ severity: 'error', kind: 'log-error', code: logLineCode(e.line), message: cutAfterFold(e.line, 400) });
       } else if (isWarnLine(e.line) && !isAllowedWarn(e.line)) {
-        findings.push({ severity: 'warning', kind: 'log-warn', code: logLineCode(e.line), message: e.line.slice(0, 400) });
+        findings.push({ severity: 'warning', kind: 'log-warn', code: logLineCode(e.line), message: cutAfterFold(e.line, 400) });
       }
     }
     state.logCursor = Math.max(state.logCursor, probe.logs.latest_seq);
@@ -415,7 +432,15 @@ export async function runSweep(
     if (state.reported.has(key)) continue;
     state.reported.add(key);
     newFindings.push(f);
-    opts.recorder?.event('finding', { severity: f.severity, kind: f.kind, code: f.code, message: f.message });
+    // The whole finding, detail included, goes to the action log - the private
+    // record (#576 W21-NF2); finding.json carries the shareable projection.
+    opts.recorder?.event('finding', {
+      severity: f.severity,
+      kind: f.kind,
+      code: f.code,
+      message: f.message,
+      ...(f.detail === undefined ? {} : { detail: f.detail }),
+    });
     if (opts.recorder && (f.severity === 'fatal' || f.severity === 'error')) {
       await captureFinding(target, opts.recorder, ++state.findingCount, f).catch(() => undefined);
     }
@@ -465,7 +490,9 @@ async function captureFinding(
 ): Promise<void> {
   const dir = path.join(recorder.findingsDir, String(index).padStart(3, '0'));
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'finding.json'), JSON.stringify(finding, null, 2));
+  // Codes, counts and code locations only (#576 W21-NF2): finding.json is what
+  // gets attached; the full finding is the `finding` event in actions.jsonl.
+  fs.writeFileSync(path.join(dir, 'finding.json'), JSON.stringify(shareableFinding(finding), null, 2));
   // Screenshot (best-effort).
   try {
     const b64 = await target.exclusive(() => target.browser.takeScreenshot());

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
 import { useLatest } from '../../hooks/useLatest';
 import { useTranslation } from 'react-i18next';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
 import GlobalSurveyLayer, { type SystemGeometry, generateSystemColor } from './GlobalSurveyLayer';
 import type { SurveyGeometry } from '../../types/survey';
@@ -18,6 +18,7 @@ import { MapAttribution } from '../Map/MapAttribution';
 import { createSurveyMap, SATELLITE_SOURCE_ID } from '../Map/createSurveyMap';
 import { useContextLossToast } from '../Map/useContextLossToast';
 import { useShallow } from 'zustand/react/shallow';
+import { MapUnavailable } from '../Map/MapUnavailable';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -175,6 +176,7 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
   const markerTooltipRef = useRef<HTMLDivElement | null>(null);
   const contextMenuOpenRef = useRef(false);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [webgl2Unavailable, setWebgl2Unavailable] = useState(false);
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   // Read by the marker tooltip at hover time: the markers are built once per
@@ -438,6 +440,11 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
       keyboard: false,
       boxZoom: true,
     });
+    // No WebGL2 context (createMap.ts): show MapUnavailable in place of the map.
+    if (!map.current) {
+      setWebgl2Unavailable(true);
+      return;
+    }
 
     // Add navigation controls
     map.current.addControl(
@@ -531,7 +538,7 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
     let isRubberBanding = false;
     let rubberBandIdleHandler: (() => void) | null = null;
 
-    const handleMoveEndRubberBand = (e: maplibregl.MapLibreEvent & { originalEvent?: Event }) => {
+    const handleMoveEndRubberBand = (e: maplibregl.MapMovementEvent) => {
       if (!map.current || !softBoundsRef.current) return;
 
       // Skip if we're already in a rubber-band animation (prevents infinite loop)
@@ -1227,6 +1234,7 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
   return (
     <div data-testid="globalview-map" className="h-full relative">
       <div ref={mapContainer} className="w-full h-full" />
+      {webgl2Unavailable && <MapUnavailable testId="globalview-webgl2-unavailable" />}
 
       {/* Fit to bounds button */}
       <button

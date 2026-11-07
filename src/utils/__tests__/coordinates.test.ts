@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
+  enuToGps,
   metersToMapCoords,
   mapCoordsToMeters,
   gpsToXY,
@@ -141,7 +145,7 @@ describe('WGS84 parity with the backend (#576 D36)', () => {
   it.each(BACKEND_VECTORS)(
     'origin (%d, %d): the GPS column shows (%d, %d) for that station',
     (olat, olon, lat, lon, east, north) => {
-      const back = xyToGps(coord(east, north, 0), gps(olat, olon, 0));
+      const back = xyToGps(coord(east, north, 0), gps(olat, olon, 0))!;
       const off = metresApart(lat, lon, back.latitude, back.longitude);
       expect(off, `GPS column ${off.toFixed(3)} m off`).toBeLessThan(0.001);
     },
@@ -176,8 +180,140 @@ describe('across the antimeridian', () => {
   });
 
   it('the GPS column still shows the conventional longitude', () => {
-    const back = xyToGps(coord(1000, 0, 0), gps(-16.8, 179.999, 0));
+    const back = xyToGps(coord(1000, 0, 0), gps(-16.8, 179.999, 0))!;
     expect(back.longitude).toBeCloseTo(-179.991619, 6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One local-to-GPS algorithm with the backend (#576 GEO-D1)
+// ---------------------------------------------------------------------------
+
+// The backend/frontend differential: `FRONTEND_PARITY` in geo.rs, read from
+// source (the repo's source-scan idiom, as knownFileExtensionsParity.test.ts),
+// so there is one table. Each row is `origin_lat origin_lon east_m north_m lat
+// lon`, the last two what the backend's `local_to_gps` returns, or `none none`
+// where it is `None`; geo.rs pins it to the backend to 1e-12 degrees
+// (`local_to_gps_matches_the_frontend_parity_table`), and enuToGps is held to
+// it here to 1e-10, so the two agree to within 1e-9 degrees. Offsets of about
+// 0.1, 1, 5, 20 and 50 km at the equator, at a mid latitude, near both poles
+// and on both sides of the antimeridian, then out to and past the horizon.
+const GEO_RS = 'src-tauri/crates/models/src/geo.rs';
+
+type ParityRow = [number, number, number, number];
+
+function backendParityRows(): { fixes: Array<[...ParityRow, number, number]>; beyond: ParityRow[] } {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../');
+  const source = fs.readFileSync(path.join(root, GEO_RS), 'utf8');
+  const match = /const FRONTEND_PARITY: &str = "([^"]*)";/.exec(source);
+  if (!match) throw new Error(`${GEO_RS}: no FRONTEND_PARITY table - renamed? Update this test with it.`);
+  const fixes: Array<[...ParityRow, number, number]> = [];
+  const beyond: ParityRow[] = [];
+  for (const line of match[1]!.split('\n')) {
+    const field = line.trim().split(/\s+/);
+    if (field.length === 1 && field[0] === '') continue;
+    if (field.length !== 6) throw new Error(`${GEO_RS}: a parity row has six fields: ${line}`);
+    const [olat, olon, east, north] = field.slice(0, 4).map(Number) as ParityRow;
+    if (field[4] === 'none') beyond.push([olat, olon, east, north]);
+    else fixes.push([olat, olon, east, north, Number(field[4]), Number(field[5])]);
+  }
+  if (fixes.length < 30 || beyond.length < 3) throw new Error(`${GEO_RS}: the parity table lost its rows`);
+  return { fixes, beyond };
+}
+
+const { fixes: PARITY, beyond: BEYOND_HORIZON } = backendParityRows();
+
+describe('one local-to-GPS algorithm with the backend (#576 GEO-D1)', () => {
+  it.each(PARITY)(
+    'origin (%d, %d), offset (%d, %d) m: enuToGps returns the backend fix',
+    (olat, olon, east, north, lat, lon) => {
+      const got = enuToGps(east, north, { latitude: olat, longitude: olon });
+      expect(got).not.toBeNull();
+      expect(Math.abs(got!.latitude - lat), `lat ${got!.latitude} vs ${lat}`).toBeLessThan(1e-10);
+      expect(Math.abs(got!.longitude - lon), `lon ${got!.longitude} vs ${lon}`).toBeLessThan(1e-10);
+    },
+  );
+
+  it.each(BEYOND_HORIZON)(
+    'origin (%d, %d), offset (%d, %d) m: beyond the horizon, as the backend None',
+    (olat, olon, east, north) => {
+      expect(enuToGps(east, north, { latitude: olat, longitude: olon })).toBeNull();
+      expect(xyToGps(coord(east, north, 0), gps(olat, olon, 0))).toBeNull();
+    },
+  );
+
+  it('a non-finite offset has no fix', () => {
+    expect(enuToGps(Number.NaN, 0, EQUATOR_ORIGIN)).toBeNull();
+    expect(enuToGps(0, Number.POSITIVE_INFINITY, EQUATOR_ORIGIN)).toBeNull();
+    expect(metersToMapCoords(Number.NaN, 0, EQUATOR_ORIGIN).every(Number.isNaN)).toBe(true);
+  });
+
+  // The map needs a finite point even for a corrupt station: beyond the
+  // horizon it is pinned near the horizon in its own direction (on it here:
+  // due east of (0, 0) the horizon is longitude 90, one semi-major axis out).
+  it('the map pins a point beyond the horizon on the horizon', () => {
+    const [inside] = metersToMapCoords(6_378_000, 0, EQUATOR_ORIGIN);
+    expect(inside).toBeCloseTo(89.62446, 4);
+    for (const east of [6_379_000, 20_000_000, 1e9]) {
+      const [lng, lat] = metersToMapCoords(east, 0, EQUATOR_ORIGIN);
+      expect(lng, `${east} m east`).toBeCloseTo(90, 9);
+      expect(lat, `${east} m east`).toBeCloseTo(0, 9);
+    }
+    const [lng, lat] = metersToMapCoords(-1e7, 1e7, { latitude: 20.5, longitude: -87.3 });
+    expect(Number.isFinite(lng) && Number.isFinite(lat)).toBe(true);
+  });
+
+  // [#576 RV18-W28-1] From about 1.3e154 m the quadratic's terms overflow
+  // (qx * qx is Infinity), and the pin must still hold: such an offset is
+  // beyond the horizon whatever its length, so it lands where a merely far one
+  // in the same direction does, not at [NaN, NaN]. Only a non-finite input
+  // gives NaN.
+  it('the map pins a finite offset too large to square, as a far one', () => {
+    const MID = { latitude: 20.5, longitude: -87.3 };
+    for (const [origin, east, north] of [
+      [EQUATOR_ORIGIN, 1e160, 0],
+      [EQUATOR_ORIGIN, Number.MAX_VALUE, Number.MAX_VALUE],
+      [MID, 1e160, 0],
+      [MID, -1e200, 3e199],
+      [MID, -Number.MAX_VALUE, -Number.MAX_VALUE],
+    ] as const) {
+      const scale = 1e150 / Math.max(Math.abs(east), Math.abs(north));
+      const far = metersToMapCoords(east * scale, north * scale, origin);
+      const huge = metersToMapCoords(east, north, origin);
+      expect(huge.every(Number.isFinite), `(${east}, ${north}) m: ${huge}`).toBe(true);
+      expect(huge[0], `(${east}, ${north}) m`).toBeCloseTo(far[0], 9);
+      expect(huge[1], `(${east}, ${north}) m`).toBeCloseTo(far[1], 9);
+    }
+    const [lng, lat] = metersToMapCoords(1e160, 0, EQUATOR_ORIGIN);
+    expect(lng).toBeCloseTo(90, 9);
+    expect(lat).toBeCloseTo(0, 9);
+    expect(metersToMapCoords(Number.POSITIVE_INFINITY, 0, MID).every(Number.isNaN)).toBe(true);
+  });
+
+  // The frontend twin of geo.rs `local_to_gps_round_trips_within_a_
+  // micrometre_out_to_50_km`: what the map draws converts back to the metres
+  // it was drawn from, within 1e-6 m, anywhere within 50 km.
+  it('round-trips through mapCoordsToMeters within 1e-6 m out to 50 km', () => {
+    const origins = [
+      { latitude: 0, longitude: 0 },
+      { latitude: 20.5, longitude: -87.3 },
+      { latitude: 89.9, longitude: 10 },
+      { latitude: -89.99, longitude: -45 },
+      { latitude: -16.8, longitude: 179.999 },
+    ];
+    let worst = 0;
+    for (const origin of origins) {
+      for (const d of [0.1, 1, 1_000, 5_000, 20_000, 50_000]) {
+        for (let k = 0; k < 16; k++) {
+          const a = (k * Math.PI) / 8 + 0.1;
+          const [east, north] = [d * Math.sin(a), d * Math.cos(a)];
+          const [lng, lat] = metersToMapCoords(east, north, origin);
+          const m = mapCoordsToMeters(lng, lat, origin);
+          worst = Math.max(worst, Math.hypot(m.x - east, m.y - north));
+        }
+      }
+    }
+    expect(worst).toBeLessThan(1e-6);
   });
 });
 
@@ -204,7 +340,7 @@ describe('gpsToXY / xyToGps', () => {
     const origin = gps(10, 20, 0);
     const point = gps(10.001, 20.001, 5);
     const xy = gpsToXY(point, origin);
-    const back = xyToGps(xy, origin);
+    const back = xyToGps(xy, origin)!;
     expect(back.latitude).toBeCloseTo(10.001, 3);
     expect(back.longitude).toBeCloseTo(20.001, 3);
     expect(back.depth_reference).toBe(5);

@@ -104,15 +104,21 @@ fn full_cache(dir: &Path, rows: u32, size: usize) -> TileCache {
 fn vm_steps(cache: &mut TileCache, f: impl FnOnce(&mut TileCache)) -> u64 {
     let steps = Arc::new(AtomicU64::new(0));
     let counter = Arc::clone(&steps);
-    cache.conn.progress_handler(
-        1,
-        Some(move || {
-            counter.fetch_add(1, Ordering::Relaxed);
-            false
-        }),
-    );
+    cache
+        .conn
+        .progress_handler(
+            1,
+            Some(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+                false
+            }),
+        )
+        .unwrap();
     f(cache);
-    cache.conn.progress_handler(1, None::<fn() -> bool>);
+    cache
+        .conn
+        .progress_handler(1, None::<fn() -> bool>)
+        .unwrap();
     steps.load(Ordering::Relaxed)
 }
 

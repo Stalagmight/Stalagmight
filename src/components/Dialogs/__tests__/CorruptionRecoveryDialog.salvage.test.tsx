@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import type { SalvagedData } from '../../../types/ipc/SalvagedData';
+import type { SalvageWriteResult } from '../../../types/ipc/SalvageWriteResult';
 
 vi.mock('../../../utils/ipc');
 
@@ -51,8 +52,16 @@ const SALVAGED: SalvagedData = {
   errors: [],
 };
 
+/** What the write answers: the counts and warnings of the salvage it wrote. */
+const WRITTEN: SalvageWriteResult = {
+  sectionCount: 2,
+  shotCount: 17,
+  mergeCount: 1,
+  errors: [],
+};
+
 /** Script the backend: the salvage read answers SALVAGED, the write answers `write`. */
-function backend(write: () => Promise<null>): void {
+function backend(write: () => Promise<SalvageWriteResult>): void {
   invokeIpc.mockImplementation(async (command: string) => {
     if (command === 'export_salvageable_data') return SALVAGED;
     if (command === 'write_salvaged_data') return write();
@@ -73,7 +82,7 @@ describe('CorruptionRecoveryDialog salvage export (#576 HFI-3)', () => {
   });
 
   it('has the backend write the salvage file to the chosen path and reports what was saved', async () => {
-    backend(async () => null);
+    backend(async () => WRITTEN);
 
     await exportSalvage();
 
@@ -100,7 +109,7 @@ describe('CorruptionRecoveryDialog salvage export (#576 HFI-3)', () => {
 
   it('writes nothing when the save dialog is cancelled', async () => {
     saveDialogMock.mockResolvedValue(null);
-    backend(async () => null);
+    backend(async () => WRITTEN);
 
     await exportSalvage();
 
@@ -113,7 +122,7 @@ describe('CorruptionRecoveryDialog salvage export (#576 HFI-3)', () => {
   // renders nothing: the dialog was left with its title and an empty body.
   it('goes back to the recovery choices when the save dialog is cancelled', async () => {
     saveDialogMock.mockResolvedValue(null);
-    backend(async () => null);
+    backend(async () => WRITTEN);
 
     await exportSalvage();
 
@@ -139,7 +148,7 @@ describe('CorruptionRecoveryDialog salvage export, a name typed without .json (#
     invokeIpc.mockImplementation(async (command: string) => {
       if (command === 'export_salvageable_data') return SALVAGED;
       if (command === 'save_target_exists') return rewrittenExists;
-      if (command === 'write_salvaged_data') return null;
+      if (command === 'write_salvaged_data') return WRITTEN;
       throw new Error(`unexpected ${command}`);
     });
   }
@@ -193,5 +202,37 @@ describe('CorruptionRecoveryDialog salvage export, a name typed without .json (#
     expect(await screen.findByText('Data Exported')).toBeInTheDocument();
     expect(written()).toEqual([{ path: '/survey/CaveA.stalx', destPath: '/survey/rescued/salvaged.json' }]);
     expect(invokeIpc).not.toHaveBeenCalledWith('save_target_exists', expect.anything(), expect.anything());
+  });
+});
+
+/**
+ * [#576 W30-5] The message reports what was WRITTEN. The dialog read the damaged
+ * file once for its summary and the backend read it again to write the file; a
+ * damaged file can read differently twice, so the counts shown were those of a
+ * read that was not the one saved. The write answers its own counts now.
+ */
+describe('CorruptionRecoveryDialog salvage export, the counts it reports (#576 W30-5)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invokeIpc.mockReset();
+    saveDialogMock.mockResolvedValue('/survey/rescued/salvaged.json');
+  });
+
+  it('shows the counts and warnings of the salvage that was written, not of the earlier read', async () => {
+    // The earlier read (SALVAGED): 2 sections, 17 shots, 1 merge, no warning.
+    backend(async () => ({
+      sectionCount: 5,
+      shotCount: 40,
+      mergeCount: 3,
+      errors: ['Failed to read station merges: database disk image is malformed'],
+    }));
+
+    await exportSalvage();
+
+    expect(await screen.findByText('Data Exported')).toBeInTheDocument();
+    const message = screen.getByText(/Recovered:/);
+    expect(message).toHaveTextContent('Recovered: 5 section(s), 40 shot(s), 3 merge(s)');
+    expect(message).toHaveTextContent('Failed to read station merges: database disk image is malformed');
+    expect(message).not.toHaveTextContent('17 shot(s)');
   });
 });

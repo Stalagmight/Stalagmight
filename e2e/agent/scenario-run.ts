@@ -33,9 +33,9 @@
  * so it works as a one-off gate too.
  */
 import * as path from 'path';
-import { redactCorpusText } from './lib/fixtureCorpus';
 import { readTrace, restoreTraceEnv, type FuzzTrace } from './lib/fuzzTrace';
 import { parseScenarioArgs, scenarioRunOptions } from './lib/scenarioRunArgs';
+import { progressLogger, scenarioFailOutput, shareableErrorText } from './lib/shareableFailure';
 
 async function main(): Promise<void> {
   const args = parseScenarioArgs(process.argv.slice(2));
@@ -183,7 +183,11 @@ async function main(): Promise<void> {
       // A replay runs at the trace's seed and iteration count unless a flag says
       // otherwise (#576 NF-E12-1); a fresh run passes only the flags given.
       ...scenarioRunOptions(args, trace),
-      log: (line) => process.stdout.write(`   . ${line}\n`),
+      // Shareable progress lines (#576 W23-NF3); the full text goes to actions.jsonl.
+      log: progressLogger(
+        (line) => process.stdout.write(`   . ${line}\n`),
+        session.hasRecorder ? session.recorder : undefined,
+      ),
     });
     const sweep = await runSweep(session, newOracleState(), { full: true, recorder: session.recorder });
     const fatal = sweep.findings.filter((finding) => finding.severity === 'fatal');
@@ -199,9 +203,17 @@ async function main(): Promise<void> {
     );
   } catch (err) {
     failed = true;
-    process.stdout.write(
-      `FAIL: ${args.name} threw:\n${redactCorpusText(err instanceof Error ? err.message : String(err))}\n`,
-    );
+    // The shareable form - headline, reproduce/trace lines, diff paths and
+    // counts - is what this prints (#576 W21-NF1): the full message quotes the
+    // app (integrity messages, IPC rejection lines, diff values). The full text
+    // goes to the session's actions.jsonl, which is not for sharing.
+    if (session.hasRecorder) {
+      session.recorder.event('scenario-failure', {
+        scenario: args.name,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+    process.stdout.write(scenarioFailOutput(args.name, err));
   } finally {
     await session.stop('scenario-run');
   }
@@ -210,6 +222,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W23-NF2): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });

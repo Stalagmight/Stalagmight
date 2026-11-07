@@ -1,5 +1,5 @@
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import { GlobalCustomController } from './customRender/globalController';
 import { generateSystemColor, type SystemGeometry } from './systemColor';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
@@ -130,9 +130,10 @@ export default class GlobalSurveyLayer {
     // Rebuild the custom global layer when the DPR changes (window moved to a
     // different-scale monitor); it bakes dpr into device-pixel sizes.
     this.dprWatcherDispose = watchDevicePixelRatio(() => this.customRender?.resync());
-    // MapLibre drops custom layers on a WebGL context loss and never re-adds them
-    // on restore; the survey map does this itself and so must the Global View, or
-    // every system's survey stays blank until the view is reopened (#576 D38).
+    // MapLibre drops custom layers when it rebuilds the style (a WebGL context
+    // loss or a worker restart) and never re-adds them; the survey map does this
+    // itself and so must the Global View, or every system's survey stays blank
+    // until the view is reopened (#576 D38, #606).
     this.detachGlContextWatch = watchGlContextLoss(map, {
       layers: () => (this.customRender ? [this.customRender] : []),
       afterRestore: () => this.replayAfterContextRestore(),

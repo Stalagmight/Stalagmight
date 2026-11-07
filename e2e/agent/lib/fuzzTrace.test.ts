@@ -26,9 +26,11 @@ import {
   readTrace,
   restoreTraceEnv,
   sameSignature,
+  shareableSignature,
   shrinkableSteps,
   writeTrace,
 } from './fuzzTrace';
+import { shareableFailureText } from './shareableFailure';
 
 /** Verbatim shape of an undo-persistence-fuzz roundtrip failure (finding 12). */
 const FINDING_12 = [
@@ -181,7 +183,13 @@ describe('TraceRecorder', () => {
       const file = path.join(dir, 'nested', 'trace.json');
       writeTrace(file, trace);
       const read = readTrace(file);
-      expect(read).toEqual(trace);
+      // The failure is written in its shareable form (#576 W21-NF1); the rest round trips as is.
+      expect({ ...read, failure: null }).toEqual({ ...trace, failure: null });
+      expect(read.failure).toEqual({
+        message: shareableFailureText(FINDING_12),
+        signature: shareableSignature(FINDING_12),
+      });
+      expect(read.failure?.signature.classifiers).toEqual(['stale-id-writes-to-the-wrong-shot']);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

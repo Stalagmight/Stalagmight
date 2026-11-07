@@ -23,7 +23,7 @@
 // plus the small hide/restore controller so both can be unit-tested without a
 // live MapLibre instance.
 
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 
 /** Section id encoded in a composite overlay id (`"<sectionId>:<...>"`), or null
  *  when the id is null or not in that shape. Shots use `"sectionId:shotId"`,
@@ -100,7 +100,7 @@ export class InteractOverlayHideController {
   private timeout: ReturnType<typeof setTimeout> | null = null;
   private onSourceData: ((e: maplibregl.MapSourceDataEvent) => void) | null = null;
   /** Per-layer visibility captured at hide time, restored on settle. */
-  private saved = new Map<string, string | undefined>();
+  private saved = new Map<string, maplibregl.VisibilitySpecification | undefined>();
 
   /**
    * `isLive` reports whether the map still has a style to restore into: false
@@ -178,7 +178,7 @@ export class InteractOverlayHideController {
     this.saved.clear();
     for (const id of this.layerIds) {
       if (!this.map.getLayer(id)) continue;
-      this.saved.set(id, this.map.getLayoutProperty(id, 'visibility') as string | undefined);
+      this.saved.set(id, this.map.getLayoutProperty(id, 'visibility') as maplibregl.VisibilitySpecification | undefined);
     }
   }
 

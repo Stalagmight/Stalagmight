@@ -50,8 +50,16 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { checkBuildFreshness } from './lib/build';
 import { agentBuildMode } from '../lib/env';
-import { cellVerdict, failureDetail, matrixSummary, type CellVerdict } from './lib/fuzzMatrixReport';
+import {
+  cellVerdict,
+  failHeadline,
+  failureDetail,
+  matrixSummary,
+  parseMetrics,
+  type CellVerdict,
+} from './lib/fuzzMatrixReport';
 import { RUN_START_ENV, runStartMs } from './lib/recorder';
+import { shareableErrorText } from './lib/shareableFailure';
 import {
   BASE_PORT,
   INHERITED_ENV_BLOCKLIST,
@@ -131,26 +139,6 @@ function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
-/** Metrics live at the tail of a PASS line, before an optional ` findings=[...]`. */
-function parseMetrics(line: string): Record<string, number> {
-  const marker = line.match(/\(\d+ms\)\s/);
-  if (!marker || marker.index === undefined) return {};
-  let json = line.slice(marker.index + marker[0].length);
-  const findingsAt = json.indexOf(' findings=');
-  if (findingsAt >= 0) json = json.slice(0, findingsAt);
-  try {
-    const parsed: unknown = JSON.parse(json);
-    if (!parsed || typeof parsed !== 'object') return {};
-    const out: Record<string, number> = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
 function runOne(
   cell: { fixture: string; seed: number; axis: AxisValue | null },
   slot: number,
@@ -213,10 +201,7 @@ function runOne(
       if (spawnError) headline = `spawn failed: ${spawnError.message}`;
       else if (timedOut) headline = `timed out after ${Math.round(CHILD_TIMEOUT_MS / 60000)}min (process group killed)`;
       else if (!passed && failIndex >= 0) {
-        const failLine = outLines[failIndex]!.slice('FAIL: '.length).trim();
-        headline = failLine.endsWith('threw:')
-          ? `${failLine} ${(outLines.slice(failIndex + 1).find((line) => line.trim()) ?? '').trim()}`
-          : failLine;
+        headline = failHeadline(outLines, failIndex);
       } else if (!passed) headline = `child exited code=${code} signal=${signal ?? 'none'} with no FAIL line`;
       if (verdict === 'lost') headline = `LOST (no verdict): ${headline}`;
 
@@ -418,6 +403,8 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   for (const child of live) killGroup(child, 'SIGKILL');
-  process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W23-NF2): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });

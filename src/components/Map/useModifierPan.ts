@@ -1,5 +1,5 @@
 import { useEffect, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { ProjectStore } from '../../store/projectStore';
 import type { UIStoreState } from '../../store/uiSelectKeys';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';

@@ -62,6 +62,7 @@ import {
   DEFAULT_STATION_SELECT_SIZE_MUL,
 } from './shaders';
 import { CUSTOM_RENDER_SYNC_HOOK } from './gate';
+import { addCustomLayer, isStyleRestoring, reAddCustomLayer, removeCustomLayer } from './styleRestore';
 
 /**
  * Defer a fail-safe restore off MapLibre's render stack. A self-disable fires
@@ -366,12 +367,7 @@ export class SurveyCustomController {
     layer.setStationsVisible(this.stationsVisible);
     layer.setReferenceShotsVisible(this.referenceShotsVisible);
     layer.setJumpShotsVisible(this.jumpShotsVisible);
-    // Insert below the interact overlay (the lowest kept layer above the survey
-    // geometry) so the custom geometry sits above loop closures / ghosts and
-    // beneath every hover/selection overlay + labels. Falls back to the top if
-    // absent (unit-test fakes).
-    const beforeId = this.map.getLayer('survey-interact-shots') ? 'survey-interact-shots' : undefined;
-    this.map.addLayer(layer, beforeId);
+    addCustomLayer(this.map, layer, this.beforeId());
     if (layer.isDisabled()) {
       // FATAL: the custom layer cannot draw (no WebGL2 / shader link failure).
       // Custom render is the sole renderer - there is NO stock fallback - so
@@ -382,7 +378,7 @@ export class SurveyCustomController {
         `[customRender] custom layer failed to initialize (${reason}); ` +
           'survey rendering unavailable',
       );
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      removeCustomLayer(this.map, layer);
       this.layer = null;
       this.fatal = true;
       this.setActive(false); // active was never true here, so this does not fire.
@@ -400,19 +396,28 @@ export class SurveyCustomController {
     this.map.triggerRepaint();
   }
 
+  /** Insert below the interact overlay (the lowest kept layer above the survey
+   *  geometry) so the custom geometry sits above loop closures / ghosts and
+   *  beneath every hover/selection overlay + labels. Falls back to the top if
+   *  absent (unit-test fakes). */
+  private beforeId(): string | undefined {
+    return this.map.getLayer('survey-interact-shots') ? 'survey-interact-shots' : undefined;
+  }
+
   /**
-   * Re-add the live layer after a WebGL context restore, which MapLibre never
-   * does for a custom layer (see surveyLayer/glContextRecovery.ts). The SAME
-   * layer object goes back, so MapLibre re-runs its onAdd: programs recompile and
-   * buffers re-upload from the layer's data on the new context. A re-add that
+   * Re-add the live layer after MapLibre rebuilt the style without it (a WebGL
+   * context restore or a worker restart; see surveyLayer/glContextRecovery.ts).
+   * The SAME layer object goes back, so MapLibre re-runs its onAdd: programs
+   * recompile and buffers re-upload from the layer's data on the live context
+   * (reAddCustomLayer first frees what a worker restart left behind). Without a
+   * `beforeId` it goes below the interact overlay, as on enable. A re-add that
    * cannot draw is the same unrecoverable state as a failed enable. No-op when
    * nothing was drawing.
    */
-  reattach(beforeId: string | undefined): void {
+  reattach(beforeId?: string): void {
     const layer = this.layer;
     if (!this.active || !layer || this.disposed || this.fatal) return;
-    this.map.addLayer(layer, beforeId);
-    if (layer.isDisabled()) {
+    if (!reAddCustomLayer(this.map, layer, beforeId ?? this.beforeId())) {
       this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
       return;
     }
@@ -430,7 +435,7 @@ export class SurveyCustomController {
    *  path uses {@link tearDownFatal}. */
   private teardown(): void {
     this.setActive(false);
-    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.map.triggerRepaint();
   }
@@ -444,7 +449,8 @@ export class SurveyCustomController {
    * not the stock-restoring {@link teardown}.
    */
   private handleSelfDisable(reason: string): void {
-    if (!this.active || this.selfDisableScheduled) return;
+    // A lost context fails every GL call; the restore's re-add rebuilds the layer.
+    if (!this.active || this.selfDisableScheduled || isStyleRestoring(this.map)) return;
     this.selfDisableScheduled = true;
     console.warn(
       `[customRender] custom layer self-disabled (${reason}); survey rendering unavailable`,
@@ -468,9 +474,9 @@ export class SurveyCustomController {
   private tearDownFatal(reason: string): void {
     this.fatal = true;
     // The style is gone when the map was removed or lost its WebGL context before
-    // this deferred teardown ran: MapLibre took the layer with it, and getLayer
-    // reads the missing style and throws (#576 NF-MAP-3).
-    if (hasLiveStyle(this.map) && this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    // this deferred teardown ran: MapLibre took the layer with it (its onRemove
+    // ran), so there is nothing left to remove (#576 NF-MAP-3).
+    if (hasLiveStyle(this.map)) removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.active = false; // set directly: onActiveChange must NOT fire (no republish).
     this.map.triggerRepaint();

@@ -1,5 +1,5 @@
 import { startTransition, useCallback, useEffect, useRef, type MutableRefObject } from 'react';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import type { StationRef } from '../../types/project';
 import type { ProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';

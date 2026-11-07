@@ -54,6 +54,10 @@ pub(super) const DISPLAY_SETTINGS_NOT_SAVED_CODE: &str = "DISPLAY_SETTINGS_NOT_S
 /// be reopened: the side tables only that file holds are not in the new one.
 pub(super) const SIDE_TABLES_NOT_CARRIED_CODE: &str = "SIDE_TABLES_NOT_CARRIED";
 
+/// The warning on a save that wrote the file but could not reopen it afterwards
+/// (`project_io.rs`): DB-backed actions stay off until the project is reopened.
+pub(super) const DATABASE_NOT_REOPENED_CODE: &str = "DATABASE_NOT_REOPENED";
+
 /// How a save relates to the file the session has open. Resolved once, by
 /// [`SaveRequest::mode`] before anything is written, so no step has to infer it
 /// again.

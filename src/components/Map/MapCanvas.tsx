@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import type { ProjectWarning } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import {
@@ -40,7 +40,7 @@ import { createSurveyMap, SATELLITE_SOURCE_ID } from './createSurveyMap';
 import { pixelsPerMeterAt } from './placementScale';
 import { useContextLossToast } from './useContextLossToast';
 import { useStyleEpoch } from './useStyleEpoch';
-import { SATELLITE_BOTTOM_CANDIDATES, hasLiveStyle } from './mapUtils';
+import { SATELLITE_BOTTOM_CANDIDATES, canWriteStyle } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
@@ -51,6 +51,7 @@ import { MapDevStatsPanels } from './MapDevStatsPanels';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
 import { installPanZoomDebug } from './panZoomDebug';
+import { MapUnavailable } from './MapUnavailable';
 import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -180,6 +181,7 @@ function MapCanvas({ onReloadMap, initialCenter }: MapCanvasProps) {
   // Moves once the style is back after a WebGL context restore: style-writing
   // effects that skipped while it was gone run again (#576 NF-MAP-5).
   const styleEpoch = useStyleEpoch(map, mapLoaded);
+  const [webgl2Unavailable, setWebgl2Unavailable] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
   // True briefly after placement confirmation to suppress the spurious MapLibre click
   const placementJustConfirmedRef = useRef(false);
@@ -705,7 +707,7 @@ function MapCanvas({ onReloadMap, initialCenter }: MapCanvasProps) {
     // Transform to map coordinates
     const mapCenter = metersToMapCoords(centerX, centerY, gpsOrigin);
 
-    map.current = createSurveyMap({
+    const created = createSurveyMap({
       container: mapContainer.current,
       style: {
         version: 8,
@@ -735,6 +737,11 @@ function MapCanvas({ onReloadMap, initialCenter }: MapCanvasProps) {
       boxZoom: false,
       performanceTuned: true,
     });
+    if (!created) {
+      setWebgl2Unavailable(true);
+      return;
+    }
+    map.current = created;
 
     // Optional MapLibre instrumentation; inert unless VITE_DEBUG_MACOS_LOCKUP
     // is set at build time. See docs/debugging-macos-pan-zoom.md.
@@ -1229,6 +1236,12 @@ function MapCanvas({ onReloadMap, initialCenter }: MapCanvasProps) {
   useEffect(() => {
     if (surveyLayerRef.current) {
       surveyLayerRef.current.setActiveTool(activeTool);
+      // Under Pan/Zoom setActiveTool drops the layer's section hover. A switch TO
+      // Pan/Zoom clears the store's in the same update, so this re-applies null;
+      // but on map load this runs after MapHoverSync (a child, so its effects run
+      // first) pushed in the hover of a panel row still under the pointer, which
+      // must stay painted (#576 W26-NF2).
+      surveyLayerRef.current.setHoveredSection(useUIStore.getState().hoveredSectionId);
     }
   }, [activeTool, mapLoaded]);
 
@@ -1268,13 +1281,14 @@ function MapCanvas({ onReloadMap, initialCenter }: MapCanvasProps) {
 
   // Handle satellite toggle
   useEffect(() => {
-    // No style while the WebGL context is lost (reading it throws); styleEpoch
-    // re-runs this once the restored style has loaded (#576 NF-MAP-5).
-    if (!map.current || !mapLoaded || !hasLiveStyle(map.current)) return;
+    // No style while the WebGL context is lost (reading it throws), and a rebuilt
+    // one refuses writes until it has loaded; styleEpoch re-runs this once the
+    // restored style has loaded (#576 NF-MAP-5, RV18-MAP-1).
+    if (!map.current || !mapLoaded || !canWriteStyle(map.current)) return;
 
     // Store reference for cleanup
     const currentMap = map.current;
-    let errorHandler: ((e: { error?: { status?: number }; sourceId?: string }) => void) | null = null;
+    let errorHandler: ((e: maplibregl.ErrorEvent & { sourceId?: string }) => void) | null = null;
 
     if (showSatellite) {
       // Add satellite layer if not already present
@@ -1305,7 +1319,7 @@ function MapCanvas({ onReloadMap, initialCenter }: MapCanvasProps) {
 
         // Add error handler for tile fetch failures
         const sourceId = 'satellite-tiles';
-        errorHandler = (e: { error?: { status?: number }; sourceId?: string }) => {
+        errorHandler = (e: maplibregl.ErrorEvent & { sourceId?: string }) => {
           if (e.sourceId === sourceId) {
             console.warn('[MapCanvas] Satellite tile load failed - the imagery provider could not be reached');
             // The map will gracefully show the background color where tiles fail to load
@@ -1555,6 +1569,7 @@ function MapCanvas({ onReloadMap, initialCenter }: MapCanvasProps) {
       onContextMenu={handleContextMenu}
     >
       <div ref={mapContainer} className="w-full h-full" data-testid="maplibre-container" />
+      {webgl2Unavailable && <MapUnavailable testId="map-webgl2-unavailable" />}
 
       {/* Zoom box overlay */}
       {zoomBox.start && zoomBox.end && (

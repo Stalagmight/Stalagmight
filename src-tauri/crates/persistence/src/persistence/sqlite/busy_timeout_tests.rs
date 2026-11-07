@@ -63,6 +63,12 @@ fn every_open_path_waits_at_least_five_seconds_for_a_busy_file() {
             Database::open_for_metadata_recovering(&path).unwrap(),
         ),
         ("open_readonly", Database::open_readonly(&path).unwrap()),
+        // [#608] The hardened open for a file from elsewhere (a server upload).
+        (
+            "open_existing_untrusted",
+            Database::open_existing_untrusted(&path, 1 << 20, std::time::Duration::from_mins(1))
+                .unwrap(),
+        ),
         (
             "open_for_recovery",
             Database::open_for_recovery(&path).unwrap(),

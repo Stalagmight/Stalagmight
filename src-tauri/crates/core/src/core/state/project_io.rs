@@ -937,7 +937,7 @@ impl AppState {
                 let mut result = CommandResult::success();
                 result.warnings.extend(warnings);
                 result.warnings.push(crate::core::ValidationWarning {
-                    code: "DATABASE_NOT_REOPENED".to_string(),
+                    code: super::save_sidecars::DATABASE_NOT_REOPENED_CODE.to_string(),
                     message: "File saved, but database could not be reopened. Some features may not work until the project is reopened.".to_string(),
                     severity: crate::core::WarningSeverity::Warning,
                 });

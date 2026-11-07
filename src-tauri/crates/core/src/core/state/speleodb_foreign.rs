@@ -694,7 +694,7 @@ mod tests {
 
         // The read really does fail on this input (pinned by
         // `metadata_open_still_propagates_a_genuinely_unreadable_file` in
-        // persistence/sqlite/tests.rs) - and the probe still does not refuse:
+        // persistence/sqlite/tests/speleo_link_tests.rs) - and the probe still does not refuse:
         // the full open right after it reports CORRUPT through the existing
         // recovery UI, which is the better surface for this file.
         assert!(

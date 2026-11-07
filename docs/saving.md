@@ -306,7 +306,8 @@ boundary") and reports anything at the name - a file, a folder, a dangling link 
 as there. A probe that fails (a folder the OS will not let it look into) is an
 error, and the prompt then asks with its "could not check whether ... already
 exists" wording rather than saving over a file nobody looked for (#576 E10-D1). A
-probe the policy refuses (an app or system folder) carries `WRITE_PATH_REFUSED`:
+probe the policy refuses (an app or system folder; on Windows also a device,
+volume, drive-relative, stream, device-name or loopback-share path) carries `WRITE_PATH_REFUSED`:
 the write after it refuses the same path with the reason, so the caller goes
 straight to it and the user sees one dialog, the refusal (#576 HFI-2-D2). The webview's fs plugin is not asked: its scope holds no user path, so its
 `exists()` failed for every path in the real app and every Save As said "could not

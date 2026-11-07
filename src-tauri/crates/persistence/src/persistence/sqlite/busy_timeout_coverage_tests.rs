@@ -21,6 +21,17 @@ const NOT_AN_OPEN_PATH: &[(&str, &str)] = &[
          and are both opened in the busy-timeout test",
     ),
     (
+        "finish_open_existing",
+        "private to open.rs: the shared tail of open_existing_with and \
+         open_existing_untrusted (#608), its only callers, both opened in the \
+         busy-timeout test; it takes their connection and opens nothing itself",
+    ),
+    (
+        "run_existing_open_checks",
+        "private to open.rs: the checks finish_open_existing runs on the handle it \
+         was given (#608); it opens nothing itself",
+    ),
+    (
         "upgraded_copy_in_memory",
         "private to open.rs: the older-file branch of open_existing_to_read (#576 \
          RV6b-R1-D1), its only caller, which the busy-timeout test opens on an older file",

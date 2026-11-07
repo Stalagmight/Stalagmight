@@ -18,6 +18,12 @@
 //! - it is not inside a system directory (`/etc`, `/usr`, `C:\Windows`,
 //!   `C:\Program Files`, ...). `/home`, `/var`, `/run/media`, `/mnt`, `/media`,
 //!   `/opt` and `/tmp` are not system directories here: users save there.
+//!
+//! On Windows a fourth, from the text alone (#576 W24-D1): the path names a
+//! plain file in a folder - not a device, volume or drive-relative path
+//! (`\\?\GLOBALROOT\..`, `\??\..`, `C:x`), not an alternate data stream (a `:`
+//! after the drive), not a device name (`NUL.stalx`, `COM1`), and not this
+//! computer reached as a network share (`\\localhost\C$\..`).
 
 use std::path::{Component, Path, PathBuf};
 
@@ -165,6 +171,11 @@ pub(crate) fn check_write_path_under(
     if !has_expected(path) {
         return refuse(format!("the file must end in {}", expected()));
     }
+    // [#576 W24-D1] A Windows path that names no plain file in a folder is
+    // refused from its text, before the walk below asks the disk about it.
+    if let Some(why) = windows_refusal(path, walk.rules) {
+        return refuse(why);
+    }
     // [#576 RV13-5] The name is right and the link at it leads to a file of
     // another type (or a folder): said of the target, not of the name.
     // A chain of links past what Windows follows has no landing to judge: the
@@ -208,7 +219,19 @@ pub(crate) fn load_upgrade_refusal(path: &Path) -> Option<UpgradeRefusal> {
 
 /// [`load_upgrade_refusal`] against given app directories (the testable core).
 pub(crate) fn load_upgrade_refusal_with(path: &Path, dirs: &AppDirs) -> Option<UpgradeRefusal> {
-    let why = location_refusal(path, true, dirs, Walk::HOST)?;
+    load_upgrade_refusal_under(path, dirs, Walk::HOST)
+}
+
+/// [`load_upgrade_refusal_with`] under given path rules, on a given file system
+/// (#576 RV18-W24-3), as [`check_write_path_under`]: the Windows refusals are
+/// tested on any host.
+pub(crate) fn load_upgrade_refusal_under(
+    path: &Path,
+    dirs: &AppDirs,
+    walk: Walk<'_>,
+) -> Option<UpgradeRefusal> {
+    let why =
+        windows_refusal(path, walk.rules).or_else(|| location_refusal(path, true, dirs, walk))?;
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
@@ -300,6 +323,177 @@ fn written_forms(path: &Path, walk: Walk<'_>) -> Option<Vec<PathBuf>> {
     }
     Some(forms)
 }
+
+/// [#576 W24-D1] Why, under Windows rules, `path` names no plain file in a
+/// folder - or `None`. Judged on the text as given, before anything on the disk
+/// is asked; under Unix and macOS rules every such text is a plain name.
+fn windows_refusal(path: &Path, rules: PathRules) -> Option<String> {
+    if !rules.windows {
+        return None;
+    }
+    // This computer's own name is a loopback server too: known on Windows.
+    let own_name = if cfg!(windows) {
+        std::env::var("COMPUTERNAME").ok()
+    } else {
+        None
+    };
+    windows_path_refusal(&path.to_string_lossy(), own_name.as_deref()).map(str::to_owned)
+}
+
+/// [`windows_refusal`] on a path's text - pure, so every host tests it. A
+/// `\\?\` or `\\.\` path must name a drive (`X:\`) or a UNC path: any other
+/// (`\\?\GLOBALROOT\..`, `\\?\Volume{..}\..`, `\\.\HarddiskVolume3\..`,
+/// `\\.\pipe\..`) is a device or volume, and so is a path under the NT prefix
+/// `\??\`, and so is a `\\.\` path (or a `\\?\` one in forward slashes) with a
+/// `.` or `..` after the prefix, which Win32 lets climb over the drive or
+/// server. A drive letter not followed by `\` (`C:x`) names a place in that
+/// drive's current folder, which the text does not tell. A UNC path whose
+/// server is this computer ([`is_this_computer`]; `own_name` its name, when
+/// known) reaches a local folder under another name.
+pub(crate) fn windows_path_refusal(path: &str, own_name: Option<&str>) -> Option<&'static str> {
+    let text = path.replace('/', "\\");
+    let plain = windows_form(path);
+    let drive = plain
+        .as_bytes()
+        .get(..2)
+        .is_some_and(|d| d[0].is_ascii_alphabetic() && d[1] == b':');
+    let after_drive = if drive { &plain[2..] } else { plain.as_str() };
+    let drive_root = drive && after_drive.starts_with('\\');
+    let prefixed = text.starts_with(r"\\?\") || text.starts_with(r"\\.\");
+    // [#576 RV18-W24-1] Win32 takes the device prefix itself as the root of a
+    // `\\.\` path, and of a `\\?\` one not spelled exactly so (forward slashes),
+    // which it normalizes: a `.` or `..` after the prefix climbs over the drive
+    // or the UNC server (`\\.\C:\..\GLOBALROOT\..` is the GLOBALROOT device).
+    // Only an exact `\\?\` path is passed on as written.
+    let climbs = prefixed
+        && !path.starts_with(r"\\?\")
+        && text
+            .get(4..)
+            .unwrap_or_default()
+            .split('\\')
+            .any(|name| matches!(name.trim_end_matches(' '), "." | ".."));
+    if text.starts_with(r"\??\")
+        || climbs
+        || (prefixed && !drive_root && !plain.starts_with(r"\\"))
+        || (drive && !drive_root)
+    {
+        return Some("that is a Windows device, volume or drive-relative path");
+    }
+    let server = plain
+        .strip_prefix(r"\\")
+        .and_then(|unc| unc.split('\\').next());
+    if server.is_some_and(|server| is_this_computer(server, own_name)) {
+        return Some("that is this computer reached as a network share");
+    }
+    // A `:` after the drive names an alternate data stream: of another file
+    // (`notes.txt:x.stalx`) or of a folder itself (`C:\Windows:x.stalx`).
+    if after_drive.contains(':') {
+        return Some("that is an alternate data stream of a file or folder");
+    }
+    // A last name whose stem - up to its first dot, trailing spaces dropped -
+    // is a device name is refused, extension or not (`NUL.stalx`): Microsoft
+    // reserves both, and Windows before 11 opens the device for either. Windows
+    // 11 opens a name with an extension as a file, but which Windows the app
+    // runs on does not change what the name is, so the rule is the same.
+    let last = after_drive.rsplit('\\').find(|name| !name.is_empty());
+    let stem = last
+        .and_then(|name| name.split('.').next())
+        .unwrap_or_default()
+        .trim_end_matches(' ');
+    if DEVICE_NAMES.iter().any(|d| stem.eq_ignore_ascii_case(d)) {
+        return Some("that is a Windows device name");
+    }
+    None
+}
+
+/// Whether a UNC server name is this computer (#576 W24-D1): `localhost`, an
+/// IPv4 address in 127.0.0.0/8 in any spelling Windows reads as one
+/// ([`ipv4_any_form`]: `127.1`, `2130706433`, `0x7f000001`, `0x7f.1`), `::1`
+/// (also as an `ipv6-literal.net` name, `--1.ipv6-literal.net`), or `own_name` -
+/// alone or as the start of a domain name. A trailing dot (the fully qualified
+/// form) and letter case do not matter.
+fn is_this_computer(server: &str, own_name: Option<&str>) -> bool {
+    let server = server.trim_end_matches('.').to_ascii_lowercase();
+    if server == "localhost"
+        || (server.starts_with("127.") && server.bytes().all(|b| b.is_ascii_digit() || b == b'.'))
+        || ipv4_any_form(&server).is_some_and(|address| address.is_loopback())
+    {
+        return true;
+    }
+    // An ipv6-literal.net name spells `:` as `-` and a zone as `s<zone>`;
+    // [#576 RV18-W24-5] an address may come in brackets, as in a URL (`[::1]`).
+    let v6 = server.strip_suffix(".ipv6-literal.net").map_or_else(
+        || {
+            server
+                .strip_prefix('[')
+                .and_then(|inner| inner.strip_suffix(']'))
+                .unwrap_or(&server)
+                .to_owned()
+        },
+        |name| name.split('s').next().unwrap_or_default().replace('-', ":"),
+    );
+    if v6.parse::<std::net::Ipv6Addr>().is_ok_and(|address| {
+        address.is_loopback() || address.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+    }) {
+        return true;
+    }
+    own_name.is_some_and(|own| {
+        let own = own.to_ascii_lowercase();
+        !own.is_empty()
+            && server
+                .strip_prefix(own.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    })
+}
+
+/// [#576 W30-3] The IPv4 address `server` spells in any form Windows reads as
+/// one (the `inet_addr` rules): one to four parts split by dots, each decimal,
+/// hex (`0x7f`) or octal (a leading `0`, `0177`), the last part filling the bytes
+/// the others leave - `127.1`, `0x7f.1`, the single numbers `2130706433` and
+/// `0x7f000001`. `None` for anything else, which is a name.
+fn ipv4_any_form(server: &str) -> Option<std::net::Ipv4Addr> {
+    let parts: Vec<&str> = server.split('.').collect();
+    if parts.len() > 4 {
+        return None;
+    }
+    let mut values = Vec::with_capacity(parts.len());
+    for part in parts {
+        let (digits, radix) = match part.strip_prefix("0x").or_else(|| part.strip_prefix("0X")) {
+            Some(hex) => (hex, 16),
+            None if part.len() > 1 && part.starts_with('0') => (&part[1..], 8),
+            None => (part, 10),
+        };
+        // `from_str_radix` takes a leading `+`; `inet_addr` does not.
+        if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+            return None;
+        }
+        values.push(u32::from_str_radix(digits, radix).ok()?);
+    }
+    let (&last, leading) = values.split_last()?;
+    let mut address = 0_u32;
+    for (i, &value) in leading.iter().enumerate() {
+        if value > 0xff {
+            return None;
+        }
+        address |= value << (24 - 8 * i);
+    }
+    // The last part fills the 32, 24, 16 or 8 bits the leading bytes leave.
+    let free_bits = 32 - 8 * leading.len();
+    if free_bits < 32 && last >> free_bits != 0 {
+        return None;
+    }
+    Some(std::net::Ipv4Addr::from(address | last))
+}
+
+/// The Windows device names a file name may not have (#576 W24-D1), compared
+/// ignoring ASCII case. [#576 W30-3] Port zero, the ports spelled with the
+/// ISO 8859-1 superscript digits Windows reads as digits (`COM¹`,
+/// `LPT²`, ...) and the console's input and output are reserved too.
+const DEVICE_NAMES: [&str; 32] = [
+    "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+    "COM8", "COM9", "COM¹", "COM²", "COM³", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6",
+    "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³", "CONIN$", "CONOUT$",
+];
 
 /// The forms of `path` to compare: as given (made absolute) with `.`/`..` folded,
 /// and as a write would reach it on disk ([`resolved`]: links followed), so `/etc`
@@ -479,9 +673,12 @@ fn lexical(path: &Path) -> PathBuf {
 /// How a platform's file system compares paths (#576 RV6b-R4).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PathRules {
-    /// Windows path syntax: `\` and `/` both separate, and a verbatim prefix
-    /// (`\\?\C:\..`, `\\?\UNC\server\share\..`) names the same place as the plain
-    /// form (`C:\..`, `\\server\share\..`).
+    /// Windows path syntax: `\` and `/` both separate, and a verbatim or device
+    /// prefix (`\\?\C:\..`, `\\.\C:\..`, `\\?\UNC\server\share\..`,
+    /// `\\.\UNC\server\share\..`, `UNC` in any case) names the same place as the
+    /// plain form (`C:\..`, `\\server\share\..`); outside a `\\?\` path a name
+    /// loses the trailing dots and spaces Win32 drops (`C:\Windows.\..` is
+    /// `C:\Windows\..`).
     pub(crate) windows: bool,
     /// Names match whatever their letter case: Windows (NTFS) and macOS, whose
     /// default file systems (APFS, HFS+) are case-insensitive. On a macOS volume
@@ -518,21 +715,15 @@ pub(crate) fn path_is_within(path: &str, dir: &str, rules: PathRules) -> bool {
 /// a UNC path's `\\` is a different one from a rooted path's `\` (#576 RV8a-F5):
 /// `\\server\share\x` and `\server\share\x` (that folder on the current drive)
 /// are different places, which split into the same names otherwise.
+///
+/// [#576 W24] Under Windows rules a name is compared as Win32 opens it
+/// ([`win32_name`]), except in a verbatim (`\\?\`) path, which reaches the file
+/// system as typed.
 fn path_components(path: &str, rules: PathRules) -> Vec<String> {
-    let mut text = if rules.windows {
-        let text = path.replace('/', "\\");
-        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
-            format!(r"\\{rest}")
-        } else if let Some(rest) = text
-            .strip_prefix(r"\\?\")
-            .or_else(|| text.strip_prefix(r"\\.\"))
-        {
-            rest.to_owned()
-        } else {
-            text
-        }
+    let (mut text, win32_names) = if rules.windows {
+        (windows_form(path), !path.starts_with(r"\\?\"))
     } else {
-        path.to_owned()
+        (path.to_owned(), false)
     };
     if rules.fold_case {
         text = text.to_lowercase();
@@ -544,12 +735,63 @@ fn path_components(path: &str, rules: PathRules) -> Vec<String> {
     } else if text.starts_with(separator) {
         parts.push(separator.to_string());
     }
+    let names: Vec<&str> = text
+        .split(separator)
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    // The last name, unless the path ends in a separator: then it ends in a folder.
+    let last = names
+        .len()
+        .checked_sub(1)
+        .filter(|_| !text.ends_with(separator));
     parts.extend(
-        text.split(separator)
-            .filter(|part| !part.is_empty() && *part != ".")
+        names
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| {
+                if win32_names {
+                    win32_name(name, Some(i) == last)
+                } else {
+                    name
+                }
+            })
+            .filter(|name| !name.is_empty())
             .map(str::to_owned),
     );
     parts
+}
+
+/// `name` as Win32 opens it (#576 W24): a folder's name loses one trailing dot,
+/// the last name every trailing dot and space. `C:\Windows.\x` is written in
+/// `C:\Windows`; `C:\Windows \x` and `C:\Windows..\x` in other folders. `..`
+/// is left as it is (folded before this compare).
+fn win32_name(name: &str, last: bool) -> &str {
+    if name.bytes().all(|b| b == b'.') {
+        name
+    } else if last {
+        name.trim_end_matches(['.', ' '])
+    } else {
+        name.strip_suffix('.').unwrap_or(name)
+    }
+}
+
+/// `path` as the Windows rules compare it: `/` read as `\`, and a DOS device
+/// prefix (`\\?\` verbatim, `\\.\` device) taken off, leaving the drive path it
+/// names - or, before `UNC\`, the UNC path (#576 W24): `\\?\UNC\s\x`,
+/// `\\?\unc\s\x` and `\\.\UNC\s\x` are all `\\s\x`. `UNC` in any letter case:
+/// Windows looks it up in its object namespace, which ignores case.
+fn windows_form(path: &str) -> String {
+    let text = path.replace('/', "\\");
+    let Some(rest) = text
+        .strip_prefix(r"\\?\")
+        .or_else(|| text.strip_prefix(r"\\.\"))
+    else {
+        return text;
+    };
+    match rest.split_at_checked(4) {
+        Some((unc, share)) if unc.eq_ignore_ascii_case(r"UNC\") => format!(r"\\{share}"),
+        _ => rest.to_owned(),
+    }
 }
 
 /// The system directories no command may write into.

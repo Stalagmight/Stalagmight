@@ -25,6 +25,7 @@ import {
   discoverCorpus,
   materializeCorpusEntry,
   publishableErrorMessage,
+  redactCorpusText,
   registerCorpusRedactions,
 } from './fixtureCorpus';
 import { newOracleState, runSweep, type OracleTarget } from './oracles';
@@ -178,7 +179,8 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
     expect(leaks).toEqual({ marker: false, findingJson: false, reportMd: false });
     // Still a readable marker and finding, naming the entry by its tag.
     expect(JSON.parse(copied)).toEqual({ message: `could not read <corpus #${id}>/<corpus #${id}>/file`, location: 'src/lib.rs:1:1' });
-    expect(finding).toContain(`<corpus #${id}>`);
+    // finding.json is shareable: the panic's code location, not its message (#576 W21-NF2).
+    expect(JSON.parse(finding)).toMatchObject({ kind: 'crash-marker', detail: { location: 'src/lib.rs:1:1' } });
     expect(report).toContain('crash-marker');
   });
 
@@ -242,6 +244,147 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
     expect(sweep.findings.find((f) => f.kind === 'log-error')?.message).toContain(`{path="<corpus #${id}>/<corpus #${id}>/file"}`);
   });
 
+  /**
+   * #576 RV17-1: Rust's `{:?}` writes more than ASCII controls as `\u{hex}` - a
+   * combining mark (an NFD accent, as file names from macOS carry them), a
+   * no-break or zero-width space, a C1 control - and one such character left the
+   * rest of the name in the finding. An encoder that writes ASCII-only JSON
+   * spells every non-ASCII character `\uXXXX`, past U+FFFF as a surrogate pair.
+   * The Debug bodies are what rustc 1.97 printed for `format!("{:?}", path)`.
+   */
+  it.each([
+    ['a combining acute (NFD)', 'rv17a', 'qzrv17a Café sump.dmp', 'qzrv17a Cafe\\u{301} sump.dmp'],
+    ['a no-break space', 'rv17b', 'qzrv17b nbsp cave.dmp', 'qzrv17b nbsp\\u{a0}cave.dmp'],
+    ['a zero-width space', 'rv17c', 'qzrv17c x​y.dmp', 'qzrv17c x\\u{200b}y.dmp'],
+    ['a C1 control', 'rv17d', 'qzrv17d c1\u0085x.dmp', 'qzrv17d c1\\u{85}x.dmp'],
+    ['an emoji', 'rv17e', 'qzrv17e emoji \u{1F600} cave.dmp', 'qzrv17e emoji \u{1F600} cave.dmp'],
+    [
+      'a quote, a backslash and two escaped marks',
+      'rv17f',
+      'qzrv17f "q" back\\slash é .dmp',
+      'qzrv17f \\"q\\" back\\\\slash e\\u{301}\\u{a0}.dmp',
+    ],
+  ])('keeps a name with %s out of a {:?} log line, a crash marker and a finding (#576 RV17-1)', async (_what, id, name, debugBody) => {
+    const token = `qz${id}`;
+    const destination = path.join(scratch, 'copies', id);
+    registerCorpusRedactions(id, destination, [name]);
+    // JSON as an ASCII-only encoder writes it: every non-ASCII UTF-16 unit as \uXXXX.
+    const asciiJson = (value: unknown): string =>
+      JSON.stringify(value).replace(/[\u007f-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+    const debugPath = `"${destination}/${debugBody}"`;
+    const line =
+      `ERROR stalagmight_lib::commands::import_runner: Failed to parse DMP file for import ` +
+      `{path=${debugPath}, purpose=import, reason=not a dump} args=${asciiJson({ path: path.join(destination, name) })}`;
+    expect(line).toContain(token); // the input really does carry the name
+    const markerDir = path.join(scratch, `markers-${id}`);
+    fs.mkdirSync(markerDir, { recursive: true });
+    const marker = path.join(markerDir, 'crash-17-1-0.json');
+    fs.writeFileSync(marker, asciiJson({ message: `called \`Result::unwrap()\` on an \`Err\` value: Parse { path: ${debugPath} }` }));
+    const target: OracleTarget = { ...webviewLogging(line), findCrashMarkers: () => [marker] };
+    const session = path.join(sessionsRoot, `run-${id}`);
+    const sweep = await runSweep(target, newOracleState(), { recorder: new Recorder(`run-${id}`, sessionsRoot) });
+    execFileSync('node', [path.join(REPO, 'scripts', 'generate-repro-report.mjs'), session], { encoding: 'utf8' });
+
+    expect(sweep.newFindings.map((f) => f.kind)).toEqual(['crash-marker', 'log-error']);
+    const leaks = {
+      text: redactCorpusText(line).includes(token),
+      findings: JSON.stringify(sweep.findings).includes(token),
+      session: allText(path.join(session, 'findings')).includes(token),
+      actions: fs.readFileSync(path.join(session, 'actions.jsonl'), 'utf8').includes(token),
+      reportMd: fs.readFileSync(path.join(session, 'report.md'), 'utf8').includes(token),
+    };
+    expect(leaks).toEqual({ text: false, findings: false, session: false, actions: false, reportMd: false });
+    // Both spellings fold to the entry's tag, inside quotes that stay as written.
+    const message = sweep.findings.find((f) => f.kind === 'log-error')?.message ?? '';
+    expect(message).toContain(`{path="<corpus #${id}>/<corpus #${id}>/file", purpose=import`);
+    expect(message).toContain(`args={"path":"<corpus #${id}>/<corpus #${id}>/file"}`);
+  });
+
+  it('folds a name escaped twice, and U+FFFD written as the bytes it stands for (#576 RV17-1)', () => {
+    const destination = path.join(scratch, 'copies', 'rv17g');
+    registerCorpusRedactions('rv17g', destination, ['qzrv17g Café \u{1F600}.dmp', 'qzrv17h bad� name.dmp']);
+    const tag = '<corpus #rv17g>/file';
+    // `{:?}` inside JSON, and that inside JSON again; JSON's \uXXXX inside JSON.
+    expect(redactCorpusText('a qzrv17g Cafe\\\\u{301} \\\\uD83D\\\\uDE00.dmp b')).toBe(`a ${tag} b`);
+    expect(redactCorpusText('a qzrv17g Cafe\\\\\\\\u{301} \u{1F600}.dmp b')).toBe(`a ${tag} b`);
+    expect(redactCorpusText('a qzrv17g Cafe\\\\u0301 \\ud83d\\ude00.dmp b')).toBe(`a ${tag} b`);
+    // Node reads a file name that is not UTF-8 with U+FFFD in its place; Rust's
+    // `{:?}` of the path writes the bytes. (Discovery and materialization skip
+    // such a name today - its lossy spelling does not stat - so this is a guard.)
+    expect(redactCorpusText('p="qzrv17h bad\\xFF\\xFE name.dmp"')).toBe(`p="${tag}"`);
+    expect(redactCorpusText('p="qzrv17h bad\\u{fffd} name.dmp"')).toBe(`p="${tag}"`);
+  });
+
+  /**
+   * #576 RV17-2: a log line was cut to 400 characters, and the error-boundary
+   * text to 300 in the page, BEFORE the fold - so a name straddling the cut was
+   * no longer whole, nothing matched it, and its beginning stayed.
+   */
+  it('folds a name that straddles the 400-character cut of a log line (#576 RV17-2)', async () => {
+    const id = 'rv17cut';
+    const name = 'qzrv17cutname secret cave.dmp';
+    registerCorpusRedactions(id, path.join(scratch, 'copies', id), [name]);
+    const head = 'ERROR stalagmight_lib::commands::import_runner: Failed to parse DMP file for import {reason=could not read ';
+    const line = `${head}${'p'.repeat(390 - head.length)}${name}: bad header}`;
+    expect(line.indexOf(name)).toBe(390);
+    const session = path.join(sessionsRoot, `run-${id}`);
+    const sweep = await runSweep(webviewLogging(line), newOracleState(), { recorder: new Recorder(`run-${id}`, sessionsRoot) });
+
+    const message = sweep.findings[0]?.message ?? '';
+    const leaks = {
+      findings: JSON.stringify(sweep.findings).includes('qzrv17cut'),
+      session: allText(path.join(session, 'findings')).includes('qzrv17cut'),
+      actions: fs.readFileSync(path.join(session, 'actions.jsonl'), 'utf8').includes('qzrv17cut'),
+    };
+    expect(leaks).toEqual({ findings: false, session: false, actions: false });
+    expect(message.length).toBe(400); // still cut, after the fold
+    expect(message.slice(390)).toBe(`<corpus #${id}>`.slice(0, 10));
+  });
+
+  it('folds a name that straddles the 300-character cut of the error-boundary text (#576 RV17-2)', async () => {
+    const id = 'rv17eb';
+    const name = 'qzrv17ebname secret cave.dmp';
+    registerCorpusRedactions(id, path.join(scratch, 'copies', id), [name]);
+    const fallback = `${'x'.repeat(290)}${name} could not be opened`;
+    // Runs the oracle's real page script against a stand-in document.
+    const browser = {
+      executeAsync: (fn: (args: unknown, done: (r: unknown) => void) => void, first: unknown) => {
+        if (first === 'get_recent_logs_since') {
+          return Promise.resolve({ value: { entries: [], latest_seq: 0, dropped: false } });
+        }
+        return new Promise((resolve) => fn(first, resolve));
+      },
+      takeScreenshot: async () => {
+        throw new Error('no screen in a unit test');
+      },
+    };
+    const target: OracleTarget = {
+      browser: browser as unknown as OracleTarget['browser'],
+      exclusive: (fn) => fn(),
+      findCrashMarkers: () => [],
+    };
+    const g = globalThis as { document?: unknown };
+    g.document = { querySelector: () => ({ textContent: fallback }) };
+    const session = path.join(sessionsRoot, `run-${id}`);
+    let sweep: Awaited<ReturnType<typeof runSweep>>;
+    try {
+      sweep = await runSweep(target, newOracleState(), { recorder: new Recorder(`run-${id}`, sessionsRoot) });
+    } finally {
+      delete g.document;
+    }
+    execFileSync('node', [path.join(REPO, 'scripts', 'generate-repro-report.mjs'), session], { encoding: 'utf8' });
+
+    expect(sweep.findings.map((f) => f.kind)).toEqual(['error-boundary']);
+    const leaks = {
+      findings: JSON.stringify(sweep.findings).includes('qzrv17eb'),
+      session: allText(path.join(session, 'findings')).includes('qzrv17eb'),
+      actions: fs.readFileSync(path.join(session, 'actions.jsonl'), 'utf8').includes('qzrv17eb'),
+      reportMd: fs.readFileSync(path.join(session, 'report.md'), 'utf8').includes('qzrv17eb'),
+    };
+    expect(leaks).toEqual({ findings: false, session: false, actions: false, reportMd: false });
+    expect(String(sweep.findings[0]?.detail).length).toBe(300); // still cut, after the fold
+  });
+
   it('withholds every torn crash marker, a plain name cut mid-way included (#576 RV16-2)', async () => {
     const id = 'rv16p';
     const name = 'qzrv16plain secret cave.dmp';
@@ -289,8 +432,8 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
           event: 'finding',
           detail: { severity: 'error', kind: 'log-error', message: `ERROR import failed path="${quoted}" reason="x"` },
         },
-        // A log line is withheld from the report whole (#576 HFI2-F2), so the
-        // path fold is exercised by a finding the report still quotes.
+        // No finding's text reaches the report (#576 HFI2-F2, W21-NF2), and no
+        // step's argument values (RV18-W23-3): the path may appear nowhere.
         {
           type: 'event',
           v: 1,
@@ -299,13 +442,25 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
           event: 'finding',
           detail: { severity: 'warning', kind: 'sweep-probe-failed', message: `oracle probe failed: could not read ${quoted}` },
         },
+        {
+          type: 'action',
+          v: 1,
+          seq: 2,
+          ts: '2026-01-01T00:00:03Z',
+          tool: 'ipc',
+          mutating: true,
+          params: { command: 'import_file', args: { path: quoted } },
+          outcome: { ok: false, durationMs: 1 },
+        },
       ]
         .map((r) => JSON.stringify(r))
         .join('\n') + '\n',
     );
     const out = execFileSync('node', [path.join(REPO, 'scripts', 'generate-repro-report.mjs'), session], { encoding: 'utf8' });
     const report = fs.readFileSync(path.join(session, 'report.md'), 'utf8');
-    expect(report).toContain('corpus-7/<corpus file>');
+    // The step gives its arguments as shapes (#576 RV18-W23-3): the path is not
+    // printed at all, folded or not.
+    expect(report).toContain('`ipc` import_file({path: string(');
     expect(report + out).not.toContain(MARK);
   });
 });

@@ -6,7 +6,7 @@
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
-    "types": ["vite/client"],
+    "types": ["vite/client", "geojson"],
     "incremental": true,
     "tsBuildInfoFile": "./node_modules/.cache/tsc/tsconfig.tsbuildinfo"
   },

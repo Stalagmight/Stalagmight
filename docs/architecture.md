@@ -5,7 +5,7 @@
 ## Workspace layout
 
 The Rust backend is a cargo workspace rooted at `src-tauri/Cargo.toml` (a
-hybrid root: the `stalagmight` app package lives there too). Eight library
+hybrid root: the `stalagmight` app package lives there too). Nine library
 crates sit under `src-tauri/crates/`, plus one test-only member
 (`stalagmight-fuzz-gen`, last row):
 
@@ -19,7 +19,8 @@ crates sit under `src-tauri/crates/`, plus one test-only member
 | `stalagmight-speleodb` | SpeleoDB client: HTTP surface, auth/token storage, dump handling, sync, TLS policy, metrics | models, telemetry |
 | `stalagmight-core` | `AppState`, the command executors, undo/redo, project I/O orchestration, config I/O (`config/`), `tile_providers`; shared test helpers behind the `test-support` feature | export, models, parsers, persistence, speleodb |
 | `stalagmight-tiles` | The map-tile engine behind the `stalagmight-tiles://` protocol and `fetch_tile`: RFC 9111 caching client over the persistence tile caches, retrying fetch, ArcGIS tilemap probe, stale-if-error, overzoom fallback. Tauri-free, so `cargo test -p stalagmight-tiles` never builds the app | core, persistence |
-| `stalagmight` (app, at `src-tauri/`) | The thin Tauri layer: `commands/` (IPC handlers), `lib.rs` (the single `generate_handler!`, the tile protocol registration), `main.rs`, `tile_attribution.rs`, `webkit_memory.rs`, `examples/`, `tests/` | all of the above |
+| `stalx-reader` | Read-only `.stalx` reader for external consumers (SpeleoDB server-side maps, #593); nothing in the app depends on it | models, persistence |
+| `stalagmight` (app, at `src-tauri/`) | The thin Tauri layer: `commands/` (IPC handlers), `lib.rs` (the single `generate_handler!`, the tile protocol registration), `main.rs`, `tile_attribution.rs`, `webkit_memory.rs`, `examples/`, `tests/` | all of the above except stalx-reader |
 | `stalagmight-fuzz-gen` (test-only) | Parser and `.stalx` fuzzing support: input generators with semantic mutators, the import/load oracle, the fuzz targets and their fixed-seed CI tests; the nightly cargo-fuzz crate at `src-tauri/fuzz` (outside the workspace) wraps it. Nothing in the app depends on it (see [Testing Recipes](testing-recipes.md), "Parser fuzzing") | core, parsers, persistence |
 
 The layering is strict and one-way - models -> telemetry / parsers /
@@ -220,6 +221,19 @@ folders (the SpeleoDB managed-project cache excepted, for projects), and must no
 be inside a system folder (`/etc`, `/usr`, `/bin`, ..., `C:\Windows`,
 `C:\Program Files`). The list is deliberately narrow - `/home`, `/var`,
 `/run/media`, `/mnt`, `/media`, `/opt` and `/tmp` are places users save to.
+On Windows the path must also name a plain file in a folder, judged from its
+text before the disk is asked (#576 W24-D1): a device, volume or drive-relative
+path (`\\?\GLOBALROOT\...`, `\\?\Volume{...}\...`, `\\.\pipe\...`, the NT prefix
+`\??\`, `C:x.stalx`), an alternate data stream (a `:` after the drive:
+`notes.txt:x.stalx`, `C:\Windows:x.stalx`), a device name (CON, PRN, AUX, NUL,
+COM0-9, LPT0-9, COM and LPT with the superscript digits ¹ ² ³, CONIN$, CONOUT$,
+in any case, with any extension, trailing dots or spaces) and this computer
+reached as a network share (`localhost`; 127.0.0.0/8 in any spelling Windows reads
+as an IPv4 address, such as `127.1`, `2130706433`, `0x7f000001` or `0x7f.1`;
+`::1`; its own name) are refused, as are older-file upgrades there. The `\\?\`
+and `\\.\` forms of a drive or UNC path, `UNC` in any case, name the plain
+folder, and a name is compared as Win32 opens it (`C:\Windows.\` is
+`C:\Windows\`), except in a `\\?\` path.
 A folder counts however the path reaches it: the path is compared folded and as
 the write reaches it on disk, one component at a time, links followed - so
 `<dir>/missing/../link-to-the-app-folder/x`, which a write that makes the missing
@@ -442,9 +456,11 @@ Whole **test files** are measured too, under their own thresholds (warn 3000 / f
 5000 code LOC, the baseline's `test_files` section): a file under `src-tauri/tests/`, or a
 `tests.rs` / `*_tests.rs` / `*_fuzz.rs` / `test_helpers.rs` that its parent declares
 under `#[cfg(test)]` (a production file merely *named* `*_tests.rs` is measured as
-production). The five test monoliths at/above 3000 (led by `models/project/tests.rs`) are
-frozen: new tests go into a new submodule, not into them. (`core/state/tests.rs`, once the
-largest, is now a module root over topic files in `core/state/tests/`, #576 E1.) The scan also covers the
+production). The three test monoliths at/above 3000 (`commands/command_tests.rs`,
+`core/state/fuzz_undo_tests.rs` and `models/project/gas/tests.rs`) are frozen: new tests go
+into a new submodule, not into them. (`core/state/tests.rs`, once the largest, is now a
+module root over topic files in `core/state/tests/`, #576 E1; `models/project/tests.rs` and
+`persistence/sqlite/tests.rs` followed the same way, #576 AFK-D3.) The scan also covers the
 first-party Rust outside the crates' `src/`: the build scripts, `src-tauri/examples`,
 the agent harness's OS helper and `scripts/lib/slice-rs`.
 
@@ -565,6 +581,29 @@ When a station is set as zero datum with GPS coordinates, the system converts GP
 - `geodetic_to_ecef(lat, lon, alt)` - WGS84 to ECEF (public)
 - `ecef_to_enu(dx, dy, dz, lat0, lon0)` - ECEF diff to ENU (private)
 - `gps_to_local(gps, origin)` - Main entry point returning (east, north)
+- `local_to_gps(east, north, origin)` - the inverse, `Option<(lat, lon)>` (below)
+- `unwrap_longitude(lon, reference)` - the explicit drawing step (below)
+
+**The inverse, one algorithm** (#576 GEO-D1): `local_to_gps` finds where the
+origin's vertical through (east, north) meets the WGS84 surface - a quadratic
+for the up offset, then the closed-form latitude of a surface point. It is exact
+to rounding (the round trip through `gps_to_local` is within nanometres out to
+50 km), returns the longitude in [-180, 180], and is `None` only beyond the
+horizon (about an earth radius out) or for a non-finite input. The frontend's
+`enuToGps` (`src/utils/coordinates.ts`) runs the same solve operation for
+operation, so the workspace map, the data table's GPS column and Global View put
+a station on the same fix (#576 D36). The parity table `FRONTEND_PARITY` in
+geo.rs is pinned to the backend there and read from source by
+`src/utils/__tests__/coordinates.test.ts`, which holds `enuToGps` to it: the two
+sides agree to within 1e-9 degrees.
+
+| Caller | Longitude | Beyond the horizon |
+|--------|-----------|--------------------|
+| Global View (`survey_geometry.rs`) | `unwrap_longitude`: continuous with the origin across the antimeridian, may leave [-180, 180] | the project shows as failed to load, with the reason |
+| Workspace map (`metersToMapCoords`) | `unwrapLongitude`, the same step | pinned near the horizon in its own direction (the vertical's closest approach to the ellipsoid, a point above the surface), so the camera and bounds stay finite |
+| GPS column (`xyToGps`) | [-180, 180] | blank cell |
+| TML import, datum carried past dropped shots | [-180, 180] (a storable `GpsCoordinates`) | anchored at the file's own fix, with a log warning |
+| stalx reader (`stalx-reader`) | [-180, 180] | station left without coordinates |
 
 **Important notes**:
 - Altitude is always 0; `depth_reference` is meters below surface, not ellipsoid height

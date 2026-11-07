@@ -6,9 +6,9 @@
  *
  * GL discipline (per the CustomLayerInterface contract):
  *  - onAdd(map, gl): compile programs, create + upload buffers. Runs again when
- *    the controller re-adds this layer after a WebGL context restore (MapLibre
- *    itself never re-adds custom layers - see glContextRecovery.ts), so it fully
- *    rebuilds.
+ *    the controller re-adds this layer after MapLibre rebuilt the style without
+ *    it (a WebGL context restore or a worker restart; MapLibre itself never
+ *    re-adds custom layers - see glContextRecovery.ts), so it fully rebuilds.
  *  - render(gl, opts): binds its OWN program / buffers / attributes / uniforms
  *    every frame, assumes nothing about incoming GL state, and sets the
  *    premultiplied-alpha blend MapLibre expects (ONE, ONE_MINUS_SRC_ALPHA).

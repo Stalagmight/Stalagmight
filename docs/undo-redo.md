@@ -247,7 +247,7 @@ worldwide. 1e-6 m clears that by two decades and stays four decades below
 `Project::MERGE_ALIGNMENT_INVARIANT_M`, which is the ordering the whole chain
 rests on. The full table is on `Project::OFFSET_DUST_M`;
 `the_dust_gate_clears_the_residue_at_the_georeference_ceiling` and
-`the_dust_gate_is_decades_clear_of_both_ends` (models/project/tests.rs) re-run the
+`the_dust_gate_is_decades_clear_of_both_ends` (models/project/tests/merge_and_offset_tests.rs) re-run the
 measurement and pin the clearances. The gate stays a **pure function of the value
 written** - never scale-aware, which would let two routes disagree by design - and
 a residue that ever approaches it means re-measuring the constant, not widening an

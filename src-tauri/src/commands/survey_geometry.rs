@@ -13,11 +13,6 @@ use crate::core::CommandError;
 use crate::models::{GpsCoordinates, Project, SectionId, ShotKind, StationRef};
 use crate::persistence::Database;
 
-/// Minimum cosine value below which an origin counts as "at the pole" (beyond ±89.4°).
-/// The flat model this guarded divided by it; the WGS84 inverse has no singularity there, but
-/// the refusal is kept as it was so the set of projects GlobalView draws does not change.
-const MIN_COS_LAT: f64 = 0.01;
-
 /// A self-contained shot with GPS coordinates and metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct GeometryShot {
@@ -50,33 +45,39 @@ pub struct SurveyGeometryError {
 }
 
 /// Convert local meters (east, north) to GPS coordinates relative to origin, returned in
-/// MapLibre `(lng, lat)` order.
+/// MapLibre `(lng, lat)` order, ready to draw.
 ///
 /// The exact WGS84 inverse of the projection that placed the stations
 /// ([`crate::models::local_to_gps`] undoes `gps_to_local`). This used a flat
 /// 111 320 m-per-degree model, which put GlobalView's drawing of a project metres away from
 /// the workspace map's (#576 D36); the map runs the same inverse in TypeScript.
 ///
+/// GlobalView draws lines from the origin, so the longitude goes through the explicit
+/// [`crate::models::unwrap_longitude`] step: continuous with the origin's across the
+/// antimeridian, possibly outside [-180, 180], exactly as the workspace map's
+/// `metersToMapCoords` draws it.
+///
+/// An origin beside a pole is drawn like any other (#576 W30-1): the refusal past about
+/// +-89.4 degrees guarded the old flat model's divide by cos(lat), which the exact solve does not
+/// have, and the workspace map always drew such an origin.
+///
 /// # Errors
-/// Returns an error if the origin latitude is too close to ±90° (beyond ±89.4°).
+/// Returns an error if the point is beyond the horizon (no point on the earth has that offset
+/// from the origin, about an earth radius out): GlobalView then shows the project as failed to
+/// load, with this message, rather than draw a station somewhere it is not.
 pub fn local_to_gps(
     east: f64,
     north: f64,
     origin: &GpsCoordinates,
 ) -> Result<(f64, f64), SurveyGeometryError> {
-    let cos_lat = origin.latitude.to_radians().cos();
-
-    // Refuse a pole-adjacent origin, as before (see MIN_COS_LAT).
-    if cos_lat.abs() < MIN_COS_LAT {
-        return Err(SurveyGeometryError {
+    let (lat, lng) =
+        crate::models::local_to_gps(east, north, origin).ok_or_else(|| SurveyGeometryError {
             message: format!(
-                "Origin latitude {:.2}° is too close to the poles for accurate coordinate conversion",
-                origin.latitude
+                "A station {:.0} km from the zero datum is beyond the horizon and cannot be drawn",
+                east.hypot(north) / 1000.0
             ),
-        });
-    }
-
-    let (lat, lng) = crate::models::local_to_gps(east, north, origin);
+        })?;
+    let lng = crate::models::unwrap_longitude(lng, origin.longitude);
     Ok((lng, lat)) // MapLibre order
 }
 
@@ -445,29 +446,64 @@ mod tests {
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 
+    /// #576 W30-1: an origin beside a pole is drawn, where the workspace map draws it. The
+    /// refusal past +-89.4 degrees guarded the old flat model's divide by cos(lat); the exact
+    /// solve (GEO-D1) has no such divide, so GlobalView now places the station exactly where
+    /// `models::local_to_gps` (and the frontend's `enuToGps`) does.
     #[test]
-    fn test_local_to_gps_rejects_extreme_latitude() {
-        // Near poles, cos(lat) approaches 0, causing division issues
-        let near_pole = GpsCoordinates::new(89.5, 0.0, 0.0).unwrap();
-        let result = local_to_gps(1000.0, 0.0, &near_pole);
-        assert!(result.is_err(), "Should reject latitude near poles");
-        assert!(
-            result.unwrap_err().message.contains("poles"),
-            "Error should mention poles"
-        );
-
-        // -89.5 should also fail
-        let near_south_pole = GpsCoordinates::new(-89.5, 0.0, 0.0).unwrap();
-        let result = local_to_gps(1000.0, 0.0, &near_south_pole);
-        assert!(result.is_err(), "Should reject latitude near south pole");
+    fn globalview_draws_an_origin_beside_the_pole() {
+        for (lat0, lon0) in [(89.9, 12.5), (-89.9, -45.0), (89.5, 0.0), (90.0, 0.0)] {
+            let origin = GpsCoordinates::new(lat0, lon0, 0.0).unwrap();
+            for (east, north) in [(1_000.0, 0.0), (0.0, 1_000.0), (-700.0, -700.0)] {
+                let drawn = local_to_gps(east, north, &origin);
+                let (fix_lat, fix_lng) = crate::models::local_to_gps(east, north, &origin).unwrap();
+                let expected = (crate::models::unwrap_longitude(fix_lng, lon0), fix_lat);
+                assert_eq!(
+                    drawn.as_ref().map_err(|e| e.message.clone()),
+                    Ok(&expected),
+                    "origin ({lat0}, {lon0}), offset ({east}, {north}) m"
+                );
+            }
+        }
     }
 
     #[test]
     fn test_local_to_gps_accepts_high_but_valid_latitude() {
-        // 89° should still work (cos(89°) ≈ 0.0175 > MIN_COS_LAT)
         let high_lat = GpsCoordinates::new(89.0, 0.0, 0.0).unwrap();
         let result = local_to_gps(1000.0, 0.0, &high_lat);
         assert!(result.is_ok(), "89° latitude should be acceptable");
+    }
+
+    /// GEO-D1: `models::local_to_gps` returns a fix in [-180, 180]; GlobalView draws lines, so
+    /// it unwraps the longitude explicitly. 1000 m east of 179.999 is drawn at 180.0084, next to
+    /// the origin, not at -179.9916 on the far side of the globe; the mirror case too.
+    #[test]
+    fn globalview_draws_a_survey_across_the_antimeridian_in_one_piece() {
+        for (lon0, east) in [(179.999, 1_000.0), (-179.999, -1_000.0)] {
+            let origin = GpsCoordinates::new(-16.8, lon0, 0.0).unwrap();
+            let (lng, lat) = local_to_gps(east, 0.0, &origin).unwrap();
+            assert!(
+                (lng - lon0).abs() < 0.01,
+                "origin lng {lon0}, {east} m east: drawn at lng {lng}, across the globe"
+            );
+            let (fix_lat, fix_lng) = crate::models::local_to_gps(east, 0.0, &origin).unwrap();
+            assert_eq!(lat, fix_lat);
+            assert!(((lng - fix_lng).abs() - 360.0).abs() < 1e-9);
+        }
+    }
+
+    /// GEO-D1: beyond the horizon there is no point to draw; GlobalView reports the project as
+    /// failed with a message instead of drawing the station somewhere it is not.
+    #[test]
+    fn globalview_refuses_a_station_beyond_the_horizon() {
+        let origin = GpsCoordinates::new(20.5, -87.4, 0.0).unwrap();
+        let err = local_to_gps(20_000_000.0, 0.0, &origin).unwrap_err();
+        assert!(
+            err.message.contains("beyond the horizon"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("20000 km"), "{}", err.message);
     }
 
     #[test]

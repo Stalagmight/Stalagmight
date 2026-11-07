@@ -4230,7 +4230,7 @@ fn removing_a_zero_datum_leaves_nothing_for_the_next_load_to_reclassify() {
 /// so the scoping's own red/green guard is at the model level, where the state
 /// can be built directly:
 /// `removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one` and
-/// its `remove_appended_first_shot` sibling in models/project/tests.rs.
+/// its `remove_appended_first_shot` sibling in models/project/tests/orphan_closure_tests.rs.
 ///
 /// The undo of `CreateShot` picks its inverse by shape, so both are pinned: this
 /// one is the append into an EMPTY section (`remove_appended_first_shot`).

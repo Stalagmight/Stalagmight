@@ -689,53 +689,132 @@ export function describeCorpus(inventory: CorpusInventory): string {
  * its text through `redactCorpusText` (#576 HFI-13). Empty, and therefore a
  * no-op, in any process that never copied a corpus entry.
  */
-const REDACTED_DIRS: { find: string; say: string }[] = [];
-const REDACTED_NAMES: { find: string; say: string }[] = [];
+const REDACTED_DIRS: Redaction[] = [];
+const REDACTED_NAMES: Redaction[] = [];
 /**
  * A path segment this short identifies nothing, and replacing it everywhere
  * would garble every line it occurs in (a Walls `.PATH` folder named `1`).
  */
 export const MIN_REDACTED_NAME = 3;
 
+/** One registered name (or copy directory), and what it folds to. */
+interface Redaction {
+  /** The name as it is on disk, or one of its Unicode normal forms; the list is ordered by its length. */
+  readonly text: string;
+  readonly say: string;
+  /**
+   * A run of the name that every form keeps verbatim (letters, digits and
+   * `-._~`, which no escape and no URL encoder touches), checked with
+   * `includes` before the pattern runs; empty when the name has none.
+   */
+  readonly anchor: string;
+  readonly pattern: RegExp;
+}
+
+/** One or more backslashes: an escape written once, or escaped again (JSON of a `{:?}` form, and so on). */
+const BACKSLASHES = '\\\\+';
+/** A byte `{:?}` writes as `\xHH`, after its backslashes. */
+const BYTE = 'x[0-9A-Fa-f]{2}';
 /**
- * `text` as Rust's `{:?}` writes it inside the quotes: `"` and `\` escaped, the
- * common controls by name, any other control as `\u{hex}`. (Rust also escapes
- * some non-printable Unicode; a corpus name made of those is not chased.)
+ * Where a character sits in the name, which decides how its escapes take the
+ * backslashes in front of them (#576 RV18-W23-1). Taken as `BACKSLASHES`
+ * everywhere, a run of N backslashes was tried from each of its N backslashes
+ * and read to its end each time, and two runs side by side (a backslash of the
+ * name before an escaped character) split it every way there is: 40k
+ * backslashes took seconds, a 1 MB line did not finish.
+ * - `first`: an escape starts where a run of backslashes (or of `\xHH` bytes)
+ *   starts, never inside one. It folds the same text - a match from inside a
+ *   run also matches from the run's start, the extra backslashes taken in -
+ *   and each run is read once.
+ * - `afterBackslash`: the name's backslash before it (`BACKSLASHES`) has taken
+ *   the run, so an escape takes exactly one more backslash and a quote none.
+ *   `\\+\\u` and `\\+"` match what `\\+\\+u` and `\\+\\*"` did, one way only.
+ * - `inside`: after any other character, as before - the match comes to a run
+ *   from that character, so at the run's start.
  */
-function rustDebugEscaped(text: string): string {
-  const named: Record<string, string> = { '"': '\\"', '\\': '\\\\', '\n': '\\n', '\r': '\\r', '\t': '\\t', '\0': '\\0' };
-  let out = '';
-  for (const c of text) {
-    const code = c.codePointAt(0) ?? 0;
-    out += named[c] ?? (code < 0x20 || code === 0x7f ? `\\u{${code.toString(16)}}` : c);
-  }
-  return out;
+type CharAt = 'first' | 'afterBackslash' | 'inside';
+/** Escapes that name a control character, Rust's (`\0`) and JSON's (`\b`, `\f`) together. */
+const NAMED_ESCAPES: Readonly<Record<string, string>> = { '\n': 'n', '\r': 'r', '\t': 't', '\0': '0', '\b': 'b', '\f': 'f' };
+
+/** `value` in hex, at least `width` digits, each letter matching either case. */
+function hexPattern(value: number, width: number): string {
+  return value
+    .toString(16)
+    .padStart(width, '0')
+    .replace(/[a-f]/g, (digit) => `[${digit}${digit.toUpperCase()}]`);
+}
+
+/** What a URL encoder leaves as it is (RFC 3986 unreserved); every other character it may write `%HH`. */
+const UNRESERVED = /^[A-Za-z0-9._~-]$/;
+
+/** `c` percent-encoded: its UTF-8 bytes, each `%HH` in either case. */
+function percentPattern(c: string): string {
+  return Array.from(Buffer.from(c, 'utf8'), (byte) => `%${hexPattern(byte, 2)}`).join('');
 }
 
 /**
- * Every form a name takes in what the app writes and the harness reads back
- * (#576 RV16-1): as is; escaped once, by JSON or by Rust's `{:?}` (a tracing
- * field `path = ?path` in a log line, a PathBuf in a panic payload); and
- * escaped twice (a `{:?}` form inside a crash marker's or a JSON line's text).
- * A name with a quote or a backslash is found in none of them but the first,
- * and a parsed marker still holds the `{:?}` form, one level inside its value.
+ * What one character of a name can look like in text the app wrote and the
+ * harness read back (#576 RV17-1). Printable ASCII is itself - `"` and `\` with
+ * any number of backslashes in front, one level of escaping per layer (Rust's
+ * `{:?}`, then JSON around it). Every other character - a control, and ANY
+ * non-ASCII one - is itself or one of its escapes, at any depth: Rust's
+ * `\u{hex}` (`{:?}` writes it for a combining mark, a no-break or zero-width
+ * space, a C1 control, ... - the set follows Unicode, so it is not listed),
+ * JSON's `\uXXXX` (an ASCII-only encoder writes one for every non-ASCII
+ * character, past U+FFFF a surrogate pair), and a control's named escape.
+ * U+FFFD also stands for bytes that are not UTF-8: Node reads such a file name
+ * with U+FFFD in their place, and Rust's `{:?}` of the path writes them `\xHH`.
+ * Any character but a letter, a digit and `-._~` is also its percent-encoding,
+ * as a `file://` URL writes it (`Caf%C3%A9%20Nord.srv`, #576 RV18-W23-5).
+ * `at` is where `c` sits in the name (`CharAt`).
  */
-function escapedForms(text: string): string[] {
-  const json = (s: string): string => JSON.stringify(s).slice(1, -1);
-  const debug = rustDebugEscaped(text);
-  return [...new Set([text, json(text), debug, json(debug), json(json(text))])];
+function charPattern(c: string, at: CharAt): string {
+  const lead = at === 'afterBackslash' ? '\\\\' : at === 'first' ? `(?<!\\\\)${BACKSLASHES}` : BACKSLASHES;
+  const percent = percentPattern(c);
+  if (c === '"') {
+    const quote = at === 'afterBackslash' ? '"' : at === 'first' ? '(?<!\\\\)\\\\*"' : '\\\\*"';
+    return `(?:${quote}|${percent})`;
+  }
+  if (c === '\\') return `(?:${lead}|${percent})`;
+  const code = c.codePointAt(0) ?? 0;
+  if (code >= 0x20 && code < 0x7f) {
+    const literal = c.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
+    return UNRESERVED.test(c) ? literal : `(?:${literal}|${percent})`;
+  }
+  let json = '';
+  for (let i = 0; i < c.length; i++) json += `${i === 0 ? lead : BACKSLASHES}u${hexPattern(c.charCodeAt(i), 4)}`;
+  const forms = [c, `${lead}u\\{0*${hexPattern(code, 1)}\\}`, json, percent];
+  const named = NAMED_ESCAPES[c];
+  if (named !== undefined) forms.push(`${lead}${named}`);
+  if (code === 0xfffd) {
+    const notAfterByte = at === 'first' ? `(?<!\\\\${BYTE})` : '';
+    forms.push(`${notAfterByte}${lead}${BYTE}(?:${BACKSLASHES}${BYTE})*`);
+  }
+  return `(?:${forms.join('|')})`;
+}
+
+function redactionFor(text: string, say: string): Redaction {
+  const runs = text.match(/[A-Za-z0-9._~-]+/g) ?? [];
+  const anchor = runs.reduce((longest, run) => (run.length > longest.length ? run : longest), '');
+  const chars = Array.from(text);
+  const at = (i: number): CharAt => (i === 0 ? 'first' : chars[i - 1] === '\\' ? 'afterBackslash' : 'inside');
+  return { text, say, anchor, pattern: new RegExp(chars.map((c, i) => charPattern(c, at(i))).join(''), 'g') };
 }
 
 /**
  * Register one materialized entry: its copy directory, and every file and
  * directory name the copy created at any depth (`MaterializedCorpusEntry.names`),
- * in each of its escaped forms, folded to the same tag.
+ * each matched in every escaped form it can take (`charPattern`), folded to the
+ * same tag.
  */
 export function registerCorpusRedactions(id: string, destination: string, names: readonly string[]): void {
   const tag = `<corpus #${id}>`;
-  const add = (list: { find: string; say: string }[], text: string, say: string): void => {
-    for (const find of escapedForms(text)) {
-      if (!list.some((entry) => entry.find === find)) list.push({ find, say });
+  // Each in both Unicode normal forms too (#576 RV18-W23-5): a macOS file name
+  // comes decomposed (`e` then U+0301), and a layer that normalizes it on the
+  // way writes it composed (U+00E9) - or the other way round.
+  const add = (list: Redaction[], text: string, say: string): void => {
+    for (const form of new Set([text, text.normalize('NFC'), text.normalize('NFD')])) {
+      if (!list.some((entry) => entry.text === form)) list.push(redactionFor(form, say));
     }
   };
   if (destination !== '') add(REDACTED_DIRS, destination, tag);
@@ -746,8 +825,8 @@ export function registerCorpusRedactions(id: string, destination: string, names:
   // Longest first, so a name that is a prefix of another cannot leave the
   // other's tail behind (`cave` before `cave-north.srv` would print `-north.srv`,
   // and `corpus-3` before `corpus-30` would tag the wrong entry).
-  REDACTED_DIRS.sort((a, b) => b.find.length - a.find.length);
-  REDACTED_NAMES.sort((a, b) => b.find.length - a.find.length);
+  REDACTED_DIRS.sort((a, b) => b.text.length - a.text.length);
+  REDACTED_NAMES.sort((a, b) => b.text.length - a.text.length);
 }
 
 /**
@@ -757,8 +836,12 @@ export function registerCorpusRedactions(id: string, destination: string, names:
  */
 export function redactCorpusText(text: string): string {
   let out = text;
-  for (const entry of REDACTED_DIRS) out = out.split(entry.find).join(entry.say);
-  for (const entry of REDACTED_NAMES) out = out.split(entry.find).join(entry.say);
+  for (const list of [REDACTED_DIRS, REDACTED_NAMES]) {
+    for (const entry of list) {
+      if (entry.anchor !== '' && !out.includes(entry.anchor)) continue;
+      out = out.replace(entry.pattern, () => entry.say);
+    }
+  }
   return out;
 }
 

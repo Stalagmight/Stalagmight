@@ -431,6 +431,18 @@ impl AppState {
         let _ = std::fs::remove_file(&staged);
         match dump.extract_entry_to(entry, &staged) {
             Ok(()) => {
+                // A server `.stalx` is input from outside: refuse a hostile schema
+                // before the history cleanup below fires a trigger it carries, and
+                // before it can replace the cache (#608).
+                if let Err(e) = crate::persistence::Database::check_schema_at(&staged) {
+                    let _ = std::fs::remove_file(&staged);
+                    if closed {
+                        let _ = self.open_project(dest.to_path_buf());
+                    }
+                    return Err(SpeleoDbError::Parse(format!(
+                        "the downloaded project file was refused: {e:#}"
+                    )));
+                }
                 // [#303] THE chokepoint. Every server `.stalx` that becomes the local
                 // cache file passes through here, so dropping the inherited history in
                 // one place is what makes "a pulled stack is never silently adopted"
@@ -789,10 +801,13 @@ mod tests {
                 &dest,
                 InheritedUndo::Drop,
             )
-            .expect_err("cleanup failure must abort adoption");
-        assert!(err
-            .to_string()
-            .contains("could not clear inherited history"));
+            .expect_err("a downloaded file carrying a trigger must not be adopted");
+        // Refused by the schema check before the cleanup could fire the trigger.
+        assert!(
+            err.to_string()
+                .contains("the downloaded project file was refused: the file defines a trigger"),
+            "{err}"
+        );
         assert_eq!(std::fs::read(&dest).expect("read destination"), before);
         assert!(
             !sanitized_download_path(&dest).exists(),

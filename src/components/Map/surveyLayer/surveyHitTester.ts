@@ -6,7 +6,7 @@
  * hitCandidateSections / resolveStationAt / resolveShotAt.
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { StationRef } from '../../../types/project';
 import { hasLiveStyle } from '../mapUtils';
 import type { SurveyGeometryIndex, VisibleKinds } from './geometryIndex';

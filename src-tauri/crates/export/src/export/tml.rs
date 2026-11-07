@@ -25,7 +25,10 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::models::comment_split;
-use crate::models::{normalize_azimuth, AzimuthReference, Project, SectionId, Shot, StationRef};
+use crate::models::project::join_station_comment;
+use crate::models::{
+    normalize_azimuth, AzimuthReference, Project, SectionId, Shot, StationKey, StationRef,
+};
 use crate::parsers::tml::schema::{
     self, color_to_ariane, element as el, pitch_to_inclination, ElementName, Spelling,
 };
@@ -1325,14 +1328,18 @@ fn build_export_shots_with_report(
     //
     // ariane_id -> list of (StationRef, comment), in a deterministic order
     // (sorted by section_id then station_index) so the joined output is
-    // reproducible across exports.
-    let mut comments_by_ariane: HashMap<i64, Vec<(StationRef, &str)>> = HashMap::new();
-    let mut entries: Vec<(StationRef, &str)> = project
+    // reproducible across exports. [#576 W30-NF3] Two stored keys naming one
+    // station (a legacy positional key beside the canonical one) are joined
+    // as the save joins them - `Project::one_row_per_station` with
+    // `join_station_comment`, the canonical key's first - not in the map's
+    // iteration order, which differs between runs.
+    let mut comments_by_ariane: HashMap<i64, Vec<(StationRef, String)>> = HashMap::new();
+    let resolved: Vec<(&StationKey, StationRef, String)> = project
         .station_comments
         .iter()
         .filter(|(_, v)| !v.is_empty())
         .filter_map(|(k, v)| match project.resolve_key(k) {
-            Some(sr) => Some((sr, v.as_str())),
+            Some(sr) => Some((k, sr, v.clone())),
             None => {
                 tracing::debug!(
                     key = ?k,
@@ -1342,8 +1349,7 @@ fn build_export_shots_with_report(
             }
         })
         .collect();
-    entries.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
-    for (sr, text) in entries {
+    for (sr, text) in project.one_row_per_station(resolved, join_station_comment) {
         let Some(&ariane_id) = station_to_ariane.get(&(sr.section_id, sr.station_index)) else {
             tracing::debug!(
                 section_id = sr.section_id,
@@ -1382,7 +1388,7 @@ fn build_export_shots_with_report(
                 comments_by_ariane.remove(&shot.id).map(|attachments| {
                     attachments
                         .iter()
-                        .map(|(_, t)| *t)
+                        .map(|(_, t)| t.as_str())
                         .collect::<Vec<_>>()
                         .join("\n")
                 });

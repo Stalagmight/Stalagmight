@@ -1,8 +1,49 @@
 use super::AppState;
 use crate::core::{Command, CommandResult, CommentHolder};
-use crate::models::{Project, StationRef};
+use crate::models::project::join_station_comment;
+use crate::models::{Project, StationKey, StationRef};
 
 impl AppState {
+    /// [#576 W30-NF1] Station `sr`'s comment: the comments of every stored key
+    /// that names it, joined in the save's order (`Project::one_row_per_station`
+    /// with `join_station_comment`, as the station payload shows it). A legacy
+    /// positional `Index` key can name a station beside its canonical key, so
+    /// reading the canonical key alone missed a comment the station shows.
+    pub(super) fn station_comment(project: &Project, sr: StationRef) -> Option<String> {
+        let entries: Vec<(&StationKey, StationRef, String)> = project
+            .station_comments
+            .iter()
+            .filter(|(key, _)| key.section_id == sr.section_id && project.key_is_ref(key, sr))
+            .map(|(key, text)| (key, sr, text.clone()))
+            .collect();
+        project
+            .one_row_per_station(entries, join_station_comment)
+            .pop()
+            .map(|(_, text)| text)
+    }
+
+    /// [#576 W30-NF1] Make `comment` station `sr`'s whole comment: every stored
+    /// key that names the station is removed, then a non-empty comment is stored
+    /// under its canonical key. Touching the canonical key alone left a comment
+    /// under a legacy key in place - a clear did nothing, and a new comment was
+    /// joined to the old one instead of replacing it.
+    fn replace_station_comment(project: &mut Project, sr: StationRef, comment: Option<String>) {
+        let naming: Vec<StationKey> = project
+            .station_comments
+            .keys()
+            .filter(|key| key.section_id == sr.section_id && project.key_is_ref(key, sr))
+            .cloned()
+            .collect();
+        for key in &naming {
+            project.station_comments.remove(key);
+        }
+        if let Some(text) = comment.filter(|text| !text.is_empty()) {
+            if let Some(key) = project.key_for_ref(sr) {
+                project.station_comments.insert(key, text);
+            }
+        }
+    }
+
     pub(super) fn set_station_comment(
         &self,
         station_ref: StationRef,
@@ -29,18 +70,7 @@ impl AppState {
                 ));
             }
 
-            match comment {
-                Some(text) if !text.is_empty() => {
-                    if let Some(key) = project.key_for_ref(station_ref) {
-                        project.station_comments.insert(key, text);
-                    }
-                }
-                _ => {
-                    if let Some(key) = project.key_for_ref(station_ref) {
-                        project.station_comments.remove(&key);
-                    }
-                }
-            }
+            Self::replace_station_comment(project, station_ref, comment);
 
             project.touch();
             tracing::info!(
@@ -176,9 +206,7 @@ impl AppState {
                         station_ref.station_index
                     ));
                 }
-                Ok(project
-                    .key_for_ref(*station_ref)
-                    .and_then(|key| project.station_comments.get(&key).cloned()))
+                Ok(Self::station_comment(project, *station_ref))
             }
             CommentHolder::Shot {
                 section_id,
@@ -203,18 +231,7 @@ impl AppState {
     ) -> Result<(), String> {
         match holder {
             CommentHolder::Station { station_ref } => {
-                match comment {
-                    Some(text) if !text.is_empty() => {
-                        if let Some(key) = project.key_for_ref(*station_ref) {
-                            project.station_comments.insert(key, text);
-                        }
-                    }
-                    _ => {
-                        if let Some(key) = project.key_for_ref(*station_ref) {
-                            project.station_comments.remove(&key);
-                        }
-                    }
-                }
+                Self::replace_station_comment(project, *station_ref, comment);
                 Ok(())
             }
             CommentHolder::Shot {

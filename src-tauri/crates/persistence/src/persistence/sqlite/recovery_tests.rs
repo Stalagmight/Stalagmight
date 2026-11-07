@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags};
 use tempfile::TempDir;
 
-use super::{BackupInfo, BackupKind, Database};
+use super::{BackupInfo, BackupKind, Database, RefusedSchemaObject};
 use crate::models::Project;
 
 /// A valid project file named `name` at `path`.
@@ -561,4 +561,166 @@ fn repair_never_runs_a_plain_vacuum() {
         !body.contains("\"VACUUM;\"") && body.contains("VACUUM INTO"),
         "attempt_repair must compact with VACUUM INTO a sibling, not a plain VACUUM"
     );
+}
+
+// === A hostile schema is refused on the recovery paths too (#608) ===
+
+/// Schemas every open of an existing file refuses (#608), as SQL run on a saved
+/// project: a view, a trigger, a CHECK the app never writes (which
+/// `quick_check` evaluates on every row) and an expression index (which
+/// `REINDEX` evaluates on every row).
+const HOSTILE_SCHEMAS: [(&str, &str); 4] = [
+    ("CREATE VIEW v AS SELECT 1;", "a view"),
+    (
+        "CREATE TRIGGER t AFTER UPDATE ON project BEGIN SELECT 1; END;",
+        "a trigger",
+    ),
+    (
+        "CREATE TABLE c (x CHECK (length(zeroblob(10)) > 0)); INSERT INTO c VALUES (1);",
+        "a table with a CHECK constraint the app never writes",
+    ),
+    (
+        "CREATE INDEX e ON shots (length(hex(zeroblob(10))) + length);",
+        "an expression or partial index",
+    ),
+];
+
+/// A valid project at `path` with `sql` run on it afterwards through a raw
+/// connection.
+fn hostile_project_file(path: &Path, sql: &str) {
+    project_file(path, "Crafted");
+    Connection::open(path).unwrap().execute_batch(sql).unwrap();
+}
+
+/// What the schema refusal inside `err` names, when that is why it failed.
+fn refused_what(err: &anyhow::Error) -> Option<&'static str> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<RefusedSchemaObject>())
+        .map(|refused| refused.what)
+}
+
+fn files_in(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// [#576 RV18-1] A restore candidate is an existing file like any other: one
+/// whose schema every open refuses (#608) is listed as not usable, with the
+/// reason, and a restore refuses it and leaves the project as it was - whichever
+/// way the check reaches the candidate (read-only, or through a copy beside it
+/// whose rollback journal is rolled back). The checks used to skip the guard
+/// and run with the file's schema trusted, so such a file was listed as usable,
+/// installed over the project, and then refused by the next open.
+#[test]
+fn a_restore_candidate_with_a_hostile_schema_is_listed_unusable_and_refused() {
+    let mut wrong = Vec::new();
+    for (sql, what) in HOSTILE_SCHEMAS {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path();
+        let project = dir.join("CaveA.stalx");
+        project_file(&project, "Original");
+        let before = std::fs::read(&project).unwrap();
+        let backup = dir.join("CaveA.stalx.backup");
+        hostile_project_file(&backup, sql);
+        // The same schema as the committed state behind an interrupted save's
+        // rollback journal.
+        let committed = dir.join("work.stalx");
+        hostile_project_file(&committed, sql);
+        let interrupted = dir.join("CaveA.stalx.tmp");
+        torn_copy(&committed, &interrupted);
+
+        let list = Database::list_backups(&project);
+        for file in ["CaveA.stalx.backup", "CaveA.stalx.tmp"] {
+            let entry = listed(&list, file).unwrap();
+            println!(
+                "{what}: {file} listed usable={} problem={:?}",
+                entry.usable, entry.problem
+            );
+            let problem = entry.problem.as_deref().unwrap_or_default();
+            if entry.usable || !problem.contains(what) {
+                wrong.push(format!("{what}: {file} listed usable={}", entry.usable));
+            }
+        }
+        for candidate in [&backup, &interrupted] {
+            let restored = Database::restore_from_backup(&project, candidate)
+                .map_or_else(|e| format!("{e:#}"), |_| "restored".to_owned());
+            let file = candidate.file_name().unwrap().to_string_lossy();
+            println!(
+                "{what}: restore from {file} -> {restored}; the project then opens as: {}",
+                project_name(&project)
+            );
+            if !(restored.contains("cannot be restored") && restored.contains(what)) {
+                wrong.push(format!("{what}: restore from {file} -> {restored}"));
+            }
+        }
+        if std::fs::read(&project).unwrap() != before {
+            wrong.push(format!("{what}: the project was replaced"));
+        }
+        let names = files_in(dir);
+        if names.iter().any(|n| {
+            n.contains("pre-restore") || n.contains("staging") || n.contains("restore-check")
+        }) {
+            wrong.push(format!("{what}: left behind: {names:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// [#576 RV18-1] Salvage reads a file nothing else has checked, so the schema
+/// guard (#608) is its first step: a hostile schema is refused before any table
+/// is read. It used to read on with the file's schema trusted.
+#[test]
+fn salvage_refuses_a_file_with_a_hostile_schema() {
+    let mut wrong = Vec::new();
+    for (sql, what) in HOSTILE_SCHEMAS {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("CaveA.stalx");
+        hostile_project_file(&project, sql);
+
+        let salvaged = Database::export_salvageable(&project);
+        println!(
+            "{what}: salvage -> {}",
+            salvaged.as_ref().map_or_else(
+                |e| format!("{e:#}"),
+                |s| format!("salvaged project {:?}", s.project_name)
+            )
+        );
+        if salvaged.err().as_ref().and_then(refused_what) != Some(what) {
+            wrong.push(format!("{what}: salvage did not refuse the file"));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// [#576 RV18-1] Repair opens the file read-write and rebuilds its indexes,
+/// which evaluates an expression index on every row, and its last step runs
+/// `quick_check`, which evaluates every CHECK. The schema guard (#608) now runs
+/// before both, so a hostile file is refused and left as it was (the backup
+/// Repair always takes first is a plain copy of it). It used to be rewritten.
+#[test]
+fn repair_refuses_a_file_with_a_hostile_schema() {
+    let mut wrong = Vec::new();
+    for (sql, what) in HOSTILE_SCHEMAS {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("CaveA.stalx");
+        hostile_project_file(&project, sql);
+        let before = std::fs::read(&project).unwrap();
+
+        let repaired = Database::attempt_repair(&project);
+        let unchanged = std::fs::read(&project).unwrap() == before;
+        println!(
+            "{what}: repair -> {}; file unchanged: {unchanged}",
+            repaired
+                .as_ref()
+                .map_or_else(|e| format!("{e:#}"), |(_, ok)| format!("repaired, ok={ok}"))
+        );
+        if repaired.err().as_ref().and_then(refused_what) != Some(what) || !unchanged {
+            wrong.push(format!("{what}: not refused, or the file changed"));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }

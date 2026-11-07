@@ -1,7 +1,8 @@
-import maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import { useNetworkStore } from '../../store/networkStore';
 import { registerTileProtocol } from '../../utils/tileProtocol';
 import { hasLiveStyle } from './mapUtils';
+import { createMap } from './createMap';
 
 /**
  * The one place the app's three MapLibre maps are built (#576 D18): the survey
@@ -52,11 +53,15 @@ export interface SurveyMapOptions {
   performanceTuned?: boolean;
 }
 
-/** Build a map for one of the app's surfaces. See the module comment for what it owns. */
-export function createSurveyMap(opts: SurveyMapOptions): maplibregl.Map {
+/**
+ * Build a map for one of the app's surfaces. See the module comment for what it owns.
+ * Null when the machine cannot give MapLibre a WebGL2 context (createMap.ts); the
+ * caller then shows `MapUnavailable` in place of the map.
+ */
+export function createSurveyMap(opts: SurveyMapOptions): maplibregl.Map | null {
   registerTileProtocol();
 
-  const map = new maplibregl.Map({
+  const map = createMap({
     container: opts.container,
     style: opts.style,
     center: opts.center,
@@ -88,6 +93,7 @@ export function createSurveyMap(opts: SurveyMapOptions): maplibregl.Map {
         }
       : {}),
   });
+  if (!map) return null;
 
   // Every surface is a top-down plan: no rotation (Ctrl+drag rotates by default;
   // the survey map pans on it instead), no pitch, and a pinch zooms only - a

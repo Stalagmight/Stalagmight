@@ -21,30 +21,34 @@ pub(super) mod merge_alignment_assert {
     use std::cell::Cell;
 
     thread_local! {
-        static SUSPENDED: Cell<bool> = const { Cell::new(false) };
+        /// How many guards are alive on this thread ([#576 RV17-5]: a count,
+        /// not a saved flag, so the order the guards drop in does not matter).
+        static DEPTH: Cell<u32> = const { Cell::new(0) };
     }
 
-    /// Holds the panic back until dropped, then puts back what it found
-    /// ([#576 RV16-4]: a nested guard used to end the outer suspension).
+    /// Holds the panic back until dropped. Nested guards count: the suspension
+    /// ends when the last live guard drops, whichever order they drop in
+    /// ([#576 RV16-4]: a nested guard used to end the outer suspension;
+    /// [#576 RV17-5]: putting back a saved flag left the thread suspended when
+    /// the outer guard dropped first).
     #[must_use = "the panic is held back only while the guard lives"]
     pub(in crate::project) struct Suspended {
-        previous: bool,
+        _private: (),
     }
 
     impl Drop for Suspended {
         fn drop(&mut self) {
-            SUSPENDED.with(|s| s.set(self.previous));
+            DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
         }
     }
 
     pub(in crate::project) fn suspend() -> Suspended {
-        Suspended {
-            previous: SUSPENDED.with(|s| s.replace(true)),
-        }
+        DEPTH.with(|d| d.set(d.get().saturating_add(1)));
+        Suspended { _private: () }
     }
 
     pub(super) fn is_suspended() -> bool {
-        SUSPENDED.with(Cell::get)
+        DEPTH.with(Cell::get) > 0
     }
 
     mod tests {
@@ -69,10 +73,135 @@ pub(super) mod merge_alignment_assert {
                 "suspended after the inner guard dropped, after the outer guard dropped"
             );
         }
+
+        /// [#576 RV17-5] Dropped out of order - the outer guard first - the
+        /// suspension still lasts while any guard lives and ends with the last.
+        #[test]
+        fn dropping_the_outer_guard_first_still_ends_with_the_last_guard() {
+            assert!(!is_suspended());
+            let outer = suspend();
+            let inner = suspend();
+            drop(outer);
+            let after_outer = is_suspended();
+            drop(inner);
+            let after_inner = is_suspended();
+            assert_eq!(
+                (after_outer, after_inner),
+                (true, false),
+                "suspended after the outer guard dropped, after the inner guard dropped"
+            );
+        }
     }
 }
 
+use super::union_find::UnionFind;
 use super::Project;
+
+/// The two section-level relations the orphan-closure sweep asks about, built
+/// once per sweep and extended as closures are promoted to merges (#597):
+///
+/// - `connected`: stations joined through shots and RESOLVABLE merges, closures
+///   excluded - the orphan predicate. Every station of a section is joined to
+///   the next by its shots, so section-level components answer it exactly.
+/// - `merge_component`: sections joined by merges by their STORED section ids,
+///   resolvable or not - the same graph `MergeTopology::adjacency` gives
+///   `merge_would_double_anchor`, with each component flagged when a resolvable
+///   zero datum sits in it. A stored id naming no live section still gets a
+///   slot (`merge_slot`), since the adjacency walk passes through it.
+pub(crate) struct StationComponents {
+    section_slot: HashMap<SectionId, usize>,
+    merge_slot: HashMap<SectionId, usize>,
+    connected: UnionFind,
+    merge_component: UnionFind,
+    anchored: Vec<bool>,
+}
+
+impl StationComponents {
+    fn new(project: &Project) -> Self {
+        let section_slot: HashMap<SectionId, usize> = project
+            .sections
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.id, i))
+            .collect();
+        let mut merge_slot = section_slot.clone();
+        for merge in &project.station_merges {
+            for id in [merge.station_a.section_id, merge.station_b.section_id] {
+                let next = merge_slot.len();
+                merge_slot.entry(id).or_insert(next);
+            }
+        }
+        let mut components = Self {
+            connected: UnionFind::new(section_slot.len()),
+            merge_component: UnionFind::new(merge_slot.len()),
+            anchored: vec![false; merge_slot.len()],
+            section_slot,
+            merge_slot,
+        };
+        for merge in &project.station_merges {
+            if project.resolve_key(&merge.station_a).is_some()
+                && project.resolve_key(&merge.station_b).is_some()
+            {
+                components.union_connected(merge.station_a.section_id, merge.station_b.section_id);
+            }
+            components.union_merge(merge.station_a.section_id, merge.station_b.section_id);
+        }
+        for datum in &project.zero_datums {
+            if let Some(station) = project.resolve_key(&datum.station_ref) {
+                if let Some(&i) = components.merge_slot.get(&station.section_id) {
+                    let root = components.merge_component.find(i);
+                    components.anchored[root] = true;
+                }
+            }
+        }
+        components
+    }
+
+    /// Whether two RESOLVED stations are connected through shots and resolvable
+    /// merges.
+    fn connected(&mut self, a: StationRef, b: StationRef) -> bool {
+        match (
+            self.section_slot.get(&a.section_id),
+            self.section_slot.get(&b.section_id),
+        ) {
+            (Some(&a), Some(&b)) => self.connected.find(a) == self.connected.find(b),
+            _ => false,
+        }
+    }
+
+    /// `merge_would_double_anchor`, answered from the components.
+    fn would_double_anchor(&mut self, a: SectionId, b: SectionId) -> bool {
+        let (Some(&a), Some(&b)) = (self.merge_slot.get(&a), self.merge_slot.get(&b)) else {
+            return false;
+        };
+        let (ra, rb) = (self.merge_component.find(a), self.merge_component.find(b));
+        ra != rb && self.anchored[ra] && self.anchored[rb]
+    }
+
+    /// Record a merge just added between two resolved stations.
+    fn join(&mut self, a: StationRef, b: StationRef) {
+        self.union_connected(a.section_id, b.section_id);
+        self.union_merge(a.section_id, b.section_id);
+    }
+
+    fn union_connected(&mut self, a: SectionId, b: SectionId) {
+        if let (Some(&a), Some(&b)) = (self.section_slot.get(&a), self.section_slot.get(&b)) {
+            self.connected.union(a, b);
+        }
+    }
+
+    fn union_merge(&mut self, a: SectionId, b: SectionId) {
+        if let (Some(&a), Some(&b)) = (self.merge_slot.get(&a), self.merge_slot.get(&b)) {
+            let (ra, rb) = (self.merge_component.find(a), self.merge_component.find(b));
+            if ra != rb {
+                let anchored = self.anchored[ra] || self.anchored[rb];
+                self.merge_component.union(ra, rb);
+                let root = self.merge_component.find(ra);
+                self.anchored[root] = anchored;
+            }
+        }
+    }
+}
 
 /// A rigid merge a command MINTED out of a coincidence CLAIM - a loop closure
 /// promoted because it stopped being a loop, or a deletion's broken-loop
@@ -509,6 +638,7 @@ impl Project {
         station_b: &StationKey,
         local: &HashMap<SectionId, Vec<(f64, f64)>>,
         station_offsets: &HashMap<StationRef, (f64, f64, f64)>,
+        components: Option<&mut StationComponents>,
     ) -> bool {
         if strategy != ClosureStrategy::Move {
             return false;
@@ -522,7 +652,12 @@ impl Project {
         if gap >= Self::MERGE_ALIGNMENT_INVARIANT_M {
             return false;
         }
-        !self.merge_would_double_anchor(a.section_id, b.section_id)
+        // A batch caller answers from components built once: a walk per closure
+        // is closures x merge-component size on every load (#597).
+        !match components {
+            Some(components) => components.would_double_anchor(a.section_id, b.section_id),
+            None => self.merge_would_double_anchor(a.section_id, b.section_id),
+        }
     }
 
     /// [`Self::closure_alignment_stamp`] for a caller that has ONE closure and no
@@ -541,7 +676,14 @@ impl Project {
         }
         let local = self.section_local_coords();
         let station_offsets = self.resolved_station_offsets();
-        self.closure_alignment_stamp(strategy, station_a, station_b, &local, &station_offsets)
+        self.closure_alignment_stamp(
+            strategy,
+            station_a,
+            station_b,
+            &local,
+            &station_offsets,
+            None,
+        )
     }
 
     /// Re-derive every snap-to-merge closure's `is_aligned` from the geometry as
@@ -612,6 +754,7 @@ impl Project {
         }
         let local = self.section_local_coords();
         let station_offsets = self.resolved_station_offsets();
+        let mut components = StationComponents::new(self);
         // Decided in an immutable pass, applied after: the stamp reads merges and
         // datums off `self`. Every decision is independent of every other, so the
         // batch is the same however the list is ordered.
@@ -627,6 +770,7 @@ impl Project {
                     &closure.station_b,
                     &local,
                     &station_offsets,
+                    Some(&mut components),
                 );
                 (stamp != closure.is_aligned).then_some((index, stamp))
             })
@@ -749,19 +893,44 @@ impl Project {
 
     /// One authoritative anchor section per connected merge group, preferring a
     /// zero-datum section so the realign keeps the group pinned to GPS.
-    fn realign_seeds(&self) -> Vec<SectionId> {
+    pub(super) fn realign_seeds(&self) -> Vec<SectionId> {
         let datum_sections: HashSet<SectionId> = self
             .zero_datums
             .iter()
             .map(|z| z.station_ref.section_id)
             .collect();
+        // The graph `get_connected_section_ids` walks (every merge and every
+        // closure, by stored section id), built once: that walk rescans every
+        // edge per visited section, which made this O(sections x edges) (#602).
+        let mut adjacency: HashMap<SectionId, Vec<SectionId>> = HashMap::new();
+        let edges = self
+            .station_merges
+            .iter()
+            .map(|m| (m.station_a.section_id, m.station_b.section_id))
+            .chain(
+                self.loop_closures
+                    .iter()
+                    .map(|c| (c.station_a.section_id, c.station_b.section_id)),
+            );
+        for (a, b) in edges {
+            adjacency.entry(a).or_default().push(b);
+            adjacency.entry(b).or_default().push(a);
+        }
         let mut seeds = Vec::new();
         let mut visited: HashSet<SectionId> = HashSet::new();
         for section in &self.sections {
             if visited.contains(&section.id) {
                 continue;
             }
-            let component = self.get_connected_section_ids(section.id);
+            let mut component: HashSet<SectionId> = HashSet::new();
+            let mut queue = vec![section.id];
+            while let Some(current) = queue.pop() {
+                if component.insert(current) {
+                    if let Some(neighbours) = adjacency.get(&current) {
+                        queue.extend(neighbours.iter().filter(|n| !component.contains(n)));
+                    }
+                }
+            }
             let anchor = component
                 .iter()
                 .copied()
@@ -845,7 +1014,11 @@ impl Project {
     /// [`Self::orphan_closure_ids`] snapshots with it, so a mutation path's
     /// before-set and the sweep that follows can never disagree about what an
     /// orphan is.
-    fn is_orphan_closure(&self, closure: &LoopClosure) -> bool {
+    ///
+    /// "Connected" is answered by `components`, a union-find over shots and
+    /// resolvable merges built once per sweep, rather than a walk per closure
+    /// (#597: the walk rescanned every merge per visited station).
+    fn is_orphan_closure(&self, closure: &LoopClosure, components: &mut StationComponents) -> bool {
         if closure.station_a.section_id == closure.station_b.section_id {
             return false;
         }
@@ -855,7 +1028,7 @@ impl Project {
         ) else {
             return false;
         };
-        !self.are_stations_connected_excluding_shot(a, b, None, false)
+        !components.connected(a, b)
     }
 
     /// The ids of every closure that is orphaned RIGHT NOW. A mutation path takes
@@ -863,9 +1036,10 @@ impl Project {
     /// [`Self::convert_closures_orphaned_since`] afterwards; see that function for
     /// why an inverse needs the distinction.
     pub(crate) fn orphan_closure_ids(&self) -> HashSet<u64> {
+        let mut components = StationComponents::new(self);
         self.loop_closures
             .iter()
-            .filter(|c| self.is_orphan_closure(c))
+            .filter(|c| self.is_orphan_closure(c, &mut components))
             .map(|c| c.id)
             .collect()
     }
@@ -923,19 +1097,20 @@ impl Project {
         preexisting: &HashSet<u64>,
     ) -> Vec<MintedMerge> {
         let mut minted = Vec::new();
-        // Sole-bridge closures left UNCONVERTED because turning them into a rigid
-        // merge would fuse two independently zero-datum-anchored groups. Tracked by
-        // id so the orphan scan below does not reconsider them on every iteration
-        // (which would loop forever, since they are never removed).
-        let mut left_as_closure: HashSet<u64> = HashSet::new();
-        loop {
-            let orphan = self.loop_closures.iter().position(|c| {
-                if left_as_closure.contains(&c.id) || preexisting.contains(&c.id) {
-                    return false;
-                }
-                self.is_orphan_closure(c)
-            });
-            let Some(idx) = orphan else { break };
+        let mut components = StationComponents::new(self);
+        // One forward pass. It decides exactly what restarting the scan from the
+        // first closure after every conversion did: a conversion only ADDS
+        // connectivity, so a closure that was not an orphan stays not one, and a
+        // refused one (left as a closure) is never reconsidered either way.
+        let mut idx = 0;
+        while idx < self.loop_closures.len() {
+            let closure = &self.loop_closures[idx];
+            if preexisting.contains(&closure.id)
+                || !self.is_orphan_closure(closure, &mut components)
+            {
+                idx += 1;
+                continue;
+            }
 
             // Converting a sole-bridge closure into a merge makes it a RIGID edge,
             // and `plan_merge_promotion` answers both questions that raises: MAY
@@ -953,14 +1128,22 @@ impl Project {
                     closure.station_b.clone(),
                 )
             };
-            let Some(plan) = self.plan_merge_promotion(&a, &b) else {
+            // The double-anchor refusal is answered from the components first, so a
+            // refused closure costs a lookup instead of `plan_merge_promotion`'s two
+            // merge-graph walks (#597); the plan still decides every promotion.
+            let plan = if components.would_double_anchor(a.section_id, b.section_id) {
+                None
+            } else {
+                self.plan_merge_promotion(&a, &b)
+            };
+            let Some(plan) = plan else {
                 tracing::warn!(
                     closure_id = id,
                     purpose = "avoid double-anchoring a merge component",
                     "Left a sole-bridge loop closure unconverted: promoting it is not legal \
                      (both endpoints zero-datum-anchored, or an endpoint no longer resolves)"
                 );
-                left_as_closure.insert(id);
+                idx += 1;
                 continue;
             };
 
@@ -969,7 +1152,10 @@ impl Project {
                 self.resolve_key(&closure.station_a),
                 self.resolve_key(&closure.station_b),
             ) {
-                (Some(a), Some(b)) => self.has_direct_merge(a, b),
+                (Some(a), Some(b)) => {
+                    components.join(a, b);
+                    self.has_direct_merge(a, b)
+                }
                 _ => false,
             };
             if !already {

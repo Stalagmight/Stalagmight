@@ -107,6 +107,21 @@ const ALLOWED_CONTENT_TYPES: &[&str] = &["image/jpeg", "image/jpg", "image/png"]
 /// Default content type when upstream doesn't provide one or it's invalid
 const DEFAULT_CONTENT_TYPE: &str = "image/jpeg";
 
+/// Most bytes a tile response body may hold (#576 W30-7a). A map tile is a
+/// 256 or 512 px JPEG/PNG: real ones are tens of KB, and even an
+/// incompressible 512 px RGBA PNG is about 1 MiB (512 * 512 * 4 bytes plus
+/// framing). 4 MiB is four times that worst case, so no real tile comes near
+/// it, while a provider (or anything between us and it) streaming a huge body
+/// is cut off there instead of at ureq's silent 10 MiB default.
+const TILE_BODY_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Most bytes a tilemap response body may hold (#576 W30-NF4), for the reason
+/// [`TILE_BODY_MAX_BYTES`] gives. A tilemap is 128 x 128 availability flags as
+/// compact JSON - `{"data":[1,0,...]}` and a few small fields, about 33 KB -
+/// so 1 MiB is some thirty times that, while a body streaming far more is cut
+/// off here instead of at ureq's silent 10 MiB default.
+const TILEMAP_BODY_MAX_BYTES: u64 = 1024 * 1024;
+
 /// Maximum retry attempts for transient network errors (total attempts = 1 + TILE_FETCH_MAX_RETRIES).
 const TILE_FETCH_MAX_RETRIES: u32 = 2;
 /// Backoff delays between retries.
@@ -166,6 +181,39 @@ fn classify_fetch_error(err: &ureq::Error) -> TileFetchError {
     }
 }
 
+/// Classify a failed read of a tile's body.
+///
+/// A body over `limit` is ureq's `BodyExceedsLimit`, matched structurally (it
+/// is not wrapped in `Io`: `From<io::Error> for ureq::Error` unwraps its own
+/// error). That is the provider answering with more than any tile can be, not
+/// the connection failing, so it is reported as a status - like an unknown
+/// provider - and therefore never served off a stored copy, and never counted
+/// as "existence unknown", which would leave the tile to be downloaded again
+/// on every request. Any other read failure is a truncated transfer: transport.
+fn classify_body_error(err: &ureq::Error, limit: u64) -> TileFetchError {
+    match err {
+        ureq::Error::BodyExceedsLimit(_) => TileFetchError::status(
+            0,
+            format!(
+                "Tile refused: the response body is larger than the {} limit for a map tile",
+                describe_body_limit(limit)
+            ),
+        ),
+        _ => TileFetchError::transport(format!("Failed to read response body: {err}")),
+    }
+}
+
+/// A body limit as a person reads it: whole MiB from 1 MiB up, exact bytes
+/// otherwise (where the test limits live).
+fn describe_body_limit(bytes: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    if bytes >= MIB && bytes.is_multiple_of(MIB) {
+        format!("{} MiB", bytes / MIB)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
 fn is_retryable_error(err: &ureq::Error) -> bool {
     match err {
         ureq::Error::StatusCode(_) => false, // Server responded - don't retry
@@ -200,7 +248,31 @@ fn fetch_tile_from_network(
         TileFetchError::status(0, format!("Unknown provider: {provider}"))
     })?;
     let url = tile_providers::expand_url(tile_provider, z, y, x);
+    fetch_tile_from_url(
+        &url,
+        provider,
+        z,
+        y,
+        x,
+        stats,
+        if_none_match,
+        TILE_BODY_MAX_BYTES,
+    )
+}
 
+/// [`fetch_tile_from_network`] once the provider's URL is known, with the body
+/// ceiling spelled out, so a test can serve a tile from a loopback stub and
+/// trip the ceiling without sending megabytes.
+fn fetch_tile_from_url(
+    url: &str,
+    provider: &str,
+    z: u32,
+    y: u32,
+    x: u32,
+    stats: Option<&TileFetchStats>,
+    if_none_match: Option<&str>,
+    body_limit: u64,
+) -> Result<TileFetchResponse, TileFetchError> {
     tracing::debug!(url = %url, provider = %provider, "Fetching tile from network");
 
     if let Some(s) = stats {
@@ -233,7 +305,7 @@ fn fetch_tile_from_network(
             .build()
             .new_agent();
 
-        let mut request = agent.get(&url);
+        let mut request = agent.get(url);
         if let Some(validator) = if_none_match {
             request = request.header("If-None-Match", validator);
         }
@@ -278,15 +350,19 @@ fn fetch_tile_from_network(
                     .and_then(|v| v.to_str().ok())
                     .map(str::to_string);
 
-                let body = response.into_body().read_to_vec().map_err(|e| {
-                    if let Some(s) = stats {
-                        s.record_error();
-                    }
-                    // The provider answered; the body just did not arrive
-                    // intact. Treated as transport, because a truncated read is
-                    // a connection problem rather than a decision by the origin.
-                    TileFetchError::transport(format!("Failed to read response body: {e}"))
-                })?;
+                // A failed read returns from here rather than reaching the
+                // retry arm below, so an oversized body is downloaded once.
+                let body = response
+                    .into_body()
+                    .with_config()
+                    .limit(body_limit)
+                    .read_to_vec()
+                    .map_err(|e| {
+                        if let Some(s) = stats {
+                            s.record_error();
+                        }
+                        classify_body_error(&e, body_limit)
+                    })?;
 
                 if let Some(s) = stats {
                     s.record_success(latency_ms);
@@ -361,8 +437,16 @@ fn fetch_tilemap(
 
     let body = response
         .into_body()
+        .with_config()
+        .limit(TILEMAP_BODY_MAX_BYTES)
         .read_to_vec()
-        .map_err(|e| format!("Failed to read tilemap response: {e}"))?;
+        .map_err(|e| match e {
+            ureq::Error::BodyExceedsLimit(_) => format!(
+                "Tilemap refused: the response body is larger than the {} limit for a tilemap",
+                describe_body_limit(TILEMAP_BODY_MAX_BYTES)
+            ),
+            _ => format!("Failed to read tilemap response: {e}"),
+        })?;
 
     let tilemap_response: TilemapResponse =
         serde_json::from_slice(&body).map_err(|e| format!("Failed to parse tilemap JSON: {e}"))?;
@@ -1061,6 +1145,32 @@ fn refetch_left_it_unknown(result: &Result<TileFetchResponse, TileFetchError>) -
     }
 }
 
+/// Largest width or height a tile may decode to (#576 W30-7b). Tiles are 256
+/// or 512 px; 4096 is eight times the larger, room for any high-DPI variant,
+/// while a header claiming more is refused before anything is allocated.
+const TILE_DECODE_MAX_SIDE: u32 = 4096;
+
+/// Most bytes decoding one tile may allocate (#576 W30-7b): the 8-bit RGBA
+/// buffer of a tile at the side cap (4096 * 4096 * 4 bytes = 64 MiB). A 512 px
+/// RGBA tile needs 1 MiB; the image crate's own default would allow 512 MiB.
+const TILE_DECODE_MAX_ALLOC: u64 = 64 * 1024 * 1024;
+
+/// Decode tile bytes under [`TILE_DECODE_MAX_SIDE`] and
+/// [`TILE_DECODE_MAX_ALLOC`]. `image::load_from_memory` applies only the image
+/// crate's defaults - no side cap, up to 512 MiB of output - so a few bytes of
+/// header claiming a huge image made it reserve hundreds of MiB before finding
+/// no pixel data behind them. The checks run on the header, before the output
+/// buffer is reserved.
+fn decode_tile_image(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(TILE_DECODE_MAX_SIDE);
+    limits.max_image_height = Some(TILE_DECODE_MAX_SIDE);
+    limits.max_alloc = Some(TILE_DECODE_MAX_ALLOC);
+    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    reader.limits(limits);
+    reader.decode()
+}
+
 fn derive_tile_from_parent(
     provider: &str,
     provider_info: &tile_providers::TileProvider,
@@ -1093,7 +1203,7 @@ fn derive_tile_from_parent(
         if let Some(cached) = cache.get(provider, parent_z, parent_y, parent_x) {
             cached
         } else {
-            let decoded = image::load_from_memory(&parent_tile.data)
+            let decoded = decode_tile_image(&parent_tile.data)
                 .map_err(|e| format!("Failed to decode parent tile: {e}"))?;
             let arc = Arc::new(decoded);
             cache.put(provider, parent_z, parent_y, parent_x, Arc::clone(&arc));
@@ -1515,3 +1625,15 @@ mod tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod crop_storage_rv4_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod body_limit_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod tilemap_body_limit_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod decode_limits_tests;

@@ -34,6 +34,7 @@ import {
   redactCorpusValue,
   registerCorpusRedactions,
 } from './fixtureCorpus';
+import { describeRunError } from './fuzzHarness';
 import { publishableFinding, type Finding } from './oracles';
 import { capJson } from './page';
 import { Recorder } from './recorder';
@@ -151,6 +152,48 @@ describe('the action log names no corpus file (#576 RV13-4)', () => {
     // ...and the MCP server records it in that order.
     const server = fs.readFileSync(path.join(REPO, 'e2e', 'agent', 'mcp', 'server.ts'), 'utf8');
     expect(server).toContain('result: capJson(redactCorpusValue(result), 4096).value,');
+  });
+
+  /**
+   * #576 RV18-W23-6: `element_state`, `eval`, `ipc` and `driver_script` capped
+   * their result at 16 KB before anything folded it. `record`'s own 4 KB cap
+   * keeps a cut that far in out of the action log, but `textResult` returned the
+   * capped text to the agent, and the start of a name across the cut with it.
+   */
+  it('caps a 16 KB tool result only after folding it, at every site the server caps one (#576 RV18-W23-6)', () => {
+    const line = failedParseLine();
+    const opening = JSON.stringify({ newEntries: [''] }).indexOf('""') + 1;
+    const head = JSON.stringify(line.slice(0, line.indexOf(MARK) + MARK.length)).slice(1, -1);
+    const result = { newEntries: [`${'x'.repeat(16384 - opening - head.length)}${line}`] };
+    // What `run` hands `textResult` (which folds) for each order of fold and cap.
+    const answer = (capped: { value: unknown; truncated: boolean }) => JSON.stringify(redactCorpusValue({ ...capped }));
+    expect(answer(capJson(result, 16384))).toContain(MARK);
+    expect(answer(capJson(redactCorpusValue(result), 16384))).not.toContain(MARK);
+    // ...and the server caps a folded value wherever it caps one.
+    const server = fs.readFileSync(path.join(REPO, 'e2e', 'agent', 'mcp', 'server.ts'), 'utf8');
+    const lineOf = (index: number) => server.slice(0, index).split('\n').length;
+    const unfolded = [...server.matchAll(/capJson\((?!redactCorpusValue\()/g)].map((m) => `server.ts:${lineOf(m.index)}`);
+    expect(unfolded).toEqual([]);
+    expect(server.match(/capJson\(redactCorpusValue\(/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("folds a stalled WebDriver call's error line before cutting it to 240 characters (#576 RV18-W23-6)", () => {
+    // webdriver appends the in-page script to the message; here it quotes the
+    // copy's file name across the cut, ten characters of it before 240.
+    const stub = FILE.slice(0, 10);
+    const opening = 'WebDriverError: The operation was aborted due to timeout when running "execute/async" with method "POST" and args "open ';
+    const first = `${opening}${'p'.repeat(230 - opening.length)}${FILE} north"`;
+    expect(first.indexOf(FILE)).toBe(230);
+    const report = describeRunError(new Error(first), 'open the import dialog');
+    expect(report.stall).toBe(true);
+    const errorLine = report.detail.split('\n').find((l) => l.startsWith('  error: ')) ?? '';
+    expect(errorLine.length).toBe('  error: '.length + 240 + '...'.length); // still cut, after the fold
+    // The failure reaches the action log through the recorder, which folds again.
+    const recorder = new Recorder('run-stall', sessionsRoot);
+    recorder.event('scenario-failure', { scenario: 'importDialogFuzz', message: `${report.headline}\n${report.detail}` });
+    const log = fs.readFileSync(path.join(sessionsRoot, 'run-stall', 'actions.jsonl'), 'utf8');
+    expect({ detail: report.detail.includes(stub), actions: log.includes(stub) }).toEqual({ detail: false, actions: false });
+    expect(errorLine).toContain('<corpus #');
   });
 
   it('the MCP server folds every tool result it returns, as it does its errors (the `logs` tool quotes the copy)', () => {

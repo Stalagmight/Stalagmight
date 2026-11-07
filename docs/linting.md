@@ -17,7 +17,7 @@ Run `cargo fmt` and `cargo clippy` locally before pushing (they're in the
 ## Formatting: rustfmt scope and adoption
 
 `cargo fmt` is the formatter for the **`src-tauri` workspace** (the
-`stalagmight` app package plus the seven member crates under
+`stalagmight` app package plus the eight member crates under
 `src-tauri/crates/`), enforced in CI: the `check` job runs
 `cargo fmt --manifest-path src-tauri/Cargo.toml --check` and then the same
 check in a loop over `src-tauri/crates/*/Cargo.toml`, failing on any drift.

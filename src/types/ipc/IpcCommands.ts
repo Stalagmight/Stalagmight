@@ -60,6 +60,7 @@ import type { RawTableData } from "./RawTableData";
 import type { RepairResult } from "./RepairResult";
 import type { ReverseOutcome } from "./ReverseOutcome";
 import type { RulerEndpoint } from "./RulerEndpoint";
+import type { SalvageWriteResult } from "./SalvageWriteResult";
 import type { SalvagedData } from "./SalvagedData";
 import type { SaveOutcome } from "./SaveOutcome";
 import type { SectionCreated } from "./SectionCreated";
@@ -302,7 +303,7 @@ export interface IpcCommands {
   update_project_settings: { args: { expectedProject?: ProjectIdentity | null; name: string; validation: ValidationConfig; defaultAzimuthReference?: AzimuthReference | null }; result: EditOutcome; error: CommandError };
   update_section: { args: { expectedProject?: ProjectIdentity | null; sectionId: number; updates: SectionUpdates }; result: EditOutcome; error: CommandError };
   update_shot: { args: { expectedProject?: ProjectIdentity | null; sectionId: number; shotId: number; updates: ShotUpdates }; result: EditOutcome; error: CommandError };
-  write_salvaged_data: { args: { path: string; destPath: string }; result: null; error: CommandError };
+  write_salvaged_data: { args: { path: string; destPath: string }; result: SalvageWriteResult; error: CommandError };
 }
 
 /** Every registered command name. */

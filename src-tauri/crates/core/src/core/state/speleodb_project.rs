@@ -11,7 +11,7 @@
 //! a second project, so every deterministic failure has to be caught before it.
 //! Collaborators, teams and project delete live in `speleodb_admin`.
 
-use super::speleodb::{local_dto, validate_project_id};
+use super::speleodb::{local_dto, validate_project_id, MANAGED_PROJECT_TYPE};
 use super::AppState;
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
@@ -79,7 +79,7 @@ fn build_patch_body(
 }
 
 /// Build the `POST /projects/` body for a create-on-SDB publish ([#207]). `type` is
-/// fixed to `other` and `exclude_geojson` to `false` (the repo-layout contract,
+/// fixed to `stalagmight` ([`MANAGED_PROJECT_TYPE`]) and `exclude_geojson` to `false` (the repo-layout contract,
 /// [#208]); `created_by` is injected server-side. lat/long are both-or-neither: sent
 /// only when BOTH are present and finite, else omitted. Pure + unit-tested.
 fn build_create_body(params: &SpeleoPublishParams) -> serde_json::Value {
@@ -96,7 +96,10 @@ fn build_create_body(params: &SpeleoPublishParams) -> serde_json::Value {
         "country".to_owned(),
         serde_json::Value::from(params.country.clone()),
     );
-    body.insert("type".to_owned(), serde_json::Value::from("other"));
+    body.insert(
+        "type".to_owned(),
+        serde_json::Value::from(MANAGED_PROJECT_TYPE),
+    );
     body.insert("exclude_geojson".to_owned(), serde_json::Value::Bool(false));
     // An unknown visibility (#576 B16) is left out: the server applies its own
     // default, PRIVATE - the fail-safe one.
@@ -361,7 +364,7 @@ impl AppState {
             }
         }
 
-        // 1. Create the project. `type: other` + `exclude_geojson: false` are fixed
+        // 1. Create the project. `type: stalagmight` + `exclude_geojson: false` are fixed
         //    (the repo-layout contract, [#208]); lat/long are both-or-neither;
         //    `created_by` is injected server-side. Runs once (create is
         //    non-idempotent) so a mid-response failure can't double-submit.
@@ -753,7 +756,7 @@ mod tests {
 
     #[test]
     fn create_body_pins_the_repo_layout_contract() {
-        // #208: every create fixes type=other + exclude_geojson=false; visibility label;
+        // #208: every create fixes type=stalagmight + exclude_geojson=false; visibility label;
         // country as given; lat/long omitted when not both present (#207 both-or-neither).
         let params = SpeleoPublishParams {
             name: "Cave X".to_owned(),
@@ -766,8 +769,8 @@ mod tests {
         let body = build_create_body(&params);
         assert_eq!(
             body.get("type").and_then(|v| v.as_str()),
-            Some("other"),
-            "#208: the repo type is always `other`"
+            Some("stalagmight"),
+            "#208: the repo type is always `stalagmight`"
         );
         assert_eq!(
             body.get("exclude_geojson"),

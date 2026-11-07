@@ -149,8 +149,9 @@ Checked against the SpeleoDB server source; these override the stale issue text:
 - **`permission` is a STRING label** - `"WEB_VIEWER" | "READ_ONLY" |
   "READ_AND_WRITE" | "ADMIN"` - and the field is **absent** (not null) when the user
   has no permission. (Issues #188/#203 say "parse the integer" - wrong.)
-- **Project `type`** is a string enum: `ariane | compass | stickmaps | therion |
-  walls | other`.
+- **Project `type`** is a string enum: `ariane | compass | stalagmight | stickmaps |
+  therion | walls | other` (`stalagmight` confirmed in the production `/api/schema/`,
+  2026-11-03). Stalagmight writes `stalagmight`; `other` is the legacy managed type.
 - **The `.stalx` lands at `misc/project.stalx`** in the dump ZIP. Locate it by the
   `.stalx` **suffix**, never the hard-coded `misc/` path (survives a server
   `TARGET_FOLDER` change).
@@ -395,8 +396,8 @@ dialog, and on confirm `speleodb_adopt_ariane` runs the whole hand-over:
 3. **Push.** The ordinary Start-editing → Done pair uploads the `.stalx` with the
    `export_tml_for_speleodb` sidecar and releases the lock, which clears the dirty
    bit and advances `base` to the new commit.
-4. **Flip the type**, ariane→other, and only once the `.stalx` has landed - a
-   project typed `other` whose only file is the Ariane one that type says to
+4. **Flip the type**, ariane→stalagmight, and only once the `.stalx` has landed - a
+   project typed `stalagmight` whose only file is the Ariane one that type says to
    disregard is openable by nobody.
 5. **Close**, so the frontend's `loadProject` is a real load. Leaving it open made
    the backend answer that load with `ALREADY_OPEN`, which the frontend reads as
@@ -426,7 +427,7 @@ needs an app handle + a live box, so it is verified manually on the dev box:
    the success toast says it was uploaded.
 4. DB-inspect the cached `.stalx`: one `speleo_link` row, `base` = the commit the
    adoption just pushed, `has_unpushed_edits = 0`.
-5. On the server the project `type` is now `other`, the repo holds both
+5. On the server the project `type` is now `stalagmight`, the repo holds both
    `ariane.tml` and `misc/project.stalx`, and a GeoJSON row exists for the new
    commit when the survey carries a GPS zero datum.
 6. A later fresh pull classifies as `Stalx` (normal open), confirming the

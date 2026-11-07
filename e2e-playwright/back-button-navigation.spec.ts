@@ -31,7 +31,7 @@ function filterMockErrors(errors: string[]): string[] {
     // Scoped by the captured location URL (appended in beforeEach): a failed
     // SAME-ORIGIN load (a 404'd app chunk or asset) still fails the spec.
     // The app makes no external fetch any more (the maplibre CSS is bundled
-    // since #576 C12, pinned by offline-map-assets.spec.ts); the former
+    // since #576 C12 / #606, pinned by offline-map-assets.spec.ts); the former
     // offender, the dev agent bridge's /__agent/token probe, is gated off
     // under VITE_E2E since #417.
     if (error.startsWith('Failed to load resource') && !error.includes('[http://localhost')) {

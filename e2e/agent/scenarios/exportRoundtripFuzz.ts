@@ -1413,7 +1413,7 @@ export const exportRoundtripFuzz: Scenario = {
       const importedOnce = await freshProjectWithImport('roundtrip-a', t1);
       if (!importedOnce.ok) {
         ctx.metric('x5:import-refused');
-        ctx.log(`x5: first import refused (${importedOnce.error ?? 'no message'})`);
+        ctx.log(`x5: first import failed: ${importedOnce.error ?? 'no message'}`);
         rmrf(dir);
         return;
       }
@@ -1593,7 +1593,7 @@ export const exportRoundtripFuzz: Scenario = {
       ]);
       if (!created.ok) {
         ctx.metric('skip:hostile-section-refused');
-        ctx.log(`x7: createSection refused (${created.err ?? 'no message'})`);
+        ctx.log(`x7: createSection failed: ${created.err ?? 'no message'}`);
         rmrf(dir);
         return;
       }

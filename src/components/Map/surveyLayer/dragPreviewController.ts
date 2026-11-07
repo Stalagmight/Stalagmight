@@ -10,7 +10,7 @@
 // drag is active / committing, the follow offset and the moving sets) is public.
 
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { LoopClosure, Section, StationRef } from '../../../types/project';
 import type { GpsOrigin } from '../../../types/config';
 import type { SurveyData } from '../../../types/survey-data';
@@ -18,7 +18,7 @@ import { metersToMapCoords } from '../../../utils/coordinates';
 import { getErrorColor } from '../../../utils/colors';
 import type { MapThemeColors } from '../../../utils/themeColors';
 import type { AnalyticalOverlays } from './analyticalOverlays';
-import { hasLiveStyle } from '../mapUtils';
+import { canWriteStyle } from '../mapUtils';
 import { AUX_IDS } from './auxiliaryLayers';
 import {
   resolveShotDisplayColor,
@@ -203,8 +203,10 @@ export class DragPreviewController {
     // dragged and a stationary section are hidden during the drag and reappear
     // with correct geometry on commit. (The survey geometry + labels are hidden in
     // the custom layers via the drag exclusion in installDragPreview.)
-    // (Not while the WebGL context is lost: no style to filter, #576 NF-MAP-5.)
-    if (hasLiveStyle(this.map)) {
+    // (Not while the WebGL context is lost: no style to filter, #576 NF-MAP-5; nor
+    // while a rebuilt style loads: it holds no layer yet and refuses the write,
+    // RV18-MAP-1.)
+    if (canWriteStyle(this.map)) {
       const existingClosureFilter = this.map.getFilter(AUX_IDS.loopClosuresLayerId);
       this.dragSavedFilters.set(AUX_IDS.loopClosuresLayerId, existingClosureFilter ?? undefined);
       const eitherEndpointExclusion: maplibregl.FilterSpecification = ['!', ['any',
@@ -485,7 +487,7 @@ export class DragPreviewController {
         ['==', ['get', 'stationB'], keyB],
       ] as unknown as maplibregl.FilterSpecification);
     }
-    if (closureExclusions.length > 0 && hasLiveStyle(this.map)) {
+    if (closureExclusions.length > 0 && canWriteStyle(this.map)) {
       const closureExclusion: maplibregl.FilterSpecification = ['!',
         ['any', ...closureExclusions],
       ] as unknown as maplibregl.FilterSpecification;
@@ -654,9 +656,11 @@ export class DragPreviewController {
     // Restore the saved auxiliary filters (only loop closures now - the survey
     // geometry + labels are custom-rendered and their drag exclusion is dropped
     // synchronously below, so they land at the new position at once).
-    // While the context is lost there is no style to write; keep the originals
-    // for the restore (an earlier lost carry's original wins: it is the real one).
-    const live = hasLiveStyle(this.map);
+    // While the context is lost there is no style to write, and a rebuilt one
+    // has none of these layers until it loads (it would come back with the
+    // exclusion serialized in): keep the originals for the restore (an earlier
+    // lost carry's original wins: it is the real one).
+    const live = canWriteStyle(this.map);
     for (const [layerId, saved] of this.dragSavedFilters) {
       if (live) {
         if (this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
@@ -681,7 +685,7 @@ export class DragPreviewController {
    * read), so it adopts them and restores them at its own drop instead.
    */
   replayAfterContextRestore(): void {
-    if (this.filtersAwaitingRestore.size === 0 || !hasLiveStyle(this.map)) return;
+    if (this.filtersAwaitingRestore.size === 0 || !canWriteStyle(this.map)) return;
     for (const [layerId, saved] of this.filtersAwaitingRestore) {
       if (this.dragPreviewActive) {
         if (!this.dragSavedFilters.has(layerId)) this.dragSavedFilters.set(layerId, saved);

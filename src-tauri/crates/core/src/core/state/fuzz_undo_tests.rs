@@ -229,7 +229,7 @@
 //!   far from both ends. `Project::OFFSET_DUST_M` is now 1e-6 m, two decades
 //!   above the worst residue measured past the georeference ceiling and four
 //!   below `MERGE_ALIGNMENT_INVARIANT_M`; the constant's doc carries the whole
-//!   argument, and two tests in `models/project/tests.rs` re-run the measurement
+//!   argument, and two tests in `models/project/tests/merge_and_offset_tests.rs` re-run the measurement
 //!   and pin the clearances. A scale-aware gate was rejected on purpose: the
 //!   bound has to stay a pure function of the value written, or two routes
 //!   disagree BY DESIGN.
@@ -336,7 +336,7 @@
 //!   user `DeleteShot`, and the load and Repair sweeps still convert everything
 //!   they find. Pinned at the MODEL level by
 //!   `removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one` and
-//!   its `remove_appended_first_shot` sibling in `models/project/tests.rs`, which
+//!   its `remove_appended_first_shot` sibling in `models/project/tests/orphan_closure_tests.rs`, which
 //!   is where it has to live now: the entry above converged the forward path, so
 //!   a project holding a pre-existing convertible orphan is no longer
 //!   constructible through the command API and this shape cannot be built from
@@ -381,7 +381,7 @@
 //!   computes - see that function and docs/undo-redo.md. `COMBINED=1 SEEDS=40
 //!   ITERATIONS=300` is 40/40 on both halves after it, and the reductions are
 //!   pinned in `open_undo_bugs_tests.rs` (six tests, from the birth route to the
-//!   save/reopen convergence) and `models/project/tests.rs` (three).
+//!   save/reopen convergence) and `models/project/tests/double_anchor_repair_tests.rs` (three).
 //! * RESOLVED as FINDING 20, and now FIXED. `HORIZON=1 SEEDS=1 ITERATIONS=2000`
 //!   left a merged pair 1.58 cm apart after an `updateShot`, because
 //!   `realign_after_shot_edit` returned early when the edited section's merge

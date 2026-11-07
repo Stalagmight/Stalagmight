@@ -1,7 +1,7 @@
 # Third-party licenses
 
 Stalagmight's shipped binaries include the open-source packages listed below:
-627 Rust crates and 62 npm packages. Each distinct license
+630 Rust crates and 57 npm packages. Each distinct license
 text is reproduced verbatim, as those licenses require. Stalagmight itself is
 licensed AGPL-3.0-or-later; see [LICENSE](LICENSE).
 
@@ -10,11 +10,11 @@ from the dependency lockfiles - do not edit by hand. CI fails if this file is
 stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
-Cargo.lock=9058c97a84797c2ed305e4d3aa8d8d6814d3e98cdfa03c65cda7a136acc44212
-pnpm-lock.yaml=cc12edc721b48bd24276d48a9ab62e5d8383d4d8ef8c98fe0548ccd661f0200b
+Cargo.lock=423f5cc5de197be3c798587773251286867589248d97284f5436006e4a7a4109
+pnpm-lock.yaml=d97c965ee56f623ec9547f748d12d4f34fbf2323ad678d38851f5b7c9d6d56de
 gen-third-party-licenses.mjs=ff6cafa3455b8c30cd20895c6cadd3b967609582cd167932396caa881b31ce7f
 about.toml=d2768e49653dc612b768e450ef73aab5e97964c9365bcf0fc2b68cd50cde9f0d
-bundle-body=65e49fc8bef42d1b64287a49f524c390a5f32e8f5e93ee9c7003264cc6891f3f
+bundle-body=e13e698676bdeac4debe89b1d6bb16fc7f3f1f1dc0bf3da88a1e14d3faadb586
 -->
 
 ## npm packages
@@ -23,7 +23,7 @@ The production JavaScript dependencies bundled into the frontend, with the licen
 
 ### (MIT OR Apache-2.0)
 
-Applies to: `@maplibre/mlt 1.1.2`
+Applies to: `@maplibre/mlt 1.3.0`
 
 ````text
 ===== MIT License =====
@@ -250,7 +250,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-	http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -471,7 +471,7 @@ SOFTWARE.
 
 ### BSD-2-Clause
 
-Applies to: `@mapbox/tiny-sdf 2.2.0`
+Applies to: `@mapbox/tiny-sdf 2.2.0`, `@mapbox/tiny-sdf 2.3.0`
 
 ````text
 BSD-2-Clause
@@ -487,7 +487,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” 
 
 ### BSD-2-Clause
 
-Applies to: `@mapbox/unitbezier 0.0.1`
+Applies to: `@mapbox/unitbezier 1.0.0`
 
 ````text
 BSD-2-Clause
@@ -522,7 +522,7 @@ http://svn.webkit.org/repository/webkit/trunk/Source/WebCore/platform/graphics/U
 
 ### BSD-3-Clause
 
-Applies to: `@mapbox/vector-tile 2.0.4`
+Applies to: `@mapbox/vector-tile 3.0.0`
 
 ````text
 Copyright (c) 2024, Mapbox
@@ -556,7 +556,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### BSD-3-Clause
 
-Applies to: `maplibre-gl 5.16.0`
+Applies to: `maplibre-gl 6.16.0`
 
 ````text
 Copyright (c) 2023, MapLibre contributors
@@ -679,10 +679,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### BSD-3-Clause
 
-Applies to: `pbf 4.0.1`
+Applies to: `pbf 5.1.2`
 
 ````text
-Copyright (c) 2024, Mapbox
+Copyright (c) 2026, Mapbox
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -711,59 +711,6 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ````
 
-### BSD-3-Clause
-
-Applies to: `rw 1.3.3`
-
-````text
-Copyright (c) 2014-2016, Michael Bostock
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-* The name Michael Bostock may not be used to endorse or promote products
-  derived from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL MICHAEL BOSTOCK BE LIABLE FOR ANY DIRECT,
-INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
-NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
-EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-````
-
-### ISC
-
-Applies to: `@mapbox/geojson-rewind 0.5.2`
-
-````text
-Copyright (c) 2020, Mapbox
-
-Permission to use, copy, modify, and/or distribute this software for any
-purpose with or without fee is hereby granted, provided that the above
-copyright notice and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-PERFORMANCE OF THIS SOFTWARE.
-````
-
 ### ISC
 
 Applies to: `@mapbox/point-geometry 1.1.0`
@@ -786,29 +733,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ### ISC
 
-Applies to: `@mapbox/whoots-js 3.1.0`
-
-````text
-ISC License
-
-Copyright (c) 2017, Mapbox
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-````
-
-### ISC
-
-Applies to: `@maplibre/geojson-vt 5.0.4`
+Applies to: `@maplibre/geojson-vt 6.3.0`
 
 ````text
 The MIT License (MIT)
@@ -854,7 +779,7 @@ THIS SOFTWARE.
 
 ### ISC
 
-Applies to: `@maplibre/maplibre-gl-style-spec 24.4.1`
+Applies to: `@maplibre/maplibre-gl-style-spec 26.5.1`
 
 ````text
 Copyright (c) 2020, MapLibre contributors
@@ -989,12 +914,12 @@ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH RE
 
 ### ISC
 
-Applies to: `earcut 3.0.2`
+Applies to: `earcut 3.2.4`
 
 ````text
 ISC License
 
-Copyright (c) 2024, Mapbox
+Copyright (c) 2026, Mapbox
 
 Permission to use, copy, modify, and/or distribute this software for any purpose
 with or without fee is hereby granted, provided that the above copyright notice
@@ -1011,34 +936,12 @@ THIS SOFTWARE.
 
 ### ISC
 
-Applies to: `geojson-vt 4.0.2`
+Applies to: `kdbush 4.1.0`
 
 ````text
 ISC License
 
-Copyright (c) 2015, Mapbox
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-````
-
-### ISC
-
-Applies to: `kdbush 4.0.2`
-
-````text
-ISC License
-
-Copyright (c) 2018, Vladimir Agafonkin
+Copyright (c) 2026, Vladimir Agafonkin
 
 Permission to use, copy, modify, and/or distribute this software for any purpose
 with or without fee is hereby granted, provided that the above copyright notice
@@ -1083,28 +986,6 @@ Applies to: `quickselect 3.0.0`
 ISC License
 
 Copyright (c) 2024, Vladimir Agafonkin
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-````
-
-### ISC
-
-Applies to: `supercluster 8.0.1`
-
-````text
-ISC License
-
-Copyright (c) 2021, Mapbox
 
 Permission to use, copy, modify, and/or distribute this software for any purpose
 with or without fee is hereby granted, provided that the above copyright notice
@@ -1199,23 +1080,35 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ### MIT
 
-Applies to: `@mapbox/jsonlint-lines-primitives 2.0.2`
-
-The published package ships no license file; notice reproduced from https://github.com/mapbox/jsonlint/blob/master/README.md ("MIT License" section, verified 2026-08-03; fork of zaach/jsonlint, same notice).
+Applies to: `@mapbox/jsonlint-lines-primitives 2.0.3`
 
 ````text
-Copyright (C) 2012 Zachary Carter
+MIT License
 
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+Copyright (c) 2012 Zachary Carter
 
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ````
 
 ### MIT
 
-Applies to: `@maplibre/vt-pbf 4.2.1`
+Applies to: `@maplibre/vt-pbf 4.3.3`
 
 ````text
 The MIT License (MIT)
@@ -1305,7 +1198,7 @@ SOFTWARE.
 
 ### MIT
 
-Applies to: `@types/geojson 7946.0.16`, `@types/geojson-vt 3.2.5`, `@types/prop-types 15.7.15`, `@types/react 18.3.27`, `@types/supercluster 7.1.3`
+Applies to: `@types/geojson 7946.0.16`, `@types/prop-types 15.7.15`, `@types/react 18.3.27`
 
 ````text
     MIT License
@@ -1329,6 +1222,35 @@ Applies to: `@types/geojson 7946.0.16`, `@types/geojson-vt 3.2.5`, `@types/prop-
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE
+````
+
+### MIT
+
+Applies to: `bidi-js 1.1.0`
+
+````text
+Copyright (c) 2021 Jason Johnston
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ````
 
 ### MIT
@@ -1399,22 +1321,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-````
-
-### MIT
-
-Applies to: `get-stream 6.0.1`
-
-````text
-MIT License
-
-Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ````
 
 ### MIT
@@ -1736,6 +1642,34 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+````
+
+### MIT
+
+Applies to: `require-from-string 2.0.2`
+
+````text
+The MIT License (MIT)
+
+Copyright (c) Vsevolod Strukchinsky <floatdrop@gmail.com> (github.com/floatdrop)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ````
 
 ### MIT
@@ -3760,7 +3694,7 @@ Applies to: `untrusted 0.9.0`
 
 ### MIT License
 
-Applies to: `adler2 2.0.1`, `anyhow 1.0.100`, `async-channel 2.5.0`, `async-executor 1.13.3`, `async-io 2.6.0`, `async-lock 3.4.2`, `async-process 2.5.0`, `async-recursion 1.1.1`, `async-signal 0.2.13`, `async-task 4.7.1`, `async-trait 0.1.89`, `atomic-waker 1.1.2`, `blocking 1.6.2`, `camino 1.2.2`, `cargo-platform 0.1.9`, `cargo_metadata 0.19.2`, `compass_data 0.0.7`, `concurrent-queue 2.5.0`, `displaydoc 0.2.5`, `dtoa 1.0.11`, `dyn-clone 1.0.20`, `endi 1.1.1`, `erased-serde 0.4.9`, `event-listener 5.4.1`, `event-listener-strategy 0.5.4`, `fastrand 2.3.0`, `futures-lite 2.6.1`, `hermit-abi 0.5.2`, `itoa 1.0.17`, `kuchikiki 0.8.8-speedreader`, `linux-raw-sys 0.11.0`, `num_enum 0.7.5`, `num_enum_derive 0.7.5`, `once_cell 1.21.3`, `ordered-stream 0.2.0`, `parking 2.2.1`, `pathdiff 0.2.3`, `pin-project-lite 0.2.16`, `piper 0.2.4`, `polling 3.11.0`, `proc-macro-crate 1.3.1`, `proc-macro-crate 2.0.2`, `proc-macro-crate 3.4.0`, `proc-macro2 1.0.105`, `quote 1.0.43`, `rustc-hash 2.1.1`, `rustix 1.1.3`, `rustversion 1.0.22`, `semver 1.0.27`, `serde 1.0.228`, `serde-untagged 0.1.9`, `serde_bytes 0.11.19`, `serde_core 1.0.228`, `serde_derive 1.0.228`, `serde_derive_internals 0.29.1`, `serde_json 1.0.149`, `serde_repr 0.1.20`, `servo_arc 0.2.0`, `syn 1.0.109`, `syn 2.0.114`, `system-deps 6.2.2`, `thiserror 1.0.69`, `thiserror 2.0.17`, `thiserror-impl 1.0.69`, `thiserror-impl 2.0.17`, `typeid 1.0.3`, `unicode-ident 1.0.22`, `utf-8 0.7.6`, `wasi 0.11.1+wasi-snapshot-preview1`, `wasi 0.9.0+wasi-snapshot-preview1`, `wasm-streams 0.4.2`, `wit-bindgen 0.46.0`, `x11 2.21.0`, `x11-dl 2.21.0`, `zmij 1.0.14`, `zvariant_utils 3.3.0`
+Applies to: `adler2 2.0.1`, `anyhow 1.0.100`, `async-channel 2.5.0`, `async-executor 1.13.3`, `async-io 2.6.0`, `async-lock 3.4.2`, `async-process 2.5.0`, `async-recursion 1.1.1`, `async-signal 0.2.13`, `async-task 4.7.1`, `async-trait 0.1.89`, `atomic-waker 1.1.2`, `blocking 1.6.2`, `camino 1.2.2`, `cargo-platform 0.1.9`, `cargo_metadata 0.19.2`, `compass_data 0.0.7`, `concurrent-queue 2.5.0`, `displaydoc 0.2.5`, `dtoa 1.0.11`, `dyn-clone 1.0.20`, `endi 1.1.1`, `erased-serde 0.4.9`, `event-listener 5.4.1`, `event-listener-strategy 0.5.4`, `fastrand 2.3.0`, `futures-lite 2.6.1`, `hermit-abi 0.5.2`, `itoa 1.0.17`, `kuchikiki 0.8.8-speedreader`, `linux-raw-sys 0.11.0`, `num_enum 0.7.5`, `num_enum_derive 0.7.5`, `once_cell 1.21.3`, `ordered-stream 0.2.0`, `parking 2.2.1`, `pathdiff 0.2.3`, `pin-project-lite 0.2.16`, `piper 0.2.4`, `polling 3.11.0`, `proc-macro-crate 1.3.1`, `proc-macro-crate 2.0.2`, `proc-macro-crate 3.4.0`, `proc-macro2 1.0.105`, `quote 1.0.43`, `rustc-hash 2.1.1`, `rustix 1.1.3`, `rustversion 1.0.22`, `semver 1.0.27`, `serde 1.0.228`, `serde-untagged 0.1.9`, `serde_bytes 0.11.19`, `serde_core 1.0.228`, `serde_derive 1.0.228`, `serde_derive_internals 0.29.1`, `serde_json 1.0.149`, `serde_repr 0.1.20`, `servo_arc 0.2.0`, `syn 1.0.109`, `syn 2.0.114`, `syn 3.0.9`, `system-deps 6.2.2`, `thiserror 1.0.69`, `thiserror 2.0.21`, `thiserror-impl 1.0.69`, `thiserror-impl 2.0.21`, `typeid 1.0.3`, `unicode-ident 1.0.22`, `utf-8 0.7.6`, `wasi 0.11.1+wasi-snapshot-preview1`, `wasi 0.9.0+wasi-snapshot-preview1`, `wasm-streams 0.4.2`, `wit-bindgen 0.46.0`, `x11 2.21.0`, `x11-dl 2.21.0`, `zmij 1.0.14`, `zvariant_utils 3.3.0`
 
 ````text
 Permission is hereby granted, free of charge, to any
@@ -3794,38 +3728,6 @@ Applies to: `aes 0.8.4`
 
 ````text
 Copyright (c) 2018 Artyom Pavlov
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-````
-
-### MIT License
-
-Applies to: `ahash 0.8.12`
-
-````text
-Copyright (c) 2018 Tom Kaitchuck
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -4151,7 +4053,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Applies to: `block2 0.6.2`, `brotli-decompressor 5.0.0`, `cargo_toml 0.22.3`, `cesu8 1.1.0`, `chrono 0.4.42`, `convert_case 0.4.0`, `dispatch 0.2.0`, `dispatch2 0.3.0`, `dlopen2 0.8.2`, `dlopen2_derive 0.4.3`, `dpi 0.1.2`, `fxhash 0.2.1`, `igrf 0.2.0`, `libm 0.2.15`, `mac 0.1.1`, `match_token 0.1.0`, `ndk 0.9.0`, `ndk-context 0.1.1`, `ndk-sys 0.6.0+11769913`, `objc2 0.6.3`, `objc2-app-kit 0.3.2`, `objc2-cloud-kit 0.3.2`, `objc2-core-data 0.3.2`, `objc2-core-foundation 0.3.2`, `objc2-core-graphics 0.3.2`, `objc2-core-image 0.3.2`, `objc2-core-text 0.3.2`, `objc2-core-video 0.3.2`, `objc2-encode 4.1.0`, `objc2-exception-helper 0.1.1`, `objc2-foundation 0.3.2`, `objc2-javascript-core 0.3.2`, `objc2-quartz-core 0.3.2`, `objc2-security 0.3.2`, `objc2-ui-kit 0.3.2`, `objc2-web-kit 0.3.2`, `phf 0.10.1`, `phf 0.8.0`, `phf_codegen 0.8.0`, `phf_generator 0.10.0`, `phf_generator 0.8.0`, `phf_macros 0.10.0`, `phf_shared 0.10.0`, `phf_shared 0.8.0`, `proj4rs 0.1.10`, `r-efi 5.3.0`, `siphasher 0.3.11`, `siphasher 1.0.1`, `tao-macros 0.1.3`, `tauri 2.9.5`, `tauri-build 2.5.3`, `tauri-codegen 2.5.2`, `tauri-macros 2.5.2`, `tauri-plugin 2.5.2`, `tauri-plugin-dialog 2.5.0`, `tauri-plugin-fs 2.4.5`, `tauri-plugin-opener 2.5.3`, `tauri-plugin-single-instance 2.3.7`, `tauri-runtime 2.9.2`, `tauri-runtime-wry 2.9.3`, `tauri-utils 2.8.1`, `ts-rs 7.1.1`, `ts-rs-macros 7.1.1`, `unic-char-property 0.9.0`, `unic-char-range 0.9.0`, `unic-common 0.9.0`, `unic-ucd-ident 0.9.0`, `unic-ucd-version 0.9.0`, `wasip2 1.0.1+wasi-0.2.4`, `webview2-com 0.38.2`, `webview2-com-macros 0.8.1`, `webview2-com-sys 0.38.2`, `winapi-i686-pc-windows-gnu 0.4.0`, `winapi-x86_64-pc-windows-gnu 0.4.0`, `windows 0.56.0`, `windows 0.61.3`, `windows-collections 0.2.0`, `windows-core 0.56.0`, `windows-core 0.61.2`, `windows-core 0.62.2`, `windows-future 0.2.1`, `windows-implement 0.56.0`, `windows-implement 0.60.2`, `windows-interface 0.56.0`, `windows-interface 0.59.3`, `windows-link 0.1.3`, `windows-link 0.2.1`, `windows-numerics 0.2.0`, `windows-result 0.1.2`, `windows-result 0.3.4`, `windows-result 0.4.1`, `windows-strings 0.4.2`, `windows-strings 0.5.1`, `windows-sys 0.45.0`, `windows-sys 0.48.0`, `windows-sys 0.52.0`, `windows-sys 0.59.0`, `windows-sys 0.60.2`, `windows-sys 0.61.2`, `windows-targets 0.42.2`, `windows-targets 0.48.5`, `windows-targets 0.52.6`, `windows-targets 0.53.5`, `windows-threading 0.1.0`, `windows-version 0.1.7`, `windows_aarch64_gnullvm 0.42.2`, `windows_aarch64_gnullvm 0.48.5`, `windows_aarch64_gnullvm 0.52.6`, `windows_aarch64_gnullvm 0.53.1`, `windows_aarch64_msvc 0.42.2`, `windows_aarch64_msvc 0.48.5`, `windows_aarch64_msvc 0.52.6`, `windows_aarch64_msvc 0.53.1`, `windows_i686_gnu 0.42.2`, `windows_i686_gnu 0.48.5`, `windows_i686_gnu 0.52.6`, `windows_i686_gnu 0.53.1`, `windows_i686_gnullvm 0.52.6`, `windows_i686_gnullvm 0.53.1`, `windows_i686_msvc 0.42.2`, `windows_i686_msvc 0.48.5`, `windows_i686_msvc 0.52.6`, `windows_i686_msvc 0.53.1`, `windows_x86_64_gnu 0.42.2`, `windows_x86_64_gnu 0.48.5`, `windows_x86_64_gnu 0.52.6`, `windows_x86_64_gnu 0.53.1`, `windows_x86_64_gnullvm 0.42.2`, `windows_x86_64_gnullvm 0.48.5`, `windows_x86_64_gnullvm 0.52.6`, `windows_x86_64_gnullvm 0.53.1`, `windows_x86_64_msvc 0.42.2`, `windows_x86_64_msvc 0.48.5`, `windows_x86_64_msvc 0.52.6`, `windows_x86_64_msvc 0.53.1`, `zune-core 0.4.12`, `zune-jpeg 0.4.21`
+Applies to: `block2 0.6.2`, `brotli-decompressor 5.0.0`, `cargo_toml 0.22.3`, `cesu8 1.1.0`, `chrono 0.4.42`, `convert_case 0.4.0`, `dispatch 0.2.0`, `dispatch2 0.3.0`, `dlopen2 0.8.2`, `dlopen2_derive 0.4.3`, `dpi 0.1.2`, `fxhash 0.2.1`, `igrf 0.2.0`, `libm 0.2.15`, `mac 0.1.1`, `match_token 0.1.0`, `ndk 0.9.0`, `ndk-context 0.1.1`, `ndk-sys 0.6.0+11769913`, `objc2 0.6.3`, `objc2-app-kit 0.3.2`, `objc2-cloud-kit 0.3.2`, `objc2-core-data 0.3.2`, `objc2-core-foundation 0.3.2`, `objc2-core-graphics 0.3.2`, `objc2-core-image 0.3.2`, `objc2-core-text 0.3.2`, `objc2-core-video 0.3.2`, `objc2-encode 4.1.0`, `objc2-exception-helper 0.1.1`, `objc2-foundation 0.3.2`, `objc2-javascript-core 0.3.2`, `objc2-quartz-core 0.3.2`, `objc2-security 0.3.2`, `objc2-ui-kit 0.3.2`, `objc2-web-kit 0.3.2`, `phf 0.10.1`, `phf 0.8.0`, `phf_codegen 0.8.0`, `phf_generator 0.10.0`, `phf_generator 0.8.0`, `phf_macros 0.10.0`, `phf_shared 0.10.0`, `phf_shared 0.8.0`, `proj4rs 0.1.10`, `r-efi 5.3.0`, `rsqlite-vfs 0.2.0`, `siphasher 0.3.11`, `siphasher 1.0.1`, `tao-macros 0.1.3`, `tauri 2.9.5`, `tauri-build 2.5.3`, `tauri-codegen 2.5.2`, `tauri-macros 2.5.2`, `tauri-plugin 2.5.2`, `tauri-plugin-dialog 2.5.0`, `tauri-plugin-fs 2.4.5`, `tauri-plugin-opener 2.5.3`, `tauri-plugin-single-instance 2.3.7`, `tauri-runtime 2.9.2`, `tauri-runtime-wry 2.9.3`, `tauri-utils 2.8.1`, `ts-rs 7.1.1`, `ts-rs-macros 7.1.1`, `unic-char-property 0.9.0`, `unic-char-range 0.9.0`, `unic-common 0.9.0`, `unic-ucd-ident 0.9.0`, `unic-ucd-version 0.9.0`, `wasip2 1.0.1+wasi-0.2.4`, `webview2-com 0.38.2`, `webview2-com-macros 0.8.1`, `webview2-com-sys 0.38.2`, `winapi-i686-pc-windows-gnu 0.4.0`, `winapi-x86_64-pc-windows-gnu 0.4.0`, `windows 0.56.0`, `windows 0.61.3`, `windows-collections 0.2.0`, `windows-core 0.56.0`, `windows-core 0.61.2`, `windows-core 0.62.2`, `windows-future 0.2.1`, `windows-implement 0.56.0`, `windows-implement 0.60.2`, `windows-interface 0.56.0`, `windows-interface 0.59.3`, `windows-link 0.1.3`, `windows-link 0.2.1`, `windows-numerics 0.2.0`, `windows-result 0.1.2`, `windows-result 0.3.4`, `windows-result 0.4.1`, `windows-strings 0.4.2`, `windows-strings 0.5.1`, `windows-sys 0.45.0`, `windows-sys 0.48.0`, `windows-sys 0.52.0`, `windows-sys 0.59.0`, `windows-sys 0.60.2`, `windows-sys 0.61.2`, `windows-targets 0.42.2`, `windows-targets 0.48.5`, `windows-targets 0.52.6`, `windows-targets 0.53.5`, `windows-threading 0.1.0`, `windows-version 0.1.7`, `windows_aarch64_gnullvm 0.42.2`, `windows_aarch64_gnullvm 0.48.5`, `windows_aarch64_gnullvm 0.52.6`, `windows_aarch64_gnullvm 0.53.1`, `windows_aarch64_msvc 0.42.2`, `windows_aarch64_msvc 0.48.5`, `windows_aarch64_msvc 0.52.6`, `windows_aarch64_msvc 0.53.1`, `windows_i686_gnu 0.42.2`, `windows_i686_gnu 0.48.5`, `windows_i686_gnu 0.52.6`, `windows_i686_gnu 0.53.1`, `windows_i686_gnullvm 0.52.6`, `windows_i686_gnullvm 0.53.1`, `windows_i686_msvc 0.42.2`, `windows_i686_msvc 0.48.5`, `windows_i686_msvc 0.52.6`, `windows_i686_msvc 0.53.1`, `windows_x86_64_gnu 0.42.2`, `windows_x86_64_gnu 0.48.5`, `windows_x86_64_gnu 0.52.6`, `windows_x86_64_gnu 0.53.1`, `windows_x86_64_gnullvm 0.42.2`, `windows_x86_64_gnullvm 0.48.5`, `windows_x86_64_gnullvm 0.52.6`, `windows_x86_64_gnullvm 0.53.1`, `windows_x86_64_msvc 0.42.2`, `windows_x86_64_msvc 0.48.5`, `windows_x86_64_msvc 0.52.6`, `windows_x86_64_msvc 0.53.1`, `zune-core 0.4.12`, `zune-jpeg 0.4.21`
 
 ````text
 MIT License
@@ -5760,7 +5662,7 @@ SOFTWARE.
 
 ### MIT License
 
-Applies to: `hashbrown 0.12.3`, `hashbrown 0.14.5`, `hashbrown 0.16.1`
+Applies to: `hashbrown 0.12.3`, `hashbrown 0.16.1`, `hashbrown 0.17.1`
 
 ````text
 Copyright (c) 2016 Amanieu d'Antras
@@ -5792,7 +5694,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Applies to: `hashlink 0.9.1`
+Applies to: `hashlink 0.12.2`
 
 ````text
 This work is derived in part from the `linked-hash-map` crate, Copyright (c)
@@ -6785,10 +6687,10 @@ SOFTWARE.
 
 ### MIT License
 
-Applies to: `libsqlite3-sys 0.28.0`, `rusqlite 0.31.0`
+Applies to: `libsqlite3-sys 0.39.1`, `rusqlite 0.41.1`
 
 ````text
-Copyright (c) 2014-2021 The rusqlite developers
+Copyright (c) 2014 The rusqlite developers
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -8494,6 +8396,34 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
 THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+````
+
+### MIT License
+
+Applies to: `sqlite-wasm-rs 0.6.2`
+
+````text
+MIT License
+
+Copyright (c) 2024 Spxg
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
@@ -10991,6 +10921,32 @@ Except as contained in this notice, the name of a copyright holder shall
 not be used in advertising or otherwise to promote the sale, use or other
 dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
+````
+
+### zlib License
+
+Applies to: `foldhash 0.2.0`
+
+````text
+Copyright (c) 2024 Orson Peters
+
+This software is provided 'as-is', without any express or implied warranty. In
+no event will the authors be held liable for any damages arising from the use of
+this software.
+
+Permission is granted to anyone to use this software for any purpose, including
+commercial applications, and to alter it and redistribute it freely, subject to
+the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not claim
+    that you wrote the original software. If you use this software in a product,
+    an acknowledgment in the product documentation would be appreciated but is
+    not required.
+
+2. Altered source versions must be plainly marked as such, and must not be
+    misrepresented as being the original software.
+
+3. This notice may not be removed or altered from any source distribution.
 ````
 
 ### zlib License

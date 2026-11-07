@@ -2942,6 +2942,10 @@
       "measurePath": "Measured-path highlight unavailable (GPU)",
       "survey": "Survey rendering unavailable (WebGL2/GPU)"
     },
+    "webgl2Unavailable": {
+      "title": "This map needs WebGL2",
+      "body": "Your graphics driver did not provide WebGL2, so the map cannot be drawn. Updating the driver may help. The rest of the app still works."
+    },
     "attribution": {
       "expandAria": "Show map imagery sources",
       "collapsed": "by {{source}}"
@@ -4007,13 +4011,13 @@
     "adopt": {
       "confirmTitle": "Adopt this Ariane project?",
       "confirmBody": "\"{{name}}\" is an Ariane (.tml) project. Adopting it imports its survey into a new Stalagmight file, uploads that file to SpeleoDB, and links it to this project. Adopting takes the write lock for as long as it runs, and hands it back when the upload is done.",
-      "confirmConsequence": "The project type on SpeleoDB is changed to \"other\", and from now on only Stalagmight edits are recognized - later Ariane (.tml) edits are disregarded. To undo this, you will have to manually roll back to the Ariane-only version and change the project type in the SpeleoDB interface.",
+      "confirmConsequence": "The project type on SpeleoDB is changed to \"Stalagmight\", and from now on only Stalagmight edits are recognized - later Ariane (.tml) edits are disregarded. To undo this, you will have to manually roll back to the Ariane-only version and change the project type in the SpeleoDB interface.",
       "confirmButton": "Adopt",
       "doneToast": "Project adopted and uploaded to SpeleoDB.",
-      "doneToastNoTypeFlip": "Project adopted and uploaded, but its SpeleoDB type could not be changed to \"other\" (you may not have write access).",
+      "doneToastNoTypeFlip": "Project adopted and uploaded, but its SpeleoDB type could not be changed to \"Stalagmight\" (you may not have write access).",
       "doneToastLocalOnly": "Project adopted on this machine only - it could not be uploaded. Use Start editing, then Done, to push it to SpeleoDB.",
       "doneToastLockHeld": "Project adopted and uploaded to SpeleoDB, but handing the write lock back could not be confirmed. Your survey is safe on the server; check the SpeleoDB menu and release the lock if you still hold it, so others can edit.",
-      "doneToastLockHeldNoTypeFlip": "Project adopted and uploaded to SpeleoDB, but two things are unfinished: handing the write lock back could not be confirmed, and its SpeleoDB type could not be changed to \"other\". Your survey is safe on the server; check the SpeleoDB menu and release the lock if you still hold it, and change the type in SpeleoDB so the project stops offering to be adopted."
+      "doneToastLockHeldNoTypeFlip": "Project adopted and uploaded to SpeleoDB, but two things are unfinished: handing the write lock back could not be confirmed, and its SpeleoDB type could not be changed to \"Stalagmight\". Your survey is safe on the server; check the SpeleoDB menu and release the lock if you still hold it, and change the type in SpeleoDB so the project stops offering to be adopted."
     },
     "dumpPicker": {
       "titleStalx": "Choose which file to open",

@@ -3,6 +3,7 @@ use rusqlite::params;
 use rusqlite::types::ValueRef;
 use std::collections::HashMap;
 
+use super::schema_guard::declares_virtual_table;
 use super::{format_blob_placeholder, Database, RawTableData, MAX_RAW_PAGE_ROWS};
 
 impl Database {
@@ -293,16 +294,34 @@ impl Database {
         }
     }
 
-    /// List user table names in the database, excluding sqlite-internal tables.
+    /// List the ordinary tables in the database, excluding sqlite-internal ones.
+    ///
+    /// Virtual tables are left out: a `.stalx` can come from anyone, and touching
+    /// a virtual table runs its module's code (FTS5, RTREE) over the file's own
+    /// data. Classified from `sqlite_master` alone (#608): it cannot be shadowed
+    /// (`sqlite_` names are reserved) and reading it connects nothing, unlike
+    /// `pragma_table_list`, which a file can shadow with its own table or view
+    /// and which prepares every virtual table it reports. Shadow tables are plain
+    /// b-trees, so they stay listed.
     pub fn list_raw_table_names(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            "SELECT name, rootpage, sql FROM sqlite_master \
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
         )?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
 
         let mut names = Vec::new();
         for row in rows {
-            names.push(row?);
+            let (name, rootpage, sql) = row?;
+            if rootpage != 0 && !declares_virtual_table(sql.as_deref().unwrap_or("")) {
+                names.push(name);
+            }
         }
         Ok(names)
     }
@@ -331,11 +350,7 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(&format!("SELECT * FROM {ident} LIMIT ?1 OFFSET ?2"))?;
-        let columns: Vec<String> = stmt
-            .column_names()
-            .iter()
-            .map(|c| (*c).to_string())
-            .collect();
+        let columns: Vec<String> = stmt.column_names().map(str::to_string).collect();
         let column_count = columns.len();
         let mapped = stmt.query_map(params![limit, offset], |row| {
             let mut values = Vec::with_capacity(column_count);

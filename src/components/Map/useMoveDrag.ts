@@ -7,7 +7,7 @@ import {
   type MutableRefObject,
   type RefObject,
 } from 'react';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { TFunction } from 'i18next';
 import type { Station, StationRef } from '../../types/project';
 import type { GpsOrigin } from '../../types/config';

@@ -114,6 +114,20 @@ describe('MeasurePathController', () => {
     expect(layer!.setDataCalls).toBe(1);
   });
 
+  it('clear() frees the GL resources of a layer a worker restart already dropped', () => {
+    const calls = makeFakeMap({ onAdd: 'skip' });
+    const { map } = calls;
+    let onRemoveCalls = 0;
+    const ctrl = new MeasurePathController(map, {
+      makeLayer: (id, d, cb) => Object.assign(new FakeLayer(id, d, cb), { onRemove: () => onRemoveCalls++ }),
+    });
+    ctrl.setPath(renderData(1, 1), []);
+    calls.dropLayer('survey-measure-path-custom');
+    ctrl.clear();
+    expect(calls.removed).toEqual([]);
+    expect(onRemoveCalls).toBe(1);
+  });
+
   it('clears the layer on clear()', () => {
     const calls = makeFakeMap({ onAdd: 'skip' });
     const { map } = calls;

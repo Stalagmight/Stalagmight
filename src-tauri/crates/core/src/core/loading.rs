@@ -13,6 +13,7 @@ use ts_rs::TS;
 
 use crate::core::events::{self, EventSink, IpcEvent, LoadingProgressEvent};
 use crate::models::CommandErrorCode;
+use crate::persistence::RefusedSchemaObject;
 
 // ============================================================================
 // LoadError
@@ -118,6 +119,25 @@ impl LoadError {
     /// The `path` is stored in `details` so the frontend can offer recovery options.
     pub fn corrupt(message: impl Into<String>, path: &str) -> Self {
         Self::with_details(CommandErrorCode::Corrupt, message, path)
+    }
+
+    /// The open was refused because the file's database schema holds something
+    /// Stalagmight never creates (a view, trigger or virtual table, or an object
+    /// named like a SQLite pragma), so it was changed by another program and
+    /// could run its own commands if opened (#608). `path` rides in `details`.
+    pub fn unsafe_file(refused: &RefusedSchemaObject, path: &str) -> Self {
+        Self::with_details(
+            CommandErrorCode::UnsafeFile,
+            format!(
+                "This file was not opened: it contains {} named \"{}\". Stalagmight \
+                 never creates these, so the file was changed by another program, and \
+                 opening it could let it run its own database commands. Your other \
+                 projects are not affected.",
+                refused.what,
+                refused.display_name()
+            ),
+            path,
+        )
     }
 
     /// Error when the OS denied filesystem access to the file - e.g. macOS
@@ -238,6 +258,12 @@ pub(crate) fn is_path_not_found(err: &anyhow::Error) -> bool {
         }
     }
     false
+}
+
+/// The schema refusal inside an open error, if that is why the open failed.
+pub(crate) fn refused_schema(err: &anyhow::Error) -> Option<&RefusedSchemaObject> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<RefusedSchemaObject>())
 }
 
 /// True if any cause carries SQLite's errno-free `SQLITE_CANTOPEN` message -
@@ -1279,5 +1305,69 @@ mod tests {
             &serde_json::to_value(&create).expect("serialize create result"),
             "CreateProjectFullResult",
         );
+    }
+}
+
+#[cfg(test)]
+mod unsafe_file_tests {
+    #![expect(clippy::unwrap_used, reason = "test assertions")]
+
+    use super::{refused_schema, LoadError};
+    use crate::models::{CommandErrorCode, Project};
+    use crate::persistence::Database;
+
+    /// A real refused open of a file carrying a view whose name hides a
+    /// right-to-left override: the load error is UNSAFE_FILE, names what was
+    /// found, and shows the override as `?` rather than echoing it.
+    #[test]
+    fn a_hostile_schema_becomes_an_unsafe_file_error_with_a_safe_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("crafted.stalx");
+        Database::open(&path)
+            .unwrap()
+            .save_project(&Project::new("Crafted".to_string(), None))
+            .unwrap();
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE VIEW \"evil\u{202E}txt\" AS SELECT 1;")
+            .unwrap();
+
+        let Err(err) = Database::open_existing(&path) else {
+            unreachable!("a file with a view must be refused");
+        };
+        let refused = refused_schema(&err).unwrap();
+        let load = LoadError::unsafe_file(refused, &path.display().to_string());
+
+        assert_eq!(load.code, CommandErrorCode::UnsafeFile);
+        assert!(
+            load.message.contains("a view named \"evil?txt\""),
+            "{}",
+            load.message
+        );
+        assert!(!load.message.contains('\u{202E}'));
+        assert_eq!(
+            load.details.as_deref(),
+            Some(path.display().to_string().as_str())
+        );
+    }
+
+    /// The production load maps a schema refusal to UNSAFE_FILE before the
+    /// permission and corruption classifiers can claim it. Guarded by order in
+    /// the source: the load needs a Wry AppHandle no unit test has (the idiom of
+    /// `the_production_load_refuses_a_managed_file_before_it_opens_the_database`).
+    #[test]
+    fn the_production_load_reports_a_refused_schema_as_unsafe_file() {
+        let src = include_str!("state/project_load.rs");
+        let start = src.find("fn do_load_project_full").unwrap();
+        let body = &src[start..];
+        // The open's error arm: the refusal check, then (in the same arm) the
+        // permission and corruption classifiers it must run ahead of.
+        let open = body.find("Database::open_existing(&path)").unwrap();
+        let arm = &body[open..];
+        let refused = arm.find("loading::refused_schema(&e)").unwrap();
+        let unsafe_file = arm.find("LoadError::unsafe_file(").unwrap();
+        let permission = arm.find("loading::is_permission_denied(&e)").unwrap();
+        let corrupt = arm.find("LoadError::corrupt(").unwrap();
+        assert!(refused < unsafe_file && unsafe_file < permission && permission < corrupt);
     }
 }

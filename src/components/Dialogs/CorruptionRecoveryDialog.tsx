@@ -154,7 +154,10 @@ export default function CorruptionRecoveryDialog() {
     // with no result, which renders an empty body (#576 NF-W12FS-1).
     let cancelled = false;
     try {
-      const data = await invokeIpc('export_salvageable_data', { path: filePath }, {
+      // [#576 W30-5] This read no longer feeds the message (the write below
+      // answers the counts of what it wrote). It stays so that a file the
+      // backend cannot open at all fails here, before a destination is asked.
+      await invokeIpc('export_salvageable_data', { path: filePath }, {
         purpose: 'salvage data from corrupt database',
       });
 
@@ -177,19 +180,20 @@ export default function CorruptionRecoveryDialog() {
       // [#576 HFI-3] The backend writes the file (the full project JSON, else
       // the sections JSON), behind the write-path policy: the webview's fs
       // plugin has no scope for user paths, so writing it here always failed.
-      await invokeIpc('write_salvaged_data', { path: filePath, destPath }, {
+      // [#576 W30-5] The counts and warnings of the salvage that was written.
+      const written = await invokeIpc('write_salvaged_data', { path: filePath, destPath }, {
         purpose: 'write salvaged data from corrupt database',
       });
 
       const parts: string[] = [];
-      if (data.sectionCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.sections', { count: data.sectionCount }));
-      if (data.shotCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.shots', { count: data.shotCount }));
-      if (data.mergeCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.merges', { count: data.mergeCount }));
+      if (written.sectionCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.sections', { count: written.sectionCount }));
+      if (written.shotCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.shots', { count: written.shotCount }));
+      if (written.mergeCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.merges', { count: written.mergeCount }));
       const summary = parts.length > 0 ? parts.join(', ') : t('dialogs.corruptionRecovery.salvage.noData');
 
       let message = t('dialogs.corruptionRecovery.salvage.savedTo', { path: destPath, summary });
-      if (data.errors.length > 0) {
-        message += `\n\n${t('dialogs.corruptionRecovery.salvage.warnings', { list: data.errors.map(e => `  - ${e}`).join('\n') })}`;
+      if (written.errors.length > 0) {
+        message += `\n\n${t('dialogs.corruptionRecovery.salvage.warnings', { list: written.errors.map(e => `  - ${e}`).join('\n') })}`;
       }
 
       setResult({

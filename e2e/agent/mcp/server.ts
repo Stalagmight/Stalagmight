@@ -57,6 +57,16 @@ function textResult(value: unknown): ToolResult {
 function errorResult(message: string): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }], isError: true };
 }
+/**
+ * A tool's result capped at 16 KB, folded through the corpus redaction FIRST
+ * (#576 RV18-W23-6), as `record` folds before its own cap. `textResult` folds
+ * the answer again, but a cut through a corpus name leaves a stub no fold
+ * recognises, and the agent was handed its start. (The action log was not:
+ * `record` keeps the first 4 KB of a result.)
+ */
+function capFolded(value: unknown): { value: unknown; truncated: boolean } {
+  return capJson(redactCorpusValue(value), 16384);
+}
 /** Every error the server records or returns, worded publishably (#576 RV12-F1). */
 function asMessage(err: unknown): string {
   return publishableErrorMessage(err);
@@ -700,7 +710,7 @@ define(
   { testid: z.string().optional(), selector: z.string().optional() },
   (args) =>
     run('element_state', args, async () => ({
-      result: capJson(await session.exclusive(() => queryElementState(session.browser, args)), 16384),
+      result: capFolded(await session.exclusive(() => queryElementState(session.browser, args))),
     })),
 );
 
@@ -741,7 +751,7 @@ define('eval', 'Run an async function body in the webview (page context) and ret
     'eval',
     args,
     async () => ({
-      result: capJson(await session.exclusive(() => evalInApp(session.browser, args.script, args.args ?? [])), 16384),
+      result: capFolded(await session.exclusive(() => evalInApp(session.browser, args.script, args.args ?? []))),
     }),
     { sweep: true },
   ),
@@ -755,7 +765,7 @@ define('ipc', 'Invoke a Tauri command from the webview (e.g. get_recent_logs_sin
     'ipc',
     args,
     async () => ({
-      result: capJson(await session.exclusive(() => invokeInApp(session.browser, args.command, args.args)), 16384),
+      result: capFolded(await session.exclusive(() => invokeInApp(session.browser, args.command, args.args))),
     }),
     { sweep: true },
   ),
@@ -985,7 +995,7 @@ define(
           }
           return raced;
         });
-        return { result: capJson(value, 16384) };
+        return { result: capFolded(value) };
       },
       { sweep: true },
     ),

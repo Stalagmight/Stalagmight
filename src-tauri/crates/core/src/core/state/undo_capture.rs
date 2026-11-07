@@ -435,14 +435,14 @@ impl AppState {
                 }
             }
 
-            // For station comment, inverse is restoring the previous comment
+            // For station comment, inverse is restoring the previous comment:
+            // the station's whole comment, every key that names it joined
+            // (#576 W30-NF1), as the forward command replaces all of them.
             Command::SetStationComment {
                 station_ref,
                 comment: _,
             } => {
-                let previous_comment = project
-                    .key_for_ref(*station_ref)
-                    .and_then(|key| project.station_comments.get(&key).cloned());
+                let previous_comment = AppState::station_comment(project, *station_ref);
                 UndoData::InverseCommand(Command::SetStationComment {
                     station_ref: *station_ref,
                     comment: previous_comment,

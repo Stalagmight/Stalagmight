@@ -23,7 +23,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Profiler, type ReactNode } from 'react';
 import { act, render, renderHook } from '@testing-library/react';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 
 // maplibre-gl touches `window.URL.createObjectURL` at module init, which jsdom
 // lacks. The subjects import it for types only.

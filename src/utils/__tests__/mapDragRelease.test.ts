@@ -83,7 +83,7 @@ describe('attachDragReleaseForwarder', () => {
     const withoutHandleEvent = {
       getCanvasContainer: map.getCanvasContainer.bind(map),
       dragPan: { isActive: () => true },
-      handlers: {},
+      _handlers: {},
     } as unknown as MaplibreMap;
     const chrome = document.createElement('button');
     document.body.appendChild(chrome);

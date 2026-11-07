@@ -1,5 +1,5 @@
 import type { Map as MaplibreMap, MapMouseEvent } from 'maplibre-gl';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { LoopClosure, Section, SectionId, ShotId, Station, StationRef } from '../../types/project';
 import type { Config, GpsOrigin, DecimalPrecision } from '../../types/config';
 import type { RouteLeg } from '../../types/ipc.generated';
@@ -9,7 +9,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { selectActiveSurveyData } from '../../store/geometrySelectors';
 import { surveyDataFromLegacy } from '../../types/survey-data';
-import { hasLiveStyle } from './mapUtils';
+import { canWriteStyle, hasLiveStyle } from './mapUtils';
 import { mapCursorFor } from './mapCursor';
 import {
   normalizeDepthRange,
@@ -40,6 +40,7 @@ import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity
 import { SurveyCustomController, buildCustomDimState } from './surveyLayer/customRender/controller';
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { MeasurePathController } from './surveyLayer/customRender/measurePathController';
+import { isStyleRestoring } from './surveyLayer/customRender/styleRestore';
 import { syncMeasurePath } from './surveyLayer/measurePathSync';
 import { trackMoveEndNav, trackZoomEndNav } from './surveyLayer/navTelemetry';
 import type { SurveyData } from '../../types/survey-data';
@@ -210,7 +211,8 @@ export default class SurveyLayer {
   } | null = null;
   private updateScheduled = false;
   /** The latest flush that landed while the map had no style (a lost WebGL
-   *  context), replayed once the context is back (#576 D38). */
+   *  context) or a rebuilt one was loading, replayed once the custom layers are
+   *  back (#576 D38). */
   private updateWhileStyleless: FlushArgs | null = null;
   /** Detach for the WebGL context-loss recovery (glContextRecovery.ts). */
   private detachGlContextWatch: (() => void) | null = null;
@@ -383,9 +385,10 @@ export default class SurveyLayer {
     // The custom layers bake devicePixelRatio into their device-pixel sizes, so a
     // DPR change (window dragged to a different-scale monitor) must rebuild them.
     this.dprWatcherDispose = watchDevicePixelRatio(() => this.handleDprChange());
-    // MapLibre drops every custom layer on a WebGL context loss and never re-adds
-    // them; bring them back on restore (#576 D38). Bottom to top: the order the
-    // recovery falls back to if it has no layer-order snapshot.
+    // MapLibre drops every custom layer when it rebuilds the style (a WebGL
+    // context loss or a worker restart) and never re-adds them; bring them back
+    // once the rebuilt style has loaded (#576 D38, #606). Bottom to top: the
+    // order a layer with no place in the layer-order snapshot goes back in.
     this.detachGlContextWatch = watchGlContextLoss(map, {
       layers: () =>
         [this.customRender, this.measurePath, this.customLabels, this.dragGhost].filter(
@@ -398,10 +401,11 @@ export default class SurveyLayer {
   }
 
   /**
-   * After a WebGL context restore the custom layers are back with the data they
-   * held at the loss, but anything that arrived meanwhile bailed on the missing
-   * style. Re-run the last flush - the one the lost window swallowed, if any - so
-   * geometry, labels, the measured path and the overlays match the store again.
+   * After a style rebuild the custom layers are back with the data they held at
+   * the loss, but anything that arrived meanwhile bailed on the missing style or
+   * was held back while the rebuilt one loaded. Re-run the last flush - the one
+   * the window swallowed, if any - so geometry, labels, the measured path and the
+   * overlays match the store again.
    */
   private replayAfterContextRestore(): void {
     const args: FlushArgs | null =
@@ -436,6 +440,9 @@ export default class SurveyLayer {
     applyGasRoute(this.map, this.gasRouteLegs, this.cachedStations, this.gpsOrigin);
     this.lastInteractKey = null;
     this.refreshInteractOverlay();
+    // A measured path set or cleared while the style was gone never reached the
+    // measure-path layer (its sync bails without a style).
+    this.syncCustomMeasurePath();
   }
 
   /**
@@ -1922,10 +1929,11 @@ export default class SurveyLayer {
    * closures and the interact overlay's station layer hide with the stations, the
    * interact overlay's shot layers with the shots - a hover/selection highlight
    * must not surface a hidden feature (#mem). Skipped while the WebGL context is
-   * lost (no style); replayAfterContextRestore re-applies it (#576 NF-MAP-5).
+   * lost (no style) and while a rebuilt style loads (it refuses the writes);
+   * replayAfterContextRestore re-applies it (#576 NF-MAP-5, RV18-MAP-1).
    */
   private applyStockVisibility(): void {
-    if (!hasLiveStyle(this.map)) return;
+    if (!canWriteStyle(this.map)) return;
     const stations = this.stationsVisible ? 'visible' : 'none';
     const shots = this.shotsVisible ? 'visible' : 'none';
     this.map.setLayoutProperty(AUX_IDS.loopClosuresLayerId, 'visibility', stations);
@@ -2144,8 +2152,10 @@ export default class SurveyLayer {
   ): void {
     // Early bail when the map is gone or its style has been torn down - the
     // coalescer's queueMicrotask can race with MapCanvas unmount → map.remove().
-    // A lost WebGL context also has no style: keep the args for the restore.
-    if (!hasLiveStyle(this.map)) {
+    // A lost WebGL context also has no style, and while a rebuilt style loads
+    // (context or worker restore) no layer can be added: keep the args for the
+    // restore to replay.
+    if (isStyleRestoring(this.map) || !hasLiveStyle(this.map)) {
       this.updateWhileStyleless = [sections, stations, loopClosures, gpsOrigin, showDepthGradient,
         depthRange, precision, showIssueSeverity, warnings];
       return;

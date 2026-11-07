@@ -178,3 +178,15 @@ mod write_path_match_tests;
               values are the evidence a run captures"
 )]
 mod write_path_tests;
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "test module: the printed verdicts are the evidence a run captures"
+)]
+mod write_path_windows_refusal_tests;
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "test module: the printed verdicts are the evidence a run captures"
+)]
+mod write_path_windows_tests;

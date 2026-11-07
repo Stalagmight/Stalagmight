@@ -57,7 +57,7 @@ export interface FakeMapOptions {
   /**
    * Give the map a DOM canvas container (appended to `document.body`, jsdom only)
    * plus the drag state the release forwarder reads: `dragPan.isActive()` answers
-   * `dragActive` (default true), and `handlers.handleEvent` is present unless
+   * `dragActive` (default true), and `_handlers.handleEvent` is present unless
    * `withHandlers` is false.
    */
   dom?: FakeMapDomOptions;
@@ -110,7 +110,7 @@ export interface FakeMap {
   dropLayer(id: string): void;
 }
 
-/** What a `dom` fake adds: the canvas container, the canvas inside it, and `handlers.handleEvent`. */
+/** What a `dom` fake adds: the canvas container, the canvas inside it, and `_handlers.handleEvent`. */
 export interface FakeMapDom {
   canvasContainer: HTMLDivElement;
   canvas: HTMLCanvasElement;
@@ -227,7 +227,7 @@ export function makeFakeMap(options: FakeMapOptions = {}): FakeMap {
     const handleEvent = vi.fn();
     map.getCanvasContainer = () => canvasContainer;
     map.dragPan = { isActive: () => dragActive };
-    if (withHandlers) map.handlers = { handleEvent };
+    if (withHandlers) map._handlers = { handleEvent };
     const dom: FakeMapDom = { canvasContainer, canvas, handleEvent };
     return Object.assign(fake, dom);
   }

@@ -183,13 +183,14 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
       this.disabledReason = 'program-link-failed';
       return;
     }
-    // Reset the glyph texture handle so uploadAtlas does a fresh texImage2D.
-    // onAdd runs again when the controller re-adds this layer after a GL context
-    // restore (glContextRecovery.ts); the old texture belongs to the dead
-    // context, so drop any stale handle (uploadBuffers already rebuilds the glyph
-    // buffers unconditionally via freeGpu -- this is the texture's matching
-    // reset). Without it, uploadAtlas' `!this.tex` + `sizeChanged` guards would
-    // skip the upload and the custom labels would silently fail to re-appear.
+    // Reset the glyph texture handle so uploadAtlas does a fresh texImage2D on
+    // every add, including the controller's re-add after MapLibre rebuilt the
+    // style without this layer (a GL context restore or a worker restart;
+    // glContextRecovery.ts). A handle from an earlier add may belong to a dead
+    // context (uploadBuffers already rebuilds the glyph buffers unconditionally
+    // via freeGpu -- this is the texture's matching reset). Without it,
+    // uploadAtlas' `!this.tex` + `sizeChanged` guards would skip the upload and
+    // the custom labels would silently fail to re-appear.
     this.tex = null;
     this.texWidth = 0;
     this.texHeight = 0;

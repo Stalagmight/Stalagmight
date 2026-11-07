@@ -83,6 +83,7 @@ import {
 import { resolveHaloColors, type LabelStyleInputs } from './labelStyle';
 import { SurveyCustomLabelLayer, type LabelRenderData } from './surveyCustomLabelLayer';
 import { CUSTOM_LABELS_SYNC_HOOK } from './labelsGate';
+import { addCustomLayer, isStyleRestoring, reAddCustomLayer, removeCustomLayer } from './styleRestore';
 
 /** Same off-the-render-stack deferral as the geometry controller. Used both for
  *  the fail-safe restore and to coalesce camera-settle viewport rebuilds. */
@@ -959,7 +960,7 @@ export class SurveyLabelController {
     const layer = new SurveyCustomLabelLayer(this.layerId, data, (reason) => this.handleSelfDisable(reason));
     layer.setStyleInputs(this.computeStyle());
     // No beforeId: the label layer draws on top (labels above geometry + overlays).
-    this.map.addLayer(layer);
+    addCustomLayer(this.map, layer);
     if (layer.isDisabled()) {
       // FATAL: the custom label layer cannot draw (no WebGL2 / shader link
       // failure). There is NO stock fallback - remove the dead layer and route
@@ -969,7 +970,7 @@ export class SurveyLabelController {
         `[customRender] custom label layer failed to initialize (${reason}); ` +
           'survey labels unavailable',
       );
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      removeCustomLayer(this.map, layer);
       this.layer = null;
       this.fatal = true;
       this.setActive(false); // active was never true here, so this does not fire.
@@ -985,16 +986,18 @@ export class SurveyLabelController {
   }
 
   /**
-   * Re-add the live label layer after a WebGL context restore (MapLibre never
-   * re-adds custom layers; see surveyLayer/glContextRecovery.ts). Its onAdd
-   * re-uploads the glyph buffers and atlas from the layer's data. A re-add that
-   * cannot draw is fatal, as on enable. No-op when nothing was drawing.
+   * Re-add the live label layer after MapLibre rebuilt the style without it (a
+   * WebGL context restore or a worker restart; see
+   * surveyLayer/glContextRecovery.ts). Its onAdd re-uploads the glyph buffers
+   * and atlas from the layer's data (reAddCustomLayer first frees what a worker
+   * restart left behind). Without a `beforeId` it goes on top, as on enable. A
+   * re-add that cannot draw is fatal, as on enable. No-op when nothing was
+   * drawing.
    */
-  reattach(beforeId: string | undefined): void {
+  reattach(beforeId?: string): void {
     const layer = this.layer;
     if (!this.active || !layer || this.destroyed || this.fatal) return;
-    this.map.addLayer(layer, beforeId);
-    if (layer.isDisabled()) {
+    if (!reAddCustomLayer(this.map, layer, beforeId)) {
       this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
       return;
     }
@@ -1010,7 +1013,7 @@ export class SurveyLabelController {
    *  restore). Safe when already inactive. Non-fatal teardown only (destroy). */
   private teardown(): void {
     this.setActive(false);
-    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.map.triggerRepaint();
   }
@@ -1031,7 +1034,8 @@ export class SurveyLabelController {
    * not the stock-restoring {@link teardown}.
    */
   private handleSelfDisable(reason: string): void {
-    if (!this.active || this.selfDisableScheduled) return;
+    // A lost context fails every GL call; the restore's re-add rebuilds the layer.
+    if (!this.active || this.selfDisableScheduled || isStyleRestoring(this.map)) return;
     this.selfDisableScheduled = true;
     console.warn(
       `[customRender] custom label layer self-disabled (${reason}); survey labels unavailable`,
@@ -1055,9 +1059,9 @@ export class SurveyLabelController {
   private tearDownFatal(reason: string): void {
     this.fatal = true;
     // The style is gone when the map was removed or lost its WebGL context before
-    // this deferred teardown ran: MapLibre took the layer with it, and getLayer
-    // reads the missing style and throws (#576 NF-MAP-3).
-    if (hasLiveStyle(this.map) && this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    // this deferred teardown ran: MapLibre took the layer with it (its onRemove
+    // ran), so there is nothing left to remove (#576 NF-MAP-3).
+    if (hasLiveStyle(this.map)) removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.active = false; // set directly: onActiveChange must NOT fire (no republish).
     this.map.triggerRepaint();

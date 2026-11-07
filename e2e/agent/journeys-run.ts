@@ -20,6 +20,7 @@ import { createSession } from './createSession';
 import { listJourneys, getJourney } from './journeys';
 import { runJourney, type JourneyResult } from './journeys/framework';
 import { findingsSummary, runSweep, newOracleState, type Finding } from './lib/oracles';
+import { shareableErrorText } from './lib/shareableFailure';
 import { callStoreAction } from './lib/stores';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -178,6 +179,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W23-NF2): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });

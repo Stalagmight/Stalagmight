@@ -1,7 +1,7 @@
 //! The one-shot Ariane adoption (#214): take the project's write mutex, download its
 //! `.tml`-only dump, import the `ariane.tml` through the TML importer into a fresh
 //! cache `.stalx`, stamp the hand-off link, push it with its Ariane sidecar, release
-//! the mutex, flip the server project type ariane->other, and close so the webview's
+//! the mutex, flip the server project type ariane->stalagmight, and close so the webview's
 //! own load is a real load.
 //!
 //! Split out of `core/state/speleodb_pull.rs` (#157 file-size ratchet) into a
@@ -15,7 +15,9 @@
 use std::path::Path;
 
 use super::session_commit::CommandsHeld;
-use super::speleodb::{local_dto, lock_held_by_me, type_says_managed, validate_project_id, DumpAt};
+use super::speleodb::{
+    local_dto, lock_held_by_me, managed_type_patch, type_says_managed, validate_project_id, DumpAt,
+};
 use super::speleodb_pull::{unopenable_to_error, UnopenableDump};
 use super::{AppState, VirtualShotMode};
 use crate::core::command::{CommandResult, ImportReceipt};
@@ -185,7 +187,7 @@ enum AdoptLock {
 /// same response carries `active_mutex` - so reading the holder here costs nothing
 /// and replaces a guess the hand-over could not make for itself.
 struct AdoptFinalize {
-    /// Whether the project is typed `other` on the way out.
+    /// Whether the project is typed `stalagmight` on the way out.
     type_flipped: bool,
     /// Who the server says holds the write mutex.
     ///
@@ -200,7 +202,7 @@ impl AdoptFinalize {
     /// The verdict for a push that never landed: nothing was asked, so nothing is
     /// known. `type_flipped: false` is the honest answer rather than a failure -
     /// the flip is deliberately not attempted until the bytes are up, because a
-    /// project typed `other` whose only file is the Ariane one that type says to
+    /// project typed `stalagmight` whose only file is the Ariane one that type says to
     /// disregard is openable by nobody.
     const fn not_attempted() -> Self {
         Self {
@@ -218,7 +220,7 @@ impl AppState {
     /// dump, import its `ariane.tml` through the existing TML importer, save a new
     /// `.stalx` at the same cache path a pull would use, stamp the hand-off link,
     /// push it with its Ariane sidecar, release the mutex, flip the server project
-    /// `type` ariane→other, and close so the webview's own load is a real load.
+    /// `type` ariane→stalagmight, and close so the webview's own load is a real load.
     ///
     /// It DOES push - that is the point of taking the lock first, and of taking it
     /// before the download rather than after the import. Only the routes that cannot
@@ -560,9 +562,9 @@ impl AppState {
         // further up closes before them.
         let (verdict, upload) = {
             let lock_ops = self.speleodb_lock_ops_guard();
-            // Make sure the server project ends up typed `other`, and report whether it
+            // Make sure the server project ends up typed `stalagmight`, and report whether it
             // did. Only after a landed push, which is the precondition either way:
-            // flipping first leaves a project typed `other` whose only file is the Ariane
+            // flipping first leaves a project typed `stalagmight` whose only file is the Ariane
             // one that type says to disregard, openable by nobody. [#576 A8] By type: the
             // settle takes the hand-over's `AdoptLanded` and this span's proof.
             //
@@ -788,7 +790,7 @@ impl AppState {
         }
     }
 
-    /// Leave the server project typed `other`, and report both what it ended up
+    /// Leave the server project typed `stalagmight`, and report both what it ended up
     /// typed and who the server says holds its write mutex.
     ///
     /// Called only after a landed push, and it is a READ first: the push's own type
@@ -838,9 +840,11 @@ impl AppState {
     ) -> AdoptFinalize {
         let (needs_flip, mut holder) =
             match client::get_project(endpoint, token, insecure_http, project_id) {
-                // Already `other`: the push's heal got there first, which is the ordinary
-                // path. Nothing to do, and nothing to report but success - but the holder
-                // still comes back, because the release verdict needs it either way.
+                // Already `stalagmight`: the push's heal got there first, which is the
+                // ordinary path. (A legacy `other` is not managed - SpeleoDB never maps
+                // it - so it falls through to the PATCH below.) Nothing to do, and nothing
+                // to report but success - but the holder still comes back, because the
+                // release verdict needs it either way.
                 Ok(fetched) if type_says_managed(Some(&fetched.kind)) => {
                     return AdoptFinalize {
                         type_flipped: true,
@@ -853,7 +857,7 @@ impl AppState {
                 // "already managed" - so a project whose metadata changed mid-run was
                 // reported flipped with the server left on the other type. We converted
                 // this project; whatever the label says now, the artefact up there is a
-                // `.stalx` and `other` is the truthful type for it.
+                // `.stalx` and `stalagmight` is the truthful type for it.
                 Ok(fetched) => (true, Some(fetched.active_mutex.map(|m| m.user))),
                 Err(e) => {
                     tracing::info!(
@@ -873,7 +877,7 @@ impl AppState {
             token,
             insecure_http,
             project_id,
-            r#"{"type":"other"}"#,
+            &managed_type_patch(),
         ) {
             Ok(patched) => {
                 // The PATCH echoes the project back, mutex included - so where the GET
@@ -895,7 +899,7 @@ impl AppState {
                 tracing::warn!(
                     error = %e,
                     project_id,
-                    purpose = "flip SpeleoDB project type ariane->other on adopt",
+                    purpose = "flip SpeleoDB project type ariane->stalagmight on adopt",
                     "speleodb_adopt_ariane: type flip failed (likely no write access); adopted locally"
                 );
                 false
@@ -2758,7 +2762,7 @@ mod tests {
         );
     }
 
-    /// A project typed `other` whose only file is the Ariane one that type says to
+    /// A project typed `stalagmight` whose only file is the Ariane one that type says to
     /// disregard is openable by nobody, so the type is settled only after a push that
     /// LANDED. [#576 A8] Was a source scan of the verb's gate; the gate is the only
     /// maker of `AdoptLanded`, which the settle takes.
@@ -2837,16 +2841,16 @@ mod tests {
         );
     }
 
-    /// The project as the server describes it to the settle: typed `other`, unlocked.
-    const ADOPTED_AS_OTHER: &str =
-        r#"{"id":"77777777-7777-7777-7777-777777777777","name":"Adopted","type":"other"}"#;
+    /// The project as the server describes it to the settle: typed `stalagmight`, unlocked.
+    const ADOPTED_AS_STALAGMIGHT: &str =
+        r#"{"id":"77777777-7777-7777-7777-777777777777","name":"Adopted","type":"stalagmight"}"#;
 
     /// The settle's GET fails on every attempt; its PATCH lands.
     fn the_type_cannot_be_read(line: &str) -> (u16, &'static str) {
         if line.starts_with("GET ") {
             (503, "")
         } else {
-            (200, ADOPTED_AS_OTHER)
+            (200, ADOPTED_AS_STALAGMIGHT)
         }
     }
 
@@ -2902,10 +2906,10 @@ mod tests {
     /// "the type could not be changed" about a project whose type had just changed.
     #[test]
     fn a_type_the_push_already_flipped_costs_one_get_and_no_patch() {
-        fn already_other(_line: &str) -> (u16, &'static str) {
-            (200, ADOPTED_AS_OTHER)
+        fn already_stalagmight(_line: &str) -> (u16, &'static str) {
+            (200, ADOPTED_AS_STALAGMIGHT)
         }
-        let (base, _listener, seen) = routing_stub(already_other);
+        let (base, _listener, seen) = routing_stub(already_stalagmight);
         let state = AppState::new().expect("state");
         let lock_ops = state.speleodb_lock_ops_guard();
         let finalized = state.adopt_finalize(
@@ -2918,7 +2922,7 @@ mod tests {
         );
         let seen = seen.lock().expect("request log").clone();
         println!(
-            "already other -> flipped {}, holder {:?}; requests {seen:?}",
+            "already stalagmight -> flipped {}, holder {:?}; requests {seen:?}",
             finalized.type_flipped, finalized.holder
         );
         assert!(finalized.type_flipped);
@@ -2943,14 +2947,14 @@ mod tests {
         fn held_by_another(_line: &str) -> (u16, &'static str) {
             (
                 200,
-                r#"{"id":"77777777-7777-7777-7777-777777777777","name":"Adopted","type":"other",
+                r#"{"id":"77777777-7777-7777-7777-777777777777","name":"Adopted","type":"stalagmight",
                     "active_mutex":{"user":"other@x"}}"#,
             )
         }
         fn held_by_us(_line: &str) -> (u16, &'static str) {
             (
                 200,
-                r#"{"id":"77777777-7777-7777-7777-777777777777","name":"Adopted","type":"other",
+                r#"{"id":"77777777-7777-7777-7777-777777777777","name":"Adopted","type":"stalagmight",
                     "active_mutex":{"user":"u@x"}}"#,
             )
         }

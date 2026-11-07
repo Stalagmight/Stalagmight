@@ -54,7 +54,9 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock('maplibre-gl', () => ({
-  default: { Map: h.FakeMap, addProtocol: h.state.addProtocol, removeProtocol: h.state.removeProtocol },
+  Map: h.FakeMap,
+  addProtocol: h.state.addProtocol,
+  removeProtocol: h.state.removeProtocol,
 }));
 vi.mock('@tauri-apps/api/core', async () => (await import('../../../test/factories/tauri')).tauriCore(vi.fn()));
 
@@ -157,7 +159,7 @@ describe('Android tile protocol', () => {
     registerTileProtocol(); // app start (main.tsx)
     const a = factory.createSurveyMap(SURFACES.survey!);
     factory.createSurveyMap(SURFACES.global!);
-    a.remove(); // leaving a project used to unregister it
+    a!.remove(); // leaving a project used to unregister it
     factory.createSurveyMap(SURFACES.preview!);
     expect(h.state.addProtocol).toHaveBeenCalledTimes(1);
     expect(h.state.addProtocol.mock.calls[0]![0]).toBe('stalagmight-tiles');

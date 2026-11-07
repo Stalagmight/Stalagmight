@@ -123,6 +123,14 @@ jobs:
           fi
         env:
           TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
+      # The verify job's `cargo test --workspace` checks the SQLite strip
+      # (LIBSQLITE3_FLAGS, from .cargo/config.toml) on Linux only, but the
+      # flags work by a later -U cancelling libsqlite3-sys's own -D, which each
+      # platform's C compiler (MSVC on Windows) must honour. Check it with this
+      # leg's compiler before anything ships (#608).
+      - name: Bundled SQLite compile options (this platform)
+        shell: bash
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib -- --exact persistence::sqlite::tests::bundled_sqlite_omits_virtual_table_modules_and_extension_loading
       # v0.5.0-rc1 shipped a .app that macOS refused to open as "damaged". The
       # cause was an absent signature rather than a corrupt download: with no
       # signing identity Tauri skips codesign entirely, leaving only the Rust

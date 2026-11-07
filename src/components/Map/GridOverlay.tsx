@@ -1,9 +1,9 @@
 import { useEffect, useRef, useCallback } from 'react';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import { metersToMapCoords } from '../../utils/coordinates';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { hasLiveStyle, BOTTOM_SURVEY_LAYERS } from './mapUtils';
+import { canWriteStyle, hasLiveStyle, BOTTOM_SURVEY_LAYERS } from './mapUtils';
 import { getThemeColor } from '../../utils/themeColors';
 import type { GpsOrigin } from '../../types/config';
 
@@ -104,7 +104,9 @@ export default function GridOverlay({ map, gpsOrigin, styleEpoch = 0 }: GridOver
   // Add/update grid layer
   useEffect(() => {
     // No style while the WebGL context is lost: reading it throws (#576 NF-MAP-5).
-    if (!map || !hasLiveStyle(map)) return;
+    // A rebuilt style that has not loaded yet holds no grid and refuses the add
+    // (RV18-MAP-1); styleEpoch runs this again once it has loaded.
+    if (!map || !canWriteStyle(map)) return;
 
     const sourceId = 'grid-source';
     const layerId = 'grid-lines';

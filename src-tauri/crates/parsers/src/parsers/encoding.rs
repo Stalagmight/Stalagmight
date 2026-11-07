@@ -65,8 +65,8 @@ pub(crate) fn strip_bom_owned(mut bytes: Vec<u8>) -> Result<Vec<u8>> {
 pub(crate) enum FileFamily {
     /// Ariane `.tmlu` and GPX: XML, the largest real files on record (a 57 MB
     /// Ariane `Data.xml`; multi-day GPS logs reach hundreds of MB). The
-    /// zipped `.tml`'s `Data.xml` has the same ceiling on what it decompresses
-    /// to (`tml::decode`).
+    /// zipped `.tml` archive is capped at it too, and so is what its `Data.xml`
+    /// decompresses to (`tml::decode`).
     Xml,
     /// Compass `.DAT` and `.MAK` (and every `.DAT` a `.MAK` links), Walls
     /// `.SRV` and `.WPJ`: survey text, typically a few MB, which decodes to up
@@ -91,7 +91,7 @@ impl FileFamily {
     /// The family as the refusal names it.
     fn description(self) -> &'static str {
         match self {
-            Self::Xml => "XML survey files (.tmlu, .gpx)",
+            Self::Xml => "XML survey files (.tml, .tmlu, .gpx)",
             Self::SurveyText => "survey text files (.DAT, .MAK, .SRV, .WPJ)",
             Self::Dmp => "mNemo .dmp files",
         }
@@ -114,7 +114,7 @@ impl FileFamily {
 }
 
 /// The refusal for a file over `limit`, in the words every capped reader uses.
-fn too_large(path: &Path, family: FileFamily, limit: u64) -> anyhow::Error {
+pub(crate) fn too_large(path: &Path, family: FileFamily, limit: u64) -> anyhow::Error {
     anyhow!(
         "'{}' is larger than the {} limit for {}; it was not read.",
         path.display(),
@@ -134,25 +134,53 @@ pub(crate) fn describe_byte_limit(bytes: u64) -> String {
     }
 }
 
-/// The metadata of `path`, or a refusal when it is not a regular file (#576
-/// B27(g)): opening a FIFO for reading blocks until somebody writes, and a
-/// device may never end. Checked before anything opens the path, so a reader
-/// that streams instead of reading whole (the zipped `.tml`) refuses the same
-/// paths [`read_capped`] does.
-pub(crate) fn regular_file_metadata(path: &Path) -> Result<std::fs::Metadata> {
-    let metadata =
-        std::fs::metadata(path).with_context(|| format!("reading {}", path.display()))?;
-    if !metadata.is_file() {
-        bail!(
-            "'{}' is not a regular file (a folder, device or pipe), so it was not read.",
-            path.display()
-        );
+/// Open `path` for reading, with its metadata, or refuse it when it is not a
+/// regular file (#576 B27(g)): reading a FIFO blocks until somebody writes, and
+/// a device may never end. The type is checked on the OPENED handle (`fstat`),
+/// and every caller reads through that handle and never opens the path again
+/// (#576 W30-7d): checking the path and then opening it left a window in which
+/// a FIFO swapped in after the check blocked the open. On unix the open is
+/// non-blocking (`O_NONBLOCK`), so opening a FIFO returns at once instead of
+/// waiting for a writer; the flag has no effect on reads of a regular file,
+/// the only kind handed back. A reader that streams instead of reading whole
+/// (the zipped `.tml`) refuses the same paths [`read_capped`] does.
+pub(crate) fn open_regular_file(path: &Path) -> Result<(std::fs::File, std::fs::Metadata)> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NONBLOCK);
     }
-    Ok(metadata)
+    let file = match options.open(path) {
+        Ok(file) => file,
+        // Windows will not open a folder at all, nor unix a socket: name either
+        // the way the check below does rather than as an access error. Only the
+        // wording of a refusal rests on this look at the path; nothing is read.
+        Err(_) if std::fs::metadata(path).is_ok_and(|metadata| !metadata.is_file()) => {
+            return Err(not_a_regular_file(path));
+        }
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("reading {}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(not_a_regular_file(path));
+    }
+    Ok((file, metadata))
+}
+
+/// The refusal for a path that is not a regular file.
+fn not_a_regular_file(path: &Path) -> anyhow::Error {
+    anyhow!(
+        "'{}' is not a regular file (a folder, device or pipe), so it was not read.",
+        path.display()
+    )
 }
 
 /// Read a whole file for an importer (#576 B27(g)). Anything that is not a
-/// regular file is refused before it is opened - a FIFO or a device would
+/// regular file is refused before a byte is read - a FIFO or a device would
 /// block the read, or never end it - and so is a file larger than its
 /// family's [`FileFamily::byte_limit`], with a message naming the limit. The
 /// read itself is capped too, so a file that grows after the size check
@@ -164,14 +192,14 @@ pub(crate) fn read_capped(path: &Path, family: FileFamily) -> Result<Vec<u8>> {
 /// [`read_capped`] with the limit spelled out, so a test can exercise it
 /// without writing the real ceiling's worth of bytes.
 fn read_with_limit(path: &Path, family: FileFamily, limit: u64) -> Result<Vec<u8>> {
-    let metadata = regular_file_metadata(path)?;
+    let (file, metadata) = open_regular_file(path)?;
     if metadata.len() > limit {
         return Err(too_large(path, family, limit));
     }
     // Within the limit, so a safe size to reserve up front.
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    std::fs::File::open(path)
-        .and_then(|file| file.take(limit.saturating_add(1)).read_to_end(&mut bytes))
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
         .with_context(|| format!("reading {}", path.display()))?;
     if bytes.len() as u64 > limit {
         return Err(too_large(path, family, limit));
@@ -198,13 +226,11 @@ fn stream_with_limit(
     limit: u64,
     mut consume: impl FnMut(&[u8]),
 ) -> Result<u64> {
-    let metadata = regular_file_metadata(path)?;
+    let (file, metadata) = open_regular_file(path)?;
     if metadata.len() > limit {
         return Err(too_large(path, family, limit));
     }
-    let mut reader = std::fs::File::open(path)
-        .with_context(|| format!("reading {}", path.display()))?
-        .take(limit.saturating_add(1));
+    let mut reader = file.take(limit.saturating_add(1));
     let mut buffer = vec![0u8; 64 * 1024];
     let mut streamed = 0u64;
     loop {
@@ -314,7 +340,7 @@ pub(crate) fn read_utf8(path: &Path, family: FileFamily) -> Result<String> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod tests {
     use super::*;
 
@@ -438,11 +464,11 @@ mod tests {
         assert!(err.contains("not a regular file"), "{err}");
     }
 
-    /// A FIFO is refused before it is opened - opening one for reading blocks
-    /// until somebody writes, which nobody will.
+    /// A FIFO is refused before it is read - reading one blocks until
+    /// somebody writes, which nobody will.
     #[cfg(unix)]
     #[test]
-    fn a_capped_read_refuses_a_fifo_without_opening_it() {
+    fn a_capped_read_refuses_a_fifo_without_reading_it() {
         let dir = tempfile::tempdir().unwrap();
         let fifo = dir.path().join("pipe.dat");
         let status = std::process::Command::new("mkfifo")
@@ -459,7 +485,7 @@ mod tests {
 
     /// #576 RV3-R-11: the duplicate-import hash streams the file - every byte,
     /// in order, across many chunks - and refuses what the capped readers
-    /// refuse: one byte over the limit, a folder, a FIFO (without opening it).
+    /// refuse: one byte over the limit, a folder, a FIFO (without reading it).
     #[test]
     fn a_streamed_import_file_is_whole_and_capped() {
         let dir = tempfile::tempdir().unwrap();
@@ -492,7 +518,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_streamed_import_file_refuses_a_fifo_without_opening_it() {
+    fn a_streamed_import_file_refuses_a_fifo_without_reading_it() {
         let dir = tempfile::tempdir().unwrap();
         let fifo = dir.path().join("pipe.tml");
         fifo_test_support::make_fifo(&fifo);
@@ -508,6 +534,52 @@ mod tests {
                 .as_deref()
                 .is_some_and(|err| err.contains("not a regular file")),
             "{outcome:?}"
+        );
+    }
+
+    /// #576 W30-7d: the check and the read share one handle. The base checked
+    /// the PATH and then opened it again, so a FIFO swapped in between blocked
+    /// that second open. Now the read goes through the handle the check was
+    /// made on - the file that was there - and opening the swapped-in FIFO is
+    /// refused at once rather than waiting for a writer.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_swapped_in_after_the_check_cannot_block_the_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cave.dat");
+        std::fs::write(&path, b"#UNITS").unwrap();
+
+        let (file, metadata) = open_regular_file(&path).unwrap();
+        println!(
+            "check on the regular file: is_file = {}",
+            metadata.is_file()
+        );
+        std::fs::remove_file(&path).unwrap();
+        fifo_test_support::make_fifo(&path);
+        println!("swapped a FIFO in at the checked path");
+
+        let read = fifo_test_support::within_five_seconds(&path, move || {
+            let mut text = String::new();
+            file.take(1024)
+                .read_to_string(&mut text)
+                .map(|_| text)
+                .map_err(|e| e.to_string())
+        });
+        println!("read through the checked handle: {read:?}");
+        assert_eq!(read, Some(Ok("#UNITS".to_string())));
+
+        let swapped = path.clone();
+        let reopened = fifo_test_support::within_five_seconds(&path, move || {
+            open_regular_file(&swapped)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        });
+        println!("open_regular_file on the swapped-in FIFO: {reopened:?}");
+        assert!(
+            reopened
+                .as_ref()
+                .is_some_and(|r| r.as_ref().is_err_and(|e| e.contains("not a regular file"))),
+            "opening a FIFO must return at once with the refusal, got {reopened:?}"
         );
     }
 

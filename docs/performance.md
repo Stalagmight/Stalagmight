@@ -422,19 +422,23 @@ tessellation entirely.
 **Reprojection with a GPS origin** goes through `metersToMapCoords`
 (`src/utils/coordinates.ts`), once per station in every full rebuild, label
 build and hit-index rebuild. Since #576 D36 it inverts the backend's WGS84
-projection exactly - two Bowring ECEF-to-geodetic inversions and one forward
-projection per point (6 `atan2`, 8 `sin`/`cos`, 3 `sqrt`) - instead of the old
-6371 km sphere. Measured under Node 26 / V8 (vitest, one worker, origin
-(20.5, -87.3), 400 000 calls, medians of 5 runs over 3 rounds): 0.16-0.19 us per
-call, against 0.05-0.06 us for the pre-D36 code - about +10 ms per full pass on
-an 89 000-station project, likely more on WebKit. A scalar rewrite with the
-per-origin products hoisted, no intermediate objects and only the `up` component
-computed in the middle step returned bit-identical results on 200 000 random
-inputs but measured the same (0.17 us): V8 already removes the allocations and
-hoists the memoised origin frame, and the transcendental calls an exact inverse
-needs are the cost. It was not applied. If a large GPS-referenced project shows
-this pass in a profile, measure it in the app first; the remaining levers change
-results (an approximate inverse) or the call shape (one batch inverse per data
+projection instead of the old 6371 km sphere, and since #576 GEO-D1 it does so
+with the backend's exact solve (`local_to_gps` in geo.rs): one quadratic for
+where the origin's vertical meets the ellipsoid, then the closed-form latitude
+of a surface point - 2 `atan2`, 1 `sqrt` and 1 `hypot` per point, the origin's
+trig memoised. The D36 inverse it replaced was an approximation (two Bowring
+ECEF-to-geodetic inversions and one forward projection per point: 6 `atan2`,
+8 `sin`/`cos`, 3 `sqrt`). Measured under Node 26 / V8 (vitest, one worker,
+origin (20.5, -87.3), 400 000 calls over a 20 km square, medians of 5 runs over
+3 rounds, both versions in the same run): 0.080-0.084 us per call for the exact
+solve, against 0.185-0.200 us for the D36 approximation and 0.05-0.06 us for
+the pre-D36 sphere (measured earlier) - about +2 ms per full pass on an
+89 000-station project over the sphere, likely more on WebKit. The
+transcendental calls are the cost: an earlier scalar rewrite of the D36 code
+with no intermediate objects measured the same as the original, as V8 already
+removes the allocations and hoists the memoised origin frame. If a large
+GPS-referenced project shows this pass in a profile, measure it in the app
+first; the remaining lever changes the call shape (one batch inverse per data
 build).
 
 **Label builds** (`customRender/labelController.ts`) do glyph shaping plus a

@@ -51,8 +51,9 @@ impl std::fmt::Display for StationRef {
 // [#576 NF-W12BE-3] The derived order is load-bearing: the variants sort in
 // declaration order, so the canonical anchors (`SectionStart`, `AfterShot` by
 // shot UUID) come before the transitional `Index`. When two stored keys name one
-// station, the one that sorts first is the one read (see
-// `Project::compute_station_coordinates_with_progress`).
+// station, the offset of the one that sorts first is the one read (see
+// `Project::resolved_station_offsets`); the station's comments are joined, as the
+// save joins them (#576 W30-6, `Project::compute_station_coordinates_with_progress`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum StationAnchor {
     SectionStart,

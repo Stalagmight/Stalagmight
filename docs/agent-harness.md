@@ -967,12 +967,17 @@ counted), and `writeTrace` / `readTrace` refuse a step that names a file inside
 a corpus copy any other way - without quoting it. What the APP echoes back - an
 import error quoting the path it was handed - is folded by one per-process list
 (`fixtureCorpus.redactCorpusText`, filled as entries are copied, each name
-also in its JSON- and Rust-`{:?}`-escaped forms, #576 RV16-1) that the
+matched in every form JSON and Rust's `{:?}` write it in, at any depth: a
+quote or backslash escaped, any control or non-ASCII character as itself,
+`\u{hex}` or `\uXXXX`, #576 RV16-1, RV17-1; percent-encoded as a `file://`
+URL writes it, and in both Unicode normal forms, NFC and NFD, RV18-W23-5 - but
+not a change of case, an HTML entity, base64 or a part of a name) that the
 scenario's failure message, `agent:scenario`'s FAIL/findings lines,
 `fuzz-shrink`'s output, the sweep's findings (`findings/` JSON included), every
 line of the session's `actions.jsonl` (a tool's params and result, its error,
 events; the recorder folds each line, and the MCP server folds a result before
-capping it) and every MCP tool result and error all pass through
+each cap - the 16 KB one too, as the fuzzer folds a stall's error line before
+cutting it, RV18-W23-6) and every MCP tool result and error all pass through
 (`redactCorpusValue` folds a value string by string), and so does every
 `state/` snapshot the recorder writes (`Recorder.writeState`; a store snapshot
 taken after a corpus import carries the copy's path). Not covered, because they
@@ -984,15 +989,70 @@ the UI prints one. No report or trace embeds them - `report.md` names the
 trace carries no image - so look at one before you publish it. Attach the
 trace and the printed failure, not the session directory.
 
-**A finding's text stays in the session directory (#576 HFI2-F2).** A
-`log-warn` / `log-error` finding's message is the app's log line, and the app's
-lines name the data they are about - a section, a project, a station - which no
-corpus fold knows. So the PASS/FAIL line of `agent:scenario`, `agent:scenarios`
-and `agent:journeys` prints findings as counts per severity, kind and code
-(`findings={"warning:log-warn@stalagmight_parsers::tml":2}`; a log finding's
-code is its line's log target, `oracles.logLineCode`), and `report.md` names a
-log finding by that target and withholds the line. The text is in the
-session's `actions.jsonl` and `findings/`, for triage where the run happened.
+**What a run shares carries codes, counts and code locations (#576 HFI2-F2,
+W21-NF1, W21-NF2).** The app's text names the data it is about - a section, a
+project, a station - which no corpus fold knows: a log line, a panic message,
+the error boundary's text, `check_project_integrity` messages, an IPC rejection
+that quotes its arguments, an undo diff's values, a leftover temp file's name.
+So every artifact meant for an issue keeps only codes, counts and code
+locations:
+
+- The PASS/FAIL line of `agent:scenario`, `agent:scenarios` and
+  `agent:journeys` prints findings as counts per severity, kind and code
+  (`findings={"warning:log-warn@stalagmight_parsers::tml":2}`; a log finding's
+  code is its line's log target, `oracles.logLineCode`).
+- A scenario that threw prints `FAIL: <name> threw:`, its headline, the
+  `reproduce:` and `trace:` lines, diff paths (`at project.sections[3].name`)
+  and classifier ids, and one count line for each run of other lines
+  (`lib/shareableFailure.ts`). It is fail-closed: a line is kept only if its
+  shape is one the harness writes, so a new oracle that quotes the app is
+  covered. An `ipc <command>:` / `eval:` / `javascript error:` headline keeps
+  the prefix and the length of the app's text. Every line it keeps has the
+  checkout folded to `<repo>` and the home directory to `~`
+  (`foldLocalPaths`), so a `reproduce:` line's fixture path or a session
+  directory in a headline does not name the user.
+- A fuzz trace's `failure` is that form, with the signature of that form.
+  `fuzz-shrink` prints that shareable signature and checks it against the
+  trace header; ddmin still compares full signatures, in memory.
+- A scenario's progress lines (`   . <line>`) print in the headline form
+  (`shareableProgressLine`): folded, and the app's text after a `<what>
+  failed:` prefix replaced by its length. A scenario reports the app's text in
+  a progress line only at the end of such a line; `shareableRunnerOutput.test.ts`
+  checks every value a `ctx.log` call interpolates against the list of harness
+  values (counts, seeds, ids, paths) or that rule. The full line is a
+  `scenario-progress` event in `actions.jsonl`.
+- A harness crash - a runner's `fatal:` line, `fuzz-shrink`'s `shrink
+  failed:` - prints the error's name, its headline in the same form, and its
+  stack frames, folded; the other lines of its message are counted
+  (`shareableErrorText`). A crash in session setup can carry an IPC rejection
+  or a page script's error, so the raw stack is not printed.
+- `fuzz-matrix` prints a failed cell's FAIL block as the child wrote it. For
+  a cell that died without one, it prints the last lines of the child's output
+  fail-closed (`shareableTail`): the session and verdict lines, progress lines
+  and crash headlines in the forms above, stack frames, and one count line for
+  each run of other lines (an uncaught error Node printed itself, a build's
+  output).
+- `findings/<n>/finding.json` and `report.md` carry the shareable projection
+  of each finding (`scripts/lib/shareable-finding.mjs`): a panic's `file:line`
+  and thread but only its message's length, the error boundary's text length,
+  the number of integrity messages, leftover temp files counted by suffix, a
+  log finding named by its target.
+- `report.md`'s steps give an `ipc` / `store_action` call's argument shapes,
+  not its values (`rename_station({oldName: string(9), newName: string(9)})`:
+  field-name keys, string lengths, value types, array lengths; only a boolean
+  or null keeps its value, and a key that is not a lowercase-led identifier is
+  only counted), and a `type_text` step the length of its text (#576
+  RV18-W23-3).
+
+**Not for sharing** - the full text, for triage where the run happened: the
+session's `actions.jsonl` (each `finding` event with its detail, each
+`scenario-failure` event with the whole failure message, each
+`scenario-progress` event with the whole progress line), the screenshots
+(`screenshots/`, `findings/<n>/screenshot.png`), the crash-marker copies in
+`findings/<n>/`, the `state/` snapshots, `tauri-driver.log`, and the app's own
+log files. `report.md`'s Evidence list still names `actions.jsonl` and
+`tauri-driver.log` for whoever triages the run, labelled local triage only, not
+for sharing (#576 RV18-W23-7).
 
 **`corpusId` labels; `corpusHash` resolves.** The 5-hex crc20 is 20 bits, which
 is ample for telling two files apart in one run's output and far too little to

@@ -1,38 +1,59 @@
 /**
- * Bring the survey map's custom WebGL layers back after a WebGL context loss
- * (#576 D38).
+ * Bring the custom WebGL layers back after MapLibre rebuilt the style without
+ * them (#576 D38, #606).
  *
- * A GPU reset, a driver crash, some sleep/resume cycles and WebKit memory
- * pressure all lose the context. maplibre-gl 5.16 then serializes the style
- * WITHOUT its custom layers (`_serializedAllLayers` skips `type === 'custom'`),
- * destroys it (custom layers get `onRemove`) and, on `webglcontextrestored`,
- * re-applies only that serialized style. It never re-adds a custom layer - it
- * warns "cannot be restored after WebGL context loss. You will need to re-add it
- * manually" - so every survey layer (geometry, labels, measured-path tint, drag
- * ghost) stayed gone until the map was remounted.
+ * MapLibre 6 rebuilds the style from `style.serialize()`, which skips custom
+ * layers, on two paths (customRender/styleRestore.ts has the event sequence):
  *
- * This module re-adds them. The layer objects survive the loss with their data
- * (their `onRemove` only drops GL handles), so re-adding the SAME object makes
- * MapLibre run its `onAdd` again, which recompiles the programs and re-uploads
- * the buffers from that data on the new context.
+ * - a WebGL context loss (a GPU reset, a driver crash, some sleep/resume cycles,
+ *   WebKit memory pressure): on the canvas's `webglcontextlost` it serializes the
+ *   style, destroys it (custom layers get `onRemove`) and, on
+ *   `webglcontextrestored`, re-applies the copy;
+ * - a worker restart (`_handleWorkersRestarted`, after the window becomes visible
+ *   and a worker misses a ping): it serializes the style, fires a synthetic map
+ *   `webglcontextlost` and `webglcontextrestored`, and swaps the copy in WITHOUT
+ *   calling `onRemove`, so the dropped layers still own live GL objects.
  *
- * Z-order: the layer order is snapshotted just before MapLibre tears the style
- * down - in the capture phase on the canvas container, which runs before
- * MapLibre's own `webglcontextlost` listener on the canvas itself - and each
- * custom layer is re-inserted before the first layer that followed it then and
- * is on the map now ({@link reattachInOrder}).
+ * Either way the copy loads one frame later (`style.load`), and MapLibre never
+ * re-adds a custom layer - it warns "cannot be restored after WebGL context loss.
+ * You will need to re-add it manually" - so every survey layer (geometry, labels,
+ * measured-path tint, drag ghost) and the Global View's survey stayed gone until
+ * the map was remounted.
+ *
+ * This module re-adds them. The layer objects survive with their data (their
+ * `onRemove` only drops GL handles), so re-adding the SAME object makes MapLibre
+ * run its `onAdd` again, which recompiles the programs and re-uploads the
+ * buffers from that data on the live context. Each controller re-adds through
+ * `reAddCustomLayer`, which first frees what a worker restart left behind.
+ *
+ * Timing is styleRestore.ts's per-map tracker (one set of map listeners): the
+ * re-add runs on the `style.load` that follows the restore. Until then
+ * `isStyleRestoring` is true, so a layer a controller adds in that window is held
+ * back (`addCustomLayer`) and goes back here with the others.
+ *
+ * Z-order: the layer order is snapshotted while the old style is still alive -
+ * for a context loss in the capture phase on the canvas container, which runs
+ * before MapLibre's own `webglcontextlost` listener on the canvas itself; for a
+ * worker restart, which has no canvas event, on the map's `webglcontextlost`,
+ * when the old style is still in place. Each custom layer is re-inserted before
+ * the first layer that followed it then and is on the map now
+ * ({@link reattachInOrder}); a layer that was not on the map at the snapshot
+ * (held back during the rebuild) goes where a fresh add puts it.
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
+import { onStyleRestored } from './customRender/styleRestore';
 
 /** A controller that owns one custom layer and can re-add it. */
 export interface ReattachableLayer {
   /** The custom layer's id on the map. */
   readonly layerId: string;
   /**
-   * Re-add the live layer object before `beforeId` (undefined: on top). No-op
+   * Re-add the live layer object before `beforeId`, its successor in the
+   * pre-rebuild order; undefined: where a fresh add puts it (none of its
+   * successors is on the map, or it was not on the map at the snapshot). No-op
    * when the controller has nothing drawing.
    */
-  reattach(beforeId: string | undefined): void;
+  reattach(beforeId?: string): void;
 }
 
 /**
@@ -70,12 +91,14 @@ export function reattachInOrder(
 }
 
 export interface GlContextRecoveryOptions {
-  /** The custom layers to bring back, read when the context comes back. */
+  /** The custom layers to bring back, bottom to top, read when the style is back. */
   layers: () => readonly ReattachableLayer[];
   /**
-   * Runs just before MapLibre serializes and destroys the style, while it is
-   * still alive - the last chance to put style state right that should survive
-   * into the restored copy.
+   * Puts right style state that should survive into the rebuilt copy. On a
+   * context loss it runs just before MapLibre serializes and destroys the style,
+   * while it is still alive. A worker restart serializes before it says anything,
+   * so there it runs on the rebuilt style once it has loaded, before the layers go
+   * back.
    */
   beforeLoss?: () => void;
   /** Runs once the custom layers are back: replay what changed meanwhile. */
@@ -83,59 +106,78 @@ export interface GlContextRecoveryOptions {
 }
 
 /**
- * Watch `map` for a WebGL context loss and restore the custom layers when the
- * context comes back. Returns the detach function.
+ * Watch `map` for a style rebuild (a WebGL context loss or a worker restart) and
+ * restore the custom layers once the rebuilt style has loaded. Returns the detach
+ * function.
  */
 export function watchGlContextLoss(map: MaplibreMap, opts: GlContextRecoveryOptions): () => void {
   const container = map.getCanvasContainer();
   let order: string[] | null = null;
+  /** The order was taken (and beforeLoss run) for the loss under way. */
+  let snapshotTaken = false;
+  /** A worker restart: beforeLoss runs on the rebuilt style. */
+  let beforeLossOwed = false;
   let lost = false;
-  let pendingStyleLoad: (() => void) | null = null;
 
-  const snapshot = (): void => {
+  const takeOrder = (): string[] | null => {
     try {
-      order = map.getLayersOrder();
+      return map.getLayersOrder();
     } catch {
-      order = null; // no style to snapshot: nothing custom is on it either
+      return null; // no style to snapshot: nothing custom is on it either
     }
+  };
+
+  // A context loss: the canvas event, before MapLibre serializes and destroys the style.
+  const onCanvasLost = (): void => {
+    // A second loss before the rebuilt style loaded (#576 RV18-MAP-2): the style
+    // in place is still empty (its layer order is `[]`) and refuses writes, so
+    // keep the order and the put-right from the last loaded style for whatever
+    // brings a style back.
+    if (lost) return;
+    order = takeOrder();
+    snapshotTaken = true;
     opts.beforeLoss?.();
   };
 
+  // MapLibre's map event, on both paths. A worker restart had no canvas event and
+  // its old style is still in place: take the order from it now.
+  const onLoss = (): void => {
+    if (!snapshotTaken) {
+      order = takeOrder();
+      snapshotTaken = true;
+      beforeLossOwed = true;
+    }
+    lost = true;
+  };
+
   const reattach = (): void => {
-    pendingStyleLoad = null;
     if (!lost) return;
     lost = false;
-    const owners = new Map(opts.layers().map((l) => [l.layerId, l]));
+    snapshotTaken = false;
+    if (beforeLossOwed) {
+      beforeLossOwed = false;
+      opts.beforeLoss?.();
+    }
+    const layers = opts.layers();
+    const owners = new Map(layers.map((l) => [l.layerId, l]));
     const snapshot = order;
     order = null;
     if (snapshot) reattachInOrder(snapshot, owners, (id) => Boolean(map.getLayer(id)));
-    // Without a snapshot, fall back to each layer's insertion order on top.
-    else for (const owner of owners.values()) owner.reattach(undefined);
+    // A layer that was not on the map at the snapshot (held back while the style
+    // was being rebuilt), or every layer without a snapshot: where a fresh add
+    // puts it, bottom to top.
+    for (const owner of layers) {
+      if (!snapshot?.includes(owner.layerId)) owner.reattach(undefined);
+    }
     opts.afterRestore();
     map.triggerRepaint();
   };
 
-  const onLost = (): void => {
-    lost = true;
-  };
-
-  // MapLibre restores by re-applying the serialized style, which loads on the
-  // NEXT frame; adding a layer before that throws "Style is not done loading".
-  const onRestored = (): void => {
-    if (!lost || pendingStyleLoad) return;
-    pendingStyleLoad = reattach;
-    map.once('style.load', reattach);
-  };
-
-  container.addEventListener('webglcontextlost', snapshot, true);
-  map.on('webglcontextlost', onLost);
-  map.on('webglcontextrestored', onRestored);
+  container.addEventListener('webglcontextlost', onCanvasLost, true);
+  const unsubscribe = onStyleRestored(map, reattach, onLoss);
 
   return () => {
-    container.removeEventListener('webglcontextlost', snapshot, true);
-    map.off('webglcontextlost', onLost);
-    map.off('webglcontextrestored', onRestored);
-    if (pendingStyleLoad) map.off('style.load', pendingStyleLoad);
-    pendingStyleLoad = null;
+    container.removeEventListener('webglcontextlost', onCanvasLost, true);
+    unsubscribe();
   };
 }

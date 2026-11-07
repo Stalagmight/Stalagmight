@@ -12,8 +12,8 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Context, Result};
 
 use crate::parsers::encoding::{
-    cp1252_char, describe_byte_limit, describe_replaced_count, read_capped, regular_file_metadata,
-    strip_bom_owned, FileFamily,
+    cp1252_char, describe_byte_limit, describe_replaced_count, open_regular_file, read_capped,
+    strip_bom_owned, too_large, FileFamily,
 };
 
 // ============================================================================
@@ -52,18 +52,45 @@ pub(super) fn load_xml(path: &Path) -> Result<LoadedXml> {
 /// is untrusted input and a deflate stream can otherwise expand without bound.
 const MAX_DATA_XML_BYTES: u64 = FileFamily::Xml.byte_limit();
 
+/// Most bytes the `.tml` archive itself may hold (#576 W30-7c): the XML
+/// family's ceiling again, refused in the words every capped reader uses.
+/// Checked before the ZIP reader sees the file, so a huge archive is not
+/// parsed at all.
+const MAX_TML_ARCHIVE_BYTES: u64 = FileFamily::Xml.byte_limit();
+
+/// Most entries a `.tml` archive may hold (#576 W30-7c). A real one holds
+/// `Data.xml` and nothing else (docs/ariane-import.md); 10 000 is the ceiling
+/// the SpeleoDB dump reader puts on an archive of a handful of files
+/// (`speleodb::dump::MAX_ENTRIES`), orders of magnitude of headroom while
+/// still bounding the walk over the entry names. The check necessarily lands
+/// AFTER `ZipArchive::new`, which parses the whole central directory eagerly -
+/// the `zip` crate exposes no hook to bound that - so it caps what follows the
+/// parse; only [`MAX_TML_ARCHIVE_BYTES`] bounds the parse itself.
+const MAX_TML_ENTRIES: usize = 10_000;
+
 /// Extract `Data.xml` from a ZIP archive.
 fn load_xml_from_zip(path: &Path) -> Result<LoadedXml> {
-    load_xml_from_zip_capped(path, MAX_DATA_XML_BYTES)
+    load_xml_from_zip_capped(path, MAX_TML_ARCHIVE_BYTES, MAX_DATA_XML_BYTES)
 }
 
-/// `load_xml_from_zip` with the decompression cap spelled out, so a test can
-/// exercise the limit without building half a gigabyte.
-fn load_xml_from_zip_capped(path: &Path, cap: u64) -> Result<LoadedXml> {
-    // A FIFO would block the open itself (#576 B27(g)).
-    regular_file_metadata(path)?;
-    let file = fs::File::open(path).context("Failed to open TML file")?;
+/// `load_xml_from_zip` with the archive-size cap and the decompression cap
+/// spelled out, so a test can exercise them without building half a gigabyte.
+fn load_xml_from_zip_capped(path: &Path, archive_limit: u64, cap: u64) -> Result<LoadedXml> {
+    // Checked on the handle the archive is then read through, so a FIFO
+    // swapped in after the check cannot block the read (#576 B27(g), W30-7d).
+    let (file, metadata) = open_regular_file(path)?;
+    if metadata.len() > archive_limit {
+        return Err(too_large(path, FileFamily::Xml, archive_limit));
+    }
     let mut archive = zip::ZipArchive::new(file).context("Failed to read TML as ZIP archive")?;
+    let entries = archive.len();
+    if entries > MAX_TML_ENTRIES {
+        bail!(
+            "'{}' is a ZIP archive of {entries} entries, over the {MAX_TML_ENTRIES}-entry limit \
+             for a TML file; it was not read.",
+            path.display()
+        );
+    }
 
     let entry_name = find_data_entry(&archive)
         .ok_or_else(|| anyhow!("TML archive does not contain 'Data.xml'"))?;
@@ -588,7 +615,7 @@ mod tests {
             "premise: the archive itself is smaller than the cap it blows past"
         );
 
-        let err = load_xml_from_zip_capped(&path, 1024)
+        let err = load_xml_from_zip_capped(&path, MAX_TML_ARCHIVE_BYTES, 1024)
             .unwrap_err()
             .to_string();
         assert!(
@@ -596,7 +623,7 @@ mod tests {
             "the error must name the limit, got {err:?}"
         );
 
-        let loaded = load_xml_from_zip_capped(&path, 512 * 1024).unwrap();
+        let loaded = load_xml_from_zip_capped(&path, MAX_TML_ARCHIVE_BYTES, 512 * 1024).unwrap();
         assert_eq!(loaded.xml.len(), xml.len());
     }
 
@@ -674,5 +701,66 @@ mod tests {
             let err = outcome.unwrap().unwrap_err();
             assert!(err.contains("not a regular file"), "{name}: {err}");
         }
+    }
+
+    /// What a zipped load produced, in words for the test log.
+    fn describe(outcome: Result<LoadedXml>) -> String {
+        match outcome {
+            Ok(loaded) => format!("Ok: read {} bytes of XML", loaded.xml.len()),
+            Err(e) => format!("Err: {e}"),
+        }
+    }
+
+    /// #576 W30-7c: the archive itself is capped before the ZIP reader parses
+    /// it - at the XML family's ceiling, refused in the words every capped
+    /// reader uses. One byte over a (test-sized) cap is refused; at the cap
+    /// the archive is read.
+    #[test]
+    fn a_tml_archive_over_the_size_cap_is_refused_before_it_is_parsed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.tml");
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        write_tml_archive(&path, "Data.xml", xml.as_bytes());
+        let size = fs::metadata(&path).unwrap().len();
+
+        let over = describe(load_xml_from_zip_capped(
+            &path,
+            size - 1,
+            MAX_DATA_XML_BYTES,
+        ));
+        println!("{size}-byte archive, {}-byte cap: {over}", size - 1);
+        let limit = format!(
+            "larger than the {} bytes limit for XML survey files (.tml",
+            size - 1
+        );
+        assert!(
+            over.contains(&limit),
+            "the refusal must name the limit and the family, got {over:?}"
+        );
+
+        let at = load_xml_from_zip_capped(&path, size, MAX_DATA_XML_BYTES).unwrap();
+        assert_eq!(at.xml.len(), xml.len());
+        assert_eq!(MAX_TML_ARCHIVE_BYTES, FileFamily::Xml.byte_limit());
+    }
+
+    /// #576 W30-7c: an archive holding more entries than a `.tml` ever does
+    /// is refused with the limit named - through the production reader and
+    /// its real ceiling, although it holds a perfectly good `Data.xml`.
+    #[test]
+    fn a_tml_archive_with_more_entries_than_the_cap_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.tml");
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        let names: Vec<String> = (0..MAX_TML_ENTRIES).map(|i| format!("pad/{i}")).collect();
+        let mut entries: Vec<(&str, &[u8])> = vec![("Data.xml", xml.as_bytes())];
+        entries.extend(names.iter().map(|name| (name.as_str(), &b""[..])));
+        write_tml_archive_entries(&path, &entries);
+
+        let outcome = describe(load_xml_from_zip(&path));
+        println!("{} entries: {outcome}", entries.len());
+        assert!(
+            outcome.contains("10001 entries") && outcome.contains("10000-entry limit"),
+            "the refusal must name the count and the limit, got {outcome:?}"
+        );
     }
 }

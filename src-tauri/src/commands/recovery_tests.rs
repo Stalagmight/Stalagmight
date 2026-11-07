@@ -18,7 +18,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 use super::recovery;
-use crate::models::Project;
+use crate::models::{Project, SectionData, ShotData, StationRef};
 use crate::persistence::Database;
 
 /// A valid project file named `name` at `path`.
@@ -117,7 +117,10 @@ fn an_unusable_candidate_is_refused_and_the_project_is_untouched() {
 // --- [#576 HFI-3] Export Salvageable Data: the backend writes the file ---------
 
 /// Run the salvage write through the command itself.
-fn write_salvage(project: &Path, dest: &Path) -> Result<(), crate::core::CommandError> {
+fn write_salvage(
+    project: &Path,
+    dest: &Path,
+) -> Result<crate::persistence::SalvageWriteResult, crate::core::CommandError> {
     tauri::async_runtime::block_on(recovery::write_salvaged_data(
         project.to_path_buf(),
         dest.to_path_buf(),
@@ -162,6 +165,76 @@ fn the_salvage_export_writes_the_chosen_file() {
     assert!(std::fs::read_to_string(&dest)
         .unwrap()
         .contains("SalvageMe"));
+}
+
+/// A project with two sections (3 and 2 shots) joined by one station merge,
+/// saved to `path`.
+fn project_with_shots_and_a_merge(path: &Path) {
+    let shot = |azimuth: f64| ShotData {
+        length: 4.0,
+        azimuth_in: azimuth,
+        azimuth_out: (azimuth + 180.0) % 360.0,
+        depth_in: 2.0,
+        depth_out: 2.0,
+        ..Default::default()
+    };
+    let mut project = Project::new("CaveA".to_string(), None);
+    let mut add = |azimuth: f64, shots: usize| {
+        project
+            .add_section(SectionData {
+                shots: (0..shots).map(|_| shot(azimuth)).collect(),
+                ..Default::default()
+            })
+            .id
+    };
+    let (trunk, branch) = (add(0.0, 3), add(90.0, 2));
+    project
+        .merge_stations(StationRef::new(trunk, 2), StationRef::new(branch, 0))
+        .unwrap();
+    Database::open(path)
+        .unwrap()
+        .save_project(&project)
+        .unwrap();
+}
+
+/// [#576 W30-5] The salvage export answers the counts and warnings of the very
+/// salvage it wrote, and the dialog reports those. It answered nothing, and the
+/// dialog reported the counts of its own earlier read: a separate read of a
+/// damaged file, which need not be the one that was written (the file is
+/// damaged; it can read differently twice). Checked on the wire the dialog gets:
+/// the counts equal what the written file holds.
+#[test]
+fn the_salvage_export_answers_the_counts_of_the_file_it_wrote() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("CaveA.stalx");
+    project_with_shots_and_a_merge(&project);
+    let dest = temp.path().join("salvaged.json");
+
+    let answered =
+        tauri::async_runtime::block_on(recovery::write_salvaged_data(project, dest.clone()))
+            .unwrap();
+    let wire = serde_json::to_value(&answered).unwrap();
+
+    let file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&dest).unwrap()).unwrap();
+    let sections = file["sections"].as_array().unwrap();
+    let shots: usize = sections
+        .iter()
+        .map(|section| section["shots"].as_array().unwrap().len())
+        .sum();
+    let merges = file["station_merges"].as_array().unwrap().len();
+    println!("write_salvaged_data answered: {wire}");
+    println!(
+        "the written file holds: {} sections, {shots} shots, {merges} merges",
+        sections.len()
+    );
+    // Premise: the file is the whole project, so a zero count cannot pass.
+    assert_eq!((sections.len(), shots, merges), (2, 5, 1));
+    assert_eq!(wire["sectionCount"], sections.len(), "sectionCount");
+    assert_eq!(wire["shotCount"], shots, "shotCount");
+    assert_eq!(wire["mergeCount"], merges, "mergeCount");
+    // An intact project salvages with no warning; the list is on the wire.
+    assert_eq!(wire["errors"], serde_json::json!([]), "errors");
 }
 
 /// Refused like every other write: the app's own folders, a non-JSON name, and

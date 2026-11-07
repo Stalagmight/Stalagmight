@@ -92,7 +92,10 @@ use std::path::Path;
 /// fenced table, so the carry-forward fence is unaffected, and the persisted
 /// undo payloads keep their meaning (`SectionIdentity` gained an OPTIONAL field,
 /// absent in every pre-v18 entry), so the stacks are NOT dropped.
-const SCHEMA_VERSION: i32 = 18;
+///
+/// Public so readers outside the app (the `stalx-reader` crate) can refuse a
+/// file written by a newer schema instead of misreading it.
+pub const SCHEMA_VERSION: i32 = 18;
 
 /// [#576 B1-D1] The oldest schema this build opens: the one the first public
 /// release (v0.0.3) shipped. A file whose `PRAGMA user_version` - or, when it
@@ -622,6 +625,7 @@ mod open;
 mod read;
 mod repair;
 mod schema;
+mod schema_guard;
 mod settings;
 mod undo;
 mod warnings;
@@ -635,6 +639,9 @@ pub use write::SAVE_PROJECT_TABLES;
 /// How many `resolved_warnings` rows a carry-over will examine (#517). Exported
 /// so a caller's test can size a fixture against the real ceiling instead of
 /// hard-coding a copy of it.
+pub use schema_guard::{
+    check_schema, declares_virtual_table, refused_schema_object, RefusedSchemaObject,
+};
 pub use warnings::MAX_CARRIED_RESOLVED_WARNINGS;
 
 /// A stringified page of rows from a raw sqlite table.
@@ -661,7 +668,8 @@ pub struct BackupInfo {
     /// For [`BackupKind::PreRestore`]: which restore replaced it (1 = the
     /// first), or `None` for the unnumbered copy older builds kept.
     pub restore_number: Option<u32>,
-    /// It opens, passes SQLite's quick integrity check and holds a project -
+    /// It opens, has no schema object every open refuses (#608), passes
+    /// SQLite's quick integrity check and holds a project -
     /// checked the way a restore would install it (with its rollback journal, if
     /// one is beside it), without changing it. The dialog greys out the rest.
     pub usable: bool,
@@ -717,6 +725,21 @@ pub struct SalvagedData {
     pub sections_json: Option<String>,
     /// Full project as JSON (if loadable despite corruption)
     pub full_project_json: Option<String>,
+    /// Errors encountered while reading individual tables
+    pub errors: Vec<String>,
+}
+
+/// What the salvage export wrote (#576 W30-5): the counts and warnings of the
+/// one salvage read whose JSON went into the file. The recovery dialog reports
+/// these, not those of an earlier read: a damaged file can read differently
+/// twice.
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../bindings/")]
+#[serde(rename_all = "camelCase")]
+pub struct SalvageWriteResult {
+    pub section_count: usize,
+    pub shot_count: usize,
+    pub merge_count: usize,
     /// Errors encountered while reading individual tables
     pub errors: Vec<String>,
 }
@@ -873,6 +896,24 @@ mod upgrade_safety_tests;
               values are the evidence a run captures"
 )]
 mod open_order_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod schema_guard_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod sidecar_free_open_tests;
 
 #[cfg(test)]
 #[expect(

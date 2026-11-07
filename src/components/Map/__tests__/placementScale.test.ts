@@ -6,7 +6,7 @@
  * only for the latter; on WGS84 a degree of latitude is 110574-111694 m.
  */
 import { describe, expect, it } from 'vitest';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import { pixelsPerMeterAt } from '../placementScale';
 import { mapCoordsToMeters, metersToMapCoords } from '../../../utils/coordinates';
 

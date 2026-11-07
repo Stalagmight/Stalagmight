@@ -22,6 +22,12 @@ import type { ProjectMetadata } from '../../../types/project';
 import type { SystemGeometry } from '../systemColor';
 import { packCssColor } from '../../Map/surveyLayer/customRender/colorPack';
 import {
+  addCustomLayer,
+  isStyleRestoring,
+  reAddCustomLayer,
+  removeCustomLayer,
+} from '../../Map/surveyLayer/customRender/styleRestore';
+import {
   buildGlobalBuffers,
   recomputeDimFlags,
   recomputeSelectedFlags,
@@ -173,7 +179,7 @@ export class GlobalCustomController {
     // Add at the top of the global map: the only other GL layer is the satellite
     // basemap (below), and the system markers are DOM overlays that always sit
     // above the canvas, so no beforeId anchor is needed.
-    this.map.addLayer(layer);
+    addCustomLayer(this.map, layer);
     if (layer.isDisabled()) {
       // FATAL: the custom layer cannot draw. There is NO stock fallback - remove
       // the dead layer and route to the error state instead of restoring stock.
@@ -182,7 +188,7 @@ export class GlobalCustomController {
         `[globalCustomRender] custom layer failed to initialize (${reason}); ` +
           'survey rendering unavailable',
       );
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      removeCustomLayer(this.map, layer);
       this.layer = null;
       this.fatal = true;
       this.setActive(false); // active was never true here, so this does not fire.
@@ -200,18 +206,19 @@ export class GlobalCustomController {
   }
 
   /**
-   * Re-add the live layer after a WebGL context restore, which MapLibre never
-   * does for a custom layer (see Map/surveyLayer/glContextRecovery.ts). The SAME
-   * layer object goes back, so MapLibre re-runs its onAdd: programs recompile and
-   * buffers re-upload from the layer's data on the new context. A re-add that
-   * cannot draw is the same unrecoverable state as a failed enable. No-op when
-   * nothing was drawing (#576 D38).
+   * Re-add the live layer after MapLibre rebuilt the style without it (a WebGL
+   * context restore or a worker restart; see Map/surveyLayer/glContextRecovery.ts).
+   * The SAME layer object goes back, so MapLibre re-runs its onAdd: programs
+   * recompile and buffers re-upload from the layer's data on the live context
+   * (reAddCustomLayer first frees what a worker restart left behind). Without a
+   * `beforeId` it goes on top, as on enable. A re-add that cannot draw is the
+   * same unrecoverable state as a failed enable. No-op when nothing was drawing
+   * (#576 D38).
    */
-  reattach(beforeId: string | undefined): void {
+  reattach(beforeId?: string): void {
     const layer = this.layer;
     if (!this.active || !layer || this.fatal) return;
-    this.map.addLayer(layer, beforeId);
-    if (layer.isDisabled()) {
+    if (!reAddCustomLayer(this.map, layer, beforeId)) {
       this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
       return;
     }
@@ -225,13 +232,14 @@ export class GlobalCustomController {
     this.setActive(false);
     // Leaving the Global View (or rebuilding it) while its WebGL context is lost:
     // the style, and the layer with it, are already gone (#576 NF-MAP-5).
-    if (hasLiveStyle(this.map) && this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    if (hasLiveStyle(this.map)) removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.map.triggerRepaint();
   }
 
   private handleSelfDisable(reason: string): void {
-    if (!this.active || this.selfDisableScheduled) return;
+    // A lost context fails every GL call; the restore's re-add rebuilds the layer.
+    if (!this.active || this.selfDisableScheduled || isStyleRestoring(this.map)) return;
     this.selfDisableScheduled = true;
     console.warn(
       `[globalCustomRender] custom layer self-disabled (${reason}); survey rendering unavailable`,
@@ -251,9 +259,9 @@ export class GlobalCustomController {
   private tearDownFatal(reason: string): void {
     this.fatal = true;
     // The style is gone when the map was removed or lost its WebGL context before
-    // this deferred teardown ran: MapLibre took the layer with it, and getLayer
-    // reads the missing style and throws (#576 NF-MAP-3).
-    if (hasLiveStyle(this.map) && this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    // this deferred teardown ran: MapLibre took the layer with it (its onRemove
+    // ran), so there is nothing left to remove (#576 NF-MAP-3).
+    if (hasLiveStyle(this.map)) removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.active = false; // set directly: onActiveChange must NOT fire (no republish).
     this.map.triggerRepaint();

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, type MutableRefObject } from 'react';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { Station } from '../../types/project';
 import type { GpsOrigin } from '../../types/config';
 import type { ProjectWarning } from '../../types/commands';
@@ -16,7 +16,7 @@ import { getMapThemeColors } from '../../utils/themeColors';
 import type { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import type SurveyLayer from './SurveyLayer';
 import type { SurveyLayerCallbacks } from './SurveyLayer';
-import { hasLiveStyle } from './mapUtils';
+import { canWriteStyle } from './mapUtils';
 
 // Helper to convert StationRef to highlight ID format (section_id:station_index)
 // Moved outside component to avoid recreating on each render
@@ -168,10 +168,11 @@ export function useSurveyLayerSync({
   }, [resolvedTheme, mapLoaded, surveyLayerRef]);
 
   // Re-apply map background color to match the active theme. Not while the
-  // WebGL context is lost (no style; the write would throw): styleEpoch runs
-  // this again once the restored style has loaded (#576 NF-MAP-5).
+  // WebGL context is lost (no style; the write would throw) nor while a rebuilt
+  // style loads (it refuses the write): styleEpoch runs this again once the
+  // restored style has loaded (#576 NF-MAP-5, RV18-MAP-1).
   useEffect(() => {
-    if (map.current && mapLoaded && hasLiveStyle(map.current)) {
+    if (map.current && mapLoaded && canWriteStyle(map.current)) {
       map.current.setPaintProperty('background', 'background-color', getMapThemeColors().background);
     }
     // map is MapCanvas's useRef object: stable, listed for the linter only.

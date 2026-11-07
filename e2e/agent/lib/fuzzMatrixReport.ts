@@ -16,6 +16,8 @@
  * and one could not be diagnosed at all.
  */
 
+import { shareableTail } from './shareableFailure';
+
 /** Last lines of a run that produced no `FAIL:` line at all (a crash, a timeout). */
 export const TAIL_LINES = 15;
 
@@ -41,8 +43,9 @@ export interface FailureDetailInput {
  * The lines worth keeping from a failed cell.
  *
  * Prefers the FIRST `FAIL:` block, because that is where the scenario put
- * everything it knows; falls back to the tail of all output for a child that
- * died without printing one. Never returns the whole log: a cell streams the
+ * everything it knows (already in the shareable form, `scenarioFailOutput`);
+ * falls back to the shareable tail of all output for a child that died
+ * without printing one (`shareableTail`). Never returns the whole log: a cell streams the
  * scenario's own `   . ` progress lines, and a matrix of 30 of those is not a
  * report.
  */
@@ -54,10 +57,11 @@ export function failureDetail(input: FailureDetailInput): string {
     while (block.length > 0 && (block[block.length - 1] as string).trim() === '') block.pop();
     return block.join('\n');
   }
-  return input.allLines
-    .filter((line) => line.trim())
-    .slice(-TAIL_LINES)
-    .join('\n');
+  // Cut, then projected line by line (#576 W23-NF1): the tail is whatever the
+  // child printed last - its progress lines, an uncaught error, a build's
+  // output - so it is as shareable as the rest of this report only once each
+  // line is one the harness words itself.
+  return shareableTail(input.allLines.filter((line) => line.trim()).slice(-TAIL_LINES));
 }
 
 /**
@@ -120,4 +124,41 @@ export function matrixSummary(
   ];
   if (lost > 0) lines.push(`MATRIX INCOMPLETE: ${lost} of ${cells.length} cell(s) produced no verdict`);
   return lines;
+}
+
+/**
+ * A cell's metrics, read off its PASS line as `scenario-run.ts` prints it: the
+ * JSON after `(<n>ms) `, before an optional ` findings={...}`
+ * (`oracles.findingsSummary`). Anything that does not parse, or is not a finite
+ * number, is no metric.
+ */
+export function parseMetrics(line: string): Record<string, number> {
+  const marker = line.match(/\(\d+ms\)\s/);
+  if (!marker || marker.index === undefined) return {};
+  let json = line.slice(marker.index + marker[0].length);
+  const findingsAt = json.indexOf(' findings=');
+  if (findingsAt >= 0) json = json.slice(0, findingsAt);
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The headline a failed cell reports, from the FAIL line at `failIndex`. A
+ * scenario that THREW prints `FAIL: <name> threw:` and its failure on the next
+ * lines (`shareableFailure.scenarioFailOutput`), so the first non-blank line
+ * after it is the failure's headline; any other FAIL line is its own headline.
+ */
+export function failHeadline(outLines: readonly string[], failIndex: number): string {
+  const failLine = (outLines[failIndex] ?? '').slice('FAIL: '.length).trim();
+  if (!failLine.endsWith('threw:')) return failLine;
+  return `${failLine} ${(outLines.slice(failIndex + 1).find((line) => line.trim()) ?? '').trim()}`;
 }

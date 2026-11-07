@@ -5179,8 +5179,8 @@
         }
       ],
       "result": {
-        "rust": "()",
-        "ts": "null"
+        "rust": "SalvageWriteResult",
+        "ts": "SalvageWriteResult"
       },
       "error": {
         "rust": "CommandError",

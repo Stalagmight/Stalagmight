@@ -4,7 +4,7 @@
  * every hover: a claimed modifier pan and placement.
  */
 import { describe, expect, it } from 'vitest';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { ToolType } from '../../../store/uiStore';
 import { MapCursor, mapCursorFor, resolveMapCursor, type MapCursorInputs } from '../mapCursor';
 
