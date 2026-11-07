@@ -12,6 +12,14 @@
 //! our account holding the lock records the claim (so the quit hands it back);
 //! another holder, or none, drops the mark; a close drops it too.
 //!
+//! [#576 SDB-ACCT-D1] The poll's reopen adopts a lock the account holds (a resumed
+//! claim: the release, not the authorship shortcut) whether or not anything is
+//! marked, so the quit hands it back either way; what the mark adds is the kind of
+//! claim the lost reply cost - this session's acquisition when the probe before the
+//! acquire saw the lock free. And the acquire is marked in every case now: also when
+//! the probe saw our own account holding the lock (W29's narrowing removed), as the
+//! adopted kind.
+//!
 //! Driven against the loopback routing stub; each test has its own static phase,
 //! since the stub routes by a plain `fn`. All data is synthetic, built in code.
 
@@ -69,6 +77,16 @@ impl Phases {
     }
 
     fn answer(&self, line: &str, after: &'static str) -> (u16, &'static str) {
+        self.answer_from(line, FREE_MUTEX_AT_BASE_BODY, after)
+    }
+
+    /// [`Self::answer`] with the holder before the first acquire given (`before`).
+    fn answer_from(
+        &self,
+        line: &str,
+        before: &'static str,
+        after: &'static str,
+    ) -> (u16, &'static str) {
         if is_acquire(line) {
             return if self.acquires.fetch_add(1, Ordering::SeqCst) == 0 {
                 (200, TRUNCATED_PROJECT)
@@ -77,7 +95,7 @@ impl Phases {
             };
         }
         if self.acquires.load(Ordering::SeqCst) == 0 {
-            return (200, FREE_MUTEX_AT_BASE_BODY);
+            return (200, before);
         }
         if is_project_read(line)
             && self.reread_failures.fetch_add(1, Ordering::SeqCst) < REREAD_ATTEMPTS
@@ -165,14 +183,19 @@ fn a_poll_that_finds_our_lock_records_the_claim_and_quit_releases_it() {
     let (_temp, state, seen, _listener) = start_lost_unread(lost_unread_then_ours);
     let was_marked = marked(&state);
     poll(&state, "ours");
-    let (gate, claimed, still_marked) = (
+    let (gate, claimed, taken, still_marked) = (
         state.edit_enabled(),
         state.speleodb_lock_acquired_here(REMOTE_ID),
+        state.speleodb_lock_taken_here(REMOTE_ID),
         marked(&state),
     );
     let released = quit(&state, &seen, "ours");
     assert!(gate, "the gate reopens over our lock");
     assert!(claimed, "and the claim the lost reply cost is recorded");
+    assert!(
+        taken,
+        "as this session's acquisition: the probe saw the lock free"
+    );
     assert_eq!(released, 1, "the quit hands the lock back");
     assert!(
         was_marked && !still_marked,
@@ -187,8 +210,9 @@ fn second_start_then_ours(line: &str) -> (u16, &'static str) {
 }
 
 /// A second Start Editing before any poll takes the lock as inherited (the probe
-/// sees it ours) and opens the gate with no claim; the poll then finds our lock with
-/// the gate open, re-reads it under the lock-ops span, and records the claim.
+/// sees it ours) and opens the gate with an ADOPTED claim (#576 SDB-ACCT-D1); the poll
+/// then finds our lock with the gate open, re-reads it under the lock-ops span, and
+/// records the claim the lost reply cost: this session's acquisition.
 #[test]
 fn a_poll_after_a_second_start_editing_records_the_claim() {
     let (_temp, state, seen, _listener) = start_lost_unread(second_start_then_ours);
@@ -202,13 +226,16 @@ fn a_poll_after_a_second_start_editing_records_the_claim() {
         state.speleodb_lock_acquired_here(REMOTE_ID)
     );
     assert!(
-        again.is_ok() && state.edit_enabled() && !state.speleodb_lock_acquired_here(REMOTE_ID),
-        "editing over an inherited lock, unclaimed"
+        again.is_ok()
+            && state.edit_enabled()
+            && state.speleodb_lock_resumed_here(REMOTE_ID)
+            && !state.speleodb_lock_taken_here(REMOTE_ID),
+        "editing over an inherited lock, adopted (for the release only)"
     );
     poll(&state, "second start");
-    let (claimed, still_marked) = (state.speleodb_lock_acquired_here(REMOTE_ID), marked(&state));
+    let (claimed, still_marked) = (state.speleodb_lock_taken_here(REMOTE_ID), marked(&state));
     let released = quit(&state, &seen, "second start");
-    assert!(claimed, "the poll records the claim");
+    assert!(claimed, "the poll records this session's acquisition");
     assert_eq!(released, 1, "the quit hands the lock back");
     assert!(!still_marked, "the mark is settled");
 }
@@ -228,7 +255,8 @@ fn lost_unread_then_another(line: &str) -> (u16, &'static str) {
 /// Control: the poll finds ANOTHER account holding the lock. The acquire did not
 /// land (or the lock moved on): nothing is claimed and the mark is dropped, so a
 /// later poll that finds the lock ours (taken elsewhere on this account) reopens the
-/// gate as inherited, with no claim, and the quit leaves that lock alone.
+/// gate over an ADOPTED lock (#576 SDB-ACCT-D1: a resumed claim, not this session's
+/// acquisition), and the quit hands that lock back.
 #[test]
 fn a_poll_that_finds_another_holder_drops_the_mark() {
     let (_temp, state, seen, _listener) = start_lost_unread(lost_unread_then_another);
@@ -238,18 +266,20 @@ fn a_poll_that_finds_another_holder_drops_the_mark() {
         "nothing opens, nothing is claimed"
     );
     assert!(!marked(&state), "no mark is left");
-    // Had the mark survived the poll above, this one would claim the lock and the
-    // quit would hand it back: the two asserts below are what prove it was dropped.
+    // Had the mark survived the poll above, this one would record this session's
+    // acquisition: the adopted kind below is what proves it was dropped.
     OTHER_LET_GO.store(true, Ordering::SeqCst);
     poll(&state, "another holder, then ours");
     assert!(
-        state.edit_enabled() && !state.speleodb_lock_acquired_here(REMOTE_ID),
-        "inherited: the gate reopens, unclaimed"
+        state.edit_enabled()
+            && state.speleodb_lock_resumed_here(REMOTE_ID)
+            && !state.speleodb_lock_taken_here(REMOTE_ID),
+        "inherited: the gate reopens over the adopted lock"
     );
     assert_eq!(
         quit(&state, &seen, "another holder"),
-        0,
-        "the quit leaves an inherited lock alone"
+        1,
+        "the quit hands the adopted lock back (#576 SDB-QUIT-D1)"
     );
 }
 
@@ -291,4 +321,47 @@ fn a_close_drops_the_mark() {
     );
     assert!(closed.success, "close");
     assert!(!marked(&state), "the mark is dropped");
+}
+
+static OURS_FIRST: Phases = Phases::new();
+
+fn ours_then_lost_unread_then_ours(line: &str) -> (u16, &'static str) {
+    OURS_FIRST.answer_from(
+        line,
+        HELD_BY_SAME_ACCOUNT_AT_BASE_BODY,
+        HELD_BY_SAME_ACCOUNT_AT_BASE_BODY,
+    )
+}
+
+/// [#576 SDB-ACCT-D1] The probe before the acquire saw our OWN account holding the
+/// lock (another session of it, the website), and the acquire's reply and the re-read
+/// after it were lost. The acquire is marked unconfirmed in this case too (W29 marked
+/// only an acquire whose probe saw the lock not ours), as the adopted kind: the poll
+/// settles it into an adopted claim - the release, not the authorship of a lock taken
+/// here - and the quit hands the lock back.
+#[test]
+fn a_lost_acquire_over_the_accounts_own_lock_is_marked_too() {
+    let (_temp, state, seen, _listener) = start_lost_unread(ours_then_lost_unread_then_ours);
+    let mark = state
+        .speleodb
+        .lock()
+        .unconfirmed_acquire
+        .as_ref()
+        .map(super::speleodb_session::LockClaim::is_resumed);
+    println!("[SDB-ACCT-D1] probe saw our own lock: marked as adopted {mark:?}");
+    assert_eq!(mark, Some(true), "marked, as an adopted lock");
+    poll(&state, "probe saw ours");
+    let (gate, adopted, taken, still_marked) = (
+        state.edit_enabled(),
+        state.speleodb_lock_resumed_here(REMOTE_ID),
+        state.speleodb_lock_taken_here(REMOTE_ID),
+        marked(&state),
+    );
+    let released = quit(&state, &seen, "probe saw ours");
+    assert!(
+        gate && adopted && !taken,
+        "the poll adopts the lock, no authorship"
+    );
+    assert!(!still_marked, "the mark is settled");
+    assert_eq!(released, 1, "the quit hands the lock back");
 }

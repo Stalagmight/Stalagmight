@@ -492,13 +492,14 @@ impl AppState {
                     );
                     return Ok(DoneResult::PushUnconfirmed);
                 }
-                // [#576 RV2-R-13] Release only a lock THIS app session took. The holder
-                // check above is per ACCOUNT, so a second window or computer on the
-                // same account - or this app after a restart, which forgets the
-                // in-memory claim - passes it, and a clean Done there used to release
-                // the lock the other session is editing under. Without the claim, finish
-                // here: editing off, nothing released, and say the lock stays with the
-                // account elsewhere.
+                // [#576 RV2-R-13] Release only a lock this session holds a claim on.
+                // [#576 SDB-ACCT-D1] That is every lock it edits under: one it took,
+                // and one it ADOPTED from the account (another window or computer, the
+                // website, this app before a restart) - the poll's reopen and Start
+                // editing record the adopted lock's claim as the gate opens, so Done
+                // releases it as usual. An edit session with no claim at all (none of
+                // those flows opened its gate) finishes here: editing off, nothing
+                // released, and say the lock stays with the account elsewhere.
                 if !self.speleodb_lock_acquired_here(&link.project_id) {
                     // Marked BEFORE the gate shuts, so a status poll that sees the
                     // gate shut also sees why, and does not reopen it under the
@@ -1867,9 +1868,9 @@ mod update_restore {
                     // reload shut the gate, and a status poll landing in that
                     // window drops the record (as start-editing's FF arm
                     // re-records for the same reason). A session that held no
-                    // record keeps none - the gate is restored either way, so an
-                    // inherited lock stays as editable as it was, just without an
-                    // authorship claim it never earned.
+                    // record gets the commit's ADOPTED claim (#576 SDB-ACCT-D1): it
+                    // edits under the account's lock, so the release verbs hand it
+                    // back, but without an authorship claim it never earned.
                     Ok(()) => {
                         if had_lock_record {
                             if had_resumed_record {
@@ -2404,6 +2405,10 @@ mod update_restore_tests {
     /// session that inherited its lock (gate open, no claim) comes back editable but
     /// without an authorship claim it never earned - which would let the shortcut in
     /// `speleodb_remote_state` explain another session's commit away as our own.
+    ///
+    /// [#576 SDB-ACCT-D1] It comes back with the ADOPTED lock's claim instead (a
+    /// resumed one): it edits under the account's lock, so the release verbs hand that
+    /// lock back.
     #[test]
     fn the_update_restores_the_acquisition_record_only_where_one_existed() {
         let (_owned_dir, owned) = session(false, true);
@@ -2422,8 +2427,16 @@ mod update_restore_tests {
         assert!(owned.edit_enabled() && owned.speleodb_lock_acquired_here(REMOTE_ID));
         assert!(inherited.edit_enabled(), "the gate is restored either way");
         assert!(
-            !inherited.speleodb_lock_acquired_here(REMOTE_ID),
-            "but no record is minted for a lock this process never took"
+            !inherited.speleodb_lock_taken_here(REMOTE_ID),
+            "but no acquisition is minted for a lock this process never took"
+        );
+        assert!(
+            inherited.speleodb_lock_resumed_here(REMOTE_ID),
+            "only the adopted lock's claim, for the release"
+        );
+        assert!(
+            owned.speleodb_lock_taken_here(REMOTE_ID),
+            "our own lock keeps its acquisition"
         );
     }
 

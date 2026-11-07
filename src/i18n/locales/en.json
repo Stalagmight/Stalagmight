@@ -4318,7 +4318,7 @@
       "open": "Open",
       "refresh": "Refresh",
       "signedInAs": "Signed in as {{email}}",
-      "concurrentSession": "Your account already holds the write lock on this project in another session. Editing it from two sessions at once is unsupported and can lose edits.",
+      "concurrentSession": "Your account already holds the write lock on this project in another session. You can edit here under that lock, but editing it in two sessions at once can lose edits.",
       "listFailed": "Could not load projects",
       "openFailed": "Could not open project"
     },

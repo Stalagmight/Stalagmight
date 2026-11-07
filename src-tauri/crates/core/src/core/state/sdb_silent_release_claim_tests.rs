@@ -1,17 +1,22 @@
-//! [#576 RV4-R-S2] The silent releases (close, project switch, quit, logout) hand
-//! back only a lock THIS app session acquired.
+//! [#576 SDB-QUIT-D1] The silent releases (close, project switch, quit, logout) hand
+//! back the lock this session edits under, however the account came to hold it.
 //!
-//! Decision RV2-R-13: "Release only when this app session acquired the lock". A
-//! second window or computer on the same account opens its edit gate through the
-//! status poll's inherited-lock reopen without taking the lock; closing a clean
-//! project or quitting there used to free the lock the other session is editing
-//! under. Driven against the loopback recording stub; all data is synthetic.
+//! Decision RV2-R-13 ("Release only when this app session acquired the lock") made
+//! them ask for this session's claim (#576 RV4-R-S2), and the status poll's
+//! inherited-lock reopen opened the gate without one: a lock the account held from
+//! another Stalagmight session, another machine or the SpeleoDB website was left held
+//! by a clean close or a quit. Decisions SDB-ACCT-D1 and SDB-QUIT-D1 supersede it:
+//! such a lock is the user's, editing under it is an edit session, and quitting
+//! releases any lock this session edits under, adopted ones included. Driven against
+//! the loopback recording stub; all data is synthetic.
 
 use std::time::Duration;
 
 use super::speleodb::{
-    editing_fixture, recording_stub, HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
+    authed_session_at, editing_fixture, recording_stub, remote_readonly_fixture,
+    HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
 };
+use super::AppState;
 
 fn release_requests(seen: &std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Vec<String> {
     seen.lock()
@@ -22,34 +27,90 @@ fn release_requests(seen: &std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Vec
         .collect()
 }
 
-#[test]
-fn close_and_quit_never_release_a_lock_this_session_did_not_take() {
-    let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
-    let (_temp, state) = editing_fixture(&base);
-    // An inherited edit session: gate open, the lock is the account's, no claim.
-    let _ = state.speleodb_forget_lock_acquired_for(REMOTE_ID);
-    assert!(state.edit_enabled() && !state.speleodb_lock_acquired_here(REMOTE_ID));
+/// A clean, signed-in copy whose lock the ACCOUNT holds from elsewhere, read-only
+/// until the status poll adopts it.
+fn adopted_by_the_poll(base: &str) -> (tempfile::TempDir, AppState) {
+    let (temp, state) = remote_readonly_fixture();
+    *state.speleodb.lock() = authed_session_at(base);
+    let polled = state.speleodb_link_status().map(|s| s.edit_enabled);
+    println!(
+        "[SDB-ACCT-D1] the account holds the lock, taken elsewhere: poll -> edit_enabled \
+         {polled:?}; claim {}; taken here {}; adopted (resumed) {}",
+        state.speleodb_lock_acquired_here(REMOTE_ID),
+        state.speleodb_lock_taken_here(REMOTE_ID),
+        state.speleodb_lock_resumed_here(REMOTE_ID),
+    );
+    assert!(
+        matches!(polled, Ok(true)),
+        "premise: the poll opens the gate over the account's lock"
+    );
+    (temp, state)
+}
 
-    let params = state.speleodb_held_lock_release_params().is_some();
-    state.speleodb_release_held_lock_best_effort();
+/// The poll adopts the account's lock: an edit session with a claim of its own, for
+/// the release only (no authorship), and the silent releases hand it back. Before
+/// SDB-ACCT-D1 the reopen recorded no claim and close, quit and logout sent nothing.
+#[test]
+fn close_quit_and_logout_hand_back_a_lock_the_poll_adopted() {
+    let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+
+    let (_close_dir, closing) = adopted_by_the_poll(&base);
+    let adopted = closing.speleodb_lock_acquired_here(REMOTE_ID)
+        && !closing.speleodb_lock_taken_here(REMOTE_ID);
+    closing.speleodb_release_held_lock_best_effort();
+    let after_close = release_requests(&seen).len();
+
+    let (_quit_dir, quitting) = adopted_by_the_poll(&base);
+    quitting.speleodb_release_held_lock_bounded(Duration::from_secs(5));
+    let after_quit = release_requests(&seen).len();
+
+    let (_logout_dir, leaving) = adopted_by_the_poll(&base);
+    let logout = leaving.speleodb_logout().map_err(|e| e.message);
+    let after_logout = release_requests(&seen).len();
+    println!(
+        "[SDB-QUIT-D1] adopted lock: claimed for the release only {adopted}; release \
+         requests after close {after_close}, after quit {after_quit}, after logout \
+         {after_logout} ({logout:?})"
+    );
+    assert!(
+        adopted,
+        "the adopted lock is claimed, without the authorship of a lock taken here"
+    );
+    assert_eq!(after_close, 1, "a clean close hands the adopted lock back");
+    assert_eq!(after_quit, 2, "so does the quit");
+    assert_eq!(after_logout, 3, "and the logout");
+}
+
+/// The rule is the edit session, not the claim: an open gate (not force-editing)
+/// over the account's lock with no claim at all is released on close and on quit
+/// too. It used to be skipped ("this session did not take the lock").
+#[test]
+fn close_and_quit_release_a_lock_this_session_edits_under_without_a_claim() {
+    let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+    let unclaimed = || {
+        let (temp, state) = editing_fixture(&base);
+        let _ = state.speleodb_forget_lock_acquired_for(REMOTE_ID);
+        assert!(state.edit_enabled() && !state.speleodb_lock_acquired_here(REMOTE_ID));
+        (temp, state)
+    };
+
+    let (_close_dir, closing) = unclaimed();
+    let params = closing.speleodb_held_lock_release_params().is_some();
+    closing.speleodb_release_held_lock_best_effort();
     let after_close = release_requests(&seen);
-    state.speleodb_release_held_lock_bounded(Duration::from_secs(5));
+
+    let (_quit_dir, quitting) = unclaimed();
+    quitting.speleodb_release_held_lock_bounded(Duration::from_secs(5));
     let after_quit = release_requests(&seen);
     println!(
-        "inherited lock, no session claim: release params offered: {params}; release \
+        "[SDB-QUIT-D1] editing with no claim: release params offered: {params}; release \
          requests after close: {}; after quit: {}; {after_quit:?}",
         after_close.len(),
         after_quit.len()
     );
-    assert!(!params, "no silent release is offered without the claim");
-    assert!(
-        after_close.is_empty(),
-        "close freed a lock this session did not take: {after_close:?}"
-    );
-    assert!(
-        after_quit.is_empty(),
-        "quit freed a lock this session did not take: {after_quit:?}"
-    );
+    assert!(params, "the silent release is offered for the edit session");
+    assert_eq!(after_close.len(), 1, "close hands the lock back");
+    assert_eq!(after_quit.len(), 2, "quit hands the lock back");
 }
 
 #[test]

@@ -462,7 +462,7 @@ impl AppState {
                 // just-created project may have landed. The next successful poll
                 // settles it (ours: the claim is recorded).
                 super::speleodb_lock_release::AfterLockVerb::Unknown => {
-                    self.speleodb_mark_acquire_unconfirmed(&project_id);
+                    self.speleodb_mark_acquire_unconfirmed(&project_id, true);
                     Err(e)
                 }
                 _ => Err(e),

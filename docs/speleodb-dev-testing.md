@@ -158,7 +158,7 @@ Checked against the SpeleoDB server source; these override the stale issue text:
 - **Upload requires the mutex** - `PUT /projects/{id}/upload/auto/` is gated by
   `UserOwnsProjectMutex`, so seed via `acquire_lock` first, then `release_lock`.
 
-## Concurrency model - one same-account session at a time (#193)
+## Concurrency model - the account's lock is the user's (#193, #576 SDB-ACCT-D1)
 
 The single-writer lock (mutex) is the only concurrency control; the server itself
 is last-writer-wins. The ambiguous-push self-heal (guardrail 7, `sync::classify_ancestry`)
@@ -166,13 +166,15 @@ recovers a lost push confirmation by asking *"is the commit now on top of BASE
 authored by me?"* - it identifies our own landed commits **purely** by
 `author_email == my_email`.
 
-**Constraint:** edit a given project from **one session per account at a time.**
-A *second* session under the **same account** editing the same project
-concurrently is unsupported: its commit also reads as `author_email == me`, so the
-self-heal could mistake it for our own landed push and wrongly clear the dirty bit
-(dropping un-pushed edits). The single-writer lock makes this rare in practice, but
-nothing stops a determined user from running two app instances logged in as the
-same account.
+**Rule (#576 SDB-ACCT-D1):** a write lock held by the user's **account** is the
+user's, however they acquired it - in another Stalagmight session, on another
+machine, or on the SpeleoDB website. How the lock was acquired is the user's
+responsibility. A session that finds the account holding the lock of the project it
+has open edits under it (the status poll's inherited-lock reopen, or Start editing),
+and that lock is then released like one this session took. Editing the same project
+from two sessions of one account at the same time is the user's call; the guard
+below keeps the other session's commits from being read as our own push, so they
+show up as a divergence rather than being uploaded over.
 
 **Guard (the licence, #576 B32):** the self-heal only runs for a session that
 provably took the lock itself - an acquisition recorded by this process's own
@@ -186,20 +188,26 @@ middle of a push whose reply was lost, your own landed upload also reads as a
 conflict (the claim is in memory only); resolve it with "Take the SpeleoDB
 version" or "Save my version as a local copy".
 
-**Release (#576 RV2-R-13):** Done releases the lock only when this app session
-took it (the same in-memory claim). A session whose gate opened through the
-inherited-lock reopen - a second window or computer on the account, or this app
-after a restart - uploads its edits and ends editing locally, but leaves the lock
-with the account (`DoneResult::LockHeldElsewhere`) and says so. After a restart,
-resume through the held-lock prompt at sign-in: its "Continue editing" claims the
-lock it resumes for this session (`speleodb_start_editing` with
-`resumeHeldLock`, #576 RV2-R-13-RESTART), so Done then releases it as usual. A
-plain Start editing under the account's lock still claims nothing; such a lock is
-released from the held-lock prompt or the SpeleoDB project dialog's Admin tab.
-That claim is marked as resumed: it licenses the release only, not the
-authorship self-heal above (#576 RV4-R-S3). The prompt lists every lock the
-account holds at sign-in, so the resumed lock may be one a second session of the
-account is still editing under, and its commits must read as a divergence there.
+**Release (#576 SDB-ACCT-D1, SDB-QUIT-D1):** every release hands back the lock the
+session edits under, whether this session took it or ADOPTED it from the account:
+Done, close, project switch, logout, a sign-in that replaces the session, deleting
+the open project, and the quit. When the status poll's inherited-lock reopen or a
+Start editing (plain, or the held-lock prompt's "Continue editing") opens the gate
+over a lock the account already held, the session records an adopted claim for it,
+and the silent releases (close, switch, logout, replacing sign-in, quit) release
+whenever the edit gate is open (not force-editing), claim or not; the un-pushed-edits
+veto still keeps a lock over edits not on the server. A revision View is refused
+while the gate is open over such a lock as over one taken here (FZ-SDB-4). This
+replaces decision RV2-R-13, under which only a lock this session took was released
+and a session whose gate the reopen had opened left it with the account
+(`DoneResult::LockHeldElsewhere`, now reached only by an edit session with no claim
+at all, which none of these flows leaves). An acquire whose reply was lost and whose
+holder re-read failed is marked unconfirmed in every case and settled by the next
+poll (#576 SDB-POLL-D1). An adopted claim is marked as resumed: it licenses the
+release only, not the authorship self-heal above (#576 RV4-R-S3), since the other
+session may still be editing under the lock, and its commits must read as a
+divergence there. A failed Start editing still never hands back a lock it did not
+take (the unwind).
 
 **Mitigation (the notice):** `speleodb_open_project` checks the project's
 `active_mutex` at open time; if the lock is already held by **our own** account, a

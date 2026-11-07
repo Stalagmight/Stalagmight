@@ -640,14 +640,13 @@ impl AppState {
         // captured or closed. (Below the Keep refusal so a View asking to keep history
         // is still told what it asked for.)
         //
-        // [#576 RVF-b] The refusal reads this session's claim on the open project's
-        // lock, the same question the silent releases ask, not the gate alone: the
-        // poll's inherited-lock reopen opens the gate without a claim, and there a
-        // View strands nothing, since no release was ever going to hand that lock back.
-        if !restore
-            && self.edit_enabled()
-            && self.speleodb_lock_acquired_here(&open_link.project_id)
-        {
+        // [#576 SDB-ACCT-D1, SDB-QUIT-D1] The open gate alone decides, as it does for
+        // the silent releases: a lock this session adopted from the account (the
+        // poll's inherited-lock reopen) is one the quit hands back too, so a View
+        // over it would strand it the same way. It used to read this session's claim
+        // as well (#576 RVF-b), when an adopted lock had none and no release was ever
+        // going to hand it back.
+        if !restore && self.edit_enabled() {
             return Err(local_dto(SpeleoDbError::refused(
                 "release the write lock (or restore) before viewing a revision".to_owned(),
             )));
@@ -1061,17 +1060,19 @@ mod restore_order {
         }
 
         /// A Restore re-enables editing (the user holds the lock) and hands the
-        /// captured record back - only where one existed, so an inherited lock is
-        /// never given a provenance it did not have.
+        /// captured record back - an acquisition only where one existed, so an
+        /// inherited lock is never given a provenance it did not have.
+        ///
+        /// [#576 SDB-ACCT-D1] Every other edit session is claimed as an ADOPTED lock
+        /// (a resumed claim), as the commit claims it: the release verbs hand it
+        /// back, the authorship shortcut stays off.
         pub(super) fn reopen_for_restore(&self, state: &AppState, restore: bool, project_id: &str) {
             if restore {
                 state.set_edit_enabled(true);
-                if self.captured.had_lock_record {
-                    if self.captured.had_resumed_record {
-                        state.speleodb_note_resumed_lock(project_id);
-                    } else {
-                        state.speleodb_note_lock_acquired(Some(project_id));
-                    }
+                if self.captured.had_lock_record && !self.captured.had_resumed_record {
+                    state.speleodb_note_lock_acquired(Some(project_id));
+                } else {
+                    state.speleodb_note_resumed_lock(project_id);
                 }
             }
         }
@@ -1454,9 +1455,15 @@ mod tests {
             FIXTURE_PROJECT_ID,
         );
         assert!(
-            !state.speleodb_lock_acquired_here(FIXTURE_PROJECT_ID),
-            "no captured record, none handed back - re-recording unconditionally would MINT \
+            !state.speleodb_lock_taken_here(FIXTURE_PROJECT_ID),
+            "no captured record, no acquisition handed back - re-recording one would MINT \
              provenance for an inherited lock"
+        );
+        // [#576 SDB-ACCT-D1] The edit session under the account's lock is claimed as
+        // ADOPTED (a resumed claim), so the release verbs hand that lock back.
+        assert!(
+            state.speleodb_lock_resumed_here(FIXTURE_PROJECT_ID),
+            "an inherited lock reopened for a Restore is adopted, for the release only"
         );
 
         let (state, _temp) = fresh();

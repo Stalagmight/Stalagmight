@@ -24,9 +24,11 @@
 //!   (its probe proved the mutex unheld, so it recorded an acquisition) and a
 //!   live edit session WITHOUT one (its probe saw the account still holding -
 //!   the pending release had not POSTed - so it inherited, and an inheritance
-//!   deliberately mints no record). Reading only the record frees the mutex
-//!   out from under exactly the inherited successors the stand-down exists
-//!   for - see [`AppState::speleodb_live_session_accounts_for`].
+//!   minted no record). Reading only the record frees the mutex out from under
+//!   exactly the inherited successors the stand-down exists for - see
+//!   [`AppState::speleodb_live_session_accounts_for`]. [#576 SDB-ACCT-D1] An
+//!   inheritance now records an ADOPTED claim with its gate, so the record eye
+//!   sees it too; the live-session eye stays for a gate open without a record.
 //!
 //! What makes both guards sound is the `speleodb_lock_ops` mutex, which every
 //! SpeleoDB LOCK OPERATION holds for its whole span:
@@ -443,8 +445,9 @@ impl AppState {
         Ok((generation, link))
     }
 
-    /// Start Editing's commit: open the edit gate, mint the acquisition record
-    /// (when `acquired_here`), and clear force-edit - IF the session the caller
+    /// Start Editing's commit: open the edit gate, mint the claim (this flow's
+    /// acquisition when `acquired_here`, otherwise an adopted lock's resumed claim,
+    /// #576 SDB-ACCT-D1), and clear force-edit - IF the session the caller
     /// started from is still the session on screen. All under one `project`
     /// acquisition, which is what makes the check and the commit atomic against
     /// every bump site (rule 1).
@@ -516,14 +519,27 @@ impl AppState {
         self.set_edit_enabled(true);
         // AFTER the gate opens, never before - a status poll landing in between
         // would see a shut gate and clear the record again
-        // (`speleodb_forget_lock_acquired_if_gate_shut`). Only where the
-        // pre-acquire probe proved the mutex was free: keeping a lock we
-        // INHERITED is an edit session, not an acquisition.
+        // (`speleodb_forget_lock_acquired_if_gate_shut`).
         if acquired_here {
             // Recorded as THIS flow's acquisition, so the stale-context unwind
             // hands back the lock this operation took rather than whichever of
             // the account's claims it happened to find first.
             self.speleodb_note_acquisition_by_this_flow(project_id);
+        } else {
+            // [#576 SDB-ACCT-D1, SDB-QUIT-D1] A lock the ACCOUNT already held - another
+            // Stalagmight session, another machine, the SpeleoDB website - is the
+            // user's, and editing under it is an edit session like any other: it is
+            // claimed for this session, so Done, a close, a switch, a logout, a
+            // replacing sign-in and the quit hand it back as they hand back one this
+            // session took. ADOPTED, not acquired: the claim is marked resumed, so it
+            // licenses the release but not the authorship shortcut (#576 RV4-R-S3),
+            // and it is not this flow's acquisition, so the stale-context unwind
+            // still never hands it back. A claim this session already holds on the
+            // project is kept as it is: a second Start Editing over a lock taken here
+            // finds it "ours" too, and must not downgrade that claim to an adopted one.
+            if !self.speleodb_lock_acquired_here(project_id) {
+                self.speleodb_note_resumed_lock(project_id);
+            }
         }
         // #213: we now genuinely hold the lock, so clear force-edit - the
         // "reconnect" transition for a force-editor, a no-op otherwise.
@@ -684,6 +700,13 @@ impl AppState {
     /// Commits through [`Self::speleodb_commit_editing`] with `acquired_here`
     /// false: an inherited lock is an edit session, never an acquisition. A
     /// failed re-read declines to reopen - "cannot say" must not enable editing.
+    ///
+    /// [#576 SDB-ACCT-D1, SDB-QUIT-D1] However the account came to hold the lock
+    /// (another Stalagmight session, another machine, the SpeleoDB website), it is
+    /// the user's: the reopen ADOPTS it, and the commit records the adopted lock's
+    /// claim (resumed: the release, not the authorship shortcut), so the quit and
+    /// every other release verb hand it back. It used to open the gate with no
+    /// claim, and the silent releases, which read the claim, left the lock held.
     pub(super) fn speleodb_reopen_gate_for_inherited_lock(
         &self,
         link: &crate::models::SpeleoLink,
@@ -735,9 +758,10 @@ impl AppState {
         {
             return false;
         }
-        // [#576 SDB-POLL-D1] Not inherited after all when this session's own acquire
-        // lost its reply (and the re-read after it failed): the re-read above says
-        // it landed, so the claim is recorded, with the gate open, in this span.
+        // [#576 SDB-POLL-D1] When this session's own acquire lost its reply (and the
+        // re-read after it failed), the re-read above says it landed: the claim the
+        // acquire would have recorded replaces the adopted one, with the gate open,
+        // in this span.
         self.speleodb_claim_unconfirmed_acquire(&lock_ops, &link.project_id);
         true
     }

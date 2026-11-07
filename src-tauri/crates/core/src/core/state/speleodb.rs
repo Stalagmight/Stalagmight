@@ -927,7 +927,9 @@ impl AppState {
         // the lock on THIS project and is still editing under it - a claim only a
         // successful Start editing makes, cleared on every release and on the first
         // poll that finds the gate shut. A lock inherited from an earlier run, or one
-        // a sibling session holds, records nothing and licenses nothing.
+        // a sibling session holds, licenses nothing: its claim (#576 SDB-ACCT-D1) is
+        // an ADOPTED one, which licenses the release only (`speleodb_lock_taken_here`
+        // skips it).
         //
         // A #213 force-edit session is excluded twice over: it records no acquisition
         // (it opens the gate precisely because it could NOT take a lock), and the flag
@@ -1836,16 +1838,15 @@ impl AppState {
     /// `Diverged` arms leave both gates untouched - so a force-editor stays
     /// force-editing (keeps their edits) rather than reverting to read-only.
     ///
-    /// [#576 RV2-R-13-RESTART] `resume_held_lock` is the held-lock prompt's
-    /// "Continue editing" ([`Self::speleodb_resume_held_lock_editing`]): the user
-    /// explicitly resumes a lock their account holds at sign-in - typically this app
-    /// before a restart - so a lock found held by this account is recorded as this
-    /// session's claim once editing starts, and Done releases it as usual. Every
-    /// other caller passes `false` and an inherited lock stays unclaimed.
-    fn speleodb_start_editing_with(
-        &self,
-        resume_held_lock: bool,
-    ) -> Result<StartEditingResult, SpeleoErrorDto> {
+    /// [#576 SDB-ACCT-D1] A lock found held by this account - another Stalagmight
+    /// session, another machine, the SpeleoDB website, or this app before a restart -
+    /// is the user's, and editing starts under it: the commit records it as this
+    /// session's ADOPTED claim (resumed: the release, not the authorship shortcut), so
+    /// Done and the silent releases hand it back as usual. Plain Start editing and the
+    /// held-lock prompt's "Continue editing" (#576 RV2-R-13-RESTART,
+    /// [`Self::speleodb_resume_held_lock_editing`]) are the same flow now; only the
+    /// latter used to claim such a lock.
+    fn speleodb_start_editing_with(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
         // [#576 RVF-c-C1] Made for another project than the open one: refused before
         // anything below reads or resets that project's state. The check that binds
         // is the one in the snapshot's span.
@@ -1905,9 +1906,9 @@ impl AppState {
         // says nothing about whether this process caused the transition. Without the
         // probe a restarted process, a second window, or the held-lock dialog's
         // "Continue editing" - which calls this verb precisely to resume an INHERITED
-        // lock - would all mint an authorship claim they never earned. (Continue
-        // editing now claims the lock it resumes on purpose, by the user's explicit
-        // choice - `resume_held_lock`, #576 RV2-R-13-RESTART - not by this probe.)
+        // lock - would all mint an authorship claim they never earned. (Such a lock
+        // is still claimed for the release once editing starts, as an ADOPTED lock -
+        // #576 SDB-ACCT-D1, in `speleodb_commit_editing` - but never by this probe.)
         //
         // Only a mutex the server says is UNHELD proves the unheld -> ours transition
         // is ours. A FAILED probe is not "unheld": reading it as one would mint the
@@ -1974,9 +1975,10 @@ impl AppState {
         // whole span, and the release's reclaim check then stands down for the live
         // session).
         let me = self.speleodb_my_email();
-        // The four outcomes are `start_order::probe_verdict`'s (driven by its tests);
-        // `inherited` is whether the lock was already OUR ACCOUNT's, for the held-lock
-        // prompt's resume (#576 RV2-R-13-RESTART).
+        // The four outcomes are `start_order::probe_verdict`'s (driven by its tests).
+        // Whatever it says, a commit below claims the lock (#576 SDB-ACCT-D1): this
+        // flow's acquisition when `acquired_here`, an ADOPTED lock otherwise - and an
+        // adopted lock is still never handed back by an unwind.
         let probed = self.speleodb_probe_before_acquire(
             &lock_ops,
             &account,
@@ -1986,12 +1988,7 @@ impl AppState {
         let start_order::ProbeVerdict {
             acquired_here,
             keep_lock_on_unwind,
-            inherited,
         } = probed.verdict(me.as_deref(), link.has_unpushed_edits);
-        // An inherited lock the user explicitly resumed from the held-lock prompt is
-        // claimed for this session once editing starts (#576 RV2-R-13-RESTART) - and
-        // is still never handed back by an unwind, exactly as inherited.
-        let resumed_here = resume_held_lock && inherited;
 
         // The unwind shared by every arm below that walks away WITHOUT an edit
         // session: hand the lock back, UNLESS one of TWO rules says the lock is worth
@@ -2088,8 +2085,8 @@ impl AppState {
             // [#576 FZ-SDB-6-D1] A lost reply: re-read the holder at once. Ours right
             // after our own acquire means the acquire landed, so Start Editing goes on
             // as if the reply had arrived, and the probe's verdict decides the claim
-            // exactly as on an answered acquire (taken here: recorded; inherited:
-            // not). Anything else stays the failed acquire.
+            // exactly as on an answered acquire (taken here: this flow's; otherwise
+            // adopted). Anything else stays the failed acquire.
             Err(e) => {
                 let after = self.speleodb_reread_after_lock_verb(
                     &endpoint,
@@ -2100,12 +2097,13 @@ impl AppState {
                 );
                 if after != super::speleodb_lock_release::AfterLockVerb::Ours {
                     // [#576 SDB-POLL-D1] The re-read failed too: the acquire may have
-                    // landed. Where an answered acquire would have been claimed (the
-                    // probe saw the lock not ours), the next successful poll settles it.
-                    if after == super::speleodb_lock_release::AfterLockVerb::Unknown
-                        && acquired_here
-                    {
-                        self.speleodb_mark_acquire_unconfirmed(&link.project_id);
+                    // landed, and the next successful poll settles it. [#576
+                    // SDB-ACCT-D1] Marked in EVERY case, as an answered acquire is
+                    // claimed in every case: of the kind it would have recorded (this
+                    // session's when the probe saw the lock free or another account's,
+                    // adopted when it saw ours or could not say).
+                    if after == super::speleodb_lock_release::AfterLockVerb::Unknown {
+                        self.speleodb_mark_acquire_unconfirmed(&link.project_id, acquired_here);
                     }
                     return Err(dto_for_error(Endpoint::Acquire, &e));
                 }
@@ -2156,9 +2154,6 @@ impl AppState {
                 ) {
                     release_unless_kept(Some(&e));
                     return Err(local_dto(e));
-                }
-                if resumed_here {
-                    self.speleodb_claim_resumed_lock(&link.project_id);
                 }
                 // [#303] Clear-on-lock (clarification #2 / q14), gated on the copy really
                 // being the file that is in git: `UpToDate` means BASE == the server tip,
@@ -2225,9 +2220,6 @@ impl AppState {
                     release_unless_kept(Some(&e));
                     return Err(local_dto(e));
                 }
-                if resumed_here {
-                    self.speleodb_claim_resumed_lock(&link.project_id);
-                }
                 Ok(StartEditingResult::FastForwarded { local_path })
             }
             // A fork, a moved tip our BASE isn't an ancestor of, OR a server
@@ -2256,39 +2248,18 @@ impl AppState {
 
     /// Start editing the open remote project: acquire its write lock and reconcile
     /// it (see [`Self::speleodb_start_editing_with`]). A lock the account already
-    /// holds is inherited, and unclaimed.
+    /// holds is adopted, and claimed for this session (#576 SDB-ACCT-D1).
     pub fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
-        self.speleodb_start_editing_with(false)
+        self.speleodb_start_editing_with()
     }
 
     /// The held-lock prompt's "Continue editing" (#576 RV2-R-13-RESTART): start
-    /// editing as [`Self::speleodb_start_editing`] does, and record a lock this
-    /// account already holds as THIS session's claim, so a later Done releases it
-    /// (the decided rule releases only a lock the session holds a claim on). The
-    /// prompt lists only locks this account holds at sign-in and the user resumes
-    /// one explicitly - after a restart that is this app's own earlier session.
-    /// The claim is marked RESUMED: it does not license the authorship shortcut
-    /// (#576 RV4-R-S3), since the lock may be a second session's.
+    /// editing exactly as [`Self::speleodb_start_editing`] does. It used to be the
+    /// only way to claim a lock this account already held; since #576 SDB-ACCT-D1
+    /// every Start editing adopts such a lock (a RESUMED claim: the release, not the
+    /// authorship shortcut, #576 RV4-R-S3, since the lock may be a second session's).
     pub fn speleodb_resume_held_lock_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
-        self.speleodb_start_editing_with(true)
-    }
-
-    /// Record the claim for a lock Continue editing resumed, once its edit session
-    /// is committed - under the `project` mutex, like the acquisition record in
-    /// [`Self::speleodb_commit_editing`], and only while that session still stands
-    /// (the gate is open and the same project is open), so a teardown landing after
-    /// the commit leaves no claim behind. Not "this flow's acquisition": the
-    /// stale-context unwind must still never hand back an inherited lock.
-    fn speleodb_claim_resumed_lock(&self, project_id: &str) {
-        let _proj_guard = self.project.lock();
-        let still_open = self
-            .speleodb_open_link()
-            .is_ok_and(|open| open.project_id == project_id);
-        if self.edit_enabled() && still_open {
-            // A resumed claim: it licenses the release, not the authorship
-            // shortcut (#576 RV4-R-S3).
-            self.speleodb_note_resumed_lock(project_id);
-        }
+        self.speleodb_start_editing_with()
     }
 
     /// [#576 RV2-R-15] The read-only workspace gate for the SpeleoDB verbs that
@@ -2888,8 +2859,6 @@ mod start_order {
         pub(super) acquired_here: bool,
         /// The pre-acquire half of the unwind's keep rule ([`super::unwind_keeps_lock`]).
         pub(super) keep_lock_on_unwind: bool,
-        /// The lock was already our ACCOUNT's (the held-lock prompt's resume).
-        pub(super) inherited: bool,
     }
 
     impl AppState {
@@ -2965,37 +2934,41 @@ mod start_order {
     /// in `speleodb_start_editing_with`):
     /// - unheld: this call takes it - record it, hand it back if we walk away;
     /// - held by OUR account (`lock_held_by_me`, case-insensitive): inherited - no
-    ///   record, never handed back;
+    ///   acquisition record, never handed back by an unwind;
     /// - held by someone else, and the acquire still succeeds: they let go in
     ///   between, so this call took it - exactly as unheld;
     /// - unknown (an unreadable probe, or a holder we have no email to compare
-    ///   against): no record, and keep the lock only over un-pushed work. "Cannot
-    ///   say" never mints a claim.
+    ///   against): no acquisition record, and keep the lock only over un-pushed
+    ///   work. "Cannot say" never mints an acquisition.
+    ///
+    /// [#576 SDB-ACCT-D1] "No acquisition record" is not "no claim": a commit that
+    /// starts editing under an inherited or unknown-provenance lock records it as an
+    /// ADOPTED (resumed) claim (`speleodb_commit_editing`).
     pub(super) fn probe_verdict(
         holder: &Result<Option<String>, SpeleoDbError>,
         me: Option<&str>,
         has_unpushed_edits: bool,
     ) -> ProbeVerdict {
-        let (acquired_here, keep_lock_on_unwind, inherited) = match holder {
+        let (acquired_here, keep_lock_on_unwind) = match holder {
             // Unheld -> this call took it: record the acquisition, hand it back if we
             // walk away.
-            Ok(None) => (true, false, false),
-            // Already ours -> inherited: no record, and never hand it back.
-            Ok(Some(holder)) if lock_held_by_me(Some(holder.as_str()), me) => (false, true, true),
+            Ok(None) => (true, false),
+            // Already ours -> inherited: no acquisition record, and never hand it back
+            // on an unwind.
+            Ok(Some(holder)) if lock_held_by_me(Some(holder.as_str()), me) => (false, true),
             // Someone else's, and the acquire still succeeded -> they released in
             // between and this call took it: answer exactly as `Ok(None)` does.
-            Ok(Some(_)) if me.is_some() => (true, false, false),
+            Ok(Some(_)) if me.is_some() => (true, false),
             // Unknown - an unreadable probe, or a holder we have no email to compare
             // against. No record either way, and keep the lock only when there is
             // un-pushed work behind it to protect - as far as the OPEN project's link
             // can tell, which is not the only copy there is (see the unwind's second
             // keep rule, `unwind_keeps_lock`).
-            Ok(Some(_)) | Err(_) => (false, has_unpushed_edits, false),
+            Ok(Some(_)) | Err(_) => (false, has_unpushed_edits),
         };
         ProbeVerdict {
             acquired_here,
             keep_lock_on_unwind,
-            inherited,
         }
     }
 }
@@ -5085,9 +5058,16 @@ mod tests {
              exactly as before, they simply carry no authorship claim"
         );
         assert!(
-            !state.speleodb_lock_acquired_here(REMOTE_ID),
+            !state.speleodb_lock_taken_here(REMOTE_ID),
             "but a lock the account ALREADY held was not taken by this process, so \
-             nothing may be recorded"
+             no acquisition may be recorded"
+        );
+        // [#576 SDB-ACCT-D1] It is the user's lock all the same, and editing started
+        // under it: recorded as ADOPTED (a resumed claim), which licenses the release
+        // and nothing else.
+        assert!(
+            state.speleodb_lock_resumed_here(REMOTE_ID),
+            "the account's lock is adopted for this session, for the release only"
         );
     }
 
@@ -5360,8 +5340,20 @@ mod tests {
             "but the stale record no longer licenses the shortcut"
         );
         assert!(
-            !state.speleodb_lock_acquired_here(REMOTE_ID),
+            !state.speleodb_lock_taken_here(REMOTE_ID),
             "and the record itself is gone, so later polls cannot resurrect it"
+        );
+        // [#576 SDB-ACCT-D1] What the reopen records instead is the ADOPTED lock's
+        // claim: the release, never the shortcut.
+        assert!(
+            state.speleodb_lock_resumed_here(REMOTE_ID),
+            "the reopen adopts the account's lock for the release only"
+        );
+        let again = state.speleodb_link_status().expect("second poll");
+        assert_eq!(
+            again.remote_state,
+            RemoteState::Conflict,
+            "and the adopted claim licenses no shortcut on a later poll either"
         );
     }
 
@@ -9413,10 +9405,9 @@ mod tests {
     #[test]
     fn the_probe_mints_a_record_only_for_a_transition_it_can_prove() {
         use super::start_order::{probe_verdict, ProbeVerdict};
-        let verdict = |acquired_here, keep_lock_on_unwind, inherited| ProbeVerdict {
+        let verdict = |acquired_here, keep_lock_on_unwind| ProbeVerdict {
             acquired_here,
             keep_lock_on_unwind,
-            inherited,
         };
         let held_by = |who: &str| Ok(Some(who.to_owned()));
         let unreadable = Err(SpeleoDbError::Status {
@@ -9427,32 +9418,32 @@ mod tests {
             (
                 "unheld",
                 probe_verdict(&Ok(None), Some("u@x"), true),
-                verdict(true, false, false),
+                verdict(true, false),
             ),
             (
                 "our account (any case)",
                 probe_verdict(&held_by("U@X"), Some("u@x"), false),
-                verdict(false, true, true),
+                verdict(false, true),
             ),
             (
                 "someone else, then our acquire landed",
                 probe_verdict(&held_by("other@x"), Some("u@x"), true),
-                verdict(true, false, false),
+                verdict(true, false),
             ),
             (
                 "a holder and no email of our own, clean copy",
                 probe_verdict(&held_by("u@x"), None, false),
-                verdict(false, false, false),
+                verdict(false, false),
             ),
             (
                 "a holder and no email of our own, dirty copy",
                 probe_verdict(&held_by("u@x"), None, true),
-                verdict(false, true, false),
+                verdict(false, true),
             ),
             (
                 "an unreadable probe over un-pushed work",
                 probe_verdict(&unreadable, Some("u@x"), true),
-                verdict(false, true, false),
+                verdict(false, true),
             ),
         ];
         for (case, got, want) in cases {

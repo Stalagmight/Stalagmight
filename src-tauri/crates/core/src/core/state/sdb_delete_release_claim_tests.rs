@@ -1,15 +1,12 @@
-//! [#576 RV5-F4-4] Deleting the OPEN project hands back only a lock THIS app
-//! session acquired.
+//! [#576 RV5-F4-4, SDB-ACCT-D1] Deleting the OPEN project hands back the lock this
+//! session edits under.
 //!
-//! Decision RV2-R-13: "Release only when this app session acquired the lock". The
-//! silent releases (close, switch, quit, logout) check the claim since RV4-R-S2,
-//! but the delete of the open project took the ABANDON snapshot, which skipped it:
-//! a second window or computer on the same account whose gate was opened by the
-//! status poll's inherited-lock reopen (no claim) freed the lock the other session
-//! is still editing under, through a verb that is about the local file.
-//!
-//! The delete keeps the abandon half (no un-pushed-edits veto: the user is
-//! destroying the local copy those edits live in) and gains the claim check.
+//! The delete takes the abandon half of the release (no un-pushed-edits veto: the
+//! user is destroying the local copy those edits live in). RV5-F4-4 gave it the
+//! RV2-R-13 claim check as well, so a lock adopted from the account (the status
+//! poll's inherited-lock reopen) was left held. Decision SDB-ACCT-D1: a lock the
+//! account holds is the user's however they acquired it, so an edit session under it
+//! is released like one under a lock this session took.
 //! Driven against the loopback recording stub; all data is synthetic.
 
 use super::speleodb::{
@@ -26,11 +23,11 @@ fn release_requests(seen: &std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Vec
 }
 
 #[test]
-fn deleting_the_open_project_never_releases_a_lock_this_session_did_not_take() {
+fn deleting_the_open_project_releases_a_lock_it_edits_under_without_a_claim() {
     crate::test_helpers::with_isolated_config(|| {
         let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
         let (_temp, state) = editing_fixture(&base);
-        // An inherited edit session: gate open, the lock is the account's, no claim.
+        // An edit session under the account's lock with no claim of this session's.
         let _ = state.speleodb_forget_lock_acquired_for(REMOTE_ID);
         assert!(state.edit_enabled() && !state.speleodb_lock_acquired_here(REMOTE_ID));
         let path = state.open_project_path().unwrap();
@@ -38,8 +35,8 @@ fn deleting_the_open_project_never_releases_a_lock_this_session_did_not_take() {
         let result = state.delete_project(path.clone());
         let released = release_requests(&seen);
         println!(
-            "inherited lock, no session claim: delete success={} file gone={}; release \
-             requests after the delete: {} {released:?}",
+            "[SDB-ACCT-D1] editing under the account's lock, no claim: delete success={} \
+             file gone={}; release requests after the delete: {} {released:?}",
             result.success,
             !path.exists(),
             released.len()
@@ -50,9 +47,10 @@ fn deleting_the_open_project_never_releases_a_lock_this_session_did_not_take() {
             result.error
         );
         assert!(!path.exists(), "and the file is gone");
-        assert!(
-            released.is_empty(),
-            "the delete freed a lock this session did not take: {released:?}"
+        assert_eq!(
+            released.len(),
+            1,
+            "the delete hands back the lock this session edits under: {released:?}"
         );
     });
 }

@@ -21,9 +21,15 @@
 //!   has moved on, and the mark is dropped;
 //! - the holder could not be read: the mark stays for the next poll.
 //!
-//! A close drops the mark (`close_open_project_locked`). A mark is only ever set
-//! where an answered acquire would have recorded a claim, so settling it records
-//! exactly the claim the lost reply cost.
+//! A close drops the mark (`close_open_project_locked`). Settling it records exactly
+//! the claim the lost reply cost.
+//!
+//! [#576 SDB-ACCT-D1] An answered acquire is claimed in every case - this session's
+//! acquisition when the probe before it saw the lock free or another account's, an
+//! ADOPTED lock (a resumed claim: the release, not the authorship shortcut) when it
+//! saw our account holding it or could not read it - so the mark is set in every
+//! case too, carrying the kind of claim it settles into. (It used to be set only for
+//! the first kind, #576 SDB-POLL-D1's narrowing.)
 
 use super::speleodb::lock_held_by_me;
 use super::speleodb_session::{LockClaim, LockOpsHeld};
@@ -33,13 +39,20 @@ impl AppState {
     /// Mark the acquire just sent for `project_id` unconfirmed: its reply was lost
     /// and the holder re-read failed. Stamped with the signed-in account in the same
     /// session acquisition that stores it; with no account there is no mark, as
-    /// there would be no claim.
-    pub(super) fn speleodb_mark_acquire_unconfirmed(&self, project_id: &str) {
+    /// there would be no claim. `acquired_here`: the probe before the acquire proved
+    /// the transition ours, so the mark settles into this session's acquisition;
+    /// otherwise into an adopted lock's resumed claim (#576 SDB-ACCT-D1).
+    pub(super) fn speleodb_mark_acquire_unconfirmed(&self, project_id: &str, acquired_here: bool) {
         let mut session = self.speleodb.lock();
         let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
-        session.unconfirmed_acquire = endpoint
-            .zip(email)
-            .map(|(endpoint, email)| LockClaim::taken(project_id, endpoint, email));
+        session.unconfirmed_acquire = endpoint.zip(email).map(|(endpoint, email)| {
+            let mark = LockClaim::taken(project_id, endpoint, email);
+            if acquired_here {
+                mark
+            } else {
+                mark.into_resumed()
+            }
+        });
         tracing::info!(
             project_id,
             marked = session.unconfirmed_acquire.is_some(),
@@ -82,8 +95,17 @@ impl AppState {
         if !self.speleodb_unconfirmed_acquire_names(project_id) {
             return;
         }
-        self.speleodb.lock().unconfirmed_acquire = None;
-        self.speleodb_note_lock_acquired(Some(project_id));
+        let adopted = self
+            .speleodb
+            .lock()
+            .unconfirmed_acquire
+            .take()
+            .is_some_and(|mark| mark.is_resumed());
+        if adopted {
+            self.speleodb_note_resumed_lock(project_id);
+        } else {
+            self.speleodb_note_lock_acquired(Some(project_id));
+        }
         tracing::info!(
             project_id,
             purpose = "settle an acquire whose reply was lost (#576 SDB-POLL-D1)",

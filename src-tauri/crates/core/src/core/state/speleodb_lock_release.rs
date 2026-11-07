@@ -34,10 +34,14 @@
 //! database handle is still alive and release with
 //! [`AppState::speleodb_release_captured_lock`] once its teardown - and the `project`
 //! mutex - are out of the way. Destroying the file is the plainest abandon there is,
-//! which is why its snapshot skips the un-pushed-edits veto. It KEEPS the claim
-//! check (#576 RV5-F4-4): the delete is about the local file, and a session that
-//! only inherited the lock (a second window or computer on the same account) must
-//! not free the mutex the other session is editing under (decision RV2-R-13).
+//! which is why its snapshot skips the un-pushed-edits veto.
+//!
+//! [#576 SDB-ACCT-D1, SDB-QUIT-D1] Every one of these hands back the lock the session
+//! is EDITING under, however the account came to hold it: taken here, or adopted from
+//! another Stalagmight session, another machine or the SpeleoDB website. How the user
+//! acquired a lock is their responsibility. The silent releases and the delete used
+//! to ask for this session's claim as well (decision RV2-R-13, #576 RV4-R-S2 and
+//! RV5-F4-4), so an adopted lock was left held at quit.
 
 use std::time::Duration;
 
@@ -130,28 +134,16 @@ enum ReleaseIntent {
     Abandon,
     /// [#576 RV5-F4-4] Deleting the OPEN project's local file
     /// (`AppState::delete_project`). An abandon of the local work, so no
-    /// un-pushed-edits veto; but only of THIS session's lock: an inherited one
-    /// stays with the account, like on a silent release.
+    /// un-pushed-edits veto. [#576 SDB-ACCT-D1] It hands back the lock the session
+    /// edits under, adopted or taken, like every other release here.
     DeleteLocal,
-}
-
-impl ReleaseIntent {
-    /// Whether this release hands back only a lock this app session acquired
-    /// (decision RV2-R-13). The deliberate abandons do not ask: unlink and take
-    /// remote are disclosed exceptions (the link row, or the local edits, are
-    /// being given up on purpose).
-    fn needs_session_claim(self) -> bool {
-        match self {
-            Self::Silent | Self::DeleteLocal => true,
-            Self::Abandon => false,
-        }
-    }
 }
 
 impl AppState {
     /// Snapshot of what a best-effort lock release needs, or `None` when no held
-    /// remote edit session is active - or when releasing would strand local work,
-    /// or when this app session did not take the lock (#576 RV4-R-S2).
+    /// remote edit session is active - or when releasing would strand local work.
+    /// [#576 SDB-QUIT-D1] An edit session under a lock this session adopted from the
+    /// account is a held one: its lock is released too.
     /// Cheap + non-blocking (reads the open link + config, no network), so a caller
     /// that must not block on the OLD project's server - the app-exit path, a
     /// project switch - can hand the actual HTTP release to a bounded / detached
@@ -167,9 +159,7 @@ impl AppState {
     }
 
     /// The snapshot for deleting the open project's file (#576 RV5-F4-4): no
-    /// un-pushed-edits veto (the file those edits live in is being destroyed), but
-    /// the RV2-R-13 claim check of the silent releases - a lock this session did
-    /// not take is not this session's to free.
+    /// un-pushed-edits veto (the file those edits live in is being destroyed).
     pub(super) fn speleodb_delete_lock_release_params(&self) -> Option<LockReleaseParams> {
         self.speleodb_lock_release_params(ReleaseIntent::DeleteLocal)
     }
@@ -217,25 +207,14 @@ impl AppState {
                 return None;
             }
         };
-        // [#576 RV4-R-S2] Release only a lock THIS app session acquired (decision
-        // RV2-R-13). The gate alone cannot say: a second window or computer on the
-        // same account opens it through the status poll's inherited-lock reopen
-        // without taking the lock, and a clean close, switch or quit there used to
-        // free the lock the other session is editing under. An inherited lock is
-        // handed back only by a deliberate verb (Release in the held-lock prompt,
-        // the Admin tab, Done after a Continue-editing claim) or by an abandon. Deleting
-        // the open project's file is not one of those (#576 RV5-F4-4): it is about the
-        // local copy, so it asks the same question.
-        if intent.needs_session_claim() && !self.speleodb_lock_acquired_here(&link.project_id) {
-            tracing::info!(
-                project_id = %link.project_id,
-                ?intent,
-                purpose = "release only a lock this app session acquired (#576 RV2-R-13)",
-                "speleodb: skipping the lock release; this session did not take the lock, \
-                 so it stays with the account"
-            );
-            return None;
-        }
+        // [#576 SDB-QUIT-D1] No claim check: the open gate (not force-editing) is the
+        // edit session, and its lock is released whether this session took it or
+        // adopted it from the account (another window or computer, the website, this
+        // app before a restart; decision SDB-ACCT-D1). This used to release only a
+        // lock with this session's claim (decision RV2-R-13, #576 RV4-R-S2, and for a
+        // delete RV5-F4-4), and the poll's reopen opened the gate without one, so a
+        // clean close, switch, logout, replacing sign-in or quit left it held.
+        //
         // Data-safety asymmetry, deliberate: never SILENTLY release a lock whose
         // project still has un-pushed local edits. The two failure modes are not
         // symmetric. Keeping the lock held is recoverable - the user reopens the

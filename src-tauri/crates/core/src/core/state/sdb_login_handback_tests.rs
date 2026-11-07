@@ -144,6 +144,59 @@ fn signing_in_as_another_account_hands_the_live_session_back_first() {
     });
 }
 
+/// [#576 SDB-ACCT-D1, FZ-SDB-3-D1] The hand-back covers a lock the session ADOPTED:
+/// the status poll reopened the gate over the account's lock (taken in another
+/// session, on another machine or on the website), and the sign-in as another account
+/// releases it on its server before forgetting the session, as it releases one taken
+/// here. It used to skip it (the release asked for a claim the reopen never minted).
+#[test]
+fn signing_in_as_another_account_hands_an_adopted_lock_back_first() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (a_base, _a_listener, a_seen) = routing_stub(server_a);
+        let (b_base, _b_listener, b_seen) = routing_stub(server_b);
+        let (_temp, state) = super::speleodb::remote_readonly_fixture();
+        *state.speleodb.lock() = authed_session_at(&a_base);
+        let polled = state
+            .speleodb_link_status()
+            .map(|s| s.edit_enabled)
+            .map_err(|e| e.message);
+        assert_eq!(
+            polled,
+            Ok(true),
+            "premise: the poll adopts the account's lock on A"
+        );
+
+        let result = state
+            .speleodb_login(Some(b_base), None, None, Some("tok-b".to_owned()))
+            .map_err(|e| e.message)
+            .expect("the paste login to B succeeds");
+
+        let a_requests = a_seen.lock().expect("A's request log").clone();
+        let b_requests = b_seen.lock().expect("B's request log").clone();
+        println!(
+            "[SDB-ACCT-D1] adopted lock on A, sign-in to B: replaced_session {}; gate {}; \
+             claims {:?}; A released: {}; B saw a release: {}",
+            result.replaced_session,
+            state.edit_enabled(),
+            claims(&state),
+            a_requests.contains(&release_line()),
+            b_requests.iter().any(|r| r.contains("/release/")),
+        );
+        assert!(result.replaced_session, "the sign-in replaces the session");
+        assert!(
+            a_requests.contains(&release_line()),
+            "the adopted lock is released on A before the session is forgotten: \
+             {a_requests:?}"
+        );
+        assert!(
+            !b_requests.iter().any(|r| r.contains("/release/")),
+            "nothing is released on the new server: {b_requests:?}"
+        );
+        assert!(!state.edit_enabled(), "the edit gate is shut");
+        assert!(claims(&state).is_empty(), "no claim is left");
+    });
+}
+
 #[test]
 fn a_same_account_re_login_keeps_the_edit_session() {
     // DO-NOT-REGRESS: re-entering the same account on the same server replaces
