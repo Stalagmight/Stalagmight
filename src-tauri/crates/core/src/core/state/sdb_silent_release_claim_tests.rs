@@ -65,7 +65,7 @@ fn close_quit_and_logout_hand_back_a_lock_the_poll_adopted() {
     let after_quit = release_requests(&seen).len();
 
     let (_logout_dir, leaving) = adopted_by_the_poll(&base);
-    let logout = leaving.speleodb_logout().map_err(|e| e.message);
+    let logout = leaving.speleodb_logout(true).map_err(|e| e.message);
     let after_logout = release_requests(&seen).len();
     println!(
         "[SDB-QUIT-D1] adopted lock: claimed for the release only {adopted}; release \
@@ -143,7 +143,7 @@ fn releases_fail(line: &str) -> (u16, &'static str) {
 fn a_logout_whose_release_fails_signs_out_and_names_the_lock_left_held() {
     let (base, _listener, seen) = routing_stub(releases_fail);
     let (_temp, state) = editing_fixture(&base);
-    let report = state.speleodb_logout().map_err(|e| e.message);
+    let report = state.speleodb_logout(true).map_err(|e| e.message);
     let tried = release_requests(&seen).len();
     let signed_in = state
         .speleodb_session_status()
@@ -174,7 +174,7 @@ fn a_logout_whose_release_fails_signs_out_and_names_the_lock_left_held() {
 fn a_logout_whose_release_lands_names_no_lock() {
     let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
     let (_temp, state) = editing_fixture(&base);
-    let report = state.speleodb_logout().map_err(|e| e.message);
+    let report = state.speleodb_logout(true).map_err(|e| e.message);
     println!(
         "[Q-W61-3-D1] logout, the release answered 200 -> {report:?}; release requests {}",
         release_requests(&seen).len()
@@ -184,4 +184,95 @@ fn a_logout_whose_release_lands_names_no_lock() {
         report.is_ok_and(|report| report.locks_left_held.is_empty()),
         "no lock is named"
     );
+}
+
+/// The (id, name) pairs a lock list names.
+fn named(locks: &[crate::core::SpeleoLockLeftHeld]) -> Vec<(String, String)> {
+    locks
+        .iter()
+        .map(|left| (left.project_id.clone(), left.project_name.clone()))
+        .collect()
+}
+
+/// Whether the session's claim on the open project is marked kept on purpose.
+fn claim_kept(state: &AppState) -> bool {
+    state
+        .speleodb
+        .lock()
+        .locks_acquired_here
+        .iter()
+        .any(|claim| claim.project_id == REMOTE_ID && claim.is_kept())
+}
+
+/// [#576 SIGNOUT-PROMPT-D1] The sign-out prompt asks only when this session holds a
+/// lock a sign-out would hand back: the open project's, while editing a clean copy
+/// under it. Read-only, signed out or over un-pushed edits (the veto keeps that lock
+/// whatever the answer), there is nothing to ask.
+#[test]
+fn the_sign_out_prompt_names_only_a_lock_the_sign_out_would_hand_back() {
+    let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+    let (_temp, editing) = editing_fixture(&base);
+    let (_temp_ro, read_only) = remote_readonly_fixture();
+    *read_only.speleodb.lock() = authed_session_at(&base);
+    let (_temp_dirty, dirty) = super::speleodb::remote_fixture_with_dirty_bit(true);
+    *dirty.speleodb.lock() = authed_session_at(&base);
+    dirty.set_edit_enabled(true);
+    let (_temp_out, signed_out) = editing_fixture(&base);
+    signed_out.speleodb.lock().forget_reporting().unwrap();
+
+    let asked = [
+        (
+            "editing a clean copy",
+            named(&editing.speleodb_sign_out_locks()),
+        ),
+        ("read-only", named(&read_only.speleodb_sign_out_locks())),
+        (
+            "editing over un-pushed edits",
+            named(&dirty.speleodb_sign_out_locks()),
+        ),
+        ("signed out", named(&signed_out.speleodb_sign_out_locks())),
+    ];
+    println!("[SIGNOUT-PROMPT-D1] sign-out locks: {asked:?}");
+    assert_eq!(
+        asked[0].1,
+        vec![(REMOTE_ID.to_owned(), "Remote".to_owned())],
+        "the lock the sign-out would release is named"
+    );
+    for (case, locks) in &asked[1..] {
+        assert!(locks.is_empty(), "{case}: nothing to ask about: {locks:?}");
+    }
+    assert!(
+        release_requests(&seen).is_empty(),
+        "asking changes nothing on the server"
+    );
+    assert!(editing.edit_enabled(), "nor the edit session");
+}
+
+/// [#576 SIGNOUT-PROMPT-D1] "Keep locks and sign out": no release request goes out,
+/// the sign-out happens, editing stops, and the lock is marked kept on purpose so
+/// the stranded-claim janitor does not hand it back later.
+#[test]
+fn a_logout_that_keeps_its_locks_sends_no_release() {
+    let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+    let (_temp, state) = editing_fixture(&base);
+    let report = state.speleodb_logout(false).map_err(|e| e.message);
+    let releases = release_requests(&seen);
+    let signed_in = state
+        .speleodb_session_status()
+        .map(|status| status.logged_in)
+        .map_err(|e| e.message);
+    let kept = claim_kept(&state);
+    println!(
+        "[SIGNOUT-PROMPT-D1] logout keeping its locks -> {report:?}; release requests \
+         {releases:?}; still signed in {signed_in:?}; editing {}; claim kept {kept}",
+        state.edit_enabled()
+    );
+    assert!(releases.is_empty(), "no release goes out: {releases:?}");
+    assert!(
+        report.is_ok_and(|report| report.locks_left_held.is_empty()),
+        "nothing failed, so nothing is named"
+    );
+    assert_eq!(signed_in, Ok(false), "signed out");
+    assert!(!state.edit_enabled(), "editing is off");
+    assert!(kept, "the lock is kept on purpose");
 }

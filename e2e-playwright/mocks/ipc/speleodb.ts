@@ -103,6 +103,12 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
       // spec seeds a failed one with an override.
       case 'speleodb_logout':
         return { locks_left_held: [] } satisfies MockReply<'speleodb_logout'>;
+      // [#576 SIGNOUT-PROMPT-D1] No lock held, so no sign-out prompt. A spec seeds
+      // held locks with an override to raise it.
+      case 'speleodb_sign_out_locks':
+        return [] satisfies MockReply<'speleodb_sign_out_locks'>;
+      case 'speleodb_sign_in_hand_back_locks':
+        return [] satisfies MockReply<'speleodb_sign_in_hand_back_locks'>;
       // Strip half of the managed-file prompt: deletes a foreign copy's
       // speleo_link row. No payload; specs assert the invocation itself.
       case 'speleodb_remove_link_at':

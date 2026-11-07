@@ -2305,7 +2305,7 @@ mod tests {
                 scope.spawn(|| {
                     let _config = config.adopt();
                     started.send(()).expect("announce the thread is running");
-                    let _ = state.speleodb_logout();
+                    let _ = state.speleodb_logout(true);
                     finished.send(()).expect("announce the logout got through");
                 });
 

@@ -86,7 +86,7 @@ fn logout_closes_edit_gate_on_remote_edit_session() {
             state.edit_enabled(),
             "precondition: remote edit session, gate on"
         );
-        state.speleodb_logout().expect("logout");
+        state.speleodb_logout(true).expect("logout");
         assert!(
             !state.edit_enabled(),
             "logout must drop the edit gate on a remote edit session"
@@ -104,7 +104,7 @@ fn logout_leaves_local_project_editable() {
     crate::test_helpers::with_isolated_config(|| {
         let state = state_with_project("Local");
         assert!(state.edit_enabled(), "local project editable");
-        state.speleodb_logout().expect("logout");
+        state.speleodb_logout(true).expect("logout");
         assert!(
             state.edit_enabled(),
             "logout must not disable editing on a local-only project"

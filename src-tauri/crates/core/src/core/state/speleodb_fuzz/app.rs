@@ -25,6 +25,12 @@ use crate::speleodb::{
 };
 use crate::test_fixtures::state_with_null_sink;
 
+/// [#576 SIGNOUT-PROMPT-D1] How the fuzzer answers the sign-out prompt (logout, and
+/// a sign-in that replaces the session): "Release and sign out". "Keep locks and
+/// sign out" is the user's choice to leave the lock held, so a step answered with
+/// it makes no I2b claim.
+const SIGN_OUT_RELEASES_LOCKS: bool = true;
+
 /// A project of the run: its server id and the name the list shows.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub(super) struct Proj {
@@ -244,7 +250,10 @@ impl App {
                 let warned = self.login(&self.other_url.clone(), out);
                 // [#576 NF-W72-1] A release the sign-in reports as failed is not
                 // silent: the user is warned and told how to release it.
-                if let (Some(warned), true, Some(project_id)) = (warned, clean, held) {
+                // [#576 SIGNOUT-PROMPT-D1] Nor is a lock the user chose to keep.
+                if let (true, Some(warned), true, Some(project_id)) =
+                    (SIGN_OUT_RELEASES_LOCKS, warned, clean, held)
+                {
                     if !warned.contains(&project_id) {
                         out.claims.push(Claim::LockReleaseBestEffort { project_id });
                     }
@@ -253,7 +262,7 @@ impl App {
             Act::Logout => {
                 let clean = !self.hint_bits().2;
                 let held = self.held_here();
-                match self.state.speleodb_logout() {
+                match self.state.speleodb_logout(SIGN_OUT_RELEASES_LOCKS) {
                     Ok(report) => {
                         let warned: Vec<String> = report
                             .locks_left_held
@@ -263,7 +272,10 @@ impl App {
                         out.note(format!("logout -> Ok, locks left held {warned:?}"));
                         // [#576 Q-W61-3-D1] A release the logout reports as failed is
                         // not silent: the user is warned and told how to release it.
-                        if let (true, Some(project_id)) = (clean, held) {
+                        // [#576 SIGNOUT-PROMPT-D1] Nor is a lock the user chose to keep.
+                        if let (true, true, Some(project_id)) =
+                            (SIGN_OUT_RELEASES_LOCKS, clean, held)
+                        {
                             if !warned.contains(&project_id) {
                                 out.claims.push(Claim::LockReleaseBestEffort { project_id });
                             }
@@ -366,13 +378,15 @@ impl App {
     }
 
     /// Sign in as the owner at `endpoint`; on success, the projects its answer names
-    /// as still locked by the session it replaced (#576 NF-W72-1).
+    /// as still locked by the session it replaced (#576 NF-W72-1). The sign-out prompt
+    /// for a replaced session is answered with [`SIGN_OUT_RELEASES_LOCKS`].
     fn login(&self, endpoint: &str, out: &mut Outcome) -> Option<Vec<String>> {
         match self.state.speleodb_login(
             Some(endpoint.to_owned()),
             Some(self.owner.email.clone()),
             Some(self.owner.password.clone()),
             None,
+            SIGN_OUT_RELEASES_LOCKS,
         ) {
             Ok(r) => {
                 let warned: Vec<String> = r

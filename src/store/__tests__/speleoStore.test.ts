@@ -280,10 +280,14 @@ describe('speleoStore', () => {
           locks_left_held: [],
         });
       useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
-      invokeIpcMock.mockRejectedValue({
-        message: 'Logged out, but the stored SpeleoDB credential could not be removed',
-        code: 'SPELEODB_FATAL',
-        status: null,
+      // No lock held, so no sign-out prompt (#576 SIGNOUT-PROMPT-D1); the logout rejects.
+      invokeIpcMock.mockImplementation(async (cmd: string) => {
+        if (cmd === 'speleodb_sign_out_locks') return [];
+        throw {
+          message: 'Logged out, but the stored SpeleoDB credential could not be removed',
+          code: 'SPELEODB_FATAL',
+          status: null,
+        };
       });
 
       const result = await useSpeleoStore.getState().applyPendingAuth('https://x/');

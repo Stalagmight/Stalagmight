@@ -541,6 +541,9 @@ export default function SettingsDialog() {
     if (hasPendingAuth) {
       const kind = pendingAuth?.kind;
       const auth = await applyPendingAuth(localConfig.speleodb.endpoint);
+      // [#576 SIGNOUT-PROMPT-D1] Cancelled at the sign-out prompt: nothing happened,
+      // so no error, and Settings stays open with the change still staged.
+      if (auth.cancelled) return false;
       if (!auth.ok) {
         setAuthError(
           humanizeSpeleoError(auth.error, kind === 'login' ? t('speleodb.errors.loginFailed') : undefined),

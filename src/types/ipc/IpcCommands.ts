@@ -77,6 +77,7 @@ import type { SpeleoDoneReport } from "./SpeleoDoneReport";
 import type { SpeleoDumpCandidate } from "./SpeleoDumpCandidate";
 import type { SpeleoLinkStatus } from "./SpeleoLinkStatus";
 import type { SpeleoLocalProjectState } from "./SpeleoLocalProjectState";
+import type { SpeleoLockLeftHeld } from "./SpeleoLockLeftHeld";
 import type { SpeleoLoginResult } from "./SpeleoLoginResult";
 import type { SpeleoLogoutReport } from "./SpeleoLogoutReport";
 import type { SpeleoManagedFile } from "./SpeleoManagedFile";
@@ -251,8 +252,8 @@ export interface IpcCommands {
   speleodb_list_projects: { args: Record<string, never>; result: Array<SpeleoProjectSummary>; error: CommandError };
   speleodb_list_teams: { args: Record<string, never>; result: Array<SpeleoTeamOption>; error: CommandError };
   speleodb_local_project_states: { args: { projectIds?: Array<string> | null }; result: Record<string, SpeleoLocalProjectState>; error: CommandError };
-  speleodb_login: { args: { endpoint?: string | null; email?: string | null; password?: string | null; token?: string | null }; result: SpeleoLoginResult; error: CommandError };
-  speleodb_logout: { args: Record<string, never>; result: SpeleoLogoutReport; error: CommandError };
+  speleodb_login: { args: { endpoint?: string | null; email?: string | null; password?: string | null; token?: string | null; releaseLocks: boolean }; result: SpeleoLoginResult; error: CommandError };
+  speleodb_logout: { args: { releaseLocks: boolean }; result: SpeleoLogoutReport; error: CommandError };
   speleodb_open_file_flags: { args: Record<string, never>; result: OpenFileFlags; error: CommandError };
   speleodb_open_project: { args: { projectId: string; projectName: string; latestCommitSha?: string | null; entryPath?: string | null }; result: SpeleoOpenResult; error: CommandError };
   speleodb_open_project_discarding_local: { args: { projectId: string; projectName: string; latestCommitSha?: string | null; entryPath?: string | null }; result: SpeleoOpenResult; error: CommandError };
@@ -276,6 +277,8 @@ export interface IpcCommands {
   speleodb_set_team: { args: { expectedProject?: ProjectIdentity | null; teamId: string; permission: Permission }; result: SpeleoCollaborators; error: CommandError };
   speleodb_set_token_storage: { args: { mode: TokenFallback }; result: SpeleoSessionStatus; error: CommandError };
   speleodb_set_undo_mode: { args: { expectedProject?: ProjectIdentity | null; mode: UndoMode }; result: null; error: CommandError };
+  speleodb_sign_in_hand_back_locks: { args: { endpoint?: string | null; email?: string | null; token?: string | null }; result: Array<SpeleoLockLeftHeld>; error: CommandError };
+  speleodb_sign_out_locks: { args: Record<string, never>; result: Array<SpeleoLockLeftHeld>; error: CommandError };
   speleodb_start_editing: { args: { expectedProject?: ProjectIdentity | null; resumeHeldLock?: boolean | null }; result: StartEditingResult; error: CommandError };
   speleodb_take_remote: { args: { expectedProject?: ProjectIdentity | null }; result: string; error: CommandError };
   speleodb_unlink: { args: { expectedProject?: ProjectIdentity | null; destination: string }; result: SaveOutcome; error: CommandError };
@@ -465,6 +468,8 @@ export const IPC_COMMAND_NAMES = [
   "speleodb_set_team",
   "speleodb_set_token_storage",
   "speleodb_set_undo_mode",
+  "speleodb_sign_in_hand_back_locks",
+  "speleodb_sign_out_locks",
   "speleodb_start_editing",
   "speleodb_take_remote",
   "speleodb_unlink",

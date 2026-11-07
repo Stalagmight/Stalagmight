@@ -28,6 +28,14 @@ function signedInWithLogoutPending() {
   useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
 }
 
+/** The logout answers `report`; no lock held beforehand, so no sign-out prompt
+ * (#576 SIGNOUT-PROMPT-D1 - the prompt has its own tests). */
+function logoutAnswers(report: unknown) {
+  invokeIpcMock.mockImplementation(async (cmd: string) =>
+    cmd === 'speleodb_sign_out_locks' ? [] : report,
+  );
+}
+
 beforeEach(() => {
   useUIStore.setState({ toasts: [] });
   signedInWithLogoutPending();
@@ -40,7 +48,7 @@ afterEach(() => {
 
 describe('logout that could not release a lock (#576 Q-W61-3-D1)', () => {
   it('signs out, then warns naming each project still locked', async () => {
-    invokeIpcMock.mockResolvedValue({
+    logoutAnswers({
       locks_left_held: [
         { project_id: '11111111-1111-1111-1111-111111111111', project_name: 'CaveA' },
       ],
@@ -61,7 +69,7 @@ describe('logout that could not release a lock (#576 Q-W61-3-D1)', () => {
   });
 
   it('names every project, in one warning', async () => {
-    invokeIpcMock.mockResolvedValue({
+    logoutAnswers({
       locks_left_held: [
         { project_id: 'a', project_name: 'CaveA' },
         { project_id: 'b', project_name: 'CaveB' },
@@ -78,7 +86,7 @@ describe('logout that could not release a lock (#576 Q-W61-3-D1)', () => {
   });
 
   it('warns about nothing when every release landed', async () => {
-    invokeIpcMock.mockResolvedValue({ locks_left_held: [] });
+    logoutAnswers({ locks_left_held: [] });
 
     const result = await useSpeleoStore.getState().applyPendingAuth('https://x/');
 

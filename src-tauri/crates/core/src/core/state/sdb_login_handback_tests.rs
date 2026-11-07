@@ -90,7 +90,13 @@ fn signing_in_as_another_account_hands_the_live_session_back_first() {
         let generation_before = state.speleodb_session_generation();
 
         let result = state
-            .speleodb_login(Some(b_base.clone()), None, None, Some("tok-b".to_owned()))
+            .speleodb_login(
+                Some(b_base.clone()),
+                None,
+                None,
+                Some("tok-b".to_owned()),
+                true,
+            )
             .map_err(|e| e.message)
             .expect("the paste login to B succeeds");
 
@@ -167,7 +173,7 @@ fn signing_in_as_another_account_hands_an_adopted_lock_back_first() {
         );
 
         let result = state
-            .speleodb_login(Some(b_base), None, None, Some("tok-b".to_owned()))
+            .speleodb_login(Some(b_base), None, None, Some("tok-b".to_owned()), true)
             .map_err(|e| e.message)
             .expect("the paste login to B succeeds");
 
@@ -206,7 +212,13 @@ fn a_same_account_re_login_keeps_the_edit_session() {
         let (_temp, state) = editing_fixture(&a_base);
 
         let result = state
-            .speleodb_login(Some(a_base.clone()), None, None, Some("tok-1b".to_owned()))
+            .speleodb_login(
+                Some(a_base.clone()),
+                None,
+                None,
+                Some("tok-1b".to_owned()),
+                true,
+            )
             .map_err(|e| e.message)
             .expect("the same-account paste login succeeds");
 
@@ -261,7 +273,13 @@ fn a_sign_in_with_no_session_leaves_a_local_projects_gate_alone() {
         let generation_before = state.speleodb_session_generation();
 
         let result = state
-            .speleodb_login(Some(b_base.clone()), None, None, Some("tok-b".to_owned()))
+            .speleodb_login(
+                Some(b_base.clone()),
+                None,
+                None,
+                Some("tok-b".to_owned()),
+                true,
+            )
             .map_err(|e| e.message)
             .expect("the paste login succeeds");
 
@@ -317,6 +335,7 @@ fn re_login_to_a(
             None,
             None,
             Some("tok-1b".to_owned()),
+            true,
         )
         .map_err(|e| e.message)
         .expect("the same-account paste login succeeds");
@@ -402,7 +421,13 @@ fn sign_in_to_b_over_a(server: fn(&str) -> (u16, &'static str), tag: &str) -> Si
     let (b_base, _b_listener, _b_seen) = routing_stub(server_b);
     let (_temp, state) = editing_fixture(&a_base);
     let result = state
-        .speleodb_login(Some(b_base.clone()), None, None, Some("tok-b".to_owned()))
+        .speleodb_login(
+            Some(b_base.clone()),
+            None,
+            None,
+            Some("tok-b".to_owned()),
+            true,
+        )
         .map_err(|e| e.message)
         .expect("the paste login to B succeeds");
     let out = SignInOverA {
@@ -454,6 +479,128 @@ fn a_sign_in_whose_hand_back_release_fails_signs_in_and_names_the_lock_left_held
             "the sign-in still happened"
         );
         assert!(!out.gate, "and the old session's edit gate is shut");
+    });
+}
+
+/// [#576 SIGNOUT-PROMPT-D1] The prompt before a sign-in asks only when that sign-in
+/// replaces a live session holding a lock it would hand back: a pasted token for
+/// another account (resolved through B's whoami) names A's lock; the same account
+/// re-entered on A, or a sign-in with nobody signed in, names nothing.
+#[test]
+fn the_sign_in_prompt_names_the_old_sessions_lock_only_when_the_sign_in_replaces_it() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (a_base, _a_listener, a_seen) = routing_stub(server_a);
+        let (b_base, _b_listener, _b_seen) = routing_stub(server_b);
+        let (_temp, state) = editing_fixture(&a_base);
+        let named = |locks: Vec<crate::core::SpeleoLockLeftHeld>| -> Vec<(String, String)> {
+            locks
+                .into_iter()
+                .map(|left| (left.project_id, left.project_name))
+                .collect()
+        };
+        let to_b = state
+            .speleodb_sign_in_hand_back_locks(Some(b_base.clone()), None, Some("tok-b".to_owned()))
+            .map(named)
+            .map_err(|e| e.message);
+        let same_account = state
+            .speleodb_sign_in_hand_back_locks(Some(a_base.clone()), Some("U@x".to_owned()), None)
+            .map(named)
+            .map_err(|e| e.message);
+        let (_temp_out, signed_out) = editing_fixture(&a_base);
+        signed_out
+            .speleodb
+            .lock()
+            .forget_reporting()
+            .expect("forget the seeded in-memory session");
+        let nobody = signed_out
+            .speleodb_sign_in_hand_back_locks(Some(b_base.clone()), None, Some("tok-b".to_owned()))
+            .map(named)
+            .map_err(|e| e.message);
+        let a_requests = a_seen.lock().expect("A's request log").clone();
+        println!(
+            "[SIGNOUT-PROMPT-D1] sign-in locks: to B {to_b:?}; same account on A \
+             {same_account:?}; signed out {nobody:?}; A saw {a_requests:?}"
+        );
+        assert_eq!(
+            to_b,
+            Ok(vec![(REMOTE_ID.to_owned(), "Remote".to_owned())]),
+            "a sign-in as another account names the old session's lock"
+        );
+        assert_eq!(
+            same_account,
+            Ok(Vec::new()),
+            "the same account replaces nothing"
+        );
+        assert_eq!(nobody, Ok(Vec::new()), "signed out, nothing is replaced");
+        assert!(
+            !a_requests.iter().any(|r| r.contains("/release/")),
+            "asking releases nothing: {a_requests:?}"
+        );
+        assert!(state.edit_enabled(), "and leaves the edit session alone");
+        assert_eq!(
+            session_of(&state).1,
+            Some("u@x".to_owned()),
+            "and the session too"
+        );
+    });
+}
+
+/// [#576 SIGNOUT-PROMPT-D1] "Keep locks and sign out" for the session a sign-in
+/// replaces: the sign-in happens, no release goes to the old server, the old gate
+/// is shut, and the lock is marked kept on purpose.
+#[test]
+fn a_sign_in_that_keeps_the_old_sessions_lock_sends_no_release() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (a_base, _a_listener, a_seen) = routing_stub(server_a);
+        let (b_base, _b_listener, b_seen) = routing_stub(server_b);
+        let (_temp, state) = editing_fixture(&a_base);
+        let result = state
+            .speleodb_login(
+                Some(b_base.clone()),
+                None,
+                None,
+                Some("tok-b".to_owned()),
+                false,
+            )
+            .map_err(|e| e.message)
+            .expect("the paste login to B succeeds");
+        let a_requests = a_seen.lock().expect("A's request log").clone();
+        let b_requests = b_seen.lock().expect("B's request log").clone();
+        let kept = state
+            .speleodb
+            .lock()
+            .locks_acquired_here
+            .iter()
+            .any(|claim| claim.project_id == REMOTE_ID && claim.is_kept());
+        println!(
+            "[SIGNOUT-PROMPT-D1] switch A -> B keeping the lock: replaced_session {}; \
+             locks left held {:?}; gate {}; claim kept {kept}; session {:?}; A saw \
+             {a_requests:?}",
+            result.replaced_session,
+            result.locks_left_held,
+            state.edit_enabled(),
+            session_of(&state)
+        );
+        assert!(
+            result.replaced_session,
+            "the sign-in replaces the live session"
+        );
+        assert!(
+            !a_requests.iter().any(|r| r.contains("/release/"))
+                && !b_requests.iter().any(|r| r.contains("/release/")),
+            "no release goes out: A {a_requests:?}, B {b_requests:?}"
+        );
+        assert!(
+            result.locks_left_held.is_empty(),
+            "nothing failed, nothing named"
+        );
+        assert!(!state.edit_enabled(), "the old session's edit gate is shut");
+        assert!(kept, "the lock is kept on purpose");
+        assert_eq!(
+            session_of(&state),
+            (Some(b_base), Some("v@y".to_owned())),
+            "the session is now B's"
+        );
     });
 }
 

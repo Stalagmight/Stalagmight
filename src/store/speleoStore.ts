@@ -9,6 +9,7 @@ import type {
   SpeleoDumpCandidate,
   SpeleoErrorDto,
   SpeleoLinkStatus,
+  SpeleoLockLeftHeld,
   SpeleoLoginResult,
   SpeleoLogoutReport,
   SpeleoProjectSummary,
@@ -274,6 +275,38 @@ export interface PendingLogin {
 }
 
 export type PendingAuth = PendingLogin | { kind: 'logout' } | null;
+
+/** [#576 SIGNOUT-PROMPT-D1] The sign-out prompt's three answers. */
+export type SignOutChoice = 'release' | 'keep' | 'cancel';
+
+/**
+ * [#576 SIGNOUT-PROMPT-D1] The sign-out prompt on screen: the write locks this
+ * session holds, asked about before a logout (`logout`) or before a sign-in as
+ * another account or server replaces the session (`switch`).
+ */
+export interface SignOutPrompt {
+  kind: 'logout' | 'switch';
+  locks: SpeleoLockLeftHeld[];
+}
+
+/** The pending `applyPendingAuth` waiting on the sign-out prompt's answer. */
+let signOutPromptAnswer: ((choice: SignOutChoice) => void) | null = null;
+
+/**
+ * Raise the sign-out prompt and wait for its answer. A prompt raised over one still
+ * unanswered answers that one Cancel, so no sign-out is left waiting forever.
+ */
+function askSignOut(
+  set: (patch: { signOutPrompt: SignOutPrompt | null }) => void,
+  kind: SignOutPrompt['kind'],
+  locks: SpeleoLockLeftHeld[],
+): Promise<SignOutChoice> {
+  signOutPromptAnswer?.('cancel');
+  return new Promise((resolve) => {
+    signOutPromptAnswer = resolve;
+    set({ signOutPrompt: { kind, locks } });
+  });
+}
 
 /**
  * [#270] The link state an optimistic open seed replaces - everything
@@ -626,8 +659,20 @@ export interface SpeleoStore {
   setPendingAuth: (p: PendingAuth) => void;
   clearPendingAuth: () => void;
   setAuthError: (msg: string | null) => void;
-  /** Apply the staged login/logout (A2). ok=false carries the raw error. */
-  applyPendingAuth: (endpoint: string | null) => Promise<{ ok: boolean; error?: unknown }>;
+  /** Apply the staged login/logout (A2). ok=false carries the raw error, or
+      `cancelled` when the user cancelled the sign-out prompt (nothing happened,
+      and the staged change is still staged). */
+  applyPendingAuth: (
+    endpoint: string | null,
+  ) => Promise<{ ok: boolean; error?: unknown; cancelled?: boolean }>;
+  /**
+   * [#576 SIGNOUT-PROMPT-D1] The sign-out prompt `applyPendingAuth` is waiting on,
+   * or null. An INDEPENDENT overlay, like the storage prompt: it is raised from the
+   * Settings account panel, which must survive a Cancel with what it staged.
+   */
+  signOutPrompt: SignOutPrompt | null;
+  /** Answer the sign-out prompt (its buttons; Escape, X and the backdrop cancel). */
+  answerSignOutPrompt: (choice: SignOutChoice) => void;
 
   // --- link/edit (action shell #204) ---
   /**
@@ -911,11 +956,25 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   clearPendingAuth: () => set({ pendingAuth: null, authError: null }),
   setAuthError: (authError) => set({ authError }),
 
+  signOutPrompt: null,
+  answerSignOutPrompt: (choice) => {
+    const answer = signOutPromptAnswer;
+    signOutPromptAnswer = null;
+    set({ signOutPrompt: null });
+    answer?.(choice);
+  },
+
   applyPendingAuth: async (endpoint) => {
     const p = get().pendingAuth;
     if (!p) return { ok: true };
     try {
       if (p.kind === 'logout') {
+        // [#576 SIGNOUT-PROMPT-D1] Ask first when this session holds write locks:
+        // release them, keep them held on SpeleoDB, or do nothing at all. No locks,
+        // no prompt - the sign-out releases as it always did (nothing to release).
+        const locks = await invokeIpc('speleodb_sign_out_locks');
+        const choice = locks.length > 0 ? await askSignOut(set, 'logout', locks) : 'release';
+        if (choice === 'cancel') return { ok: false, cancelled: true };
         // #270: the backend drops the session and the persisted account email even
         // when it can't remove the credential from the OS keychain - it rejects only
         // to WARN that a credential may still be stored on this machine. So mirror
@@ -924,7 +983,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // success would leave the UI claiming a session the backend no longer has.
         let report: SpeleoLogoutReport | null = null;
         try {
-          report = await invokeIpc('speleodb_logout');
+          report = await invokeIpc('speleodb_logout', { releaseLocks: choice === 'release' });
         } finally {
           set({ pendingAuth: null, authError: null });
           get().clearSession();
@@ -945,11 +1004,26 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           );
         }
       } else {
-        const r = await invokeIpc('speleodb_login', {
+        const credentials = {
           endpoint: (endpoint ?? '').trim() || undefined,
           email: p.useToken ? undefined : p.email.trim() || undefined,
           password: p.useToken ? undefined : p.password || undefined,
           token: p.useToken ? p.token.trim() || undefined : undefined,
+        };
+        // [#576 SIGNOUT-PROMPT-D1] A sign-in as another account (or on another
+        // server) signs the live session out first: the same prompt about that
+        // session's locks, asked before it is replaced. The backend says which
+        // locks, if any - it alone knows whose account a pasted token is.
+        const locks = await invokeIpc('speleodb_sign_in_hand_back_locks', {
+          endpoint: credentials.endpoint,
+          email: credentials.email,
+          token: credentials.token,
+        });
+        const choice = locks.length > 0 ? await askSignOut(set, 'switch', locks) : 'release';
+        if (choice === 'cancel') return { ok: false, cancelled: true };
+        const r = await invokeIpc('speleodb_login', {
+          ...credentials,
+          releaseLocks: choice === 'release',
         });
         set({ pendingAuth: null, authError: null });
         // [#576 FZ-SDB-3-D1] The login replaced a live session for another account or

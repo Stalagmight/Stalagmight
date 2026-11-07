@@ -433,6 +433,9 @@ pub fn run() {
             commands::speleodb::speleodb_open_project_discarding_local,
             commands::speleodb::speleodb_adopt_ariane,
             commands::speleodb::speleodb_logout,
+            // [#576 SIGNOUT-PROMPT-D1] What the sign-out prompt names.
+            commands::speleodb::speleodb_sign_out_locks,
+            commands::speleodb::speleodb_sign_in_hand_back_locks,
             commands::speleodb::speleodb_session,
             commands::speleodb::speleodb_set_token_storage,
             commands::speleodb::speleodb_retry_keychain,

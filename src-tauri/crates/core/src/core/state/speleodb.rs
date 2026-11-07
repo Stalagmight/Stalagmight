@@ -1514,15 +1514,78 @@ impl AppState {
     // email is the rehydrate SEED, so clearing it is a logout obligation and its
     // failure is part of logout's report. `speleodb_login` only writes it.
 
+    /// Whether a sign-in as `email` at `endpoint` REPLACES the live session (another
+    /// account, or the same one on another server), and so runs logout's hand-back
+    /// for it first (#576 FZ-SDB-3-D1).
+    ///
+    /// [#576 RVF-c-B1] "Another account" is judged the way the lock-holder check
+    /// and the claim identity judge it (`lock_held_by_me`, `LockClaim::taken_by`):
+    /// the email case-insensitively, the server through `normalize_endpoint`. The
+    /// same account re-typed as `U@x`, or the same server with a trailing slash,
+    /// replaces nothing; an exact compare released its own lock and shut its gate.
+    fn speleodb_login_replaces_session(&self, endpoint: &str, email: &str) -> bool {
+        let session = self.speleodb.lock();
+        match (session.endpoint.as_deref(), session.email.as_deref()) {
+            (Some(old_endpoint), Some(old_email)) => {
+                crate::speleodb::auth::normalize_endpoint(old_endpoint)
+                    != crate::speleodb::auth::normalize_endpoint(endpoint)
+                    || !old_email.eq_ignore_ascii_case(email)
+            }
+            (None, Some(_)) => true,
+            (_, None) => false,
+        }
+    }
+
+    /// [#576 SIGNOUT-PROMPT-D1] The write locks a sign-in with these credentials
+    /// would hand back from the session it replaces, for the prompt that asks first
+    /// ([`Self::speleodb_sign_out_locks`]): empty when the sign-in replaces nothing
+    /// (signed out, or the same account on the same server) or that session holds
+    /// no lock to ask about.
+    ///
+    /// The account is resolved as [`Self::speleodb_login`] resolves it: a pasted
+    /// token is asked who it belongs to (`GET /user/`, with the login's error for a
+    /// token that answer refuses); otherwise the typed email. Nothing is changed.
+    pub fn speleodb_sign_in_hand_back_locks(
+        &self,
+        override_endpoint: Option<String>,
+        email: Option<String>,
+        token: Option<String>,
+    ) -> Result<Vec<crate::core::SpeleoLockLeftHeld>, SpeleoErrorDto> {
+        // Signed out: nothing to replace, and no reason to ask the server who a
+        // pasted token belongs to.
+        if self.speleodb.lock().email.is_none() {
+            return Ok(Vec::new());
+        }
+        let endpoint = self
+            .speleodb_resolve_endpoint(override_endpoint.as_deref())
+            .ok_or(SpeleoDbError::NoEndpoint)
+            .map_err(local_dto)?;
+        let email = if let Some(t) = token.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()) {
+            client::fetch_user_email(&endpoint, &t, self.speleodb_insecure_http())
+                .map_err(|e| dto_for_error(Endpoint::User, &e))?
+        } else {
+            email.map(|e| e.trim().to_owned()).unwrap_or_default()
+        };
+        if email.is_empty() || !self.speleodb_login_replaces_session(&endpoint, &email) {
+            return Ok(Vec::new());
+        }
+        Ok(self.speleodb_sign_out_locks())
+    }
+
     /// Log in: exchange email+password for a token (or accept a pasted `token`),
     /// store it backend-side, and record the session. The token never crosses
     /// back to the webview - only the email + whether the keychain was used.
+    ///
+    /// [#576 SIGNOUT-PROMPT-D1] `release_locks` is the sign-out prompt's answer for
+    /// the session this sign-in replaces (see [`Self::speleodb_logout`]); it means
+    /// nothing when no session is replaced.
     pub fn speleodb_login(
         &self,
         override_endpoint: Option<String>,
         email: Option<String>,
         password: Option<String>,
         token: Option<String>,
+        release_locks: bool,
     ) -> Result<SpeleoLoginResult, SpeleoErrorDto> {
         let endpoint = self
             .speleodb_resolve_endpoint(override_endpoint.as_deref())
@@ -1612,33 +1675,21 @@ impl AppState {
         // a brief session guard, which the hand-back (it takes the session lock to
         // read the token and clear the claim) must not run under.
         //
-        // [#576 RVF-c-B1] "Another account" is judged the way the lock-holder check
-        // and the claim identity judge it (`lock_held_by_me`, `LockClaim::taken_by`):
-        // the email case-insensitively, the server through `normalize_endpoint`. The
-        // same account re-typed as `U@x`, or the same server with a trailing slash,
-        // replaces nothing; an exact compare released its own lock and shut its gate.
-        let replaced_session = {
-            let session = self.speleodb.lock();
-            match (session.endpoint.as_deref(), session.email.as_deref()) {
-                (Some(old_endpoint), Some(old_email)) => {
-                    crate::speleodb::auth::normalize_endpoint(old_endpoint)
-                        != crate::speleodb::auth::normalize_endpoint(&endpoint)
-                        || !old_email.eq_ignore_ascii_case(&email)
-                }
-                (None, Some(_)) => true,
-                (_, None) => false,
-            }
-        };
+        let replaced_session = self.speleodb_login_replaces_session(&endpoint, &email);
         // [#576 NF-W72-1] A lock the hand-back could not release is named in the
         // answer: the sign-in goes on, and the frontend warns, as after a logout.
+        // [#576 SIGNOUT-PROMPT-D1] `release_locks: false` is the sign-out prompt's
+        // "Keep locks and sign out" for the replaced session: no release goes out.
         let mut locks_left_held = Vec::new();
         if replaced_session {
             tracing::info!(
                 purpose = "hand back the session a sign-in replaces (#576 FZ-SDB-3)",
+                release_locks,
                 "speleodb login: replacing a live session; handing its lock and edit \
                  gate back first"
             );
-            locks_left_held.extend(self.speleodb_hand_back_replaced_session(&lock_ops));
+            locks_left_held
+                .extend(self.speleodb_hand_back_replaced_session(&lock_ops, release_locks));
         }
         let (tier, keychain_state, has_token) = {
             let mut session = self.speleodb.lock();
@@ -3035,9 +3086,9 @@ pub(super) use landing::Landed;
 // cuts the file at its first top-level `#[cfg(test)]` still sees all of it.
 #[cfg(test)]
 pub(super) use tests::{
-    authed_session_at, editing_fixture, logged_events, recording_stub, remote_readonly_fixture,
-    routing_stub, FREE_MUTEX_AT_BASE_BODY, HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY,
-    HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
+    authed_session_at, editing_fixture, logged_events, recording_stub,
+    remote_fixture_with_dirty_bit, remote_readonly_fixture, routing_stub, FREE_MUTEX_AT_BASE_BODY,
+    HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY, HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
 };
 
 #[cfg(test)]
@@ -4258,7 +4309,9 @@ mod tests {
     /// [`remote_readonly_fixture`] with the persisted dirty bit set either way, for
     /// the gate-closed-BUT-DIRTY case (a 401 auto-drop closes the edit gate and
     /// deliberately leaves `has_unpushed_edits` alone).
-    fn remote_fixture_with_dirty_bit(dirty: bool) -> (TempDir, AppState) {
+    pub(in crate::core::state) fn remote_fixture_with_dirty_bit(
+        dirty: bool,
+    ) -> (TempDir, AppState) {
         let temp = TempDir::new().expect("temp");
         let path = temp.path().join("remote.stalx");
         let mut db = Database::open(&path).expect("open db");
@@ -5889,7 +5942,7 @@ mod tests {
                 "fixture is dirty"
             );
 
-            let _ = state.speleodb_logout();
+            let _ = state.speleodb_logout(true);
 
             assert_eq!(
                 hits.load(std::sync::atomic::Ordering::SeqCst),
@@ -5923,7 +5976,7 @@ mod tests {
                 "fixture starts clean"
             );
 
-            let report = state.speleodb_logout();
+            let report = state.speleodb_logout(true);
 
             // The release goes out first. [#576 Q-W61-3-D1] The stub never answers
             // it, so the logout re-reads the holder (a reply that may have been lost,
@@ -6830,7 +6883,7 @@ mod tests {
             let (_temp, state) = remote_readonly_fixture();
             state.set_edit_enabled(true);
             state.set_force_editing(true);
-            state.speleodb_logout().expect("logout");
+            state.speleodb_logout(true).expect("logout");
             assert!(!state.edit_enabled(), "logout drops the edit gate");
             assert!(!state.force_editing(), "logout clears force-edit");
         });
@@ -7020,7 +7073,9 @@ mod tests {
                 .expect("seed the persisted account");
             *state.speleodb.lock() = authed_session_with(Box::new(InMemoryStore::new()));
 
-            state.speleodb_logout().expect("a clean logout succeeds");
+            state
+                .speleodb_logout(true)
+                .expect("a clean logout succeeds");
             assert_eq!(
                 state.config.lock().speleodb.email,
                 None,
@@ -7043,7 +7098,7 @@ mod tests {
             *state.speleodb.lock() = authed_session_with(Box::new(FailingDeleteStore::new()));
 
             let err = state
-                .speleodb_logout()
+                .speleodb_logout(true)
                 .expect_err("a failed credential delete is surfaced");
             assert!(
                 err.message.contains("Logged out"),
@@ -7096,7 +7151,7 @@ mod tests {
             );
 
             state
-                .speleodb_logout()
+                .speleodb_logout(true)
                 .expect("logout still succeeds through a poisoned config lock");
             assert_eq!(
                 state.config.lock().speleodb.email,
@@ -7125,7 +7180,7 @@ mod tests {
             *state.speleodb.lock() = authed_session_with(Box::new(InMemoryStore::new()));
 
             let err = state
-                .speleodb_logout()
+                .speleodb_logout(true)
                 .expect_err("an unwritable config must be reported");
             assert!(
                 err.message.contains("Logged out") && err.message.contains("sign in again"),
@@ -7212,7 +7267,7 @@ mod tests {
             state.speleodb_session_status().expect("status");
 
             let result = state
-                .speleodb_login(Some(base), None, None, Some("tok-today".to_owned()))
+                .speleodb_login(Some(base), None, None, Some("tok-today".to_owned()), true)
                 .expect("the paste login succeeds; only the keychain write fails");
 
             assert_eq!(
@@ -7344,7 +7399,7 @@ mod tests {
             state.speleodb_session_status().expect("status");
 
             let result = state
-                .speleodb_login(Some(base), None, None, Some("tok-new".to_owned()))
+                .speleodb_login(Some(base), None, None, Some("tok-new".to_owned()), true)
                 .expect("the paste login succeeds; only the keychain write fails");
 
             assert_eq!(
@@ -7422,7 +7477,7 @@ mod tests {
 
             // The same person, signing in to the second server.
             let result = state
-                .speleodb_login(Some(second), None, None, Some("tok-2".to_owned()))
+                .speleodb_login(Some(second), None, None, Some("tok-2".to_owned()), true)
                 .expect("the paste login succeeds; only the keychain write fails");
 
             assert_eq!(
@@ -7664,7 +7719,13 @@ mod tests {
             state.speleodb_session_status().expect("status");
 
             state
-                .speleodb_login(Some(base.clone()), None, None, Some("tok-new".to_owned()))
+                .speleodb_login(
+                    Some(base.clone()),
+                    None,
+                    None,
+                    Some("tok-new".to_owned()),
+                    true,
+                )
                 .expect("the paste login succeeds; only the keychain write and the save fail");
 
             let pair = state.get_config().speleodb;

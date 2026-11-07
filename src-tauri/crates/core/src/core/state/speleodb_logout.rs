@@ -296,7 +296,15 @@ impl AppState {
     /// the release of the held write lock, and says so: the answer names each project
     /// whose lock is still held, for the frontend's warning. It used to answer `Ok`
     /// with the lock still held and nothing said.
-    pub fn speleodb_logout(&self) -> Result<crate::core::SpeleoLogoutReport, SpeleoErrorDto> {
+    ///
+    /// [#576 SIGNOUT-PROMPT-D1] `release_locks` is the sign-out prompt's answer:
+    /// `true` ("Release and sign out", and every sign-out with no lock to ask about)
+    /// hands the held lock back as above; `false` ("Keep locks and sign out") sends no
+    /// release and leaves the lock held on SpeleoDB, marked kept on purpose.
+    pub fn speleodb_logout(
+        &self,
+        release_locks: bool,
+    ) -> Result<crate::core::SpeleoLogoutReport, SpeleoErrorDto> {
         // ONE lock-ops span over the WHOLE logout - gates, lock release, AND the
         // credential sweep below - because logout is a SpeleoDB lock operation
         // (it ends an edit session and hands its mutex back) and the thing that
@@ -317,7 +325,7 @@ impl AppState {
         // and the release path (`speleodb_release_held_lock_best_effort`) posts
         // directly and touches only the session record.
         let lock_ops = self.speleodb_lock_ops_guard();
-        let (gates_dropped, left_held) = self.speleodb_logout_drop_gates(&lock_ops);
+        let (gates_dropped, left_held) = self.speleodb_logout_drop_gates(&lock_ops, release_locks);
 
         // Drop the session AND the persisted rehydrate seed FIRST, then report. The
         // ordering is load-bearing: an early return on the credential failure would
@@ -364,11 +372,15 @@ impl AppState {
     /// [#576 NF-W72-1] The sign-in goes on either way, and, as logout does
     /// (Q-W61-3-D1), answers the project whose lock the hand-back could not release,
     /// for the frontend's warning. It used to be only logged.
+    ///
+    /// [#576 SIGNOUT-PROMPT-D1] `release_locks` is the sign-out prompt's answer for
+    /// the replaced session, as for [`Self::speleodb_logout`].
     pub(super) fn speleodb_hand_back_replaced_session<'s>(
         &self,
         lock_ops: &'s super::speleodb_session::LockOpsHeld<'s>,
+        release_locks: bool,
     ) -> Option<crate::core::SpeleoLockLeftHeld> {
-        let (_gates_dropped, left_held) = self.speleodb_logout_drop_gates(lock_ops);
+        let (_gates_dropped, left_held) = self.speleodb_logout_drop_gates(lock_ops, release_locks);
         if let Some(left) = &left_held {
             tracing::info!(
                 project_id = %left.project_id,
@@ -377,6 +389,31 @@ impl AppState {
             );
         }
         left_held
+    }
+
+    /// [#576 SIGNOUT-PROMPT-D1] The write locks a sign-out would hand back now, for
+    /// the prompt that asks first: the open project's lock while this session edits
+    /// under it (the edit gate open, not force-editing, a remote link, a token), over
+    /// a copy with no un-pushed edits. Empty when there is nothing to ask about.
+    ///
+    /// The same conditions as the silent release's snapshot
+    /// (`speleodb_lock_release_params`), read without its side effect: a lock over
+    /// un-pushed edits is kept by that veto whatever the answer, so it is not offered
+    /// for release.
+    pub fn speleodb_sign_out_locks(&self) -> Vec<crate::core::SpeleoLockLeftHeld> {
+        if !self.edit_enabled() || self.force_editing() {
+            return Vec::new();
+        }
+        let Ok(link) = self.speleodb_open_link() else {
+            return Vec::new();
+        };
+        if link.has_unpushed_edits || self.speleodb_active_token().is_err() {
+            return Vec::new();
+        }
+        vec![crate::core::SpeleoLockLeftHeld {
+            project_id: link.project_id,
+            project_name: link.project_name,
+        }]
     }
 
     /// [#576 A8] Drop the session (token, keychain entry, plaintext) - inside the
@@ -393,7 +430,15 @@ impl AppState {
 
     /// The edit-session half of [`Self::speleodb_logout_drop_gates`]: the project
     /// whose lock the release could not hand back, if any (#576 Q-W61-3-D1).
-    fn speleodb_logout_release_and_drop_gates(&self) -> Option<crate::core::SpeleoLockLeftHeld> {
+    ///
+    /// [#576 SIGNOUT-PROMPT-D1] `release_locks: false` is the sign-out prompt's "Keep
+    /// locks and sign out": no release request goes out, and the lock is marked kept
+    /// on purpose, as the close dialog's "Keep lock" marks it, so the stranded-claim
+    /// janitor does not hand it back later. The gates drop either way.
+    fn speleodb_logout_release_and_drop_gates(
+        &self,
+        release_locks: bool,
+    ) -> Option<crate::core::SpeleoLockLeftHeld> {
         match self.speleodb_open_link() {
             // Remote edit session: best-effort RELEASE the lock (needs the token, so
             // before `forget`), then drop the gates. #213: a force-editor holds NO
@@ -409,7 +454,12 @@ impl AppState {
             // whereas a lock freed over stranded edits lets a colleague lock and push,
             // leaving weeks of local survey reachable only through a divergence.
             Ok(_) => {
-                let left_held = self.speleodb_release_held_lock_reporting();
+                let left_held = if release_locks {
+                    self.speleodb_release_held_lock_reporting()
+                } else {
+                    self.speleodb_keep_open_lock_deliberately();
+                    None
+                };
                 self.set_edit_enabled(false);
                 self.set_force_editing(false);
                 left_held
@@ -465,10 +515,12 @@ mod logout_span {
         /// [#576 RV9a-3] The proof's only producer: it lives in this module, whose field
         /// nothing outside can fill, so no gate-less proof can be made for a fresh span.
         /// [#576 Q-W61-3-D1] With the proof, the project whose held lock the release
-        /// could not hand back, if any.
+        /// could not hand back, if any. [#576 SIGNOUT-PROMPT-D1] `release_locks: false`
+        /// keeps the lock (the sign-out prompt's "Keep locks and sign out").
         pub(super) fn speleodb_logout_drop_gates<'s>(
             &self,
             lock_ops: &'s LockOpsHeld<'s>,
+            release_locks: bool,
         ) -> (GatesDropped<'s>, Option<crate::core::SpeleoLockLeftHeld>) {
             // A session boundary even though the project slot never moves (footgun
             // 5.8): the token an in-flight Start Editing would commit a claim over is
@@ -481,7 +533,7 @@ mod logout_span {
                 self.bump_speleodb_session();
             }
             let left_held = if self.edit_enabled() {
-                self.speleodb_logout_release_and_drop_gates()
+                self.speleodb_logout_release_and_drop_gates(release_locks)
             } else {
                 None
             };

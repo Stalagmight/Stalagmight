@@ -31,7 +31,10 @@ use tauri::{AppHandle, Manager};
 
 use crate::config::TokenFallback;
 use crate::core::state::{for_project, ProjectIdentity};
-use crate::core::{AppState, CommandError, SpeleoDoneReport, SpeleoLogoutReport, SpeleoPushReport};
+use crate::core::{
+    AppState, CommandError, SpeleoDoneReport, SpeleoLockLeftHeld, SpeleoLogoutReport,
+    SpeleoPushReport,
+};
 // [Track A] #186/D-B2: the orchestration `AppState::speleodb_*` methods build the
 // structured SpeleoErrorDto at the call site where the endpoint is known; the
 // commands hand it on as a CommandError carrying its code (#576 C4), so the FE
@@ -66,6 +69,11 @@ async fn run_blocking<T: Send + 'static>(
 /// and derived from the API instead. `endpoint` overrides the configured/env
 /// endpoint for this session. Returns the (authoritative) user email + whether
 /// the token was stored in the OS keychain - never the token itself.
+///
+/// [#576 SIGNOUT-PROMPT-D1] `release_locks` is the sign-out prompt's answer for the
+/// session this sign-in replaces: `false` keeps that session's write lock held on
+/// SpeleoDB. Ask [`speleodb_sign_in_hand_back_locks`] first whether there is
+/// anything to ask about.
 #[tauri::command]
 pub async fn speleodb_login(
     app: AppHandle,
@@ -73,9 +81,37 @@ pub async fn speleodb_login(
     email: Option<String>,
     password: Option<String>,
     token: Option<String>,
+    release_locks: bool,
 ) -> Result<SpeleoLoginResult, CommandError> {
     run_blocking(app, move |s| {
-        s.speleodb_login(endpoint, email, password, token)
+        s.speleodb_login(endpoint, email, password, token, release_locks)
+    })
+    .await
+}
+
+/// [#576 SIGNOUT-PROMPT-D1] The write locks a sign-out would hand back now: what
+/// the sign-out prompt names before a logout. Empty when there is nothing to ask.
+#[tauri::command]
+pub async fn speleodb_sign_out_locks(
+    app: AppHandle,
+) -> Result<Vec<SpeleoLockLeftHeld>, CommandError> {
+    run_blocking(app, |s| Ok(s.speleodb_sign_out_locks())).await
+}
+
+/// [#576 SIGNOUT-PROMPT-D1] The write locks a sign-in with these credentials would
+/// hand back from the live session it replaces (another account or server): what
+/// the sign-out prompt names before such a sign-in. Empty when it replaces nothing
+/// or that session holds no lock to ask about. A pasted `token` is resolved to its
+/// account as the login resolves it.
+#[tauri::command]
+pub async fn speleodb_sign_in_hand_back_locks(
+    app: AppHandle,
+    endpoint: Option<String>,
+    email: Option<String>,
+    token: Option<String>,
+) -> Result<Vec<SpeleoLockLeftHeld>, CommandError> {
+    run_blocking(app, move |s| {
+        s.speleodb_sign_in_hand_back_locks(endpoint, email, token)
     })
     .await
 }
@@ -207,10 +243,15 @@ pub async fn speleodb_adopt_ariane(
 /// removed from the OS keychain / plaintext store, so the frontend warns (and can
 /// offer a retry) while treating the user as logged out. [#576 Q-W61-3-D1] The `Ok`
 /// answer names each project whose write lock could not be released, for the
-/// frontend's warning (the sign-out happened regardless).
+/// frontend's warning (the sign-out happened regardless). [#576 SIGNOUT-PROMPT-D1]
+/// `release_locks` is the sign-out prompt's answer: `false` sends no release and
+/// leaves the write lock held on SpeleoDB.
 #[tauri::command]
-pub async fn speleodb_logout(app: AppHandle) -> Result<SpeleoLogoutReport, CommandError> {
-    run_blocking(app, AppState::speleodb_logout).await
+pub async fn speleodb_logout(
+    app: AppHandle,
+    release_locks: bool,
+) -> Result<SpeleoLogoutReport, CommandError> {
+    run_blocking(app, move |s| s.speleodb_logout(release_locks)).await
 }
 
 /// [#213] Enable optimistic force-edit: edit the open remote project WITHOUT the

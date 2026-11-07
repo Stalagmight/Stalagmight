@@ -3893,6 +3893,18 @@
     "map": {
       "readOnlyBadge": "SpeleoDB · read-only"
     },
+    "signOutLocks": {
+      "title": "Sign out of SpeleoDB",
+      "titleSwitch": "Sign in as another account",
+      "switchNote": "Signing in as another account signs this session out first.",
+      "message_one": "You hold the lock on {{projects}}. Release it before signing out?",
+      "message_other": "You hold the locks on {{projects}}. Release them before signing out?",
+      "keepHint_one": "If you keep it, it stays held on SpeleoDB and nobody else can edit that project until it is released.",
+      "keepHint_other": "If you keep them, they stay held on SpeleoDB and nobody else can edit those projects until they are released.",
+      "release": "Release and sign out",
+      "keep_one": "Keep lock and sign out",
+      "keep_other": "Keep locks and sign out"
+    },
     "storageChoice": {
       "title": "Where should your API key be kept?",
       "intro": "You are signed in, but this computer's keychain would not accept your SpeleoDB API key. Choose where it should be kept instead.",

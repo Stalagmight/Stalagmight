@@ -696,6 +696,14 @@ const NOT_OPEN_PROJECT_WRITERS: &[(&str, &str)] = &[
     ("speleodb_search_users", "reads the server"),
     ("speleodb_session", "the account, not a project"),
     ("speleodb_set_token_storage", "the account, not a project"),
+    (
+        "speleodb_sign_in_hand_back_locks",
+        "reads the session and the open project's link; changes nothing",
+    ),
+    (
+        "speleodb_sign_out_locks",
+        "reads the session and the open project's link; changes nothing",
+    ),
     ("speleodb_unwind_target", "reads the server"),
 ];
 

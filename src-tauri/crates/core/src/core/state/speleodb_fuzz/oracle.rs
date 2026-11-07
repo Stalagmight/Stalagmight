@@ -21,7 +21,10 @@
 //!   over it): only a change to the owner's access or a delete excuses I2b.
 //!   [#576 Q-W61-3-D1] A logout whose answer names the project as still locked is
 //!   not silent (the user is warned), so it makes no I2b claim; [#576 NF-W72-1] nor
-//!   does a sign-in that replaced the session and names it.
+//!   does a sign-in that replaced the session and names it. [#576
+//!   SIGNOUT-PROMPT-D1] Logout and a replacing sign-in ask first; the fuzzer answers
+//!   "Release and sign out". "Keep locks and sign out" is the user's choice to leave
+//!   the lock held, and makes no I2b claim.
 //! - **I3 BASE is real.** A linked copy's `base_commit_sha` names a commit in the
 //!   server's history of that project.
 //! - **I4 the un-pushed mark matches the real difference.** A linked copy marked

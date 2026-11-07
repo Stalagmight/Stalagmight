@@ -179,7 +179,7 @@ fn sweep(state: &AppState, sid: u32, dir: &Path, refusing: bool) -> Vec<(&'stati
     ));
     out.push(("recent projects", state.get_recent_projects().len() == 1));
     out.push(("speleodb status", state.speleodb_session_status().is_ok()));
-    out.push(("speleodb logout", state.speleodb_logout().is_ok()));
+    out.push(("speleodb logout", state.speleodb_logout(true).is_ok()));
     out.push((
         "adjusted view",
         matches!(state.adjusted_stations_checked(), Ok(Some(ref s)) if !s.is_empty()),

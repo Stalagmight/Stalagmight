@@ -205,7 +205,12 @@ poll's "finished here" guard it needed). A logout whose release the server refus
 (or does not answer) still signs out, and its answer names the project, which the
 frontend warns about with how to release it (#576 Q-W61-3-D1); a sign-in that replaces
 the session does the same for its hand-back: it signs in, and its answer names the
-project (#576 NF-W72-1). An acquire whose reply was lost and whose
+project (#576 NF-W72-1). Logout and a replacing sign-in ASK FIRST when the session
+holds a lock they would hand back (#576 SIGNOUT-PROMPT-D1; `speleodb_sign_out_locks`,
+`speleodb_sign_in_hand_back_locks`): "Release and sign out" releases as above, "Keep
+locks and sign out" (`release_locks: false`) sends no release and marks the lock kept
+as the close dialog's "Keep lock" does, and Cancel does nothing. A lock over un-pushed
+edits is not offered: the veto keeps it whatever the answer. An acquire whose reply was lost and whose
 holder re-read failed is marked unconfirmed in every case and settled by the next
 poll (#576 SDB-POLL-D1). An adopted claim is marked as resumed: it licenses the
 release only, not the authorship self-heal above (#576 RV4-R-S3), since the other

@@ -124,7 +124,8 @@ export function SpeleoDbSettings({
     setLoggingIn(true);
     try {
       const result = await applyPendingAuth(speleo.endpoint);
-      if (!result.ok) {
+      // [#576 SIGNOUT-PROMPT-D1] A Cancel at the sign-out prompt is no failure.
+      if (!result.ok && !result.cancelled) {
         setAuthError(humanizeSpeleoError(result.error, t('speleodb.errors.loginFailed')));
       }
     } finally {

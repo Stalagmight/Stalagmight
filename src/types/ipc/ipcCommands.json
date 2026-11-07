@@ -3801,6 +3801,13 @@
           "rust": "Option<String>",
           "ts": "string | null",
           "optional": true
+        },
+        {
+          "name": "release_locks",
+          "key": "releaseLocks",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
         }
       ],
       "result": {
@@ -3816,7 +3823,15 @@
       "name": "speleodb_logout",
       "module": "speleodb",
       "async": true,
-      "args": [],
+      "args": [
+        {
+          "name": "release_locks",
+          "key": "releaseLocks",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        }
+      ],
       "result": {
         "rust": "SpeleoLogoutReport",
         "ts": "SpeleoLogoutReport"
@@ -4474,6 +4489,56 @@
       "result": {
         "rust": "()",
         "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_sign_in_hand_back_locks",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "endpoint",
+          "key": "endpoint",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "email",
+          "key": "email",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "token",
+          "key": "token",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "Vec<SpeleoLockLeftHeld>",
+        "ts": "Array<SpeleoLockLeftHeld>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_sign_out_locks",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<SpeleoLockLeftHeld>",
+        "ts": "Array<SpeleoLockLeftHeld>"
       },
       "error": {
         "rust": "CommandError",
