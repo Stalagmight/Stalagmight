@@ -23,8 +23,23 @@ let epoch = 0;
  * session moved, null with none open. A Save As moves a session's project to another
  * file without a new session, so the file a session was OPENED from is not always the
  * one its project was last open from (`followSession`, `projectIssue.ts`).
+ * [#576 W44-NF2] Kept for the most recent {@link ENDED_SESSIONS_KEPT} sessions only.
  */
 const endedOn = new Map<number, DisplaySettingTarget | null>();
+
+/**
+ * [#576 W44-NF2] How many ended sessions `endedOn` keeps; the oldest goes first (the
+ * map's insertion order is the session order). Its one reader is `followSession`, for
+ * the DMP wizard's run, which rides `dialogData` across the project switches the user
+ * makes while it is open: every session change is a load, create, close or delete the
+ * user asked for, so a run would have to outlive 256 of them for its own session to
+ * be gone. An entry is one identity (a `created_at` and a path: a few hundred bytes
+ * for a path of ordinary length), so 256 stay well under a megabyte. An evicted
+ * session reads as one that recorded nothing: `projectSessionEndedOn` answers
+ * undefined and `followSession` gives the identity back unchanged (the rule before
+ * #576 RVF-c-A2-2).
+ */
+export const ENDED_SESSIONS_KEPT = 256;
 
 /** The current project session; compare two reads to tell whether a switch happened. */
 export function projectSessionEpoch(): number {
@@ -37,10 +52,17 @@ export function projectSessionEpoch(): number {
  */
 export function noteProjectSessionChanged(): void {
   endedOn.set(epoch, openProjectIdentity());
+  for (const oldest of endedOn.keys()) {
+    if (endedOn.size <= ENDED_SESSIONS_KEPT) break;
+    endedOn.delete(oldest);
+  }
   epoch += 1;
 }
 
-/** The project `session` ended on (see `endedOn`); undefined while it is the current one. */
+/**
+ * The project `session` ended on (see `endedOn`); undefined while it is the current
+ * one, and once it is older than the last {@link ENDED_SESSIONS_KEPT} ended sessions.
+ */
 export function projectSessionEndedOn(session: number): DisplaySettingTarget | null | undefined {
   return endedOn.get(session);
 }
