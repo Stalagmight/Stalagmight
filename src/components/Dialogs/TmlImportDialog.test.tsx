@@ -681,6 +681,23 @@ describe('TmlImportDialog discard failures (#411 fix round)', () => {
     expect(importContext()).toBeNull();
   });
 
+  // [#576 W54-NF1] A save in place since the prompt wrote the deferred project to the
+  // file the backend reserved for it: the project's own file, still in its session.
+  // Closing it (the deferred arm the snapshot picked) left that empty .stalx behind.
+  it('deletes the file a save in place wrote since the prompt of a deferred project', async () => {
+    openEmptyImportProject();
+    useProjectStore.setState({ databaseOpen: false, project: emptyProject({ file_path: '/tmp/reserved.stalx' }) });
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+    await userEvent.click(await screen.findByTestId('tml-import-cancel'));
+
+    // What a save in place leaves: the same project and file, now written.
+    useProjectStore.setState({ databaseOpen: true });
+    await userEvent.click(screen.getByTestId('tml-import-residue-discard'));
+
+    await waitFor(() => expect(deleteProject).toHaveBeenCalledWith('/tmp/reserved.stalx'));
+    expect(closeProject, 'closed it and left the written file behind').not.toHaveBeenCalled();
+  });
+
   it('still deletes after a reload of the same file, with no Save As', async () => {
     openEmptyImportProject();
     useProjectStore.setState({

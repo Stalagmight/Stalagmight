@@ -90,7 +90,9 @@ function isEmptyImportProject(): boolean {
  * backend's deferred-save safety net (`finalize_deferred_import`,
  * src-tauri/src/commands/import.rs) returns early on `!result.success`, so a
  * failing import never writes the `.stalx` behind the frontend's back, and a
- * fresh empty project is not dirty, so autosave never fires either.
+ * fresh empty project is not dirty, so autosave never fires either. A save in
+ * place while the prompt is up does write it; the click re-reads `databaseOpen`
+ * for that (#576 W54-NF1).
  */
 function discardTarget(): DiscardTarget {
   const { project, databaseOpen } = useProjectStore.getState();
@@ -509,9 +511,13 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       // `.stalx` yet and closing the project IS the discard. One created with an
       // explicit save path was written to disk, so it goes through the same
       // delete path the Delete Project dialog uses.
-      const result = residue.project.savedPath
-        ? await deleteProject(residue.project.savedPath)
-        : await closeProject();
+      // [#576 W54-NF1] So does a deferred one a save in place has written since
+      // the prompt: the checks above say it is still this project, at the file
+      // it reserved, and `databaseOpen` says that file is on disk now. Closing
+      // it left the empty `.stalx` behind, and in Recents.
+      const savedPath =
+        residue.project.savedPath ?? (useProjectStore.getState().databaseOpen ? issued.file : null);
+      const result = savedPath ? await deleteProject(savedPath) : await closeProject();
       if (!result.success) {
         // Both arms can fail with the session already torn down (the backend
         // closes BEFORE handing the file to the OS trash), so "it failed" is not
