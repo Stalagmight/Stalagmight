@@ -3,7 +3,7 @@
 //! deleted shot on a landing slot, and not a live shot's ignore that can land
 //! neither on its shot's id nor back on its own slot. Synthetic rows only.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 
@@ -72,7 +72,8 @@ fn a_deleted_shots_ignore_moves_out_of_the_way_of_a_landing_one() {
     ignore_at(&db, 3, None, "N's");
     let reversed = HashMap::from([((0, 1), "uuid-n".to_owned()), ((0, 3), "uuid-a".to_owned())]);
 
-    let moved = db.rekey_position_resolved_warnings(&[(0, 1, 3), (0, 3, 1)], &reversed);
+    let moved =
+        db.rekey_position_resolved_warnings(&[(0, 1, 3), (0, 3, 1)], &reversed, &HashSet::new());
     println!("rekey -> {moved:?}; rows {:?}", slots(&db));
     assert_eq!(moved.unwrap(), 1, "N's row lands on N's id");
     assert_eq!(
@@ -82,7 +83,7 @@ fn a_deleted_shots_ignore_moves_out_of_the_way_of_a_landing_one() {
 
     // And back: N's row follows N again, B's stays out of the way.
     let back = HashMap::from([((0, 1), "uuid-a".to_owned()), ((0, 3), "uuid-n".to_owned())]);
-    db.rekey_position_resolved_warnings(&[(0, 1, 3), (0, 3, 1)], &back)
+    db.rekey_position_resolved_warnings(&[(0, 1, 3), (0, 3, 1)], &back, &HashSet::new())
         .unwrap();
     assert_eq!(
         slots(&db),
@@ -106,7 +107,8 @@ fn a_live_shots_ignore_with_nowhere_to_land_takes_a_free_slot() {
         ((0, 3), "uuid-a".to_owned()),
     ]);
 
-    let moved = db.rekey_position_resolved_warnings(&[(0, 1, 3), (0, 3, 1)], &reversed);
+    let moved =
+        db.rekey_position_resolved_warnings(&[(0, 1, 3), (0, 3, 1)], &reversed, &HashSet::new());
     println!("rekey -> {moved:?}; rows {:?}", slots(&db));
     assert_eq!(moved.unwrap(), 1, "only N's row lands on its shot's id");
     assert_eq!(
@@ -139,7 +141,7 @@ fn free_slots_skip_the_ids_shots_hold() {
         ((0, TOP), "uuid-t".to_owned()),
     ]);
     let moves = [(0, 1, 4), (0, 2, 3), (0, 3, 2), (0, 4, 1)];
-    let moved = db.rekey_position_resolved_warnings(&moves, &reversed);
+    let moved = db.rekey_position_resolved_warnings(&moves, &reversed, &HashSet::new());
     println!("rekey -> {moved:?}; rows {:?}", slots(&db));
     assert_eq!(moved.unwrap(), 2);
     let mut rows = slots(&db);
@@ -151,5 +153,28 @@ fn free_slots_skip_the_ids_shots_hold() {
         parked_sorted,
         vec![TOP - 2, TOP - 1],
         "below the held top id: {parked:?}"
+    );
+}
+
+/// [#576 PR #594 review] A free slot is never the id of a shot of the section,
+/// with a uuid or without one. The shots N (id 3, ignored by position), T (the
+/// top id, no uuid) and A (id 1) are reversed: N and A swap, T stays in the
+/// middle. The deleted B's ignore on id 1 moves out of the way of N's, to the
+/// slot below T's id: T is in no uuid map, so its id comes in `shot_ids`.
+#[test]
+fn a_free_slot_is_never_the_id_of_a_shot_without_a_uuid() {
+    let db = database_with_one_section();
+    ignore_at(&db, 1, Some("uuid-b"), "B's");
+    ignore_at(&db, 3, None, "N's");
+    let reversed = HashMap::from([((0, 1), "uuid-n".to_owned()), ((0, 3), "uuid-a".to_owned())]);
+    let shot_ids = HashSet::from([(0, 1), (0, TOP), (0, 3)]);
+
+    let moved = db.rekey_position_resolved_warnings(&[(0, 1, 3), (0, 3, 1)], &reversed, &shot_ids);
+    println!("rekey -> {moved:?}; rows {:?}", slots(&db));
+    assert_eq!(moved.unwrap(), 1, "N's row lands on N's id");
+    assert_eq!(
+        slots(&db),
+        vec![row(1, None, "N's"), row(TOP - 1, Some("uuid-b"), "B's")],
+        "B's row is not on T's id ({TOP})"
     );
 }

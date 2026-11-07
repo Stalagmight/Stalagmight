@@ -63,10 +63,16 @@ pub enum EntryExcess {
 /// that parse can do (see the module docs): `parse` is handed `reader` at its
 /// start, wrapped so the last end record is the only one it can find, and the
 /// wrapper reads the file as it is once `parse` has returned. Reads the file
-/// once from its start, plus its last 64 KiB, before `parse` runs.
+/// once from its start to the end it has when this is called, plus its last
+/// 64 KiB, before `parse` runs.
 ///
 /// `Err(excess)` when the archive is over the limit; `parse` has not run. A
 /// missing or garbled end record is the ZIP reader's to refuse.
+///
+/// `parse` must not read an entry's data: until it returns, every end-record
+/// signature but the last reads with a zero for its fourth byte, so an entry
+/// that holds one (a stored archive's own end record) would read altered.
+/// Read entries through what `parse` returns, once it has returned.
 ///
 /// # Errors
 ///
@@ -78,7 +84,7 @@ pub fn parse_bounded<R: Read + Seek, T>(
 ) -> io::Result<Result<T, EntryExcess>> {
     let len = reader.seek(SeekFrom::End(0))?;
     let last = last_end_record(&mut reader, len)?;
-    let scan = scan_end_records(&mut reader, limit, last.as_ref())?;
+    let scan = scan_end_records(&mut reader, len, limit, last.as_ref())?;
     if let Some(declared) = last
         .and_then(|record| record.declared)
         .filter(|&count| count > limit)
@@ -175,12 +181,14 @@ struct EndRecordScan {
     zip64_declared_over: Option<u64>,
 }
 
-/// Read `reader` once from its start in 64 KiB chunks: find where every
+/// Read `reader` once from its start to `len`, where [`parse_bounded`]
+/// measured its end, in 64 KiB chunks: find where every
 /// end-record signature but `last`'s starts, and every ZIP64 end record
 /// declaring more than `limit` entries that ends exactly at `last`'s locator -
 /// the shape the ZIP reader takes (see the module docs).
 fn scan_end_records<R: Read + Seek>(
     reader: &mut R,
+    len: u64,
     limit: u64,
     last: Option<&LastEndRecord>,
 ) -> io::Result<EndRecordScan> {
@@ -193,6 +201,8 @@ fn scan_end_records<R: Read + Seek>(
     let last_at = last.map(|record| record.at);
     let locator_at = last.and_then(|record| record.locator_at);
     reader.rewind()?;
+    // Only as far as the file was measured, as the end-record search reads it.
+    let mut reader = reader.take(len);
     let mut scan = EndRecordScan::default();
     let mut buffer = vec![0u8; WINDOW + CHUNK];
     let mut carried = 0;
@@ -450,5 +460,50 @@ mod tests {
         println!("limit 5: 5 other end records -> {at_limit:?}; 6 -> {over:?}");
         assert_eq!(at_limit, Ok(()), "as many as the limit are hidden");
         assert_eq!(over, Err(EntryExcess::EndRecords), "one more is refused");
+    }
+
+    /// A reader that grows by `tail` right after it is first measured
+    /// (`seek(End)`), as a file another program appends to does.
+    struct GrowsAfterTheMeasure {
+        inner: Cursor<Vec<u8>>,
+        tail: Option<Vec<u8>>,
+    }
+
+    impl std::io::Read for GrowsAfterTheMeasure {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.inner.read(buf)
+        }
+    }
+
+    impl std::io::Seek for GrowsAfterTheMeasure {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            let at = self.inner.seek(pos)?;
+            if matches!(pos, SeekFrom::End(_)) {
+                if let Some(tail) = self.tail.take() {
+                    self.inner.get_mut().extend(tail);
+                }
+            }
+            Ok(at)
+        }
+    }
+
+    /// [#576 PR #594 review] The scan reads the file as long as it was
+    /// measured, as the end-record search does: bytes past that length are no
+    /// part of the archive the checks judge. Here six end-record signatures
+    /// land past it, over a limit of 5; the scan read on to the end and
+    /// refused the archive for them.
+    #[test]
+    fn the_scan_stops_at_the_length_the_file_was_measured_at() {
+        let reader = GrowsAfterTheMeasure {
+            inner: Cursor::new(end_record(1)),
+            tail: Some(b"PK\x05\x06".repeat(6)),
+        };
+        let outcome = parse_bounded(reader, 5, |_| ()).unwrap();
+        println!("an end record of 1, then 6 more signatures past the measured end -> {outcome:?}");
+        assert_eq!(
+            outcome,
+            Ok(()),
+            "what lies past the measured end is not scanned"
+        );
     }
 }

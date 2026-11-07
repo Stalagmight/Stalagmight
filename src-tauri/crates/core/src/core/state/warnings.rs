@@ -259,7 +259,8 @@ impl AppState {
         type Slots = std::collections::HashMap<(u32, u32), String>;
         // `moves`: (section, id the row holds, id its shot has now). `mirrored`: the
         // shot each row belongs to, by the id it holds. `current`: the shot at each id.
-        let (moves, mirrored, current) = {
+        // `ids`: every shot's id, with a uuid or without.
+        let (moves, mirrored, current, ids) = {
             let guard = self.project.lock();
             let Some(project) = guard.as_ref() else {
                 return;
@@ -267,6 +268,7 @@ impl AppState {
             let mut moves = Vec::new();
             let mut mirrored = Slots::new();
             let mut current = Slots::new();
+            let mut ids = HashSet::new();
             for section in section_ids
                 .iter()
                 .filter_map(|sid| project.get_section(*sid))
@@ -276,6 +278,7 @@ impl AppState {
                     let Some(owner) = section.shots.get(last - p) else {
                         continue;
                     };
+                    ids.insert((section.id, shot.id));
                     if shot.id != owner.id {
                         moves.push((section.id, shot.id, owner.id));
                     }
@@ -287,7 +290,7 @@ impl AppState {
                     }
                 }
             }
-            (moves, mirrored, current)
+            (moves, mirrored, current, ids)
         };
         let db_guard = self.database.lock();
         let Some(db) = db_guard.as_ref() else {
@@ -298,7 +301,7 @@ impl AppState {
         let pins = if moves.is_empty() {
             current
         } else {
-            match db.rekey_position_resolved_warnings(&moves, &current) {
+            match db.rekey_position_resolved_warnings(&moves, &current, &ids) {
                 Ok(_) => current,
                 Err(e) => {
                     tracing::warn!(

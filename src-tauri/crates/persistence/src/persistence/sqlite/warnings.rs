@@ -499,7 +499,8 @@ impl Database {
     ///
     /// Each `(section_id, from, to)` re-keys the position-keyed (NULL-uuid) rows
     /// at `from` to `to`. `shots` gives the uuid of the shot at each
-    /// `(section_id, shot id)` of those sections. A uuid-keyed row is matched by
+    /// `(section_id, shot id)` of those sections that has one, and `shot_ids`
+    /// every shot of them, with a uuid or without. A uuid-keyed row is matched by
     /// its uuid wherever it sits, but it still holds its slot under
     /// UNIQUE(section_id, shot_id, warning_code), so, in a section of `moves`:
     /// one whose uuid names exactly one of those shots, and is in the file, moves
@@ -530,6 +531,7 @@ impl Database {
         &self,
         moves: &[(u32, u32, u32)],
         shots: &HashMap<(u32, u32), String>,
+        shot_ids: &HashSet<(u32, u32)>,
     ) -> Result<usize> {
         let tx = self.conn.unchecked_transaction()?;
         // (row, target) of each position-keyed row that moves, and the
@@ -559,9 +561,11 @@ impl Database {
                 .and_modify(|id| *id = None)
                 .or_insert(Some(shot_id));
         }
-        // Every shot id of the sections, which no free slot may be.
-        let held: HashSet<(u32, u32)> = shots
-            .keys()
+        // Every shot id of the sections, with a uuid or without (a shot with
+        // none is in no uuid map), which no free slot may be.
+        let held: HashSet<(u32, u32)> = shot_ids
+            .iter()
+            .chain(shots.keys())
             .copied()
             .chain(moves.iter().flat_map(|&(s, from, to)| [(s, from), (s, to)]))
             .collect();
