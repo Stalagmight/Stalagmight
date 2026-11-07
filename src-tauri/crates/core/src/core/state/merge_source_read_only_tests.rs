@@ -173,12 +173,31 @@ fn a_merge_into_a_folder_that_is_not_there_writes_nothing_through_a_link() {
     let merged = state.merge_projects(vec![a, b], output, "Merged".to_owned(), false);
     let landed = files_in(&guarded);
     println!(
-        "merge into missing/..: success={} error={:?}; the guarded folder holds {landed:?}",
-        merged.success, merged.error
+        "merge into missing/..: success={} code={:?} error={:?}; the guarded folder holds \
+         {landed:?}",
+        merged.success, merged.code, merged.error
     );
     assert!(
         landed.is_empty(),
         "the merge created {landed:?} through the link at its temp name"
     );
     assert!(!merged.success, "the output's folder is not there");
+    // [#576 RVF-d-17] Refused by THIS guard, the output's folder check, and not
+    // by whichever later barrier happens to refuse the temp's open: since
+    // 64353dd30 `open_scratch` also fails on `missing/..`, with the same code
+    // ("Failed to create output file: Failed to open database"), so without
+    // the message the test stays green with the guard deleted.
+    assert_eq!(
+        merged.code,
+        Some(crate::models::CommandErrorCode::FsPathNotFound),
+        "the merge is refused for its missing folder"
+    );
+    assert!(
+        merged
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("the folder no longer exists")),
+        "the merge is refused by its output-folder check, before anything is opened: {:?}",
+        merged.error
+    );
 }
