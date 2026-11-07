@@ -104,8 +104,8 @@ export const PROJECT_SETTING_FLUSH_TIMEOUT_MS = 2000;
  * not show. Each write now lands in its own session.
  *
  * Bounded by {@link PROJECT_SETTING_FLUSH_TIMEOUT_MS}: a write still QUEUED (not yet
- * sent) when the bound runs out is dropped unsent; one already sent lands as it
- * would have. With nothing queued it returns at once and arms no timer.
+ * sent) when the bound runs out - one made during the wait included - is dropped
+ * unsent; one already sent lands as it would have. With nothing queued it returns at once and arms no timer.
  */
 export function flushProjectSettingWrites(timeoutMs = PROJECT_SETTING_FLUSH_TIMEOUT_MS): Promise<void> {
   const pending = [...projectSettingKeys].flatMap((key) => {
@@ -113,7 +113,6 @@ export function flushProjectSettingWrites(timeoutMs = PROJECT_SETTING_FLUSH_TIME
     return tail ? [tail] : [];
   });
   if (pending.length === 0) return Promise.resolve();
-  const queuedBefore = projectWritesQueued;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<boolean>((resolve) => {
     timer = setTimeout(() => resolve(true), timeoutMs);
@@ -121,7 +120,10 @@ export function flushProjectSettingWrites(timeoutMs = PROJECT_SETTING_FLUSH_TIME
   const flushed = Promise.all(pending).then(() => false);
   return Promise.race([flushed, timedOut]).then((outOfTime) => {
     clearTimeout(timer);
-    if (outOfTime) droppedUpTo = Math.max(droppedUpTo, queuedBefore);
+    // [#576 RVF-c-A2-3] Every write queued AT the timeout, those made during the wait
+    // included: one made then queues behind the wedged write too, and would be sent
+    // after the switch committed (a reload of the same file takes it).
+    if (outOfTime) droppedUpTo = Math.max(droppedUpTo, projectWritesQueued);
   });
 }
 

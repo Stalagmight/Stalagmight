@@ -117,4 +117,41 @@ describe('a close or a load first flushes the queued display writes (#576 FZ-FZ-
     await vi.advanceTimersByTimeAsync(10);
     expect(sent).toEqual(['gridSpacing=20', 'close_project']);
   });
+
+  it('drops a write made while the flush waited, so it never lands after the reload (#576 RVF-c-A2-3)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    useUIStore.getState().setGridSpacing(20); // wedged
+    await vi.waitFor(() => expect(releaseFirst).not.toBeNull());
+    const reload = useProjectStore.getState().loadProject(CAVE_A); // the same file
+    await vi.advanceTimersByTimeAsync(5);
+    useUIStore.getState().setGridSpacing(50); // made during the flush wait: still queued at the timeout
+
+    await vi.advanceTimersByTimeAsync(PROJECT_SETTING_FLUSH_TIMEOUT_MS);
+    await vi.waitFor(() => expect(loads).toHaveLength(1));
+    loads[0]?.resolve(reloadResult());
+    expect(await reload).toMatchObject({ success: true });
+    releaseFirst?.(); // the wedged write answers only after the reload committed
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(sent.filter((s) => s.startsWith('gridSpacing=')), `sent: ${sent.join(', ')}`).toEqual(['gridSpacing=20']);
+  });
 });
+
+/** The load answer for a reload of CaveA (the same project, a new session). */
+function reloadResult() {
+  return {
+    loadingId: 7,
+    isRemote: false,
+    newerSchemaVersion: null,
+    speleoLinkUnreadable: false,
+    unreadableProjectSettings: [],
+    loadRepairs: null,
+    project: makeProject({ created_at: '2026-09-01T10:00:00Z', file_path: CAVE_A }),
+    stations: [],
+    surveyData: { shots: [], stations: [] },
+    stats: null,
+    warnings: [],
+    frozen_shots: [],
+    displaySettings: {},
+  };
+}
