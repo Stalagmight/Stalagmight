@@ -4,6 +4,7 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { useProject } from '../../hooks/useProject';
 import { useGlobalViewShortcuts } from '../../hooks/useGlobalViewShortcuts';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
+import { useToastBottomClearance } from '../../hooks/useToastBottomClearance';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
@@ -107,6 +108,7 @@ export default function GlobalView() {
   // use the stricter 'icons' level - handled inside AppMenu).
   const showToolbarIcons = syntacticLevelAtLeast(syntacticLevel, 'toolbar_only');
   const { t } = useTranslation();
+  const statusBarToastClearance = useToastBottomClearance('project-list-status-bar');
   const [activeTab, setActiveTab] = useState<ViewTab>('list');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
@@ -1050,8 +1052,11 @@ export default function GlobalView() {
         )}
       </main>
 
-      {/* Status bar */}
-      <footer className="px-4 py-2 border-t border-border text-sm text-text-secondary flex justify-between">
+      {/* Status bar. [#576 W70] Toasts keep their gap above it instead of covering it. */}
+      <footer
+        ref={statusBarToastClearance}
+        className="px-4 py-2 border-t border-border text-sm text-text-secondary flex justify-between"
+      >
         <span>
           {t('globalView.status.systems', {
             count: recentProjects.length,

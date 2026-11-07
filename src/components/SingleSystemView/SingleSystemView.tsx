@@ -4,6 +4,7 @@ import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useOnboardingStep } from '../../hooks/useOnboardingStep';
 import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
+import { useToastBottomClearance } from '../../hooks/useToastBottomClearance';
 import { useProjectStore } from '../../store/projectStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { PANEL_FIELDS, useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
@@ -71,6 +72,8 @@ export default function SingleSystemView() {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   useKeyboardShortcuts();
+  // [#576 W70] Toasts keep their gap above the status bar instead of covering it.
+  const statusBarToastClearance = useToastBottomClearance('project-view-status-bar');
 
   const {
     project,
@@ -894,6 +897,7 @@ export default function SingleSystemView() {
           the Data hover region: keep an already-open (hover) Data panel open
           while the pointer rests here, but don't open it from closed. */}
       <footer
+        ref={statusBarToastClearance}
         onMouseEnter={() => {
           if (dataReveal.isFloatingOpen) dataReveal.onRegionEnter();
         }}
