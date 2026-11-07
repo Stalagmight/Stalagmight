@@ -35,7 +35,10 @@
  * depends on the direction the export walks it (the depth it arrives with), so
  * the oracle accepts the mean for any one-per-section choice rather than
  * re-deriving the walk. With every section single-valued, the usual case, the
- * mean is exact.
+ * mean is exact. That the export takes the ARRIVING reading (Q1-D1) is pinned
+ * in Rust instead, by `a_section_merged_part_way_along_is_one_reading_of_its_junction`
+ * (src-tauri/crates/export/src/export/tml/junction_depths_tests.rs); the
+ * shot digest here carries no walk direction to check it with (#576 RVF-d-18).
  *
  * This module only imports the error type, so it stays pinnable from vitest.
  */

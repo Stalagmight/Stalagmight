@@ -1834,8 +1834,9 @@ fn simplify_lone_branch_names(configs: &mut [ImportSectionConfig]) {
 
 /// Resolve a TML shot's entry depth, handling the `-1.0` "same as previous" sentinel.
 ///
-/// `prev_depth` is the previous real shot's cumulative depth (`None` for the first
-/// shot in a section), `start_depth` the parent station's cumulative depth.
+/// `prev_depth` is the depth the previous leg in the file ends at, whether that
+/// leg was kept or dropped, CLOSURE rows skipped (`None` for the first shot in a
+/// section), `start_depth` the parent station's cumulative depth.
 ///
 /// The `-1.0` is the FILE FORMAT's marker, not this parser's invention, so a
 /// literal `-1.0` in the file means "inherit" even though -1 m is a perfectly
