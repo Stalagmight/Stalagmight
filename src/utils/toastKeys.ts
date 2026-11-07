@@ -116,6 +116,15 @@ export const TOAST_KEYS = {
   // Open / import routing
   IMPORT_IN_PROGRESS: 'import-in-progress',
 
+  // In-app updater (#579)
+  APP_UPDATE_DOWNLOAD_FAILED: 'app-update-download-failed',
+  // Its own key, not a reuse of the download one: the copy has to name a
+  // DIFFERENT recovery. "Try again from the update banner" is right after a
+  // failed download (the banner still offers Download); after a failed install
+  // the banner is on "Restart to update", where that instruction points at a
+  // button that does not exist.
+  APP_UPDATE_INSTALL_FAILED: 'app-update-install-failed',
+
   // Debug
   DEBUG_REFRESH: 'debug-refresh',
   DEBUG_COPY: 'debug-copy',

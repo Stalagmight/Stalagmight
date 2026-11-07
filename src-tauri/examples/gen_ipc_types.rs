@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use ts_rs::TS;
 
+use stalagmight_lib::commands::app_update::{AppUpdateCheck, AppUpdateProgress, AppUpdateStatus};
 use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStatsResponse};
 use stalagmight_lib::commands::export::DiveProfileRequest;
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
@@ -24,7 +25,7 @@ use stalagmight_lib::config::{
     ProviderCacheConfig, ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback,
     ShortcutsConfig, ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel,
     SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode, TokenFallback, UnitsConfig,
-    ValidationConfig,
+    UpdateTrack, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
@@ -352,11 +353,17 @@ fn main() {
     export::<LengthUnit>(&out_dir);
     export::<AngleUnit>(&out_dir);
     export::<ShortcutFeedback>(&out_dir);
+    export::<UpdateTrack>(&out_dir);
     export::<ThemeMode>(&out_dir);
     export::<ColorTheme>(&out_dir);
     export::<SpeleoDbConfig>(&out_dir);
     export::<TokenFallback>(&out_dir);
     export::<ConfigSaveReport>(&out_dir);
+    // In-app updater (#579): the check answer, its status union, and the
+    // download-progress event payload.
+    export::<AppUpdateCheck>(&out_dir);
+    export::<AppUpdateStatus>(&out_dir);
+    export::<AppUpdateProgress>(&out_dir);
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
@@ -588,11 +595,15 @@ fn main() {
         "DpvUnit",
         "DpvRig",
         "ShortcutFeedback",
+        "UpdateTrack",
         "ThemeMode",
         "ColorTheme",
         "SpeleoDbConfig",
         "TokenFallback",
         "ConfigSaveReport",
+        "AppUpdateCheck",
+        "AppUpdateStatus",
+        "AppUpdateProgress",
         "Permission",
         "SpeleoProjectSummary",
         "TokenStorage",

@@ -4,7 +4,8 @@ use super::{
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
     SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
-    StationConfig, SyntacticHighlightingConfig, UnitsConfig, ValidationConfig, WebkitMemoryConfig,
+    StationConfig, SyntacticHighlightingConfig, UnitsConfig, UpdateTrack, ValidationConfig,
+    WebkitMemoryConfig,
 };
 
 #[expect(clippy::derivable_impls)]
@@ -56,6 +57,8 @@ impl Default for GeneralConfig {
             onboarding_first_launch_done: false,
             telemetry_enabled: false,
             telemetry_opt_in_shown: false,
+            update_track: UpdateTrack::default(),
+            update_check_enabled: true,
         }
     }
 }

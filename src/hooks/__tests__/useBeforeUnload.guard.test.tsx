@@ -31,8 +31,22 @@ vi.mock('@tauri-apps/api/window', () => ({
 const confirmMock = vi.hoisted(() => vi.fn(async () => true));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
 
+const invokeIpcMock = vi.hoisted(() => vi.fn());
+vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+
+const showToastMock = vi.hoisted(() => vi.fn());
+vi.mock('../../store/uiStore', () => ({
+  useUIStore: { getState: () => ({ showToast: showToastMock }) },
+}));
+
 import { useBeforeUnload } from '../useBeforeUnload';
-import { performQuit, resetQuitConfirmationForTests } from '../../utils/quit';
+import {
+  performQuit,
+  resetQuitConfirmationForTests,
+  requestUpdateRestart,
+  resetUpdateRestartForTests,
+} from '../../utils/quit';
+import { useUpdateStore } from '../../store/updateStore';
 
 function Harness({
   shouldBlock,
@@ -60,6 +74,11 @@ beforeEach(() => {
   confirmMock.mockClear();
   confirmMock.mockResolvedValue(true);
   resetQuitConfirmationForTests();
+  resetUpdateRestartForTests();
+  invokeIpcMock.mockReset();
+  invokeIpcMock.mockResolvedValue(undefined);
+  showToastMock.mockClear();
+  useUpdateStore.getState().reset();
 });
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -315,5 +334,156 @@ describe('useBeforeUnload - the tier-1 cleanup waits for the tier-2 guard', () =
 
     expect(destroyMock).toHaveBeenCalledTimes(1);
     err.mockRestore();
+  });
+});
+
+/**
+ * [#579] An update restart armed by `requestUpdateRestart` runs the SAME guard
+ * chain as a plain close, but the final branch installs instead of destroying.
+ */
+describe('useBeforeUnload - the armed update restart (#579)', () => {
+  /** Arm, then forget the arm's own IPC call so assertions read cleanly. */
+  async function armRestart(): Promise<void> {
+    await requestUpdateRestart();
+    invokeIpcMock.mockClear();
+  }
+
+  it('installs instead of destroying once every guard has passed', async () => {
+    const guard = vi.fn(() => false);
+    render(<Harness shouldBlock={false} guard={guard} />);
+    await flush();
+
+    await armRestart();
+    await pressWindowX();
+
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'install_app_update_and_restart',
+      undefined,
+      expect.any(Object),
+    );
+    expect(destroyMock).not.toHaveBeenCalled();
+  });
+
+  it('a guard that opens a dialog leaves the flag armed - not consumed - and installs nothing', async () => {
+    const guard = vi.fn(() => true);
+    render(<Harness shouldBlock={false} guard={guard} />);
+    await flush();
+
+    await armRestart();
+    await pressWindowX();
+
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(destroyMock).not.toHaveBeenCalled();
+
+    // The dialog's own action re-issues the close, pre-confirmed - the still-armed
+    // flag is what makes it install rather than destroy.
+    performQuit();
+    await pressWindowX();
+
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'install_app_update_and_restart',
+      undefined,
+      expect.any(Object),
+    );
+    expect(destroyMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * [review, HIGH] The arm used to carry a 10-second TTL borrowed from the quit
+   * confirmation. It does not span an IPC round trip, it spans a HUMAN reading
+   * the unsaved-changes dialog and saving their work - so past ten seconds the
+   * restart silently degraded into a plain quit and the downloaded update was
+   * lost with nothing said. Only an explicit abandon may clear it.
+   */
+  it('survives a guard dialog the user sat on for far longer than any TTL', async () => {
+    vi.useFakeTimers();
+    try {
+      const guard = vi.fn(() => true);
+      render(<Harness shouldBlock={false} guard={guard} />);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await armRestart();
+      await pressWindowX();
+      expect(destroyMock).not.toHaveBeenCalled();
+
+      // The user reads the dialog, saves, thinks about it.
+      await vi.advanceTimersByTimeAsync(11_000);
+
+      performQuit();
+      await pressWindowX();
+
+      expect(invokeIpcMock).toHaveBeenCalledWith(
+        'install_app_update_and_restart',
+        undefined,
+        expect.any(Object),
+      );
+      expect(destroyMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * Declining tier 1 abandons the exit outright, so the restart goes with it -
+   * on both sides. Without this the arm survives and the NEXT ordinary quit
+   * installs the update instead of quitting.
+   */
+  it('abandons the restart when the tier-1 confirm is declined', async () => {
+    confirmMock.mockResolvedValue(false);
+    const guard = vi.fn(() => false);
+    render(<Harness shouldBlock guard={guard} />);
+    await flush();
+
+    await armRestart();
+    await pressWindowX();
+
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'unarm_app_update_restart',
+      undefined,
+      expect.any(Object),
+    );
+    expect(destroyMock).not.toHaveBeenCalled();
+
+    // ...and the next, ordinary close is a plain quit again.
+    confirmMock.mockResolvedValue(true);
+    invokeIpcMock.mockClear();
+    await pressWindowX();
+    expect(invokeIpcMock).not.toHaveBeenCalledWith(
+      'install_app_update_and_restart',
+      undefined,
+      expect.any(Object),
+    );
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('toasts on a rejected install, drops the banner back, and does NOT close the window', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const guard = vi.fn(() => false);
+    render(<Harness shouldBlock={false} guard={guard} />);
+    await flush();
+
+    // A banner sitting on "ready" is what a rejected install has to walk back.
+    const seq = useUpdateStore.getState().beginCheck();
+    useUpdateStore.getState().setAvailable(seq, { version: '9.9.9', notesUrl: 'https://x' });
+    useUpdateStore.getState().startDownloading('9.9.9');
+    useUpdateStore.getState().setReady('9.9.9');
+
+    await armRestart();
+    invokeIpcMock.mockRejectedValueOnce(new Error('disk full'));
+    await pressWindowX();
+
+    expect(destroyMock).not.toHaveBeenCalled();
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    // The install-failed toast, NOT the download-failed one: the banner is on
+    // "Restart to update", where "retry from the banner" names no button.
+    expect(showToastMock.mock.calls[0]?.[1]).toBe('app-update-install-failed');
+    // Back to `available`, so Download is offerable again - the bytes are the
+    // likeliest reason the install failed.
+    expect(useUpdateStore.getState().status).toBe('available');
+    err.mockRestore();
+
+    // The arm was spent by the attempt, so a later ordinary close destroys.
+    await pressWindowX();
+    expect(destroyMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -39,12 +39,14 @@ pub const EVENT_NAMES: &[&str] = &[
     // historical continuity; it has no live handler, so the command/undo
     // coverage tests skip it via REMOVED_COMMANDS.
     "command.adjust_loop_closures",
+    "command.arm_app_update_restart",
     "command.attempt_repair",
     "command.calculate_file_hash",
     "command.can_redo",
     "command.can_undo",
     "command.cancel_loading",
     "command.check_duplicate_import",
+    "command.check_for_app_update",
     "command.check_merge_connectivity",
     "command.check_section_hashes",
     "command.clear_tile_cache",
@@ -64,6 +66,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.delete_section",
     "command.delete_shot",
     "command.delete_shot_and_split",
+    "command.download_app_update",
     "command.execute_batch",
     "command.execute_gpx_import",
     "command.execute_tml_import",
@@ -94,6 +97,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.history_discarded",
     "command.import_dmp",
     "command.import_sections",
+    "command.install_app_update_and_restart",
     "command.list_backups",
     "command.list_dive_plans",
     "command.list_recent_projects",
@@ -181,6 +185,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.suggest_all_import_placements",
     "command.suggest_import_placement",
     "command.suggest_orphan_placements",
+    "command.unarm_app_update_restart",
     "command.undo",
     "command.undo_to",
     "command.unmerge_station_pair",
@@ -1108,7 +1113,14 @@ mod tests {
         //   + 1 the discarded-history banner (#473) asks the backend whether the
         //       project it just opened could read its edit history at all:
         //       command.history_discarded = 737.
-        assert_eq!(EVENT_NAMES.len(), 737);
+        //   + 5 the in-app updater (#579), one per step of the deliberately
+        //       split cycle: command.check_for_app_update,
+        //       command.download_app_update, command.arm_app_update_restart,
+        //       command.unarm_app_update_restart,
+        //       command.install_app_update_and_restart = 742. The arm/unarm
+        //       pair is the backend's one-shot consent for the install, so a
+        //       webview `invoke` cannot skip the exit guards.
+        assert_eq!(EVENT_NAMES.len(), 742);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

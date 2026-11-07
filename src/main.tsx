@@ -17,6 +17,7 @@ import { useGasPlanStore } from './store/gasPlanStore';
 import { useSpeleoStore } from './store/speleoStore';
 import { useExportStore } from './store/exportStore';
 import { useNetworkStore } from './store/networkStore';
+import { useUpdateStore } from './store/updateStore';
 import { shotMaterialization } from './types/survey-data';
 import { getPerfTimings } from './utils/memoryProbe';
 import { routeOpenedFile } from './utils/openOrImport';
@@ -67,6 +68,7 @@ declare global {
       speleoStore?: typeof useSpeleoStore;
       exportStore?: typeof useExportStore;
       networkStore?: typeof useNetworkStore;
+      updateStore?: typeof useUpdateStore;
       // Loading progress E2E hooks
       getLoadingId?: () => number;
       getBackendLoadingId?: () => bigint;
@@ -109,6 +111,7 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
   testAPI.speleoStore = useSpeleoStore;
   testAPI.exportStore = useExportStore;
   testAPI.networkStore = useNetworkStore;
+  testAPI.updateStore = useUpdateStore;
   testAPI.fileDialogAnswers ??= { open: [], save: [] };
   testAPI.fileDialogConsumptions ??= {};
   // See the declaration above for why the router needs its own hook.
