@@ -8,6 +8,7 @@ import {
 } from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
 import { expectedOpenProject } from '../../store/expectedOpenProject';
+import { projectSessionEpoch } from '../../store/projectSession';
 import { Select } from '../common/Select';
 import { divePlanSnapshotOf } from '../../utils/divePlan';
 import {
@@ -19,6 +20,26 @@ import {
 } from '../../utils/divePlanApi';
 import { projectChangedMessage } from '../../utils/projectChangedNotice';
 import type { DivePlanMeta } from '../../types/ipc.generated';
+
+/**
+ * The open project's identity, read when a request is made and again when its answer
+ * arrives: an answer made for another project is dropped, success or failure (#244).
+ * The gas store mutations (apply/markSaved/clear) survive an unmount, so a reply that
+ * resolves after the user opened ANOTHER project would corrupt the new project's store.
+ * Composite key (mirrors prevProjectKeyRef below): created_at alone doesn't change on a
+ * Save-As, but the .plnx sibling path is derived from file_path, so a Save-As mid-flight
+ * must also be treated as a project-identity change here.
+ *
+ * [#576 W60-NF2] Plus the project session (`projectSession.ts`, moved by every load or
+ * create), and checked on failures and the plan list too: the bar stays mounted while a
+ * load answered ALREADY_OPEN re-reads another project (`loadProject`), and the previous
+ * project's error or plan list landed on the new project's bar. Not `modified_at` (as
+ * useMapTools' key has): a project-settings save, allowed in Plan, moves it.
+ */
+function projectKey(): string {
+  const p = useProjectStore.getState().project;
+  return `${projectSessionEpoch()}|${p?.created_at ?? ''}|${p?.file_path ?? ''}`;
+}
 
 /** Inline confirm/prompt state for the bar (kept inline to avoid registering a new
  *  dialog type + its telemetry events; #244). */
@@ -73,9 +94,14 @@ export function DivePlanBar() {
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(() => {
+    const key = projectKey();
     listDivePlans()
-      .then(setPlans)
-      .catch((e: unknown) => setError(String(e)));
+      .then((list) => {
+        if (projectKey() === key) setPlans(list);
+      })
+      .catch((e: unknown) => {
+        if (projectKey() === key) setError(String(e));
+      });
   }, []);
 
   // Refetch on mount (panel mounts when Plan mode opens) and whenever the project's identity
@@ -96,17 +122,8 @@ export function DivePlanBar() {
 
   const loadedName = plans.find((p) => p.id === loadedPlanId)?.name ?? null;
 
-  // The gas store mutations below (apply/markSaved/clear) survive an unmount, so a reply that
-  // resolves after the user opened ANOTHER project would corrupt the new project's store.
-  // Capture the project identity at request time and drop the mutation if it moved (#244).
-  // Composite key (mirrors prevProjectKeyRef above): created_at alone doesn't change on a
-  // Save-As, but the .plnx sibling path is derived from file_path, so a Save-As mid-flight
-  // must also be treated as a project-identity change here.
-  const projectKey = () => {
-    const p = useProjectStore.getState().project;
-    return `${p?.created_at ?? ''}|${p?.file_path ?? ''}`;
-  };
-
+  // Each request captures the project identity (`projectKey`) and drops its answer if it
+  // moved, success or failure (#244, #576 W60-NF2).
   const doLoad = useCallback(
     async (id: number) => {
       setError(null);
@@ -119,6 +136,7 @@ export function DivePlanBar() {
         setStaleCount(plan.stale_ref_count);
         setDroppedSpeedCount(droppedSpeeds);
       } catch (e) {
+        if (projectKey() !== key) return; // [#576 W60-NF2] not this project's error
         setError(String(e));
       } finally {
         setBusy(false);
@@ -161,6 +179,7 @@ export function DivePlanBar() {
       markPlanSaved(meta.id, snap);
       refresh();
     } catch (e) {
+      if (projectKey() !== key) return; // [#576 W60-NF2] not this project's error
       // [#576 Q-W44-7-D1] Refused because the project changed: the short line instead.
       setError(projectChangedMessage(e) ?? String(e));
     } finally {
@@ -184,6 +203,7 @@ export function DivePlanBar() {
       setPending({ kind: 'none' });
       refresh();
     } catch (e) {
+      if (projectKey() !== key) return; // [#576 W60-NF2] not this project's error
       setError(projectChangedMessage(e) ?? String(e));
     } finally {
       setBusy(false);
@@ -205,6 +225,7 @@ export function DivePlanBar() {
       setDroppedSpeedCount(0);
       refresh();
     } catch (e) {
+      if (projectKey() !== key) return; // [#576 W60-NF2] not this project's error
       setError(projectChangedMessage(e) ?? String(e));
     } finally {
       setBusy(false);
