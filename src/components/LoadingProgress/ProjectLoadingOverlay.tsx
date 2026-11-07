@@ -41,8 +41,9 @@ export function ProjectLoadingOverlay({ retrySource, occupiesScreen = false }: P
   );
   useScreenOccupant(occupiesScreen && loading.isLoading);
 
+  // [#576 Q-W44-2-D1] The user's Cancel: the load's answer then shows no error.
   const handleCancel = useCallback(async () => {
-    await cancelLoading();
+    await cancelLoading({ byUser: true });
   }, [cancelLoading]);
 
   // Retry re-drives `loadProject` directly on the SAME path a previous call

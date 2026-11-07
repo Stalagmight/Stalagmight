@@ -67,6 +67,22 @@ export const initialLoadingState: LoadingState = {
 // Separate client operation ID for race detection (independent of backend loading ID)
 let clientOpIdCounter = 0;
 
+/**
+ * [#576 Q-W44-2-D1] The `clientOpId` of the newest load the user pressed Cancel for
+ * (the loading modal's Cancel: `cancelLoading({ byUser: true })`), noted before the
+ * cancel IPC leaves, so an answer that beats the cancel's own answer is covered too.
+ */
+let cancelledByUserOpId = 0;
+
+/**
+ * Whether the user cancelled the load with this `clientOpId`. Its answer then ends
+ * it without an error modal, whatever the answer is: CANCELLED, or a
+ * FILE_REPLACED_DURING_LOAD that crossed the Cancel (the repeat is skipped then).
+ */
+export function loadCancelledByUser(clientOpId: number): boolean {
+  return clientOpId !== 0 && clientOpId === cancelledByUserOpId;
+}
+
 export interface ProjectLoadingActions {
   /** Start a new loading operation, returns the loadingId. `loadToken`: the load's name, if it has one. */
   startLoading: (projectName: string, projectPath: string, loadToken?: string) => number;
@@ -76,8 +92,11 @@ export interface ProjectLoadingActions {
   resetLoading: () => void;
   /** Set loading error (keeps modal open) */
   setLoadingError: (message: string, details?: string) => void;
-  /** Cancel the in-progress loading operation the loading state is for (#576 W44-NF3: by its name) */
-  cancelLoading: () => Promise<void>;
+  /**
+   * Cancel the in-progress loading operation the loading state is for (#576 W44-NF3: by
+   * its name). `byUser`: the user pressed Cancel (#576 Q-W44-2-D1: no error modal after).
+   */
+  cancelLoading: (options?: { byUser?: boolean }) => Promise<void>;
 }
 
 export function createProjectLoadingActions(
@@ -129,11 +148,12 @@ export function createProjectLoadingActions(
         },
       })),
 
-    cancelLoading: async () => {
+    cancelLoading: async (options?: { byUser?: boolean }) => {
       // [#576 W44-NF3] Named: the load this state is for, read now. The IPC can run
       // after that load ended and a newer one started; it must not cancel that one.
       // No name (no load of the store's in progress): it cancels nothing.
-      const { clientOpId, loadToken } = get().loading;
+      const { clientOpId, loadToken, isLoading } = get().loading;
+      if (options?.byUser && isLoading) cancelledByUserOpId = clientOpId;
       // Safe to call even when no load is active - backend is idempotent
       try {
         await invokeIpc('cancel_loading', { loadToken: loadToken ?? null }, {

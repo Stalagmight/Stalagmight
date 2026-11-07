@@ -76,7 +76,7 @@ import { expectedProjectOf, issuedAgainstOf, lostProjectOf, type IssuedAgainst }
 import { issueSave, refuseDuringSwitch } from './switchGate';
 import { loadRetryingReplacedFile } from './loadRetry';
 import { newLoadToken } from '../utils/loadToken';
-import { createProjectLoadingActions, initialLoadingState, type LoadingState, type ProjectLoadingActions } from './projectLoadingState';
+import { createProjectLoadingActions, initialLoadingState, loadCancelledByUser, type LoadingState, type ProjectLoadingActions } from './projectLoadingState';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -892,7 +892,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // state, keeping clientOpId): the repeat is a new backend load that cancel never reached.
         const result = await loadRetryingReplacedFile(() => loadProjectFullBinary(path, loadToken), () => {
           if (turn.superseded || get().loading.clientOpId !== clientOpId) return false;
-          if (!get().loading.isLoading) return false;
+          // [#576 Q-W44-2-D1] Nor once the Cancel was pressed, before its own answer reset the state.
+          if (!get().loading.isLoading || loadCancelledByUser(clientOpId)) return false;
           get().setLoadingProgress({ loadingId: 0 }); // the repeat's progress events carry a new id
           return true;
         });
@@ -1120,6 +1121,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (turn.superseded) {
           if (get().loading.clientOpId === clientOpId) get().resetLoading();
           return { success: false, superseded: true };
+        }
+        // [#576 Q-W44-2-D1] The user cancelled this load: it ends quietly, whatever it
+        // answers (CANCELLED, or FILE_REPLACED_DURING_LOAD crossing the Cancel).
+        if (loadCancelledByUser(clientOpId)) {
+          if (get().loading.clientOpId === clientOpId) get().resetLoading();
+          clearProjectActionSource();
+          return { success: false };
         }
 
         // Handle a permission denial - folder-access guidance, not a corruption/error.
