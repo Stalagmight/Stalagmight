@@ -378,15 +378,18 @@ fn rowids(conn: &Connection, table: &str) -> Vec<i64> {
 }
 
 /// The cell at `row` of column `c` in table `t` (both quoted), with text that
-/// is not UTF-8 read lossily (rusqlite's own `Value` conversion panics on it).
+/// is not UTF-8 read lossily (rusqlite's own `Value` conversion refuses it).
 fn cell(conn: &Connection, t: &str, c: &str, row: i64) -> Value {
     conn.query_row(
         &format!("SELECT {c} FROM {t} WHERE rowid = ?1"),
         [row],
         |r| {
             Ok(match r.get_ref(0)? {
+                ValueRef::Null => Value::Null,
+                ValueRef::Integer(i) => Value::Integer(i),
+                ValueRef::Real(f) => Value::Real(f),
                 ValueRef::Text(bytes) => Value::Text(String::from_utf8_lossy(bytes).into_owned()),
-                other => Value::from(other),
+                ValueRef::Blob(bytes) => Value::Blob(bytes.to_vec()),
             })
         },
     )
