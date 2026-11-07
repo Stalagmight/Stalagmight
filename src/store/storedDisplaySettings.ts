@@ -69,6 +69,27 @@ export function storedDisplayValue(rows: Record<string, string>, key: string): b
   return undefined;
 }
 
+/** Every key of a load's `display_settings`. */
+const DISPLAY_KEYS: readonly DisplayKey[] = [...TRUE_BY_DEFAULT, ...FALSE_BY_DEFAULT, 'gridSpacing', 'geometryMode'];
+
+/**
+ * [#576 W71-NF3] The open project's display settings as its load would hand them over,
+ * for the one path that shows the backend's project without a load answer: the
+ * ALREADY_OPEN re-read in `loadProject`. Built from the stored rows key by key with
+ * {@link storedDisplayValue}; a failed or malformed read gives the defaults, as the
+ * load's own read does (`project_load.rs`: `load_display_settings().unwrap_or_default()`).
+ */
+export async function readStoredDisplaySettings(): Promise<DisplaySettings> {
+  let rows: Record<string, string> = {};
+  try {
+    const read = await invokeIpc('load_display_settings', {}, { purpose: 'read the open project display settings' });
+    if (typeof read === 'object' && read !== null) rows = read;
+  } catch {
+    // The defaults, as above.
+  }
+  return Object.fromEntries(DISPLAY_KEYS.map((key) => [key, storedDisplayValue(rows, key)])) as unknown as DisplaySettings;
+}
+
 const DISPLAY_SETTING_PREFIX = SETTING_KEYS.displaySetting('');
 
 /**

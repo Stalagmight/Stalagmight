@@ -76,7 +76,8 @@ import { runProjectSwitch } from '../utils/projectTransition';
 import { expectedProjectOf, issuedAgainstOf, lostProjectOf, type IssuedAgainst } from './projectIssue';
 import { issueSave } from './switchGate';
 import { refuseEditDuringSwitch } from './switchEditNotice';
-import { showStoredDisplaySettings } from './storedDisplaySettings';
+import { readStoredDisplaySettings, showStoredDisplaySettings } from './storedDisplaySettings';
+import type { DisplaySettings } from '../types/loading';
 import { loadRetryingReplacedFile } from './loadRetry';
 import { newLoadToken } from '../utils/loadToken';
 import { createProjectLoadingActions, initialLoadingState, loadCancelledByUser, type LoadingState, type ProjectLoadingActions } from './projectLoadingState';
@@ -532,6 +533,54 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
   dropDormantDistanceOrigin();
 }
 
+/**
+ * The project-store state a load resets for the project it opens, whatever its file
+ * holds. Shared by `loadProject`'s success path and its ALREADY_OPEN re-read of a
+ * project the store did not show (#576 W71-NF3), which reset none of it.
+ */
+function openedProjectCleared(): Partial<ProjectStore> {
+  return {
+    isDirty: false,
+    // Reset integrity state on project switch so a dismissal from the
+    // previous project can never carry over and suppress this one's banner.
+    // The post-load integrity-check effect in App.tsx (keyed on
+    // project.file_path + loading.isLoading) repopulates it for the new
+    // project once this load settles.
+    integrityIssues: [],
+    integrityDismissed: false,
+    integritySaveBlocked: false,
+    integrityDialogOpen: false,
+    ...HISTORY_BANNER_CLEARED,
+  };
+}
+
+/**
+ * The per-project UI resets a load runs once the store shows the project it opened,
+ * before `setView('single')` paints it. Shared, like {@link openedProjectCleared}, by
+ * `loadProject`'s success path and its ALREADY_OPEN re-read (#576 W71-NF3).
+ */
+function resetUiForOpenedProject(displaySettings: DisplaySettings): void {
+  // Apply display settings to UI store (merge, don't overwrite). The same funnel drops
+  // the previous project's Plan/Export snapshots, dive plan and Export options.
+  useUIStore.getState().applyDisplaySettings(displaySettings);
+  useUIStore.getState().triggerFitToBounds();
+  // Reset the Details panel to the project-level view on open (#54): a
+  // stale shot/station/section selection from a previous project/session
+  // must not carry over.
+  useUIStore.getState().clearSelection();
+  // Same hazard for tool state (#275 B1): an armed move-comment pickup or
+  // merge station from the previous project would resolve against this
+  // project's ids and mutate the wrong entities on the next click.
+  // Ordering constraint: this must stay in the SUCCESS path, after the
+  // authoritative set() committed the new project. On a failed
+  // load the old project is still displayed, so its armed tool refs are
+  // still valid and must not be cleared.
+  useUIStore.getState().resetToolTransientsForProjectSwitch();
+  // An undo in this project must not bring back the previous one's distance origin
+  // (#576 RV4-FE-FEA2) - nor this project's own, from before it was reopened.
+  dropDormantDistanceOrigin();
+}
+
 export const useProjectStore = create<ProjectStore>((set, get) => {
   /** What a request was ISSUED against (#24): see `projectIssue.ts`. */
   const issuedAgainst = (): IssuedAgainst => issuedAgainstOf(get().project);
@@ -959,17 +1008,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           unreadableProjectSettings: result.unreadableProjectSettings,
           // [#576 B35(h)] What this load reset or dropped: one notice after the open.
           ...loadRepairsStateFor(result.loadRepairs),
-          isDirty: false,
-          // Reset integrity state on project switch so a dismissal from the
-          // previous project can never carry over and suppress this one's banner.
-          // The post-load integrity-check effect in App.tsx (keyed on
-          // project.file_path + loading.isLoading) repopulates it for the new
-          // project once this load settles.
-          integrityIssues: [],
-          integrityDismissed: false,
-          integritySaveBlocked: false,
-          integrityDialogOpen: false,
-          ...HISTORY_BANNER_CLEARED,
+          ...openedProjectCleared(),
         });
         const tSetDone = performance.now();
         recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
@@ -987,24 +1026,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // from the previously-open remote project is replaced rather than reused.
         speleoState()?.syncProjectLink(result.isRemote, path);
 
-        // Apply display settings to UI store (merge, don't overwrite)
-        useUIStore.getState().applyDisplaySettings(result.displaySettings);
-        useUIStore.getState().triggerFitToBounds();
-        // Reset the Details panel to the project-level view on open (#54): a
-        // stale shot/station/section selection from a previous project/session
-        // must not carry over.
-        useUIStore.getState().clearSelection();
-        // Same hazard for tool state (#275 B1): an armed move-comment pickup or
-        // merge station from the previous project would resolve against this
-        // project's ids and mutate the wrong entities on the next click.
-        // Ordering constraint: this must stay in the SUCCESS path, after the
-        // authoritative set() above committed the new project. On a failed
-        // load the old project is still displayed, so its armed tool refs are
-        // still valid and must not be cleared.
-        useUIStore.getState().resetToolTransientsForProjectSwitch();
-        // An undo in this project must not bring back the previous one's distance origin
-        // (#576 RV4-FE-FEA2) - nor this project's own, from before it was reopened.
-        dropDormantDistanceOrigin();
+        resetUiForOpenedProject(result.displaySettings);
         const tViewStart = performance.now();
         useUIStore.getState().setView('single');
         const tViewDone = performance.now();
@@ -1082,11 +1104,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // answer was not applied. Read what the backend has, as a new session.
           if (get().project?.file_path !== path) {
             noteProjectSessionChanged();
-            // A new session gets the plan reset a load gets in `applyDisplaySettings`, which
-            // this branch never reaches (and `setView` below keeps the plan by design, #244).
-            // Before the await, as there: a pending anchor reply then finds its pins gone.
+            // A new session gets the plan reset a load gets in `applyDisplaySettings`
+            // (`setView` below keeps the plan by design, #244). Here before the await, so a
+            // pending anchor reply finds its pins gone; `resetUiForOpenedProject` below
+            // resets it again with the rest.
             useGasPlanStore.getState().reset();
+            const displaySettings = await readStoredDisplaySettings();
             await get().refreshProjectState();
+            // [#576 W71-NF3] And every other reset a load runs for the project it opens,
+            // through the same two helpers; the backend has `path` open from its file.
+            set({ databaseOpen: true, ...openedProjectCleared(), ...LOAD_REPAIRS_CLEARED });
+            resetUiForOpenedProject(displaySettings);
           }
           // #270 (hardening): resolve the edit gate SYNCHRONOUSLY when nothing has
           // resolved it, mirroring the success path's `syncProjectLink` before the
