@@ -807,6 +807,14 @@ interface UIStore {
   importContext: 'new-project' | 'existing-project' | null;
   setImportContext: (context: 'new-project' | 'existing-project' | null) => void;
 
+  // [#576 Q-W27-1-D1] The import whose file `routeOpenedFile` is parsing right
+  // now, before any dialog for it is up: the path, and the route's generation
+  // token so a settling parse clears only its own mark. Null when no parse is in
+  // flight. `importFlowOwnsScreen` counts it (one import at a time, #411) and
+  // `ImportParseIndicator` shows it.
+  importParse: { path: string; token: number } | null;
+  setImportParse: (importParse: { path: string; token: number } | null) => void;
+
   // Session surveyor memory (not persisted to config)
   lastUsedSurveyor: string;
   setLastUsedSurveyor: (surveyor: string) => void;
@@ -2158,6 +2166,9 @@ export const useUIStore = create<UIStore>((set) => ({
   // Import flow context
   importContext: null,
   setImportContext: (importContext) => set({ importContext }),
+
+  importParse: null,
+  setImportParse: (importParse) => set({ importParse }),
 
   // Session surveyor memory (not persisted to config)
   lastUsedSurveyor: '',

@@ -77,8 +77,9 @@ function unsupportedFileDisplayName(path: string): string {
  * no-op branch, only one of them opened a dialog first.
  *
  * [#576 HFI-4-D1] `stillWanted` is read when the parse settles: a result nobody
- * is waiting for any more - another project opened meanwhile, or the
- * import-as-new confirm was cancelled - is dropped, success or failure alike,
+ * is waiting for any more - another project opened meanwhile, the
+ * import-as-new confirm was cancelled, or a newer route took over (#576
+ * Q-W27-1-D1, `latestRouteToken`) - is dropped, success or failure alike,
  * so neither a late dialog nor a late error lands over what the user did since.
  */
 async function parseForImport<T>(
@@ -176,8 +177,22 @@ const IMPORT_FLOW_DIALOGS = new Set([
  */
 function importFlowOwnsScreen(ui: ReturnType<typeof useUIStore.getState>): boolean {
   if (ui.activeDialog && IMPORT_FLOW_DIALOGS.has(ui.activeDialog)) return true;
+  // [#576 Q-W27-1-D1] A third shape: an import whose file is still parsing has
+  // nothing on screen yet (no project open, a slow or oversized file), and its
+  // result opens the flow's first dialog when it lands - over whatever a second
+  // routed file had raised in the meantime. One import at a time covers it too.
+  if (ui.importParse !== null) return true;
   return ui.placementMode !== null;
 }
+
+/**
+ * [#576 Q-W27-1-D1] Generation of the latest route the gates below let through.
+ * Each such route takes the next one, and its parse is still wanted only while
+ * it holds the latest: the backstop for a caller that reaches a second route
+ * past the one-import-at-a-time gate, so the superseded parse's late result
+ * (good or failed) is dropped instead of landing over the newer route's screen.
+ */
+let latestRouteToken = 0;
 
 /**
  * Dispatch an already-chosen path to the matching open/import flow.
@@ -235,13 +250,26 @@ export async function routeOpenedFile(
   // fresh `dialogData`, so its identity names the instance). A parse that settles
   // after either moved is a late result and is dropped.
   const session = projectSessionEpoch();
+  // Taken once this route passes the gates (below), before anything reads
+  // `stillWanted`; 0 means it never did (the finally then has no mark to clear).
+  let token = 0;
   const confirmDialogData = importAsNew ? ui.dialogData : null;
   const confirmStillShowing = (): boolean => {
     const now = useUIStore.getState();
     return now.activeDialog === 'import-as-new-project' && now.dialogData === confirmDialogData;
   };
   const stillWanted = (): boolean =>
-    projectSessionEpoch() === session && (!importAsNew || confirmStillShowing());
+    projectSessionEpoch() === session &&
+    latestRouteToken === token &&
+    (!importAsNew || confirmStillShowing());
+  // [#576 Q-W27-1-D1] Parse the file with the parse marked in flight, so the gate
+  // refuses a second routed file (with the in-progress toast) until this one
+  // settles, and the busy indicator shows meanwhile. The finally below clears the
+  // mark whichever way the route ends.
+  const parseMarked = <T>(start: () => Promise<T>): Promise<T | null> => {
+    ui.setImportParse({ path, token });
+    return parseForImport(start(), errorTitle, stillWanted);
+  };
   // A dropped result whose confirm dialog is still up (the project changed under
   // it, not by a cancel) takes the dialog down too: it names the old project.
   const dropLateResult = (): void => {
@@ -326,6 +354,9 @@ export async function routeOpenedFile(
       ui.showToast(i18n.t('importGate.inProgress'), TOAST_KEYS.IMPORT_IN_PROGRESS, 'warning');
       return;
     }
+
+    // Past the gates: this is now the user's latest pick (see `latestRouteToken`).
+    token = ++latestRouteToken;
 
     // `importContext` tells `saveAfterImport` whether the completion handlers must
     // write the .stalx (a brand-new project's initial save is deferred) or only mark
@@ -441,7 +472,7 @@ export async function routeOpenedFile(
         handedOff = true;
         return;
       }
-      const gpxFile = await parseForImport(store.parseGpx(path), errorTitle, stillWanted);
+      const gpxFile = await parseMarked(() => store.parseGpx(path));
       if (!gpxFile) {
         dropLateResult();
         return;
@@ -462,7 +493,7 @@ export async function routeOpenedFile(
         handedOff = true;
         return;
       }
-      const tmlFile = await parseForImport(store.parseTml(path), errorTitle, stillWanted);
+      const tmlFile = await parseMarked(() => store.parseTml(path));
       if (!tmlFile) {
         dropLateResult();
         return;
@@ -486,7 +517,7 @@ export async function routeOpenedFile(
         handedOff = true;
         return;
       }
-      const compassFile = await parseForImport(store.parseCompass(path), errorTitle, stillWanted);
+      const compassFile = await parseMarked(() => store.parseCompass(path));
       if (!compassFile) {
         dropLateResult();
         return;
@@ -507,7 +538,7 @@ export async function routeOpenedFile(
         handedOff = true;
         return;
       }
-      const wallsFile = await parseForImport(store.parseWalls(path), errorTitle, stillWanted);
+      const wallsFile = await parseMarked(() => store.parseWalls(path));
       if (!wallsFile) {
         dropLateResult();
         return;
@@ -523,7 +554,7 @@ export async function routeOpenedFile(
       });
     } else if (isDmp) {
       // mNemo DMP: import into the current project, or seed a new one.
-      const dmpFile = await parseForImport(store.importDmp(path), errorTitle, stillWanted);
+      const dmpFile = await parseMarked(() => store.importDmp(path));
       if (!dmpFile) return;
       // Re-read project state fresh after the parse - the existing/new-project
       // decision must reflect the project as it is NOW, not the snapshot taken
@@ -561,6 +592,8 @@ export async function routeOpenedFile(
       message: getErrorMessage(err, 'Failed to open file'),
     });
   } finally {
+    // Only this route's own mark: a newer one (a caller past the gate) keeps its.
+    if (token !== 0 && useUIStore.getState().importParse?.token === token) ui.setImportParse(null);
     if (!handedOff) clearProjectActionSource();
   }
 }

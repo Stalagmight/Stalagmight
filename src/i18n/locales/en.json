@@ -3220,7 +3220,8 @@
     "commandFailed": "The change could not be applied."
   },
   "importGate": {
-    "inProgress": "Finish or cancel the current import first."
+    "inProgress": "Finish or cancel the current import first.",
+    "parsing": "Reading {{fileName}}..."
   },
   "newSection": {
     "collapse": "Shrink the table",
