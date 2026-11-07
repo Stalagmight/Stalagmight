@@ -226,10 +226,22 @@ TML-DEPTH-D1 and D2):
   plan stays where it is. A shot with a recorded pitch has its `Inclination`
   rewritten to the new slope (`h` over `dz'`), so the file never states a pitch
   its own `Depth` and `Length` contradict (#576 RVF-d-8); an unrecorded one
-  stays 0. `L'` is rounded up to the next written micrometre and
-  never below the depth change as written, so `|Depth - parent.Depth| <=
-  Length` holds on the file's six decimals in both profiles. A zero-length tie
-  has no run, so its new length is its whole new depth change.
+  stays 0. `L'` is rounded up to the shortest written micrometre that
+  covers it, and never below the depth change as written, so `|Depth -
+  parent.Depth| <= Length` holds on the file's six decimals in both profiles.
+  A zero-length tie has no run, so its new length is its whole new depth
+  change.
+- **A shot with no run states its drop exactly.** A vertical shot (its tape
+  and its drop agree on the file's six decimals, whichever way subtracting
+  its depths in binary tips them) or broken data (below) has `h = 0`. In the
+  user file its length is its new depth change as written, exactly, so the
+  file states a tape equal to its drop and Ariane and our importer read it
+  back with no run. Only the SpeleoDB sidecar rounds it up, by a micrometre
+  where its two written depths differ by a hair more in binary, because
+  SpeleoDB's validator compares them that way (see the sidecar profile
+  below); that micrometre would come back as a run of `sqrt(2 L 1e-6)` (2.5 mm
+  on a 3.2 m shot), which is why the user file does not carry it (#576
+  Q-W46-1-D1).
 - Every refitted shot writes the `DepthIn` sentinel ("I start at my parent's
   `Depth`"), which our importer resolves to exactly that, so all three readers
   - Ariane, our importer and `openspeleo_lib` - see the same geometry.
@@ -252,7 +264,8 @@ later shot on the branch by the size of the mismatch.
 A shot whose own drop already exceeds its own tape is broken data (decision
 TML-DEPTH-Q2-D1). Both its depths stay true and it is exported as the vertical
 shot it can at most be: no horizontal run (`h = 0`), so its length becomes its
-drop, `L' = |dz|`, rounded up the same way. No station moves for it, so the
+drop, `L' = |dz|`: exact in the user file, rounded up in the sidecar, as for
+any shot with no run (above). No station moves for it, so the
 shot after it keeps its start and its tape. (This replaces an earlier clamp
 onto the tape, which moved the station the shot ends at.) Whether a drop
 exceeds its tape is decided on the values as the file writes them, so a
@@ -398,7 +411,7 @@ additionally:
 
 | Concession | Why |
 |------------|-----|
-| Rounds a repaired `Length` up to the next micrometre | The server re-derives `abs(Depth - parent.Depth) <= Length` from the DECIMAL STRINGS, and the six-decimal write can round a repaired tape back below the drop it was minted to cover |
+| Rounds a repaired `Length` up to the shortest written micrometre that covers the drop, a vertical or broken shot's included (the user file writes that one's drop exactly) | The server re-derives `abs(Depth - parent.Depth) <= Length` from the DECIMAL STRINGS, parsed and subtracted in binary, and the six-decimal write can round a repaired tape back below the drop it was minted to cover |
 | Never emits exactly one `<SurveyData>` (pads with a VIRTUAL root) | A lone element parses as a dict in the server's decoder and crashes the conversion; zero is handled cleanly, two or more is the normal path |
 | Re-emits every `<Date>` as an ISO calendar date (`YYYY-MM-DD`), year clamped to `[1900, 2035]` | A missing, empty or non-ISO date fails the whole file; outside IGRF's range the declination silently becomes 0.0. Only `YYYY-MM-DD` is parsed - anything else, including a full ISO 8601 datetime, falls back to the placeholder and loses its real survey date |
 | Emits `<UUID>` only for a v4 not already used in the file | The field is typed `UUID4`; a repeat aliases two shots onto one GeoJSON feature (shot UUIDs are unique per SECTION only) |

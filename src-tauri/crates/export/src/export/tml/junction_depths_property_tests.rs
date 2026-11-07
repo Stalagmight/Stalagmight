@@ -14,7 +14,9 @@
 //! - `|Depth - parent.Depth| <= Length` holds on the values as written;
 //! - a shot keeps its tape unless it touches a moved station or is broken, and
 //!   then its length is `sqrt(h^2 + dz'^2)` for its measured run `h` (none for
-//!   a broken shot, so its drop), rounded up by at most the written micrometre;
+//!   a broken shot, so its drop), rounded up by at most the written micrometre -
+//!   except that a rewritten shot with no run states its drop as written,
+//!   exactly, in the user profile (#576 Q-W46-1-D1);
 //! - plan positions, read back the way our importer reads the file, are
 //!   unchanged. The bound allows only what that micrometre round-up can move a
 //!   run by: `sqrt(h^2 + 2 L' e) - h` for a round-up `e`, which is about a
@@ -215,10 +217,14 @@ fn check(seed: u64, profile: TmlProfile) {
     );
 
     // The bound as the server checks it: on the decimal strings. A length this
-    // pass rewrote holds it in both profiles; the user profile's untouched
+    // pass rewrote holds it in both profiles, but for one case: in the user
+    // profile a rewritten shot with no run states its drop as written as its
+    // tape (#576 Q-W46-1-D1), which holds on the file's decimals and can miss
+    // by binary noise in their difference. The user profile's untouched
     // shots keep the sweep's own arithmetic (rounded depths against the raw
     // tape), which is what that profile has always written.
     let strict = |d: f64, pd: f64, l: f64| (as_written(d) - as_written(pd)).abs() <= as_written(l);
+    let written_drop = |d: f64, pd: f64| as_written((as_written(d) - as_written(pd)).abs());
     let sweep = |d: f64, pd: f64, l: f64| {
         (round_as_written(d) - round_as_written(pd)).abs() <= round_as_written(l).max(l)
     };
@@ -266,7 +272,15 @@ fn check(seed: u64, profile: TmlProfile) {
         let broken = orig.depth_in_same_as_prev && (orig.depth - orig.depth_in).abs() > orig.length;
         let touched =
             !closure && (want[p].1 || want[i].1 || explicit_breaks || off_parent || broken);
-        let holds = if rewritten || touched || profile == TmlProfile::SpeleoDbSidecar {
+        // Rewritten with no run, its drop as written as its exact tape: vertical
+        // or broken on the file's decimals, as the pass judges it.
+        let exact_drop = touched
+            && profile == TmlProfile::User
+            && (measured_run <= 0.0
+                || written_drop(orig.depth, orig.depth_in) >= as_written(orig.length));
+        let holds = if exact_drop {
+            written_drop(got.depth, shots[p].depth) <= as_written(got.length)
+        } else if rewritten || touched || profile == TmlProfile::SpeleoDbSidecar {
             strict(got.depth, shots[p].depth, got.length)
         } else {
             sweep(got.depth, shots[p].depth, got.length)
@@ -294,13 +308,22 @@ fn check(seed: u64, profile: TmlProfile) {
                 at(i)
             );
             let exact = measured_run.hypot(got.depth - start);
-            assert!(
-                got.length >= exact - 1e-12 && got.length <= exact + 2e-6,
-                "{}: length {} for a {measured_run} m run over {} (expected {exact})",
-                at(i),
-                got.length,
-                got.depth - start
-            );
+            if exact_drop {
+                assert_eq!(
+                    as_written(got.length),
+                    written_drop(got.depth, start),
+                    "{}: a shot with no run writes its drop exactly",
+                    at(i)
+                );
+            } else {
+                assert!(
+                    got.length >= exact - 1e-12 && got.length <= exact + 2e-6,
+                    "{}: length {} for a {measured_run} m run over {} (expected {exact})",
+                    at(i),
+                    got.length,
+                    got.depth - start
+                );
+            }
         } else {
             assert!(
                 got.length >= orig.length && got.length <= orig.length + 1e-6,

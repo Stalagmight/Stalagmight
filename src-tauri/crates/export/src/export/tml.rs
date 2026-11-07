@@ -1655,10 +1655,14 @@ fn as_written(v: f64) -> f64 {
 /// file: a 1.3000000000000007 m drop written to six decimals comes back as
 /// "1.3", which is BELOW the drop it was minted to cover, and SpeleoDB rejects
 /// the whole survey for it ("Shot is shorter than the vertical variation").
-/// Rounding up to the next micrometre covers every case; the loop is the check
-/// against the rounding tie, and takes at most an iteration or two.
+/// It starts at the NEAREST micrometre and steps up while that writes short,
+/// which takes at most one step. Not at the ceiling of `delta * 1e6`: where
+/// that product carries binary noise above the integer the ceiling is a
+/// micrometre past a `delta` that is already a written value - 0.062811 would
+/// come out 0.062812, as about 1.5% of six-decimal values did (#576
+/// Q-W46-1-D1).
 fn length_covering_written_delta(delta: f64) -> f64 {
-    let mut fixed = (delta * ARIANE_WRITTEN_DECIMALS).ceil() / ARIANE_WRITTEN_DECIMALS;
+    let mut fixed = (delta * ARIANE_WRITTEN_DECIMALS).round() / ARIANE_WRITTEN_DECIMALS;
     for _ in 0..4 {
         if as_written(fixed) >= delta {
             break;
@@ -1735,7 +1739,7 @@ fn enforce_ariane_geometry_invariants(
 
     let index_by_id: HashMap<i64, usize> =
         shots.iter().enumerate().map(|(i, s)| (s.id, i)).collect();
-    let (junctions, visited) = junction_depths::settle(shots, &index_by_id);
+    let (junctions, visited) = junction_depths::settle(shots, &index_by_id, profile);
 
     // Final sweep on the values AS WRITTEN. Everything above works in f64 while the
     // file carries six decimals, and the two rounding errors (Depth, Length) are
@@ -5001,6 +5005,42 @@ mod tests {
                  the rounding it exists to absorb"
             );
         }
+    }
+
+    /// [#576 Q-W46-1-D1] The covering tape is the SHORTEST written value that
+    /// covers the drop: a drop that is already a six-decimal value is its own
+    /// tape. Starting from the ceiling of `delta * 1e6` added a micrometre
+    /// wherever that product carries binary noise above the integer -
+    /// 0.062811 * 1e6 is 62811.00000000001, so 0.062811 came out 0.062812 -
+    /// which is about 1.5% of all six-decimal values.
+    #[test]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the count and the first overshoots are the evidence"
+    )]
+    fn a_drop_already_written_to_six_decimals_is_its_own_covering_tape() {
+        let micrometres = (0..200_000u64).chain((200_000..200_000_000).step_by(997));
+        let (mut checked, mut overshot) = (0usize, Vec::new());
+        for k in micrometres {
+            let delta = as_written(k as f64 / ARIANE_WRITTEN_DECIMALS);
+            let fixed = length_covering_written_delta(delta);
+            checked += 1;
+            // Its own loop guarantees it covers; longer is the overshoot.
+            if as_written(fixed) > delta {
+                overshot.push(format!("{} -> {}", format_f64(delta), format_f64(fixed)));
+            }
+        }
+        println!(
+            "[Q-W46-1-D1] {} of {checked} six-decimal drops got a longer tape than \
+             themselves; first: {:?}",
+            overshot.len(),
+            overshot.iter().take(3).collect::<Vec<_>>()
+        );
+        assert!(
+            overshot.is_empty(),
+            "{} of {checked} written drops were covered by a longer tape",
+            overshot.len()
+        );
     }
 
     #[test]

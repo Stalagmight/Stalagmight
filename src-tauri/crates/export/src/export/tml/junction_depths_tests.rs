@@ -23,7 +23,7 @@ use crate::parsers::tml::{
     convert_tml_with_options, parse_tml, TmlFile, TmlImportOptions, TmlShot,
 };
 
-use super::export_tml;
+use super::{export_tml, export_tml_for_speleodb};
 
 fn uuid(n: u32) -> String {
     format!("00000000-0000-4000-8000-{n:012}")
@@ -66,6 +66,14 @@ impl Exported {
         let path = dir.path().join("junctions.tmlu");
         let notes = export_tml(project, &path).unwrap();
         Self::read(notes, &path)
+    }
+
+    /// The same project as the SpeleoDB sidecar writes it.
+    fn sidecar_of(project: &Project) -> Self {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("sidecar.tmlu");
+        export_tml_for_speleodb(project, &path).unwrap();
+        Self::read(Vec::new(), &path)
     }
 
     fn read(notes: Vec<String>, path: &Path) -> Self {
@@ -480,4 +488,111 @@ fn a_refitted_shot_with_a_recorded_pitch_is_written_with_its_new_slope() {
     assert!(implied < 0.0, "the refitted shot climbs");
     // Refitted too (9.0 -> 12.0), with no pitch recorded: still none.
     assert_eq!(out.imported(1).pitch_in, None);
+}
+
+/// [#576 Q-W46-1-D1] Broken data goes out vertical with its EXACT drop in the
+/// user file: a 3.0 m tape over 10.1 -> 13.3 m. In binary that drop is
+/// 3.200000000000001, which the micrometre round-up wrote as 3.200001: a 2.5 mm
+/// run on re-import where the export means none. Only the SpeleoDB sidecar
+/// keeps the round-up, because its validator compares the parsed decimals in
+/// binary.
+#[test]
+fn a_broken_shot_goes_out_with_its_exact_drop_and_comes_back_with_no_run() {
+    let mut project = Project::new("CaveA".to_string(), None);
+    section(
+        &mut project,
+        "Main",
+        vec![
+            shot(1, 0.0, 12.0, 0.0, 10.1),
+            shot(2, 90.0, 3.0, 10.1, 13.3),
+        ],
+    );
+
+    let out = Exported::of(&project);
+    let (row, back) = (out.row(2), out.imported(2));
+    println!(
+        "[Q-W46-1-D1] broken shot, user file: written length {} over {} -> {}; \
+         re-imported run {:e} m",
+        row.length,
+        back.depth_in,
+        row.depth,
+        back.horizontal_length()
+    );
+    assert_close("broken shot start", back.depth_in, 10.1);
+    assert_close("broken shot end", row.depth, 13.3);
+    assert_eq!(
+        row.length, 3.2,
+        "written with its exact 3.2 m drop as its tape"
+    );
+    assert_eq!(back.horizontal_length(), 0.0, "comes back vertical");
+
+    let sidecar = Exported::sidecar_of(&project);
+    println!(
+        "[Q-W46-1-D1] broken shot, sidecar: written length {}",
+        sidecar.row(2).length
+    );
+    assert_eq!(
+        sidecar.row(2).length,
+        3.200_001,
+        "the sidecar still covers the binary drop of its parsed depths"
+    );
+}
+
+/// [#576 Q-W46-1-D1] A vertical shot out of an averaged junction goes out
+/// vertical with its exact new drop in the user file. Junction A reads 10.0 m
+/// on the main line and 10.2 m on a branch, so it is written at 10.1 m and the
+/// main-line shot out of it is refitted from there. Its tape covers its drop
+/// in binary by a hair either way: 10.0 -> 13.3 on 3.3 m (the drop a hair
+/// over the tape, so no run) and 10.0 -> 13.2 on 3.2 m (a hair under it, a
+/// run of 67 nanometres). Both were written a micrometre long, 3.200001 and
+/// 3.100001: a 2.5 mm run on re-import.
+#[test]
+fn a_vertical_shot_out_of_an_averaged_junction_comes_back_with_no_run() {
+    let mut wrong = Vec::new();
+    for (tape, end, drop, sidecar_length) in [(3.3, 13.3, 3.2, 3.200_001), (3.2, 13.2, 3.1, 3.1)] {
+        let mut project = Project::new("CaveA".to_string(), None);
+        section(
+            &mut project,
+            "Main",
+            vec![shot(1, 0.0, 5.0, 9.0, 10.0), shot(2, 90.0, tape, 10.0, end)],
+        );
+        section(
+            &mut project,
+            "Branch",
+            vec![shot(11, 180.0, 2.0, 10.2, 10.7)],
+        );
+        merge(&mut project, (0, 1), (1, 0));
+
+        let out = Exported::of(&project);
+        let sidecar = Exported::sidecar_of(&project);
+        let (row, back) = (out.row(2), out.imported(2));
+        println!(
+            "[Q-W46-1-D1] vertical {tape} m shot 10.0 -> {end} out of a junction at {}: \
+             user file length {}, re-imported run {:e} m; sidecar length {}",
+            out.row(1).depth,
+            row.length,
+            back.horizontal_length(),
+            sidecar.row(2).length
+        );
+        assert_close("junction", out.row(1).depth, 10.1);
+        assert_close("vertical shot end", row.depth, end);
+        // Written with its exact new drop as its tape, so it comes back
+        // vertical; the sidecar covers the binary drop of its parsed depths,
+        // and no more. Apart means apart on the file's six decimals.
+        let apart = |a: f64, b: f64| (a - b).abs() > 5e-7;
+        if apart(row.length, drop) || back.horizontal_length() >= 1e-6 {
+            wrong.push(format!(
+                "{tape} m shot: user length {} (want {drop}), run {:e} m",
+                row.length,
+                back.horizontal_length()
+            ));
+        }
+        if apart(sidecar.row(2).length, sidecar_length) {
+            wrong.push(format!(
+                "{tape} m shot: sidecar length {} (want {sidecar_length})",
+                sidecar.row(2).length
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }

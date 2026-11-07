@@ -26,6 +26,14 @@
 //!   written as that new slope (#576 RVF-d-8). `L'` is rounded up with
 //!   `length_covering_written_delta`, so `|Depth - parent.Depth| <= Length`
 //!   holds on the file's decimals.
+//! - A shot that goes out with no run (`h = 0`: a vertical shot, or broken
+//!   data, below) states its new drop exactly in the user file: its tape is its
+//!   drop as written, so it re-imports with no run, as Ariane reads it too.
+//!   Only the SpeleoDB sidecar rounds it up, a micrometre where its two parsed
+//!   depths differ by a hair more in binary, because SpeleoDB's validator
+//!   compares them that way (#576 Q-W46-1-D1). Vertical is judged on the
+//!   values as written, as broken is: a tape and drop that agree on the file's
+//!   decimals leave no run, whichever way binary noise tips them.
 //!
 //! Example: main-line station A reads 10.0 m and a branch's first shot starts
 //! at 12.0 m and ends at 12.5 m. A is exported at 11.0 m, the branch shot runs
@@ -45,8 +53,9 @@
 //!
 //! A shot whose OWN drop already exceeds its own tape is broken data
 //! (TML-DEPTH-Q2-D1). Both its depths stay true, and it goes out as the
-//! vertical shot it can at most be: no run (`h = 0`), so `L' = |dz|`, rounded
-//! up the same way. No station moves for it, so the shot after it is
+//! vertical shot it can at most be: no run (`h = 0`), so `L' = |dz|`, exact in
+//! the user file and rounded up in the sidecar, as above. No station moves for
+//! it, so the shot after it is
 //! untouched. Broken is judged on the values as written, so a vertical shot,
 //! whose written drop is its written tape, is no broken data for the binary
 //! noise of subtracting its depths, and goes out as measured (#576 RVF-d-7).
@@ -57,7 +66,9 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use super::{as_written, length_covering_written_delta, pitch_to_inclination, schema, ExportShot};
+use super::{
+    as_written, length_covering_written_delta, pitch_to_inclination, schema, ExportShot, TmlProfile,
+};
 use crate::models::{pitch_from_components, SectionId};
 
 /// Readings this close are one reading: the tolerance the same-as-previous flag
@@ -108,6 +119,7 @@ fn receipt_metres(metres: f64) -> String {
 pub(super) fn settle(
     shots: &mut [ExportShot],
     index_by_id: &HashMap<i64, usize>,
+    profile: TmlProfile,
 ) -> (JunctionDepths, Vec<bool>) {
     let n = shots.len();
     // Adjacency by INDEX, so the walk can borrow it while mutating `shots`.
@@ -200,7 +212,7 @@ pub(super) fn settle(
                 } else {
                     shot.depth_in
                 };
-                refit(shot, start, end);
+                refit(shot, start, end, profile);
                 shot.depth_in_same_as_prev = keep_flag;
                 refitted += 1;
             }
@@ -234,14 +246,14 @@ pub(super) fn settle(
                 // Broken data: its own drop is longer than its tape. Both
                 // depths stay true; it goes out as the vertical shot it can at
                 // most be, no run (h = 0) and its drop as its length.
-                refit(shot, start, end);
+                refit(shot, start, end, profile);
                 broken += 1;
                 continue;
             }
         } else if !moved[p] && !moved[k] && (shot.depth - start).abs() <= shot.length {
             continue;
         }
-        refit(shot, start, end);
+        refit(shot, start, end, profile);
         refitted += 1;
     }
 
@@ -272,11 +284,22 @@ pub(super) fn settle(
 
 /// Export `shot` from `start` to `end` with the length that keeps its measured
 /// horizontal run: `L' = sqrt(h^2 + dz'^2)`, rounded up so the bound holds as
-/// written. It now starts where its parent ends, which the `DepthIn` sentinel
-/// says.
-fn refit(shot: &mut ExportShot, start: f64, end: f64) {
-    let run = horizontal_run(shot.length, shot.depth - shot.depth_in);
-    shot.length = covering_length(run.hypot(end - start), start, end);
+/// written. A shot with no run takes its drop as written instead, exactly, in
+/// the user file (#576 Q-W46-1-D1). It now starts where its parent ends, which
+/// the `DepthIn` sentinel says.
+fn refit(shot: &mut ExportShot, start: f64, end: f64, profile: TmlProfile) {
+    // Vertical on the values as written, as broken is in `settle`: binary
+    // noise in the measured drop is no run.
+    let run = if written_change(shot.depth_in, shot.depth).abs() >= as_written(shot.length) {
+        0.0
+    } else {
+        horizontal_run(shot.length, shot.depth - shot.depth_in)
+    };
+    shot.length = if run <= 0.0 && profile == TmlProfile::User {
+        written_change(start, end).abs()
+    } else {
+        covering_length(run.hypot(end - start), start, end)
+    };
     // [#576 RVF-d-8] A recorded pitch takes the slope the shot is now written
     // with, its kept run over its new depth change: the old one contradicts the
     // new Depth and Length (it can even point the other way), which a re-import
