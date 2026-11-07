@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import {
+  gasPlanResetCount,
   selectHasUnresolvedPins,
   selectIsPlanDirty,
   useGasPlanStore,
@@ -168,6 +169,9 @@ export function DivePlanBar() {
     setError(null);
     setBusy(true);
     const key = projectKey();
+    // [#576 W71-NF5] And the plan store's resets: an in-place tree swap resets the plan without
+    // moving the key, and an answer after it must not mark the reset store as this plan.
+    const resets = gasPlanResetCount();
     // [#576 RVF-c-C1] The project the plan is saved for, named on the IPC.
     const madeFor = expectedOpenProject();
     // Capture the exact snapshot once so the persisted bytes and the new dirty-baseline agree
@@ -175,7 +179,7 @@ export function DivePlanBar() {
     const snap = divePlanSnapshotOf(useGasPlanStore.getState());
     try {
       const meta = await saveDivePlan(loadedPlanId, loadedName, snap, madeFor);
-      if (projectKey() !== key) return;
+      if (projectKey() !== key || gasPlanResetCount() !== resets) return;
       markPlanSaved(meta.id, snap);
       refresh();
     } catch (e) {
@@ -193,11 +197,12 @@ export function DivePlanBar() {
     setError(null);
     setBusy(true);
     const key = projectKey();
+    const resets = gasPlanResetCount(); // [#576 W71-NF5] as in doSave
     const madeFor = expectedOpenProject();
     const snap = divePlanSnapshotOf(useGasPlanStore.getState());
     try {
       const meta = await saveDivePlan(null, name, snap, madeFor);
-      if (projectKey() !== key) return;
+      if (projectKey() !== key || gasPlanResetCount() !== resets) return;
       markPlanSaved(meta.id, snap);
       setSaveAsName('');
       setPending({ kind: 'none' });

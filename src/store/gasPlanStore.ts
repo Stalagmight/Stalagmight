@@ -753,6 +753,19 @@ function cancelAnchorCapture(): void {
   captureTimer = null;
 }
 
+/**
+ * [#576 W71-NF5] How many times `reset()` has run. An in-place SpeleoDB tree swap resets the
+ * store without moving any project identity (same session, `created_at` and path), so a dive-plan
+ * save answered after it would mark the reset store as holding that plan, unsaved. The bar
+ * compares this across the save and drops such an answer.
+ */
+let resetCount = 0;
+
+/** The number of `reset()` calls so far; see {@link resetCount}. */
+export function gasPlanResetCount(): number {
+  return resetCount;
+}
+
 export const useGasPlanStore = create<GasPlanState>((set, get) => ({
   ...initialState(),
 
@@ -1251,6 +1264,7 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
     set({ loadedPlanId: null, loadedPlanBaseline: null, baselineAnchors: null, baselineAnchoredPins: null }),
 
   reset: () => {
+    resetCount += 1;
     set(initialState());
     // After the set, not before: the subscription below re-arms the debounce on the pin change
     // this very reset just made, and a capture left armed would fire against the next project.
