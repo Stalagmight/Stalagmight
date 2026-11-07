@@ -6,7 +6,11 @@
 //! length that keeps its measured horizontal run. These go through the public
 //! export alone, so they run unchanged against the re-hang this replaced.
 
-#![expect(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: a failed assumption panics, and the printed values are the evidence"
+)]
 
 use std::path::Path;
 
@@ -400,4 +404,35 @@ fn a_junction_whose_readings_agree_is_written_as_measured() {
         "nothing to report, got {:?}",
         out.notes
     );
+}
+
+/// [#576 RVF-d-7] A vertical shot goes out vertical: its tape as written is its
+/// drop as written, so it comes back with no run. In binary 13.3 - 10.1 is
+/// 3.200000000000001, a hair over the 3.2 m tape, which sent the shot down the
+/// broken-data path and wrote it 3.200001 long: a 2.5 mm run on re-import where
+/// the survey has none.
+#[test]
+fn a_vertical_shot_is_written_with_its_drop_as_its_tape_and_no_run() {
+    let mut project = Project::new("CaveA".to_string(), None);
+    section(
+        &mut project,
+        "Main",
+        vec![
+            shot(1, 0.0, 12.0, 0.0, 10.1),
+            shot(2, 90.0, 3.2, 10.1, 13.3),
+        ],
+    );
+
+    let out = Exported::of(&project);
+    let (row, back) = (out.row(2), out.imported(2));
+    println!(
+        "[RVF-d-7] vertical shot: written length {} over {} -> {}; re-imported run {:e} m",
+        row.length,
+        back.depth_in,
+        row.depth,
+        back.horizontal_length()
+    );
+    assert_close("vertical shot end", row.depth, 13.3);
+    assert_eq!(row.length, 3.2, "written with its 3.2 m drop as its tape");
+    assert_eq!(back.horizontal_length(), 0.0, "comes back vertical");
 }

@@ -251,7 +251,11 @@ TML-DEPTH-Q2-D1). Both its depths stay true and it is exported as the vertical
 shot it can at most be: no horizontal run (`h = 0`), so its length becomes its
 drop, `L' = |dz|`, rounded up the same way. No station moves for it, so the
 shot after it keeps its start and its tape. (This replaces an earlier clamp
-onto the tape, which moved the station the shot ends at.)
+onto the tape, which moved the station the shot ends at.) Whether a drop
+exceeds its tape is decided on the values as the file writes them, so a
+vertical shot (drop equal to tape) is not broken data because subtracting its
+two depths in binary came out a hair over its tape: it keeps its tape and
+re-imports with no run (#576 RVF-d-7).
 
 A second reading of a station inside one section - a shot whose `DepthIn`
 differs from where the shot before it ended, so it is written out explicitly -

@@ -45,7 +45,10 @@
 //! A shot whose OWN drop already exceeds its own tape is broken data
 //! (TML-DEPTH-Q2-D1). Both its depths stay true, and it goes out as the
 //! vertical shot it can at most be: no run (`h = 0`), so `L' = |dz|`, rounded
-//! up the same way. No station moves for it, so the shot after it is untouched.
+//! up the same way. No station moves for it, so the shot after it is
+//! untouched. Broken is judged on the values as written, so a vertical shot,
+//! whose written drop is its written tape, is no broken data for the binary
+//! noise of subtracting its depths, and goes out as measured (#576 RVF-d-7).
 //! And an explicit `DepthIn` (a second reading of a station inside one
 //! section) is no junction and is never averaged (TML-DEPTH-Q3-D1): it is
 //! honoured as long as its shot keeps the bound and neither end moved, and
@@ -220,9 +223,11 @@ pub(super) fn settle(
             continue;
         }
         if shot.depth_in_same_as_prev {
-            let measured = shot.depth - shot.depth_in;
             if (start - shot.depth_in).abs() < SAME_DEPTH_M && !moved[k] {
-                if measured.abs() <= shot.length {
+                // On the values as written (#576 RVF-d-7): a vertical shot's
+                // drop is its tape there, where in binary 10.1 -> 13.3 is
+                // 3.200000000000001, a hair over a 3.2 m tape.
+                if written_change(shot.depth_in, shot.depth).abs() <= as_written(shot.length) {
                     continue;
                 }
                 // Broken data: its own drop is longer than its tape. Both
@@ -274,6 +279,14 @@ fn refit(shot: &mut ExportShot, start: f64, end: f64) {
     shot.depth_in = start;
     shot.depth = end;
     shot.depth_in_same_as_prev = true;
+}
+
+/// The depth change from `start` to `end` as the file states it: the two depths
+/// as written, and their difference to the written decimals. Two six-decimal
+/// values differ by a six-decimal value, so that rounding takes off only the
+/// noise of subtracting them in binary (#576 RVF-d-7).
+fn written_change(start: f64, end: f64) -> f64 {
+    as_written(as_written(end) - as_written(start))
 }
 
 /// `length`, rounded up to the next written micrometre - and never below the
