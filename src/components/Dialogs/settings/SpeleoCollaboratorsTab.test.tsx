@@ -140,7 +140,7 @@ describe('SpeleoCollaboratorsTab', () => {
     await userEvent.click(screen.getByTestId('speleodb-collab-user-level-apply-1'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_set_collaborator');
-      expect(call![1]).toEqual({ email: 'bob@x.com', permission: 'READ_AND_WRITE' });
+      expect(call![1]).toEqual({ email: 'bob@x.com', permission: 'READ_AND_WRITE', expectedProject: null });
     });
     await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-offer-2'));
     expect(screen.getByTestId('speleodb-collab-user-remove-confirm-2')).toBeInTheDocument();
@@ -148,7 +148,7 @@ describe('SpeleoCollaboratorsTab', () => {
     await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-confirm-2'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_remove_collaborator');
-      expect(call![1]).toEqual({ email: 'carol@x.com' });
+      expect(call![1]).toEqual({ email: 'carol@x.com', expectedProject: null });
     });
   });
 
