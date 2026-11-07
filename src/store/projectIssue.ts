@@ -8,11 +8,15 @@
  * (`projectSession.ts`); importing no store, so the store and its callers can both
  * use it without an import cycle.
  */
-import { projectSessionEndedOn, projectSessionEpoch } from './projectSession';
+import { openTreeGeneration, projectSessionEndedOn, projectSessionEpoch } from './projectSession';
 import type { ProjectIdentity } from '../types/ipc/ProjectIdentity';
 
-/** What a request was ISSUED against: the project's key, the file it was open from and the session. */
-export type IssuedAgainst = { key: string | null; file: string | null; session: number };
+/**
+ * What a request was ISSUED against: the project's key, the file it was open from and the
+ * session - and [#576 W75-NF7] the tree generation the store's tree came with, when the
+ * backend named one (`openTreeGeneration`), which the saves send.
+ */
+export type IssuedAgainst = { key: string | null; file: string | null; session: number; tree?: number };
 
 /** The part of the open project the identity reads (`ProjectStore['project']`). */
 type OpenProject = { created_at: string; file_path?: string | null } | null | undefined;
@@ -36,7 +40,13 @@ export function projectSwitched(before: string | null, after: string | null): bo
 
 /** The identity of `open` (the store's open project) now. */
 export function issuedAgainstOf(open: OpenProject): IssuedAgainst {
-  return { key: open?.created_at ?? null, file: open?.file_path ?? null, session: projectSessionEpoch() };
+  const tree = openTreeGeneration();
+  return {
+    key: open?.created_at ?? null,
+    file: open?.file_path ?? null,
+    session: projectSessionEpoch(),
+    ...(tree !== null ? { tree } : {}),
+  };
 }
 
 /**
@@ -78,7 +88,16 @@ export function followSession(issued: IssuedAgainst): IssuedAgainst {
  * the project it was issued against, which the backend checks under its command lock
  * (`core/state/expected_project.rs`) and refuses with PROJECT_CHANGED when another is
  * open. Null - "made with no project open" - when none was.
+ *
+ * [#576 W75-NF7] With the tree generation it was issued in, when one is known: the
+ * backend refuses a SAVE made for a tree an in-place SpeleoDB swap has replaced since
+ * (the same file, the same `created_at`); nothing else reads it.
  */
 export function expectedProjectOf(issued: IssuedAgainst): ProjectIdentity | null {
-  return issued.key === null ? null : { createdAt: issued.key, filePath: issued.file };
+  if (issued.key === null) return null;
+  return {
+    createdAt: issued.key,
+    filePath: issued.file,
+    ...(issued.tree !== undefined ? { treeGeneration: issued.tree } : {}),
+  };
 }

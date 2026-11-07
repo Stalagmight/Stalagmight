@@ -79,6 +79,7 @@ fn every_cell(state: &AppState) -> Vec<&dyn LockCell> {
         adjusted_cache,
         adjusted_cache_generation: _,
         speleodb_session_generation: _,
+        tree_generation: _,
         speleodb_adoption_gate: _,
         park_after_mutation,
         speleodb_lock_ops,

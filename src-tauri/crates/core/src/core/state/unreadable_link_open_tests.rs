@@ -74,7 +74,7 @@ struct EnvelopeFlag {
 fn envelope_flag(state: &AppState, path: PathBuf) -> (bool, Option<bool>) {
     let loaded = state.do_load_project_full(path).unwrap();
     let is_remote = loaded.is_remote;
-    let bytes = crate::core::load_binary::encode(loaded).unwrap();
+    let bytes = crate::core::load_binary::encode(loaded, 0).unwrap();
     let flag: EnvelopeFlag = rmp_serde::from_slice(&bytes).unwrap();
     (is_remote, flag.speleo_link_unreadable)
 }

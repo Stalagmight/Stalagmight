@@ -42,6 +42,7 @@ pub(super) fn identity_of(state: &AppState) -> Option<ProjectIdentity> {
             .file_path
             .as_ref()
             .map(|f| f.to_string_lossy().into_owned()),
+        tree_generation: None,
     })
 }
 
@@ -169,6 +170,7 @@ fn an_edit_is_refused_unless_it_names_the_open_project() {
         Some(ProjectIdentity {
             created_at: "2020-01-01T00:00:00Z".to_owned(),
             file_path: open.file_path.clone(),
+            tree_generation: None,
         }),
         || state.undo(),
     );

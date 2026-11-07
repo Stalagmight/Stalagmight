@@ -144,7 +144,7 @@ fn the_load_result_and_the_binary_envelope_carry_what_the_load_reset() {
         "no infinity reaches the open project"
     );
 
-    let bytes = crate::core::load_binary::encode(loaded).unwrap();
+    let bytes = crate::core::load_binary::encode(loaded, 0).unwrap();
     let envelope: EnvelopeWithRepairs = rmp_serde::from_slice(&bytes).unwrap();
     println!("envelope load_repairs: {:?}", envelope.load_repairs);
     assert_eq!(

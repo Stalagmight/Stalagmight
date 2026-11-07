@@ -608,6 +608,14 @@ impl AppState {
             if let Err(f) = self.refuse_other_project(&cmd.description()) {
                 return CommandResult::refused(f);
             }
+            // [#576 W75-NF7] And a save made for the tree an in-place SpeleoDB swap
+            // replaced at the same path is refused too: it would save the new tree for
+            // a request made before it (a Save As, to the path chosen for the old one).
+            if matches!(cmd, Command::SaveProject { .. }) {
+                if let Err(f) = self.refuse_replaced_tree(&cmd.description()) {
+                    return CommandResult::refused(f);
+                }
+            }
         } else {
             if let Err(f) = self.guard_mutation(&cmd.description()) {
                 return CommandResult::refused(f);

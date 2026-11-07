@@ -25,6 +25,7 @@ import { useGasPlanStore } from './gasPlanStore';
 import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
 import { runSerialized } from './mutationQueue';
 import {
+  noteOpenTreeGeneration,
   noteProjectDirtied,
   noteProjectSessionChanged,
   projectDirtyMarks,
@@ -492,6 +493,7 @@ function noteImportResolvedDeferredSave(
  */
 function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): void {
   noteProjectSessionChanged();
+  noteOpenTreeGeneration(null); // [#576 W75-NF7] no tree is open
   set({
     project: null,
     projectTreeGeneration: nextProjectTreeGeneration(),
@@ -1007,6 +1009,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         const tSetStart = performance.now();
         // [#576 NF-FIX5-1] A new session: an answer issued for the previous project is stale.
         noteProjectSessionChanged();
+        // [#576 W75-NF7] The tree generation this tree came with: the saves name it.
+        noteOpenTreeGeneration(result.treeGeneration ?? null);
         set({
           project: result.project,
           projectTreeGeneration: nextProjectTreeGeneration(),
@@ -1329,6 +1333,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Apply project state from result. Fresh project has no shots /
       // stations yet, so `surveyData` starts as an empty SoA.
       noteProjectSessionChanged(); // [#576 NF-FIX5-1] see loadProject
+      noteOpenTreeGeneration(null); // [#576 W75-NF7] the create answer names none
       set({
         project: result.project,
         projectTreeGeneration: nextProjectTreeGeneration(),
@@ -1659,6 +1664,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       const superseded = request < refreshAppliedRequest || session !== projectSessionEpoch();
       if (!superseded) refreshAppliedRequest = request;
       if (state && !superseded) {
+        // [#576 W75-NF7] After an in-place SpeleoDB swap this is how the store learns the
+        // new tree's generation; a save made before it names the old one.
+        noteOpenTreeGeneration(state.treeGeneration ?? null);
         set({
           project: state.project,
           projectTreeGeneration: nextProjectTreeGeneration(),

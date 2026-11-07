@@ -459,7 +459,8 @@ fn light_channels(state: &AppState) -> Vec<Raw> {
         &project.compute_frozen_shots(),
     ));
     out.push(
-        match crate::core::load_binary::encode_refresh(&pinned_clock(&project), stations, stats) {
+        match crate::core::load_binary::encode_refresh(&pinned_clock(&project), stations, stats, 0)
+        {
             Ok(bytes) => Raw::binary("ipc.project_state_binary", bytes),
             Err(error) => Raw::text("ipc.project_state_binary", format!("<error: {error}>")),
         },

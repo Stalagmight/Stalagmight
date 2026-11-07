@@ -784,6 +784,14 @@ mod switch_commit_tests;
 mod switch_identity_tests;
 #[cfg(any(test, feature = "test-support"))]
 mod tests_support;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              answers are the evidence a run captures"
+)]
+mod tree_swap_save_tests;
 
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;

@@ -555,7 +555,7 @@
     "src-tauri/crates/tiles/src/tests.rs": 1917,
     "src-tauri/crates/tiles/src/tilemap_body_limit_tests.rs": 66,
     "src-tauri/src/commands/app_contract_tests.rs": 89,
-    "src-tauri/src/commands/command_tests.rs": 4749,
+    "src-tauri/src/commands/command_tests.rs": 4750,
     "src-tauri/src/commands/compass_import_tests.rs": 103,
     "src-tauri/src/commands/expected_project_tests.rs": 108,
     "src-tauri/src/commands/export_command_tests.rs": 263,

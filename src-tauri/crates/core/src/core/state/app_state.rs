@@ -264,6 +264,14 @@ pub struct AppState {
     /// [`Self::adjusted_cache_generation`] / `unrecognised_shot_kinds`, applied to
     /// the one slot that never had it. See `core::state::speleodb_session`.
     pub(super) speleodb_session_generation: AtomicU64,
+    /// [#576 W75-NF7] The open file's TREE generation: bumped when a SpeleoDB pull
+    /// replaced the file of the open project in place (`replace_cache_stalx_*`, the
+    /// pull, the fast-forward and the revision swap), never by an edit or a save.
+    /// The load and refresh envelopes carry it, and a save made for the tree before
+    /// the swap names the old value and is refused (`refuse_replaced_tree`). The
+    /// project identity alone cannot tell the two trees apart: the swapped file has
+    /// the same path and `created_at`. Transient, never persisted.
+    pub(super) tree_generation: AtomicU64,
     /// [#576 NF-W4C-3-EDIT] The session generation, plus one, an Ariane adoption
     /// shut the edit gate in, from its local span until its hand-over push has
     /// landed (0: not shut): the adopted project is open (and reopened editable,
@@ -393,6 +401,7 @@ impl AppState {
             adjusted_cache: RecoveringMutex::with_monitor("adjusted_cache", None, &poison),
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
+            tree_generation: AtomicU64::new(0),
             speleodb_adoption_gate: AtomicU64::new(0),
             #[cfg(test)]
             park_after_mutation: RecoveringMutex::with_monitor(

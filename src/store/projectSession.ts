@@ -103,3 +103,22 @@ export function registerOpenProjectIdentity(get: () => DisplaySettingTarget | nu
 export function openProjectIdentity(): DisplaySettingTarget | null {
   return identity ? identity() : null;
 }
+
+/**
+ * [#576 W75-NF7] The open file's tree generation, as the backend's last applied load
+ * or refresh envelope named it (`tree_generation`), or null when none did (a create, a
+ * close, a backend that predates the field). A save names it (`expectedProjectOf`),
+ * and the backend refuses one made for a tree an in-place SpeleoDB swap has replaced
+ * since: the swapped file keeps the path and `created_at`, so the identity alone
+ * cannot tell the two trees apart.
+ */
+let treeGeneration: number | null = null;
+
+/** Called where the store applies a load or refresh answer, a create, or a close. */
+export function noteOpenTreeGeneration(generation: number | null): void {
+  treeGeneration = generation;
+}
+
+export function openTreeGeneration(): number | null {
+  return treeGeneration;
+}

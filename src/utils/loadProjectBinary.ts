@@ -80,6 +80,11 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
   /** [#576 B35(h)] What this load reset or dropped because it could not use it,
    *  per kind, or null when nothing. Binary envelope only. */
   loadRepairs: LoadRepairs | null;
+  /** [#576 W75-NF7] The open file's tree generation this tree belongs to, or null
+   *  from an envelope that predates it. The saves name it (`openTreeGeneration`), so
+   *  the backend can refuse one made for a tree an in-place SpeleoDB swap replaced.
+   *  Binary envelope only (load and refresh). */
+  treeGeneration?: number | null;
 }
 
 /** [#576 B35(h)] Per-kind counts of the stored values a load reset or dropped
@@ -164,6 +169,9 @@ export interface BinaryEnvelope {
     station_offsets?: number | bigint;
     gps_points?: number | bigint;
   };
+  /** [#576 W75-NF7] The open file's tree generation (u64 on the wire: a msgpack
+   *  decoder may hand it over as bigint). Absent from an envelope that predates it. */
+  tree_generation?: number | bigint;
   project_header: ProjectHeaderBinary;
   shot_count: number;
   shots_floats: Uint8Array;
@@ -274,7 +282,7 @@ export async function loadProjectFullBinary(path: string, loadToken?: string): P
  *  set. */
 export type ProjectStateBinary = Pick<
   LoadProjectFullResultWithSoa,
-  'project' | 'stations' | 'surveyData' | 'stats' | 'frozen_shots'
+  'project' | 'stations' | 'surveyData' | 'stats' | 'frozen_shots' | 'treeGeneration'
 >;
 
 /**
@@ -301,8 +309,8 @@ export async function fetchProjectStateBinary(): Promise<ProjectStateBinary | nu
 
   const result = decodeBinaryAnswer('get_project_state_binary', raw, REFRESH_TIMINGS);
   if (result === null) return null;
-  const { project, stations, surveyData, stats, frozen_shots } = result;
-  return { project, stations, surveyData, stats, frozen_shots };
+  const { project, stations, surveyData, stats, frozen_shots, treeGeneration } = result;
+  return { project, stations, surveyData, stats, frozen_shots, treeGeneration: treeGeneration ?? null };
 }
 
 /** The perf-panel rows one binary IPC records under. The load and the refresh
@@ -605,6 +613,7 @@ export function buildResult(
     speleoLinkUnreadable: env.speleo_link_unreadable === true,
     unreadableProjectSettings: env.unreadable_project_settings ?? [],
     loadRepairs: loadRepairsFromEnvelope(env.load_repairs),
+    treeGeneration: env.tree_generation === undefined ? null : Number(env.tree_generation),
     surveyData,
   };
 }

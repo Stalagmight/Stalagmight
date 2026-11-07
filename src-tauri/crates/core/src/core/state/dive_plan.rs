@@ -772,6 +772,9 @@ impl AppState {
     ) -> Result<DivePlanMeta, CommandError> {
         let _commands = self.hold_commands();
         self.refuse_other_project("Saving the dive plan")?;
+        // [#576 W75-NF7] Nor in a tree an in-place SpeleoDB swap put at the same path:
+        // `to_persisted` would anchor the old tree's station refs against the new one.
+        self.refuse_replaced_tree("Saving the dive plan")?;
         self.save_dive_plan(id, name, snapshot)
             .map_err(CommandError::from)
     }

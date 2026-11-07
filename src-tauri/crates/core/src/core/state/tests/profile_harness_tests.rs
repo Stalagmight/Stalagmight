@@ -186,7 +186,7 @@ fn profile_stalx_load() {
         unreadable_project_settings: Vec::new(),
         load_repairs: crate::persistence::LoadRepairs::default(),
     };
-    let bin = crate::core::load_binary::encode(result).expect("encode");
+    let bin = crate::core::load_binary::encode(result, 0).expect("encode");
     let t8 = Instant::now();
 
     eprintln!("\n┌─ profile_stalx_load ──────────────────────────────────");

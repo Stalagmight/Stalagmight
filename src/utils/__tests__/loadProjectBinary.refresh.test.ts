@@ -155,7 +155,17 @@ describe('fetchProjectStateBinary (#576 A9-D2)', () => {
 
     const result = await fetchProjectStateBinary();
 
-    expect(Object.keys(result!).sort()).toEqual(['frozen_shots', 'project', 'stations', 'stats', 'surveyData']);
+    // [#576 W75-NF7] `treeGeneration` is no load-only field: the refresh carries the open
+    // file's tree generation too (null from an envelope without it, as here).
+    expect(Object.keys(result!).sort()).toEqual([
+      'frozen_shots',
+      'project',
+      'stations',
+      'stats',
+      'surveyData',
+      'treeGeneration',
+    ]);
+    expect(result!.treeGeneration).toBeNull();
   });
 
   it('an empty answer means no project is open, on every transport shape', async () => {

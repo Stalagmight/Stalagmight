@@ -185,11 +185,16 @@ pub async fn get_project_state_binary<R: Runtime>(
     app: tauri::AppHandle<R>,
 ) -> Result<tauri::ipc::Response, CommandError> {
     pool::run(app, |state| {
+        // [#576 W75-NF7] Read BEFORE the snapshot: an in-place swap bumps it before
+        // the new tree is committed, so this pairs a tree with its own generation or
+        // with an older one (a save then refused, the safe side), never an old tree
+        // with the new generation.
+        let tree_generation = state.tree_generation();
         let Some(project) = state.settled_snapshot() else {
             return Ok(tauri::ipc::Response::new(Vec::new()));
         };
         let (stations, stats) = measured_state(state, &project);
-        crate::core::load_binary::encode_refresh(&project, stations, stats)
+        crate::core::load_binary::encode_refresh(&project, stations, stats, tree_generation)
             .map(tauri::ipc::Response::new)
             .map_err(|e| CommandError::failed(format!("Could not encode the project state: {e}")))
     })
@@ -499,6 +504,7 @@ pub async fn load_project_full_binary(
     // [#576 RV4-R-M3-OPEN] Opens anywhere; only the in-place upgrade of an
     // older-format file (and its backup copy) is refused where nothing may be written.
     let upgrade_refusal = load_upgrade_refusal(&path);
+    let app = app_handle.clone();
     let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
@@ -512,9 +518,13 @@ pub async fn load_project_full_binary(
         Ok(Err(e)) => return Err(e.into()),
         Err(join_err) => return Err(LoadError::internal(join_err.to_string()).into()),
     };
+    // [#576 W75-NF7] The generation the tree was committed under: a swap that bumps
+    // it must first close this very project, which the frontend's switch and swap
+    // ordering keep from overlapping its own load.
+    let tree_generation = app.state::<AppState>().tree_generation();
 
     let encode_start = std::time::Instant::now();
-    let bytes = crate::core::load_binary::encode(load_result)
+    let bytes = crate::core::load_binary::encode(load_result, tree_generation)
         .map_err(|e| LoadError::internal(format!("encode binary: {e}")))?;
     let encode_elapsed = encode_start.elapsed();
 

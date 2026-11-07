@@ -55,6 +55,7 @@
 //! the backstop for ANOTHER project or another copy, not for an older session.
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -78,6 +79,12 @@ pub struct ProjectIdentity {
     /// The file the project is open from (`Project::file_path`); `None` for a
     /// project that has never been saved.
     pub file_path: Option<String>,
+    /// [#576 W75-NF7] The tree generation the frontend's tree came with (the load
+    /// and refresh envelopes' `tree_generation`), when it knows one. Checked only
+    /// by the saves (`refuse_replaced_tree`): absent, nothing is checked.
+    #[serde(default)]
+    #[ts(optional, type = "number")]
+    pub tree_generation: Option<u64>,
 }
 
 /// What a command body was made for: `None` inside means made with no project open.
@@ -161,6 +168,58 @@ impl AppState {
         Err(CommandError::new(
             CommandErrorCode::ProjectChanged,
             format!("{what} was not applied: another project is open now."),
+        ))
+    }
+
+    /// [#576 W75-NF7] The open file's tree generation ([`AppState::tree_generation`]
+    /// the field): what the load and refresh envelopes carry.
+    pub fn tree_generation(&self) -> u64 {
+        self.tree_generation.load(Ordering::SeqCst)
+    }
+
+    /// [#576 W75-NF7] A SpeleoDB pull replaced the open project's file in place:
+    /// the tree a save was made for before now is gone. Call it once the new file
+    /// is at the path and before the project is opened from it again, while no
+    /// project is open (the replace closed it), so no save can be checked between
+    /// the new tree's commit and the bump.
+    pub(super) fn bump_tree_generation(&self) {
+        self.tree_generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// [#576 W75-NF7] Refuse `what` - a save, of the project or of a dive plan -
+    /// with `PROJECT_CHANGED` when it was made for a tree an in-place SpeleoDB swap
+    /// (History > View, Update, Start editing's fast-forward, Take remote, a re-open
+    /// from SpeleoDB) has replaced since. [`Self::refuse_other_project`] cannot see
+    /// that: the swapped file has the same path and `created_at`. A save that ran
+    /// anyway wrote the old tree's dive plan anchored against the new tree (its
+    /// stations re-resolved there, or dropped silently) and saved the new tree for
+    /// a request made before it.
+    ///
+    /// Only an expectation that names a generation is checked; one made outside any
+    /// [`for_project`] scope, or naming none, is not. Same rules as
+    /// [`Self::refuse_other_project`]: hold `command_lock`, nothing written yet.
+    pub(super) fn refuse_replaced_tree(&self, what: &str) -> Result<(), CommandError> {
+        let made_for = EXPECTED.with(|scope| {
+            scope
+                .borrow()
+                .as_ref()
+                .and_then(|MadeFor(expected)| expected.as_ref())
+                .and_then(|identity| identity.tree_generation)
+        });
+        let Some(made_for) = made_for else {
+            return Ok(());
+        };
+        if made_for == self.tree_generation() {
+            return Ok(());
+        }
+        tracing::info!(
+            what,
+            purpose = "keep a save in the tree it was made for",
+            "Refused: the open project's file was replaced since"
+        );
+        Err(CommandError::new(
+            CommandErrorCode::ProjectChanged,
+            format!("{what} was not applied: the project was reloaded from another version since."),
         ))
     }
 

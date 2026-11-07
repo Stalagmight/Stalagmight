@@ -521,6 +521,15 @@ impl AppState {
                 // the failure paths above re-open, and a hot journal is what rolls
                 // that file back to a consistent state.
                 remove_sidecars(dest);
+                // [#576 W75-NF7] The open project's file is another tree now, at the
+                // same path and with the same `created_at`: a save made for the old
+                // one must not land in it. Bumped here, with no project open (closed
+                // above) and before anything opens the new file, so no save is checked
+                // between the new tree's commit and the bump. Not on the failure paths
+                // above: they reopen the bytes the frontend still shows.
+                if closed {
+                    self.bump_tree_generation();
+                }
                 Ok(preserved_view)
             }
             Err(e) => {

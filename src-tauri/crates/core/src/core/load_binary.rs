@@ -120,6 +120,12 @@ pub struct LoadProjectFullBinaryResult {
     /// after the open when any count is non-zero. A top-level key, like
     /// `newer_schema_version`: absent to a reader that predates it.
     pub load_repairs: crate::persistence::LoadRepairs,
+    /// [#576 W75-NF7] The open file's tree generation (`AppState::tree_generation`)
+    /// this envelope's tree belongs to, on a load and on a refresh: the frontend
+    /// names it on a save, and the backend refuses a save made for a tree an
+    /// in-place SpeleoDB swap has replaced since. A top-level key, like
+    /// `newer_schema_version`: absent to a reader that predates it.
+    pub tree_generation: u64,
     pub project_header: ProjectHeaderBinary,
 
     pub shot_count: u32,
@@ -220,14 +226,16 @@ struct EnvelopeExtras {
     speleo_link_unreadable: bool,
     unreadable_project_settings: Vec<String>,
     load_repairs: crate::persistence::LoadRepairs,
+    tree_generation: u64,
     warnings: Vec<ProjectWarning>,
     display_settings: DisplaySettings,
 }
 
 /// Convert a `LoadProjectFullResult` into the binary-friendly layout.
 /// All bulk fields are written as packed little-endian bytes; the rest is
-/// passed through into the msgpack envelope.
-pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
+/// passed through into the msgpack envelope. `tree_generation`: the open file's
+/// tree generation the load committed under (#576 W75-NF7).
+pub fn encode(result: LoadProjectFullResult, tree_generation: u64) -> Result<Vec<u8>> {
     let LoadProjectFullResult {
         loading_id,
         project,
@@ -252,6 +260,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
             speleo_link_unreadable,
             unreadable_project_settings,
             load_repairs,
+            tree_generation,
             warnings,
             display_settings,
         },
@@ -268,10 +277,13 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
 /// 0, not remote, no newer schema, nothing unreadable or repaired, no warnings,
 /// default display settings): they describe a load, the refresh decoder reads
 /// none of them, and the open project's verdicts stay what its load committed.
+/// `tree_generation` is not one of them: the refresh carries the open file's,
+/// read before the snapshot (#576 W75-NF7).
 pub fn encode_refresh(
     project: &crate::models::Project,
     stations: Vec<crate::models::Station>,
     stats: ProjectStats,
+    tree_generation: u64,
 ) -> Result<Vec<u8>> {
     encode_project(
         project,
@@ -284,6 +296,7 @@ pub fn encode_refresh(
             speleo_link_unreadable: false,
             unreadable_project_settings: Vec::new(),
             load_repairs: crate::persistence::LoadRepairs::default(),
+            tree_generation,
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
         },
@@ -304,6 +317,7 @@ fn encode_project(
         speleo_link_unreadable,
         unreadable_project_settings,
         load_repairs,
+        tree_generation,
         warnings,
         display_settings,
     } = extras;
@@ -510,6 +524,7 @@ fn encode_project(
         speleo_link_unreadable,
         unreadable_project_settings,
         load_repairs,
+        tree_generation,
         project_header,
         shot_count: shot_count as u32,
         shots_floats: ByteBuf::from(shots_floats),
@@ -613,6 +628,7 @@ mod tests {
     struct DecodedResult {
         version: u32,
         loading_id: u64,
+        tree_generation: u64,
         project_header: DecodedHeader,
         shot_count: u32,
         shots_floats: ByteBuf,
@@ -696,7 +712,7 @@ mod tests {
             load_repairs: crate::persistence::LoadRepairs::default(),
         };
 
-        let bytes = encode(result).unwrap();
+        let bytes = encode(result, 0).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
 
         assert_eq!(decoded.version, BINARY_FORMAT_VERSION);
@@ -771,7 +787,7 @@ mod tests {
             unreadable_project_settings: Vec::new(),
             load_repairs: crate::persistence::LoadRepairs::default(),
         };
-        let bytes = encode(result).unwrap();
+        let bytes = encode(result, 0).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
 
         assert_eq!(decoded.shot_count, 1);
@@ -842,7 +858,7 @@ mod tests {
             unreadable_project_settings: Vec::new(),
             load_repairs: crate::persistence::LoadRepairs::default(),
         };
-        let bytes = encode(result).unwrap();
+        let bytes = encode(result, 0).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
 
         assert_eq!(
@@ -884,7 +900,7 @@ mod tests {
             unreadable_project_settings: Vec::new(),
             load_repairs: crate::persistence::LoadRepairs::default(),
         };
-        let bytes = encode(result).unwrap();
+        let bytes = encode(result, 0).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(decoded.shot_count, 0);
         assert_eq!(decoded.station_count, 0);
@@ -912,29 +928,34 @@ mod tests {
         ];
 
         let refresh: DecodedResult = rmp_serde::from_slice(
-            &encode_refresh(&project, stations.clone(), empty_stats()).unwrap(),
+            &encode_refresh(&project, stations.clone(), empty_stats(), 4).unwrap(),
         )
         .unwrap();
         let load: DecodedResult = rmp_serde::from_slice(
-            &encode(LoadProjectFullResult {
-                loading_id: 7,
-                project: project.clone(),
-                stations,
-                stats: empty_stats(),
-                warnings: Vec::new(),
-                display_settings: DisplaySettings::default(),
-                is_remote: false,
-                newer_schema_version: None,
-                speleo_link_unreadable: false,
-                unreadable_project_settings: Vec::new(),
-                load_repairs: crate::persistence::LoadRepairs::default(),
-            })
+            &encode(
+                LoadProjectFullResult {
+                    loading_id: 7,
+                    project: project.clone(),
+                    stations,
+                    stats: empty_stats(),
+                    warnings: Vec::new(),
+                    display_settings: DisplaySettings::default(),
+                    is_remote: false,
+                    newer_schema_version: None,
+                    speleo_link_unreadable: false,
+                    unreadable_project_settings: Vec::new(),
+                    load_repairs: crate::persistence::LoadRepairs::default(),
+                },
+                3,
+            )
             .unwrap(),
         )
         .unwrap();
 
         assert_eq!(refresh.version, BINARY_FORMAT_VERSION);
         assert_eq!(refresh.loading_id, 0, "a refresh is no load");
+        // [#576 W75-NF7] Both carry the tree generation they were given: the saves name it.
+        assert_eq!((load.tree_generation, refresh.tree_generation), (3, 4));
         assert_eq!(refresh.project_header.name, load.project_header.name);
         assert_eq!(refresh.shot_count, 2);
         assert_eq!(refresh.shots_floats, load.shots_floats);
@@ -992,7 +1013,7 @@ mod tests {
         }
         let json = serde_json::to_string(&project).unwrap();
         let encode = |p: &Project| {
-            encode_refresh(p, p.compute_station_coordinates(), empty_stats()).unwrap()
+            encode_refresh(p, p.compute_station_coordinates(), empty_stats(), 0).unwrap()
         };
         let first = encode(&serde_json::from_str(&json).unwrap());
         let differing = (0..8)

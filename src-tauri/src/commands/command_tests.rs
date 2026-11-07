@@ -54,6 +54,7 @@ pub(super) fn made_for(app: &tauri::App<MockRuntime>) -> Option<ProjectIdentity>
                 .file_path
                 .as_ref()
                 .map(|f| f.to_string_lossy().into_owned()),
+            tree_generation: None,
         })
 }
 
