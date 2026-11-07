@@ -1102,7 +1102,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // [#576 RVF-a-2] The backend has `path` open, but the store may not show it: the
           // backend re-checks "already open" at its commit, after a load of `path` whose
           // answer was not applied. Read what the backend has, as a new session.
-          if (get().project?.file_path !== path) {
+          const reread = get().project?.file_path !== path;
+          if (reread) {
             noteProjectSessionChanged();
             // A new session gets the plan reset a load gets in `applyDisplaySettings`
             // (`setView` below keeps the plan by design, #244). Here before the await, so a
@@ -1125,7 +1126,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // recovery poll on `link !== null`). Seeding remote is the pessimistic
           // direction - read-only, with a way out on screen - and the status reply
           // resolves it either way (a non-remote status seeds `local`).
-          if (speleoState()?.projectLinkKind === 'unknown') {
+          // [#576 W71-NF4] Same seed after a re-read: whatever resolved the gate resolved it
+          // for the project the store showed, so a local one left it open and a remote one
+          // left its own link (lock holder, permission, dirty bit) on this project. A link
+          // seeded for `path` on the way in (`setLinkOnOpen`) is kept, as a load keeps it.
+          if (reread || speleoState()?.projectLinkKind === 'unknown') {
             speleoState()?.syncProjectLink(true, path);
           }
           useUIStore.getState().setView('single');
