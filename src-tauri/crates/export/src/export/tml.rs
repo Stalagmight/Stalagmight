@@ -2300,24 +2300,41 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn export_replaces_a_symlinked_target_instead_of_writing_through_it() {
-        // #570: the rename replaces a symlink at the target; a direct truncating
-        // write (`std::fs::write` / `File::create`) follows it and destroys the
-        // file it points at. That difference is what pins both writers to the
-        // temp + rename path.
+    fn export_through_a_symlink_replaces_its_target_by_rename_and_keeps_the_link() {
+        // #570 pinned both Ariane writers to temp + rename with a symlinked
+        // target. The one writer kept by the #576 merge (`export::atomic`, B9)
+        // follows a link at the name - the in-place write did, and replacing the
+        // link would cut what the user linked it to - so the rename is pinned
+        // here by a second hard link instead: a truncating write rewrites the
+        // bytes that link still names, a rename leaves them. What a link may
+        // lead to is the export commands' write-path policy (a `.tml` name that
+        // leads to a `.stalx` is refused there before anything is written;
+        // `commands/export_write_policy_tests.rs`).
         let project = simple_project();
-        for name in ["cave.tml", "cave.tmlu"] {
+        for ext in ["tml", "tmlu"] {
             let dir = tempfile::TempDir::new().unwrap();
-            let victim = dir.path().join("victim.stalx");
-            std::fs::write(&victim, b"not an export").unwrap();
-            let path = dir.path().join(name);
-            std::os::unix::fs::symlink(&victim, &path).unwrap();
+            let real = dir.path().join(format!("real.{ext}"));
+            std::fs::write(&real, b"a previous export").unwrap();
+            let pin = dir.path().join("previous");
+            std::fs::hard_link(&real, &pin).unwrap();
+            let path = dir.path().join(format!("cave.{ext}"));
+            std::os::unix::fs::symlink(&real, &path).unwrap();
 
             export_tml(&project, &path).unwrap();
 
-            assert_eq!(std::fs::read(&victim).unwrap(), b"not an export", "{name}");
-            let meta = std::fs::symlink_metadata(&path).unwrap();
-            assert!(!meta.file_type().is_symlink(), "{name}");
+            assert_eq!(std::fs::read(&pin).unwrap(), b"a previous export", "{ext}");
+            assert_eq!(std::fs::read_link(&path).unwrap(), real, "{ext}");
+            let parsed = crate::parsers::tml::parse_tml(&real).unwrap();
+            assert_eq!(parsed.sections.len(), 1, "{ext}");
+            assert_eq!(
+                dir_entries(dir.path()),
+                vec![
+                    format!("cave.{ext}"),
+                    "previous".to_string(),
+                    format!("real.{ext}")
+                ],
+                "{ext}"
+            );
         }
     }
 
