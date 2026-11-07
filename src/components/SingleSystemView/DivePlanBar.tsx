@@ -59,14 +59,18 @@ type Pending =
  */
 export function DivePlanBar() {
   const { t } = useTranslation();
-  const { loadedPlanId, applyLoadedPlan, markPlanSaved, clearLoadedPlan } = useGasPlanStore(
-    useShallow((s) => ({
-      loadedPlanId: s.loadedPlanId,
-      applyLoadedPlan: s.applyLoadedPlan,
-      markPlanSaved: s.markPlanSaved,
-      clearLoadedPlan: s.clearLoadedPlan,
-    }))
-  );
+  const { loadedPlanId, applyLoadedPlan, markPlanSaved, clearLoadedPlan, loadDropped, setLoadDropped } =
+    useGasPlanStore(
+      useShallow((s) => ({
+        loadedPlanId: s.loadedPlanId,
+        applyLoadedPlan: s.applyLoadedPlan,
+        markPlanSaved: s.markPlanSaved,
+        clearLoadedPlan: s.clearLoadedPlan,
+        // [#576 W71-NF6] The last load's notices (stale stations, #576 NF-UI-2 dropped speeds).
+        loadDropped: s.loadDropped,
+        setLoadDropped: s.setLoadDropped,
+      }))
+    );
   const isDirty = useGasPlanStore(selectIsPlanDirty);
   // #310: a pin the backend can no longer place must not be written into a `.plnx`. The backend's
   // own `to_persisted` refuses it too, but that refusal arrives as an error string after the diver
@@ -88,9 +92,6 @@ export function DivePlanBar() {
   const [plans, setPlans] = useState<DivePlanMeta[]>([]);
   const [pending, setPending] = useState<Pending>({ kind: 'none' });
   const [saveAsName, setSaveAsName] = useState('');
-  const [staleCount, setStaleCount] = useState(0);
-  // #576 NF-UI-2: span speeds the last load dropped as out of range (one notice).
-  const [droppedSpeedCount, setDroppedSpeedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -114,12 +115,11 @@ export function DivePlanBar() {
     const key = `${projectCreatedAt ?? ''}|${projectFilePath ?? ''}`;
     if (prevProjectKeyRef.current !== null && prevProjectKeyRef.current !== key) {
       clearLoadedPlan();
-      setStaleCount(0);
-      setDroppedSpeedCount(0);
+      setLoadDropped(0, 0);
     }
     prevProjectKeyRef.current = key;
     refresh();
-  }, [refresh, clearLoadedPlan, projectCreatedAt, projectFilePath]);
+  }, [refresh, clearLoadedPlan, setLoadDropped, projectCreatedAt, projectFilePath]);
 
   const loadedName = plans.find((p) => p.id === loadedPlanId)?.name ?? null;
 
@@ -134,8 +134,8 @@ export function DivePlanBar() {
         const plan = await loadDivePlan(id);
         if (projectKey() !== key) return; // project switched mid-flight
         const { droppedSpeeds } = applyLoadedPlan(id, plan.snapshot, planAnchorsOf(plan));
-        setStaleCount(plan.stale_ref_count);
-        setDroppedSpeedCount(droppedSpeeds);
+        // [#576 W71-NF6] A store write, like the plan: the bar may have closed meanwhile.
+        setLoadDropped(plan.stale_ref_count, droppedSpeeds);
       } catch (e) {
         if (projectKey() !== key) return; // [#576 W60-NF2] not this project's error
         setError(String(e));
@@ -143,15 +143,14 @@ export function DivePlanBar() {
         setBusy(false);
       }
     },
-    [applyLoadedPlan]
+    [applyLoadedPlan, setLoadDropped]
   );
 
   const onSelect = (value: string) => {
     setError(null);
     setPending({ kind: 'none' });
     if (value === '') {
-      setStaleCount(0);
-      setDroppedSpeedCount(0);
+      setLoadDropped(0, 0);
       return;
     }
     const id = Number(value);
@@ -226,8 +225,7 @@ export function DivePlanBar() {
       if (projectKey() !== key) return;
       clearLoadedPlan();
       setPending({ kind: 'none' });
-      setStaleCount(0);
-      setDroppedSpeedCount(0);
+      setLoadDropped(0, 0);
       refresh();
     } catch (e) {
       if (projectKey() !== key) return; // [#576 W60-NF2] not this project's error
@@ -235,7 +233,7 @@ export function DivePlanBar() {
     } finally {
       setBusy(false);
     }
-  }, [loadedPlanId, clearLoadedPlan, refresh]);
+  }, [loadedPlanId, clearLoadedPlan, setLoadDropped, refresh]);
 
   const canSave =
     loadedPlanId !== null && loadedName !== null && isDirty && hasPath && !busy && !pinsUnresolved;
@@ -417,21 +415,21 @@ export function DivePlanBar() {
         </div>
       )}
 
-      {staleCount > 0 && (
+      {loadDropped.staleRefs > 0 && (
         <p
           className="text-xs p-2 rounded bg-warning-10 border border-warning-30 text-warning"
           data-testid="dive-plan-stale-warning"
         >
-          {t('divePlanBar.staleRefs', { count: staleCount })}
+          {t('divePlanBar.staleRefs', { count: loadDropped.staleRefs })}
         </p>
       )}
 
-      {droppedSpeedCount > 0 && (
+      {loadDropped.speeds > 0 && (
         <p
           className="text-xs p-2 rounded bg-warning-10 border border-warning-30 text-warning"
           data-testid="dive-plan-speeds-dropped-warning"
         >
-          {t('divePlanBar.speedsDropped', { count: droppedSpeedCount })}
+          {t('divePlanBar.speedsDropped', { count: loadDropped.speeds })}
         </p>
       )}
 

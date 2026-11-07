@@ -432,6 +432,11 @@ interface GasPlanState {
   /** #244: the snapshot as loaded / as of the last successful Save. The baseline the dirty
    *  check compares the live inputs against (see `selectIsPlanDirty`). */
   loadedPlanBaseline: DivePlanSnapshot | null;
+  /** [#576 W71-NF6] What the last plan load dropped, for the bar's two notices: stations the plan
+   *  referenced that no longer exist (the backend's `stale_ref_count`) and span speeds out of range
+   *  (#576 NF-UI-2). Held here rather than in the bar, so a load answered after the bar closed (a
+   *  mode switch mid-load) still shows them back in Plan. Cleared by `reset()` and by the bar. */
+  loadDropped: { staleRefs: number; speeds: number };
   /** Session-only: the user accepted the advanced (staged) reserve presets. Cleared by
    *  `reset()` on every project load (`applyDisplaySettings`), so a fresh project re-prompts.
    *  Never persisted. */
@@ -563,6 +568,8 @@ interface GasPlanState {
   markPlanSaved: (planId: number, baseline: DivePlanSnapshot) => void;
   /** #244: forget the loaded plan (e.g. it was deleted) without touching the inputs. */
   clearLoadedPlan: () => void;
+  /** [#576 W71-NF6] Set (with zeros, clear) the last load's notices; see `loadDropped`. */
+  setLoadDropped: (staleRefs: number, speeds: number) => void;
   /** Restore defaults. Called from `applyDisplaySettings` on project load / new session
    *  (NOT on a mode switch - the plan persists across mode switches now, #244). */
   reset: () => void;
@@ -585,6 +592,7 @@ const initialState = (): Pick<
   | 'stageDropOverrides'
   | 'loadedPlanId'
   | 'loadedPlanBaseline'
+  | 'loadDropped'
   | 'pushyAck'
   | 'hydrated'
   | 'lastSeenPersistedGas'
@@ -611,6 +619,7 @@ const initialState = (): Pick<
   stageDropOverrides: [],
   loadedPlanId: null,
   loadedPlanBaseline: null,
+  loadDropped: { staleRefs: 0, speeds: 0 },
   pushyAck: false,
   hydrated: false,
   lastSeenPersistedGas: null,
@@ -1262,6 +1271,7 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
     set({ loadedPlanId: planId, loadedPlanBaseline: baseline }),
   clearLoadedPlan: () =>
     set({ loadedPlanId: null, loadedPlanBaseline: null, baselineAnchors: null, baselineAnchoredPins: null }),
+  setLoadDropped: (staleRefs, speeds) => set({ loadDropped: { staleRefs, speeds } }),
 
   reset: () => {
     resetCount += 1;
