@@ -12,7 +12,7 @@
  * is a spy, and the in-flight parse is a real `routeOpenedFile` held on its
  * parser.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 
 const openMock = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: (...args: unknown[]) => openMock(...args) }));
@@ -41,6 +41,16 @@ const importDmp = vi.fn();
 const parseCompass = vi.fn();
 const realShowToast = useUIStore.getState().showToast;
 const showToast = vi.fn();
+
+/** Settles when `spy` is next called, which `impl` answers. */
+function nextCallOf(spy: Mock, impl: (...args: unknown[]) => unknown): Promise<void> {
+  return new Promise<void>((resolve) => {
+    spy.mockImplementationOnce((...args: unknown[]) => {
+      resolve();
+      return impl(...args);
+    });
+  });
+}
 
 /** Each door, run the way its UI runs it (source first, then the door). */
 const DOORS: Array<[door: string, run: () => Promise<void> | void]> = [
@@ -126,8 +136,15 @@ describe('the file-picker doors while an import parses (#576 W62-NF1)', () => {
     await first;
     expect(useUIStore.getState().importParse).toBeNull();
 
+    // [#576 W71-NF7] Wait for the picker to open and the picked file to reach its parser,
+    // not for a count of turns: `openDialog` reaches the picker through a dynamic import
+    // (fileDialogs.ts), the file's first of that module, and under a loaded worker one
+    // timer turn was not always enough. Same answers as `beforeEach` gives.
+    const opened = nextCallOf(openMock, async () => PICKED);
+    const parsing = nextCallOf(parseCompass, () => new Promise(() => {}));
     runFileShortcutAction('open_file');
-    await nextTimer();
+    await opened;
+    await parsing;
 
     expect(openMock).toHaveBeenCalledTimes(1);
     expect(parseCompass).toHaveBeenCalledWith(PICKED);
