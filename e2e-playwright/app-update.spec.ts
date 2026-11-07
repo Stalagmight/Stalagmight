@@ -82,6 +82,27 @@ async function dirtyProjectWithReadyUpdate(page: import('@playwright/test').Page
   await expect(page.getByTestId('update-banner-restart')).toBeVisible();
 }
 
+/** The page-side handle `holdInstall` leaves for settling the install. */
+interface InstallHoldWindow {
+  __MOCK_IPC_OVERRIDES__?: Record<string, unknown>;
+  __E2E_INSTALL__?: { resolve: (value: unknown) => void; reject: (reason: unknown) => void };
+}
+
+/**
+ * Keep `install_app_update_and_restart` running until the spec settles it through
+ * `window.__E2E_INSTALL__`: a real install takes seconds to write the new bundle,
+ * and the mock otherwise answers at once.
+ */
+async function holdInstall(page: import('@playwright/test').Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as InstallHoldWindow;
+    const running = new Promise((resolve, reject) => {
+      w.__E2E_INSTALL__ = { resolve, reject };
+    });
+    w.__MOCK_IPC_OVERRIDES__ = { ...(w.__MOCK_IPC_OVERRIDES__ ?? {}), install_app_update_and_restart: running };
+  });
+}
+
 test.describe('In-app update banner', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
@@ -189,6 +210,48 @@ test.describe('In-app update banner', () => {
     await expect.poll(() => count('install_app_update_and_restart')).toBe(1);
     expect(await count('arm_app_update_restart')).toBe(2);
     expect(await count('plugin:window|destroy')).toBe(0);
+  });
+
+  /**
+   * [#579 x #576] The install runs off the main thread, so the window stays live
+   * while it writes the new bundle - after the user already passed the
+   * unsaved-changes prompt, so an edit made then would be dropped by the restart
+   * without a word. From the moment the install starts the app is held still: a
+   * shortcut does nothing (Ctrl+Z sends no undo), and a failed install gives the
+   * app back with the existing failure toast.
+   */
+  test('while the update installs, shortcuts do nothing; a failed install lifts the hold', async ({ page }) => {
+    await dirtyProjectWithReadyUpdate(page);
+    await holdInstall(page);
+    await recordIpcCalls(page, ['install_app_update_and_restart', 'undo']);
+    const count = async (cmd: string) => (await getIpcCalls(page, cmd)).length;
+
+    await page.getByTestId('update-banner-restart').click();
+    await simulateCloseRequested(page);
+    await page.getByTestId('unsaved-changes-discard').click();
+    await simulateCloseRequested(page);
+    await expect.poll(() => count('install_app_update_and_restart')).toBe(1);
+
+    await page.keyboard.press('Control+z');
+    // settle: an undo that is never sent leaves nothing to poll for
+    await page.waitForTimeout(500);
+    expect(await count('undo')).toBe(0);
+    const overlay = page.getByTestId('update-install-overlay');
+    await expect(overlay).toBeVisible();
+    await expect(overlay).toBeFocused();
+    await expect(page.getByTestId('update-install-panel')).toContainText('9.9.9');
+
+    await page.evaluate(() => {
+      (window as unknown as InstallHoldWindow).__E2E_INSTALL__?.reject({
+        code: 'FAILED',
+        message: 'Update install failed: disk full',
+      });
+    });
+    await expect(overlay).toHaveCount(0);
+    await expect(page.locator('[data-toast-key="app-update-install-failed"]')).toBeVisible();
+    await expect(page.getByTestId('update-banner-download')).toBeVisible();
+    await page.keyboard.press('Control+z');
+    await expect.poll(() => count('undo')).toBe(1);
   });
 
   /**

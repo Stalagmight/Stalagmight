@@ -219,6 +219,14 @@ export function useBeforeUnload(
             // install ends - a failed install leaves the app running, and autosave
             // with it, as a refused quit does.
             const releaseAutosave = holdAutosave();
+            // [#579 x #576] The install runs off the main thread, so the window stays
+            // live while it writes the new bundle - and the user has already passed
+            // the unsaved-changes prompt, so an edit made now would be dropped by the
+            // restart without a word. Hold the project still until the install ends:
+            // the overlay takes the screen and keyboard, and the editing gate and the
+            // mutation queue refuse edits. Lifted only when the install fails; a
+            // successful one ends the process.
+            useUpdateStore.getState().setInstalling(true);
             try {
               await invokeIpc('install_app_update_and_restart', undefined, {
                 purpose: 'install downloaded app update and restart',
@@ -226,6 +234,8 @@ export function useBeforeUnload(
               // Never returns on success - the process exits from under us.
             } catch (e) {
               console.error('[useBeforeUnload] install_app_update_and_restart failed:', e);
+              // The app stays up: give the project back before saying why.
+              useUpdateStore.getState().setInstalling(false);
               // The backend arm was spent by the attempt itself, so there is
               // nothing left to unarm; what has to be undone is the BANNER,
               // which is sitting on "ready" offering a restart that just

@@ -1693,6 +1693,7 @@
         "correctionAria": "Correction to true north, in degrees east",
         "correctionUnit": "° east",
         "blocked": {
+          "update": "An update is installing: the north reference cannot be changed until it finishes.",
           "newerFile": "A newer version of Stalagmight saved this project: update Stalagmight to change the north reference.",
           "lock": "This project is open read-only: acquire the lock to change the north reference.",
           "workspace": "The north reference turns the survey: switch to Survey to change it.",
@@ -3218,6 +3219,13 @@
       "installFailed": "Could not install the update. Download it again from the update banner."
     }
   },
+  "updateInstall": {
+    "title": "Installing update…",
+    "titleVersion": "Installing Stalagmight {{version}}…",
+    "body": "Stalagmight restarts when the install finishes. The project cannot be changed until then.",
+    "progressAria": "Installing update",
+    "editRefused": "An update is installing - the project cannot be changed until it finishes."
+  },
   "integrityRepair": {
     "toasts": {
       "issue_one": "issue",
@@ -3229,6 +3237,7 @@
       "failed": "Repair failed - nothing was changed. Please try again."
     },
     "blocked": {
+      "update": "An update is installing",
       "newerFile": "Update Stalagmight to repair",
       "lock": "Acquire the lock to repair",
       "workspace": "Switch to Survey to repair",

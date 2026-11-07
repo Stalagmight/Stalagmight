@@ -42,6 +42,7 @@ import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu, ToastStack } from './components/common';
 import { UpdateBanner } from './components/UpdateBanner';
+import { UpdateInstallOverlay } from './components/UpdateInstallOverlay';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
@@ -819,6 +820,8 @@ function App() {
 
       {/* In-app update banner (#579): available / downloading / ready to restart. */}
       <UpdateBanner />
+      {/* While an update restart installs, the project is held still (#579 x #576). */}
+      <UpdateInstallOverlay />
 
       {/* Integrity details + repair dialog */}
       {integrityDialogOpen && integrityIssues.length > 0 && (

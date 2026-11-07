@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import i18n from '../i18n';
+import { refusedLocally, type CommandRefused } from './commandResult';
 import type { AppUpdateProgress } from '../types/ipc/AppUpdateProgress';
 
 /**
@@ -48,6 +50,20 @@ interface UpdateStore {
    * nothing.
    */
   downloadVersion: string | null;
+  /**
+   * An update restart is installing (#579 x #576): set by `useBeforeUnload` the
+   * moment every exit guard has passed and the install starts, cleared only when
+   * the install fails and the app stays up. A successful install ends the process,
+   * so it is never cleared on that path.
+   *
+   * Independent of `status` on purpose: a check reply landing mid-install rewrites
+   * `status` (`setUpToDate` drops to idle), and that must not lift the hold. While
+   * it is set the project cannot change - the user already passed the
+   * unsaved-changes prompt, and the restart would drop any edit made now without a
+   * word. `UpdateInstallOverlay` holds the screen and keyboard, and the editing
+   * gate reads it ({@link selectUpdateInstalling}).
+   */
+  installing: boolean;
 
   /** Start a check; the returned sequence must be passed back with the reply. */
   beginCheck: () => number;
@@ -62,13 +78,15 @@ interface UpdateStore {
   /** A download failed - the banner re-offers the download it already knows about. */
   setDownloadFailed: () => void;
   dismiss: (version: string) => void;
+  /** The install started (`true`), or failed and the app stays up (`false`). */
+  setInstalling: (installing: boolean) => void;
   /** Test-only reset. */
   reset: () => void;
 }
 
 const INITIAL_STATE: Pick<
   UpdateStore,
-  'status' | 'info' | 'progress' | 'dismissedVersion' | 'checkSeq' | 'downloadVersion'
+  'status' | 'info' | 'progress' | 'dismissedVersion' | 'checkSeq' | 'downloadVersion' | 'installing'
 > = {
   status: 'idle',
   info: null,
@@ -76,7 +94,30 @@ const INITIAL_STATE: Pick<
   dismissedVersion: null,
   checkSeq: 0,
   downloadVersion: null,
+  installing: false,
 };
+
+/**
+ * Is an update installing, so the project must not change? One of the terms
+ * `useEditingBlocked` composes; gate edits through that hook, not on this
+ * directly. The mutation queue (`projectStore`'s `executeCommand` /
+ * `executeUndoRedo`) also refuses on it, so an edit that does not come through a
+ * gated control is refused too.
+ */
+export const selectUpdateInstalling = (s: Pick<UpdateStore, 'installing'>): boolean => s.installing;
+
+/**
+ * The mutation queue's issue-time check (`projectStore`'s `executeCommand` and
+ * `executeUndoRedo`, every queued edit and undo/redo): while an update installs,
+ * an edit is refused before it can queue, so one that does not come through a
+ * gated control - a script, a key the screen hold did not catch - cannot change
+ * a project the restart is about to drop. No toast: the install overlay already
+ * says why nothing can change (docs/notifications.md, one event, one surface).
+ */
+export function refuseEditWhileUpdateInstalls(): CommandRefused | null {
+  if (!selectUpdateInstalling(useUpdateStore.getState())) return null;
+  return refusedLocally(i18n.t('updateInstall.editRefused'));
+}
 
 export const useUpdateStore = create<UpdateStore>((set, get) => ({
   ...INITIAL_STATE,
@@ -139,5 +180,6 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
       downloadVersion: null,
     })),
   dismiss: (version) => set({ dismissedVersion: version }),
+  setInstalling: (installing) => set({ installing }),
   reset: () => set(INITIAL_STATE),
 }));

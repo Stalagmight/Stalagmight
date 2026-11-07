@@ -23,6 +23,7 @@ import { emptyCommandResult, refusedLocally, settleCommand, type CommandOutcome 
 import { useExportStore } from './exportStore';
 import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
 import { runSerialized } from './mutationQueue';
+import { refuseEditWhileUpdateInstalls } from './updateStore';
 import { noteProjectSessionChanged, projectSessionEpoch, registerOpenProjectIdentity } from './projectSession';
 import type {
   Project,
@@ -605,6 +606,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     typedArgs: QueuedCallArgs<K>,
     meta: { purpose: string; fields?: Record<string, unknown>; readOnlyNoticeInline?: boolean }
   ): Promise<CommandOutcome<IpcResult<K>>> => {
+    // [#579 x #576] An update is installing: the restart would drop this edit unseen.
+    const installing = refuseEditWhileUpdateInstalls();
+    if (installing) return installing;
     // Checked against the command's manifest entry at the call site (#576 C3); forwarded as is.
     const args = typedArgs as Record<string, unknown> | undefined;
     // Captured when the user ISSUES the command, not when the queue gets round to it. The two
@@ -733,6 +737,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     meta: { purpose: string; fields?: Record<string, unknown> },
     toastId: string,
   ): Promise<CommandOutcome<HistoryOutcome>> => {
+    // Refused while an update installs, as `executeCommand` refuses an edit.
+    const installing = refuseEditWhileUpdateInstalls();
+    if (installing) return installing;
     // Captured at ISSUE time - see `executeCommand`, which also explains the GHOST-2 check.
     const requestProjectKey = get().project?.created_at ?? null;
     const refused = refuseMutationDuringCarry();

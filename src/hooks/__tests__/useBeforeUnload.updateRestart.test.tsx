@@ -45,6 +45,8 @@ import {
   resetUpdateRestartForTests,
 } from '../../utils/quit';
 import { isAutosaveHeld, useAutosaveHoldStore } from '../../utils/autosaveHold';
+import { editBlockedReasonNow } from '../useEditingBlocked';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
@@ -169,6 +171,55 @@ describe('an update restart runs the exit guards a quit runs', () => {
     install.reject({ code: 'FAILED', message: 'Update install failed: disk full' });
     await closing;
     expect(isAutosaveHeld()).toBe(false);
+    expect(destroyMock).not.toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  /**
+   * The install runs off the main thread, so the window stays live while it writes
+   * the new bundle - after the user already passed the unsaved-changes prompt. An
+   * edit made then would be dropped by the restart without a word, so the project
+   * is held still from the moment the install starts until it fails.
+   */
+  it('holds the project still while the install runs, and gives it back when it fails', async () => {
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'measured', toasts: [] });
+    useSpeleoStore.setState({ projectLinkKind: 'local' });
+    useProjectStore.setState({ isDirty: true, newerSchemaVersion: null });
+    const install = deferred<null>();
+    invokeIpcMock.mockImplementation((cmd: string) => (cmd === INSTALL ? install.promise : Promise.resolve(null)));
+
+    await restartFrom();
+
+    // The unsaved-changes prompt is up: nothing is held yet, its Cancel keeps the
+    // user working on the project.
+    expect(useUIStore.getState().activeDialog).toBe('unsaved-changes');
+    expect(editBlockedReasonNow()).toBeNull();
+
+    // "Discard & Quit": the install starts.
+    useUIStore.getState().closeDialog();
+    performQuit();
+    const closing = closeRequested();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls(INSTALL)).toBe(1);
+
+    // An edit attempt while it runs never reaches the backend...
+    const undone = await useProjectStore.getState().undo();
+    const edited = await useProjectStore.getState().updateShot(1, 1, { length: 55 });
+    expect(calls('undo')).toBe(0);
+    expect(calls('update_shot')).toBe(0);
+    expect(undone.success).toBe(false);
+    expect(edited.success).toBe(false);
+    // ...because the project is held, and the editing gate says why.
+    expect(useUpdateStore.getState().installing).toBe(true);
+    expect(editBlockedReasonNow()).toBe('update');
+
+    // The install fails: the hold lifts, and the existing failure toast says so.
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    install.reject({ code: 'FAILED', message: 'Update install failed: disk full' });
+    await closing;
+    expect(useUpdateStore.getState().installing).toBe(false);
+    expect(editBlockedReasonNow()).toBeNull();
+    expect(useUIStore.getState().toasts.map((toast) => toast.key)).toContain(TOAST_KEYS.APP_UPDATE_INSTALL_FAILED);
     expect(destroyMock).not.toHaveBeenCalled();
     err.mockRestore();
   });

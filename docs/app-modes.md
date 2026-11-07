@@ -109,8 +109,13 @@ Every mutation entry point goes through `src/hooks/useEditingBlocked.ts`:
 
 Both compose `isMapReadOnly` with `selectSpeleoReadOnly` and, for a project saved
 by a newer Stalagmight, `selectNewerFileReadOnly` (`projectStore.ts`, set from the
-load result in the same `set()` as the project). Do not write that composition
-inline. `useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly)`
+load result in the same `set()` as the project). A fourth term,
+`selectUpdateInstalling` (`updateStore.ts`), holds while an update restart installs:
+the user has already passed the unsaved-changes prompt and the restart would drop
+any edit, so nothing may change the project until the install ends. It has no
+backend backstop; the mutation queue (`executeCommand` / `executeUndoRedo`) refuses
+every edit and undo/redo on it instead, and `UpdateInstallOverlay` holds the screen
+and keyboard. Do not write that composition inline. `useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly)`
 is a Rules-of-Hooks violation: `||` short-circuits, so the second hook is skipped
 on any render where the first term is already true, and React throws "Rendered
 fewer hooks than expected" when it flips back. The hook calls both

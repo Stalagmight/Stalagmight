@@ -17,6 +17,7 @@ import { routeOpenedFile, pickAndRoute } from '../openOrImport';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
+import { useUpdateStore } from '../../store/updateStore';
 import { setProjectActionSource, peekProjectActionSource } from '../telemetry';
 import { makeSpeleoLink } from '../../test/factories/speleo';
 
@@ -123,6 +124,24 @@ describe('routeOpenedFile', () => {
     await routeOpenedFile('/Users/someone/caves/');
     expect(useUIStore.getState().activeDialog).toBe('error');
     expect(String(useUIStore.getState().dialogData.message)).not.toContain('/');
+  });
+});
+
+describe('routeOpenedFile - while an update installs (#579 x #576)', () => {
+  afterEach(() => useUpdateStore.getState().reset());
+
+  it('a file dropped on the window opens nothing, imports nothing and raises no prompt', async () => {
+    useProjectStore.setState({ project: { name: 'X' } as never, isDirty: true });
+    useUpdateStore.getState().setInstalling(true);
+
+    await routeOpenedFile('/cave/other.stalx');
+    await routeOpenedFile('/cave/survey.dmp');
+
+    expect(useUIStore.getState().activeDialog).toBeNull();
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(importDmp).not.toHaveBeenCalled();
+    // An abandoned route drops the pending entry-point source, like every other.
+    expect(peekProjectActionSource()).toBeUndefined();
   });
 });
 
