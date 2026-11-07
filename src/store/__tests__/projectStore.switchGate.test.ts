@@ -94,7 +94,8 @@ describe('saves and edits around a project switch (#576 FZ-FZ-INT-4/7)', () => {
     await vi.waitFor(() => expect(sent).toContain('load_project_full_binary'));
   });
 
-  it('an edit requested while a switch is under way is refused, nothing sent, nothing shown', async () => {
+  // [#576 Q-RVFc-1-D1] Refused with a quiet toast saying to wait (it used to be silent).
+  it('an edit requested while a switch is under way is refused, nothing sent, a quiet toast says to wait', async () => {
     void useProjectStore.getState().loadProject('/caves/CaveB.stalx');
     await timerTurns(3);
 
@@ -105,7 +106,10 @@ describe('saves and edits around a project switch (#576 FZ-FZ-INT-4/7)', () => {
     expect(undo).toMatchObject({ success: false, code: null, error: PROJECT_CHANGED_REFUSAL });
     expect(sent).not.toContain('create_section');
     expect(sent).not.toContain('undo');
-    expect(useUIStore.getState().toasts).toEqual([]);
+    // One toast for both refusals (one dedup key), quiet, and no error.
+    expect(useUIStore.getState().toasts).toEqual([
+      expect.objectContaining({ message: 'Wait for the project to finish opening.', key: 'edit-during-switch', kind: 'info' }),
+    ]);
   });
 
   it('an edit made once the loaded project is on screen is sent, while the rest of the load runs', async () => {
@@ -174,6 +178,8 @@ describe('saves and edits around a project switch (#576 FZ-FZ-INT-4/7)', () => {
     await timerTurns(3);
     expect(await useProjectStore.getState().resolveWarning(1, 2, 'W')).toBe(false);
     expect(sent).not.toContain('resolve_warning');
+    expect(useUIStore.getState().toasts).toEqual([expect.objectContaining({ key: 'edit-during-switch', kind: 'info' })]);
+    useUIStore.setState({ toasts: [] });
     loads[0]!.reject({ code: 'CANCELLED', message: 'Loading cancelled' });
     await timerTurns(10);
 

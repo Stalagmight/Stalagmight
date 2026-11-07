@@ -9,7 +9,7 @@ import { refuseMutationDuringCarry } from './moveCarry';
 import { noteProjectDirtied, projectSessionEpoch } from './projectSession';
 import { isProjectChangedRefusal } from './commandResult';
 import { expectedProjectOf, issuedAgainstOf } from './projectIssue';
-import { refuseDuringSwitch } from './switchGate';
+import { refuseEditDuringSwitch } from './switchEditNotice';
 import type { IntegrityRepairResult } from '../types/commands';
 import type { ProjectStore } from './projectStore';
 
@@ -91,7 +91,7 @@ export function createProjectIntegrityActions(
     resolveWarning: async (sectionId: number, shotId: number, warningCode: string, comment?: string): Promise<boolean> => {
       // GHOST-2: a survey mutation (resolved warnings are pushed content), see `executeCommand`;
       // refused during a project switch too, and named for its project ([#576 FZ-FZ-INT-7]).
-      if (refuseMutationDuringCarry() || refuseDuringSwitch()) return false;
+      if (refuseMutationDuringCarry() || refuseEditDuringSwitch()) return false;
       const expectedProject = expectedProjectOf(issuedAgainstOf(get().project));
       try {
         await invokeIpc(
@@ -118,7 +118,7 @@ export function createProjectIntegrityActions(
     },
 
     unresolveWarning: async (sectionId: number, shotId: number, warningCode: string) => {
-      if (refuseMutationDuringCarry() || refuseDuringSwitch()) return; // GHOST-2, #576 FZ-FZ-INT-7: see `resolveWarning`
+      if (refuseMutationDuringCarry() || refuseEditDuringSwitch()) return; // GHOST-2, #576 FZ-FZ-INT-7: see `resolveWarning`
       const expectedProject = expectedProjectOf(issuedAgainstOf(get().project));
       try {
         await invokeIpc(
@@ -204,7 +204,7 @@ export function createProjectIntegrityActions(
       // recognises it with `isMoveCarryRefusal` and shows nothing more. So for a Repair
       // requested during a project switch ([#576 FZ-FZ-INT-7], `isProjectChangedRefusal`),
       // and it names the project it was made for.
-      const refused = refuseMutationDuringCarry() ?? refuseDuringSwitch();
+      const refused = refuseMutationDuringCarry() ?? refuseEditDuringSwitch();
       if (refused) throw refused;
       const expectedProject = expectedProjectOf(issuedAgainstOf(get().project));
       try {

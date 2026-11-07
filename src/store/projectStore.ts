@@ -73,7 +73,8 @@ import { createProjectIntegrityActions, type ProjectIntegrityActions } from './p
 import { createProjectExportActions, type ProjectExportActions } from './projectExportActions';
 import { runProjectSwitch } from '../utils/projectTransition';
 import { expectedProjectOf, issuedAgainstOf, lostProjectOf, type IssuedAgainst } from './projectIssue';
-import { issueSave, refuseDuringSwitch } from './switchGate';
+import { issueSave } from './switchGate';
+import { refuseEditDuringSwitch } from './switchEditNotice';
 import { loadRetryingReplacedFile } from './loadRetry';
 import { newLoadToken } from '../utils/loadToken';
 import { createProjectLoadingActions, initialLoadingState, loadCancelledByUser, type LoadingState, type ProjectLoadingActions } from './projectLoadingState';
@@ -571,7 +572,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const mutatesOpenSurvey = command !== 'set_project_name_for_path' || args?.path === get().project?.file_path;
     // [#576 FZ-FZ-INT-7] And an edit requested while a project switch is under way is refused
     // (`switchGate.ts`): until the switch answers, nothing knows which project it would reach.
-    const refused = (carryCommit || !mutatesOpenSurvey ? null : refuseMutationDuringCarry()) ?? (mutatesOpenSurvey ? refuseDuringSwitch() : null);
+    // [#576 Q-RVFc-1-D1] With a quiet toast saying to wait (`switchEditNotice.ts`).
+    const refused = (carryCommit || !mutatesOpenSurvey ? null : refuseMutationDuringCarry()) ?? (mutatesOpenSurvey ? refuseEditDuringSwitch() : null);
     if (refused) carryCommit?.restorePreview();
     return refused ?? runSerialized(() => executeCommandInner(command, args, meta, issued, carryCommit));
   };
@@ -691,7 +693,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   ): Promise<CommandOutcome<HistoryOutcome>> => {
     // Captured at ISSUE time - see `executeCommand`, which also explains the GHOST-2 check.
     const issued = issuedAgainst();
-    const refused = refuseMutationDuringCarry() ?? refuseDuringSwitch(); // [#576 FZ-FZ-INT-7]
+    const refused = refuseMutationDuringCarry() ?? refuseEditDuringSwitch(); // [#576 FZ-FZ-INT-7, Q-RVFc-1-D1]
     if (refused) return refused;
     const args = typedArgs as Record<string, unknown> | undefined;
     return runSerialized(() => executeUndoRedoInner(command, args, meta, toastId, issued));

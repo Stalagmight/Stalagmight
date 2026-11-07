@@ -185,6 +185,9 @@ Commands now run **concurrently**, which makes three rules explicit:
   write still queued then is dropped unsent. A display-setting write made once the
   flush started waits until the switch has committed or settled, and is dropped
   unsent if a new session started meanwhile (it is sent if none did).
+  An edit refused because a switch is under way shows a quiet "Wait for the project
+  to finish opening." toast; saves refused the same way stay silent (#576
+  Q-RVFc-1-D1).
 - **A read of the project is a settled read.** A command mutates the project and
   then settles it (orphan conversion, frame renormalisation, the reconcile, the undo
   push) under one `command_lock` span but several `project` acquisitions, so a read

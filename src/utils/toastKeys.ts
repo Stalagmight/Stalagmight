@@ -11,6 +11,8 @@ export const TOAST_KEYS = {
   // Integrity / undo-redo
   INTEGRITY_REPAIR: 'integrity-repair',
   EDIT_DISABLED: 'edit-disabled',
+  /** An edit refused while a project switch is under way (#576 Q-RVFc-1-D1). */
+  EDIT_DURING_SWITCH: 'edit-during-switch',
   /** A save refused because a newer Stalagmight saved the project (#576 B6-D1). */
   NEWER_FILE_READ_ONLY: 'newer-file-read-only',
   /*
