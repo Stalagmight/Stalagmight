@@ -180,6 +180,38 @@ describe('a Cancel names the load it was made for (#576 W44-NF3)', () => {
     });
   });
 
+  // [#576 W50-NF3] The same late Cancel must not take B's progress down either: the
+  // loading modal shows the loading state, and B is still loading.
+  it("the loading modal's late Cancel for load A leaves B's progress showing", async () => {
+    const opA = useProjectStore.getState().loadProject(CAVE_A);
+    await timerTurns(5);
+    const loadA = loads[0]!;
+
+    holdNextCancel = true;
+    const cancelA = useProjectStore.getState().cancelLoading();
+    await timerTurns(2);
+    expect(held).toHaveLength(1);
+
+    deliver(loadA);
+    expect(await opA).toEqual({ success: true });
+    const opB = useProjectStore.getState().loadProject(CAVE_B);
+    await timerTurns(5);
+    const loadB = loads[1]!;
+    expect(loadB.path).toBe(CAVE_B);
+
+    // A's Cancel answers while B is still loading.
+    applyCancel(held[0]!.args);
+    held[0]!.reply.resolve(undefined);
+    await cancelA;
+    const { isLoading, loadToken, projectPath } = useProjectStore.getState().loading;
+    const shown = { isLoading, loadToken, projectPath };
+    console.log(`[W50-NF3] loading state once A's late Cancel answered: ${JSON.stringify(shown)}`);
+
+    deliver(loadB); // first, so a failure below leaves no switch queued for the next test
+    expect(await opB).toEqual({ success: true });
+    expect(shown).toEqual({ isLoading: true, loadToken: loadB.name, projectPath: CAVE_B });
+  });
+
   it('the cancel a superseded load sends names that load', async () => {
     const opA = useProjectStore.getState().loadProject(CAVE_A);
     await timerTurns(5);

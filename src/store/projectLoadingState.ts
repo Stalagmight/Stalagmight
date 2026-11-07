@@ -130,19 +130,23 @@ export function createProjectLoadingActions(
       })),
 
     cancelLoading: async () => {
+      // [#576 W44-NF3] Named: the load this state is for, read now. The IPC can run
+      // after that load ended and a newer one started; it must not cancel that one.
+      // No name (no load of the store's in progress): it cancels nothing.
+      const { clientOpId, loadToken } = get().loading;
       // Safe to call even when no load is active - backend is idempotent
       try {
-        // [#576 W44-NF3] Named: the load this state is for, read now. The IPC can run
-        // after that load ended and a newer one started; it must not cancel that one.
-        // No name (no load of the store's in progress): it cancels nothing.
-        await invokeIpc('cancel_loading', { loadToken: get().loading.loadToken ?? null }, {
+        await invokeIpc('cancel_loading', { loadToken: loadToken ?? null }, {
           purpose: 'cancel project loading',
         });
       } catch {
         // Ignore errors - might be called when no load active
       }
-      // Always reset loading state
-      get().resetLoading();
+      // [#576 W50-NF3] Reset only the state of the load the Cancel named. Once a newer
+      // load started (a new clientOpId) or an import named this one (a new loadToken),
+      // the state is that load's progress, which this Cancel did not stop.
+      const now = get().loading;
+      if (now.clientOpId === clientOpId && now.loadToken === loadToken) get().resetLoading();
     },
   };
 }
