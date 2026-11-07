@@ -546,8 +546,20 @@ async fn check<R: Runtime>(app: &AppHandle<R>) -> Result<AppUpdateCheck, String>
     let url = Url::parse(&endpoint)
         .map_err(|e| format!("Update endpoint '{endpoint}' is not a valid URL: {e}"))?;
 
+    // [#576] What a quit does on its way out, on the one install path that skips
+    // it: on Windows `Update::install` hands over to the installer and calls
+    // `std::process::exit` itself, so `RunEvent::ExitRequested` - where a quit
+    // releases a held SpeleoDB write lock - never runs. This hook runs right
+    // before that exit (replacing the plugin's default, which only cleaned up).
+    // Elsewhere the install returns and `app.restart()`, called off the main
+    // thread, goes through `ExitRequested` like a quit.
+    let exiting = app.clone();
     let updater = app
         .updater_builder()
+        .on_before_exit(move || {
+            crate::release_held_lock_on_exit(&exiting);
+            exiting.cleanup_before_exit();
+        })
         .timeout(CHECK_TIMEOUT)
         .endpoints(vec![url])
         .map_err(|e| format!("Update endpoint was rejected: {e}"))?
@@ -793,7 +805,14 @@ pub async fn unarm_app_update_restart<R: Runtime>(app: AppHandle<R>) -> Result<(
 /// On failure the bytes are put back, so the restart can be retried - through
 /// the guarded path, which re-arms - without downloading again.
 ///
-/// [#576 C2] `async`, the body on the blocking pool like every command's.
+/// [#576 C2] `async`, the body on the blocking pool - which is also what makes
+/// the restart exit like a quit. `AppHandle::restart` on the MAIN thread (where
+/// Tauri runs a non-`async` command) cleans up and re-executes at once, without
+/// `RunEvent::ExitRequested`, so the exit-time release of a held SpeleoDB write
+/// lock that every quit gets was skipped; off the main thread it requests the
+/// exit, and the event loop runs `ExitRequested` before it restarts (tauri 2.9
+/// `AppHandle::restart`). Windows, where the install exits the process itself,
+/// gets the same release from the `on_before_exit` hook set at the check.
 #[tauri::command]
 pub async fn install_app_update_and_restart<R: Runtime>(
     app: AppHandle<R>,
@@ -1354,5 +1373,48 @@ mod tests {
         );
         let err = refusal(checked_update(&state).map(|_| ()));
         assert!(err.contains("check for updates first"), "{err}");
+    }
+
+    /// [#579 x #576] What a quit gets on its way out, the restart gets too. The
+    /// two halves are wiring, so they are pinned on the source: the install body
+    /// runs on the blocking pool (off the main thread, so `AppHandle::restart`
+    /// requests the exit and `RunEvent::ExitRequested` runs, as on a quit), and the
+    /// Windows installer hand-over, which exits without that event, runs the same
+    /// release first. Both go through the one function `RunEvent::ExitRequested`
+    /// calls.
+    #[test]
+    fn the_update_restart_exits_through_the_quit_path() {
+        fn body<'a>(src: &'a str, signature: &str) -> &'a str {
+            let start = src.find(signature).expect("the function is there");
+            let rest = &src[start..];
+            &rest[..rest.find("\n}\n").expect("the function ends")]
+        }
+        let src = include_str!("app_update.rs");
+        let install = body(src, "pub async fn install_app_update_and_restart<");
+        assert!(
+            install.contains("pool::run_stateless(move || install_and_restart(&app))"),
+            "{install}"
+        );
+        let restart = body(src, "fn install_and_restart<");
+        assert!(restart.contains("app.restart()"), "{restart}");
+        let check = body(src, "async fn check<");
+        assert!(
+            check.contains(".on_before_exit(move || {")
+                && check.contains("crate::release_held_lock_on_exit(&exiting);")
+                && check.contains("exiting.cleanup_before_exit();"),
+            "{check}"
+        );
+        let lib = include_str!("../lib.rs");
+        let on_exit = body(lib, "pub(crate) fn release_held_lock_on_exit<");
+        assert!(
+            on_exit.contains("speleodb_release_held_lock_bounded(EXIT_LOCK_RELEASE_TIMEOUT)"),
+            "{on_exit}"
+        );
+        assert!(
+            lib.contains(
+                "if let tauri::RunEvent::ExitRequested { .. } = event {\n                    release_held_lock_on_exit(app_handle);"
+            ),
+            "the quit path calls the same release"
+        );
     }
 }

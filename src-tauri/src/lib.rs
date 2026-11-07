@@ -85,6 +85,22 @@ pub use stalagmight_core::tile_stats::{TileFetchStats, TileFetchStatsSnapshot};
 /// server-side mutex times out on its own if the release doesn't land.
 const EXIT_LOCK_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The backend's part of every exit: a best-effort, bounded release of a held
+/// SpeleoDB write lock, so quitting does not strand the server mutex locked for
+/// every other editor (fix 1, fix M2). No-op when no remote edit session is
+/// active.
+///
+/// [#579 x #576] One function for every way the process ends: the
+/// `RunEvent::ExitRequested` handler below (a quit, a window close, and an
+/// update restart, which `commands::app_update` runs off the main thread so it
+/// goes through that event), and the updater's Windows installer hand-over,
+/// which exits the process without it (`on_before_exit`).
+pub(crate) fn release_held_lock_on_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(state) = app.try_state::<core::state::AppState>() {
+        state.speleodb_release_held_lock_bounded(EXIT_LOCK_RELEASE_TIMEOUT);
+    }
+}
+
 // The mobile entry point is `run()` itself (#576 NF-W4T-2): the attribute sat on
 // the constant above, which a mobile build would have tried to export instead.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -655,9 +671,7 @@ pub fn run() {
                 // unreachable server would freeze quit for the full HTTP timeout - cap
                 // the wait and exit anyway (the server lock times out on its own).
                 if let tauri::RunEvent::ExitRequested { .. } = event {
-                    if let Some(state) = app_handle.try_state::<core::state::AppState>() {
-                        state.speleodb_release_held_lock_bounded(EXIT_LOCK_RELEASE_TIMEOUT);
-                    }
+                    release_held_lock_on_exit(app_handle);
                 }
 
                 // macOS "open with" (#424). Finder never uses argv: both a cold

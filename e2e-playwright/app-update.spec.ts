@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures/coverage';
 import { setupMockedPage, createProject, createSectionViaStore, openSettingsFromMenu } from './helpers/app';
 import { setIpcOverrides } from './helpers/ipcOverrides';
+import { getIpcCalls, recordIpcCalls } from './helpers/ipcRecorder';
 
 /**
  * E2E for the in-app updater (#579): the banner's three states, and the
@@ -58,6 +59,27 @@ async function simulateCloseRequested(page: import('@playwright/test').Page): Pr
       payload: null,
     });
   });
+}
+
+/** Make the open project dirty, and put a downloaded update on the banner. */
+async function dirtyProjectWithReadyUpdate(page: import('@playwright/test').Page): Promise<void> {
+  await createSectionViaStore(page, {
+    name: 'Update Restart Dirty Section',
+    shots: [{ azimuth_in: 0, azimuth_out: 0, length: 5, depth_in: 0, depth_out: 0 }],
+  });
+  await page.waitForFunction(
+    () =>
+      (window as unknown as {
+        __E2E_TEST__: { projectStore: { getState: () => { isDirty: boolean } } };
+      }).__E2E_TEST__.projectStore.getState().isDirty === true,
+  );
+  await seedAvailable(page, '9.9.9');
+  await page.evaluate(() => {
+    const store = (window as unknown as { __E2E_TEST__: { updateStore: UpdateStoreApi } }).__E2E_TEST__.updateStore;
+    store.getState().startDownloading('9.9.9');
+    store.getState().setReady('9.9.9');
+  });
+  await expect(page.getByTestId('update-banner-restart')).toBeVisible();
 }
 
 test.describe('In-app update banner', () => {
@@ -130,6 +152,43 @@ test.describe('In-app update banner', () => {
     await page.getByTestId('unsaved-changes-cancel').click();
     await expect(page.getByTestId('unsaved-changes-dialog')).toHaveCount(0);
     await expect(page.getByTestId('update-banner-restart')).toBeVisible();
+  });
+
+  /**
+   * [#579 x #576] The restart is a quit that installs: through the real
+   * unsaved-changes prompt, Cancel gives up the restart on both sides, and
+   * "Discard & Quit" re-issues the close, which installs the update instead of
+   * destroying the window.
+   */
+  test('Restart through the unsaved-changes prompt: Cancel unarms, Discard & Quit installs', async ({ page }) => {
+    await dirtyProjectWithReadyUpdate(page);
+    // A real install ends the process; here it answers, and the app stays up.
+    await setIpcOverrides(page, { install_app_update_and_restart: null });
+    await recordIpcCalls(page, [
+      'arm_app_update_restart',
+      'unarm_app_update_restart',
+      'install_app_update_and_restart',
+      'plugin:window|destroy',
+    ]);
+    const count = async (cmd: string) => (await getIpcCalls(page, cmd)).length;
+
+    await page.getByTestId('update-banner-restart').click();
+    await simulateCloseRequested(page);
+    await expect(page.getByTestId('unsaved-changes-dialog')).toBeVisible();
+    await page.getByTestId('unsaved-changes-cancel').click();
+    await expect.poll(() => count('unarm_app_update_restart')).toBe(1);
+    expect(await count('install_app_update_and_restart')).toBe(0);
+
+    await page.getByTestId('update-banner-restart').click();
+    await simulateCloseRequested(page);
+    await expect(page.getByTestId('unsaved-changes-dialog')).toBeVisible();
+    await page.getByTestId('unsaved-changes-discard').click();
+    // The confirmed quit re-issues the close; the backend would re-emit it.
+    await simulateCloseRequested(page);
+
+    await expect.poll(() => count('install_app_update_and_restart')).toBe(1);
+    expect(await count('arm_app_update_restart')).toBe(2);
+    expect(await count('plugin:window|destroy')).toBe(0);
   });
 
   /**

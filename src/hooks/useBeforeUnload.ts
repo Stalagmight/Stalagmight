@@ -9,6 +9,7 @@ import { invokeIpc } from '../utils/ipc';
 import { useUIStore } from '../store/uiStore';
 import { useUpdateStore } from '../store/updateStore';
 import { TOAST_KEYS } from '../utils/toastKeys';
+import { holdAutosave } from '../utils/autosaveHold';
 import i18n from '../i18n';
 
 /**
@@ -210,6 +211,14 @@ export function useBeforeUnload(
           // with an error toast, rather than destroying a window the update
           // never actually applied to.
           if (consumeUpdateRestartArmed()) {
+            // [#576 D34] The guarantee `performQuit` gives a quit, for as long as
+            // this one takes: the user may have just chosen "Discard & Quit", and
+            // the install can outlast the quit confirmation's hold (it writes the
+            // whole new bundle before the restart), so autosave must not write the
+            // discarded edits into the project while it runs. Released however the
+            // install ends - a failed install leaves the app running, and autosave
+            // with it, as a refused quit does.
+            const releaseAutosave = holdAutosave();
             try {
               await invokeIpc('install_app_update_and_restart', undefined, {
                 purpose: 'install downloaded app update and restart',
@@ -232,6 +241,8 @@ export function useBeforeUnload(
                   'error',
                 );
               isClosing.current = false;
+            } finally {
+              releaseAutosave();
             }
             return;
           }
