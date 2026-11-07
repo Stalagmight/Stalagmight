@@ -28,6 +28,12 @@ describe('seedWindow (STALAGMIGHT_VITEST_SEED_FIRST / _COUNT)', () => {
     expect(seedWindow(1, 2)).toEqual([7000, 7001, 7002]);
   });
 
+  it("offsets the first-seed knob by the loop's own first, so disjoint loops stay disjoint (#576 RVF-c-M2)", () => {
+    vi.stubEnv('STALAGMIGHT_VITEST_SEED_FIRST', '7000');
+    expect(seedWindow(1, 2)).toEqual([7000, 7001]);
+    expect(seedWindow(101, 2)).toEqual([7100, 7101]);
+  });
+
   it('refuses a knob that is not a usable integer', () => {
     vi.stubEnv('STALAGMIGHT_VITEST_SEED_FIRST', '-1');
     expect(() => seedWindow(1, 2)).toThrow(/STALAGMIGHT_VITEST_SEED_FIRST=-1/);

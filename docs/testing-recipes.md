@@ -562,9 +562,11 @@ STALAGMIGHT_VITEST_SEED_FIRST=50001 STALAGMIGHT_VITEST_SEED_COUNT=500 \
 ```
 
 The last row's knobs (`seedWindow` in `src/test/seedWindow.ts` and
-`e2e/agent/lib/seedWindow.ts`) move every seeded loop in those files to the
-same window; a check of the generator's pool (which swarm profiles exist) keeps
-its own seeds. A knob that is not an integer (or a count below 1) fails the
+`e2e/agent/lib/seedWindow.ts`) move every seeded loop in those files: the first
+seed becomes the knob plus the loop's own offset (its default first seed minus
+one), so loops with disjoint default ranges stay disjoint while the count fits
+the gap between them; a check of the generator's pool (which swarm profiles
+exist) keeps its own seeds. A knob that is not an integer (or a count below 1) fails the
 file instead of running no seeds.
 
 The real-app replay mode for the agent-harness fuzzers is in
