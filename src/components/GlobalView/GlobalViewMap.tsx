@@ -17,6 +17,7 @@ import { testIdPart } from '../../utils/testId';
 import { MapAttribution } from '../Map/MapAttribution';
 import { createSurveyMap, SATELLITE_SOURCE_ID } from '../Map/createSurveyMap';
 import { useContextLossToast } from '../Map/useContextLossToast';
+import { useParseIndicatorClearance } from '../../hooks/useParseIndicatorClearance';
 import { useShallow } from 'zustand/react/shallow';
 import { MapUnavailable } from '../Map/MapUnavailable';
 
@@ -650,6 +651,10 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
   // leaves every system's survey blank for good: say so, and offer the rebuild
   // (#576 D38-LOST).
   useContextLossToast(map, mapLoaded, onReloadMap);
+  // [#576 W71-NF10] The import parse indicator floats above the imagery
+  // attribution, as in the project view: centred on the window, it reaches over
+  // the source names in this map's bottom-right corner.
+  const attributionParseIndicatorClearance = useParseIndicatorClearance('global-view-map-attribution');
 
   // E2E handle on the Global View map (the survey map's is `__stalagmight_map__`).
   useEffect(() => {
@@ -1259,7 +1264,11 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
           for as long as the view exists. Bottom-flush on the right, with the
           project count lifted above it - Esri requires the names not be
           obstructed, and the count chip previously owned this corner. */}
-      <MapAttribution visible className="absolute bottom-0 right-0 z-10" />
+      <MapAttribution
+        visible
+        className="absolute bottom-0 right-0 z-10"
+        elementRef={attributionParseIndicatorClearance}
+      />
 
       {/* Project count indicator */}
       <div className="absolute bottom-8 right-2 bg-panel-90 border border-border rounded px-2 py-1 text-xs">

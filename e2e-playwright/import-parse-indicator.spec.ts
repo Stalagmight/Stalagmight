@@ -11,7 +11,9 @@ import { setupMockedPage, createProject } from './helpers/app';
  *
  * In the project view it also floats above the map's imagery attribution, which
  * rides the map's bottom edge just above the bar: Esri's terms want the source
- * names unobstructed while the imagery is drawn.
+ * names unobstructed while the imagery is drawn. So does the Global View's map
+ * (#576 W71-NF10), whose attribution sits in its bottom-right corner and reaches
+ * under the centred pill - all the way across it in a 900 px window.
  *
  * The parse is real: a `.dmp` picked through the app's own door, its
  * `import_dmp` held on a promise so the pill stays up while it is measured.
@@ -100,6 +102,39 @@ test.describe('the import parse indicator clears the status bar (#576 W62)', () 
     await expect.poll(async () => (await statusBar.boundingBox())!.height).toBeGreaterThan(before);
 
     await expectPillAbove(pill, statusBar, 'the taller status bar');
+  });
+
+  test.describe('in a 900 px window', () => {
+    // The Global View map's right edge stops at the metadata panel, so its
+    // attribution bar (about 350 px wide) runs right under the centred pill.
+    test.use({ viewport: { width: 900, height: 720 } });
+
+    test('on the Global View map: above the map attribution, back above the bar in the list (#576 W71-NF10)', async ({
+      page,
+    }) => {
+      await page.getByTestId('globalview-view-toggle-map').click();
+      const attribution = page.getByTestId('map-attribution');
+      const names = page.getByTestId('map-attribution-text');
+      await expect(names).toBeVisible();
+      await holdTheNextDmpParse(page);
+      await page.getByTestId('global-open-import-button').click();
+
+      const pill = page.getByTestId('import-parse-indicator');
+      await expectPillAbove(pill, attribution, 'the map attribution');
+      expect(await gapAbove(pill, names), 'the pill leaves the source names uncovered').toBeGreaterThan(GAP_PX);
+      // The case under test: the names run right under the pill.
+      const pillBox = (await pill.boundingBox())!;
+      const namesBox = (await names.boundingBox())!;
+      expect(
+        pillBox.x < namesBox.x + namesBox.width && namesBox.x < pillBox.x + pillBox.width,
+        `the names (x ${namesBox.x}-${namesBox.x + namesBox.width}) run under the pill (x ${pillBox.x}-${pillBox.x + pillBox.width})`,
+      ).toBe(true);
+
+      // The list has no attribution: its registration goes with the map.
+      await page.getByTestId('globalview-view-toggle-list').click();
+      await expect(attribution).toHaveCount(0);
+      await expectPillAbove(pill, page.getByTestId('global-view').locator('footer'), 'the status bar');
+    });
   });
 
   test('in a project, while a DMP picked for it parses: above the map attribution (#576 W71)', async ({ page }) => {
