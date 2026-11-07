@@ -1609,11 +1609,23 @@ impl AppState {
         // lock with its gate open; the backend must not depend on it. Decided under
         // a brief session guard, which the hand-back (it takes the session lock to
         // read the token and clear the claim) must not run under.
+        //
+        // [#576 RVF-c-B1] "Another account" is judged the way the lock-holder check
+        // and the claim identity judge it (`lock_held_by_me`, `LockClaim::taken_by`):
+        // the email case-insensitively, the server through `normalize_endpoint`. The
+        // same account re-typed as `U@x`, or the same server with a trailing slash,
+        // replaces nothing; an exact compare released its own lock and shut its gate.
         let replaced_session = {
             let session = self.speleodb.lock();
-            session.email.is_some()
-                && (session.endpoint.as_deref() != Some(endpoint.as_str())
-                    || session.email.as_deref() != Some(email.as_str()))
+            match (session.endpoint.as_deref(), session.email.as_deref()) {
+                (Some(old_endpoint), Some(old_email)) => {
+                    crate::speleodb::auth::normalize_endpoint(old_endpoint)
+                        != crate::speleodb::auth::normalize_endpoint(&endpoint)
+                        || !old_email.eq_ignore_ascii_case(&email)
+                }
+                (None, Some(_)) => true,
+                (_, None) => false,
+            }
         };
         if replaced_session {
             tracing::info!(
@@ -1628,6 +1640,9 @@ impl AppState {
             // If a *different* account is already active, forget it first so its
             // keychain entry isn't orphaned; its lock and edit gate were handed back
             // above. A same-account re-login just overwrites the existing entry.
+            // Exact here, unlike `replaced_session`: the keychain key keeps the
+            // email's case, so `U@x` over `u@x` clears the old entry (its claim and
+            // gate stay - nothing was handed back for the same account).
             let switching = session.endpoint.as_deref() != Some(endpoint.as_str())
                 || session.email.as_deref() != Some(email.as_str());
             if switching {

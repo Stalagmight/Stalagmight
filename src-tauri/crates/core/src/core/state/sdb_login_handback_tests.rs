@@ -239,3 +239,84 @@ fn a_sign_in_with_no_session_leaves_a_local_projects_gate_alone() {
         );
     });
 }
+
+/// Server A, but whoami spells our account with another case.
+fn server_a_other_case(line: &str) -> (u16, &'static str) {
+    if is_whoami(line) {
+        (200, r#"{"email":"U@x"}"#)
+    } else {
+        (200, HELD_BY_SAME_ACCOUNT_AT_BASE_BODY)
+    }
+}
+
+/// Re-sign in to A as `server`'s whoami names us, at `endpoint`, and report what
+/// the hand-back decided: (replaced_session, gate, claims, releases A saw).
+fn re_login_to_a(
+    server: fn(&str) -> (u16, &'static str),
+    spell_endpoint: fn(&str) -> String,
+    tag: &str,
+) -> (bool, bool, Vec<String>, Vec<String>) {
+    let (a_base, _a_listener, a_seen) = routing_stub(server);
+    let (_temp, state) = editing_fixture(&a_base);
+    let result = state
+        .speleodb_login(
+            Some(spell_endpoint(&a_base)),
+            None,
+            None,
+            Some("tok-1b".to_owned()),
+        )
+        .map_err(|e| e.message)
+        .expect("the same-account paste login succeeds");
+    let releases: Vec<String> = a_seen
+        .lock()
+        .expect("A's request log")
+        .iter()
+        .filter(|r| r.contains("/release/"))
+        .cloned()
+        .collect();
+    let gate = state.edit_enabled();
+    let claims_after = claims(&state);
+    println!(
+        "[RVF-c-B1] {tag}: replaced_session {}; gate {gate}; claims {claims_after:?}; \
+         session {:?}; releases {releases:?}",
+        result.replaced_session,
+        session_of(&state)
+    );
+    (result.replaced_session, gate, claims_after, releases)
+}
+
+#[test]
+fn a_same_account_re_login_with_the_email_in_another_case_keeps_the_edit_session() {
+    // [#576 RVF-c-B1] The holder check (`lock_held_by_me`) and the claim identity
+    // (`LockClaim::taken_by`) treat the email case-insensitively, so a re-login as
+    // `U@x` over a lock `u@x` holds is the same account and replaces nothing.
+    crate::test_helpers::with_isolated_config(|| {
+        let (replaced, gate, claims_after, releases) =
+            re_login_to_a(server_a_other_case, str::to_owned, "u@x -> U@x");
+        assert!(!replaced, "same account, other case: not a replacement");
+        assert!(
+            releases.is_empty(),
+            "no release of our own lock: {releases:?}"
+        );
+        assert!(gate, "the edit gate stays open");
+        assert_eq!(claims_after, vec![REMOTE_ID.to_owned()], "the claim stays");
+    });
+}
+
+#[test]
+fn a_same_account_re_login_with_the_server_spelled_differently_keeps_the_edit_session() {
+    // [#576 RVF-c-B1] The claim identity compares endpoints through
+    // `normalize_endpoint`, so the same server typed with a trailing slash is the
+    // same session and replaces nothing.
+    crate::test_helpers::with_isolated_config(|| {
+        let (replaced, gate, claims_after, releases) =
+            re_login_to_a(server_a, |base| format!("{base}/"), "A -> A/");
+        assert!(!replaced, "same server, trailing slash: not a replacement");
+        assert!(
+            releases.is_empty(),
+            "no release of our own lock: {releases:?}"
+        );
+        assert!(gate, "the edit gate stays open");
+        assert_eq!(claims_after, vec![REMOTE_ID.to_owned()], "the claim stays");
+    });
+}
