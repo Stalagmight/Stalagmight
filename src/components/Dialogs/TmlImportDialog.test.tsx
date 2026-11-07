@@ -636,6 +636,66 @@ describe('TmlImportDialog discard failures (#411 fix round)', () => {
     expect(closeDialog).toHaveBeenCalled();
     expect(importContext()).toBeNull();
   });
+
+  // [#576 W50-NF1] A Save As moves the project to another file within its session: the
+  // file the prompt captured is then the copy left behind, no longer the open project's.
+  // Which file a Discard should delete then is not settled; it deletes none.
+  it('bails when a Save As moved the project to another file since the prompt', async () => {
+    openEmptyImportProject();
+    useProjectStore.setState({
+      databaseOpen: true,
+      project: emptyProject({ file_path: '/tmp/new.stalx' }),
+    });
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+    await userEvent.click(await screen.findByTestId('tml-import-cancel'));
+
+    useProjectStore.setState({ project: emptyProject({ file_path: '/tmp/saved as.stalx' }) }); // same session
+    await userEvent.click(screen.getByTestId('tml-import-residue-discard'));
+
+    console.log(`[W50-NF1] Save As, then Discard: deleteProject calls ${JSON.stringify(deleteProject.mock.calls)}`);
+    expect(deleteProject, 'deleted the copy the Save As left behind').not.toHaveBeenCalled();
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(closeDialog).toHaveBeenCalled();
+    expect(importContext()).toBeNull();
+  });
+
+  it('bails when the copy a Save As left behind is open again', async () => {
+    openEmptyImportProject();
+    useProjectStore.setState({
+      databaseOpen: true,
+      project: emptyProject({ file_path: '/tmp/new.stalx' }),
+    });
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+    await userEvent.click(await screen.findByTestId('tml-import-cancel'));
+
+    // Save As, then the session ends on the saved-as file and the copy left behind is reopened.
+    useProjectStore.setState({ project: emptyProject({ file_path: '/tmp/saved as.stalx' }) });
+    noteProjectSessionChanged();
+    useProjectStore.setState({ project: emptyProject({ file_path: '/tmp/new.stalx' }) });
+    await userEvent.click(screen.getByTestId('tml-import-residue-discard'));
+
+    console.log(`[W50-NF1] Save As, reopen the old copy, Discard: deleteProject calls ${JSON.stringify(deleteProject.mock.calls)}`);
+    expect(deleteProject, 'deleted the copy the Save As left behind').not.toHaveBeenCalled();
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(closeDialog).toHaveBeenCalled();
+    expect(importContext()).toBeNull();
+  });
+
+  it('still deletes after a reload of the same file, with no Save As', async () => {
+    openEmptyImportProject();
+    useProjectStore.setState({
+      databaseOpen: true,
+      project: emptyProject({ file_path: '/tmp/new.stalx' }),
+    });
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+    await userEvent.click(await screen.findByTestId('tml-import-cancel'));
+
+    noteProjectSessionChanged();
+    useProjectStore.setState({ project: emptyProject({ file_path: '/tmp/new.stalx' }) });
+    await userEvent.click(screen.getByTestId('tml-import-residue-discard'));
+
+    await waitFor(() => expect(deleteProject).toHaveBeenCalledWith('/tmp/new.stalx'));
+  });
 });
 
 describe('TmlImportDialog failure after unmount (#411 fix round)', () => {

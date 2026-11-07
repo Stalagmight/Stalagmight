@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { isMoveCarryRefusal } from '../../store/moveCarry';
-import { issuedAgainstOf, lostProjectOf, type IssuedAgainst } from '../../store/projectIssue';
+import { followSession, issuedAgainstOf, lostProjectOf, type IssuedAgainst } from '../../store/projectIssue';
 import { useUIStore } from '../../store/uiStore';
 import { getErrorMessage } from '../../utils/ipc';
 import {
@@ -482,11 +482,17 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     // identity: the backend RESERVES one for a deferred project that has never
     // been written, and a Save As moves it within the session.) Unlike the edit
     // guard, a missing project on either side bails too.
+    // [#576 W50-NF1] So does a Save As since the prompt: the file it captured is then
+    // the copy left behind, in this session (another file now) or reopened later
+    // (`followSession`: another project). Which file a Discard should delete after
+    // a Save As is not settled, so it deletes none.
     const open = useProjectStore.getState().project;
+    const issued = residue.project.issued;
     if (
       !isEmptyImportProject() ||
-      (open?.created_at ?? null) !== residue.project.issued.key ||
-      lostProjectOf(residue.project.issued, open)
+      (open?.created_at ?? null) !== issued.key ||
+      (open?.file_path ?? null) !== issued.file ||
+      lostProjectOf(followSession(issued), open)
     ) {
       // The flow is over here too: leaving `importContext` set would have the
       // next import that sets none (GPX/Compass/Walls) inherit 'new-project'
