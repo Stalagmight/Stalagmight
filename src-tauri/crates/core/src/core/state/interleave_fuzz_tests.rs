@@ -151,10 +151,19 @@ const REGRESSION_SEEDS: &[(Mode, u64)] = &[
     // They read as class `display`, not as a stale handle, because that later
     // save reopened the handle. Campaign seeds only: under this generator they
     // pass with the load's file-stamp checks reverted too (the schedule moved),
-    // and so did 18,000 Lifecycle seeds from 30000000; 14100050 is the seed that
-    // catches that revert.
+    // and so did 18,000 Lifecycle seeds from 30000000. That revert is caught as a
+    // stale handle by 14100050 and in this display form by 40600960 below.
     (Mode::Lifecycle, 20_141_800),
     (Mode::Lifecycle, 20_143_615),
+    // FZ-FZ-INT-R2 in its display form under this generator, found by a campaign
+    // over Lifecycle seeds from 40000000 with the load's two file-stamp checks
+    // reverted (W42-NF3). It shrinks to 14 ops on 4 threads around two loads of
+    // CaveA copy: t1 loads it, saves and writes a display setting, t2 loads it
+    // too, and the write t1 was acknowledged for is not in the file at the end
+    // (class `display`, no stale handle in the shrunk case). It fails with both
+    // checks reverted and passes with them (one of its loads is then refused
+    // with `FILE_REPLACED_DURING_LOAD`).
+    (Mode::Lifecycle, 40_600_960),
 ];
 
 const MAX_STEPS: usize = 200_000;
