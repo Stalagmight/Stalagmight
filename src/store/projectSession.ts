@@ -18,14 +18,31 @@ import type { DisplaySettingTarget } from '../types/ipc.generated';
 
 let epoch = 0;
 
+/**
+ * [#576 RVF-c-A2-2] The project each ended session ended on: its identity when the
+ * session moved, null with none open. A Save As moves a session's project to another
+ * file without a new session, so the file a session was OPENED from is not always the
+ * one its project was last open from (`followSession`, `projectIssue.ts`).
+ */
+const endedOn = new Map<number, DisplaySettingTarget | null>();
+
 /** The current project session; compare two reads to tell whether a switch happened. */
 export function projectSessionEpoch(): number {
   return epoch;
 }
 
-/** Called where the open project is replaced (load / create commit, close, delete). */
+/**
+ * Called where the open project is replaced (load / create commit, close, delete),
+ * before the store drops the project it replaces.
+ */
 export function noteProjectSessionChanged(): void {
+  endedOn.set(epoch, openProjectIdentity());
   epoch += 1;
+}
+
+/** The project `session` ended on (see `endedOn`); undefined while it is the current one. */
+export function projectSessionEndedOn(session: number): DisplaySettingTarget | null | undefined {
+  return endedOn.get(session);
 }
 
 /**

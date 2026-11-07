@@ -56,7 +56,7 @@ import type { ZeroDatumConfigResult } from '../ZeroDatumConfigDialog';
 import { convertToEditableShots } from '../../../utils/shotConversion';
 import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
-import { noteProjectSessionChanged } from '../../../store/projectSession';
+import { noteProjectSessionChanged, projectSessionEpoch } from '../../../store/projectSession';
 import type { Project } from '../../../types/project';
 
 const receipt = (): ImportReceipt => ({
@@ -1083,6 +1083,45 @@ describe('DMP wizard: imports land in the run project, a read-only refusal reads
     renderWizard(placedOnly({ project: { key: 'project-A', file: null, session: 0 } }), { onComplete, selected: [0] });
 
     await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(ipcOrder).toContain('import_sections');
+  });
+
+  /**
+   * [#576 RVF-c-A2-2] A Save As inside the run's session moves the run's project to
+   * another file without a new session. The run kept the file it began on, so the copy
+   * the Save As left behind, reopened, passed as the run's project, and the copy the
+   * run's work was saved into, reopened, was refused. The run now follows its session's
+   * project to the file it was last open from.
+   */
+  const runSavedAsThenReopened = (reopened: string) => {
+    const run = { key: 'project-A', file: '/caves/A.stalx', session: projectSessionEpoch() };
+    useProjectStore.setState({ project: { created_at: 'project-A', file_path: '/caves/A.stalx' } as Project });
+    // Save As, inside the run's session: the project is now open from B.
+    useProjectStore.setState({ project: { created_at: 'project-A', file_path: '/caves/B.stalx' } as Project });
+    // An open of `reopened`: a new session.
+    noteProjectSessionChanged();
+    useProjectStore.setState({ project: { created_at: 'project-A', file_path: reopened } as Project });
+    return run;
+  };
+
+  it('refuses the late import into the copy a Save As left behind, reopened', async () => {
+    const run = runSavedAsThenReopened('/caves/A.stalx');
+    const onComplete = vi.fn();
+    renderWizard(placedOnly({ project: run }), { onComplete, selected: [0] });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('wizard-placing')).toHaveTextContent('dialogs.dmpNewImport.importWrongProject'),
+    );
+    expect(ipcOrder, 'imported into the copy the Save As left behind').not.toContain('import_sections');
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('still imports into the copy the run was saved as, reopened', async () => {
+    const run = runSavedAsThenReopened('/caves/B.stalx');
+    const onComplete = vi.fn();
+    renderWizard(placedOnly({ project: run }), { onComplete, selected: [0] });
+
+    await waitFor(() => expect(onComplete, 'refused the reopened copy the run was saved as').toHaveBeenCalled());
     expect(ipcOrder).toContain('import_sections');
   });
 

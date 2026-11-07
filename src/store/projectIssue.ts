@@ -8,7 +8,7 @@
  * (`projectSession.ts`); importing no store, so the store and its callers can both
  * use it without an import cycle.
  */
-import { projectSessionEpoch } from './projectSession';
+import { projectSessionEndedOn, projectSessionEpoch } from './projectSession';
 import type { ProjectIdentity } from '../types/ipc/ProjectIdentity';
 
 /** What a request was ISSUED against: the project's key, the file it was open from and the session. */
@@ -57,6 +57,20 @@ export function lostProjectOf(issued: IssuedAgainst, open: OpenProject): boolean
     issued.session !== projectSessionEpoch() &&
     issued.file !== (open.file_path ?? null)
   );
+}
+
+/**
+ * [#576 RVF-c-A2-2] `issued`, with the file its session's project was last open from
+ * once that session has ended, for a run of requests kept across a session (the DMP
+ * wizard's run outlives its dialog). A Save As inside the session moves the project to
+ * another file without a new session: by the rule above, the copy the Save As left
+ * behind, reopened, is then another project, and the copy the run's work was saved
+ * into, reopened, is a reload of it. Unchanged while the session is current (the rule
+ * above already takes a Save As in it) and when it ended on another project.
+ */
+export function followSession(issued: IssuedAgainst): IssuedAgainst {
+  const ended = projectSessionEndedOn(issued.session);
+  return ended && ended.createdAt === issued.key ? { ...issued, file: ended.filePath } : issued;
 }
 
 /**

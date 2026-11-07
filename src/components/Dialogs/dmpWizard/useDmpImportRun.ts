@@ -24,7 +24,7 @@ import type { CommandRefused } from '../../../store/commandResult';
 import type { DmpFile } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
 import { useProjectStore, type ImportReceiptProvenance } from '../../../store/projectStore';
-import { issuedAgainstOf, lostProjectOf, type IssuedAgainst } from '../../../store/projectIssue';
+import { followSession, issuedAgainstOf, lostProjectOf, type IssuedAgainst } from '../../../store/projectIssue';
 import { useUIStore } from '../../../store/uiStore';
 import { extractFilename } from '../../../utils/path';
 import { aggregateImportReceipts } from '../../../utils/importReceipt';
@@ -137,9 +137,11 @@ function importFailureText(result: CommandRefused, fallback: string): string {
  * does not clear) has outlived a switch. [#576 RVF-a-1] By the store's rule
  * (`lostProjectOf`): another copy of the same file is another project. The import is
  * issued in the same tick, so the project its IPC names (`expectedProject`) is this one.
+ * [#576 RVF-c-A2-2] The run follows its session's project through a Save As
+ * (`followSession`): the copy left behind is another project, the one saved into is not.
  */
 function runProjectReplaced(run: IssuedAgainst): boolean {
-  return lostProjectOf(run, useProjectStore.getState().project);
+  return lostProjectOf(followSession(run), useProjectStore.getState().project);
 }
 
 /** What the user is told when the backend gives no reason of its own: the en.json
