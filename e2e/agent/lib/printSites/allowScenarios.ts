@@ -271,7 +271,7 @@ export const GROUP: SiteGroup = {
         "a number: countUnanchoredComponents' in-page script returns a component count, -1 or -2 (importDialogFuzz.ts)",
       'what()':
         "guarded(fn) returns fn(): at its one print, the f1Pushed metric key, fn is checkPushed, which returns a number " +
-        '(lib/importFlowOracles.ts:490-495)',
+        '(lib/importFlowOracles.ts:590-595)',
       "ctx.metrics['file:shape:suggestive']": METRIC_COUNT,
     },
     'e2e/agent/scenarios/importDialogTrace.ts': {
