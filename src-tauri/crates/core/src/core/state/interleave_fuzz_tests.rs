@@ -144,6 +144,17 @@ const REGRESSION_SEEDS: &[(Mode, u64)] = &[
     // been cancelled after its first check under `command_lock`).
     (Mode::Lifecycle, 7_104_685),
     (Mode::Lifecycle, 14_100_050),
+    // FZ-FZ-INT-R2 again, found in the farm's timed-out runs of 8062377e2 (W27
+    // F5): two loads of CaveA, the first commits and saves (the rename replaces
+    // the file) before the second commits; the stale session's later save then
+    // put an old project over the path, losing an acknowledged display write.
+    // They read as class `display`, not as a stale handle, because that later
+    // save reopened the handle. Campaign seeds only: under this generator they
+    // pass with the load's file-stamp checks reverted too (the schedule moved),
+    // and so did 18,000 Lifecycle seeds from 30000000; 14100050 is the seed that
+    // catches that revert.
+    (Mode::Lifecycle, 20_141_800),
+    (Mode::Lifecycle, 20_143_615),
 ];
 
 const MAX_STEPS: usize = 200_000;
