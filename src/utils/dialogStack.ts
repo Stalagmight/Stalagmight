@@ -121,6 +121,39 @@ export function pushDialog(element: HTMLElement): void {
 }
 
 /**
+ * Push a modal container onto the BOTTOM of the stack, beneath every open dialog.
+ *
+ * For a modal layer that must never cover a dialog, whichever of the two opened
+ * first: the project loading window (`ProjectLoadingOverlay`). A survey-file
+ * import starts a load while its own dialog is open and keeps that dialog as the
+ * interactive surface (its footer Cancel stops the import); `pushDialog` would put
+ * the loading window over it. Otherwise the same bookkeeping as `pushDialog`: the
+ * app root goes inert, the container is interactive only while nothing is above
+ * it, and the layers are re-ranked. A dialog pushed later goes on top as usual,
+ * and `popDialog` removes the container wherever it sits.
+ */
+export function pushDialogBeneath(element: HTMLElement): void {
+  const existing = stack.indexOf(element);
+  if (existing !== -1) {
+    stack.splice(existing, 1);
+  }
+
+  stack.unshift(element);
+
+  if (stack.length > 1) {
+    element.setAttribute('inert', '');
+  } else {
+    element.removeAttribute('inert');
+  }
+
+  setAppInert(true);
+
+  restack();
+
+  emitChange();
+}
+
+/**
  * Remove a dialog container from the stack.
  *
  * - Removes `inert` from the new topmost dialog (if any)

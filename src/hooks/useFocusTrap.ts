@@ -37,8 +37,9 @@ function isInHiddenSubtree(element: Element, container: HTMLElement): boolean {
 /**
  * Get all visible, focusable elements within the container,
  * excluding those inside [inert] or [aria-hidden="true"] subtrees.
+ * Exported for a trap's initial focus (`ProjectLoadingOverlay`).
  */
-function getFocusableElements(container: HTMLElement): HTMLElement[] {
+export function getFocusableElements(container: HTMLElement): HTMLElement[] {
   const candidates = container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
   const result: HTMLElement[] = [];
   for (const el of candidates) {

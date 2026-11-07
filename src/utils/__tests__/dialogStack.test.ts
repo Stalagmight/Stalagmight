@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { pushDialog, popDialog, isTopmost } from '../dialogStack';
+import { pushDialog, pushDialogBeneath, popDialog, isTopmost } from '../dialogStack';
 
 /**
  * Create a mock HTMLElement with the attributes API needed by dialogStack.
@@ -177,6 +177,65 @@ describe('dialogStack', () => {
 
       expect(isTopmost(c)).toBe(true);
       expect(isTopmost(a)).toBe(false);
+    });
+  });
+
+  // [W71-NF1] The project loading window: a modal layer that never covers a
+  // dialog, whichever opened first (an import starts a load under its own dialog).
+  describe('pushDialogBeneath', () => {
+    it('on an empty stack, is the interactive top layer with the app inert', () => {
+      const loading = createMockElement('loading');
+      pushDialogBeneath(loading);
+      trackedElements.push(loading);
+
+      expect(isTopmost(loading)).toBe(true);
+      expect(loading.hasAttribute('inert')).toBe(false);
+      expect(mockAppRoot.setAttribute).toHaveBeenCalledWith('inert', '');
+    });
+
+    it('goes beneath a dialog already open: inert, painted below, the dialog stays topmost', () => {
+      const dialog = createMockElement('import-dialog');
+      pushAndTrack(dialog);
+      const loading = createMockElement('loading');
+      pushDialogBeneath(loading);
+      trackedElements.push(loading);
+
+      expect(isTopmost(dialog)).toBe(true);
+      expect(dialog.hasAttribute('inert')).toBe(false);
+      expect(loading.hasAttribute('inert')).toBe(true);
+      expect(Number(loading.style.zIndex)).toBeLessThan(Number(dialog.style.zIndex));
+    });
+
+    it('takes the top back when the dialog above it closes, and leaves the app inert', () => {
+      const loading = createMockElement('loading');
+      pushDialogBeneath(loading);
+      trackedElements.push(loading);
+      const dialog = createMockElement('dialog');
+      pushAndTrack(dialog);
+      expect(loading.hasAttribute('inert')).toBe(true);
+      vi.clearAllMocks();
+
+      popDialog(dialog);
+      trackedElements = trackedElements.filter((e) => e !== dialog);
+
+      expect(isTopmost(loading)).toBe(true);
+      expect(loading.hasAttribute('inert')).toBe(false);
+      expect(mockAppRoot.removeAttribute).not.toHaveBeenCalledWith('inert');
+    });
+
+    it('leaves the dialog above it in place when it closes first', () => {
+      const dialog = createMockElement('import-dialog');
+      pushAndTrack(dialog);
+      const loading = createMockElement('loading');
+      pushDialogBeneath(loading);
+      vi.clearAllMocks();
+
+      popDialog(loading);
+
+      expect(isTopmost(dialog)).toBe(true);
+      expect(dialog.hasAttribute('inert')).toBe(false);
+      expect(loading.style.zIndex).toBe('');
+      expect(mockAppRoot.removeAttribute).not.toHaveBeenCalledWith('inert');
     });
   });
 

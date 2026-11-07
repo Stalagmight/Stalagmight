@@ -1,7 +1,82 @@
-import { test, expect } from './fixtures/coverage';
+import { test, expect, type Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import { createProject } from './helpers/app';
 import type { E2EWindow } from './helpers/e2eWindow';
+
+/** Where keyboard focus is: the focused element's test id (or tag), and whether it is in the loading window. */
+async function focusSpot(page: Page): Promise<{ id: string; inWindow: boolean }> {
+  return page.evaluate(() => {
+    const active = document.activeElement;
+    const overlay = document.querySelector('[data-testid="project-loading-overlay"]');
+    return {
+      id: active?.getAttribute('data-testid') ?? active?.tagName.toLowerCase() ?? 'none',
+      inWindow: overlay !== null && active !== null && overlay.contains(active),
+    };
+  });
+}
+
+/**
+ * Press Tab `count` times, then Shift+Tab `count` times, and return every press
+ * after which focus was NOT in the loading window (empty when it held focus).
+ */
+async function focusEscapes(page: Page, count: number): Promise<string[]> {
+  const escapes: string[] = [];
+  for (const key of ['Tab', 'Shift+Tab']) {
+    for (let i = 1; i <= count; i++) {
+      await page.keyboard.press(key);
+      const spot = await focusSpot(page);
+      if (!spot.inWindow) escapes.push(`${key} #${i} -> ${spot.id}`);
+    }
+  }
+  return escapes;
+}
+
+/**
+ * Note the target of every keydown and click from now on, so a test can show that
+ * a key pressed during a load reached nothing behind the loading window.
+ */
+async function recordKeyTargets(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __loadingKeyTargets?: string[] };
+    w.__loadingKeyTargets = [];
+    const note = (e: Event): void => {
+      const target = e.target instanceof Element ? e.target : null;
+      const overlay = document.querySelector('[data-testid="project-loading-overlay"]');
+      if (overlay !== null && target !== null && overlay.contains(target)) return;
+      const id = target?.getAttribute('data-testid') ?? target?.tagName.toLowerCase() ?? 'none';
+      w.__loadingKeyTargets?.push(`${e.type} on ${id}`);
+    };
+    document.addEventListener('keydown', note, true);
+    document.addEventListener('click', note, true);
+  });
+}
+
+/** The keydowns and clicks since `recordKeyTargets` that landed outside the loading window. */
+async function keyTargetsBehind(page: Page): Promise<string[]> {
+  return page.evaluate(() => (window as unknown as { __loadingKeyTargets?: string[] }).__loadingKeyTargets ?? []);
+}
+
+/** Hold a load in progress (nothing ends it but Cancel / Dismiss). */
+async function holdLoad(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const e2e = (window as unknown as { __E2E_TEST__?: { simulateLoadingProgress?: (payload: Record<string, unknown>) => void } }).__E2E_TEST__;
+    e2e?.simulateLoadingProgress?.({
+      isLoading: true,
+      projectName: 'CaveB',
+      projectPath: '/caves/CaveB.stalx',
+      phase: 'loading_project_data',
+      overallProgress: 25,
+    });
+  });
+}
+
+/** Fail the held load: the error state with details, Retry, Dismiss and Copy. */
+async function failLoad(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const e2e = (window as unknown as { __E2E_TEST__?: { simulateLoadingError?: (msg: string, details?: string) => void } }).__E2E_TEST__;
+    e2e?.simulateLoadingError?.('Could not read the project file.', 'ENOENT: /caves/CaveB.stalx');
+  });
+}
 
 test.describe('Loading Progress', () => {
   test.beforeEach(async ({ page }) => {
@@ -378,6 +453,49 @@ test.describe('Loading Progress', () => {
       expect(await page.evaluate(() => (window as E2EWindow).__E2E_TEST__.uiStore.getState().screenOccupants)).toBe(0);
       await expect(page.getByTestId('single-system-view')).toBeVisible();
     });
+
+    // [W71-NF1] The loading window is modal for the keyboard as well: Tab and
+    // Shift+Tab used to walk out of it onto the toolbar and the panels under it,
+    // where Enter / Space acted. Focus now moves into it, stays there (in progress
+    // and in its error state), and goes back where it was when the window closes.
+    test('the loading window holds keyboard focus, in progress and in its error state, and gives it back when it closes', async ({ page }) => {
+      await createProject(page, 'CaveA');
+      const trigger = page.getByTestId('display-menu-button');
+      await trigger.focus();
+      await expect(trigger).toBeFocused();
+
+      await holdLoad(page);
+      await expect(page.getByTestId('loading-progress')).toBeVisible();
+      await expect(page.getByTestId('loading-progress-cancel')).toBeFocused();
+      await recordKeyTargets(page);
+      // More presses each way than the window has controls.
+      expect(await focusEscapes(page, 4)).toEqual([]);
+
+      // Space presses the focused Cancel: the load ends and focus is back on the toolbar.
+      await page.keyboard.press('Space');
+      await expect(page.getByTestId('project-loading-overlay')).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+      expect(await keyTargetsBehind(page)).toEqual([]);
+      await expect(page.getByTestId('display-menu')).toHaveCount(0);
+
+      // The error state: focus moves to its first control when it replaces the progress.
+      await holdLoad(page);
+      await expect(page.getByTestId('loading-progress-cancel')).toBeFocused();
+      await failLoad(page);
+      await expect(page.getByTestId('loading-error-details-toggle')).toBeFocused();
+      await recordKeyTargets(page);
+      expect(await focusEscapes(page, 6)).toEqual([]);
+      // Details, Retry, Dismiss: Enter on Dismiss closes it and focus is back on the toolbar.
+      await page.keyboard.press('Tab');
+      await page.keyboard.press('Tab');
+      await expect(page.getByTestId('loading-error-dismiss')).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expect(page.getByTestId('project-loading-overlay')).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+      expect(await keyTargetsBehind(page)).toEqual([]);
+      await expect(page.getByTestId('display-menu')).toHaveCount(0);
+      await expect(page.getByTestId('single-system-view')).toBeVisible();
+    });
   });
 
   test.describe('In the project list', () => {
@@ -465,6 +583,114 @@ test.describe('Loading Progress', () => {
       // The screen is free: the launched file that waited is taken now.
       await expect.poll(async () => (await counters()).launchFetches).toBeGreaterThan(0);
       expect((await counters()).occupants).toBe(0);
+    });
+
+    // [W71-NF1] Tab and Shift+Tab used to walk out of the loading window onto the
+    // cards, the search field and the sort / density controls under it, and Enter /
+    // Space acted there. Focus now moves into the window, stays there, and goes back
+    // to where it was when the load is cancelled.
+    test('the loading window holds keyboard focus and gives it back when the load is cancelled', async ({ page }) => {
+      const selection = () =>
+        page.evaluate(() =>
+          (window as unknown as { __E2E_TEST__: { globalViewStore: { getState: () => { selectedSystemIds: unknown } } } })
+            .__E2E_TEST__.globalViewStore.getState().selectedSystemIds,
+        );
+      const card = page.locator('[role="button"][data-testid^="system-card-"]').first();
+      await card.focus();
+      await expect(card).toBeFocused();
+      const selectedBefore = await selection();
+
+      await holdLoad(page);
+      await expect(page.getByTestId('loading-progress')).toBeVisible();
+      await expect(page.getByTestId('loading-progress-cancel')).toBeFocused();
+      await recordKeyTargets(page);
+      // More presses each way than the window has controls (and than the list has cards).
+      expect(await focusEscapes(page, 6)).toEqual([]);
+
+      // Enter presses the focused Cancel: the load ends and focus is back on the card.
+      await page.keyboard.press('Enter');
+      await expect(page.getByTestId('project-loading-overlay')).toHaveCount(0);
+      await expect(card).toBeFocused();
+      expect(await keyTargetsBehind(page)).toEqual([]);
+      expect(await selection()).toEqual(selectedBefore);
+      expect(await page.evaluate(() => (window as E2EWindow).__E2E_TEST__.uiStore.getState().screenOccupants)).toBe(0);
+    });
+
+    test('the loading window holds keyboard focus in its error state, and Dismiss gives it back', async ({ page }) => {
+      const search = page.getByTestId('globalview-search-input');
+      await search.focus();
+      await expect(search).toBeFocused();
+
+      await holdLoad(page);
+      await failLoad(page);
+      await expect(page.getByTestId('loading-error-details-toggle')).toBeFocused();
+      await recordKeyTargets(page);
+      expect(await focusEscapes(page, 6)).toEqual([]);
+
+      // Enter and Space act on the focused control in the window, nothing behind it.
+      const details = page.getByTestId('loading-error-details-toggle');
+      await expect(details).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expect(details).toHaveAttribute('aria-expanded', 'true');
+      await page.keyboard.press('Space');
+      await expect(details).toHaveAttribute('aria-expanded', 'false');
+      expect(await keyTargetsBehind(page)).toEqual([]);
+      await expect(search).toHaveValue('');
+
+      // Details, Retry, Dismiss: Enter on Dismiss closes it and focus is back in the search field.
+      await page.keyboard.press('Tab');
+      await page.keyboard.press('Tab');
+      await expect(page.getByTestId('loading-error-dismiss')).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expect(page.getByTestId('project-loading-overlay')).toHaveCount(0);
+      await expect(search).toBeFocused();
+      expect(await keyTargetsBehind(page)).toEqual([]);
+    });
+
+    // A dialog keeps its place above the loading window whichever came first (the
+    // survey-file imports raise the window under their own open dialog), and focus
+    // goes back to the window when a dialog raised over it closes.
+    test('a dialog stays above the loading window, and focus goes back to the window when it closes', async ({ page }) => {
+      const openShortcuts = () =>
+        page.evaluate(() => (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('keyboard-shortcuts'));
+      const dialogOnTop = () =>
+        page.evaluate(() => {
+          const dialog = document.querySelector('[data-testid="keyboard-shortcuts-dialog"]');
+          const overlay = document.querySelector('[data-testid="project-loading-overlay"]');
+          if (!dialog || !overlay) return null;
+          const r = dialog.getBoundingClientRect();
+          const top = document.elementFromPoint(r.left + r.width / 2, r.top + 8);
+          return {
+            painted: top !== null && dialog.contains(top),
+            focusInDialog: dialog.contains(document.activeElement),
+            windowInert: overlay.closest('[inert]') !== null,
+          };
+        });
+
+      // The dialog first, then a load: the dialog stays on top and keeps focus.
+      await openShortcuts();
+      await expect(page.getByTestId('keyboard-shortcuts-dialog')).toBeVisible();
+      await expect.poll(() => focusSpot(page)).toEqual({ id: 'keyboard-shortcuts-search', inWindow: false });
+      await holdLoad(page);
+      await expect(page.getByTestId('project-loading-overlay')).toBeAttached();
+      expect(await dialogOnTop()).toEqual({ painted: true, focusInDialog: true, windowInert: true });
+      await page.evaluate(() => (window as unknown as { __E2E_TEST__: { resetLoading: () => void } }).__E2E_TEST__.resetLoading());
+      await expect(page.getByTestId('project-loading-overlay')).toHaveCount(0);
+      expect((await focusSpot(page)).id).toBe('keyboard-shortcuts-search');
+      await page.keyboard.press('Escape');
+      await expect(page.getByTestId('keyboard-shortcuts-dialog')).toHaveCount(0);
+
+      // A load, then a dialog over it: the dialog is on top and has focus; closing it
+      // hands focus back to the window, which still holds it.
+      await holdLoad(page);
+      await expect(page.getByTestId('loading-progress-cancel')).toBeFocused();
+      await openShortcuts();
+      await expect(page.getByTestId('keyboard-shortcuts-dialog')).toBeVisible();
+      await expect.poll(dialogOnTop).toEqual({ painted: true, focusInDialog: true, windowInert: true });
+      await page.keyboard.press('Escape');
+      await expect(page.getByTestId('keyboard-shortcuts-dialog')).toHaveCount(0);
+      await expect(page.getByTestId('loading-progress-cancel')).toBeFocused();
+      expect(await focusEscapes(page, 3)).toEqual([]);
     });
   });
 
