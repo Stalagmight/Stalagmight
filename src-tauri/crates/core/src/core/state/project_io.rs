@@ -171,6 +171,11 @@ thread_local! {
     /// part-way through the save).
     pub(super) static AFTER_TEMP_OPENED: std::cell::RefCell<Option<Box<dyn FnOnce(&Database)>>> =
         const { std::cell::RefCell::new(None) };
+    /// [#576 W25-NF1] Test seam: run once on the saving (or merging) thread with
+    /// the temp name as soon as [`clear_save_temp`] cleared it and before the temp
+    /// database is opened there, so a test can plant a link in exactly that window.
+    pub(super) static AFTER_TEMP_CLEARED: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+        const { std::cell::RefCell::new(None) };
     /// [#576 FZ-PERSIST] Test seam: when set, the reopen of the saved file after
     /// the rename reports a failure (taken once), as an unreadable file would.
     pub(super) static FAIL_REOPEN_AFTER_RENAME: std::cell::Cell<bool> =
@@ -776,9 +781,14 @@ impl AppState {
         if let Err(refused) = clear_save_temp(&temp_path, &save_path) {
             return *refused;
         }
+        #[cfg(test)]
+        if let Some(hook) = AFTER_TEMP_CLEARED.with(|hook| hook.borrow_mut().take()) {
+            hook(&temp_path);
+        }
 
-        // Save to temporary file first
-        let mut db = match Database::open(&temp_path) {
+        // Save to temporary file first. [#576 W25-NF1] As a scratch name: a link
+        // planted at it since the clear above is refused, never followed.
+        let mut db = match Database::open_scratch(&temp_path) {
             Ok(db) => db,
             Err(e) => {
                 // Clean up temp file on failure

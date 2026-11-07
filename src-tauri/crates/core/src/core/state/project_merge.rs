@@ -464,9 +464,16 @@ impl AppState {
         if let Err(refused) = super::project_io::clear_save_temp(&temp_path, &output_path) {
             return *refused;
         }
+        #[cfg(test)]
+        if let Some(hook) =
+            super::project_io::AFTER_TEMP_CLEARED.with(|hook| hook.borrow_mut().take())
+        {
+            hook(&temp_path);
+        }
 
-        // Save to temporary file
-        let mut db = match Database::open(&temp_path) {
+        // Save to temporary file. [#576 W25-NF1] As a scratch name: a link planted
+        // at it since the clear above is refused, never followed.
+        let mut db = match Database::open_scratch(&temp_path) {
             Ok(db) => db,
             Err(e) => {
                 let _ = std::fs::remove_file(&temp_path);

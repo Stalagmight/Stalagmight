@@ -15,6 +15,11 @@ use std::path::{Path, PathBuf};
 /// this short: anything here is a construction no test pins the timeout of.
 const NOT_AN_OPEN_PATH: &[(&str, &str)] = &[
     (
+        "open_with",
+        "private to open.rs: the one body of open and open_scratch (#576 W25-NF1), \
+         which are its only callers and are both opened in the busy-timeout test",
+    ),
+    (
         "open_existing_with",
         "private to open.rs: the one body of open_existing and \
          open_existing_refusing_upgrade (#576 RV4-R-M3-OPEN), which are its only callers \

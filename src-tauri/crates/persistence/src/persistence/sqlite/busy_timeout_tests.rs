@@ -35,6 +35,10 @@ fn every_open_path_waits_at_least_five_seconds_for_a_busy_file() {
     let opened: Vec<(&str, Database)> = vec![
         ("open (new file)", created),
         ("open (existing file)", Database::open(&path).unwrap()),
+        (
+            "open_scratch (new file)",
+            Database::open_scratch(&dir.path().join("CaveA.stalx.tmp")).unwrap(),
+        ),
         ("open_existing", Database::open_existing(&path).unwrap()),
         (
             "open_existing_refusing_upgrade",

@@ -3,6 +3,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection, Transaction};
 use std::path::Path;
 
+use super::open::{connect_for_vacuum_into, scratch_spelling};
 use super::{BackupInfo, BackupKind, Database, RestoreOutcome, SalvagedData, SalvagedSection};
 
 /// [#576 C15] Where a restore stages the candidate before installing it: beside
@@ -16,7 +17,16 @@ const CHECK_STAGING_SUFFIX: &str = ".restore-check";
 /// [#576 B27(f)] Where Repair writes its compacted copy before renaming it over
 /// the project. Not `.tmp`: that is what the listing offers as an interrupted
 /// save.
-const REPAIR_STAGING_SUFFIX: &str = ".repair-staging";
+pub(super) const REPAIR_STAGING_SUFFIX: &str = ".repair-staging";
+
+#[cfg(test)]
+thread_local! {
+    /// [#576 W25-NF1] Test seam: run on this thread with every scratch name
+    /// [`clear_scratch_name`] has just cleared, before the caller writes there, so
+    /// a test can plant a link in exactly that window. Kept until a test clears it.
+    pub(super) static AFTER_SCRATCH_CLEARED: std::cell::RefCell<Option<Box<dyn FnMut(&Path)>>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 /// `path` with `suffix` appended to its file name (`CaveA.stalx` + `.x` ->
 /// `CaveA.stalx.x`).
@@ -120,6 +130,12 @@ pub(super) fn clear_scratch_name(path: &Path) -> std::io::Result<()> {
             _ => {}
         }
     }
+    #[cfg(test)]
+    AFTER_SCRATCH_CLEARED.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().as_mut() {
+            hook(path);
+        }
+    });
     Ok(())
 }
 
@@ -270,7 +286,11 @@ impl Database {
         // target name and would create the snapshot where it points.
         clear_scratch_name(dest)
             .with_context(|| format!("remove stale snapshot {}", dest.display()))?;
-        let conn = Connection::open(src).context("open source .stalx for snapshot")?;
+        // [#576 W25-NF1] A link planted at `dest` since the clear is refused, not
+        // followed (`connect_for_vacuum_into`, `scratch_spelling`).
+        let conn = connect_for_vacuum_into(src).context("open source .stalx for snapshot")?;
+        let dest = scratch_spelling(dest)
+            .with_context(|| format!("resolve the snapshot's folder {}", dest.display()))?;
         // The destination filename is a bound parameter (supported by VACUUM INTO
         // since SQLite 3.27); this avoids any path-quoting pitfalls.
         conn.execute("VACUUM INTO ?1", params![dest.to_string_lossy()])
@@ -520,7 +540,9 @@ impl Database {
     ) -> Result<()> {
         // No transaction spans the WHOLE sanitizer: VACUUM cannot run inside one.
         // The history tables use one short transaction that commits before compaction.
-        let conn = Connection::open(snapshot).context("open snapshot to sanitize for push")?;
+        // [#576 W25-NF1] Opened for the `VACUUM INTO` below: see `connect_for_vacuum_into`.
+        let conn =
+            connect_for_vacuum_into(snapshot).context("open snapshot to sanitize for push")?;
         // Capture this from the untouched snapshot. The missing-watermark branch below
         // must not change meaning when the local-table list is reordered.
         let chain_pointer_present =
@@ -590,9 +612,13 @@ impl Database {
                 compacted.display()
             )));
         }
-        if let Err(e) = conn.execute("VACUUM INTO ?1", params![compacted.to_string_lossy()]) {
+        // [#576 W25-NF1] A link planted there since the clear is refused, not followed.
+        let vacuumed = scratch_spelling(&compacted)
+            .map_err(anyhow::Error::from)
+            .and_then(|into| Ok(conn.execute("VACUUM INTO ?1", params![into.to_string_lossy()])?));
+        if let Err(e) = vacuumed {
             let _ = std::fs::remove_file(&compacted);
-            return Err(anyhow::Error::from(e).context(format!(
+            return Err(e.context(format!(
                 "could not compact the push snapshot into {} (most likely not enough \
                  free disk space there for a second copy of the project); refusing to \
                  upload it",
@@ -681,7 +707,8 @@ impl Database {
         // schema guard still runs (#608), before REINDEX evaluates an expression
         // index or the final quick_check a CHECK: a file every open refuses is
         // left as it is, beside the plain copy step 1 took of it.
-        let conn = Connection::open(path).context("Failed to open database for repair")?;
+        // [#576 W25-NF1] Opened for the `VACUUM INTO` below: see `connect_for_vacuum_into`.
+        let conn = connect_for_vacuum_into(path).context("Failed to open database for repair")?;
         super::check_schema(&conn)?;
 
         // 3. Rebuild indexes
@@ -705,10 +732,13 @@ impl Database {
             return Err(anyhow::Error::from(e)
                 .context("Could not clear the name the repaired copy is written under"));
         }
-        if let Err(e) = conn.execute("VACUUM INTO ?1", params![staging.to_string_lossy()]) {
+        // [#576 W25-NF1] A link planted there since the clear is refused, not followed.
+        let vacuumed = scratch_spelling(&staging)
+            .map_err(anyhow::Error::from)
+            .and_then(|into| Ok(conn.execute("VACUUM INTO ?1", params![into.to_string_lossy()])?));
+        if let Err(e) = vacuumed {
             remove_with_journal(&staging);
-            return Err(anyhow::Error::from(e)
-                .context("VACUUM failed - database may be too damaged to repair"));
+            return Err(e.context("VACUUM failed - database may be too damaged to repair"));
         }
         // Closed before the rename: Windows cannot replace a file SQLite holds.
         drop(conn);

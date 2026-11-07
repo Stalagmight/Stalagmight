@@ -77,6 +77,67 @@ pub(super) fn connect_for_reading(path: &Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
+/// [#576 W25-NF1] How a scratch name - a file this app creates afresh beside
+/// another: a save's or a merge's temp, a push snapshot, a compaction or repair
+/// staging copy - is spelled to SQLite, so that a link at it is refused, never
+/// followed.
+///
+/// The name is cleared first, but a link planted between the clear and the open
+/// was followed: SQLite resolves links itself on its walk to the file, the final
+/// name included, and opens wherever they lead (its API has no exclusive create
+/// for a database file). Opened with `SQLITE_OPEN_NOFOLLOW` ([`scratch_flags`]),
+/// SQLite refuses a link anywhere on that walk (`SQLITE_CANTOPEN_SYMLINK`), and
+/// its open of the file carries `O_NOFOLLOW`. A folder reached through a link is
+/// still a place a save may go, so the folder is resolved first
+/// ([`std::fs::canonicalize`]) and only the file's own name is left to walk: a
+/// link SQLite meets after that was put there after the folder was resolved.
+///
+/// Unix only. Elsewhere SQLite gets the path as given, as before.
+pub(super) fn scratch_spelling(path: &Path) -> std::io::Result<PathBuf> {
+    if !cfg!(unix) {
+        return Ok(path.to_path_buf());
+    }
+    let Some(name) = path.file_name() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} names no file", path.display()),
+        ));
+    };
+    let folder = match path.parent() {
+        Some(folder) if !folder.as_os_str().is_empty() => folder,
+        _ => Path::new("."),
+    };
+    Ok(std::fs::canonicalize(folder)?.join(name))
+}
+
+/// [#576 W25-NF1] The flags a connection that creates or writes a scratch name
+/// opens with: rusqlite's defaults (what [`Connection::open`] uses), plus
+/// `SQLITE_OPEN_NOFOLLOW` on Unix (see [`scratch_spelling`]).
+pub(super) fn scratch_flags() -> rusqlite::OpenFlags {
+    let flags = rusqlite::OpenFlags::default();
+    if cfg!(unix) {
+        flags | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW
+    } else {
+        flags
+    }
+}
+
+/// [#576 W25-NF1] A connection on the existing database `path` for a
+/// `VACUUM INTO` a scratch name. `VACUUM INTO` opens its target with the source
+/// connection's flags, so the source is opened with [`scratch_flags`] too, which
+/// is what makes a link at the target (spelled by [`scratch_spelling`]) refused.
+/// It is opened at its canonical path (on Unix), every link on the way to it -
+/// the file's own name included, a project opened through a link - resolved
+/// first, so it is the same file SQLite opened before.
+pub(super) fn connect_for_vacuum_into(path: &Path) -> Result<Connection> {
+    let canonical = if cfg!(unix) {
+        std::fs::canonicalize(path)?
+    } else {
+        path.to_path_buf()
+    };
+    Ok(Connection::open_with_flags(canonical, scratch_flags())?)
+}
+
 /// Whether `path` is a SQLite database in WAL journal mode - the header's
 /// write and read format bytes (offsets 18 and 19) are 2 - with no `-wal` and
 /// no `-journal` beside it. Unreadable or not a database: no.
@@ -95,6 +156,24 @@ fn wal_mode_with_nothing_beside(path: &Path) -> bool {
 impl Database {
     /// Open or create a database at the given path
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with(path, || Connection::open(path))
+    }
+
+    /// [`Self::open`] for a scratch name a caller has just cleared (a save's or
+    /// a merge's temp): SQLite gets [`scratch_spelling`] and [`scratch_flags`],
+    /// so a link planted at the name since the clear is refused, never followed
+    /// (#576 W25-NF1).
+    pub fn open_scratch(path: &Path) -> Result<Self> {
+        let spelled = scratch_spelling(path).context("Failed to open database")?;
+        Self::open_with(path, || {
+            Connection::open_with_flags(&spelled, scratch_flags())
+        })
+    }
+
+    fn open_with(
+        path: &Path,
+        connect: impl FnOnce() -> rusqlite::Result<Connection>,
+    ) -> Result<Self> {
         // Per-open chatter is debug-only - `open` is called for every
         // project create / save-as / import / recent-list refresh.
         tracing::debug!("Opening database at: {:?}", path);
@@ -106,7 +185,7 @@ impl Database {
         // row yet must still be MIGRATED, not treated as fresh.
         let file_existed = path.exists();
 
-        let conn = Connection::open(path).context("Failed to open database")?;
+        let conn = connect().context("Failed to open database")?;
         if file_existed {
             // An existing file may come from anywhere; refuse a hostile schema
             // before init_schema or a migration touches it (#608).
