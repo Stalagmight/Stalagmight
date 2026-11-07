@@ -376,9 +376,10 @@ struct Documented {
     /// drags its own merge group with it).
     partners: std::collections::BTreeSet<SectionId>,
     /// The edited section's merge group AFTER the delete when no section in it
-    /// holds a zero datum - the group the delete cut loose - and empty when the
-    /// group is still anchored (something holds it, so both routes have to agree
-    /// about it). See [`cut_loose_group`].
+    /// holds a zero datum but one did BEFORE it (the group the delete cut
+    /// loose), and empty otherwise: when the group is still anchored (something
+    /// holds it), and when it never was (nothing was cut loose, #576 RVF-d-4),
+    /// both routes have to agree about it. See [`cut_loose_group`].
     cut_loose: std::collections::BTreeSet<SectionId>,
     /// The edited section and the last HEAD station of the interior range:
     /// stations `0..=head` survive a gap-close with their index unchanged, which
@@ -1153,6 +1154,28 @@ fn pair_range_shift_vs_singles(
     rng: &mut Rng,
     pair: &'static str,
 ) -> Option<Comparison> {
+    range_shift_vs_singles(twins, rng, pair, |_, _| {})
+}
+
+/// A drawn range delete, as [`range_shift_vs_singles`] hands it to its hook once
+/// both routes have run and before anything is compared.
+struct RangeShiftDraw {
+    section_id: SectionId,
+    /// The range removes a merge to another section: the doomed-anchor shape.
+    removes_merge: bool,
+    /// The edited section's merge group held a zero datum BEFORE the delete.
+    anchored_before: bool,
+}
+
+/// [`pair_range_shift_vs_singles`], with `after_routes` run between the two
+/// routes and the comparison. The gate passes a hook that does nothing; the
+/// planted-displacement test (#576 RVF-d-4) moves the singles twin there.
+fn range_shift_vs_singles(
+    twins: &Twins,
+    rng: &mut Rng,
+    pair: &'static str,
+    after_routes: impl FnOnce(&Twins, &RangeShiftDraw),
+) -> Option<Comparison> {
     let section_id = section_with_shots(&twins.left, rng, 3)?;
     let ids = shot_ids(&twins.left, section_id);
     // An INTERIOR range, so the gap-close has a head and a tail and the section
@@ -1167,6 +1190,10 @@ fn pair_range_shift_vs_singles(
     // equal at this point, so this is both routes' starting position.
     let partners = doomed_anchor_partners(&twins.left, section_id, ids[start], ids[end]);
     let before = adjusted_positions(&adjusted_geometry_of(&twins.left));
+    // [#576 RVF-d-4] Whether the edited group was anchored BEFORE the delete: only
+    // then can the delete have cut it loose. A group that never reached a datum
+    // loses nothing, so both routes have to place it alike.
+    let anchored_before = cut_loose_group(&twins.left, section_id).is_empty();
 
     let ranged = twins
         .left
@@ -1186,12 +1213,26 @@ fn pair_range_shift_vs_singles(
         }
     }
 
+    after_routes(
+        twins,
+        &RangeShiftDraw {
+            section_id,
+            removes_merge: partners.is_some(),
+            anchored_before,
+        },
+    );
+
     let documented = partners.map(|partners| Documented {
         partners,
         // Read off the ATOMIC twin after the delete: the two routes agree on
         // every merge and datum (the stored-project oracle still asserts it), so
-        // this is the group on both sides.
-        cut_loose: cut_loose_group(&twins.left, section_id),
+        // this is the group on both sides. Empty unless the delete is what left
+        // it without a datum.
+        cut_loose: if anchored_before {
+            cut_loose_group(&twins.left, section_id)
+        } else {
+            std::collections::BTreeSet::new()
+        },
         edited: (section_id, start as u32),
         before,
     });
@@ -1264,9 +1305,11 @@ fn doomed_anchor_partners(
 }
 
 /// The edited section's merge group on `state`, or an empty set when any
-/// section in it holds a zero datum. Read AFTER the delete, so it is the group
-/// the gap-close left behind: empty means something still anchors the edited
-/// section and neither route may place it differently from the other.
+/// section in it holds a zero datum. Read AFTER the delete, it is the group the
+/// gap-close left behind: empty means something still anchors the edited
+/// section and neither route may place it differently from the other. Read
+/// BEFORE it, empty means the group was anchored, the one case in which the
+/// delete can have cut it loose.
 fn cut_loose_group(
     state: &AppState,
     section_id: SectionId,
@@ -1747,13 +1790,7 @@ fn run_pairs(
             baseline_distance: 0,
         });
         for repeat in 0..repeats {
-            // The RNG is seeded per (seed, pair, repeat) so one pair's draw
-            // count cannot move another pair's stream - which is what keeps a
-            // pinned seed pinned when a pair is added or changed.
-            let mut rng = Rng::new(
-                seed.wrapping_mul(1_000_003)
-                    .wrapping_add((repeat as u32).wrapping_mul(7919)),
-            );
+            let mut rng = pair_rng(seed, repeat);
             let Some(twins) = Twins::build(seed, closures, prelude) else {
                 entry.skipped += 1;
                 continue;
@@ -1785,6 +1822,16 @@ fn run_pairs(
         }
     }
     out
+}
+
+/// A pair's RNG for one repeat of `seed`. Seeded per (seed, pair, repeat) so one
+/// pair's draw count cannot move another pair's stream - which is what keeps a
+/// pinned seed pinned when a pair is added or changed.
+fn pair_rng(seed: u32, repeat: usize) -> Rng {
+    Rng::new(
+        seed.wrapping_mul(1_000_003)
+            .wrapping_add((repeat as u32).wrapping_mul(7919)),
+    )
 }
 
 /// [#576 FZ-DET] One seed's pairs, summarized: the determinism harness's way in
@@ -1927,6 +1974,95 @@ fn metamorphic_gate() {
         problems.len(),
         problems.join("\n\n")
     );
+}
+
+/// [#576 RVF-d-4] Sweep draws, `(seed, repeats, closures)`, whose range removes a
+/// merge from an edited group that never reached a datum. The gate's own runs
+/// hold one such draw (seed 3, repeat 2); these add five (13 repeat 1, 25
+/// repeats 0-3), so the planted-displacement test below rests on more than one.
+const NEVER_ANCHORED_RUNS: &[(u32, usize, bool)] = &[(13, 2, false), (25, 4, false)];
+
+/// [#576 RVF-d-4] The cut-loose allowance covers only a group the delete cut
+/// loose.
+///
+/// A range that removes a merge from an edited group that NEVER reached a datum
+/// cuts nothing loose, so both routes must place that group alike. Half a metre
+/// planted on the singles twin's placement of it, between the routes and the
+/// comparison, has to fail the pair: an allowance taken off the post-delete
+/// group alone let it through on every such draw. The other direction is the
+/// gate's regression runs (1016, 500089), where the delete is what left the
+/// group without a datum: the allowance still applies there and they pass. That
+/// arm is counted too, so neither half can pass vacuously.
+#[test]
+fn a_planted_displacement_of_a_never_anchored_edited_group_fails_the_pair() {
+    let _config = isolated_config();
+    let pair = "range-shift-is-n-single-deletes";
+    let (mut planted, mut cut_loose) = (0usize, 0usize);
+    let mut problems = Vec::new();
+    let runs = GATE_SEEDS
+        .iter()
+        .map(|&seed| (seed, GATE_REPEATS, false))
+        .chain(GATE_REGRESSIONS.iter().copied())
+        .chain(NEVER_ANCHORED_RUNS.iter().copied());
+    for (seed, repeats, closures) in runs {
+        for repeat in 0..repeats {
+            let mut rng = pair_rng(seed, repeat);
+            let Some(twins) = Twins::build(seed, closures, GATE_PRELUDE) else {
+                continue;
+            };
+            let (mut this_planted, mut this_cut_loose) = (false, false);
+            let found = range_shift_vs_singles(&twins, &mut rng, pair, |twins, draw| {
+                if !draw.removes_merge {
+                    return;
+                }
+                let group = cut_loose_group(&twins.left, draw.section_id);
+                if draw.anchored_before {
+                    this_cut_loose = !group.is_empty();
+                    return;
+                }
+                let Some(mut project) = twins.right.get_project_state() else {
+                    return;
+                };
+                for id in group {
+                    let (x, y) = project.section_offset(id);
+                    project.set_section_offset(id, (x + 0.5, y));
+                }
+                twins.right.set_project_for_tests(project);
+                this_planted = true;
+            });
+            let Some(found) = found else {
+                continue;
+            };
+            let at = format!("seed {seed} repeat {repeat} closures={closures}");
+            let forward = found
+                .problems
+                .iter()
+                .filter(|line| !line.starts_with("AFTER UNWIND: "))
+                .count();
+            println!(
+                "[RVF-d-4] {at}: planted={this_planted} cut_loose={this_cut_loose} \
+                 forward_problems={forward} problems={}",
+                found.problems.len()
+            );
+            planted += usize::from(this_planted);
+            cut_loose += usize::from(this_cut_loose);
+            if this_planted && forward == 0 {
+                problems.push(format!(
+                    "{at}: half a metre planted on a never-anchored edited group passed"
+                ));
+            }
+            if !this_planted && !found.problems.is_empty() {
+                problems.push(format!("{at}: {}", found.problems.join("\n  ")));
+            }
+        }
+    }
+    println!("[RVF-d-4] planted draws {planted}, cut-loose draws {cut_loose}");
+    assert!(
+        planted > 0,
+        "no draw removed a merge from a never-anchored group"
+    );
+    assert!(cut_loose > 0, "no draw cut an anchored edited group loose");
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
 /// The pairs the gate built fewer than once per gate seed, each as a line, from
