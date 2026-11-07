@@ -13,7 +13,9 @@ import { setupMockedPage, createProject } from './helpers/app';
  * rides the map's bottom edge just above the bar: Esri's terms want the source
  * names unobstructed while the imagery is drawn. So does the Global View's map
  * (#576 W71-NF10), whose attribution sits in its bottom-right corner and reaches
- * under the centred pill - all the way across it in a 900 px window.
+ * under the centred pill - all the way across it in a 900 px window. Its
+ * "Systems: N" count chip sits just above the attribution in that corner, and
+ * in a narrow window reaches under the pill's right end (#576 W79-NF8).
  *
  * The parse is real: a `.dmp` picked through the app's own door, its
  * `import_dmp` held on a promise so the pill stays up while it is measured.
@@ -57,6 +59,40 @@ async function expectPillAbove(pill: Locator, below: Locator, what: string): Pro
     .poll(() => gapAbove(pill, below), { message: `the pill's gap above ${what}` })
     .toBeGreaterThan(GAP_PX - 1);
   expect(await gapAbove(pill, below), `the pill's gap above ${what}`).toBeLessThan(GAP_PX + 1);
+}
+
+type Box = NonNullable<Awaited<ReturnType<Locator['boundingBox']>>>;
+
+/** Whether two boxes share any area. */
+function boxesOverlap(a: Box, b: Box): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+/**
+ * On the Global View map, the pill floats the usual gap above the "Systems: N"
+ * chip - the highest thing in the map's bottom-right corner - and so clear of it,
+ * where the window is narrow enough that the chip runs under the pill (#576 W79-NF8).
+ */
+async function expectPillClearOfTheSystemsCount(page: Page): Promise<void> {
+  await page.getByTestId('globalview-view-toggle-map').click();
+  const count = page.getByTestId('globalview-map').getByText('Systems: 3', { exact: true });
+  await expect(count).toBeVisible();
+  await holdTheNextDmpParse(page);
+  await page.getByTestId('global-open-import-button').click();
+
+  const pill = page.getByTestId('import-parse-indicator');
+  await expectPillAbove(pill, count, 'the systems count');
+  const pillBox = (await pill.boundingBox())!;
+  const countBox = (await count.boundingBox())!;
+  const span = (b: Box) => `x ${b.x}-${b.x + b.width}, y ${b.y}-${b.y + b.height}`;
+  // The case under test: the chip runs under the pill's right end.
+  expect(
+    pillBox.x < countBox.x + countBox.width && countBox.x < pillBox.x + pillBox.width,
+    `the systems count (${span(countBox)}) runs under the pill (${span(pillBox)})`,
+  ).toBe(true);
+  expect(boxesOverlap(pillBox, countBox), `the pill (${span(pillBox)}) clear of the systems count (${span(countBox)})`).toBe(
+    false,
+  );
 }
 
 /** Turn the satellite imagery (and with it the attribution) on or off from the Display menu. */
@@ -120,7 +156,12 @@ test.describe('the import parse indicator clears the status bar (#576 W62)', () 
       await page.getByTestId('global-open-import-button').click();
 
       const pill = page.getByTestId('import-parse-indicator');
-      await expectPillAbove(pill, attribution, 'the map attribution');
+      await expect(pill).toBeVisible();
+      // At least the usual gap: the systems count above the attribution is the
+      // higher edge, and sets the pill's height (pinned below).
+      await expect
+        .poll(() => gapAbove(pill, attribution), { message: "the pill's gap above the map attribution" })
+        .toBeGreaterThan(GAP_PX - 1);
       expect(await gapAbove(pill, names), 'the pill leaves the source names uncovered').toBeGreaterThan(GAP_PX);
       // The case under test: the names run right under the pill.
       const pillBox = (await pill.boundingBox())!;
@@ -134,6 +175,18 @@ test.describe('the import parse indicator clears the status bar (#576 W62)', () 
       await page.getByTestId('globalview-view-toggle-list').click();
       await expect(attribution).toHaveCount(0);
       await expectPillAbove(pill, page.getByTestId('global-view').locator('footer'), 'the status bar');
+    });
+
+    test('on the Global View map: clear of the systems count (#576 W79-NF8)', async ({ page }) => {
+      await expectPillClearOfTheSystemsCount(page);
+    });
+  });
+
+  test.describe('in an 800 px window, the minimum width', () => {
+    test.use({ viewport: { width: 800, height: 720 } });
+
+    test('on the Global View map: clear of the systems count (#576 W79-NF8)', async ({ page }) => {
+      await expectPillClearOfTheSystemsCount(page);
     });
   });
 

@@ -10,6 +10,9 @@
  * goes back to list mode, or the Global View is left). Where the indicator then
  * sits is pinned in e2e-playwright/import-parse-indicator.spec.ts.
  *
+ * The "Systems: N" count chip just above the attribution does the same (#576
+ * W79-NF8): in a narrow window it runs under the indicator's right end.
+ *
  * Component tier: the real GlobalViewMap, MapAttribution and uiStore, with
  * maplibre-gl and the WebGL survey layer replaced by fakes.
  */
@@ -29,6 +32,7 @@ import { invokeIpcMock } from '../../../test/factories/ipc';
 import { fakeGlobalView as h } from '../../../test/factories/globalViewMap';
 
 const OWNER = 'global-view-map-attribution';
+const COUNT_OWNER = 'global-view-map-system-count';
 
 const project = (file_path: string): ProjectMetadata =>
   ({
@@ -45,7 +49,7 @@ function mapWith(projects: ProjectMetadata[]) {
   );
 }
 
-const registered = () => OWNER in useUIStore.getState().parseIndicatorBottomOffsets;
+const registered = (owner = OWNER) => owner in useUIStore.getState().parseIndicatorBottomOffsets;
 
 beforeEach(() => {
   h.state.map = null;
@@ -77,5 +81,26 @@ describe('the Global View map attribution clears the import parse indicator (#57
 
     rerender(mapWith([project('/caves/CaveA.stalx')]));
     expect(registered(), 'registered again once the attribution is back').toBe(true);
+  });
+});
+
+describe('the Global View map systems count clears the import parse indicator (#576 W79-NF8)', () => {
+  it('registers while the map is up and unregisters when the map unmounts', () => {
+    const { unmount } = render(mapWith([project('/caves/CaveA.stalx')]));
+    expect(registered(COUNT_OWNER), 'registered while the count is up').toBe(true);
+
+    unmount();
+    expect(registered(COUNT_OWNER), 'still registered after the map unmounted').toBe(false);
+  });
+
+  it('unregisters when the map shows its empty state, and registers again when a system returns', () => {
+    const { rerender } = render(mapWith([project('/caves/CaveA.stalx')]));
+    expect(registered(COUNT_OWNER)).toBe(true);
+
+    rerender(mapWith([]));
+    expect(registered(COUNT_OWNER), 'still registered with no count on screen').toBe(false);
+
+    rerender(mapWith([project('/caves/CaveA.stalx')]));
+    expect(registered(COUNT_OWNER), 'registered again once the count is back').toBe(true);
   });
 });

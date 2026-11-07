@@ -655,6 +655,10 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
   // attribution, as in the project view: centred on the window, it reaches over
   // the source names in this map's bottom-right corner.
   const attributionParseIndicatorClearance = useParseIndicatorClearance('global-view-map-attribution');
+  // [#576 W79-NF8] And above the systems count, which sits just above the
+  // attribution in that corner, so is the higher edge: in a narrow window
+  // (800 or 900 px) the pill's right end reaches over it.
+  const systemCountParseIndicatorClearance = useParseIndicatorClearance('global-view-map-system-count');
 
   // E2E handle on the Global View map (the survey map's is `__stalagmight_map__`).
   useEffect(() => {
@@ -1271,7 +1275,10 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
       />
 
       {/* Project count indicator */}
-      <div className="absolute bottom-8 right-2 bg-panel-90 border border-border rounded px-2 py-1 text-xs">
+      <div
+        ref={systemCountParseIndicatorClearance}
+        className="absolute bottom-8 right-2 bg-panel-90 border border-border rounded px-2 py-1 text-xs"
+      >
         {t('globalView.map.systemCount', {
           count: gpsProjects.length,
           countFormatted: formatNumber(gpsProjects.length),
