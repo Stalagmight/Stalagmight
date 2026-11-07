@@ -60,7 +60,10 @@ fn a_landed_upload_is_recorded_whatever_an_autosave_is_doing() {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
     let state = AppState::new().unwrap();
-    assert!(state.open_project(linked_file(temp.path())).success);
+    let file = linked_file(temp.path());
+    assert!(state.open_project(file.clone()).success);
+    // [#576 Q-W44-6-D1] The file and link the push was made from (the open copy here).
+    let made_for_link = state.speleodb_open_link().unwrap();
     // The race needs saves that really rewrite the file; a refused save is no autosave.
     let probe = state.execute(Command::SaveProject { path: None });
     assert!(probe.success, "the autosave runs: {:?}", probe.error);
@@ -100,6 +103,10 @@ fn a_landed_upload_is_recorded_whatever_an_autosave_is_doing() {
             let landed = state.speleodb_revision_landed("push-bookkeeping");
             let recorded = state.speleodb_record_landed_upload(
                 &landed,
+                &super::speleodb_push::UploadMadeFor {
+                    file: &file,
+                    link: &made_for_link,
+                },
                 Some(LANDED),
                 &push_start,
                 &push_start,

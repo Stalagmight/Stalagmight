@@ -160,7 +160,11 @@ Commands now run **concurrently**, which makes three rules explicit:
   collaborator and team changes, lock release, project delete). Those check where
   they first read the link, in one `command_lock` span with that read and before any
   network call (`speleodb_link_made_for`), and again in each span that then writes
-  the open file; the refusal reaches the frontend as `PROJECT_CHANGED`. A source
+  the open file; the refusal reaches the frontend as `PROJECT_CHANGED`. [#576
+  Q-W44-6-D1] One write still happens on that refusal: a Done or Push whose upload
+  landed before the switch records the new BASE and the cleared dirty mark in the
+  link of the file it was made from (never the open one), so that link matches the
+  server. A source
   scan (`app_contract_tests.rs`) fails when an identity-carrying command does not
   declare, hand on, or put the identity on the wire, and every registered command
   must be classified - an identity carrier, or listed with the reason it does not

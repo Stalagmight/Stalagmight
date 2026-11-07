@@ -51,6 +51,53 @@ pub(super) enum PushOutcome {
     Unconfirmed,
 }
 
+/// [#576 Q-W44-6-D1] The file a push was made from and the link it read there: where
+/// its landing is recorded when the session has switched away by then
+/// (`AppState::speleodb_record_landed_upload`).
+pub(super) struct UploadMadeFor<'a> {
+    /// The `.stalx` the snapshot was taken from.
+    pub(super) file: &'a Path,
+    /// The link the push read from it.
+    pub(super) link: &'a crate::models::SpeleoLink,
+}
+
+/// A concluded upload, recorded in `link`: BASE advances to `new_base` when there is
+/// one, and the dirty mark clears when no edit was recorded after `push_start`.
+fn record_landing(link: &mut crate::models::SpeleoLink, new_base: Option<&str>, push_start: &str) {
+    if let Some(base) = new_base {
+        link.base_commit_sha = Some(base.to_owned());
+    }
+    if sync::edits_captured_by_push(link.last_edit_at.as_deref(), Some(push_start)) {
+        link.has_unpushed_edits = false;
+        link.last_edit_at = None;
+    }
+}
+
+/// [#576 Q-W44-6-D1] [`record_landing`] in the link row of `made_for.file`, through a
+/// handle of its own: `Ok(false)` when that file holds no link, or a link to another
+/// project or deployment than the push read.
+fn record_landing_in_file(
+    made_for: &UploadMadeFor<'_>,
+    new_base: Option<&str>,
+    push_start: &str,
+) -> Result<bool, String> {
+    let db =
+        crate::persistence::Database::open_existing(made_for.file).map_err(|e| e.to_string())?;
+    let Some(mut link) = db.load_speleo_link().map_err(|e| e.to_string())? else {
+        return Ok(false);
+    };
+    let same_project = link.project_id == made_for.link.project_id
+        && crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+            == crate::speleodb::auth::normalize_endpoint(&made_for.link.endpoint);
+    if !same_project {
+        return Ok(false);
+    }
+    record_landing(&mut link, new_base, push_start);
+    db.save_speleo_link(Some(&link))
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 /// Sanitize a push SNAPSHOT copy before upload: clear the dirty bit and strip the
 /// per-machine / per-session LOCAL tables so they don't ride to the server (#197).
 /// All durable project data - survey, config, import-dedup, resolved-warnings -
@@ -1342,6 +1389,7 @@ impl AppState {
                 let dropped = self
                     .speleodb_record_landed_upload(
                         &landed,
+                        &UploadMadeFor { file: &live, link },
                         new_base.as_deref(),
                         &push_start,
                         &undo_cutoff,
@@ -1373,6 +1421,7 @@ impl AppState {
                     let dropped = self
                         .speleodb_record_landed_upload(
                             &landed,
+                            &UploadMadeFor { file: &live, link },
                             None,
                             &push_start,
                             &undo_cutoff,
@@ -1488,9 +1537,19 @@ impl AppState {
     /// file about to be replaced (BASE and the dirty bit came back stale: a later
     /// self-conflict) or failed with `NoRemoteProject` (Done reported an error for a
     /// revision that landed, and skipped the history cut so it rode again).
+    ///
+    /// [#576 Q-W44-6-D1] `made_for` is the file the push was made from and the link it
+    /// read there. When a project switch landed after the upload reached the server
+    /// but before this write, the open project is another one: the answer stays
+    /// `PROJECT_CHANGED` (nothing is written to the project now open, and the verb's
+    /// release half does not run), but the landing is still recorded in the link of
+    /// the file it was made for ([`Self::speleodb_record_landed_upload_in_file`]), so
+    /// that link matches the server. It used to keep its old BASE and dirty mark, and
+    /// the next open of that project read our own landed commit as somebody else's.
     pub(super) fn speleodb_record_landed_upload(
         &self,
         _landed: &Landed,
+        made_for: &UploadMadeFor<'_>,
         new_base: Option<&str>,
         push_start: &str,
         undo_cutoff: &str,
@@ -1498,18 +1557,74 @@ impl AppState {
     ) -> Result<Option<ValidationWarning>, SpeleoDbError> {
         let _commands = self.hold_commands();
         // [#576 RVF-c-C1] Never into the link of a project a switch opened meanwhile.
-        self.refuse_other_project("Recording the upload")
-            .map_err(super::speleodb::refused_by)?;
-        self.speleodb_mutate_link(|l| {
-            if let Some(base) = new_base {
-                l.base_commit_sha = Some(base.to_owned());
-            }
-            if sync::edits_captured_by_push(l.last_edit_at.as_deref(), Some(push_start)) {
-                l.has_unpushed_edits = false;
-                l.last_edit_at = None;
-            }
-        })?;
+        if let Err(refusal) = self.refuse_other_project("Recording the upload") {
+            self.speleodb_record_landed_upload_in_file(made_for, new_base, push_start);
+            return Err(super::speleodb::refused_by(refusal));
+        }
+        self.speleodb_mutate_link(|l| record_landing(l, new_base, push_start))?;
         Ok(self.speleodb_clear_undo_after_push(undo_cutoff, captured_through))
+    }
+
+    /// [#576 Q-W44-6-D1] Record a concluded upload in the link of `made_for.file`, a
+    /// file the session has switched away from: BASE and the dirty mark, as
+    /// [`Self::speleodb_record_landed_upload`] records them for the open copy.
+    ///
+    /// Called under `command_lock` (the caller's), and holds `project` across the
+    /// write, so no open, close or switch can commit between the check and the write
+    /// (the shape of `speleodb_remove_link_at`). Writes nothing when the file is the
+    /// open project's (a session of that very file owns its link now), when it holds
+    /// no link or a link to another project or deployment (the path is not that file
+    /// any more), or when it cannot be opened. Best-effort: the verb is answered
+    /// `PROJECT_CHANGED` either way, and a failure is logged.
+    ///
+    /// Only the link: the undo history the commit carried stays in that file (its
+    /// stack is not the one in memory), as after a crash between the upload and the
+    /// local bookkeeping.
+    fn speleodb_record_landed_upload_in_file(
+        &self,
+        made_for: &UploadMadeFor<'_>,
+        new_base: Option<&str>,
+        push_start: &str,
+    ) {
+        let open = self.project.lock();
+        if open
+            .as_ref()
+            .and_then(|project| project.file_path.as_deref())
+            .is_some_and(|open| super::project_io::same_file(open, made_for.file))
+        {
+            tracing::info!(
+                path = %made_for.file.display(),
+                purpose = "record a push whose project was switched away mid-verb (#576 Q-W44-6-D1)",
+                "speleodb: the file the push was made for is open again; its session owns the link"
+            );
+            return;
+        }
+        let recorded = record_landing_in_file(made_for, new_base, push_start);
+        drop(open);
+        match recorded {
+            Ok(true) => tracing::info!(
+                path = %made_for.file.display(),
+                project_id = %made_for.link.project_id,
+                new_base = ?new_base,
+                purpose = "record a push whose project was switched away mid-verb (#576 Q-W44-6-D1)",
+                "speleodb: recorded the landed push in the link of the project it was made for"
+            ),
+            Ok(false) => tracing::warn!(
+                path = %made_for.file.display(),
+                project_id = %made_for.link.project_id,
+                purpose = "record a push whose project was switched away mid-verb (#576 Q-W44-6-D1)",
+                "speleodb: the file the push was made for no longer holds that project's link; \
+                 nothing recorded"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                path = %made_for.file.display(),
+                project_id = %made_for.link.project_id,
+                purpose = "record a push whose project was switched away mid-verb (#576 Q-W44-6-D1)",
+                "speleodb: could not record the landed push in the link of the project it was \
+                 made for; its next open reconciles"
+            ),
+        }
     }
 
     /// [#303] Clear-on-push (q8 / Q25): after a CONFIRMED push, drop the undo entries
