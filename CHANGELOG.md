@@ -19,6 +19,12 @@ Update this file every time a new version is tagged.
 
 - **Writes to Windows paths that are not a plain file are refused** - on Windows, a save, export or other file write to a device or volume path (`\\?\GLOBALROOT\...`, `\\.\pipe\...`, `\??\...`), a path relative to a drive's current folder (`C:x.stalx`), an alternate data stream (`notes.txt:x.stalx`), a device name such as `NUL.stalx`, `COM1.stalx`, `LPT0.stalx`, `COM¹.stalx` or `CONOUT$.stalx`, or this computer reached as a network share (`\\localhost\C$\...`, `\\127.0.0.1\...`, also spelled `\\127.1\...`, `\\2130706433\...` or `\\0x7f000001\...`) is now refused with the reason, as a write into a system folder is; so is opening an older project at such a path, which would upgrade it in place. A network path spelled `\\?\unc\...` or `\\.\UNC\...`, and a folder name with a trailing dot (`C:\Windows.\`), now count as the folder they name ([#576](https://github.com/Stalagmight/Stalagmight/issues/576))
 
+### Fixed
+
+#### Updates
+
+- **Restarting into an update protects your work as quitting does** - it now releases a SpeleoDB write lock you hold, and keeps autosave from writing edits you chose to discard while the update installs. The app also holds the screen until the install finishes, so nothing can be changed in the seconds before the restart, when the change would have been lost. If the install fails, editing resumes ([#576](https://github.com/Stalagmight/Stalagmight/issues/576), [#579](https://github.com/Stalagmight/Stalagmight/issues/579))
+
 ### Security
 
 - **Full-text search, R-tree, DBSTAT and extension loading are also refused while a file is open** - every project file is opened with SQLite set to refuse them, so `stalx-reader` built from crates.io, whose SQLite has them compiled in, keeps a crafted `.stalx` away from their code too; a file whose schema names are not valid UTF-8, or whose schema SQL is not stored as text (a crafted file could hide a CHECK constraint from the unsafe-file check that way), is refused as unsafe, though the recovery dialog's Export Salvageable Data still reads a damaged file whose schema type, name, table name or SQL one flipped bit left stored as a blob, its station comments, loop closures and project settings included ([#619](https://github.com/Stalagmight/Stalagmight/issues/619))
