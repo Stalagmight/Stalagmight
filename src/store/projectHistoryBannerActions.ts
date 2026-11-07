@@ -76,7 +76,7 @@ export function createProjectHistoryBannerActions(
       const opAtStart = get().loading.clientOpId;
       const mySeq = ++historyDiscardedCheckSeq;
       try {
-        const discarded = await invokeIpc<boolean>('history_discarded', undefined, {
+        const discarded = await invokeIpc('history_discarded', undefined, {
           purpose: 'report a history load that was discarded',
         });
         const cur = get();

@@ -4,6 +4,7 @@ import type {
   KeychainReport,
   Permission,
   PushResult,
+  RemoteLinkBits,
   RemoteState,
   SpeleoDumpCandidate,
   SpeleoErrorDto,
@@ -26,6 +27,7 @@ import {
 import { emailsMatch } from '../utils/email';
 import { useProjectStore } from './projectStore';
 import { useUIStore } from './uiStore';
+import { registerSpeleoStore } from './speleoStoreHandle';
 
 /** [#258] Which ambiguity the picker is resolving. Both share the mechanics and
     differ only in the verb the user is offered. */
@@ -97,13 +99,47 @@ export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify'
     (server `exclude_geojson`) and `no_anchor` (no georeferenced zero datum on
     push/unlock) are the #200 non-blocking notices; `push_failed` (#260) is the
     durable surface for a push/unlock that threw (the toast alone auto-clears
-    after 3 s, leaving a failed upload with no trace). */
+    after 3 s, leaving a failed upload with no trace). `lock_lost` (#576 B35(e))
+    is the backend switching editing off because SpeleoDB says the write lock this
+    session was editing under is gone or held by `holder`. */
 export type SpeleoBanner =
   | { kind: 'push_unconfirmed' }
   | { kind: 'concurrent_session' }
   | { kind: 'rendering_disabled' }
   | { kind: 'no_anchor' }
+  | { kind: 'lock_lost'; holder: string | null }
   | PushFailedBanner;
+
+/**
+ * [#576 B35(e)] Did this status reply end an edit session because the lock is not
+ * ours any more? The backend closes the edit gate when a SUCCESSFUL read names
+ * another holder or none (the status poll, or Done refusing to release); this is
+ * the frontend half that says so instead of silently turning the toolbar
+ * read-only.
+ *
+ * Read from the transition (we were editing under a lock, the backend now reports
+ * the gate shut) plus what the server answered (`permission` is only set when the
+ * read succeeded - a signed-out or offline reply carries none). Two shapes qualify:
+ * another account named as holder, which no release of OURS produces; and no
+ * holder over un-pushed edits, which is worth saying however it came about, since
+ * those edits now need Start editing to reach the server. A clean copy whose lock
+ * simply went away is left to the read-only toolbar - that is also exactly what a
+ * deliberate release looks like.
+ */
+export function lockLostHolder(
+  prior: Pick<SpeleoLinkState, 'editState' | 'forceEditing'> | null,
+  s: SpeleoLinkStatus,
+  myEmail: string | null,
+): { lost: boolean; holder: string | null } {
+  const wasHoldingLock = prior?.editState === 'editing' && !prior.forceEditing;
+  if (!wasHoldingLock || !s.is_remote || s.edit_enabled || s.force_editing || s.permission === null) {
+    return { lost: false, holder: null };
+  }
+  const holder = s.lock_holder;
+  const holderIsOther = !!holder && !emailsMatch(holder, myEmail);
+  const lost = holderIsOther || (holder === null && s.has_unpushed_edits);
+  return { lost, holder: lost ? holder : null };
+}
 
 /** [#260] The last push/unlock failed. Carries the already-humanized error plus
     enough context for the banner's Retry to re-issue the SAME verb with the SAME
@@ -155,8 +191,8 @@ export interface SpeleoSession {
  *
  * Derived here rather than reported pre-combined by the backend, because the two halves
  * arrive at different times: a step onto the tip leaves the copy CLEAN, so the composite
- * was false at the moment of the poll, and the Undo that follows marks `hasUnpushedEdits`
- * optimistically without asking the backend anything. Composing locally is what makes the
+ * was false at the moment of the poll, and the Undo that follows sets `hasUnpushedEdits`
+ * from its own answer (`remote_link`, #576 D22) before the next poll. Composing locally is what makes the
  * status button react to that Undo instead of waiting a poll interval - which is exactly
  * how it was still offering "Push & release" after an unwind.
  */
@@ -325,7 +361,7 @@ export interface SpeleoLinkSnapshot {
   banner: SpeleoBanner | null;
 }
 
-interface SpeleoStore {
+export interface SpeleoStore {
   /** Backend session, or `null` before the first `setSession`/`refreshSession`. */
   session: SpeleoSession | null;
   /**
@@ -685,27 +721,23 @@ interface SpeleoStore {
   applyDone: (r: DoneResult) => void;
   /** Push-without-release (T2d): keeps the lock; clears the dirty bit on success. */
   applyPush: (r: PushResult) => void;
-  /** First successful mutation while editing flips the dirty indicator on. */
-  markDirty: () => void;
   /**
-   * [#303] A FORWARD edit, as opposed to an undo/redo: dirty, AND no longer merely
-   * "where the Unwind walk left it". Mirrors the backend pairing - `mark_remote_dirty()`
-   * followed by `speleodb_forget_unwind_position()` at commands.rs:757-761 (and the
-   * batch/repair sites).
+   * [#576 D22] The SpeleoDB link bits a survey mutation answered with - the BACKEND's
+   * own `has_unpushed_edits` / `unwound` after the edit, an undo/redo, or a failure
+   * that still mutated (read from its link row by the one helper that fills every
+   * mutation's `remote_link`). Applied by `invokeIpc`, the only caller, so no editing
+   * call site re-derives them: the hand-written mirrors this replaced (`markDirty` /
+   * `markForwardEdit`) stamped a provable no-op as an un-pushed edit and dropped its
+   * Unwind position while the backend stayed clean.
    *
-   * Deliberately NOT `markDirty`, which short-circuits when the link is already dirty.
-   * An unwound copy is always already dirty (`revision_swap_base` stamps the bit on any
-   * restore off tip), so mirroring a forward edit through `markDirty` was a total no-op:
-   * `unwound` survived until the next `speleodb_link_status` poll, up to
-   * `MIN_POLL_INTERVAL_SECONDS` away. Inside that window {@link isUnwoundNotEdited} still
-   * held, so SpeleoStatusButton, the lock menu, the `done()` guard and both exit prompts
-   * offered "Discard and take the latest" over work the user had just drawn.
-   *
-   * Undo/redo keeps `markDirty`: the backend deliberately does NOT drop the chain pointer
-   * on an undo, and a structural tripwire in speleodb_revisions.rs asserts that undo.rs
-   * never calls `speleodb_forget_unwind_position`.
+   * `linkPathAtIssue` is the `linkPath` when the command was ISSUED: a reply for a
+   * project the user has since left (the link now describes another file) is
+   * dropped. No link (a local project, nothing open) is a no-op too. Returns `{}`
+   * when the bits already match, so the object identity `refreshLinkStatus` uses to
+   * spot a concurrent mutation is preserved; any change bumps
+   * `chainTargetGeneration`, since an Unwind/Rewind target resolved before it is stale.
    */
-  markForwardEdit: () => void;
+  applyRemoteLink: (bits: RemoteLinkBits, linkPathAtIssue: string | null) => void;
 
   // --- seams ---
   clearDivergence: () => void;
@@ -775,6 +807,17 @@ export type DoneKind = DoneResult['kind'] | 'not_editing';
  */
 export const asPushKind = (kind: PushResult['kind']): PushKind => kind;
 export const asDoneKind = (kind: DoneResult['kind']): DoneKind => kind;
+
+/**
+ * Whether a Done finished the edit session with the work on the server: `released`,
+ * or `lock_held_elsewhere` (#576 RV2-R-13) - the same, except the lock was taken by
+ * another session of the account and so was left with it rather than released. The
+ * exit prompts and the Done dialog move on for both; every other kind left the work
+ * (or the lock) where a retry still needs it.
+ */
+export function doneFinished(kind: DoneKind | null | undefined): boolean {
+  return kind === 'released' || kind === 'lock_held_elsewhere';
+}
 
 /**
  * Exhaustiveness guard for the hand-off switches. Reached only if the backend
@@ -878,13 +921,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // catch below so the dialog still surfaces that warning. Clearing only on
         // success would leave the UI claiming a session the backend no longer has.
         try {
-          await invokeIpc<null>('speleodb_logout');
+          await invokeIpc('speleodb_logout');
         } finally {
           set({ pendingAuth: null, authError: null });
           get().clearSession();
         }
       } else {
-        const r = await invokeIpc<SpeleoLoginResult>('speleodb_login', {
+        const r = await invokeIpc('speleodb_login', {
           endpoint: (endpoint ?? '').trim() || undefined,
           email: p.useToken ? undefined : p.email.trim() || undefined,
           password: p.useToken ? undefined : p.password || undefined,
@@ -988,8 +1031,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // Object identity is the check on purpose: every action that mutates link
     // truth builds a NEW link object (they all spread `...state.link`), so any
     // future mutator is covered without having to remember to bump a counter.
-    // The no-op arms that return `{}` (markDirty when already dirty, applyPush's
-    // not_editing) keep the same object, and a reply is genuinely still valid
+    // The no-op arms that return `{}` (applyRemoteLink when the bits already match,
+    // applyPush's not_editing) keep the same object, and a reply is genuinely still valid
     // there.
     //
     // A seed by ANOTHER refresh is explicitly not such a mutation (`seededLinks`).
@@ -1002,7 +1045,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     const seq = ++linkStatusSeq;
     const requestedLink = get().link;
     try {
-      const status = await invokeIpc<SpeleoLinkStatus>('speleodb_link_status');
+      const status = await invokeIpc('speleodb_link_status');
       if ((useProjectStore.getState().project?.file_path ?? null) !== requestedPath) return;
       const current = get().link;
       if (current !== requestedLink && !(current && seededLinks.has(current))) return;
@@ -1055,7 +1098,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   refreshSession: async () => {
     try {
-      const status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
+      const status = await invokeIpc('speleodb_session');
       get().setSession(status);
     } catch {
       // Best-effort - leave whatever the store had.
@@ -1207,12 +1250,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   // config still keeps anything rendering off it honest about where the key went.
   setTokenStorage: async (mode) => {
     try {
-      const status = await invokeIpc<SpeleoSessionStatus>('speleodb_set_token_storage', { mode });
+      const status = await invokeIpc('speleodb_set_token_storage', { mode });
       // Seed from the ANSWER, not from the request: a plaintext write can itself
       // fail, and then the honest thing to show is session-only.
       get().setSession(status);
       set({ storageChoiceOpen: false });
-      await useProjectStore.getState().loadConfig();
+      await useProjectStore.getState().reloadConfigInOrder();
       // The landed tier, handed back rather than collapsed to a bare `true`, so the
       // caller can say where the key went instead of where it was sent. `storage` is
       // null only when the backend reports logged-out, which this verb refuses
@@ -1225,9 +1268,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   retryKeychain: async () => {
     try {
-      const status = await invokeIpc<SpeleoSessionStatus>('speleodb_retry_keychain');
+      const status = await invokeIpc('speleodb_retry_keychain');
       get().setSession(status);
-      await useProjectStore.getState().loadConfig();
+      await useProjectStore.getState().reloadConfigInOrder();
       return true;
     } catch {
       return false;
@@ -1256,7 +1299,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       return;
     }
     try {
-      const projects = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
+      const projects = await invokeIpc('speleodb_list_projects');
       // Staleness guard: a logout / account switch can land while the list_projects
       // GET is in flight. Bail if the session moved so we never repaint the ended
       // session's badges or re-raise its prompt (mirrors refreshLinkStatus's guard).
@@ -1299,7 +1342,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   releaseLock: async (projectId) => {
     // Throws on failure so the dialog keeps itself open and surfaces the error.
-    await invokeIpc<null>('speleodb_release_lock', { projectId });
+    await invokeIpc('speleodb_release_lock', { projectId });
     // Optimistic local update (avoids a full re-scan per release when the user frees
     // several one by one): drop this lock from the prompt's list and mark the project
     // free in the badge map. `heldLocks` going empty is what auto-closes the dialog.
@@ -1437,6 +1480,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       } else if (prior?.kind === 'rendering_disabled') {
         banner = null;
       }
+      // [#576 B35(e)] The edit session just ended because the lock is not ours any
+      // more. Outranks every other notice: whatever they said was about an edit
+      // session that is over (a Done refused for exactly this reason raises a
+      // push_failed first, and this explains it).
+      const lockLost = lockLostHolder(state.link, s, state.session?.userEmail ?? null);
+      if (lockLost.lost) banner = { kind: 'lock_lost', holder: lockLost.holder };
       const seeded: SpeleoLinkState = {
         editState,
         // The network fields degrade to null/unknown offline - keep the
@@ -1665,6 +1714,24 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             divergence: null,
             banner: null,
           };
+        case 'lock_held_elsewhere':
+          // [#576 RV2-R-13] The edits are on the server and editing has ended here,
+          // as for `released` - but the lock was the account's from another session
+          // and stays with it, so the holder is NOT cleared (the poll keeps it fresh).
+          return {
+            link: {
+              ...state.link,
+              editState: 'read-only',
+              hasUnpushedEdits: false,
+              unwound: false,
+              lockedByOther: false,
+              remoteState: 'up_to_date',
+              serverError: null,
+            },
+            chainTargetGeneration: state.chainTargetGeneration + 1,
+            divergence: null,
+            banner: null,
+          };
         case 'divergence_needed':
           return { divergence: 'done' };
         case 'push_unconfirmed':
@@ -1714,27 +1781,16 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       }
     }),
 
-  markDirty: () =>
-    set((state) =>
-      state.link && !state.link.hasUnpushedEdits
-        ? { link: { ...state.link, hasUnpushedEdits: true } }
-        : {},
-    ),
-
-  // [#303] Both halves of the backend's post-edit bookkeeping, not just the dirty bit.
-  // The `unwound` term in the guard is what makes this fire on an already-dirty link -
-  // exactly the case `markDirty` skips, and exactly the case an unwound copy is always
-  // in. Still returns `{}` when nothing would change, so the identity check that
-  // `refreshLinkStatus` uses to spot a concurrent mutation keeps working.
-  markForwardEdit: () =>
-    set((state) =>
-      state.link && (!state.link.hasUnpushedEdits || state.link.unwound)
-        ? {
-            link: { ...state.link, hasUnpushedEdits: true, unwound: false },
-            chainTargetGeneration: state.chainTargetGeneration + 1,
-          }
-        : {},
-    ),
+  applyRemoteLink: (bits, linkPathAtIssue) =>
+    set((state) => {
+      const link = state.link;
+      if (!link || state.linkPath !== linkPathAtIssue) return {};
+      if (link.hasUnpushedEdits === bits.has_unpushed_edits && link.unwound === bits.unwound) return {};
+      return {
+        link: { ...link, hasUnpushedEdits: bits.has_unpushed_edits, unwound: bits.unwound },
+        chainTargetGeneration: state.chainTargetGeneration + 1,
+      };
+    }),
 
   clearDivergence: () => set({ divergence: null }),
 
@@ -1757,7 +1813,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   enableRendering: async () => {
     // Throws on failure so the banner keeps itself open and shows the error.
-    await invokeIpc<null>('speleodb_set_exclude_geojson', { exclude: false });
+    await invokeIpc('speleodb_set_exclude_geojson', { exclude: false });
     // Drop the rendering-disabled banner (this resolved it) and re-seed from the
     // server so the flag reflects the change.
     set((state) => (state.banner?.kind === 'rendering_disabled' ? { banner: null } : {}));
@@ -1768,7 +1824,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // [#303] Throws on failure so the caller (the settings control) renders the
     // refusal - most usefully the lock one, since this writes the `.stalx` and so
     // becomes every collaborator's policy on the next push.
-    await invokeIpc<null>('speleodb_set_undo_mode', { mode });
+    await invokeIpc('speleodb_set_undo_mode', { mode });
     // The backend policy changed even if the best-effort status refresh below cannot
     // reach the server, so a target resolved under the old policy is already stale.
     get().invalidateChainTargets();
@@ -1781,6 +1837,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   dismissBanner: () => set({ banner: null }),
 }));
+
+// projectStore reaches this store through speleoStoreHandle instead of importing
+// it (this module imports projectStore; the two used to be a value-import cycle,
+// #576 D27-32(b)).
+registerSpeleoStore(() => useSpeleoStore.getState());
 
 /**
  * [#260] The dialogs that OWN a push/unlock failure while they are open: they

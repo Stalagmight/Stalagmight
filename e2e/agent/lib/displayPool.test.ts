@@ -31,4 +31,10 @@ describe('parseDisplayPool', () => {
     expect(() => parseDisplayPool(':89,localhost:0')).toThrow(/malformed/);
     expect(() => parseDisplayPool(':89,:8a')).toThrow(/malformed/);
   });
+
+  it("counts the malformed entries on its first line and names them only below it (#576 W51)", () => {
+    expect(() => parseDisplayPool(':89,qzCaveA,:8a')).toThrow(
+      new Error('STALAGMIGHT_AGENT_DISPLAYS has 2 malformed display(s); entries must look like ":87"\n  malformed: ["qzCaveA",":8a"]'),
+    );
+  });
 });

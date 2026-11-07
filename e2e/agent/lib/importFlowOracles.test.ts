@@ -73,6 +73,7 @@ const digest = (over: Partial<ImportScreenDigest> = {}): ImportScreenDigest => (
   live: {},
   opts: {},
   rows: 0,
+  dataRows: 0,
   frozen: [],
   activeRow: null,
   selRows: [],

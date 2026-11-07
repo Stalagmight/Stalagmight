@@ -7,7 +7,8 @@ import { useUIStore } from '../../store/uiStore';
 import { getThemeColor } from '../../utils/themeColors';
 import { formatGasLength } from '../../utils/formatGas';
 import { formatFixed } from '../../i18n/format';
-import { saveDialog, exportSaveFilters, ensureExtension } from '../../utils/fileDialogs';
+import { saveDialog, exportSaveFilters } from '../../utils/fileDialogs';
+import { resolveSavePath } from '../../utils/overwriteGuard';
 import {
   exportDiveProfile,
   renderDiveProfileText,
@@ -211,7 +212,11 @@ function ProfileExportControls({
         filters: exportSaveFilters(t('planTables.profile.export.xmlFilter'), 'xml'),
       });
       if (!path) return;
-      // Re-check what the render-time `disabled` proved BEFORE the await: the dialog is not
+      // [#576 D35] Ask before replacing an existing file the extension fix-up renamed
+      // the answer onto (the OS prompt only saw the typed name); `null` = declined.
+      const finalPath = await resolveSavePath(path, 'xml');
+      if (!finalPath) return;
+      // Re-check what the render-time `disabled` proved BEFORE the awaits: the dialog is not
       // modal everywhere (Android's in-app picker), so an edit behind it can strand a pin
       // after the button's gate passed - and `currentRequest()` would then export a route
       // through the stale positional ref the Save gate refuses.
@@ -223,7 +228,7 @@ function ProfileExportControls({
           )
         );
       }
-      await exportDiveProfile(ensureExtension(path, '.xml'), 'subsurface-xml', currentRequest());
+      await exportDiveProfile(finalPath, 'subsurface-xml', currentRequest());
       showToast(t('planTables.profile.export.written'), TOAST_KEYS.PROFILE_EXPORT_OK, 'success');
     });
 

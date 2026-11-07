@@ -8,6 +8,7 @@ import {
   openAppMenu,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for the data table's fullscreen mode.
@@ -43,14 +44,14 @@ const sectionSeeds: SectionSeed[] = [
 
 async function getIsDirty(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    const e2e = (window as any).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
     return e2e.projectStore.getState().isDirty as boolean;
   });
 }
 
 async function getActiveTool(page: Page): Promise<string> {
   return page.evaluate(() => {
-    const e2e = (window as any).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
     return e2e.uiStore.getState().activeTool as string;
   });
 }
@@ -226,24 +227,38 @@ test.describe('Data table fullscreen mode', () => {
     // or not fullscreen blocked anything.
     expect(await getActiveTool(page)).toBe('select');
     await page.keyboard.press('m');
+    // settle: proves the shortcut is dead (the tool does NOT change); a poll
+    // would accept the pre-update value.
     await page.waitForTimeout(300);
     expect(await getActiveTool(page)).toBe('select');
 
     // Ctrl+I (import) and Ctrl+E (export) are dead: no dialog appears and
     // the mode stays active.
     await page.keyboard.press('Control+i');
+    // settle: proves no import dialog opens; its absence is true on the first
+    // read whether or not the shortcut fired.
     await page.waitForTimeout(300);
     await expect(page.getByTestId('dmp-selection-dialog')).toHaveCount(0);
     await page.keyboard.press('Control+e');
+    // settle: proves no export dialog opens; its absence is true on the first
+    // read whether or not the shortcut fired.
     await page.waitForTimeout(300);
     await expect(page.getByTestId('export-dialog')).toHaveCount(0);
     await expect(page.getByTestId('data-table')).toHaveAttribute('data-fullscreen', 'true');
 
-    // The fullscreen Sections view stays editable - dirty the project.
+    // Ctrl+S is alive: the save clears the dirty flag the seeding left. This clean
+    // baseline is also what makes the edit below observable: from a dirty start the
+    // dirty poll passed at once, before the edit had landed, so Ctrl+S could save
+    // first and the late edit re-dirty the project (#576 NF-W12DMP-4).
+    await page.keyboard.press('Control+s');
+    await expect.poll(() => getIsDirty(page)).toBe(false);
+
+    // The fullscreen Sections view stays editable: the flag turns true only once
+    // the edit has landed (it is set after the edit's state refresh).
     await fillCell(page, 0, 'length', '42');
     await expect.poll(() => getIsDirty(page)).toBe(true);
 
-    // Ctrl+S is alive: the save clears the dirty flag.
+    // Ctrl+S again, now saving the edit.
     await page.keyboard.press('Control+s');
     await expect.poll(() => getIsDirty(page)).toBe(false);
 

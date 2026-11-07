@@ -7,6 +7,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import type { IpcCommandName } from './ipc';
 import { DISPLAY_DEFAULTS } from '../store/displaySelectors';
 
 /** How often (ms) to flush batched counts to Rust. */
@@ -31,6 +32,10 @@ const INTERACTION_LISTENER_OPTS = { passive: true, capture: true } as const;
 
 /** In-memory event counters. */
 const counts: Record<string, number> = {};
+/** Counts whose `track_events` call failed, held for the next flush under the
+ *  project sequence they were recorded in (#576 TEL-2): restoring them into
+ *  `counts` re-sent them under whatever sequence was current by then. */
+const failedBySeq = new Map<number, Record<string, number>>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let dwellFlushInterval: ReturnType<typeof setInterval> | null = null;
 let available: boolean | null = null;
@@ -145,7 +150,7 @@ const UNDOABLE_COMMANDS: ReadonlySet<string> = new Set([
   'delete_shot_range_split', 'delete_shot_range_shift',
   'import_sections', 'execute_tml_import', 'execute_compass_import', 'execute_walls_import',
   'execute_gpx_import', 'execute_batch',
-]);
+] satisfies IpcCommandName[]);
 
 /**
  * Check if the telemetry feature is compiled into the Rust backend.
@@ -163,25 +168,49 @@ async function checkAvailable(): Promise<boolean> {
 
 /** Flush batched counts to the Rust backend. */
 async function flushToRust(): Promise<void> {
-  flushTimer = null;
-
-  const snapshot = { ...counts };
-  // Clear immediately so new events during flush aren't lost
-  for (const key of Object.keys(counts)) {
-    delete counts[key];
+  // Cancel the pending flush timeout, not just forget it: when this flush comes from
+  // advanceProjectSeq or the dwell interval, a timeout left running would fire at its
+  // stale deadline and flush later events early - and orphan the next one in turn.
+  if (flushTimer !== null) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
   }
 
-  const hasEvents = Object.keys(snapshot).length > 0;
-  if (!hasEvents) return;
+  // Every batch is taken, and tagged with its sequence, before the first await:
+  // the current counts belong to `_projectSeq` as it is NOW (advanceProjectSeq
+  // bumps it right after this call), and the held batches to the sequences
+  // they failed under.
+  const batches = new Map(failedBySeq);
+  failedBySeq.clear();
+  if (Object.keys(counts).length > 0) {
+    // Clear immediately so new events during flush aren't lost
+    const current = { ...counts };
+    for (const key of Object.keys(counts)) {
+      delete counts[key];
+    }
+    batches.set(_projectSeq, mergeCounts(batches.get(_projectSeq), current));
+  }
 
-  try {
-    await invoke('track_events', { events: snapshot, projectSeq: _projectSeq });
-  } catch {
-    // Restore counts if flush failed - they'll be retried next cycle
-    for (const [key, value] of Object.entries(snapshot)) {
-      counts[key] = (counts[key] || 0) + value;
+  for (const [projectSeq, events] of batches) {
+    try {
+      await invoke('track_events', { events, projectSeq });
+    } catch {
+      // Hold them for the next flush, still under their own sequence.
+      failedBySeq.set(projectSeq, mergeCounts(failedBySeq.get(projectSeq), events));
     }
   }
+}
+
+/** `into` plus `from`, key by key (a fresh object when `into` is absent). */
+function mergeCounts(
+  into: Record<string, number> | undefined,
+  from: Record<string, number>,
+): Record<string, number> {
+  const merged = into ?? {};
+  for (const [key, value] of Object.entries(from)) {
+    merged[key] = (merged[key] || 0) + value;
+  }
+  return merged;
 }
 
 /** Set source for the next action. Auto-resets after 50ms to prevent bleed. */
@@ -249,8 +278,12 @@ export function isPersistSuppressed(): boolean {
 /** Increment project sequence and force-flush pending events from previous project. */
 export async function advanceProjectSeq(): Promise<void> {
   flushDwell();
-  await flushToRust();
+  // Bump before awaiting: flushToRust has already taken its snapshot and read the
+  // old sequence by its first await, and anything tracked during the round trip -
+  // even when the dwell interval flushes it - belongs to the new project.
+  const flushed = flushToRust();
   _projectSeq++;
+  await flushed;
 }
 
 /**
@@ -469,7 +502,7 @@ function startDwellInterval(): void {
   attachInteractionListeners();
   dwellFlushInterval = setInterval(() => {
     flushDwell();
-    if (Object.keys(counts).length > 0) {
+    if (Object.keys(counts).length > 0 || failedBySeq.size > 0) {
       void flushToRust();
     }
   }, DWELL_FLUSH_INTERVAL_MS);
@@ -511,6 +544,7 @@ export function setTelemetryEnabled(enabled: boolean): void {
     for (const key of Object.keys(counts)) {
       delete counts[key];
     }
+    failedBySeq.clear();
     _dwellState = null;
     _activeDwell = null;
     _lastInteraction = 0;

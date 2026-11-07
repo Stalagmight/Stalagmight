@@ -13,7 +13,12 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { prodLoc, classify, markCfgTestItems, maskNonCode, discoverSrcRoots, WARN_LOC, FAIL_LOC } from './check-rust-file-size.mjs';
+import { spawnSync } from 'node:child_process';
+import {
+  prodLoc, classify, markCfgTestItems, maskNonCode, discoverSrcRoots, discoverExtraRoots, WARN_LOC, FAIL_LOC,
+  TEST_WARN_LOC, TEST_FAIL_LOC, TEST_LIMITS, TEST_FILE_RE, declaredUnderTestCfg, isTestModule, testLoc,
+  tightenRows, unrecordedFiles,
+} from './check-rust-file-size.mjs';
 
 let passed = 0;
 const failures = [];
@@ -170,6 +175,183 @@ test('discoverSrcRoots adds every crates/*/src after the root src', () => {
     path.join(base, 'crates', 'zeta', 'src'),
   ]);
   fs.rmSync(base, { recursive: true, force: true });
+});
+
+// --- whole test files: measured, with their own thresholds (#576 E8-D1) ---------
+
+test('TEST_FILE_RE: the names a whole-file test module may have', () => {
+  for (const rel of ['a/tests.rs', 'a/foo_tests.rs', 'src/commands/command_tests.rs', 'a/anchor_fuzz.rs', 'a/test_helpers.rs']) {
+    assert.ok(TEST_FILE_RE.test(rel), rel);
+  }
+  for (const rel of ['a/tests_util.rs', 'a/testsuite.rs', 'a/mod.rs', 'a/contests.rs']) assert.ok(!TEST_FILE_RE.test(rel), rel);
+});
+
+test('declaredUnderTestCfg: cfg(test) / all(test,..) / any(test,..) above `mod x;`, through stacked attributes', () => {
+  assert.ok(declaredUnderTestCfg('#[cfg(test)]\nmod tests;', 'tests'));
+  assert.ok(declaredUnderTestCfg('#[cfg(all(test, feature = "telemetry"))]\nmod cov_tests;', 'cov_tests'));
+  assert.ok(declaredUnderTestCfg('#[cfg(any(test, feature = "test-support"))]\npub mod test_helpers;', 'test_helpers'));
+  // A multi-line #[expect] whose reason string holds a `]` must not break the walk.
+  const stacked = ['#[cfg(test)]', '#[expect(', '    clippy::unwrap_used,', '    reason = "panics are assertions [ok]"', ')]', 'pub(crate) mod tests;'].join('\n');
+  assert.ok(declaredUnderTestCfg(stacked, 'tests'));
+});
+
+test('declaredUnderTestCfg: a plain, cfg(not(test)) or cfg_attr declaration is NOT a test module', () => {
+  assert.ok(!declaredUnderTestCfg('mod parser_tests;', 'parser_tests'));
+  assert.ok(!declaredUnderTestCfg('#[cfg(not(test))]\nmod parser_tests;', 'parser_tests'));
+  assert.ok(!declaredUnderTestCfg('#[cfg_attr(test, derive(Debug))]\nmod parser_tests;', 'parser_tests'));
+  assert.ok(!declaredUnderTestCfg('// #[cfg(test)]\nmod parser_tests;', 'parser_tests'), 'a commented-out cfg does not count');
+  assert.ok(!declaredUnderTestCfg('#[cfg(test)]\nmod other;', 'parser_tests'));
+});
+
+test('isTestModule: a production file merely NAMED *_tests.rs is measured as production', () => {
+  const files = {
+    '/r/src/state/mod.rs': '#[cfg(test)]\nmod tests;\nmod sneaky_tests;\n',
+    '/r/src/project.rs': '#[cfg(test)]\nmod tests;\n',
+  };
+  const read = (f) => {
+    if (!(f in files)) throw new Error('ENOENT');
+    return files[f];
+  };
+  const list = (d) => Object.keys(files).filter((f) => path.dirname(f) === d).map((f) => path.basename(f));
+  assert.ok(isTestModule('/r/src/state/tests.rs', read, list), 'declared in the sibling mod.rs');
+  assert.ok(isTestModule('/r/src/project/tests.rs', read, list), 'declared in the <dir>.rs next to the dir');
+  assert.ok(!isTestModule('/r/src/state/sneaky_tests.rs', read, list), 'name matches, declaration is not test-gated');
+  assert.ok(!isTestModule('/r/src/state/helpers.rs', read, list), 'name does not match');
+});
+
+test('testLoc counts every code line of a test file (nothing is stripped as cfg(test))', () => {
+  const src = ['use super::*;', '', '// comment', '#[test]', 'fn t() {', '    let s = "{";', '}'].join('\n');
+  assert.equal(testLoc(src), 5);
+});
+
+test('test-file thresholds: frozen at/above TEST_WARN, hard cap TEST_FAIL', () => {
+  assert.equal(TEST_WARN_LOC, 3000);
+  assert.equal(TEST_FAIL_LOC, 5000);
+  // A frozen monolith may shrink but not grow by one line.
+  assert.equal(classify('state/tests.rs', 21464, 21464, TEST_LIMITS).level, 'warn');
+  assert.equal(classify('state/tests.rs', 21000, 21464, TEST_LIMITS).level, 'warn');
+  assert.equal(classify('state/tests.rs', 21465, 21464, TEST_LIMITS).level, 'error');
+  // A new test file may not be born at/above the test warn line, nor over the cap.
+  assert.equal(classify('new_tests.rs', TEST_WARN_LOC, undefined, TEST_LIMITS).level, 'error');
+  assert.match(classify('new_tests.rs', TEST_FAIL_LOC + 1, undefined, TEST_LIMITS).message, /hard 5000-LOC budget for test files/);
+  // Below the test warn line a test file grows freely - well past the PRODUCTION cap.
+  assert.equal(classify('small_tests.rs', 2900, 2500, TEST_LIMITS).level, 'ok');
+  assert.equal(classify('small_tests.rs', 2900, 2500).level, 'error', 'the same numbers fail under production limits');
+});
+
+test('discoverExtraRoots finds build.rs, examples, tests, the OS helper and slice-rs when present', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-file-size-extra-'));
+  try {
+    for (const d of ['src-tauri/crates/telemetry', 'src-tauri/crates/models', 'src-tauri/examples', 'src-tauri/tests', 'e2e/agent/os/helper/src']) {
+      fs.mkdirSync(path.join(base, d), { recursive: true });
+    }
+    fs.writeFileSync(path.join(base, 'src-tauri/build.rs'), 'fn main() {}');
+    fs.writeFileSync(path.join(base, 'src-tauri/crates/telemetry/build.rs'), 'fn main() {}');
+    assert.deepEqual(discoverExtraRoots(base), {
+      files: ['src-tauri/build.rs', 'src-tauri/crates/telemetry/build.rs'],
+      dirs: ['src-tauri/examples', 'e2e/agent/os/helper/src'],
+      testDirs: ['src-tauri/tests'],
+    });
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// --- --tighten: the refresh that never raises a row (#576 NF-W9E1-2) ----------
+
+test('tightenRows lowers a row to its shrunk file and never raises one', () => {
+  const recorded = { 'a.rs': 900, 'b.rs': 400, 'c.rs': 250 };
+  const measured = { 'a.rs': 700, 'b.rs': 520, 'c.rs': 250 };
+  // a shrank: lowered. b grew below warn: kept at 400 (--update would write
+  // 520 - the loosening this mode exists to avoid). c unchanged.
+  assert.deepEqual(tightenRows(recorded, measured), { 'a.rs': 700, 'b.rs': 400, 'c.rs': 250 });
+});
+
+test('tightenRows records an unrecorded file at its size and prunes a vanished one', () => {
+  const recorded = { 'gone.rs': 300, 'kept.rs': 100 };
+  const measured = { 'kept.rs': 100, 'new_tests.rs': 1234 };
+  assert.deepEqual(tightenRows(recorded, measured), { 'kept.rs': 100, 'new_tests.rs': 1234 });
+});
+
+test('tightenRows output is sorted and every row is <= the recorded one', () => {
+  const recorded = { 'z.rs': 10, 'm.rs': 5000, 'a.rs': 3 };
+  const measured = { 'z.rs': 12, 'm.rs': 4999, 'a.rs': 1, 'b.rs': 7 };
+  const rows = tightenRows(recorded, measured);
+  assert.deepEqual(Object.keys(rows), ['a.rs', 'b.rs', 'm.rs', 'z.rs']);
+  for (const [rel, loc] of Object.entries(rows)) {
+    if (recorded[rel] !== undefined) assert.ok(loc <= recorded[rel], `${rel} raised to ${loc}`);
+  }
+});
+
+test('unrecordedFiles names the measured files with no row, sorted', () => {
+  assert.deepEqual(unrecordedFiles({ 'b.rs': 1, 'gone.rs': 2 }, { 'c.rs': 1, 'b.rs': 1, 'a.rs': 1 }), ['a.rs', 'c.rs']);
+  assert.deepEqual(unrecordedFiles({ 'a.rs': 1 }, { 'a.rs': 9 }), []);
+});
+
+// [#576 RV10a-2] Recording a NEW file at/above its warn line would grandfather the
+// file check mode refuses ("new file at/above warn", "exceeds the hard budget").
+test('REGRESSION: tightenRows never records a NEW file at/above its warn line', () => {
+  const measured = { 'big_new.rs': WARN_LOC, 'huge_new.rs': FAIL_LOC + 100, 'tiny_new.rs': 50, 'frozen.rs': 1650 };
+  const recorded = { 'frozen.rs': 1600 };
+  // frozen.rs has a row, so it keeps it (never raised); only tiny_new.rs is added.
+  assert.deepEqual(tightenRows(recorded, measured), { 'frozen.rs': 1600, 'tiny_new.rs': 50 });
+  const tests = { 'big_tests.rs': TEST_WARN_LOC, 'small_tests.rs': TEST_WARN_LOC - 1 };
+  assert.deepEqual(tightenRows({}, tests, TEST_LIMITS), { 'small_tests.rs': TEST_WARN_LOC - 1 });
+});
+
+// A copy of the script in a throwaway tree resolves REPO_ROOT to that tree, so the
+// CLI runs end to end against a fixture baseline.
+function sizeGateFixture() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-size-tighten-'));
+  fs.mkdirSync(path.join(base, 'scripts'));
+  fs.mkdirSync(path.join(base, 'src-tauri', 'src'), { recursive: true });
+  fs.copyFileSync(new URL('./check-rust-file-size.mjs', import.meta.url), path.join(base, 'scripts', 'check-rust-file-size.mjs'));
+  const rs = (name, n) =>
+    fs.writeFileSync(path.join(base, 'src-tauri', 'src', name), Array.from({ length: n }, (_, i) => `pub fn f${i}() {}\n`).join(''));
+  rs('lib.rs', 10);
+  rs('small.rs', 200);
+  rs('big_new.rs', 1700);
+  rs('huge_new.rs', 2100);
+  rs('tiny_new.rs', 50);
+  const baseline = path.join(base, 'src-tauri', 'file-size-baseline.json');
+  fs.writeFileSync(
+    baseline,
+    JSON.stringify({
+      warn_loc: WARN_LOC, fail_loc: FAIL_LOC, test_warn_loc: TEST_WARN_LOC, test_fail_loc: TEST_FAIL_LOC,
+      files: { 'src-tauri/src/lib.rs': 10, 'src-tauri/src/small.rs': 300 },
+      test_files: {},
+    }, null, 2),
+  );
+  const run = (...args) =>
+    spawnSync(process.execPath, [path.join(base, 'scripts', 'check-rust-file-size.mjs'), ...args], { encoding: 'utf8' });
+  return { base, baseline, run };
+}
+
+test('REGRESSION: --tighten refuses a NEW file at/above warn with the split instruction and writes nothing', () => {
+  const { base, baseline, run } = sizeGateFixture();
+  try {
+    const before = fs.readFileSync(baseline, 'utf8');
+    const r = run('--tighten');
+    assert.equal(r.status, 1, `--tighten must fail, got ${r.status}\n${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /big_new\.rs: new production file at 1700 LOC \(>= warn 1500\).*Split it/);
+    assert.match(r.stderr, /huge_new\.rs: 2100 LOC exceeds the hard 2000-LOC budget.*Split it/);
+    assert.doesNotMatch(r.stderr, /tiny_new\.rs/);
+    assert.equal(fs.readFileSync(baseline, 'utf8'), before, 'a refused --tighten must not write the baseline');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('REGRESSION: check mode tells only the files --tighten will record to run it', () => {
+  const { base, run } = sizeGateFixture();
+  try {
+    const r = run();
+    assert.equal(r.status, 1, 'the two new files at/above warn are check-mode errors');
+    const note = r.stderr.split('\n').find((l) => l.includes('have no row')) ?? '';
+    assert.match(note, /1 measured file\(s\) have no row \(src-tauri\/src\/tiny_new\.rs\); run --tighten/);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 });
 
 // --- report ------------------------------------------------------------------

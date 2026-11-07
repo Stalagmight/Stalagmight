@@ -6,38 +6,14 @@ import {
   deriveDmpTiming,
   rerankSuggestionsByTemporalPlan,
 } from '../dmpTemporalRerank';
+import { makeDmpSection, makeDmpShot } from '../../test/factories/dmp';
 
 function makeShot(length: number, hour: number, minute: number, second = 0): DmpShot {
-  return {
-    shot_type: 'Standard',
-    heading_in: 90,
-    heading_out: 90,
-    length,
-    depth_in: 0,
-    depth_out: 0,
-    pitch_in: 0,
-    pitch_out: 0,
-    left: 0,
-    right: 0,
-    up: 0,
-    down: 0,
-    temperature: 0,
-    hour,
-    minute,
-    second,
-    marker_index: 0,
-  };
+  return makeDmpShot({ heading_in: 90, heading_out: 90, length, hour, minute, second });
 }
 
 function makeSection(name: string, date: string, shots: DmpShot[]): DmpSection {
-  return {
-    version: 5,
-    name,
-    direction: 'in',
-    date,
-    shots,
-    content_hash: name,
-  };
+  return makeDmpSection({ version: 5, name, date, shots, content_hash: name });
 }
 
 function suggestion(overrides: Partial<CrossSectionSuggestion>): CrossSectionSuggestion {

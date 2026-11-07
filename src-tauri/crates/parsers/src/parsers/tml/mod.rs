@@ -17,7 +17,8 @@ use ts_rs::TS;
 
 use crate::models::config::DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD;
 use crate::models::shot::implied_pitch_deg;
-use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
+use crate::models::{ImportClosure, ImportSectionConfig, ShotData, ShotKind};
+use crate::parsers::station_graph::{topological_sort_configs, ConfigOrder};
 
 use azimuth::tml_azimuth_reference;
 use import_options::{build_selection_index, determine_placement, PlacementInput};
@@ -27,11 +28,21 @@ mod azimuth;
 mod decode;
 mod import_options;
 mod linearize;
+pub mod schema;
+
+use schema::element as el;
+pub use schema::inclination_to_pitch;
 // `test-support` (never on in production builds) keeps these fixture builders
 // compiled for the root crate's tests, which can no longer see a dependency's
 // `#[cfg(test)]` items now that the parsers live in their own crate.
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_helpers;
+#[cfg(test)]
+#[expect(clippy::print_stdout)]
+mod undated_date_rv4_tests;
+
+#[cfg(test)]
+mod mock_narrowing_tests;
 
 use linearize::{
     collapsed_trip_report, join_contiguous_chains, linearize_section, split_runs_at_trip_boundaries,
@@ -69,12 +80,18 @@ pub struct TmlFile {
     ///
     /// `convert_tml_to_import_configs` copies it verbatim into the import
     /// warnings, which reach the receipt on the import-wizard path. The
-    /// SpeleoDB adoption path in `core::state::speleodb_pull` calls the same
+    /// SpeleoDB adoption path in `core::state::speleodb_adopt` calls the same
     /// converter but discards its warnings, so this one is invisible there too -
     /// a pre-existing gap, not one this field introduces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub encoding_warning: Option<String>,
+    /// Set when the file's "same as previous" `DepthIn` marker was written scaled
+    /// from feet and read as the marker (`restore_scaled_depth_in_marker`), so the
+    /// import receipt can say so (#576 HFI-1-D2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub scaled_depth_in_marker: Option<TmlScaledDepthInMarker>,
     pub geo_coding: Option<TmlGeoCoding>,
     pub sections: Vec<TmlSection>,
     pub closures: Vec<TmlClosure>,
@@ -102,6 +119,18 @@ impl TmlParseAnomalies {
     fn any(self) -> bool {
         self != Self::default()
     }
+}
+
+/// [#576 HFI-1-D2] A "same as previous" `DepthIn` marker the parser read from
+/// its feet-to-metre scaled spelling ([`schema::DEPTH_IN_SAME_AS_PREVIOUS_SCALED`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../bindings/")]
+pub struct TmlScaledDepthInMarker {
+    /// Each spelling the file used (`-0.3`, ...), once, in file order. From the
+    /// fixed spelling list, never file text.
+    pub written_as: Vec<String>,
+    /// Shots whose `DepthIn` was read as the marker.
+    pub shots: u32,
 }
 
 /// Measurement unit in the TML file.
@@ -133,8 +162,10 @@ pub struct TmlSection {
     pub color: String,
     pub is_branch_split: bool,
     /// Ariane ID of the first shot's FromID (for topology linking).
+    #[ts(type = "number")]
     pub start_ariane_id: i64,
     /// Ariane ID of the last shot in this section.
+    #[ts(type = "number")]
     pub end_ariane_id: i64,
     /// Cumulative depth of the parent shot (from_id target) for correct rebasing
     /// when a section branches mid-chain. 0.0 if the section starts from a
@@ -146,6 +177,7 @@ pub struct TmlSection {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct TmlShot {
+    #[ts(type = "number")]
     pub id: i64,
     /// Ariane's own `<UUID>`/`<UU>` for this row, verbatim - `None` when the
     /// element is absent or empty. Carried into [`crate::models::ShotData::uuid`]
@@ -155,6 +187,7 @@ pub struct TmlShot {
     #[serde(default)]
     #[ts(optional)]
     pub uuid: Option<String>,
+    #[ts(type = "number")]
     pub from_id: i64,
     pub shot_type: TmlShotType,
     pub azimuth: f64,
@@ -174,6 +207,7 @@ pub struct TmlShot {
     pub excluded: bool,
     pub latitude: f64,
     pub longitude: f64,
+    #[ts(type = "number")]
     pub closure_to_id: i64,
     pub section: String,
 }
@@ -244,37 +278,39 @@ struct RawShot {
 
 /// Normalize an XML element name to a canonical key. Byte-slice form used by
 /// the hot XML loop so we don't have to allocate a `String` from the quick-xml
-/// element name on every Start/End/Empty event.
+/// element name on every Start/End/Empty event. The names come from
+/// [`schema::element`], the one table the exporter writes from too.
 fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
     match name {
-        b"ID" | b"Id" => Some("id"),
+        el::id::LONG | schema::ID_LEGACY_SPELLING => Some("id"),
         // Ariane 26+ writes a stable per-row id here and preserves it across
         // edits; we read it so a file that leaves Ariane and comes back keeps
         // its shot identity instead of getting a fresh mint (#423).
-        b"UUID" | b"UU" => Some("uuid"),
-        b"FromID" | b"FRID" => Some("from_id"),
-        b"ClosureToID" | b"CID" => Some("closure_to_id"),
-        b"Type" | b"TY" => Some("type"),
-        b"Section" | b"SC" => Some("section"),
-        b"Azimut" | b"AZ" => Some("azimuth"),
-        b"Length" | b"LG" => Some("length"),
-        b"Depth" | b"DP" => Some("depth"),
-        b"DepthIn" | b"DPI" => Some("depth_in"),
-        b"Inclination" | b"INC" => Some("inclination"),
-        b"Left" | b"L" => Some("left"),
-        b"Right" | b"R" => Some("right"),
-        b"Up" | b"U" => Some("up"),
-        b"Down" | b"D" => Some("down"),
-        b"Comment" | b"CM" => Some("comment"),
-        b"Explorer" | b"EX" => Some("explorer"),
-        b"Date" | b"DT" => Some("date"),
-        b"Color" | b"CL" => Some("color"),
-        b"Excluded" | b"EXC" => Some("excluded"),
-        b"Latitude" | b"LT" => Some("latitude"),
-        b"Longitude" | b"LGT" => Some("longitude"),
+        el::uuid::LONG | el::uuid::SHORT => Some("uuid"),
+        el::from_id::LONG | el::from_id::SHORT => Some("from_id"),
+        el::closure_to_id::LONG | el::closure_to_id::SHORT => Some("closure_to_id"),
+        el::shot_type::LONG | el::shot_type::SHORT => Some("type"),
+        el::section::LONG | el::section::SHORT => Some("section"),
+        el::azimuth::LONG | el::azimuth::SHORT => Some("azimuth"),
+        el::length::LONG | el::length::SHORT => Some("length"),
+        el::depth::LONG | el::depth::SHORT => Some("depth"),
+        el::depth_in::LONG | el::depth_in::SHORT => Some("depth_in"),
+        el::inclination::LONG | el::inclination::SHORT => Some("inclination"),
+        el::left::LONG | el::left::SHORT => Some("left"),
+        el::right::LONG | el::right::SHORT => Some("right"),
+        el::up::LONG | el::up::SHORT => Some("up"),
+        el::down::LONG | el::down::SHORT => Some("down"),
+        el::comment::LONG | el::comment::SHORT => Some("comment"),
+        el::explorer::LONG | el::explorer::SHORT => Some("explorer"),
+        el::date::LONG | el::date::SHORT => Some("date"),
+        el::color::LONG | el::color::SHORT => Some("color"),
+        el::excluded::LONG | el::excluded::SHORT => Some("excluded"),
+        el::latitude::LONG | el::latitude::SHORT => Some("latitude"),
+        el::longitude::LONG | el::longitude::SHORT => Some("longitude"),
         // `Name`/`NM` is deliberately absent: Ariane uses it as a per-shot marker
         // ("START", "CLOSURE:CLOSURE", else ""), and import takes shot type from
-        // `Type`/`TY`, so nothing would read it.
+        // `Type`/`TY`, so nothing would read it. `Locked` and `Profiletype` are
+        // write-only for the same reason.
         _ => None,
     }
 }
@@ -329,13 +365,13 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                 let name_bytes = name_bytes.as_ref();
 
                 match name_bytes {
-                    b"CaveFile" => in_cave_file = true,
-                    b"Data" => in_data = true,
-                    b"SurveyData" | b"SRVD" => {
+                    el::cave_file::LONG => in_cave_file = true,
+                    el::data::LONG => in_data = true,
+                    el::survey_data::LONG | el::survey_data::SHORT => {
                         in_shot = true;
                         current_fields.clear();
                     }
-                    b"Shape" | b"SH" => {
+                    el::shape::LONG | el::shape::SHORT => {
                         // Fast-forward past the Shape/SH subtree -
                         // quick-xml will scan its bytes without
                         // emitting events back to us.
@@ -377,7 +413,7 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                 let name_bytes = name_bytes.as_ref();
 
                 match name_bytes {
-                    b"SurveyData" | b"SRVD" => {
+                    el::survey_data::LONG | el::survey_data::SHORT => {
                         if in_shot {
                             // Counted as a missing ID because that is
                             // `build_raw_shot`'s ONLY fallible path today (the
@@ -398,8 +434,8 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                             in_shot = false;
                         }
                     }
-                    b"Data" => in_data = false,
-                    b"CaveFile" => in_cave_file = false,
+                    el::data::LONG => in_data = false,
+                    el::cave_file::LONG => in_cave_file = false,
                     _ => {
                         current_element_key = None;
                         current_element_raw.clear();
@@ -420,12 +456,12 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                     let text = e.unescape().unwrap_or_default().trim().to_string();
                     if !text.is_empty() {
                         match current_element_raw.as_slice() {
-                            b"caveName" => metadata.cave_name = text,
-                            b"unit" => metadata.unit = text,
-                            b"useMagneticAzimuth" => {
+                            el::cave_name::LONG => metadata.cave_name = text,
+                            el::unit::LONG => metadata.unit = text,
+                            el::use_magnetic_azimuth::LONG => {
                                 metadata.use_magnetic_azimuth = text.eq_ignore_ascii_case("true");
                             }
-                            b"firstStartAbsoluteElevation" => {
+                            el::first_start_absolute_elevation::LONG => {
                                 // `"NaN"`, `"inf"` and `1e309` all parse
                                 // happily. This value is scaled by the unit
                                 // conversion and handed out on `TmlFile` and
@@ -512,12 +548,7 @@ const MAX_FOREIGN_UUID_LEN: usize = 128;
 ///   SQLite TEXT read-back - which would make the saved and the reloaded
 ///   identity differ with nothing to show for it.
 fn is_unexportable_in_xml(c: char) -> bool {
-    let in_xml_char_set = matches!(c,
-        '\u{9}' | '\u{A}' | '\u{D}'
-        | '\u{20}'..='\u{D7FF}'
-        | '\u{E000}'..='\u{FFFD}'
-        | '\u{10000}'..='\u{10FFFF}');
-    !in_xml_char_set || c.is_control()
+    !schema::is_xml_char(c) || c.is_control()
 }
 
 /// The file's `<UUID>`/`<UU>` as an identity we are willing to store, or `None`
@@ -583,7 +614,9 @@ const EXPLORER_SURVEYOR_SEPARATOR: &str = " / ";
 /// throwing the whole field away (#427). Case-insensitive: the placeholder is
 /// a word this format writes, not a value, and `Unknown` is the same word.
 fn is_explorer_placeholder(value: &str) -> bool {
-    value.is_empty() || value.eq_ignore_ascii_case("None") || value.eq_ignore_ascii_case("unknown")
+    value.is_empty()
+        || value.eq_ignore_ascii_case("None")
+        || value.eq_ignore_ascii_case(schema::EXPLORER_PLACEHOLDER)
 }
 
 /// The text of `<tag>…</tag>` inside an already-unescaped field value, with the
@@ -663,6 +696,27 @@ fn parse_explorer_field(raw: &str) -> Option<String> {
     }
 }
 
+/// The row's survey date, strictly `%Y-%m-%d`.
+///
+/// [`schema::UNDATED_PLACEHOLDER`] is "no date" (#576 B2): our exporter writes
+/// it for a section with none, and reading it as 1 January 2000 fabricated a
+/// date AND derived a declination for it. Every 2000-01-01 reads as undated,
+/// whether or not our [`schema::UNDATED_MARKER`] comment follows it: Ariane
+/// drops the comment when it re-saves a file, exports from before the marker
+/// never had it, and the SpeleoDB sidecar never writes it. A survey genuinely
+/// dated 1 January 2000 therefore imports undated, the accepted cost of not
+/// rotating every re-imported placeholder (B2-MARKER).
+///
+/// The parsed date is compared, not the raw text: `%Y-%m-%d` also accepts an
+/// unpadded month or day, so "2000-1-1" from a tool that does not zero-pad
+/// is the placeholder too (#576 RV4-R-P1).
+fn shot_date(fields: &HashMap<&str, String>) -> Option<NaiveDate> {
+    let raw = fields.get("date")?;
+    let date = NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()?;
+    let placeholder = NaiveDate::parse_from_str(schema::UNDATED_PLACEHOLDER, "%Y-%m-%d").ok();
+    (Some(date) != placeholder).then_some(date)
+}
+
 /// Build a `RawShot` from parsed field map.
 fn build_raw_shot(
     fields: &HashMap<&str, String>,
@@ -675,10 +729,10 @@ fn build_raw_shot(
     // third-party tool need not: match every spelling before falling through to
     // the unknown-type path.
     let shot_type = match fields.get("type").map(String::as_str) {
-        Some(t) if t.eq_ignore_ascii_case("REAL") => TmlShotType::Real,
-        Some(t) if t.eq_ignore_ascii_case("VIRTUAL") => TmlShotType::Virtual,
-        Some(t) if t.eq_ignore_ascii_case("START") => TmlShotType::Start,
-        Some(t) if t.eq_ignore_ascii_case("CLOSURE") => TmlShotType::Closure,
+        Some(t) if t.eq_ignore_ascii_case(schema::TYPE_REAL) => TmlShotType::Real,
+        Some(t) if t.eq_ignore_ascii_case(schema::TYPE_VIRTUAL) => TmlShotType::Virtual,
+        Some(t) if t.eq_ignore_ascii_case(schema::TYPE_START) => TmlShotType::Start,
+        Some(t) if t.eq_ignore_ascii_case(schema::TYPE_CLOSURE) => TmlShotType::Closure,
         Some(other) => {
             tracing::warn!(shot_type = other, id, "Unknown shot type, treating as Real");
             anomalies.unknown_shot_types = anomalies.unknown_shot_types.saturating_add(1);
@@ -694,11 +748,9 @@ fn build_raw_shot(
             .unwrap_or_default(),
     );
 
-    let color = convert_ariane_color(fields.get("color").map(String::as_str));
+    let color = schema::color_from_ariane(fields.get("color").map(String::as_str));
 
-    let date = fields
-        .get("date")
-        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+    let date = shot_date(fields);
 
     let comment = fields
         .get("comment")
@@ -718,7 +770,7 @@ fn build_raw_shot(
         azimuth: parse_f64(fields, "azimuth"),
         length: parse_f64(fields, "length"),
         depth: parse_f64(fields, "depth"),
-        depth_in: parse_f64_default(fields, "depth_in", -1.0),
+        depth_in: parse_f64_default(fields, "depth_in", schema::DEPTH_IN_SAME_AS_PREVIOUS),
         inclination: parse_f64(fields, "inclination"),
         left: parse_f64(fields, "left"),
         right: parse_f64(fields, "right"),
@@ -779,40 +831,6 @@ fn strip_section_description(section: &str) -> String {
     } else {
         section.to_string()
     }
-}
-
-// ============================================================================
-// Color conversion
-// ============================================================================
-
-/// Convert Ariane color `0xRRGGBBAA` → `#RRGGBB`. Falls back to default teal.
-fn convert_ariane_color(color_str: Option<&str>) -> String {
-    const DEFAULT_COLOR: &str = "#4ecdc4";
-
-    let Some(s) = color_str else {
-        return DEFAULT_COLOR.to_string();
-    };
-    let s = s.trim();
-    if s.is_empty() {
-        return DEFAULT_COLOR.to_string();
-    }
-
-    // Strip "0x" prefix
-    let hex = if let Some(stripped) = s.strip_prefix("0x") {
-        stripped
-    } else if let Some(stripped) = s.strip_prefix("0X") {
-        stripped
-    } else {
-        return DEFAULT_COLOR.to_string();
-    };
-
-    // Expect 8 hex chars (RRGGBBAA)
-    if hex.len() != 8 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return DEFAULT_COLOR.to_string();
-    }
-
-    // Take first 6 chars (RRGGBB), skip alpha
-    format!("#{}", &hex[..6])
 }
 
 // ============================================================================
@@ -1100,7 +1118,7 @@ fn apply_unit_conversion(
         for shot in &mut section.shots {
             shot.length *= FEET_TO_METERS;
             shot.depth *= FEET_TO_METERS;
-            if shot.depth_in != -1.0 {
+            if !schema::is_depth_in_sentinel(shot.depth_in) {
                 shot.depth_in *= FEET_TO_METERS;
             }
             shot.left *= FEET_TO_METERS;
@@ -1109,6 +1127,59 @@ fn apply_unit_conversion(
             shot.down *= FEET_TO_METERS;
         }
     }
+}
+
+/// [#576 HFI-1] Read the "same as previous" `DepthIn` marker in a METRIC file
+/// whose marker went through a feet-to-metre conversion: -1.0 ft written in
+/// metres ([`schema::DEPTH_IN_SAME_AS_PREVIOUS_SCALED`], `-0.3` as Ariane writes
+/// it) instead of `-1.0`. Read literally, every such shot started 0.3 m above the
+/// datum. Rewritten to the canonical marker in place, so every reader downstream
+/// (`resolve_tml_depth_in`, the linearizer) sees the file's intent.
+///
+/// Per FILE, never per value, because -0.3 m is also a legal start depth: the
+/// marker is written on nearly every shot of an Ariane file, so the scaled
+/// spelling counts as the marker only when MORE THAN HALF of the file's shots
+/// carry it. A real start depth
+/// shared by half a survey's shots is not a survey - and if a flat stretch did
+/// sit there, "same as previous" would read the same depth back. A feet file is
+/// left alone: its marker is `-1.0`, and its -0.3 is -0.3 ft.
+///
+/// Returns what it read, for the import receipt (#576 HFI-1-D2).
+fn restore_scaled_depth_in_marker(
+    sections: &mut [TmlSection],
+    unit: TmlUnit,
+) -> Option<TmlScaledDepthInMarker> {
+    if unit != TmlUnit::Metric {
+        return None;
+    }
+    let total: usize = sections.iter().map(|s| s.shots.len()).sum();
+    let scaled = sections
+        .iter()
+        .flat_map(|s| &s.shots)
+        .filter(|shot| schema::is_scaled_depth_in_sentinel(shot.depth_in))
+        .count();
+    if scaled * 2 <= total {
+        return None;
+    }
+    let mut written_as: Vec<String> = Vec::new();
+    for shot in sections.iter_mut().flat_map(|s| &mut s.shots) {
+        if let Some(spelling) = schema::scaled_depth_in_spelling(shot.depth_in) {
+            let spelling = spelling.to_string();
+            if !written_as.contains(&spelling) {
+                written_as.push(spelling);
+            }
+            shot.depth_in = schema::DEPTH_IN_SAME_AS_PREVIOUS;
+        }
+    }
+    tracing::info!(
+        shots = scaled,
+        total,
+        "TML: DepthIn marker written as -1 ft in metres; read as same-as-previous"
+    );
+    Some(TmlScaledDepthInMarker {
+        written_as,
+        shots: u32::try_from(scaled).unwrap_or(u32::MAX),
+    })
 }
 
 // ============================================================================
@@ -1138,6 +1209,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
     anomalies.duplicate_shot_ids = count_duplicate_shot_ids(&raw_shots);
 
     let (mut sections, closures) = build_sections(raw_shots);
+    let scaled_depth_in_marker = restore_scaled_depth_in_marker(&mut sections, unit);
 
     // Apply unit conversion before returning
     let mut first_start_absolute_elevation = metadata.first_start_absolute_elevation;
@@ -1170,6 +1242,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
         unrecognized_unit,
         parse_anomalies: anomalies.any().then_some(anomalies),
         encoding_warning,
+        scaled_depth_in_marker,
         geo_coding,
         sections,
         closures,
@@ -1345,6 +1418,15 @@ pub fn convert_tml_with_options(
         push_parse_anomaly_warnings(anomalies, &mut warnings);
     }
 
+    if let Some(marker) = &tml.scaled_depth_in_marker {
+        warnings.push(format!(
+            "Read the depth marker written as {} (a scaled -1) as same as previous on {} shot{}.",
+            marker.written_as.join(" or "),
+            marker.shots,
+            plural_s(marker.shots)
+        ));
+    }
+
     // What the per-trip section cut could not express (#427).
     if let Some(note) = collapsed_trip_report(&tml.sections, include_excluded) {
         warnings.push(note);
@@ -1401,7 +1483,7 @@ pub fn convert_tml_with_options(
             let eff = section
                 .shots
                 .iter()
-                .find(|s| s.shot_type != TmlShotType::Closure && !s.excluded)
+                .find(|s| survives_import(s, false))
                 .map(|s| s.from_id);
             // Only use as fallback if different from start_ariane_id
             eff.filter(|&id| id != section.start_ariane_id)
@@ -1429,6 +1511,8 @@ pub fn convert_tml_with_options(
                 // never built.
                 is_root: configs.is_empty(),
                 root_placement: opts.root_placement,
+                include_excluded,
+                azimuth_reference,
             },
         )
         .map_err(|e| anyhow!("{e}"))?;
@@ -1512,7 +1596,7 @@ pub fn convert_tml_with_options(
     // FromImporting placement is created before its dependent. This handles
     // forward references that arise when excluded-shot filtering changes
     // which section a given section attaches to.
-    topological_sort_configs(&mut configs);
+    topological_sort_configs(&mut configs, ConfigOrder::KeepValid);
 
     // Ariane IDs that name an ENTRANCE (a START shot): they are some section's
     // parent but are no shot in the file, because START shots carry no
@@ -1709,97 +1793,6 @@ fn simplify_lone_branch_names(configs: &mut [ImportSectionConfig]) {
     }
 }
 
-/// Topologically sort import configs so that FromImporting targets come first.
-///
-/// Uses Kahn's algorithm. Configs with no FromImporting dependency (Origin,
-/// ZeroDatum, etc.) come first, then configs whose targets have already been
-/// placed, and so on. Cycles (which shouldn't happen in valid survey data)
-/// are broken by appending remaining configs in their original order.
-fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
-    if configs.len() <= 1 {
-        return;
-    }
-
-    // Build index mapping: section_index → position in configs vec
-    let pos_of: HashMap<u32, usize> = configs
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.section_index, i))
-        .collect();
-
-    // Build dependency: for each config, which config position must come first?
-    // dep[i] = Some(j) means configs[i] depends on configs[j].
-    let dep: Vec<Option<usize>> = configs
-        .iter()
-        .map(|c| {
-            if let ImportPlacement::FromImporting {
-                target_section_index,
-                ..
-            } = &c.placement
-            {
-                pos_of.get(target_section_index).copied()
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // Check if already in valid order (common case - skip reallocation)
-    let already_sorted = dep.iter().enumerate().all(|(i, d)| match d {
-        Some(j) => *j < i,
-        None => true,
-    });
-    if already_sorted {
-        return;
-    }
-
-    // Kahn's algorithm
-    let n = configs.len();
-    let mut in_degree = vec![0u32; n];
-    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (i, d) in dep.iter().enumerate() {
-        if let Some(j) = d {
-            in_degree[i] += 1;
-            dependents[*j].push(i);
-        }
-    }
-
-    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
-    for (i, &deg) in in_degree.iter().enumerate() {
-        if deg == 0 {
-            queue.push_back(i);
-        }
-    }
-
-    let mut order: Vec<usize> = Vec::with_capacity(n);
-    while let Some(i) = queue.pop_front() {
-        order.push(i);
-        for &dep_i in &dependents[i] {
-            in_degree[dep_i] -= 1;
-            if in_degree[dep_i] == 0 {
-                queue.push_back(dep_i);
-            }
-        }
-    }
-
-    // Append any remaining (cycle - shouldn't happen, but be safe)
-    if order.len() < n {
-        for i in 0..n {
-            if !order.contains(&i) {
-                order.push(i);
-            }
-        }
-    }
-
-    // Reorder configs
-    let mut old_configs: Vec<Option<ImportSectionConfig>> =
-        std::mem::take(configs).into_iter().map(Some).collect();
-    *configs = order
-        .into_iter()
-        .filter_map(|i| old_configs[i].take())
-        .collect();
-}
-
 /// Resolve a TML shot's entry depth, handling the `-1.0` "same as previous" sentinel.
 ///
 /// `prev_depth` is the previous real shot's cumulative depth (`None` for the first
@@ -1813,39 +1806,10 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 /// `-1.0` measured here would misread every ordinary Ariane file, where the
 /// sentinel is spelled out on nearly every shot.
 fn resolve_tml_depth_in(shot: &TmlShot, prev_depth: Option<f64>, start_depth: f64) -> f64 {
-    if shot.depth_in != -1.0 {
-        shot.depth_in
-    } else {
+    if schema::is_depth_in_sentinel(shot.depth_in) {
         prev_depth.unwrap_or(start_depth)
-    }
-}
-
-/// Convert Ariane's `<Inclination>` into a model pitch.
-///
-/// Ariane is taken to be +up, like every other survey format we read: Walls and
-/// Compass both store +up in-file, and the mNemo device reports +up. The model
-/// is +down (positive descends, matching `depth_in` / `depth_out`), so the sign
-/// flips here.
-///
-/// This could not be confirmed against data. Across every Ariane file available,
-/// all 5,686 shots carry `Inclination` 0 (these are depth-gauge surveys and
-/// Ariane does not populate the field), so the flip is an inference from the
-/// surrounding ecosystem rather than a measurement, and on real files it is a
-/// no-op. `0` maps to a plain `0.0`, never `-0.0`, so a round-trip through
-/// Ariane does not show up as a phantom edit. Inverse of
-/// `export::tml::pitch_to_inclination`.
-///
-/// Applied to every `.tml` regardless of who wrote it, deliberately: export
-/// writes the same convention, so a file Stalagmight produces re-imports
-/// correctly as though Ariane had written it. A standalone `.tml` from a
-/// pre-#296 build holds raw +down pitch here and so imports inverted, with no
-/// migration to repair it; that is accepted rather than sniffed for, since real
-/// Ariane files carry `Inclination` 0. See `docs/inclination.md`.
-pub fn inclination_to_pitch(inclination: f64) -> f64 {
-    if inclination == 0.0 {
-        0.0
     } else {
-        -inclination
+        shot.depth_in
     }
 }
 
@@ -1853,7 +1817,7 @@ pub fn inclination_to_pitch(inclination: f64) -> f64 {
 /// "not recorded" exactly when reading it as `Some(0.0)` would fabricate an
 /// `INCLINATION_DEPTH_MISMATCH` warning.
 ///
-/// `export::tml::pitch_to_inclination` collapses both `None` (never measured)
+/// `schema::pitch_to_inclination` collapses both `None` (never measured)
 /// and `Some(0.0)` (genuinely level) to the same wire `0.0`, so import cannot
 /// tell them apart from the inclination field alone (#482). Gate on the real
 /// condition instead of a proxy: compute what the shot's own geometry implies
@@ -1951,6 +1915,22 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     }
 }
 
+/// Whether the import builds `shot` - THE rule, used everywhere the importer
+/// decides which rows become shots (#576 E17). CLOSURE rows never do: they are
+/// loop-closure markers, not survey measurements, whatever tape reading they
+/// carry (our own exporter gives them the vertical gap between the two nodes
+/// they tie), and their topology is captured separately. Excluded rows do only
+/// when the user ticks "include excluded shots".
+///
+/// The import dialog's preview applies the same rule in TypeScript
+/// (`survivesImport`, src/utils/tmlImportStats.ts) so it can recompute on every
+/// toggle without a round trip; the two are pinned by the same truth table,
+/// here (`survives_import_truth_table`) and in
+/// src/utils/__tests__/tmlImportStats.test.ts.
+pub(crate) fn survives_import(shot: &TmlShot, include_excluded: bool) -> bool {
+    shot.shot_type != TmlShotType::Closure && (include_excluded || !shot.excluded)
+}
+
 /// Convert TML shots to `ShotData` for import.
 ///
 /// Depth handling: Ariane `DP` is absolute station depth (depth gauge reading).
@@ -1966,20 +1946,25 @@ fn convert_shots_to_shot_data(
         return Vec::new();
     }
 
-    // Filter out CLOSURE shots - they are loop-closure markers, not real survey
-    // measurements, whatever tape reading they carry (our own exporter gives them
-    // the vertical gap between the two nodes they tie, so `Length` is only zero on
-    // a loop that closes perfectly). Their topology is captured in TmlClosure.
-    // Also filter out excluded shots unless explicitly included.
     let real_shots: Vec<&TmlShot> = shots
         .iter()
-        .filter(|s| s.shot_type != TmlShotType::Closure)
-        .filter(|s| include_excluded || !s.excluded)
+        .filter(|s| survives_import(s, include_excluded))
         .collect();
 
     if real_shots.is_empty() {
         return Vec::new();
     }
+
+    // Dropped leading shots move where the first kept one starts: to the end
+    // of the last of them, where `import_options::dropped_lead_offset` carries
+    // the datum. Its "same as previous" `DepthIn` is THAT depth, not the
+    // parent's start depth (#576 NF-TML-2). A CLOSURE row is no leg.
+    let dropped_lead_end_depth = shots
+        .iter()
+        .take_while(|s| !survives_import(s, include_excluded))
+        .filter(|s| s.shot_type != TmlShotType::Closure)
+        .last()
+        .map(|s| s.depth);
 
     let mut result = Vec::with_capacity(real_shots.len());
 
@@ -1987,7 +1972,7 @@ fn convert_shots_to_shot_data(
         let prev_depth = if i > 0 {
             Some(real_shots[i - 1].depth)
         } else {
-            None
+            dropped_lead_end_depth
         };
         let depth_in = resolve_tml_depth_in(shot, prev_depth, start_depth);
         result.push(normalize_tml_shot(shot, depth_in));
@@ -2005,12 +1990,121 @@ fn convert_shots_to_shot_data(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::print_stderr
+    clippy::print_stderr,
+    clippy::print_stdout
 )]
 mod tests {
     use super::linearize::{MAX_TRIP_CUTS_PER_FILE, MAX_TRIP_CUTS_PER_RUN};
     use super::test_helpers::*;
     use super::*;
+    use crate::models::test_support::require_env_file;
+    use crate::models::ImportPlacement;
+    use crate::parsers::station_graph::dependency_order;
+
+    /// #576 B2-MARKER: the placeholder 2000-01-01 reads as "no date" whether
+    /// or not our marker comment follows it - a file Ariane re-saved drops the
+    /// comment, an export from before the marker never had it, and the
+    /// SpeleoDB sidecar never writes it. The marker never erases any other
+    /// date, and any other comment changes nothing.
+    #[test]
+    fn the_placeholder_date_reads_as_undated_with_or_without_the_marker() {
+        // Every row hangs off the START, so no two sections chain end to start
+        // (#412 would sew same-trip neighbours into one).
+        let row = |id: i64, section: &str, date_and_comment: &str| {
+            tml_shot_xml(id, 0, "REAL", section)
+                .replace("<Date>2024-06-15</Date>", date_and_comment)
+        };
+        let marker = format!("<!--{}-->", schema::UNDATED_MARKER);
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                row(
+                    1,
+                    "Marked",
+                    &format!("<Date>2000-01-01</Date>\n    {marker}"),
+                ),
+                row(2, "Unmarked", "<Date>2000-01-01</Date>"),
+                row(3, "Real", &format!("<Date>2019-02-03</Date>{marker}")),
+                row(4, "Other", "<Date>2000-01-01</Date><!-- hand edited -->"),
+            ]
+            .join("\n"),
+        );
+
+        let tml = parse_synthetic_tmlu(&xml);
+        let date_of = |name: &str| {
+            tml.sections
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("no section {name}"))
+                .date
+        };
+        assert_eq!(date_of("Marked"), None);
+        assert_eq!(date_of("Unmarked"), None);
+        assert_eq!(date_of("Real"), NaiveDate::from_ymd_opt(2019, 2, 3));
+        assert_eq!(date_of("Other"), None);
+    }
+
+    /// The reader keys every per-shot element the exporter writes from the same
+    /// `schema::element` table, in BOTH spellings, onto the field it means
+    /// (#576 B4). The three elements the exporter writes for Ariane's sake and
+    /// the import has no use for map to nothing, explicitly.
+    #[test]
+    fn every_schema_shot_element_reads_back_as_its_field_in_both_spellings() {
+        let expected: &[(schema::ElementName, Option<&str>)] = &[
+            (el::azimuth::NAME, Some("azimuth")),
+            (el::closure_to_id::NAME, Some("closure_to_id")),
+            (el::color::NAME, Some("color")),
+            (el::comment::NAME, Some("comment")),
+            (el::date::NAME, Some("date")),
+            (el::depth::NAME, Some("depth")),
+            (el::depth_in::NAME, Some("depth_in")),
+            (el::down::NAME, Some("down")),
+            (el::excluded::NAME, Some("excluded")),
+            (el::explorer::NAME, Some("explorer")),
+            (el::from_id::NAME, Some("from_id")),
+            (el::id::NAME, Some("id")),
+            (el::inclination::NAME, Some("inclination")),
+            (el::latitude::NAME, Some("latitude")),
+            (el::left::NAME, Some("left")),
+            (el::length::NAME, Some("length")),
+            (el::locked::NAME, None),
+            (el::longitude::NAME, Some("longitude")),
+            (el::name::NAME, None),
+            (el::profiletype::NAME, None),
+            (el::right::NAME, Some("right")),
+            (el::section::NAME, Some("section")),
+            (el::shot_type::NAME, Some("type")),
+            (el::up::NAME, Some("up")),
+            (el::uuid::NAME, Some("uuid")),
+        ];
+        for (element, key) in expected {
+            for spelling in [element.long, element.short] {
+                assert_eq!(
+                    normalize_key_bytes(spelling.as_bytes()),
+                    *key,
+                    "<{spelling}> must read as {key:?}"
+                );
+            }
+        }
+        // Every per-shot element of the schema is accounted for above: the
+        // file-level ones and the skipped `Shape` are the only others.
+        let file_level = [
+            el::cave_file::NAME,
+            el::cave_name::NAME,
+            el::unit::NAME,
+            el::use_magnetic_azimuth::NAME,
+            el::first_start_absolute_elevation::NAME,
+            el::data::NAME,
+            el::survey_data::NAME,
+            el::shape::NAME,
+        ];
+        assert_eq!(
+            schema::element::ALL.len(),
+            expected.len() + file_level.len(),
+            "a new schema element needs a row in this table"
+        );
+        assert_eq!(normalize_key_bytes(b"Id"), Some("id"));
+    }
 
     /// A tiny NEGATIVE azimuth must normalise to `0.0`, not `360.0`.
     ///
@@ -2106,8 +2200,8 @@ mod tests {
 
     #[test]
     fn test_color_conversion_standard() {
-        assert_eq!(convert_ariane_color(Some("0x8f6112ff")), "#8f6112");
-        assert_eq!(convert_ariane_color(Some("0xFF0000FF")), "#FF0000");
+        assert_eq!(schema::color_from_ariane(Some("0x8f6112ff")), "#8f6112");
+        assert_eq!(schema::color_from_ariane(Some("0xFF0000FF")), "#FF0000");
     }
 
     #[test]
@@ -2151,11 +2245,11 @@ mod tests {
 
     #[test]
     fn test_color_conversion_fallback() {
-        assert_eq!(convert_ariane_color(None), "#4ecdc4");
-        assert_eq!(convert_ariane_color(Some("")), "#4ecdc4");
-        assert_eq!(convert_ariane_color(Some("invalid")), "#4ecdc4");
-        assert_eq!(convert_ariane_color(Some("0xZZZZZZZZ")), "#4ecdc4");
-        assert_eq!(convert_ariane_color(Some("0x123")), "#4ecdc4"); // too short
+        assert_eq!(schema::color_from_ariane(None), "#4ecdc4");
+        assert_eq!(schema::color_from_ariane(Some("")), "#4ecdc4");
+        assert_eq!(schema::color_from_ariane(Some("invalid")), "#4ecdc4");
+        assert_eq!(schema::color_from_ariane(Some("0xZZZZZZZZ")), "#4ecdc4");
+        assert_eq!(schema::color_from_ariane(Some("0x123")), "#4ecdc4"); // too short
     }
 
     // -------------------------------------------------------------------
@@ -2328,6 +2422,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding,
             sections,
             closures,
@@ -2944,6 +3039,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections: vec![TmlSection {
                 name: "Main".to_string(),
@@ -3735,6 +3831,124 @@ mod tests {
         );
     }
 
+    /// The `DepthIn` of each imported shot of `xml`'s first section.
+    fn imported_depth_ins(xml: &str) -> Vec<f64> {
+        let tml = parse_synthetic_tmlu(xml);
+        let section = &tml.sections[0];
+        convert_shots_to_shot_data(&section.shots, section.start_depth, false)
+            .iter()
+            .map(|s| s.depth_in)
+            .collect()
+    }
+
+    /// [#576 HFI-1] A METRIC file whose "same as previous" marker went through a
+    /// feet-to-metre conversion carries -1 ft written in metres: -0.3048, which
+    /// Ariane (two decimals, trailing zero trimmed) writes as `-0.3`, on nearly
+    /// every shot. Read literally, every one of those shots started 0.3 m above the
+    /// datum - impossible geometry the validator flagged without naming the cause.
+    /// Each spelling a conversion can leave (rounded or truncated to 1-4 decimals)
+    /// is the marker there.
+    #[test]
+    fn a_metric_marker_scaled_from_feet_still_means_same_as_previous() {
+        for marker in [-0.3, -0.304, -0.305, -0.3048] {
+            let xml = wrap_xml(
+                &[
+                    tml_shot_xml_depth(0, -1, "START", "Start", 0.0, marker),
+                    tml_shot_xml_depth(1, 0, "REAL", "A", 7.0, marker),
+                    tml_shot_xml_depth(2, 1, "REAL", "A", 9.0, marker),
+                    tml_shot_xml_depth(3, 2, "REAL", "A", 12.0, marker),
+                ]
+                .join("\n"),
+            );
+            let depth_ins = imported_depth_ins(&xml);
+            assert_eq!(depth_ins, [0.0, 7.0, 9.0], "marker spelled {marker}");
+        }
+    }
+
+    /// [#576 HFI-1] ...but only where it IS the file's marker. A real start depth
+    /// of -0.3 m (a station 0.3 m above the datum) on one shot of a file that
+    /// marks "same as previous" with -1.0 stays a measurement, and a feet file's
+    /// -0.3 is -0.3 ft.
+    #[test]
+    fn a_real_start_depth_that_spells_the_scaled_marker_stays_a_measurement() {
+        let rows = |unit: &str| {
+            wrap_xml_with(
+                unit,
+                100.0,
+                &[
+                    tml_shot_xml_depth(0, -1, "START", "Start", 0.0, -1.0),
+                    tml_shot_xml_depth(1, 0, "REAL", "A", -0.2, -1.0),
+                    tml_shot_xml_depth(2, 1, "REAL", "A", 2.0, -0.3),
+                    tml_shot_xml_depth(3, 2, "REAL", "A", 3.0, -1.0),
+                ]
+                .join("\n"),
+            )
+        };
+        let metric = imported_depth_ins(&rows("m"));
+        assert_eq!(metric, [0.0, -0.3, 2.0], "metric");
+        let feet = imported_depth_ins(&rows("ft"));
+        assert!(
+            (feet[1] - (-0.3 * FEET_TO_METERS)).abs() < 1e-9,
+            "feet: {feet:?}"
+        );
+
+        // A marker is on nearly every shot: on half of them, and no more, it is not.
+        let half = wrap_xml(
+            &[
+                tml_shot_xml_depth(0, -1, "START", "Start", 0.0, -1.0),
+                tml_shot_xml_depth(1, 0, "REAL", "A", 1.0, -0.3),
+                tml_shot_xml_depth(2, 1, "REAL", "A", 2.0, -1.0),
+            ]
+            .join("\n"),
+        );
+        assert_eq!(imported_depth_ins(&half), [-0.3, 1.0], "half the shots");
+    }
+
+    /// [#576 HFI-1-D2] Reading the scaled marker as "same as previous" is a
+    /// reinterpretation of the file, so the import receipt says so in one line,
+    /// naming the spelling and how many shots it was read on. A file whose marker
+    /// is the plain -1.0 (or that has no scaled spelling at all) gets no line.
+    #[test]
+    fn the_receipt_says_a_scaled_depth_marker_was_read_as_same_as_previous() {
+        let receipt = |rows: &[String]| {
+            let tml = parse_synthetic_tmlu(&wrap_xml(&rows.join("\n")));
+            let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+            warnings
+                .into_iter()
+                .filter(|w| w.contains("depth marker"))
+                .collect::<Vec<_>>()
+        };
+        // The START row opens the section; the three REAL rows are its shots.
+        let scaled = |marker: f64| {
+            vec![
+                tml_shot_xml_depth(0, -1, "START", "Start", 0.0, marker),
+                tml_shot_xml_depth(1, 0, "REAL", "A", 7.0, marker),
+                tml_shot_xml_depth(2, 1, "REAL", "A", 9.0, marker),
+                tml_shot_xml_depth(3, 2, "REAL", "A", 12.0, marker),
+            ]
+        };
+        let lines = receipt(&scaled(-0.3));
+        println!("HFI-1-D2 marker -0.3 on every shot: {lines:?}");
+        assert_eq!(
+            lines,
+            ["Read the depth marker written as -0.3 (a scaled -1) as same as previous on 3 shots."]
+        );
+        assert_eq!(
+            receipt(&scaled(-0.3048)),
+            ["Read the depth marker written as -0.3048 (a scaled -1) as same as previous on 3 shots."]
+        );
+        // Two spellings in one file: both named, in file order, in the one line.
+        let mut mixed = scaled(-0.305);
+        mixed[3] = tml_shot_xml_depth(3, 2, "REAL", "A", 12.0, -0.3);
+        assert_eq!(
+            receipt(&mixed),
+            ["Read the depth marker written as -0.305 or -0.3 (a scaled -1) as same as previous on 3 shots."]
+        );
+        let plain = receipt(&scaled(-1.0));
+        println!("HFI-1-D2 marker -1.0 on every shot: {plain:?}");
+        assert!(plain.is_empty(), "the plain marker is no news: {plain:?}");
+    }
+
     // -------------------------------------------------------------------
     // Multi-section topology
     // -------------------------------------------------------------------
@@ -3821,6 +4035,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections,
             closures,
@@ -4216,6 +4431,58 @@ mod tests {
         assert!((data[2].azimuth_in - 270.0).abs() < f64::EPSILON);
     }
 
+    /// #576 NF-TML-2: when leading excluded shots are dropped, the first
+    /// imported shot starts where they END - the station `dropped_lead_offset`
+    /// carries the datum to - so a "same as previous" `DepthIn` resolves to the
+    /// last dropped shot's depth, not the parent section's start depth. A
+    /// leading CLOSURE row is no leg and does not count.
+    #[test]
+    fn a_first_kept_shot_starts_at_the_depth_the_dropped_lead_ends() {
+        let shot = |id: i64, depth: f64, excluded: bool, shot_type: TmlShotType| TmlShot {
+            uuid: None,
+            id,
+            from_id: id - 1,
+            shot_type,
+            azimuth: 90.0,
+            length: 20.0,
+            depth,
+            depth_in: schema::DEPTH_IN_SAME_AS_PREVIOUS,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color: "#000000".to_string(),
+            excluded,
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            section: "Test".to_string(),
+        };
+        let shots = [
+            shot(1, 4.0, true, TmlShotType::Real),
+            shot(2, 9.0, true, TmlShotType::Real),
+            shot(3, 30.0, false, TmlShotType::Closure),
+            shot(4, 12.0, false, TmlShotType::Real),
+            shot(5, 15.0, false, TmlShotType::Real),
+        ];
+        let data = convert_shots_to_shot_data(&shots, 1.5, false);
+        let depths: Vec<(f64, f64)> = data.iter().map(|d| (d.depth_in, d.depth_out)).collect();
+        eprintln!("dropped lead ends at 9.0, parent start 1.5: kept (in, out) = {depths:?}");
+        assert_eq!(depths, [(9.0, 12.0), (12.0, 15.0)]);
+
+        // Nothing dropped: the parent's start depth, as before.
+        let data = convert_shots_to_shot_data(&shots[3..], 1.5, false);
+        assert!((data[0].depth_in - 1.5).abs() < f64::EPSILON);
+        // Kept with include_excluded: every shot chains from the one before.
+        let data = convert_shots_to_shot_data(&shots, 1.5, true);
+        assert!((data[0].depth_in - 1.5).abs() < f64::EPSILON);
+        assert!((data[2].depth_in - 9.0).abs() < f64::EPSILON);
+    }
+
     #[test]
     fn test_all_excluded_section_dropped_from_configs() {
         // Section where every shot is excluded → should be dropped entirely
@@ -4252,6 +4519,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -4328,6 +4596,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -4423,6 +4692,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -4508,6 +4778,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections: vec![
                 // Section A (index 0): shots 1,2
@@ -4678,6 +4949,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections,
             closures,
@@ -4709,29 +4981,22 @@ mod tests {
         }
     }
 
-    /// End-to-end coordinate verification: parse a real TML file, import all
-    /// sections into a Project, compute station coordinates, and compare
-    /// against independently calculated expected values.
+    /// End-to-end coordinate verification on a real TML file: parse it, import
+    /// all sections into a Project, then check every station against an
+    /// independent walk of its section's shots, and every merged pair for
+    /// co-location. The file is the caller's survey, never committed; it comes
+    /// from `TML_COORDS_PATH`, and a run without it fails naming the variable
+    /// (#576 NF-PRIVATE-PATHS, NF-W4M-4).
     ///
-    /// Run with:  TML_NAHARON_PATH=/path/to/ariane.tml cargo test --manifest-path src-tauri/Cargo.toml --lib parse_tml_naharon_coordinates -- --ignored
+    /// Run with:  TML_COORDS_PATH=/path/to/ariane.tml cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-parsers --lib a_real_tml_import_matches_an_independent_traversal -- --ignored
     #[test]
-    #[ignore]
-    fn parse_tml_naharon_coordinates() {
+    #[ignore = "needs a private Ariane .tml; set TML_COORDS_PATH"]
+    fn a_real_tml_import_matches_an_independent_traversal() {
         use crate::models::{ImportPlacement, Project, SectionData, StationRef};
 
-        let path_str = std::env::var("TML_NAHARON_PATH").unwrap_or_else(|_| {
-            "/home/user/tmp/467b76f1-5909-4e00-b96f-c30931ac81db/ariane.tml".into()
-        });
-        let path = Path::new(&path_str);
-        if !path.exists() {
-            eprintln!("Skipping: TML file not found at {path_str}");
-            return;
-        }
-
         // 1. Parse
-        let tml = parse_tml(path).expect("Failed to parse TML");
-        assert_eq!(tml.cave_name, "2025 Naharon Resurvey");
-        assert_eq!(tml.unit, TmlUnit::Metric);
+        let path = require_env_file("TML_COORDS_PATH");
+        let tml = parse_tml(&path).expect("Failed to parse TML");
 
         // 2. Convert to import configs (exclude excluded shots)
         let (configs, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
@@ -4765,9 +5030,7 @@ mod tests {
                     let offset_x = -current.x;
                     let offset_y = -current.y;
                     if offset_x.abs() > 1e-9 || offset_y.abs() > 1e-9 {
-                        project
-                            .section_offsets
-                            .insert(section_id, (offset_x, offset_y));
+                        project.set_section_offset(section_id, (offset_x, offset_y));
                     }
                 }
                 ImportPlacement::FromExisting { .. } => {
@@ -4836,114 +5099,7 @@ mod tests {
             }
         }
 
-        // 5. Verify absolute coordinates for selected stations against
-        //    independently computed values from the raw TML data.
-        //    These were calculated by traversing the shot graph from the START
-        //    station (ID=75) using: h = sqrt(length² - dz²), dx = h·sin(azi),
-        //    dy = h·cos(azi), with cumulative depth propagation.
-        //
-        //    Format: (section_name, station_index, expected_x, expected_y, expected_depth)
-        //    Coordinates are relative to the START station at (0, 0).
-        //    Since the import places the first section at Origin, all coords are
-        //    in that same frame (modulo ZeroDatum GPS offset which only shifts XY).
-
-        // Find the section containing the START station (first section, placed at origin
-        // or ZeroDatum). We compare coordinates RELATIVE to that origin.
-        // Get the offset applied by ZeroDatum so we can subtract it.
-        let first_section_id = *created_ids.get(&configs[0].section_index).unwrap();
-        let origin_offset = project
-            .section_offsets
-            .get(&first_section_id)
-            .copied()
-            .unwrap_or((0.0, 0.0));
-
-        // Helper: get absolute coords relative to START station
-        // Expected coordinates computed independently from raw TML data
-        // (Python traversal of shot graph from START station at origin)
-        struct Expected {
-            section: &'static str,
-            station: u32,
-            x: f64,
-            y: f64,
-            depth: f64,
-        }
-
-        let expectations = [
-            // Reel to Mainline Cx: station 0 = START at origin
-            Expected {
-                section: "Reel to Mainline Cx",
-                station: 0,
-                x: 0.0,
-                y: 0.0,
-                depth: 0.28,
-            },
-            // Reel to Mainline Cx: station 13 = end of shot 88
-            Expected {
-                section: "Reel to Mainline Cx",
-                station: 13,
-                x: -30.7455,
-                y: 69.9489,
-                depth: 11.06,
-            },
-            // Bypass south: station 11 = end of shot 68
-            Expected {
-                section: "Bypass south",
-                station: 11,
-                x: -21.7235,
-                y: 176.5525,
-                depth: 15.80,
-            },
-            // Haloline (branch 2): station 30 = end of shot 264
-            Expected {
-                section: "Haloline (branch 2)",
-                station: 30,
-                x: -58.9147,
-                y: 413.9500,
-                depth: 12.30,
-            },
-        ];
-
-        let tolerance = 0.05; // 5cm tolerance for absolute coordinates
-        for exp in &expectations {
-            // Section names in the import may differ slightly (our parser strips
-            // SectionDescription suffixes and may split at branches). Try to find
-            // the section; skip if the parser organized it differently.
-            let section_opt = project
-                .sections
-                .iter()
-                .find(|s| s.name.as_deref() == Some(exp.section));
-            let Some(section) = section_opt else {
-                eprintln!("  Skipping absolute check: section '{}' not found (parser may have renamed it)", exp.section);
-                continue;
-            };
-            if exp.station as usize > section.shots.len() {
-                eprintln!("  Skipping absolute check: section '{}' station {} out of range (has {} shots)",
-                    exp.section, exp.station, section.shots.len());
-                continue;
-            }
-            let c = project
-                .compute_station_raw_coords(StationRef::new(section.id, exp.station))
-                .unwrap_or_else(|| panic!("Coords for {}:{}", exp.section, exp.station));
-            let (rx, ry) = (c.x - origin_offset.0, c.y - origin_offset.1);
-
-            assert!(
-                (rx - exp.x).abs() < tolerance && (ry - exp.y).abs() < tolerance,
-                "Absolute coords mismatch for '{}' station {}: expected ({:.4}, {:.4}), got ({:.4}, {:.4}), delta=({:.4}, {:.4})",
-                exp.section, exp.station, exp.x, exp.y, rx, ry,
-                rx - exp.x, ry - exp.y,
-            );
-            // Depth check with wider tolerance (averaging can shift depth slightly)
-            assert!(
-                (c.z - exp.depth).abs() < 0.5,
-                "Depth mismatch for '{}' station {}: expected {:.4}, got {:.4}",
-                exp.section,
-                exp.station,
-                exp.depth,
-                c.z,
-            );
-        }
-
-        // 6. Verify all merged stations are co-located (XY within tolerance)
+        // 5. Verify all merged stations are co-located (XY within tolerance)
         //    This validates the full import + merge + offset pipeline.
         let merge_tolerance = 1e-6;
         for merge in &project.station_merges {
@@ -4971,13 +5127,11 @@ mod tests {
             );
         }
 
-        // 7. Verify closures were parsed
-        assert!(!closures.is_empty(), "Should have parsed loop closures");
-
         eprintln!(
-            "Naharon TML coordinate test passed: {} sections, {} merges, {} total stations verified",
+            "TML coordinate check passed: {} sections, {} merges, {} closures, {} total stations verified",
             project.sections.len(),
             project.station_merges.len(),
+            closures.len(),
             project.sections.iter().map(|s| s.shots.len() + 1).sum::<usize>(),
         );
     }
@@ -4999,6 +5153,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections: vec![TmlSection {
                 name: "S".to_string(),
@@ -6856,14 +7011,10 @@ mod tests {
     /// Run with:
     ///   TML_MEASURE_PATH=/path/to/file.tml cargo test measure_tml_fragmentation -- --ignored --nocapture
     #[test]
-    #[ignore]
+    #[ignore = "measurement harness for #412, not a check; set TML_MEASURE_PATH"]
     fn measure_tml_fragmentation() {
-        let Ok(path_str) = std::env::var("TML_MEASURE_PATH") else {
-            eprintln!("Skipping: TML_MEASURE_PATH not set");
-            return;
-        };
-        let path = Path::new(&path_str);
-        let tml = parse_tml(path).expect("parse");
+        let path = require_env_file("TML_MEASURE_PATH");
+        let tml = parse_tml(&path).expect("parse");
         let file_names: std::collections::BTreeSet<String> = tml
             .sections
             .iter()
@@ -6899,7 +7050,7 @@ mod tests {
         let tiny = sizes.iter().filter(|&&n| n <= 2).count();
         eprintln!(
             "FRAG {}: file_section_names={} configs={} closures={} warnings={} shots_min={} shots_median={} shots_max={} fragments_le2={}",
-            path_str,
+            path.display(),
             file_names.len(),
             configs.len(),
             closures.len(),
@@ -6909,5 +7060,127 @@ mod tests {
             sizes.last().copied().unwrap_or(0),
             tiny,
         );
+    }
+
+    /// The section order as it was computed before #576 B27(d): the cycle tail
+    /// found by `order.contains` for every index. Kept as the oracle for
+    /// [`dependency_order`].
+    fn dependency_order_by_contains(dep: &[Option<usize>]) -> Vec<usize> {
+        let n = dep.len();
+        let mut in_degree = vec![0u32; n];
+        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (i, d) in dep.iter().enumerate() {
+            if let Some(j) = d {
+                in_degree[i] += 1;
+                dependents[*j].push(i);
+            }
+        }
+        let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+        for (i, &deg) in in_degree.iter().enumerate() {
+            if deg == 0 {
+                queue.push_back(i);
+            }
+        }
+        let mut order: Vec<usize> = Vec::with_capacity(n);
+        while let Some(i) = queue.pop_front() {
+            order.push(i);
+            for &dep_i in &dependents[i] {
+                in_degree[dep_i] -= 1;
+                if in_degree[dep_i] == 0 {
+                    queue.push_back(dep_i);
+                }
+            }
+        }
+        if order.len() < n {
+            for i in 0..n {
+                if !order.contains(&i) {
+                    order.push(i);
+                }
+            }
+        }
+        order
+    }
+
+    /// Same order as the oracle on random dependency graphs, cycles included
+    /// (a crafted file's `FromImporting` targets can form one).
+    #[test]
+    fn dependency_order_matches_the_contains_scan() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut below = |bound: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % bound
+        };
+        let mut with_cycle = 0;
+        for case in 0..500 {
+            let n = 1 + below(80) as usize;
+            let dep: Vec<Option<usize>> = (0..n)
+                .map(|_| (below(3) > 0).then(|| below(n as u64) as usize))
+                .collect();
+            let fast = dependency_order(&dep);
+            let slow = dependency_order_by_contains(&dep);
+            assert_eq!(fast, slow, "case {case}: {dep:?}");
+            let mut sorted = fast.clone();
+            sorted.sort_unstable();
+            assert_eq!(sorted, (0..n).collect::<Vec<_>>(), "a permutation");
+            with_cycle += usize::from(dep.iter().enumerate().any(|(i, d)| *d == Some(i)));
+        }
+        assert!(with_cycle > 50, "{with_cycle}");
+    }
+
+    /// Timing probe, not a test: `cargo test -p stalagmight-parsers --lib
+    /// dependency_order_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing probe; run by hand"]
+    fn dependency_order_timing() {
+        for n in [10_000, 20_000, 40_000] {
+            // One cycle through every section: Kahn's queue never starts, so
+            // the whole order is the fallback tail.
+            let dep: Vec<Option<usize>> = (0..n).map(|i| Some((i + 1) % n)).collect();
+            let start = std::time::Instant::now();
+            let fast = dependency_order(&dep);
+            let fast_ms = start.elapsed().as_millis();
+            let start = std::time::Instant::now();
+            let slow = dependency_order_by_contains(&dep);
+            let slow_ms = start.elapsed().as_millis();
+            assert_eq!(fast, slow);
+            eprintln!("{n} sections on one cycle: bitmap {fast_ms} ms, contains scan {slow_ms} ms");
+        }
+    }
+
+    /// THE rule for which Ariane rows the import builds (#576 E17), as a truth
+    /// table: (type, excluded, include-excluded toggle) -> imported. The SAME
+    /// table pins the TypeScript mirror the import dialog previews with,
+    /// `survivesImport` in src/utils/__tests__/tmlImportStats.test.ts - change
+    /// one, change both.
+    #[test]
+    fn survives_import_truth_table() {
+        let table: &[(TmlShotType, bool, bool, bool)] = &[
+            (TmlShotType::Real, false, false, true),
+            (TmlShotType::Real, false, true, true),
+            (TmlShotType::Real, true, false, false),
+            (TmlShotType::Real, true, true, true),
+            (TmlShotType::Virtual, false, false, true),
+            (TmlShotType::Virtual, false, true, true),
+            (TmlShotType::Virtual, true, false, false),
+            (TmlShotType::Virtual, true, true, true),
+            (TmlShotType::Closure, false, false, false),
+            (TmlShotType::Closure, false, true, false),
+            (TmlShotType::Closure, true, false, false),
+            (TmlShotType::Closure, true, true, false),
+        ];
+        for &(shot_type, excluded, include_excluded, imported) in table {
+            let shot = TmlShot {
+                shot_type,
+                excluded,
+                ..sample_tml_shot()
+            };
+            assert_eq!(
+                survives_import(&shot, include_excluded),
+                imported,
+                "{shot_type:?} excluded={excluded} include_excluded={include_excluded}"
+            );
+        }
     }
 }

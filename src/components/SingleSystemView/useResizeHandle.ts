@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, type PointerEvent, type RefObject } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { useResizingFlag } from '../../hooks/useResizingFlag';
 import { clampRound } from '../../utils/clamp';
 
@@ -48,8 +49,7 @@ export function useResizeHandle({
   const movedRef = useRef(false);
   // Latest onResizeEnd, read by the unmount-cleanup effect without making it a
   // dependency (so the cleanup runs only on unmount, not on every prop change).
-  const onResizeEndRef = useRef(onResizeEnd);
-  onResizeEndRef.current = onResizeEnd;
+  const onResizeEndRef = useLatest(onResizeEnd);
 
   const onPointerDown = useCallback((e: PointerEvent) => {
     e.preventDefault();
@@ -111,7 +111,7 @@ export function useResizeHandle({
         onResizeEndRef.current?.(sizeRef.current);
       }
     },
-    [isResizingRef],
+    [isResizingRef, onResizeEndRef],
   );
 
   return {

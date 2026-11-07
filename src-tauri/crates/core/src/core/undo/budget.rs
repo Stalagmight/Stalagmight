@@ -1,6 +1,9 @@
 use std::collections::VecDeque;
 
-use super::{DepthLimit, UndoData, UndoEntry, UndoStack, ENTRY_OVERHEAD_BYTES};
+use super::{
+    DepthLimit, StackSlot, UndoData, UndoEntry, UndoStack, COUNT_WINDOW_MEMORY_BYTES,
+    ENTRY_OVERHEAD_BYTES,
+};
 
 impl UndoStack {
     /// [#303] Estimated serialized size of one entry, in bytes.
@@ -65,6 +68,9 @@ impl UndoStack {
                 ..
             } => affected_sections.len() * 16 + previous_offsets.len() * BYTES_PER_OFFSET,
             UndoData::StationMoveInfo { .. } => 2 * BYTES_PER_SHOT,
+            UndoData::StationCommentRows { previous, .. } => {
+                previous.iter().map(|(_, text)| 128 + text.len()).sum()
+            }
             UndoData::InverseCommand(_) | UndoData::None => 0,
         };
         // Restored rows deliberately do not reserialize their command just to rebuild
@@ -90,11 +96,31 @@ impl UndoStack {
     /// Under `Bytes`, the newest entry is always kept even if it alone exceeds the
     /// budget: dropping it would silently discard the operation the user just did, and
     /// a single entry over the budget is a very large import, not runaway growth.
+    ///
+    /// [#576 B20] `Count` is bounded in bytes too, at [`COUNT_WINDOW_MEMORY_BYTES`]
+    /// with the same newest-kept rule: a count alone let 100 whole-project snapshot
+    /// pairs hold several GB on a large survey.
     pub(super) fn enforce_depth_limit(&mut self) {
         match self.depth_limit {
             DepthLimit::Count(limit) => {
                 Self::trim_to_count(&mut self.undo_stack, &mut self.undo_bytes, limit);
                 Self::trim_to_count(&mut self.redo_stack, &mut self.redo_bytes, limit);
+                let ceiling = COUNT_WINDOW_MEMORY_BYTES;
+                let undo_dropped =
+                    Self::trim_to_bytes(&mut self.undo_stack, &mut self.undo_bytes, ceiling);
+                let redo_dropped =
+                    Self::trim_to_bytes(&mut self.redo_stack, &mut self.redo_bytes, ceiling);
+                if undo_dropped + redo_dropped > 0 {
+                    tracing::info!(
+                        undo_dropped,
+                        redo_dropped,
+                        undo_remaining = self.undo_stack.len(),
+                        estimated_undo_bytes = self.undo_bytes,
+                        ceiling,
+                        purpose = "bound the in-memory undo history in bytes (#576 B20)",
+                        "Trimmed the oldest undo/redo entries past the in-memory byte ceiling"
+                    );
+                }
             }
             DepthLimit::Bytes(budget) => {
                 let undo_dropped =
@@ -114,7 +140,7 @@ impl UndoStack {
         }
     }
 
-    fn trim_to_count(stack: &mut VecDeque<UndoEntry>, total: &mut usize, limit: usize) {
+    fn trim_to_count(stack: &mut VecDeque<StackSlot>, total: &mut usize, limit: usize) {
         while stack.len() > limit {
             if let Some(front) = stack.pop_front() {
                 *total = total.saturating_sub(Self::estimated_size(&front));
@@ -124,7 +150,7 @@ impl UndoStack {
 
     /// Evict from the front until the running total is at most `budget`, always
     /// keeping the newest entry. Returns the number evicted.
-    fn trim_to_bytes(stack: &mut VecDeque<UndoEntry>, total: &mut usize, budget: usize) -> u64 {
+    fn trim_to_bytes(stack: &mut VecDeque<StackSlot>, total: &mut usize, budget: usize) -> u64 {
         let mut dropped = 0;
         while *total > budget && stack.len() > 1 {
             if let Some(front) = stack.pop_front() {

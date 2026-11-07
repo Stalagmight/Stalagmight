@@ -480,8 +480,11 @@ test.describe('Zoom Tool Click Behavior', () => {
       const centerY = canvasBox.y + canvasBox.height / 2;
 
       // Click on map with zoom tool - should NOT trigger selection
+      const zoomBefore = await page.evaluate(() => (window as unknown as { __stalagmight_map__: { getZoom: () => number } }).__stalagmight_map__.getZoom());
       await page.mouse.click(centerX, centerY);
-      await page.waitForTimeout(400); // Wait for zoom animation
+      // The click zoomed in, and the zoom animation has finished.
+      await expect.poll(() => page.evaluate(() => (window as unknown as { __stalagmight_map__: { getZoom: () => number } }).__stalagmight_map__.getZoom())).toBeGreaterThan(zoomBefore);
+      await waitForMapIdle(page);
 
       // Verify selection is still null (click-to-zoom doesn't select)
       const selectionAfterClick = await page.evaluate(() => {

@@ -122,7 +122,7 @@ function buildMockDmpFile(options: MockDmpOptions = {}) {
   };
 }
 
-const defaultSuggestions: MockSuggestion[] = [
+const defaultSuggestions: [MockSuggestion, ...MockSuggestion[]] = [
   {
     existingStationIndex: 0,
     importStationIndex: 0,
@@ -235,9 +235,12 @@ async function openManualPlacing(page: Page): Promise<void> {
   await page.getByTestId('confirm-button').click();
 
   const manualPlacing = page.getByTestId('wizard-manual-placing');
-  await page.waitForTimeout(300);
+  const placementIndicator = page.getByTestId('placement-mode-indicator');
+  // One of the two end states: the wizard on its manual-placing screen, or (the
+  // auto-start handoff, during which the dialog is display:none) map placement.
+  await expect(manualPlacing.or(placementIndicator).filter({ visible: true }).first()).toBeVisible({ timeout: 10000 });
   if (!(await manualPlacing.isVisible())) {
-    await expect(page.getByTestId('placement-mode-indicator')).toBeVisible({ timeout: 10000 });
+    await expect(placementIndicator).toBeVisible({ timeout: 10000 });
     await page.keyboard.press('Escape');
   }
 
@@ -412,9 +415,12 @@ test.describe('Import Placement Flow', () => {
     await page.getByTestId('skip-button').click();
 
     const manualPlacing = page.getByTestId('wizard-manual-placing');
-    await page.waitForTimeout(300);
+    const placementIndicator = page.getByTestId('placement-mode-indicator');
+    // One of the two end states: the wizard on its manual-placing screen, or (the
+    // auto-start handoff, during which the dialog is display:none) map placement.
+    await expect(manualPlacing.or(placementIndicator).filter({ visible: true }).first()).toBeVisible({ timeout: 10000 });
     if (!(await manualPlacing.isVisible())) {
-      await expect(page.getByTestId('placement-mode-indicator')).toBeVisible({ timeout: 10000 });
+      await expect(placementIndicator).toBeVisible({ timeout: 10000 });
       await page.keyboard.press('Escape');
     }
 

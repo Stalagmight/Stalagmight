@@ -14,7 +14,7 @@ import { GAS_CYLINDER_GRID_PREFIX } from '../../utils/testId';
 import { buildCylinderColumns } from './cylindersGridColumns';
 import { applyCylinderEdits, CYL_COL, CYL_ROLES, isUsableEditable } from './cylindersGridEdits';
 import { planGridHeight, usePlanGridFillHeight } from './planGridHeight';
-import { usePasteReportToast } from './usePasteReportToast';
+import { useBulkEditReportToast } from '../common/useBulkEditReportToast';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /** Rows behind the FALLBACK height (before the pane is measured, and under jsdom).
@@ -143,7 +143,7 @@ export function CylindersTable() {
   );
 
   const labels = useGridLabels('gasPanel.tanks.tankNoun');
-  const onPasteReport = usePasteReportToast(TOAST_KEYS.PLAN_CYLINDERS_PASTE);
+  const onPasteReport = useBulkEditReportToast(TOAST_KEYS.PLAN_CYLINDERS_PASTE);
   const onEdit = useCallback(
     (row: number, colKey: string, value: unknown) => applyEdits([{ row, colKey, value }]),
     [applyEdits]

@@ -1,12 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 describe('projectStore range deletion', () => {
   beforeEach(() => {

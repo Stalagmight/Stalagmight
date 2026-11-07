@@ -366,9 +366,18 @@ pub enum PushPlan {
 }
 
 /// Pure Done-push decision (#192/#193): fence BASE against the tip, and on a moved
-/// tip (we hold the lock, so it is almost always our own ambiguous push) classify
-/// the gap by authorship. Every fail-closed branch routes to the divergence prompt
-/// rather than a hard error or a blind re-push.
+/// tip classify the gap by authorship. Every fail-closed branch routes to the
+/// divergence prompt rather than a hard error or a blind re-push.
+///
+/// `we_hold_the_lock` is the SAME licence [`poll_verdict`] takes, and for the same
+/// reason (#576 B32): `author_email == my_email` only proves "this account pushed
+/// it", and a second session signed in as the same account breaks that proxy. Our
+/// own landed-but-unrecorded push can only have been made while THIS session held
+/// the single-writer lock, so without the licence a moved tip is a divergence
+/// whoever authored the gap. Adopting it instead made the gap commit BASE and
+/// uploaded our older copy on top - the other session's revision silently dropped
+/// out of the tip, while the status button (which already required the licence)
+/// showed a conflict for the very state the click overwrote.
 #[must_use]
 pub fn plan_push(
     base: Option<&str>,
@@ -377,9 +386,13 @@ pub fn plan_push(
     my_email: &str,
     last_edit_at: Option<&str>,
     push_start_at: Option<&str>,
+    we_hold_the_lock: bool,
 ) -> PushPlan {
     match fence(base, tip, true) {
         FenceOutcome::UpToDate => PushPlan::Upload,
+        // Not provably our lock, so the gap is not ours to explain away - even when
+        // it carries our email. Mirrors the same arm in `poll_verdict`.
+        FenceOutcome::Diverged if !we_hold_the_lock => PushPlan::Diverged,
         FenceOutcome::Diverged => {
             match classify_ancestry(base, tip, commits, my_email, last_edit_at, push_start_at) {
                 AncestryOutcome::Landed { clear_dirty: true } => PushPlan::AdoptConfirmed,
@@ -428,7 +441,8 @@ pub fn plan_push(
 /// superseding the other session's revision with no prompt at any point. Our own
 /// landed-but-unrecorded push can only have been made while we held the
 /// single-writer lock, so requiring it costs the recovery nothing and denies the
-/// same-account session the shortcut.
+/// same-account session the shortcut. [`plan_push`] takes the same licence, so the
+/// passive mark and the Done/Push click behind it cannot disagree on this gap.
 ///
 /// It also keeps this verdict AGREEING with [`reconcile_verdict`], which has no
 /// authorship recovery. That function drives Start editing - reachable only while
@@ -1127,7 +1141,8 @@ mod tests {
                 &linear_history(),
                 ME,
                 Some(T1),
-                Some(T2)
+                Some(T2),
+                true
             ),
             PushPlan::Upload
         );
@@ -1144,7 +1159,8 @@ mod tests {
                 &linear_history(),
                 ME,
                 Some(T1),
-                Some(T2)
+                Some(T2),
+                true
             ),
             PushPlan::AdoptConfirmed
         );
@@ -1161,7 +1177,8 @@ mod tests {
                 &linear_history(),
                 ME,
                 Some(T3),
-                Some(T2)
+                Some(T2),
+                true
             ),
             PushPlan::AdoptThenUpload
         );
@@ -1175,7 +1192,7 @@ mod tests {
             commit("b", &["a"], OTHER), // a stranger pushed into the gap (lock theft)
         ];
         assert_eq!(
-            plan_push(Some("a"), Some("b"), &stolen, ME, Some(T1), Some(T2)),
+            plan_push(Some("a"), Some("b"), &stolen, ME, Some(T1), Some(T2), true),
             PushPlan::Diverged
         );
     }
@@ -1190,7 +1207,7 @@ mod tests {
             commit("m", &["a", "root"], ME),
         ];
         assert_eq!(
-            plan_push(Some("a"), Some("m"), &merge, ME, Some(T1), Some(T2)),
+            plan_push(Some("a"), Some("m"), &merge, ME, Some(T1), Some(T2), true),
             PushPlan::Diverged
         );
     }
@@ -1198,9 +1215,68 @@ mod tests {
     #[test]
     fn plan_push_diverges_when_base_some_but_tip_none() {
         assert_eq!(
-            plan_push(Some("a"), None, &[], ME, Some(T1), Some(T2)),
+            plan_push(Some("a"), None, &[], ME, Some(T1), Some(T2), true),
             PushPlan::Diverged
         );
+    }
+
+    #[test]
+    fn plan_push_diverges_on_a_same_account_gap_without_the_lock_licence() {
+        // [#576 B32] The commit in the gap carries OUR email but was pushed by another
+        // session on the same account. Without proof that THIS session held the lock,
+        // it is not ours to adopt: adopting it uploaded our older copy over it.
+        let gap = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        assert_eq!(
+            plan_push(Some("c0"), Some("c1"), &gap, ME, Some(T3), Some(T2), false),
+            PushPlan::Diverged
+        );
+        // ...and the licensed case still recovers our own lost-reply push.
+        assert_eq!(
+            plan_push(Some("c0"), Some("c1"), &gap, ME, Some(T3), Some(T2), true),
+            PushPlan::AdoptThenUpload
+        );
+        // The licence never matters when the tip has not moved.
+        assert_eq!(
+            plan_push(Some("c1"), Some("c1"), &gap, ME, Some(T3), Some(T2), false),
+            PushPlan::Upload
+        );
+    }
+
+    #[test]
+    fn plan_push_and_poll_verdict_agree_for_every_gap_authorship_and_licence() {
+        // [#576 B32] The passive mark and the click behind it must never disagree: a
+        // poll that paints Conflict must be backed by a push that opens the conflict
+        // dialog, and a push that adopts the gap must be backed by a calm mark. Every
+        // (fence outcome, gap authorship, licence) combination a dirty copy can reach,
+        // built in code.
+        let ours = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        let stranger = vec![commit("c1", &["c0"], OTHER), commit("c0", &[], ME)];
+        let merge = vec![
+            commit("c1", &["c0", "x0"], ME),
+            commit("c0", &[], ME),
+            commit("x0", &[], ME),
+        ];
+        let cases: [(&str, Option<&str>, Option<&str>, &[RevisionCommit]); 5] = [
+            ("tip unmoved", Some("c1"), Some("c1"), &ours),
+            ("gap is ours", Some("c0"), Some("c1"), &ours),
+            ("gap is a stranger's", Some("c0"), Some("c1"), &stranger),
+            ("gap is a merge", Some("c0"), Some("c1"), &merge),
+            ("tip vanished", Some("c0"), None, &[]),
+        ];
+        for (label, base, tip, commits) in cases {
+            for licence in [false, true] {
+                let plan = plan_push(base, tip, commits, ME, Some(T3), Some(T2), licence);
+                let mark = poll_verdict(base, tip, true, commits, ME, licence);
+                let push_diverges = plan == PushPlan::Diverged;
+                // `Unknown` is the poll's transient-empty-tip degrade: the push fails
+                // closed there, which is never the silent overwrite this guards.
+                let mark_conflicts = matches!(mark, RemoteState::Conflict | RemoteState::Unknown);
+                assert_eq!(
+                    push_diverges, mark_conflicts,
+                    "{label}, licence {licence}: push plans {plan:?} but the mark says {mark:?}"
+                );
+            }
+        }
     }
 
     // ---- poll_verdict: the passive status-button verdict ----

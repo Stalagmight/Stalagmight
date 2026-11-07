@@ -8,16 +8,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import OpenFromSpeleoDbDialog from './OpenFromSpeleoDbDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
 let loadProjectMock: ReturnType<typeof vi.fn>;
 let closeDialogMock: ReturnType<typeof vi.fn>;
@@ -40,7 +38,7 @@ function mockRoutes(overrides: Record<string, () => Promise<unknown>> = {}) {
       speleodb_list_projects: () => Promise.resolve([ARIANE_PROJECT]),
       // The dump has no .stalx -> the backend returns the typed Adopt action.
       speleodb_open_project: () =>
-        Promise.reject({ message: 'ariane project', action: 'Adopt', status: null }),
+        Promise.reject({ message: 'ariane project', code: 'SPELEODB_ADOPT', status: null }),
       speleodb_adopt_ariane: () =>
         Promise.resolve({
           local_path: '/cache/p1/project.stalx',
@@ -168,7 +166,7 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
 
   it('a flaky list fetch keeps the authenticated list phase (no login prompt)', async () => {
     mockRoutes({
-      speleodb_list_projects: () => Promise.reject({ message: 'boom', action: 'Retry', status: 503 }),
+      speleodb_list_projects: () => Promise.reject({ message: 'boom', code: 'SPELEODB_RETRY', status: 503 }),
     });
     render(<OpenFromSpeleoDbDialog />);
 
@@ -181,7 +179,7 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
 
   it('the empty state says the list could not load, not that there are no projects', async () => {
     mockRoutes({
-      speleodb_list_projects: () => Promise.reject({ message: 'boom', action: 'Retry', status: 503 }),
+      speleodb_list_projects: () => Promise.reject({ message: 'boom', code: 'SPELEODB_RETRY', status: 503 }),
     });
     render(<OpenFromSpeleoDbDialog />);
 
@@ -194,7 +192,7 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
     mockRoutes({
       speleodb_list_projects: () =>
         fail
-          ? Promise.reject({ message: 'boom', action: 'Retry', status: 503 })
+          ? Promise.reject({ message: 'boom', code: 'SPELEODB_RETRY', status: 503 })
           : Promise.resolve([ARIANE_PROJECT]),
     });
     render(<OpenFromSpeleoDbDialog />);
@@ -210,7 +208,7 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
   it('a dead token surfacing from the list call DOES drop the session', async () => {
     mockRoutes({
       speleodb_list_projects: () =>
-        Promise.reject({ message: 'token expired', action: 'ReLogin', status: 401 }),
+        Promise.reject({ message: 'token expired', code: 'SPELEODB_RELOGIN', status: 401 }),
     });
     render(<OpenFromSpeleoDbDialog />);
 
@@ -222,7 +220,7 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
 
   it('a failing session probe still routes to the login prompt', async () => {
     mockRoutes({
-      speleodb_session: () => Promise.reject({ message: 'no token', action: 'ReLogin', status: 401 }),
+      speleodb_session: () => Promise.reject({ message: 'no token', code: 'SPELEODB_RELOGIN', status: 401 }),
     });
     render(<OpenFromSpeleoDbDialog />);
 
@@ -253,7 +251,7 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
 describe('OpenFromSpeleoDbDialog refused open with unpushed local edits (#270)', () => {
   const REFUSAL = {
     message: 'local copy has unpushed edits',
-    action: 'UnpushedLocalEdits',
+    code: 'SPELEODB_UNPUSHED_LOCAL_EDITS',
     status: null,
     unpushed_local: {
       project_id: 'p1',
@@ -335,5 +333,33 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
     expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_open_project')).toBe(false);
     expect(loadProjectMock).not.toHaveBeenCalled();
     expect(closeDialogMock).not.toHaveBeenCalled();
+  });
+});
+
+// [#576 RV4-FE-SP-5] The access badge shows the localized level, as the collaborator
+// tab and the Publish dialog do, not the wire enum ("READ_AND_WRITE", "UNKNOWN").
+describe('OpenFromSpeleoDbDialog access badge', () => {
+  it.each([
+    ['READ_AND_WRITE', 'Read & write'],
+    ['READ_ONLY', 'Read only'],
+    ['UNKNOWN', 'Unknown'],
+  ])('%s reads as "%s"', async (permission, label) => {
+    mockRoutes({
+      speleodb_list_projects: () => Promise.resolve([{ ...ARIANE_PROJECT, permission }]),
+    });
+    render(<OpenFromSpeleoDbDialog />);
+
+    const list = await screen.findByTestId('open-from-speleodb-list');
+    expect(list).toHaveTextContent(label);
+    expect(list).not.toHaveTextContent(permission);
+  });
+
+  it('a project without access still says so', async () => {
+    mockRoutes({
+      speleodb_list_projects: () => Promise.resolve([{ ...ARIANE_PROJECT, permission: null }]),
+    });
+    render(<OpenFromSpeleoDbDialog />);
+
+    expect(await screen.findByTestId('open-from-speleodb-list')).toHaveTextContent('NO ACCESS');
   });
 });

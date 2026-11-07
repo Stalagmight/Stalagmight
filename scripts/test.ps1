@@ -10,8 +10,6 @@
 $ErrorActionPreference = 'Stop'
 
 $env:STALAGMIGHT_TEST_MANIFEST = '1'
-# Strip SQLite modules a hostile .stalx could reach (#608, docs/toolchain.md).
-$env:LIBSQLITE3_FLAGS = '-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION'
 if (-not $env:TELEMETRY_ENDPOINT) { $env:TELEMETRY_ENDPOINT = 'http://localhost/dummy' }
 
 cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry @args

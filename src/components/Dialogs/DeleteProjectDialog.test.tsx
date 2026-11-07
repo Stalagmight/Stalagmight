@@ -9,6 +9,8 @@ import { render, screen } from '@testing-library/react';
 import DeleteProjectDialog from './DeleteProjectDialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { accepted } from '../../store/commandResult';
+import type { DeleteProjectOutcome } from '../../types/ipc/DeleteProjectOutcome';
 
 beforeEach(() => {
   useUIStore.setState({
@@ -16,7 +18,7 @@ beforeEach(() => {
     dialogData: { path: '/tmp/cave.stalx', name: 'My Cave' },
   });
   useProjectStore.setState({
-    deleteProject: vi.fn(async () => ({ success: true, warnings: [], error: null, section_ids: [] })),
+    deleteProject: vi.fn(async () => accepted<DeleteProjectOutcome>({ session_closed: false, warnings: [] })),
   });
 });
 
@@ -42,5 +44,17 @@ describe('DeleteProjectDialog', () => {
     expect(screen.getByText(/not yet pushed to SpeleoDB will be lost/)).toBeInTheDocument();
     expect(screen.queryByText(/It cannot be undone\./)).toBeNull();
     expect(screen.getByTestId('delete-project-confirm')).toHaveTextContent('Delete local copy');
+  });
+
+  // #576 D20: the copy is a <Trans> template now (`Permanently delete
+  // <name>{{name}}</name>?`). A name or path that looks like markup must render
+  // as typed, not be parsed as a tag of the template.
+  it('renders a project name and path that look like markup as typed', () => {
+    useUIStore.setState({ dialogData: { path: '/caves/a</path>b.stalx', name: 'Main <A> & </name>B', isRemote: false } });
+    render(<DeleteProjectDialog />);
+
+    expect(screen.getByText('Main <A> & </name>B')).toHaveClass('font-medium');
+    expect(screen.getByText(/^Permanently delete/).textContent).toBe('Permanently delete Main <A> & </name>B?');
+    expect(screen.getByText('/caves/a</path>b.stalx')).toHaveClass('break-all');
   });
 });

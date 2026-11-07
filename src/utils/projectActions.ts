@@ -13,14 +13,13 @@
  * handlers (outside React). Callers tag the telemetry entry-point source before
  * calling.
  */
-import { exists } from '@tauri-apps/plugin-fs';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { needsSpeleoHandBackPrompt } from './quit';
-import { surfaceSaveFailure } from './saveFeedback';
+import { saveFailureOf, surfaceSaveFailure } from './saveFeedback';
 import i18n from '../i18n';
-import { getErrorMessage, invokeIpc } from './ipc';
+import { invokeIpc } from './ipc';
 import {
   ensureExtension,
   projectSaveFilters,
@@ -28,7 +27,9 @@ import {
   PROJECT_EXTENSION,
 } from './fileDialogs';
 import { extractFilename } from './path';
-import type { CommandResult } from '../types/commands';
+import { resolveSavePath, saveTargetPresence } from './overwriteGuard';
+import type { CommandOutcome } from '../store/commandResult';
+import type { SaveOutcome } from '../types/ipc/SaveOutcome';
 
 /**
  * Open the New Project dialog, guarding a dirty open project: defer to the
@@ -63,53 +64,59 @@ export function newProjectGuarded(): void {
 
 /**
  * Save As: pick a path, then either defer to the overwrite-confirm dialog (the
- * file already exists) or save directly. Carries the caller's "close after a
- * successful save" intent (Save and Close) through the deferred overwrite flow.
+ * file already exists, or whether it does could not be checked) or save directly.
+ * Carries the caller's "close after a successful save" intent (Save and Close)
+ * through the deferred overwrite flow.
  *
  * A failed save is routed through `surfaceSaveFailure` (integrity blocks → Review
  * & Repair; permission denials already surfaced their own guidance dialog). The
- * guard is `!success`, NOT "has an error string": a blocked save can legitimately
- * carry a null error (the block is signaled via `integritySaveBlocked`), and must
+ * guard is `!success`, NOT "has an error string": a refused save is routed on its
+ * code, and an integrity block is signaled via `integritySaveBlocked`, so it must
  * still surface rather than be mistaken for a clean save.
  */
 export async function saveProjectAs(opts?: {
   closeAfterSave?: boolean;
-}): Promise<CommandResult | null> {
+}): Promise<CommandOutcome<SaveOutcome> | null> {
   const { openDialog } = useUIStore.getState();
   try {
     const selected = await saveDialog({ filters: projectSaveFilters() });
     if (!selected) return null;
 
     const finalPath = ensureExtension(selected, PROJECT_EXTENSION);
-    try {
-      if (await exists(finalPath)) {
-        // The overwrite-confirm dialog performs the actual save. Carry the
-        // close-after-save intent so the deferred flow still closes the project.
-        openDialog('confirm-overwrite', {
-          path: finalPath,
-          fileName: extractFilename(finalPath),
-          closeAfterSave: opts?.closeAfterSave ?? false,
-        });
-        return null;
-      }
-    } catch {
-      // exists() failed - proceed with the save (the backend reports real errors).
+    // [#576 E10-D1] A probe that FAILS (permissions, an unreachable folder, a
+    // network drive) says nothing about whether the file is there, so it asks
+    // exactly like a probe that found it. It used to fall through to the save,
+    // replacing an existing survey with no prompt at all. [#576 HFI-2] The
+    // backend answers: the webview's fs plugin threw for every user path.
+    // [#576 HFI-2-D2] A refused path (an app or system folder) goes straight to
+    // the save, which refuses it with the reason: one dialog, not two.
+    const { present, existenceUnknown } = await saveTargetPresence(finalPath);
+    if (present) {
+      // The overwrite-confirm dialog performs the actual save. Carry the
+      // close-after-save intent so the deferred flow still closes the project.
+      openDialog('confirm-overwrite', {
+        path: finalPath,
+        fileName: extractFilename(finalPath),
+        closeAfterSave: opts?.closeAfterSave ?? false,
+        ...(existenceUnknown ? { existenceUnknown: true } : {}),
+      });
+      return null;
     }
 
     const result = await useProjectStore.getState().saveProject(finalPath);
     if (result && !result.success) {
-      surfaceSaveFailure(result.error, openDialog);
+      surfaceSaveFailure(result, openDialog, useProjectStore.getState());
     }
     return result;
   } catch (e) {
-    // store.saveProject rejects only on an IPC-transport failure (real save
-    // failures resolve as CommandResult{success:false}, handled above). Surface
+    // store.saveProject rejects only on an IPC-transport failure (a refused save
+    // resolves as the refused outcome, handled above). Surface
     // it here rather than letting it escape as an unhandled rejection - the
     // keyboard (`void saveProjectAs()`) and menu (`void handleSaveProjectAs()`)
     // call sites don't catch. Return null (not a failure result) so the
     // delegating handleSaveProject doesn't surface a second dialog and
     // saveAndClose treats it as "not saved" and keeps the project open.
-    surfaceSaveFailure(getErrorMessage(e, 'Failed to save project'), openDialog, {
+    surfaceSaveFailure(saveFailureOf(e, 'Failed to save project'), openDialog, useProjectStore.getState(), {
       skipIntegrityRouting: true,
     });
     return null;
@@ -145,15 +152,21 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
   try {
     const selected = await saveDialog({ filters: projectSaveFilters() });
     if (!selected) return false;
-    finalPath = ensureExtension(selected, PROJECT_EXTENSION);
+    // [#576 D35] The copy lands on the NORMALISED name, which the OS overwrite
+    // prompt never saw when it differs from the answer - and the backend's
+    // copy-only branch renames over whatever is there. Ask first; declining
+    // changes nothing, like a cancelled picker.
+    const resolved = await resolveSavePath(selected, PROJECT_EXTENSION);
+    if (!resolved) return false;
+    finalPath = resolved;
     const result = await useProjectStore.getState().saveProject(finalPath);
     if (!result || !result.success) {
-      surfaceSaveFailure(result?.error ?? null, openDialog);
+      surfaceSaveFailure(result, openDialog, useProjectStore.getState());
       return false;
     }
     wroteDetachedCopy = Boolean(result.unlinked_copy_path);
   } catch (e) {
-    surfaceSaveFailure(getErrorMessage(e, 'Failed to save a local copy'), openDialog, {
+    surfaceSaveFailure(saveFailureOf(e, 'Failed to save a local copy'), openDialog, useProjectStore.getState(), {
       skipIntegrityRouting: true,
     });
     return false;
@@ -176,8 +189,9 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     await invokeIpc('speleodb_unlink');
   } catch (e) {
     surfaceSaveFailure(
-      getErrorMessage(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
+      saveFailureOf(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
       openDialog,
+      useProjectStore.getState(),
       { skipIntegrityRouting: true, title: i18n.t('dialogs.saveFailure.detachTitle') },
     );
     return false;

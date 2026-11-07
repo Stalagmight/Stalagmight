@@ -29,21 +29,9 @@ import { renderHook, act } from '@testing-library/react';
 import { useUIStore } from '../uiStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../speleoStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { makeSpeleoLink } from '../../test/factories/speleo';
 
-const READ_ONLY_LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'read-only',
-  lockHolder: 'someone-else',
-  lockedByOther: true,
-  hasUnpushedEdits: false,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+const READ_ONLY_LINK: SpeleoLinkState = makeSpeleoLink({ lockHolder: 'someone-else', lockedByOther: true });
 
 beforeEach(() => {
   useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });

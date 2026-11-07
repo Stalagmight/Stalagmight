@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
+import { doneFinished } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { getErrorMessage } from '../../utils/ipc';
 import { handBackProject, performQuit, readPendingExit } from '../../utils/quit';
@@ -84,7 +85,9 @@ export default function SpeleoUnwoundPushDialog() {
       if (outcome === 'editing') {
         showToast(t('speleodb.unwoundPush.discardedToast'), TOAST_KEYS.SPELEODB_DISCARDED, 'success');
       }
-      trackDialogComplete('speleodb-unwound-push');
+      // [#576 NF-FIX4FE-1] Refused in the read-only Plan/Export workspace (the notice is
+      // up): leave as on Cancel - nothing was done, so the dialog did not complete.
+      if (outcome !== 'workspace_read_only') trackDialogComplete('speleodb-unwound-push');
       // Not the exit: this branch keeps the lock so the user can carry on editing, and
       // quitting on a button that says so would be a lie. It still has to hand the exit
       // prompt back rather than close over it - the request was to leave, and the state
@@ -114,7 +117,7 @@ export default function SpeleoUnwoundPushDialog() {
     // this would raise this same dialog again.
     if (!pendingExit) {
       const resolved = await done(message, { acceptOlderVersion: true });
-      if (resolved?.kind === 'released') {
+      if (doneFinished(resolved?.kind)) {
         trackDialogComplete('speleodb-unwound-push');
         closeDialog();
       } else {
@@ -125,7 +128,7 @@ export default function SpeleoUnwoundPushDialog() {
       return;
     }
     const resolved = await done(message, { acceptOlderVersion: true });
-    if (resolved?.kind === 'released') {
+    if (doneFinished(resolved?.kind)) {
       trackDialogComplete('speleodb-unwound-push');
       closeDialog();
       if (pendingExit.kind === 'quit') performQuit();

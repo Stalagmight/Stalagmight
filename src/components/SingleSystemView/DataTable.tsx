@@ -1,4 +1,5 @@
-import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { useTranslation } from 'react-i18next';
 import { type Section, type Shot, type ShotData, type Station, type StationRef } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
@@ -7,8 +8,9 @@ import { useUIStore, type Selection } from '../../store/uiStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
+import { useBulkEditReportToast } from '../common/useBulkEditReportToast';
 import { EntityBlob } from '../common/EntityBlob';
-import { ChevronDownIcon, ExpandIcon } from '../common/icons';
+import { ExpandIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getDeleteShotDialog, deriveRangeDeleteParams } from '../../utils/contextMenuHelpers';
@@ -18,13 +20,12 @@ import { useGridLabels } from '../../hooks/useGridLabels';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { ShotColumnsMenu } from '../common/ShotColumnsMenu';
 import { ANGLE_FAMILY_KEYS, reorderForAngleMode } from '../Dialogs/newSectionRows';
-import { useAnchoredFixedMenu } from '../../hooks/useAnchoredFixedMenu';
 import { setSource } from '../../utils/telemetry';
-import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { invokeIpc } from '../../utils/ipc';
 import { buildShotColumns } from './dataTableShotColumns';
 import { buildStationColumns } from './dataTableStationColumns';
 import RawTableView from './RawTableView';
+import { CenteredPillBand, PillChevron, RawTablePill, SubHeaderPickerMenu, SubHeaderRow } from './DataTableSubHeader';
 import { DetailLink } from '../common/DetailLink';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
 import { useDataTableViewPersistence } from './useDataTableViewPersistence';
@@ -42,9 +43,8 @@ import {
   overflowDraft,
   respawnsBlank,
   draftMissing,
-  completeDraftData,
-  commitAnchorArgs,
 } from './dataTableDrafts';
+import { useDraftAutoCommit } from './useDraftAutoCommit';
 import type { CellEdit } from '../common/SpreadsheetGrid/types';
 
 interface DataTableProps {
@@ -91,197 +91,12 @@ const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
  *  arrives it is authoritative (an empty list there means "show all"). */
 const STATION_DEFAULT_HIDDEN = ['_x', '_y', '_lat', '_long'];
 
-/** Pill-as-trigger picker used in the sub-header: the whole pill (rendered via
- *  {@link renderTrigger}, which embeds the chevron) toggles the dropdown.
- *  Closes on outside click and Escape (and declares data-dropdown-open so the
- *  global Escape guard yields to it). The list anchors centered under the pill. */
-function SubHeaderPickerMenu({
-  triggerTestId,
-  listTestId,
-  title,
-  options,
-  onPick,
-  onHoverOption,
-  onHoverTrigger,
-  renderTrigger,
-}: {
-  triggerTestId?: string;
-  listTestId: string;
-  title: string;
-  options: { value: string; label: string; disabled?: boolean; dot?: string }[];
-  onPick: (value: string) => void;
-  onHoverOption?: (value: string | null) => void;
-  onHoverTrigger?: (over: boolean) => void;
-  renderTrigger: (state: { open: boolean }) => ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const toggle = () => setOpen((v) => !v);
-  // Position the list with `position:fixed` so it escapes the Dock's
-  // overflow-hidden clip box when it flips up (the data-table sub-header sits
-  // low in the window); the hook flips/clamps within the viewport.
-  const listStyle = useAnchoredFixedMenu(open, triggerRef, listRef, {
-    align: 'center',
-    gap: 4,
-    width: 208, // px; the hook also sets this as the list width (single source of truth)
-    maxHeightCap: 256, // matches the old max-h-64 - stay compact + scroll on a tall window
-    // The raw-table submenu feeds async rawTables through `options`: it opens on
-    // a single disabled "loading" row, then swaps to N rows once the load
-    // resolves. Signal that resize so the hook re-places instead of sticking to
-    // the stale on-open placement. The length prefix disambiguates the loading
-    // placeholder ([{value:''}], length 1) from an empty result ([], length 0) -
-    // both would otherwise join to the same '' key.
-    remeasureKey: `${options.length}:${options.map((o) => o.value).join('|')}`,
-  });
-  // Close on outside mousedown / external scroll / resize (shared hook). The
-  // list is position:fixed at a captured rect, so any scroll/resize would
-  // otherwise leave it floating at a stale spot. Escape is handled separately
-  // below.
-  useDismissableLayer({
-    open,
-    onDismiss: () => setOpen(false),
-    contains: [triggerRef, listRef],
-  });
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-  return (
-    // `min-w-0` down the whole trigger chain: the pill lives in a grid track that
-    // is allowed to shrink, and every box between that track and the truncating
-    // label has to be allowed to shrink with it (#429).
-    <div className="relative min-w-0" onMouseDown={(e) => e.stopPropagation()}>
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={toggle}
-        onMouseEnter={onHoverTrigger ? () => onHoverTrigger(true) : undefined}
-        onMouseLeave={onHoverTrigger ? () => onHoverTrigger(false) : undefined}
-        className="flex min-w-0 max-w-full cursor-pointer items-center"
-        title={title}
-        data-testid={triggerTestId}
-      >
-        {renderTrigger({ open })}
-      </button>
-      {open && (
-        <div
-          ref={listRef}
-          data-dropdown-open
-          className="overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg"
-          style={listStyle}
-          data-testid={listTestId}
-          onMouseLeave={() => onHoverOption?.(null)}
-        >
-          {options.map((o) => (
-            <button
-              key={o.value}
-              data-testid={`${listTestId}-option-${encodeURIComponent(o.value)}`}
-              disabled={o.disabled}
-              className="flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-left hover:bg-accent-10 disabled:opacity-50"
-              onMouseEnter={() => onHoverOption?.(o.value)}
-              onClick={() => {
-                onHoverOption?.(null);
-                setOpen(false);
-                onPick(o.value);
-              }}
-            >
-              {o.dot !== undefined && (
-                <span
-                  className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: o.dot }}
-                  aria-hidden="true"
-                />
-              )}
-              <span className="truncate">{o.label}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * The middle cell of {@link SubHeaderRow}: holds the centered pill, and shrinks
- * to nothing before it will push on the controls either side of it.
- *
- * Centering here is a property of the ROW, not of this box - the two side columns
- * are equal `1fr`, so the middle track lands on the header's true midpoint. The
- * previous cut instead spanned the full width with `absolute inset-x-0` and a
- * `pointer-events-none` band, which centered just as well but took no part in the
- * layout: at 1024x640 the pill simply grew over the "Shots" button and its
- * `pointer-events-auto` wrapper swallowed the clicks (#429).
- *
- * Still no CSS `transform` anywhere on this path. A transformed ancestor would
- * make the picker's `position:fixed` list resolve against this box instead of the
- * viewport, re-introducing the Dock-clip that fix escapes (#162).
- */
-function CenteredPillBand({ children }: { children: ReactNode }) {
-  return <div className="flex min-w-0 justify-center">{children}</div>;
-}
-
-/**
- * The data table's sub-header row: `title | centered pill | controls`.
- *
- * A three-column grid rather than a flex row, because the pill has to center on
- * the full width while the side groups keep their natural size. The outer columns
- * are `1fr` with their default `auto` minimum, so they never shrink below their
- * content; the middle one is `minmax(0, auto)`, so it is the one that gives way
- * and the pill truncates instead of overlapping (#429).
- */
-function SubHeaderRow({ children }: { children: ReactNode }) {
-  return (
-    <div
-      className="relative grid grid-cols-[1fr_minmax(0,auto)_1fr] items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs"
-      data-testid="data-table-sub-header"
-    >
-      {children}
-    </div>
-  );
-}
-
-/** The chevron that sits INSIDE the sub-header pill, dim until the menu opens. */
-function PillChevron({ open, testId }: { open: boolean; testId: string }) {
-  return (
-    <span className={`ml-0.5 ${open ? 'text-text' : 'text-text-secondary'}`} data-testid={testId}>
-      <ChevronDownIcon size={12} />
-    </span>
-  );
-}
-
-/** Raw-table name pill: neutral gray sibling of the section EntityBlob, with
- *  the same syntactic-level gate (plain text below 'full'). `trailing` (the
- *  picker chevron) renders inside the pill. */
-function RawTablePill({ name, trailing }: { name: string; trailing?: ReactNode }) {
-  const level = useUIStore((s) => s.syntacticLevel);
-  if (!syntacticLevelAtLeast(level, 'full')) {
-    return (
-      <span
-        className="inline-flex min-w-0 max-w-full items-center font-medium"
-        data-testid="data-table-raw-name"
-      >
-        <span className="truncate">{name}</span>
-        {trailing}
-      </span>
-    );
-  }
-  return (
-    <span
-      className="sh-pill inline-flex min-w-0 max-w-full items-center gap-1 align-middle rounded-full px-2 py-0.5 text-xs leading-none text-text-primary tabular-nums"
-      style={{ '--o': 'var(--cc-text-secondary)' } as CSSProperties}
-      data-testid="data-table-raw-name"
-    >
-      <span className="truncate">{name}</span>
-      {trailing}
-    </span>
-  );
+/** An external selection's row, as the key the host knows it by (shot id, or
+ *  station index) in its section; `nonce` makes every ask a new request. */
+interface RowSelectRequest {
+  sectionId: number;
+  key: number;
+  nonce: number;
 }
 
 export default function DataTable({ sections }: DataTableProps) {
@@ -291,15 +106,34 @@ export default function DataTable({ sections }: DataTableProps) {
     sections[0]?.id ?? null
   );
   const [tableView, setTableView] = useState<'shots' | 'stations'>('shots');
-  // Track key for scrolling to a row (set when external selection changes)
-  const [scrollToKey, setScrollToKey] = useState<number | null>(null);
-  const [stationScrollToKey, setStationScrollToKey] = useState<number | null>(null);
+  // An external selection (map, sections panel) asks the grid to put its
+  // cursor on that row: a section-scoped key plus a fresh nonce, which the grid
+  // honours once. Asking again for the row the user has since moved off is
+  // then a NEW request, never a same-value state update React drops (D21, #576).
+  const [shotSelectRequest, setShotSelectRequest] = useState<RowSelectRequest | null>(null);
+  const [stationSelectRequest, setStationSelectRequest] = useState<RowSelectRequest | null>(null);
+  const selectNonceRef = useRef(0);
   // Track previous selection to only react to actual selection changes
   const prevSelectionRef = useRef<Selection | null>(null);
   // Flag to skip scroll when selection originated from within the table
   const internalSelectionRef = useRef(false);
 
-  const { updateShot, setShotKind, warnings, isShotFrozen, updateStationComment, executeBatch, createShot, isDirty } = useProjectStore();
+  // `frozenShots` is picked but not destructured: isShotFrozen reads it through
+  // get(), so a change to the frozen set must still re-render the table (row tint).
+  const { updateShot, setShotKind, warnings, isShotFrozen, updateStationComment, executeBatch, createShot, isDirty } =
+    useProjectStore(
+      useShallow((s) => ({
+        updateShot: s.updateShot,
+        setShotKind: s.setShotKind,
+        warnings: s.warnings,
+        isShotFrozen: s.isShotFrozen,
+        frozenShots: s.frozenShots,
+        updateStationComment: s.updateStationComment,
+        executeBatch: s.executeBatch,
+        createShot: s.createShot,
+        isDirty: s.isDirty,
+      })),
+    );
   // Coordinate columns follow the active geometry (adjusted in the read-only
   // closure-adjusted view); row refs/comments stay measured for editing.
   const activeStations = useActiveStations();
@@ -413,8 +247,13 @@ export default function DataTable({ sections }: DataTableProps) {
       // a stale flag here would swallow the next genuinely external selection.
       if (referenceChanged && internalSelectionRef.current) {
         internalSelectionRef.current = false;
+        return;
       }
-      return;
+      // Same reference: the effect re-ran for another dependency.
+      if (!referenceChanged) return;
+      // The same selection made AGAIN from outside (the map clicked on the shot
+      // already selected) still asks for its row: the cursor may have moved since
+      // onto a row that selects nothing, such as a draft row (#576 NF-GRID-1).
     }
 
     // Skip scroll/view-switch for selections made from within the table
@@ -424,8 +263,9 @@ export default function DataTable({ sections }: DataTableProps) {
     }
 
     if (!selection) {
-      // No selection - clear scroll target but keep current dropdown
-      setScrollToKey(null);
+      // No selection - drop any pending row request but keep current dropdown
+      setShotSelectRequest(null);
+      setStationSelectRequest(null);
       return;
     }
 
@@ -435,7 +275,7 @@ export default function DataTable({ sections }: DataTableProps) {
         setSelectedSectionId(selection.sectionId);
       }
       if (tableView !== 'shots') setTableView('shots');
-      setScrollToKey(selection.shotId);
+      setShotSelectRequest({ sectionId: selection.sectionId, key: selection.shotId, nonce: ++selectNonceRef.current });
     } else if (selection.type === 'station' && selection.stationRef) {
       const { section_id, station_index } = selection.stationRef;
       const section = sections.find((s) => s.id === section_id);
@@ -446,29 +286,17 @@ export default function DataTable({ sections }: DataTableProps) {
         }
         // Switch to stations view and scroll to station
         if (tableView !== 'stations') setTableView('stations');
-        setStationScrollToKey(station_index);
+        setStationSelectRequest({ sectionId: section_id, key: station_index, nonce: ++selectNonceRef.current });
       }
     } else if (selection.type === 'section' && selection.sectionId !== undefined) {
       // Section selected externally - switch dropdown, clear row highlight
       if (selection.sectionId !== selectedSectionId) {
         setSelectedSectionId(selection.sectionId);
       }
-      setScrollToKey(null);
+      setShotSelectRequest(null);
+      setStationSelectRequest(null);
     }
   }, [selection, selectedSectionId, sections, tableView]);
-
-  // Clear scrollToKey after it's been consumed (to allow re-scrolling to same row)
-  useEffect(() => {
-    if (scrollToKey === null) return;
-    const timer = setTimeout(() => setScrollToKey(null), 100);
-    return () => clearTimeout(timer);
-  }, [scrollToKey]);
-
-  useEffect(() => {
-    if (stationScrollToKey === null) return;
-    const timer = setTimeout(() => setStationScrollToKey(null), 100);
-    return () => clearTimeout(timer);
-  }, [stationScrollToKey]);
 
   const selectedSection = sections.find((s) => s.id === selectedSectionId);
 
@@ -570,6 +398,10 @@ export default function DataTable({ sections }: DataTableProps) {
   }, [activeStations, selectedSectionId, tableView]);
 
   const handleViewChange = useCallback((value: 'shots' | 'stations') => {
+    // The grid of the view being entered mounts fresh and would honour a request
+    // left over from an earlier visit, moving the cursor to a stale row.
+    setShotSelectRequest(null);
+    setStationSelectRequest(null);
     setTableView(value);
   }, []);
 
@@ -724,11 +556,13 @@ export default function DataTable({ sections }: DataTableProps) {
   // Draft keys come from a monotonic counter and are NEVER reused (incl. the
   // end draft, which gets a fresh key on every reset): the grid keys per-cell
   // state (missing-cell marks) by row identity, and a reused key would leak a
-  // stale mark onto an unrelated later draft.
+  // stale mark onto an unrelated later draft. Not even across a section change
+  // (#576 RV3-FE-4): a create still in flight from the previous section finds
+  // its draft by key, and a restarted counter handed that key to the new
+  // section's end draft - whose values were then sent to the shot just created.
   const draftKeyRef = useRef(-2);
   useEffect(() => {
-    setDrafts([endDraft()]);
-    draftKeyRef.current = -2;
+    setDrafts([endDraft(draftKeyRef.current--)]);
   }, [selectedSectionId]);
   // Drop drafts whose anchor shot was deleted (the end draft always survives).
   useEffect(() => {
@@ -833,31 +667,11 @@ export default function DataTable({ sections }: DataTableProps) {
     [draftMissingByKey]
   );
 
-  // Commit a draft once its required fields are present - one at a time; the
-  // refresh after create_shot re-runs the effect for the next complete one.
-  const draftCommitting = useRef(false);
-  useEffect(() => {
-    if (!selectedSection || draftCommitting.current) return;
-    for (const draft of drafts) {
-      const data = completeDraftData(draft);
-      if (data === null) continue;
-      const { afterShotId, beforeShotId } = commitAnchorArgs(draft, selectedSection.shots);
-      draftCommitting.current = true;
-      setSource('data-table');
-      void createShot(selectedSection.id, data, afterShotId, beforeShotId)
-        .then(() =>
-          setDrafts((prev) =>
-            prev.flatMap((d) =>
-              d.key === draft.key ? (respawnsBlank(d) ? [endDraft(draftKeyRef.current--)] : []) : [d]
-            )
-          )
-        )
-        .finally(() => {
-          draftCommitting.current = false;
-        });
-      return;
-    }
-  }, [drafts, selectedSection, createShot]);
+  // Commit each draft once its required fields are present, keeping what it
+  // could not keep alone: a failed create's typed row (DRAFT-1) and the values
+  // typed while the create was in flight (D39(f)) - see useDraftAutoCommit.
+  const nextDraftKey = useCallback(() => draftKeyRef.current--, []);
+  useDraftAutoCommit({ drafts, setDrafts, selectedSection, createShot, updateShot, nextDraftKey });
 
 
   const onShotEdit = useCallback(
@@ -1029,19 +843,8 @@ export default function DataTable({ sections }: DataTableProps) {
   );
 
   // Surface partially-applied pastes (only the non-zero parts).
-  const onShotPasteReport = useCallback(
-    ({ written, clipped, skipped }: { written: number; clipped: number; skipped: number }) => {
-      const parts: string[] = [];
-      if (written > 0) parts.push(t('dataTable.pasteReport.written', { count: written }));
-      if (clipped > 0) parts.push(t('dataTable.pasteReport.clipped', { count: clipped }));
-      if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
-      if (parts.length > 0) {
-        const kind = clipped > 0 || skipped > 0 ? 'warning' : 'success';
-        showToast(parts.join(' · '), TOAST_KEYS.DATA_TABLE_PASTE, kind);
-      }
-    },
-    [t, showToast]
-  );
+  // Paste and fill outcomes (#576 FILL-1), the toast every grid shares.
+  const onShotPasteReport = useBulkEditReportToast(TOAST_KEYS.DATA_TABLE_PASTE);
 
   // Delete on a gutter-selected range (or the context menu's "Delete rows"):
   // draft rows in the range are discarded outright (the end draft resets, no
@@ -1165,7 +968,7 @@ export default function DataTable({ sections }: DataTableProps) {
       }),
     // getShotWarnings reads shotWarningsMap (derived from `warnings`); rebuild when
     // warnings change so frozen/warning icons stay current.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- getShotWarnings is a fresh closure every render; `warnings` (what it reads) is listed instead
     [t, precision, selectedSectionId, editingBlocked, isShotFrozen, warnings, shotIndexAt, handleCycleShotKind, triggerResolveWarning]
   );
 
@@ -1181,11 +984,12 @@ export default function DataTable({ sections }: DataTableProps) {
     [rowEntries]
   );
 
-  const shotScrollToRow = useMemo(() => {
-    if (scrollToKey === null) return null;
-    const idx = rowEntries.findIndex((e) => e.kind === 'shot' && e.shot.id === scrollToKey);
-    return idx >= 0 ? idx : null;
-  }, [scrollToKey, rowEntries]);
+  const shotSelectRow = useMemo(() => {
+    const req = shotSelectRequest;
+    if (req === null || req.sectionId !== selectedSectionId) return null;
+    const idx = rowEntries.findIndex((e) => e.kind === 'shot' && e.shot.id === req.key);
+    return idx >= 0 ? { row: idx, nonce: req.nonce } : null;
+  }, [shotSelectRequest, selectedSectionId, rowEntries]);
 
   // The grid's name-box content, lifted into the condensed panel header:
   // "<column> <row>" for a single cell, "3R × 2C" for a range.
@@ -1267,13 +1071,12 @@ export default function DataTable({ sections }: DataTableProps) {
     return idx >= 0 ? idx : null;
   }, [hoveredStation, sectionStations, selectedSectionId]);
 
-  const stationScrollToRow = useMemo(() => {
-    if (stationScrollToKey === null) return null;
-    const idx = sectionStations.findIndex(
-      (s) => s.station_ref.station_index === stationScrollToKey
-    );
-    return idx >= 0 ? idx : null;
-  }, [stationScrollToKey, sectionStations]);
+  const stationSelectRow = useMemo(() => {
+    const req = stationSelectRequest;
+    if (req === null || req.sectionId !== selectedSectionId) return null;
+    const idx = sectionStations.findIndex((s) => s.station_ref.station_index === req.key);
+    return idx >= 0 ? { row: idx, nonce: req.nonce } : null;
+  }, [stationSelectRequest, selectedSectionId, sectionStations]);
 
   // GPS (zero-datum) cell click: a station that already is - or is merged
   // with - a zero datum opens the dialog in plain edit mode; the rest open in
@@ -1416,7 +1219,7 @@ export default function DataTable({ sections }: DataTableProps) {
   const [rawTables, setRawTables] = useState<string[] | 'unavailable' | null>(null);
   const lastRawTableRef = useRef<string | null>(null);
   const fetchRawTableNames = useCallback(() => {
-    invokeIpc<string[]>('get_raw_table_names', undefined, {
+    invokeIpc('get_raw_table_names', undefined, {
       purpose: 'list raw sqlite tables for the data viewer',
     })
       .then((names) => setRawTables(Array.isArray(names) ? names : 'unavailable'))
@@ -1454,10 +1257,8 @@ export default function DataTable({ sections }: DataTableProps) {
   // only when it actually changes (toolbar wrap), guarded against sub-pixel churn so
   // a drag doesn't re-render the table via this state.
   const [chromeOffset, setChromeOffset] = useState(CHROME_OFFSET_DEFAULT);
-  const dataTableHeightRef = useRef(dataTableHeight);
-  dataTableHeightRef.current = dataTableHeight;
-  const dataTableFullScreenRef = useRef(dataTableFullScreen);
-  dataTableFullScreenRef.current = dataTableFullScreen;
+  const dataTableHeightRef = useLatest(dataTableHeight);
+  const dataTableFullScreenRef = useLatest(dataTableFullScreen);
   useEffect(() => {
     const el = gridBodyRef.current;
     if (!el) return undefined;
@@ -1474,7 +1275,7 @@ export default function DataTable({ sections }: DataTableProps) {
     ro.observe(el);
     measure();
     return () => ro.disconnect();
-  }, []);
+  }, [dataTableFullScreenRef, dataTableHeightRef]);
   // Entering/leaving fullscreen changes the body height drastically; measure it
   // synchronously so the fullscreen grid is sized in the same paint (no trailing).
   useLayoutEffect(() => {
@@ -1771,7 +1572,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 onActiveCellChange={onShotActiveCellChange}
                 onRowHover={onShotRowHover}
                 onPasteReport={onShotPasteReport}
-                selectedRow={shotScrollToRow}
+                selectRequest={shotSelectRow}
                 hoveredRow={shotHoveredRow}
                 rowClassName={shotRowClassName}
                 cellClassName={shotCellClassName}
@@ -1808,7 +1609,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 onEdit={onStationEdit}
                 onActiveCellChange={onStationActiveCellChange}
                 onRowHover={onStationRowHover}
-                selectedRow={stationScrollToRow}
+                selectRequest={stationSelectRow}
                 hoveredRow={stationHoveredRow}
                 rowLabel={stationRowLabel}
                 labels={stationGridLabels}

@@ -4,7 +4,6 @@ import type { TFunction } from 'i18next';
 import { formatFixed, getNumberFormatLocale } from '../../i18n/format';
 import { defaultConfig } from '../../types/config';
 import { useProjectStore } from '../../store/projectStore';
-import { useUIStore } from '../../store/uiStore';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useGridLabels } from '../../hooks/useGridLabels';
 import {
@@ -14,6 +13,7 @@ import {
 } from '../../utils/validation';
 import { nextShotKind } from '../../utils/shotKind';
 import { SpreadsheetGrid } from './SpreadsheetGrid';
+import { useBulkEditReportToast } from './useBulkEditReportToast';
 import { ExpandIcon, ShrinkIcon } from './icons';
 import {
   useEditSectionViewPersistence,
@@ -246,7 +246,6 @@ export function ShotTableEditor({
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const gridLabels = useGridLabels('dataTable.shotNoun');
-  const showToast = useUIStore((st) => st.showToast);
   const configValidation = useProjectStore((s) => s.config?.validation);
   // Per-project thresholds (#57). Between the host's prop and the global config
   // on purpose: a host that passes nothing - the import wizard, zero-datum -
@@ -590,20 +589,8 @@ export function ShotTableEditor({
 
   /** Report what a paste actually did, so an over-cap block cannot vanish
    *  quietly. Rows are grown to fit (below), so this normally only speaks when
-   *  the grid's own ceiling is hit. */
-  const onPasteReport = useCallback(
-    ({ written, clipped, skipped }: { written: number; clipped: number; skipped: number }) => {
-      const parts: string[] = [];
-      if (written > 0) parts.push(t('dataTable.pasteReport.written', { count: written }));
-      if (clipped > 0) parts.push(t('dataTable.pasteReport.clipped', { count: clipped }));
-      if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
-      if (parts.length > 0) {
-        const kind = clipped > 0 || skipped > 0 ? 'warning' : 'success';
-        showToast(parts.join(' \u00b7 '), TOAST_KEYS.SHOT_EDITOR_PASTE, kind);
-      }
-    },
-    [t, showToast]
-  );
+   *  the grid's own ceiling is hit. Fills report refused cells too (#576 FILL-1). */
+  const onPasteReport = useBulkEditReportToast(TOAST_KEYS.SHOT_EDITOR_PASTE);
 
   /** Let a paste grow the table past the single trailing blank. Without this the
    *  grid clips every target at `rows.length`, so pasting a block of shots wrote
@@ -717,10 +704,13 @@ export function ShotTableEditor({
 
   // The host tracks selection in FULL-array indices; the grid works in visible
   // ones, so translate in both directions.
-  const selectedVisibleRow = useMemo(() => {
+  // The grid moves its cursor once per request nonce. This host's selection is
+  // only ever the grid's own cursor echoed back, so it needs a request only when
+  // that row MOVES (rows inserted or removed above it): the row is its own nonce.
+  const selectRequest = useMemo(() => {
     if (selectedRowIndex === null || selectedRowIndex === undefined) return null;
     const found = actualIndexes.indexOf(selectedRowIndex);
-    return found === -1 ? null : found;
+    return found === -1 ? null : { row: found, nonce: found };
   }, [selectedRowIndex, actualIndexes]);
 
   // With an explicit `maxHeight` the host is dictating the size. Without one
@@ -811,7 +801,7 @@ export function ShotTableEditor({
           rowClassName={rowClassName}
           cellClassName={cellClassName}
           labels={gridLabels}
-          selectedRow={selectedVisibleRow}
+          selectRequest={selectRequest}
           onActiveCellChange={onActiveCellChange}
           hiddenColumns={hiddenColumnList}
           columnOrder={columnOrder}

@@ -16,33 +16,26 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { renderHook } from '@testing-library/react';
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue({}) }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn().mockResolvedValue(null) }));
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, fallback?: string) => fallback ?? 'error',
-}));
+vi.mock('../ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 const listenMock = vi.hoisted(() => vi.fn(async () => () => {}));
 vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));
 
-vi.mock('../../components/Dialogs/DialogWrapper', () => ({
-  DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+vi.mock('../../components/Dialogs/DialogWrapper', async () =>
+  (await import('../../test/factories/components')).dialogWrapperStub(),
+);
 
-vi.mock('../../components/common/Button', () => ({
-  Button: ({ children, ...rest }: React.ComponentProps<'button'>) => (
-    <button {...rest}>{children}</button>
-  ),
-}));
+vi.mock('../../components/common/Button', async () => (await import('../../test/factories/components')).buttonStub());
 
 import { useLaunchWithFile, resetLaunchFileQueueForTest } from '../launchWithFile';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import LaunchOpenConfirmDialog from '../../components/Dialogs/LaunchOpenConfirmDialog';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
 let queued: string[] = [];
 let loadProject: ReturnType<typeof vi.fn>;

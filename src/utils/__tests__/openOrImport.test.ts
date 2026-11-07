@@ -8,10 +8,6 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
-
 const openMock = vi.fn();
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: (...args: unknown[]) => openMock(...args),
@@ -22,21 +18,9 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { setProjectActionSource, peekProjectActionSource } from '../telemetry';
+import { makeSpeleoLink } from '../../test/factories/speleo';
 
-const READ_ONLY_LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'read-only',
-  lockHolder: 'someone-else',
-  lockedByOther: true,
-  hasUnpushedEdits: false,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+const READ_ONLY_LINK: SpeleoLinkState = makeSpeleoLink({ lockHolder: 'someone-else', lockedByOther: true });
 
 const loadProject = vi.fn().mockResolvedValue({ success: true });
 const importDmp = vi.fn().mockResolvedValue(null);

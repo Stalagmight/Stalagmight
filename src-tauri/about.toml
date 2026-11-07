@@ -31,3 +31,16 @@ accepted = [
     # stops resolution failing, it does not put AGPL text in the bundle.
     "AGPL-3.0-or-later",
 ]
+
+# [#576 NF-W4T-1] miniz_oxide ships the MIT text twice - `LICENSE` and
+# `LICENSE-MIT.md`, one blank line apart - and cargo-about picked whichever it met
+# first, which differs from machine to machine, so a regen flipped a line of the
+# bundle. Pin the one named for the license (the checksum makes a changed file a
+# loud stop rather than a silent swap).
+[miniz_oxide.clarify]
+license = "MIT OR Zlib OR Apache-2.0"
+
+[[miniz_oxide.clarify.files]]
+path = "LICENSE-MIT.md"
+license = "MIT"
+checksum = "799e9ca9d179295ef372f25d3769cdda7d25bb2668add6a6a1e22d1e4c678b8d"

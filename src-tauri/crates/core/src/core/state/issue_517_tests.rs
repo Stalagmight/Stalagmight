@@ -25,7 +25,7 @@
 use tempfile::TempDir;
 
 use super::AppState;
-use crate::core::loading::IGNORES_UNREADABLE_CODE;
+use crate::models::CommandErrorCode;
 use crate::models::{Project, SectionData, ShotData};
 use crate::persistence::Database;
 
@@ -486,11 +486,12 @@ fn a_save_is_refused_when_the_ignore_list_cannot_be_read_at_all() {
         "a save that cannot read the ignore list it is about to rewrite must be refused"
     );
     let error = saved.error.unwrap_or_default();
-    // The marker is what keeps the refusal out of the Review & Repair route,
+    // The code is what keeps the refusal out of the Review & Repair route,
     // which cannot fix this (`surfaceSaveFailure`).
     assert!(
-        error.starts_with(IGNORES_UNREADABLE_CODE),
-        "the refusal must carry its routing marker, got: {error}"
+        saved.code == Some(CommandErrorCode::IgnoresUnreadable)
+            && !error.contains("IGNORES_UNREADABLE"),
+        "the refusal must carry its routing code, and no marker in its text, got: {error}"
     );
     // ...and it must be the STRUCTURAL refusal, naming the missing column - not
     // a row-level complaint, which no longer refuses anything.
@@ -554,8 +555,9 @@ fn a_save_refuses_while_the_ignore_list_cannot_be_reached() {
     );
     let error = saved.error.unwrap_or_default();
     assert!(
-        error.starts_with(IGNORES_UNREADABLE_CODE),
-        "the refusal must carry its routing marker, got: {error}"
+        saved.code == Some(CommandErrorCode::IgnoresUnreadable)
+            && !error.contains("IGNORES_UNREADABLE"),
+        "the refusal must carry its routing code, and no marker in its text, got: {error}"
     );
     assert_eq!(
         raw_row_count(&path),
@@ -666,23 +668,11 @@ fn an_unwritable_unstamped_pre_v8_file_keeps_its_ignores_through_a_save_as() {
         .unwrap();
     std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o444)).unwrap();
 
-    // Mode bits are advice, not a guarantee: root ignores them, and CI's check
-    // job runs as root in a container. Confirm the protection took before
-    // asserting anything about it (the #485 pattern) - otherwise a failure here
-    // would report the guard, when what really happened is that the fixture
-    // could not be built.
-    if std::fs::OpenOptions::new()
-        .write(true)
-        .open(&source)
-        .is_ok()
-    {
-        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).unwrap();
-        eprintln!(
-            "skipping an_unwritable_unstamped_pre_v8_file_keeps_its_ignores_through_a_save_as: \
-             this user can write a 0444 file (root?), so there is no read-only database to test"
-        );
-        return;
-    }
+    // Mode bits are advice, not a guarantee: root ignores them. Confirm the
+    // protection took before asserting anything about it (the #485 pattern),
+    // and fail when it did not - run as root this test could not mean anything
+    // (#576 NF-ROOT-PERM; CI runs the Rust tests unprivileged).
+    crate::models::test_support::assert_file_refuses_writes(&source);
 
     let state = AppState::new().unwrap();
     let opened = state.open_project(source.clone());

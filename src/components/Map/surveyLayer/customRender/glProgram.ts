@@ -105,6 +105,17 @@ export function linkProgramBundle<U extends readonly string[], A extends readonl
   };
 }
 
+/**
+ * The GL error a layer's first-frames probe should act on, or NO_ERROR. A lost
+ * context reports CONTEXT_LOST_WEBGL from `getError` - no fault of the layer,
+ * and one that is re-added once the context is back (glContextRecovery.ts) - so
+ * it must not latch the layer dead.
+ */
+export function layerGlError(gl: WebGL2RenderingContext): number {
+  const err = gl.getError();
+  return err !== gl.NO_ERROR && gl.isContextLost() ? gl.NO_ERROR : err;
+}
+
 /** Free a bundle's program. Safe on null (a layer that never linked). */
 export function deleteProgramBundle(
   gl: WebGL2RenderingContext,

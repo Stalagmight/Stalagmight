@@ -21,7 +21,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+
+use stalagmight_models::poison_policy::RecoveringMutex;
 
 const KEYRING_SERVICE: &str = "stalagmight";
 
@@ -147,7 +148,7 @@ impl SecretStore for KeyringStore {
     }
 }
 
-/// In-memory backend (`Mutex<HashMap>`). The always-run CI seam (D-B17): tier
+/// In-memory backend (`RecoveringMutex<HashMap>`). The always-run CI seam (D-B17): tier
 /// precedence, delete-on-401, rehydration, and the never-override-keychain
 /// guardrail are all unit-tested by injecting these. It compiles in production
 /// (the impls are not `#[cfg(test)]`-gated per the plan) but its constructor is
@@ -155,13 +156,13 @@ impl SecretStore for KeyringStore {
 /// (a reachable `pub` fn is never dead, retiring the old non-test dead-code
 /// expectation).
 pub struct InMemoryStore {
-    map: Mutex<HashMap<String, String>>,
+    map: RecoveringMutex<HashMap<String, String>>,
 }
 
 impl InMemoryStore {
     pub fn new() -> Self {
         Self {
-            map: Mutex::new(HashMap::new()),
+            map: RecoveringMutex::new("speleodb_memory_store", HashMap::new()),
         }
     }
 }
@@ -172,28 +173,18 @@ impl SecretStore for InMemoryStore {
     }
 
     fn store(&self, account_key: &str, token: &str) -> Result<(), SecretStoreError> {
-        let mut map = self
-            .map
+        self.map
             .lock()
-            .map_err(|_| SecretStoreError("in-memory store lock poisoned".to_owned()))?;
-        map.insert(account_key.to_owned(), token.to_owned());
+            .insert(account_key.to_owned(), token.to_owned());
         Ok(())
     }
 
     fn load(&self, account_key: &str) -> Result<Option<String>, SecretStoreError> {
-        let map = self
-            .map
-            .lock()
-            .map_err(|_| SecretStoreError("in-memory store lock poisoned".to_owned()))?;
-        Ok(map.get(account_key).cloned())
+        Ok(self.map.lock().get(account_key).cloned())
     }
 
     fn delete(&self, account_key: &str) -> Result<(), SecretStoreError> {
-        let mut map = self
-            .map
-            .lock()
-            .map_err(|_| SecretStoreError("in-memory store lock poisoned".to_owned()))?;
-        map.remove(account_key);
+        self.map.lock().remove(account_key);
         Ok(())
     }
 }

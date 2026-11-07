@@ -3,9 +3,13 @@
 Tauri desktop app for processing underwater cave survey data (Rust backend + React/TypeScript frontend).
 
 It is year 2026. No em-dashes: write an ASCII hyphen instead, instead of '—' use '-'. This covers the
-hyphen, non-breaking hyphen, figure dash, en dash, em dash, horizontal bar and
-minus sign (U+2010..U+2015,U+2212). Box-drawing 
-characters in ASCII diagrams are fine.
+hyphen, non-breaking hyphen, figure dash, en dash, em dash, horizontal bar,
+minus sign, soft hyphen, the small, fullwidth, two-em, three-em and vertical
+dash forms, the double hyphens and the Armenian and oblique hyphens
+(U+2010..U+2015, U+2212, U+00AD, U+FE58, U+FE63, U+FF0D, U+2E3A, U+2E3B,
+U+FE31, U+FE32, U+2E40, U+2E17, U+058A, U+2E5D). The
+soft hyphen is invisible inside a word, so delete it rather than replace it.
+Box-drawing characters in ASCII diagrams are fine.
 
 ## Quick Reference
 
@@ -63,40 +67,66 @@ cargo check --manifest-path src-tauri/Cargo.toml
 All must pass before pushing:
 
 ```bash
-pnpm tsc --noEmit
-pnpm typecheck:agent                                      # agent-harness typecheck (CI check-job gate)
-pnpm typecheck:playwright                                 # e2e-playwright specs + IPC mock (CI smoke-job gate)
-pnpm test:mock-contract                                    # IPC mock <-> generate_handler! contract (CI smoke-job gate)
-pnpm exec vitest run                                      # vitest unit + component (CI check-job gate; plain "pnpm test" watches and never exits locally)
-pnpm test:ui
-pnpm lint:e2e-parallel                                    # Playwright parallel-safety (CI smoke-job gate)
-pnpm lint:pw-timing:test                                  # Playwright timing-reporter fixtures (CI smoke-job gate)
-pnpm lint:rust-file-size                                  # Rust file-size ratchet (CI check-job gate)
-pnpm lint:ts-file-size                                     # TS file-size ratchet (CI check-job gate)
-pnpm lint:private-leaks                                   # no internal/personal refs in the public tree (CI leak-scan gate)
-pnpm lint:third-party:test && pnpm lint:third-party      # THIRD-PARTY-LICENSES.md matches the lockfiles (CI leak-scan gate; regen: pnpm gen:third-party)
-pnpm lint:readonly-gates:test && pnpm lint:readonly-gates # read-only gating tripwire (CI check-job gate)
-pnpm lint:test-ids:test && pnpm lint:test-ids            # interactive UI test-ID contract (CI check-job gate)
-pnpm lint:no-em-dash:test && pnpm lint:no-em-dash        # Unicode-dash guard (CI leak-scan gate)
-cargo fmt --manifest-path src-tauri/Cargo.toml --check   # root package (run without --check to fix)
+# --- check job (ci.yml) - same order as CI: lints first, then the gates and tests ---
+cargo fmt --manifest-path src-tauri/Cargo.toml --check    # root package (run without --check to fix)
 for m in src-tauri/crates/*/Cargo.toml; do cargo fmt --manifest-path "$m" --check; done   # every member (CI runs this loop, NOT --all - see docs/linting.md)
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --features telemetry --all-targets   # deny-level lint gate
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo check --release --manifest-path src-tauri/Cargo.toml --workspace --features telemetry   # release profile: debug_assertions off (#541)
+pnpm tsc --noEmit
+pnpm lint:test-ids:test && pnpm lint:test-ids             # interactive UI test-ID contract
+pnpm lint:eslint:test && pnpm lint:eslint                 # ESLint over src + e2e trees, warnings ratcheted (eslint-baseline.json); smoke runs it too
+pnpm lint:import-cycles:test && pnpm lint:import-cycles   # no value-import cycle under src/ (import type is fine)
+pnpm lint:i18n-literals:test && pnpm lint:i18n-literals   # no hard-coded UI text in the dialogs (strings come from en.json)
+pnpm lint:vitest-ipc-mock:test && pnpm lint:vitest-ipc-mock   # no vi.mock of utils/ipc with a factory outside the allowlist (use the shared mock)
+pnpm typecheck:agent                                      # agent-harness typecheck
+./scripts/test-release.sh                                 # release tooling, driven in throwaway clones
+pnpm lint:rust-file-size:test && pnpm lint:rust-file-size # Rust file-size ratchet
+pnpm lint:ts-file-size:test && pnpm lint:ts-file-size     # TS file-size ratchet
+pnpm lint:readonly-gates:test && pnpm lint:readonly-gates   # read-only gating tripwire
+pnpm exec vitest run                                      # vitest unit + component (plain "pnpm test" watches and never exits locally)
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry
-cargo test --manifest-path src-tauri/vendor/compass_data/Cargo.toml   # workspace-excluded vendored crate; no telemetry feature/env (CI check-job gate)
+git status --porcelain src-tauri/bindings                 # must print nothing after cargo test (generated ts-rs bindings are committed)
+pnpm gen:ipc-types                                        # regenerate the frontend IPC types from the Rust types
+git status --porcelain src/types/ipc src/types/ipc.generated.ts   # must print nothing after gen:ipc-types (the generated frontend IPC types are committed)
+cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml   # workspace-excluded vendored crate; no telemetry feature/env
+cargo package --no-verify --manifest-path src-tauri/Cargo.toml -p stalagmight-models -p stalagmight-persistence -p stalx-reader   # crates.io packaging check; each package must also list LICENSE
+# --- smoke job (e2e-smoke.yml) ---
+pnpm lint:e2e-parallel:test && pnpm lint:e2e-parallel     # Playwright parallel-safety
+pnpm lint:e2e-no-sleep:test && pnpm lint:e2e-no-sleep     # no unannotated waitForTimeout in Playwright specs
+pnpm typecheck:playwright                                 # e2e-playwright specs + IPC mock
+pnpm test:mock-contract                                   # IPC mock <-> generate_handler! contract
+pnpm lint:smoke-features:test && pnpm lint:smoke-features # every critical feature in docs/TESTING.md has an @smoke test
+pnpm test:pw-timing                                       # timing reporter self-test (a report, not a time budget)
+pnpm test:ui:smoke                                        # the @smoke merge gate (needs a display, e.g. xvfb-run)
+# plus the specs for the feature you changed: pnpm exec playwright test e2e-playwright/<feature>.spec.ts
+# --- leak-scan job (leak-scan.yml; runs on every change, docs included) ---
+pnpm lint:private-leaks:test && pnpm lint:private-leaks   # no internal/personal refs in the public tree
+pnpm lint:no-em-dash:test && pnpm lint:no-em-dash         # Unicode-dash guard
+pnpm lint:third-party:test && pnpm lint:third-party       # THIRD-PARTY-LICENSES.md matches the lockfiles (regen: pnpm gen:third-party)
+pnpm lint:prepush-checklist:test && pnpm lint:prepush-checklist # this block lists every gate CI runs
 ```
 
-Running full `pnpm test:ui` is not recommended as it is heavy. You must select
-playwright tests relevant to the code and funcitonality changed/affected by the
-changes made and run those selectively.
+The full `pnpm test:ui` suite is deliberately not on the list: it is heavy and
+runs nightly. Run the `@smoke` set (the CI merge gate) plus the Playwright specs
+for the code and functionality the change affects, selected by hand.
+
+The block is the floor of what CI runs, not a summary of it:
+`pnpm lint:prepush-checklist` (leak-scan) fails when `ci.yml`, `e2e-smoke.yml`
+or `leak-scan.yml` runs a gate this block lacks, so a new CI step lands with its
+line here.
 
 Rust tests must run with `--workspace`, `--features telemetry` and
 `TELEMETRY_ENDPOINT` set, exactly as above - without `--workspace` only the
-app crate runs, and a plain `cargo test` skips the registry-coverage tests, so
-either omission can pass locally while CI fails. For fast iteration on one
+app crate runs, and a featureless `cargo test` skips the telemetry collector's
+own tests (the registry-coverage tests run either way), so either omission can
+pass locally while CI fails. For fast iteration on one
 crate use `-p`, e.g.
 `cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib fuzz_undo`
 (`--features telemetry` only applies to the packages that define the feature:
-`stalagmight`, `stalagmight-telemetry`, `stalagmight-speleodb`). On
+`stalagmight`, `stalagmight-telemetry`). Run cargo from inside the clone: the
+bundled-SQLite build flags live in the repo's `.cargo/config.toml`, which cargo
+reads from its working directory, not from `--manifest-path`, and the
+persistence tests fail without them ([docs/toolchain.md](docs/toolchain.md)). On
 **Windows**, use `./scripts/test.ps1` instead (a bare `cargo test` aborts at
 startup with `STATUS_ENTRYPOINT_NOT_FOUND`). All explained in
 [docs/testing-recipes.md](docs/testing-recipes.md).
@@ -178,7 +208,7 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [SPEC.md](docs/SPEC.md) | **Full specification** - data model, UI design, workflows, file formats, validation rules |
 | [Testing Guide](docs/TESTING.md) | Which tier a test belongs in, and the UI testability requirements |
 | [Testing Recipes](docs/testing-recipes.md) | Commands per tier, Playwright/agent-harness/Rust/vitest patterns, mock conventions, troubleshooting |
-| [Linting & Format Policy](docs/linting.md) | Rust clippy/rustfmt CI gates, the anti-AI-slop policy, the per-test-module `#[expect]` idiom, considered-but-deferred lints |
+| [Linting & Format Policy](docs/linting.md) | Rust clippy/rustfmt CI gates, the anti-AI-slop policy, the per-test-module `#[expect]` idiom, considered-but-deferred lints; the frontend ESLint gate and its warning ratchet |
 | [Toolchain](docs/toolchain.md) | The pnpm/node pins: corepack integrity hash, `allowBuilds` build-script approvals, lockfile version policy |
 | [Architecture](docs/architecture.md) | Workspace crate layout, state flow, command pattern, key files, Rust patterns |
 | [Project Structure](docs/project-structure.md) | Directory tree, tech stack |

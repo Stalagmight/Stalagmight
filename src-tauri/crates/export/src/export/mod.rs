@@ -1,3 +1,4 @@
+mod atomic;
 pub mod csv;
 mod depth_colors;
 pub mod dive_profile;
@@ -5,8 +6,13 @@ pub mod image;
 pub mod json;
 pub mod tml;
 mod tml_azimuth;
+#[cfg(test)]
+mod tml_comment_order_tests;
+#[cfg(test)]
+mod tml_golden_tests;
 mod tml_topology;
 
+pub use atomic::{write_atomic, write_atomic_bytes};
 pub use csv::*;
 pub use dive_profile::*;
 pub use image::*;

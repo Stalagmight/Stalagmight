@@ -181,8 +181,22 @@ impl DatFile<Unloaded> {
         // than failing on invalid UTF-8.
         let bytes = std::fs::read(&full_path).map_err(Error::CouldntReadFile)?;
         let file_contents: String = bytes.iter().map(|&b| b as char).collect();
-        let (surveys, remainder) = Survey::parse_dat_file_with_remainder(&file_contents)?;
-        // One latin1 byte is one `char`, so the chars ahead of the remainder
+        self.load_from_text(&file_contents)
+    }
+
+    /// Parse the survey data file from text the caller has already read
+    /// (Stalagmight fork). Lets a consumer apply its own file-reading policy -
+    /// which paths may be read, how large a file may be, how its bytes are
+    /// decoded - instead of [`Self::load`]'s.
+    ///
+    /// The text should hold one `char` per byte of the file (a single-byte
+    /// decode such as Windows-1252), so [`DatFile::unread_at`] stays a byte
+    /// offset.
+    /// # Errors
+    /// - [`Error::CouldntParseSurvey`] If the survey file cannot be parsed
+    pub fn load_from_text(self, file_contents: &str) -> Result<DatFile<Loaded>, Error> {
+        let (surveys, remainder) = Survey::parse_dat_file_with_remainder(file_contents)?;
+        // One decoded byte is one `char`, so the chars ahead of the remainder
         // count the bytes of the file that were read.
         let unread_at = file_contents.chars().count() - remainder.chars().count();
         let unread = remainder.to_string();
@@ -268,16 +282,56 @@ impl Project<Unloaded> {
             return Err(Error::ProjectFileNotFound(path));
         }
         let file_contents = std::fs::read_to_string(&path).map_err(Error::CouldntReadFile)?;
+        Self::from_text(path, &file_contents)
+    }
+
+    /// Parse a project file from text the caller has already read
+    /// (Stalagmight fork), so a consumer can decode the file its own way -
+    /// [`Self::read`] insists on UTF-8, and a Compass project is written in
+    /// the Windows ANSI code page. `file_path` is where the file lives; the
+    /// survey files it lists are relative to its folder.
+    /// # Errors
+    /// - [`Error::CouldntParseProject`] If the file cannot be parsed
+    pub fn from_text(file_path: impl AsRef<Path>, file_contents: &str) -> Result<Self, Error> {
+        let path = file_path.as_ref().to_path_buf();
 
         // Phase 1: Tokenize
-        let tokens = lexer::tokenize(&file_contents)
+        let tokens = lexer::tokenize(file_contents)
             .map_err(|e| Error::CouldntParseProject(e.to_string()))?;
 
         // Phase 2: Parse
-        let project = parser::parse_project(path, &tokens, &file_contents)
+        let project = parser::parse_project(path, &tokens, file_contents)
             .map_err(|e| Error::CouldntParseProject(e.to_string()))?;
 
         Ok(project)
+    }
+
+    /// Load the project's survey data files through `read` (Stalagmight
+    /// fork). `read` gets each file's path as the project lists it - relative
+    /// to the project file's folder unless the project wrote an absolute one -
+    /// and returns the file's text (see [`DatFile::load_from_text`]), or `None`
+    /// to leave that file out: the consumer decides which files may be read
+    /// and reports the ones it skipped, and the rest of the project still
+    /// loads.
+    /// # Errors
+    /// - [`Error::CouldntParseSurvey`] If a survey file that was read cannot be parsed
+    pub fn load_survey_files_with(
+        self,
+        mut read: impl FnMut(&Path) -> Option<String>,
+    ) -> Result<Project<Loaded>, Error> {
+        let mut survey_files = Vec::new();
+        for survey_file in self.survey_files {
+            let Some(text) = read(&survey_file.file_path) else {
+                continue;
+            };
+            survey_files.push(survey_file.load_from_text(&text)?);
+        }
+        Ok(Project {
+            id: self.id,
+            file_path: self.file_path,
+            survey_files,
+            state: PhantomData::<Loaded>,
+        })
     }
 
     /// Read a Compass project's survey data files from disk
@@ -344,6 +398,36 @@ mod tests {
         let path = PathBuf::from("does_not_exist.mak");
         let result = Project::read(&path);
         assert!(result.is_err_and(|err| matches!(err, Error::ProjectFileNotFound(_path))));
+    }
+
+    /// Stalagmight fork: the caller reads the files. A survey file the reader
+    /// declines is left out and the others still load.
+    #[test]
+    fn load_with_a_caller_supplied_reader() {
+        let project = Project::from_text(
+            "/nowhere/project.mak",
+            "@1.0,2.0,3.0,13,0.0;\n&WGS 1984;\n#kept.dat;\n#skipped.dat;\n",
+        )
+        .unwrap();
+        assert_eq!(project.survey_files.len(), 2);
+        let dat = "CAVE\r\nSURVEY NAME: A\r\nSURVEY DATE: 7 10 1979\r\nSURVEY TEAM:\r\nNobody\r\n\
+                   DECLINATION: 0.00  FORMAT: DDDDLRUDLADN  CORRECTIONS: 0.00 0.00 0.00\r\n\r\n\
+                   FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\r\n\
+                   A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\x0c\r\n";
+        let mut asked = Vec::new();
+        let loaded = project
+            .load_survey_files_with(|path| {
+                asked.push(path.to_path_buf());
+                (path == Path::new("kept.dat")).then(|| dat.to_string())
+            })
+            .unwrap();
+        assert_eq!(
+            asked,
+            [PathBuf::from("kept.dat"), PathBuf::from("skipped.dat")],
+            "the reader sees each path as the project lists it"
+        );
+        assert_eq!(loaded.survey_files.len(), 1);
+        assert_eq!(loaded.survey_files[0].surveys().len(), 1);
     }
 
     #[test]

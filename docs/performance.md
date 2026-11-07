@@ -166,6 +166,140 @@ fires an `UpdateShot` per cell: that would multiply the reconcile by the edit
 count and should batch the edits (the `Batch` command already finalizes once)
 or debounce the reconcile.
 
+## The Refresh After an Edit
+
+After every successful edit the frontend re-reads the project: the state, the
+warnings list and the integrity check (`projectStore.executeCommand`). Three things
+keep that off the critical path (#576 C2, A9):
+
+- **Off the main thread.** Every command runs on the blocking pool
+  (docs/architecture.md, "Where commands run"), so the window keeps painting while
+  the backend works; before, each of these reads ran inline on the main thread.
+- **No copies.** The project is held copy-on-write (`core/state/project_slot.rs`);
+  a read takes an O(1) snapshot instead of deep-cloning the survey. Each of the three
+  reads used to clone it.
+- **Binary state.** The refresh fetches `get_project_state_binary`, the load's
+  msgpack + typed-array envelope (`core/load_binary.rs` `encode_refresh`, decoded by
+  `utils/loadProjectBinary.ts`), instead of the JSON `get_project_state`, which stays
+  for the agent harness and tests.
+
+Release probes (`src-tauri/src/commands/refresh_probe_tests.rs`, `#[ignore]`d; run
+with `--release -- --ignored --nocapture --test-threads=1`), synthetic 75,000 shots
+in 750 sections, medians of 7 on a loaded machine (2026-11):
+
+| Step | Before | After |
+|---|---|---|
+| whole-project copies per edit cycle | 3 (about 7 ms each) | 0 |
+| warnings list | 16.4 ms | 4.6 ms |
+| integrity check | 25.9 ms | 13.3 ms |
+| state refresh payload | JSON: 180.6 ms, 36.5 MB, then `JSON.parse` | binary: 74.0 ms, 7.2 MB |
+
+The rest of the state refresh is the measured coordinate walk, penetration and the
+frozen-shot pass, which both forms pay.
+
+## Placement Suggestions - the Crossing Check
+
+`suggest_placements` / `suggest_all_placements` (models `placement_suggest.rs`,
+behind the import wizards and `suggest_orphan_placements`) score every way an
+imported section could continue an existing one, then reject a candidate whose
+placed trace would cross the existing trace too closely. That crossing check is
+exact: since #576 A2 a uniform grid (`CrossingPrefilter`) hands each placed
+import segment only the existing segments within a proven rounding margin, which
+took two straight 2,000-shot sections from 370 s to well under a second.
+
+The worst case that left was a scene where almost every candidate survives the
+scoring: long, dead-straight, constant-depth sections, where every shot matches
+every other. Each surviving start index then needed one crossing check over the
+whole placed import - candidates x import length - and a profile of the 5x2000
+scene below put 58% in the per-segment grid walk, 15% in `floor`, 10% in
+`cell_range` and 9% in the segment test itself: the walk, once per placed
+segment per candidate, with no single hot spot.
+
+### The collinear speedup (#576 NF-W4U-3)
+
+The check now skips what it can PROVE the exact segment test passes, so every
+verdict - and with it every suggestion, rejection and score - is unchanged.
+`CrossingIndex`, built once per section pair (and only on the first candidate
+that reaches the check, which most pairs never produce), applies three shortcuts:
+
+1. **Straight runs proven parallel.** The import trace is cut into straight runs
+   (16+ consecutive segments whose direction vectors agree to 1e-10 m / leg).
+   For a run and one existing segment, `run_parallel_to` bounds the
+   denominator the segment test computes, for every translation the check can
+   apply - including the rounding of placing the import - and when that bound
+   is under half of `PARALLEL_DENOM_EPS` the test returns "parallel, no
+   crossing" for every pair, whatever the candidate. A run proven parallel to EVERY existing segment is
+   not walked at all; on the collinear scenes that is the whole import.
+2. **Sparse lanes.** A run proven parallel to only some existing segments walks
+   a grid built over the others (same margin, same cell rule, same entry test).
+3. **Chunk skips.** Placed segments are walked in chunks of 32. When a chunk's
+   placed box, grown by the margin, misses its lane's grid, the chunk is skipped
+   in one test: rounding is monotone, so that box contains every member
+   segment's own query box, and each of those would have missed too.
+
+The crossing check now lives in `placement_suggest/crossing.rs`. The bound and
+its derivation are in the `run_parallel_to` doc comment, the other two
+arguments in `CrossingIndex`'s. The proof needs the placed coordinates times
+the leg length to stay small (about 1e6 m^2: 5 m legs over roughly 70 km of
+section); past that it proves nothing and the walk runs, still exact.
+
+**The gate.** `placement_suggest/differential_tests.rs` keeps the pipeline's
+crossing half as it was before this change (`reference`, verbatim) and runs
+seeded scenes through both: random walks, collinear, skewed and micro-noise
+sections around the parallel cutoff, bends, crossings near the 4 m clearance,
+constant depth, zigzags, long legs, degenerate shots, import-to-import. The
+suggestions must match field for field with scores bit for bit, and the crossing
+checks the two pipelines make must match one for one with the same verdicts; each
+section pair also gets extra direct crossing checks. A failure prints its seed
+(`PLACEMENT_DIFF_SEED=<seed>` replays it). The default run is 660 scenes in
+debug; this change passed 50,000 seeds (sections up to 160 shots) plus 3,000
+(up to 600) and 11 worst-case-size scenes in release, with 0 mismatches, and the
+gate caught two deliberately wrong variants (a 100x looser parallel tolerance,
+seed 0x13; a chunk box one point short, seed 0x4c). A NaN reading used to make
+the score sorts panic (35 of those 53,000 scenes): they took NaN as equal to
+every score. They order by `score_cmp` now (#576 NF-W9PERF-1) - `partial_cmp` on
+any two numbers, NaN below all of them - so no finite result moved (20,000
+seeded scenes compared against the old sorts: every all-finite scene
+bit-identical) and the gate fails on any panic (20,000 seeds in release: 0
+panics, 0 mismatches).
+
+Release probe (`placement_suggest_timing_probe`, 2026-11-03, before = b83b12de5).
+The machine was shared (load average 13-17 on 22 cores for this table, 8-17
+over the session) and wall-clock runs vary by +/-25%, so the base and optimised
+binaries ran alternately, 5 times each, and the table gives the medians. The
+instructions column is the exact, load-independent ratio of user-space
+instructions for the pipeline alone (`perf stat -e instructions:u`, pinned to
+one core, the verbatim reference vs the optimised pipeline in one binary):
+
+| Scene | Before | After | Instructions after / before | Suggestions |
+|---|---|---|---|---|
+| spec-scale random: existing 200x50, import 20x50 | 91 ms | 55 ms | 0.70 | 3 |
+| spec-scale straight: existing 200x50, import 20x50 | 619 ms | 729 ms (*) | 0.95 | 400 |
+| long straight: existing 1x2000, import 1x2000 | 519 ms | 13 ms | 0.018 | 10 |
+| long straight: existing 5x2000, import 2x2000 | 8,366 ms | 165 ms | 0.017 | 40 |
+
+(*) Noise: that scene's samples overlapped completely (483-799 ms before,
+486-778 ms after), its medians went both ways over the six interleaved runs
+made during this work (-6% to +18%), and it runs 5% fewer instructions.
+
+What is left:
+
+- **spec-scale straight** is essentially unchanged: its candidates pair sections
+  1.7 degrees apart, which no parallel argument covers. Its time splits between
+  those candidates' grid walks (about a third), the matcher's scoring (about a
+  quarter) and allocation, hashing and sorting.
+- **Long, straight, nearly-but-not-exactly parallel sections** (between ~1e-9
+  degrees and the matcher's 25 degrees apart) still walk the grid per
+  candidate. Axis-aligned ones mostly leave the grid's box and are chunk-skipped
+  (2x2000 at 90 / 91 degrees: 1.5 s before, 0.1 s after), diagonal ones do not
+  (37 / 38 degrees: 2.2 s before, 0.9 s after). Cutting those needs a different
+  exact argument - a separating line with its own rounding bound - not more of
+  this one. That 0.9 s for two 2,000-shot diagonal sections 1 degree apart is
+  accepted as it stands (#576 NF-W9PERF-2).
+
+Real surveys rarely look like any of these scenes: a random 2,000-shot pair
+takes about a millisecond.
+
 ## Profiling Guide
 
 ### Build for profiling
@@ -285,6 +419,28 @@ re-emits only the dirty sections' vertex ranges, and a pure global recolor
 re-resolves and re-uploads only the four color buffers, skipping reprojection and
 tessellation entirely.
 
+**Reprojection with a GPS origin** goes through `metersToMapCoords`
+(`src/utils/coordinates.ts`), once per station in every full rebuild, label
+build and hit-index rebuild. Since #576 D36 it inverts the backend's WGS84
+projection instead of the old 6371 km sphere, and since #576 GEO-D1 it does so
+with the backend's exact solve (`local_to_gps` in geo.rs): one quadratic for
+where the origin's vertical meets the ellipsoid, then the closed-form latitude
+of a surface point - 2 `atan2`, 1 `sqrt` and 1 `hypot` per point, the origin's
+trig memoised. The D36 inverse it replaced was an approximation (two Bowring
+ECEF-to-geodetic inversions and one forward projection per point: 6 `atan2`,
+8 `sin`/`cos`, 3 `sqrt`). Measured under Node 26 / V8 (vitest, one worker,
+origin (20.5, -87.3), 400 000 calls over a 20 km square, medians of 5 runs over
+3 rounds, both versions in the same run): 0.080-0.084 us per call for the exact
+solve, against 0.185-0.200 us for the D36 approximation and 0.05-0.06 us for
+the pre-D36 sphere (measured earlier) - about +2 ms per full pass on an
+89 000-station project over the sphere, likely more on WebKit. The
+transcendental calls are the cost: an earlier scalar rewrite of the D36 code
+with no intermediate objects measured the same as the original, as V8 already
+removes the allocations and hoists the memoised origin frame. If a large
+GPS-referenced project shows this pass in a profile, measure it in the app
+first; the remaining lever changes the call shape (one batch inverse per data
+build).
+
 **Label builds** (`customRender/labelController.ts`) do glyph shaping plus a
 zoom-ladder greedy declutter, which is the heaviest CPU pass in the renderer.
 They are scoped to a padded viewport and emit a slack zoom window, and they
@@ -384,7 +540,5 @@ so a production build stays diagnosable.
 `VITE_DEBUG_MACOS_LOCKUP`. Both are documented in
 [`debug-gates.md`](debug-gates.md).
 
-**`src/hooks/useFpsMonitor.ts` is not running.** It implements a rolling
-`requestAnimationFrame` average with hysteresis thresholds, but it has no
-consumer; the live FPS readout is `useMapDevStats`' own loop. Do not wire
-adaptive work to it without wiring the hook up first.
+**There is no FPS monitor hook.** The unused `useFpsMonitor` was deleted
+(#576 D27-32(e)); the live FPS readout is `useMapDevStats`' own loop.

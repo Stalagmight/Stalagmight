@@ -17,6 +17,7 @@
  * wrong ids.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { failOnRefreshErrors } from '../../../test/refreshGuard';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { DmpFile } from '../../../types/commands';
 import type { ImportReceipt } from '../../../types/ipc/ImportReceipt';
@@ -36,28 +37,23 @@ vi.mock('../WizardMapPanel', () => ({
 }));
 // Interpolation is kept, not swallowed: "how many sections are at stake" is the
 // whole point of the new confirmation copy, so the count has to be observable.
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({
-    t: (key: string, opts?: Record<string, unknown>) =>
-      opts ? `${key}:${JSON.stringify(opts)}` : key,
-  }),
-}));
-vi.mock('../../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-  setSource: vi.fn(),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys('keyAndOptions'));
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
+);
 
-const invokeIpcMock = vi.fn();
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: (...args: unknown[]) => invokeIpcMock(...args),
-  getErrorMessage: (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback),
-}));
+import { emptyBinaryRefresh, invokeIpcMock, stubGetErrorMessage } from '../../../test/factories/ipc';
 
+vi.mock('../../../utils/ipc');
+// [#576 NF-W6A-5] The refresh every edit/import ends with reads bytes; a test that
+// gives none answers "no project open" rather than making the decoder throw.
+emptyBinaryRefresh();
+stubGetErrorMessage((e, fallback) => (e instanceof Error ? e.message : fallback));
+
+import i18n from '../../../i18n';
 import DmpNewImportDialog, { type SavedManualPlacingState } from '../DmpNewImportDialog';
 import type { ZeroDatumConfigResult } from '../ZeroDatumConfigDialog';
-import { convertToEditableShots } from '../../../hooks/useImportState';
+import { convertToEditableShots } from '../../../utils/shotConversion';
 import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
 import type { Project } from '../../../types/project';
@@ -147,7 +143,7 @@ const zeroDatumOnly = (): ZeroDatumConfigResult => ({
     quality: 1,
     reverse: false,
   },
-  shots: convertToEditableShots(dmpFile.sections[0]!.shots),
+  shots: convertToEditableShots(dmpFile.sections[0]!.shots, dmpFile.sections[0]!.version),
 });
 
 /** The fake project: what the wizard has actually put in it, right now. */
@@ -203,6 +199,23 @@ const renderWizard = (
     />,
   );
 
+/**
+ * The anchor import has landed AND the run has let go of it. The fake project
+ * holds the id the moment the mock answers, but the wizard is still importing
+ * until the store's import path returns (its refresh, its integrity check), and
+ * both exits are shut while it is (`exitBlocked`) - a click in that window hits
+ * a disabled button and opens nothing. Waiting on the id alone lost that race
+ * (#576 NF-FIX5-2: the file's first case, 22 runs in 30 on a quiet machine).
+ */
+async function anchorImportSettled(): Promise<void> {
+  await waitFor(() => expect(projectSectionIds).toEqual([7]));
+  await waitFor(() => expect(screen.getByTestId('back-button')).toBeEnabled());
+  expect(screen.getByTestId('cancel-button')).toBeEnabled();
+}
+
+// [#576 NF-W6A-5] Every refresh this file drives must be answered by its mock.
+failOnRefreshErrors();
+
 describe('DMP wizard: what Back and Cancel do with sections already imported (#394)', () => {
   beforeEach(() => {
     projectSectionIds = [];
@@ -229,7 +242,8 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
         return { success: true, section_ids: ids, import_receipt: receipt(), warnings: [] };
       }
       if (cmd === 'execute_batch') {
-        if (!batchResult.success) return { ...batchResult, warnings: [] };
+        // A refusal is the backend's CommandError rejection (#576 C4).
+        if (!batchResult.success) throw { code: 'FAILED', message: batchResult.error ?? '' };
         for (const command of commands) {
           if (command.type === 'delete_section') {
             projectSectionIds = projectSectionIds.filter((id) => id !== command.section_id);
@@ -237,7 +251,10 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
         }
         return { success: true, warnings: [] };
       }
-      if (cmd === 'save_project') return { ...saveResult, warnings: [] };
+      if (cmd === 'save_project') {
+        if (!saveResult.success) throw { code: 'FAILED', message: saveResult.error ?? '' };
+        return { saved_path: null, unlinked_copy_path: null, warnings: [] };
+      }
       return null;
     });
     useUIStore.setState({
@@ -274,7 +291,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
       zeroDatumConfig: zeroDatumOnly(),
     });
 
-    await waitFor(() => expect(projectSectionIds).toEqual([7]));
+    await anchorImportSettled();
 
     fireEvent.click(screen.getByTestId('back-button'));
     expect(screen.getByTestId('back-confirm-message')).toHaveTextContent(
@@ -310,7 +327,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     const onCancel = vi.fn();
     renderWizard(undefined, { onCancel, selected: [0], zeroDatumConfig: zeroDatumOnly() });
 
-    await waitFor(() => expect(projectSectionIds).toEqual([7]));
+    await anchorImportSettled();
 
     fireEvent.click(screen.getByTestId('cancel-button'));
 
@@ -378,7 +395,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     const onCancel = vi.fn();
     renderWizard(undefined, { onCancel, selected: [0], zeroDatumConfig: zeroDatumOnly() });
 
-    await waitFor(() => expect(projectSectionIds).toEqual([7]));
+    await anchorImportSettled();
 
     fireEvent.click(screen.getByTestId('cancel-button'));
     fireEvent.click(screen.getByTestId('confirm-cancel-button'));
@@ -386,6 +403,31 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     expect(onCancel).toHaveBeenCalled();
     expect(projectSectionIds).toEqual([7]);
     expect(batches).toEqual([]);
+  });
+
+  /**
+   * The done step completes the run ONCE (#576 D4). It was an effect watching
+   * for `done` that ran again whenever the run's busy flag flipped, so a removal
+   * from that screen - open to the user while App.tsx is still saving after the
+   * first completion - completed the run a second time.
+   *
+   * Injection: put the completion back in an effect keyed on `isImporting` and
+   * `onComplete` is called twice.
+   */
+  it('a removal from the done screen does not complete the run again', async () => {
+    const onComplete = vi.fn();
+    const onCancel = vi.fn();
+    renderWizard(undefined, { onComplete, onCancel, selected: [0], zeroDatumConfig: zeroDatumOnly() });
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    await anchorImportSettled();
+    fireEvent.click(screen.getByTestId('cancel-button'));
+    fireEvent.click(screen.getByTestId('cancel-remove-button'));
+    await waitFor(() => expect(onCancel).toHaveBeenCalled());
+    await act(async () => {});
+
+    expect(projectSectionIds).toEqual([]);
+    expect(onComplete).toHaveBeenCalledTimes(1);
   });
 
   /**
@@ -539,7 +581,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     await act(async () => {
       importGate.release();
     });
-    await waitFor(() => expect(projectSectionIds).toEqual([7]));
+    await anchorImportSettled();
 
     // And the id that landed is tracked: cancelling now offers to remove it.
     fireEvent.click(screen.getByTestId('cancel-button'));
@@ -562,7 +604,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     const onCancel = vi.fn();
     renderWizard(undefined, { onCancel, selected: [0], zeroDatumConfig: zeroDatumOnly() });
 
-    await waitFor(() => expect(projectSectionIds).toEqual([7]));
+    await anchorImportSettled();
     fireEvent.click(screen.getByTestId('cancel-button'));
     fireEvent.click(screen.getByTestId('cancel-remove-button'));
 
@@ -597,8 +639,9 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     fireEvent.click(screen.getByTestId('cancel-button'));
     fireEvent.click(screen.getByTestId('cancel-remove-button'));
 
+    // In the confirmation the user is looking at (#576 NF-AN4-N2), not behind it.
     await waitFor(() =>
-      expect(screen.getByTestId('wizard-error')).toHaveTextContent('FS_PERMISSION'),
+      expect(screen.getByTestId('cancel-confirm-dialog')).toHaveTextContent('FS_PERMISSION'),
     );
     expect(onCancel).not.toHaveBeenCalled();
     // The delete DID land - this is a disk failure, not a backend refusal.
@@ -659,7 +702,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     const onCancel = vi.fn();
     renderWizard(undefined, { onCancel, selected: [0], zeroDatumConfig: zeroDatumOnly() });
 
-    await waitFor(() => expect(projectSectionIds).toEqual([7]));
+    await anchorImportSettled();
     fireEvent.click(screen.getByTestId('cancel-button'));
     fireEvent.click(screen.getByTestId('cancel-remove-button'));
 
@@ -693,7 +736,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
 
     await waitFor(() => expect(batches).toHaveLength(1));
     await waitFor(() =>
-      expect(screen.getByTestId('wizard-error')).toHaveTextContent(
+      expect(screen.getByTestId('cancel-confirm-dialog')).toHaveTextContent(
         'Section 7 is referenced by a closure',
       ),
     );
@@ -735,7 +778,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     fireEvent.click(screen.getByTestId('cancel-remove-button'));
 
     await waitFor(() =>
-      expect(screen.getByTestId('wizard-error')).toHaveTextContent(
+      expect(screen.getByTestId('cancel-confirm-dialog')).toHaveTextContent(
         'dialogs.dmpNewImport.removeImportedWrongProject',
       ),
     );
@@ -777,5 +820,235 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
       'dialogs.dmpNewImport.cancelWizardNoImports',
     );
     expect(screen.queryByTestId('cancel-remove-button')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * #576 NF-AN4-N2. A failed "remove imported sections" wrote its reason into the
+ * wizard's one shared error slot, which renders in the panel BEHIND the open
+ * Cancel/Back confirmation: the confirmation kept showing only its static copy.
+ * And because the slot was shared, "Continue editing" then showed the removal's
+ * error next to the late import's Retry - a button that re-runs the IMPORT.
+ */
+describe('DMP wizard: a failed removal is reported in the confirmation (#576 NF-AN4-N2)', () => {
+  const placedOnly = (overrides: Partial<SavedManualPlacingState> = {}) =>
+    savedState({
+      segmentQueue: [],
+      directPlacements: [
+        {
+          anchorSectionIndex: 0,
+          anchorStationIndex: 0,
+          placement: { type: 'manual', align_station_index: 0, offset: { x: 0, y: 0, z: 0 } },
+        },
+      ],
+      ...overrides,
+    });
+  let importResult: Record<string, unknown> | null;
+  let batchAnswer: Record<string, unknown>;
+
+  beforeEach(() => {
+    ipcOrder = [];
+    importResult = null;
+    // Refusals, as the backend's CommandError rejections (#576 C4).
+    batchAnswer = { code: 'FAILED', message: 'Batch refused (test)' };
+    invokeIpcMock.mockReset();
+    invokeIpcMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      ipcOrder.push(cmd);
+      if (cmd === 'import_sections') {
+        if (importResult) throw importResult;
+        const configs = (args?.sections as unknown[] | undefined) ?? [];
+        return { success: true, section_ids: configs.map(() => 20), import_receipt: receipt(), warnings: [] };
+      }
+      if (cmd === 'execute_batch') throw batchAnswer;
+      return null;
+    });
+    useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null, importContext: null, toasts: [] });
+    useProjectStore.setState({ project: null });
+  });
+
+  it('Back shows the refusal inside its confirmation, not in the panel behind it', async () => {
+    const onBack = vi.fn();
+    renderWizard(
+      savedState({
+        segmentQueue: [[1]],
+        segmentAnchor: { sectionIndex: 1, stationIndex: 0 },
+        importedSectionIds: [7],
+      }),
+      { onBack, selected: [0, 1] },
+    );
+
+    fireEvent.click(screen.getByTestId('back-button'));
+    fireEvent.click(screen.getByTestId('confirm-back-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('back-confirm-dialog')).toHaveTextContent('Batch refused (test)'),
+    );
+    expect(screen.getByTestId('wizard-manual-placing')).not.toHaveTextContent('Batch refused (test)');
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it('Continue editing returns to the late-import failure and its Retry, not to the removal', async () => {
+    importResult = { code: 'FAILED', message: 'Late refused (test)' };
+    renderWizard(placedOnly({ importedSectionIds: [7] }), { selected: [0] });
+
+    await waitFor(() => expect(screen.getByTestId('wizard-placing')).toHaveTextContent('Late refused (test)'));
+    expect(screen.getByTestId('retry-button')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('cancel-button'));
+    fireEvent.click(screen.getByTestId('cancel-remove-button'));
+    await waitFor(() =>
+      expect(screen.getByTestId('cancel-confirm-dialog')).toHaveTextContent('Batch refused (test)'),
+    );
+
+    fireEvent.click(screen.getByTestId('cancel-confirm-continue'));
+
+    await waitFor(() => expect(screen.queryByTestId('cancel-confirm-dialog')).not.toBeInTheDocument());
+    // The Retry beside the error re-runs the late IMPORT, so the error beside it
+    // has to be the import's.
+    expect(screen.getByTestId('wizard-placing')).toHaveTextContent('Late refused (test)');
+    expect(screen.getByTestId('wizard-placing')).not.toHaveTextContent('Batch refused (test)');
+    importResult = null;
+    fireEvent.click(screen.getByTestId('retry-button'));
+    await waitFor(() => expect(ipcOrder.filter((c) => c === 'import_sections')).toHaveLength(2));
+  });
+});
+
+/**
+ * #576 D6: the wizard's late import goes through the store's single edit path
+ * (`importSections` -> `executeCommand`), so it gets that path's aftermath -
+ * among it the deferred-save flag (`noteImportResolvedDeferredSave`) and the
+ * integrity re-check - instead of the two steps the wizard used to replicate by
+ * hand. The case that mattered: a brand-new project without a zero datum, left
+ * with "Keep and close", kept `databaseOpen` false (warning resolution and
+ * dive-plan saving disabled) although the import had written the file.
+ */
+describe('DMP wizard: wizard imports run through the store edit path (#576 D6)', () => {
+  beforeEach(() => {
+    ipcOrder = [];
+    nextSectionId = 7;
+    invokeIpcMock.mockReset();
+    invokeIpcMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      ipcOrder.push(cmd);
+      if (cmd === 'import_sections') {
+        const configs = (args?.sections as unknown[] | undefined) ?? [];
+        return { success: true, section_ids: configs.map(() => nextSectionId++), import_receipt: receipt(), warnings: [] };
+      }
+      return null;
+    });
+    useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null, importContext: null });
+    // A project created with a deferred first save: no file yet, so the DB-backed
+    // surfaces are off until something writes it.
+    useProjectStore.setState({ project: null, databaseOpen: false, isDirty: false });
+  });
+
+  it('opens the deferred-save gate and re-checks integrity after the late import', async () => {
+    const onComplete = vi.fn();
+    // Reopened after the user placed section 0 by hand: queue drained, the placement
+    // recorded but not imported yet, so the late import sends it.
+    renderWizard(
+      savedState({
+        segmentQueue: [],
+        directPlacements: [
+          {
+            anchorSectionIndex: 0,
+            anchorStationIndex: 0,
+            placement: { type: 'manual', align_station_index: 0, offset: { x: 0, y: 0, z: 0 } },
+          },
+        ],
+      }),
+      { onComplete, selected: [0] },
+    );
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    const afterImport = ipcOrder.slice(ipcOrder.indexOf('import_sections'));
+    expect(afterImport[0]).toBe('import_sections');
+    expect({
+      databaseOpen: useProjectStore.getState().databaseOpen,
+      integrityRechecked: afterImport.includes('check_project_integrity'),
+      dirty: useProjectStore.getState().isDirty,
+    }).toEqual({ databaseOpen: true, integrityRechecked: true, dirty: true });
+  });
+});
+
+/**
+ * #576 RV2-FE-D1 / RV2-FE-D3: the wizard's own run identity, and a read-only refusal.
+ *
+ * D1: the store's edit path refuses an import whose project changed between the call
+ * and the IPC - but it captures the project at the CALL, so a run whose project changed
+ * before that (the saved state outlives a project switch: nothing clears `dialogData`)
+ * imported into whatever was open. Only the withdrawal checked the run's own project
+ * key. Every import now does.
+ *
+ * D3: a read-only refusal of a wizard import (the lock lost mid-wizard, the Plan/Export
+ * workspace) showed the raw coded EDIT_DISABLED string inline, AND the store's friendly
+ * read-only toast. One message now: the friendly one, inline, where the wizard shows
+ * its errors.
+ */
+describe('DMP wizard: imports land in the run project, a read-only refusal reads once (#576 RV2-FE-D1/D3)', () => {
+  const placedOnly = (overrides: Partial<SavedManualPlacingState> = {}) =>
+    savedState({
+      segmentQueue: [],
+      directPlacements: [
+        {
+          anchorSectionIndex: 0,
+          anchorStationIndex: 0,
+          placement: { type: 'manual', align_station_index: 0, offset: { x: 0, y: 0, z: 0 } },
+        },
+      ],
+      ...overrides,
+    });
+  let importResult: Record<string, unknown> | null;
+
+  beforeEach(() => {
+    ipcOrder = [];
+    nextSectionId = 7;
+    importResult = null;
+    invokeIpcMock.mockReset();
+    invokeIpcMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      ipcOrder.push(cmd);
+      if (cmd === 'import_sections') {
+        if (importResult) throw importResult;
+        const configs = (args?.sections as unknown[] | undefined) ?? [];
+        return { success: true, section_ids: configs.map(() => nextSectionId++), import_receipt: receipt(), warnings: [] };
+      }
+      return null;
+    });
+    useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null, importContext: null, toasts: [] });
+    useProjectStore.setState({ project: { created_at: 'project-A' } as Project });
+  });
+
+  it('refuses the late import once another project is open', async () => {
+    useProjectStore.setState({ project: { created_at: 'project-B' } as Project });
+    const onComplete = vi.fn();
+    renderWizard(placedOnly({ projectKey: 'project-A' }), { onComplete, selected: [0] });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('wizard-placing')).toHaveTextContent('dialogs.dmpNewImport.importWrongProject'),
+    );
+    expect(ipcOrder, 'imported into the project that replaced the run').not.toContain('import_sections');
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('still imports into the project the run belongs to', async () => {
+    const onComplete = vi.fn();
+    renderWizard(placedOnly({ projectKey: 'project-A' }), { onComplete, selected: [0] });
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(ipcOrder).toContain('import_sections');
+  });
+
+  it('shows a read-only refusal as the friendly notice, inline and nowhere else', async () => {
+    importResult = {
+      code: 'WORKSPACE_READ_ONLY',
+      message: 'Import sections is disabled in Plan and Export.',
+    };
+    renderWizard(placedOnly(), { selected: [0] });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('wizard-placing')).toHaveTextContent(i18n.t('editGate.workspaceReadOnlyNotice')),
+    );
+    expect(screen.getByTestId('wizard-placing')).not.toHaveTextContent('EDIT_DISABLED');
+    expect(screen.getByTestId('wizard-placing')).not.toHaveTextContent('Import sections is disabled in Plan and Export.');
+    expect(useUIStore.getState().toasts.map((t) => t.message), 'the same notice toasted on top').toEqual([]);
   });
 });

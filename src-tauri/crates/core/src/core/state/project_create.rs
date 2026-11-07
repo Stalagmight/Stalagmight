@@ -1,3 +1,5 @@
+use super::command_epilogue::EpilogueSteps;
+use super::session_commit::{CommandsHeld, SessionCommit};
 use super::AppState;
 use crate::core::CommandResult;
 use crate::models::Project;
@@ -89,13 +91,19 @@ impl AppState {
     /// Examples:
     /// - `Cave.stalx` -> `Cave_1.stalx` (if `Cave.stalx` exists)
     /// - `Cave_1.stalx` -> `Cave_2.stalx` (if both previous files exist)
+    ///
+    /// [#576 RV13-1] A link at a name is a name taken, even one that leads nowhere
+    /// yet: `symlink_metadata`, not `exists()`/`metadata()`, which follow it - a
+    /// dangling link was "free" and a link to an empty file a placeholder, and the
+    /// create then made or wrote the link's target, wherever it points.
     pub(super) fn next_available_project_path(path: &PathBuf) -> PathBuf {
-        if !path.exists() {
+        let taken = |candidate: &std::path::Path| candidate.symlink_metadata().is_ok();
+        if !taken(path) {
             return path.clone();
         }
         // Treat 0-byte files as non-existent: Android's SAF (ACTION_CREATE_DOCUMENT)
         // creates an empty placeholder at the chosen path before returning.
-        if path.metadata().is_ok_and(|m| m.len() == 0) {
+        if path.symlink_metadata().is_ok_and(|m| m.len() == 0) {
             return path.clone();
         }
 
@@ -123,7 +131,7 @@ impl AppState {
                 PathBuf::from(&candidate_name)
             };
 
-            if !candidate_path.exists() {
+            if !taken(&candidate_path) {
                 return candidate_path;
             }
 
@@ -131,6 +139,12 @@ impl AppState {
         }
     }
 
+    /// Create a project in memory, with no file (#576 NF-AN3-5: test-only).
+    ///
+    /// Reached only through `execute(Command::CreateProject)`, which only the test
+    /// suites issue - the app's File > New is [`Self::do_create_project_full`]. Gated
+    /// out of release builds so nothing there can install a file-less project.
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn create_project(&self, name: String, location: Option<String>) -> CommandResult {
         let mut project = Project::new(name, location);
         // Seed per-project validation thresholds from the global config - the
@@ -143,42 +157,35 @@ impl AppState {
             "Project created in memory"
         );
 
-        if let Ok(mut proj) = self.project.lock() {
-            *proj = Some(project);
-            // A session boundary (a project committed into the slot), bumped under
-            // the guard per the `speleodb_session` rule.
-            self.bump_speleodb_session();
-        }
-
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.clear();
-            // [#303] A brand-new project is local: the configured entry window.
-            undo_stack.use_count_limit();
-        }
-
-        // Clear display settings cache for new project
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-        // [Track B] (#191) A freshly-created local project is always editable;
-        // reset the gate so a previously-open read-only remote project's disabled
-        // flag can't leak in.
-        self.set_edit_enabled(true);
-        // #213: a new local project is never force-editing; clear any prior flag.
-        self.set_force_editing(false);
-        // [#473] A project created from nothing has no persisted history, so it cannot
-        // have lost any. Cleared for the same reason as the two gates above: the flag is
-        // per-project, the previous project may have set it, and a stale `true` here puts
-        // a banner reading "edit history could not be read and was discarded" over a
-        // brand-new empty project. Create is a project-slot commit like a load, and every
-        // commit must write this.
-        self.set_history_discarded(false);
+        // [#576 A5] A project-slot commit like every other: each per-project cell
+        // written under one `project` acquisition (this used to set three of the
+        // gates after dropping the guard, and kept the previous project's database
+        // handle and undo watermark). A project created from nothing has no file,
+        // so no handle, nothing deferred and no Recent Projects row.
+        let commands = self.hold_commands();
+        self.commit_open_session(&commands, SessionCommit::new_local(project, None));
 
         CommandResult::success()
     }
 
-    /// Update per-project settings (#57): the project name and validation
-    /// thresholds. Persisted into the .stalx on the next save; warnings recompute
-    /// from the new thresholds on the next get_project_warnings.
+    /// Update per-project settings (#57): the project name, the validation
+    /// thresholds and (#576 NF-W3-2) the default north reference - the one a
+    /// section declaring none inherits (`Project::default_azimuth_reference`,
+    /// `None` = nothing recorded). Persisted into the .stalx on the next save;
+    /// warnings recompute from the new thresholds on the next
+    /// get_project_warnings, and geometry from the new reference on the next
+    /// read (the cached closure-adjusted coordinates are dropped here).
+    ///
+    /// The Project Settings dialog sends all three on every Save, so `None` is
+    /// "nothing recorded", not "leave it alone". A reference arriving off the
+    /// wire is re-sanitised (`AzimuthReference::sanitised`) like every ingress.
+    ///
+    /// [#576 NF-W3-2-PLAN] The name and the thresholds are on the read-only
+    /// workspace's allowlist; the north reference is NOT. It turns every section
+    /// that declares none of its own - a survey edit, like the entrance elevation -
+    /// so in Plan and Export a save that would CHANGE it is refused whole
+    /// (`WORKSPACE_READ_ONLY`, nothing applied), and an unread one is not set
+    /// (lifted) from there either: it stays unread until a Survey save sets it.
     ///
     /// Undoable via a snapshot pair (mirrors repair_open_project_integrity) so an
     /// unrelated undo can't silently revert a settings change: without its own
@@ -188,24 +195,27 @@ impl AppState {
         &self,
         name: String,
         validation: crate::config::ValidationConfig,
+        default_azimuth_reference: Option<crate::models::AzimuthReference>,
     ) -> CommandResult {
+        let default_azimuth_reference =
+            default_azimuth_reference.map(crate::models::AzimuthReference::sanitised);
         // Serialize against execute()/undo()/redo() so the before/after pair is
         // consistent (same rationale as repair_open_project_integrity).
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B5): a settings change mutates the project,
         // so it is gated on a read-only remote project (returns the EDIT_DISABLED
-        // coded failure).
-        if let Err(f) = self.guard_mutation("Update project settings") {
-            return f;
+        // coded failure). [#576 C5] On the read-only-workspace allowlist: the name
+        // and the validation thresholds stay editable in Plan/Export on purpose
+        // (docs/app-modes.md says why). The north reference is not (NF-W3-2-PLAN):
+        // its own workspace check is below, once it is known to change.
+        if let Err(f) = self.guard_metadata_mutation("Update project settings") {
+            return CommandResult::refused(f);
         }
+        let survey_edits_allowed = !self.workspace_mode().is_read_only();
         let before_snapshot = self.capture_project_snapshot().ok();
-        {
-            let mut guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
+        let frame_before = self.frame_datum_key();
+        let reference_changed = {
+            let mut guard = self.project.lock();
             let Some(project) = guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
@@ -213,28 +223,81 @@ impl AppState {
             // modified_at, marking the project dirty and pushing a misleading
             // "Update project settings" undo entry for a save that changed nothing
             // (Codex). Compare before mutating.
-            if project.name == name && project.validation == validation {
+            if project.name == name
+                && project.validation == validation
+                && project.default_azimuth_reference == default_azimuth_reference
+            {
+                // [#576 B15 follow-up] Unchanged, but SET: the dialog sends the
+                // thresholds and the north reference while they are unread so the
+                // user can keep the shown ones, and that choice is what lets a save
+                // write them. Setting the north reference is a survey edit, so not
+                // from Plan or Export (NF-W3-2-PLAN).
+                self.lift_unreadable_project_setting("validation");
+                if survey_edits_allowed {
+                    self.lift_unreadable_project_setting("default_azimuth_reference");
+                }
                 return CommandResult::success();
             }
-            project.name = name;
-            project.validation = validation;
-            project.touch();
-        }
-        // Record an undo entry (before -> after) so the change is on the stack.
-        if let Some(before_json) = before_snapshot {
-            if let Ok(after_json) = self.capture_project_snapshot() {
-                if before_json != after_json {
-                    self.push_snapshot_undo(
-                        crate::core::Command::UpdateProjectSettings,
-                        before_json,
-                        after_json,
-                    );
-                    // Dirty-bit flip (#191, D-B16): settings mutated a remote
-                    // project. Set-only; no-op for local-only.
-                    self.mark_remote_forward_edit();
+            let reference_changed = project.default_azimuth_reference != default_azimuth_reference;
+            // [#576 NF-W3-2-PLAN] A changed north reference is a survey edit: in
+            // Plan or Export the whole save is refused, before anything is applied.
+            if reference_changed {
+                if let Err(f) = self.guard_workspace("Change the default north reference") {
+                    return CommandResult::refused(f);
                 }
             }
+            // [#576 RV5-F4-2] Where each anchoring datum is, measured BEFORE the
+            // reference turns the sections that inherit it.
+            let datum_holds = if reference_changed {
+                datum_holds(project)
+            } else {
+                Vec::new()
+            };
+            project.name = name;
+            project.validation = validation;
+            project.default_azimuth_reference = default_azimuth_reference;
+            // Each inheriting section turned about its own station 0, so a datum on
+            // a later station moved: the frame datum off local (0, 0), and every
+            // other datum off its GPS-implied place. Hold each merge group's datum
+            // where it was and re-place the group's partners around it, exactly as
+            // a shot edit does (`realign_after_shot_edit`); the epilogue's reconcile
+            // then settles the groups that hold no datum.
+            for (section_id, held_at) in datum_holds {
+                project.realign_after_shot_edit(section_id, Some(held_at));
+            }
+            project.touch();
+            reference_changed
+        };
+        // Every section that declares no reference of its own turns with the
+        // default: the closure-adjusted coordinates cached for the old one are stale.
+        if reference_changed {
+            self.invalidate_adjusted_cache();
         }
+        // [#576 B15 follow-up] The thresholds and the north reference are now the
+        // user's, not defaults standing in for unread ones: they no longer refuse a
+        // save (NF-W3-2 gave the north reference its control) - the reference only
+        // where survey edits are allowed (NF-W3-2-PLAN).
+        self.lift_unreadable_project_setting("validation");
+        if survey_edits_allowed {
+            self.lift_unreadable_project_setting("default_azimuth_reference");
+        }
+        // Record an undo entry (before -> after) so the change is on the stack, and
+        // flip the dirty bit (#191, D-B16) - through the shared forward epilogue
+        // (#576 A4). A name or threshold edit needs no derived-state step. A changed
+        // north reference does (#576 RV4-R-C1): each inheriting section turned about
+        // its own stored origin, so the offsets are re-derived (the reconcile) before
+        // the after-snapshot, or sections merged at a junction come apart.
+        let steps = if reference_changed {
+            EpilogueSteps::GEOMETRY
+        } else {
+            EpilogueSteps::NONE
+        };
+        self.record_snapshot_edit_if_changed(
+            frame_before,
+            steps,
+            crate::core::Command::UpdateProjectSettings,
+            before_snapshot,
+        );
         CommandResult::success()
     }
 
@@ -255,18 +318,13 @@ impl AppState {
         }
         // Serialize against execute()/undo()/redo(), same rationale as
         // update_project_settings.
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         if let Err(f) = self.guard_mutation("Set entrance elevation") {
-            return f;
+            return CommandResult::refused(f);
         }
         let before_snapshot = self.capture_project_snapshot().ok();
         {
-            let mut guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
+            let mut guard = self.project.lock();
             let Some(project) = guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
@@ -278,23 +336,24 @@ impl AppState {
             // skips that comparison inherits the same spurious-dirty risk this
             // guard alone cannot close.
             if project.surface_elevation == elevation {
+                // [#576 B15 follow-up] Unchanged, but SET: see
+                // `update_project_settings`.
+                self.lift_unreadable_project_setting("surface_elevation");
                 return CommandResult::success();
             }
             project.surface_elevation = elevation;
             project.touch();
         }
-        if let Some(before_json) = before_snapshot {
-            if let Ok(after_json) = self.capture_project_snapshot() {
-                if before_json != after_json {
-                    self.push_snapshot_undo(
-                        crate::core::Command::SetSurfaceElevation,
-                        before_json,
-                        after_json,
-                    );
-                    self.mark_remote_forward_edit();
-                }
-            }
-        }
+        // [#576 B15 follow-up] The elevation is now the user's: it no longer
+        // refuses a save.
+        self.lift_unreadable_project_setting("surface_elevation");
+        // [#576 A4] Recorded through the shared forward epilogue, like the settings.
+        self.record_snapshot_edit_if_changed(
+            None,
+            EpilogueSteps::NONE,
+            crate::core::Command::SetSurfaceElevation,
+            before_snapshot,
+        );
         CommandResult::success()
     }
 
@@ -318,8 +377,19 @@ impl AppState {
     ///   this takes precedence over `save_directory`.
     /// * `defer_initial_save` - When true, reserve `project.file_path` but do not
     ///   create/write the project file yet. First save/autosave will create it.
-    pub fn do_create_project_full(
+    ///
+    /// The body of [`Self::do_create_project_full`] and
+    /// [`Self::do_create_project_full_held`] [#576 NF-W4C-3]: `held` is a
+    /// `command_lock` span the caller already holds, and `None` takes the lock around
+    /// the commit only, as the create always has. First in this impl because the
+    /// source tripwire that pins the create's shared commit (`speleodb_session`
+    /// tests) reads the first full-create definition in this file.
+    ///
+    /// `check_target` [#576 RV13-1]: see [`Self::do_create_project_full_checked`].
+    fn do_create_project_full_with(
         &self,
+        held: Option<&CommandsHeld<'_>>,
+        check_target: Option<&dyn Fn(&std::path::Path) -> Result<(), String>>,
         name: String,
         project_location: Option<String>,
         save_directory: Option<PathBuf>,
@@ -334,6 +404,33 @@ impl AppState {
         let sink = self
             .get_event_sink()
             .ok_or_else(|| LoadError::internal("EventSink not initialized"))?;
+
+        // [#576 RV14-1] The file this create opens is resolved, and the caller's
+        // write-path check run on it, before the create cancels any open or load
+        // in progress or emits a progress phase: a create refused here (or whose
+        // name does not resolve) leaves both as they were.
+        //
+        // Resolve database path from explicit save path or from project name + optional save directory.
+        let mut db_path = self.requested_create_path(&name, save_directory.as_ref(), save_path)?;
+
+        // Avoid collisions by selecting the next available path instead of overwriting.
+        let available_db_path = Self::next_available_project_path(&db_path);
+        if available_db_path != db_path {
+            tracing::warn!(
+                requested_path = ?db_path,
+                selected_path = ?available_db_path,
+                purpose = "avoid overwriting existing project on create",
+                "Project path already exists; using auto-renamed path"
+            );
+            db_path = available_db_path;
+        }
+
+        // [#576 RV13-1] The caller's write-path check, on the file this create
+        // opens - the name resolved and any `_N` rename made - before anything is
+        // created, the missing folders included.
+        if let Some(check) = check_target {
+            check(&db_path).map_err(LoadError::internal)?;
+        }
 
         // Start new load - cancels any existing load
         let cancel_token = self.start_new_load();
@@ -359,40 +456,12 @@ impl AppState {
         // === PHASE 0: Creating database (40%) ===
         progress.start_phase(LoadingPhase::CreatingDatabase);
 
-        // Resolve database path from explicit save path or from project name + optional save directory.
-        let mut db_path = if let Some(path) = save_path {
-            if path.extension().is_none_or(|ext| ext != "stalx") {
-                path.with_extension("stalx")
-            } else {
-                path
-            }
-        } else {
-            match self.resolve_project_path(&name, save_directory.as_ref()) {
-                Ok(path) => path,
-                Err(e) => {
-                    early_return_err!(LoadError::new("IO", e));
-                }
-            }
-        };
-
-        // Avoid collisions by selecting the next available path instead of overwriting.
-        let available_db_path = Self::next_available_project_path(&db_path);
-        if available_db_path != db_path {
-            tracing::warn!(
-                requested_path = ?db_path,
-                selected_path = ?available_db_path,
-                purpose = "avoid overwriting existing project on create",
-                "Project path already exists; using auto-renamed path"
-            );
-            db_path = available_db_path;
-        }
-
         // Create parent directories if they don't exist
         if let Some(parent) = db_path.parent() {
             if !parent.exists() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     early_return_err!(LoadError::new(
-                        "IO",
+                        crate::models::CommandErrorCode::Io,
                         format!("Failed to create directory: {e}")
                     ));
                 }
@@ -407,7 +476,7 @@ impl AppState {
                 Ok(db) => Some(db),
                 Err(e) => {
                     early_return_err!(LoadError::new(
-                        "DATABASE",
+                        crate::models::CommandErrorCode::Database,
                         format!("Failed to create database: {e}")
                     ));
                 }
@@ -427,7 +496,7 @@ impl AppState {
         if let Some(ref mut database) = db {
             if let Err(e) = database.save_project(&project) {
                 early_return_err!(LoadError::new(
-                    "DATABASE",
+                    crate::models::CommandErrorCode::Database,
                     format!("Failed to save project: {e}")
                 ));
             }
@@ -475,7 +544,7 @@ impl AppState {
                 if let Err(e) = database.save_display_setting(key, value) {
                     // Fail the command if display settings can't be saved - this indicates a real DB error
                     early_return_err!(LoadError::new(
-                        "DATABASE",
+                        crate::models::CommandErrorCode::Database,
                         format!("Failed to save display setting {key}: {e}")
                     ));
                 }
@@ -487,95 +556,52 @@ impl AppState {
         // === FINALIZE: Store in AppState (NON-CANCELLABLE STATE COMMIT) ===
         // Allow cancellation only before any state mutation occurs.
         check_cancelled!();
-        // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
-        // data is written even if a previous panic poisoned a mutex.
 
-        // ALL commits under ONE `project` acquisition, exactly as
-        // `do_load_project_full`'s finalization and for the same reason (round
-        // 4): this project carries a `file_path`, so `delete_project`'s
-        // check-and-teardown can match it - and a delete landing between the
-        // slot commit and the handle commits tore down a half-built session
-        // that this function then finished building into an empty world.
-        // (`create_project`, the in-memory sibling, commits a project with no
-        // `file_path`, which the delete's identity check can never match.)
-        let mut proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        // Commit 1: Project state mutation
-        *proj_guard = Some(project.clone());
-        // A session boundary (a project committed into the slot), bumped under
-        // the guard per the `speleodb_session` rule.
-        self.bump_speleodb_session();
-
-        // Commit 2: Database handle mutation
-        *self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = db;
-
-        // Commit 3: Clear undo stack (new project)
-        self.undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
-
-        // [Track B] (#191) A freshly-created local project is always editable;
-        // reset the gate so a prior read-only remote project can't leak in.
-        self.set_edit_enabled(true);
-        // #213: a new local project is never force-editing; clear any prior flag.
-        self.set_force_editing(false);
-        // [#473] A project created from nothing has no persisted history, so it cannot
-        // have lost any. Cleared for the same reason as the two gates above: the flag is
-        // per-project, the previous project may have set it, and a stale `true` here puts
-        // a banner reading "edit history could not be read and was discarded" over a
-        // brand-new empty project. Create is a project-slot commit like a load, and every
-        // commit must write this.
-        self.set_history_discarded(false);
-
-        // Track whether the initial save is still pending: a deferred new project
-        // has no file on disk yet, so its first import must durably persist it.
-        self.initial_save_deferred
-            .store(defer_initial_save, std::sync::atomic::Ordering::Relaxed);
-
-        // Commit 4: Display settings cache
-        if defer_initial_save {
-            let mut cache = self
-                .display_settings_cache
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.clear();
-            for (key, value) in &settings_map {
-                cache.insert((*key).to_string(), value.clone());
-            }
-        } else {
-            self.clear_display_settings_cache();
-            self.invalidate_adjusted_cache();
+        // [#576 A5] Every per-project cell under ONE `project` acquisition, through the
+        // commit every load, create and close shares (round 4: this project carries a
+        // `file_path`, so `delete_project`'s check-and-teardown can match it, and a
+        // delete landing between a slot commit and the handle commits tore down a
+        // half-built session that this function then finished building into an empty
+        // world). The shared commit is also what puts a new project on the local undo
+        // window with no inherited-history watermark: File > New over a Full-mode
+        // linked project used to keep its byte budget and watermark (#576 A18(f)).
+        // [#576 A1] Under `command_lock`, so the commit cannot land inside an edit of
+        // the previous project and inherit its undo entry - or under the caller's span
+        // when it already holds one [#576 NF-W4C-3].
+        {
+            let own_commands;
+            let commands = if let Some(commands) = held {
+                commands
+            } else {
+                own_commands = self.hold_commands();
+                // [#576 RV4-R-C2] Re-checked once the lock is held, still before any
+                // state write: a newer load or create that started while this one
+                // waited for an in-flight command has cancelled it.
+                check_cancelled!();
+                &own_commands
+            };
+            self.commit_open_session(
+                commands,
+                SessionCommit {
+                    // A deferred new project has no file on disk yet, so its first import must
+                    // durably persist it.
+                    initial_save_deferred: defer_initial_save,
+                    // ...and no database to read its display settings from: seed the cache
+                    // with the defaults just chosen.
+                    display_settings: if defer_initial_save {
+                        settings_map
+                            .iter()
+                            .map(|(key, value)| ((*key).to_string(), value.clone()))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
+                    // Recent Projects only after a real file exists.
+                    recent: (!defer_initial_save).then(|| db_path.clone()),
+                    ..SessionCommit::new_local(project.clone(), db)
+                },
+            );
         }
-
-        // Commit 5: Add to recent projects only after a real file exists.
-        if !defer_initial_save {
-            let mut recent = self
-                .recent_projects
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            recent.retain(|p| p != &db_path);
-            recent.insert(0, db_path.clone());
-            if let Ok(mut config) = self.config.lock() {
-                recent.truncate(config.general.recent_projects_max);
-                config.general.recent_projects.clone_from(&recent);
-                if let Err(e) = config.save() {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "persist recent projects list",
-                        "Failed to save config with recent projects"
-                    );
-                }
-            }
-        }
-
-        drop(proj_guard);
 
         // Get loading_id before clearing token
         let loading_id = progress.loading_id();
@@ -595,6 +621,149 @@ impl AppState {
             project,
             display_settings,
         })
+    }
+
+    /// Create a new project with full progress reporting (see
+    /// `do_create_project_full_with` above for the phases and arguments), taking
+    /// `command_lock` for its commit only - File > New.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the LoadError every create path returns; this only delegates to the body \
+                  above, and boxing the error type is a repo-wide change outside NF-W4C-3"
+    )]
+    pub fn do_create_project_full(
+        &self,
+        name: String,
+        project_location: Option<String>,
+        save_directory: Option<PathBuf>,
+        save_path: Option<PathBuf>,
+        defer_initial_save: bool,
+    ) -> Result<crate::core::loading::CreateProjectFullResult, crate::core::loading::LoadError>
+    {
+        self.do_create_project_full_with(
+            None,
+            None,
+            name,
+            project_location,
+            save_directory,
+            save_path,
+            defer_initial_save,
+        )
+    }
+
+    /// [`Self::do_create_project_full`] with the caller's write-path check run on
+    /// the file the create opens [#576 RV13-1]: `check_target` is handed that path
+    /// once the name is resolved and any `_N` rename made, before anything is
+    /// created; its `Err` refuses the create with that message. The
+    /// `create_project_full` command's entry when the webview names a file or a
+    /// folder - checking a name of its own instead (the folder's
+    /// `project.stalx`) let a link at the name the create really opens through.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the LoadError every create path returns; this only delegates to the body \
+                  above, and boxing the error type is a repo-wide change outside NF-W4C-3"
+    )]
+    pub fn do_create_project_full_checked(
+        &self,
+        check_target: &dyn Fn(&std::path::Path) -> Result<(), String>,
+        name: String,
+        project_location: Option<String>,
+        save_directory: Option<PathBuf>,
+        save_path: Option<PathBuf>,
+        defer_initial_save: bool,
+    ) -> Result<crate::core::loading::CreateProjectFullResult, crate::core::loading::LoadError>
+    {
+        self.do_create_project_full_with(
+            None,
+            Some(check_target),
+            name,
+            project_location,
+            save_directory,
+            save_path,
+            defer_initial_save,
+        )
+    }
+
+    /// [`Self::do_create_project_full`] inside a `command_lock` span the caller
+    /// already holds [#576 NF-W4C-3] - the Ariane adoption's, whose create is the
+    /// first step of that one span.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the LoadError every create path returns; this only delegates to the body \
+                  above, and boxing the error type is a repo-wide change outside NF-W4C-3"
+    )]
+    pub(super) fn do_create_project_full_held(
+        &self,
+        commands: &CommandsHeld<'_>,
+        name: String,
+        project_location: Option<String>,
+        save_directory: Option<PathBuf>,
+        save_path: Option<PathBuf>,
+        defer_initial_save: bool,
+    ) -> Result<crate::core::loading::CreateProjectFullResult, crate::core::loading::LoadError>
+    {
+        self.do_create_project_full_with(
+            Some(commands),
+            None,
+            name,
+            project_location,
+            save_directory,
+            save_path,
+            defer_initial_save,
+        )
+    }
+
+    /// The file a create asks for, before any `_N` rename: `save_path` with the
+    /// project extension, else `name` resolved in `save_directory` (or the default
+    /// folder). A name that does not resolve is an `Io` refusal.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the LoadError every create path returns; boxing it is a repo-wide change"
+    )]
+    fn requested_create_path(
+        &self,
+        name: &str,
+        save_directory: Option<&PathBuf>,
+        save_path: Option<PathBuf>,
+    ) -> Result<PathBuf, crate::core::loading::LoadError> {
+        match save_path {
+            Some(path) => Ok(crate::persistence::with_stalx_extension(path)),
+            None => self
+                .resolve_project_path(name, save_directory)
+                .map_err(|e| {
+                    crate::core::loading::LoadError::new(crate::models::CommandErrorCode::Io, e)
+                }),
+        }
+    }
+
+    /// [#576 RV15-2] The write-path check [`Self::do_create_project_full_checked`]
+    /// would run, alone: `check_target` on the file that create would open (the
+    /// name resolved, any `_N` rename made), with the error that create would
+    /// return. Nothing is created, cancelled or emitted, so the webview can ask
+    /// before it stops a load in progress or shows its loading state for a create
+    /// that will be refused. The create checks again (the disk may change between
+    /// the two), so this is a courtesy, not the guard.
+    ///
+    /// Only for a create that names `save_directory` or `save_path`: the default
+    /// location is not checked, and resolving it would create the default folder,
+    /// so with neither this answers `Ok` and touches nothing (#576 RV16-3).
+    #[expect(
+        clippy::result_large_err,
+        reason = "the LoadError every create path returns; boxing it is a repo-wide change"
+    )]
+    pub fn check_create_target(
+        &self,
+        check_target: &dyn Fn(&std::path::Path) -> Result<(), String>,
+        name: &str,
+        save_directory: Option<&PathBuf>,
+        save_path: Option<PathBuf>,
+    ) -> Result<(), crate::core::loading::LoadError> {
+        if save_directory.is_none() && save_path.is_none() {
+            return Ok(());
+        }
+        let requested = self.requested_create_path(name, save_directory, save_path)?;
+        check_target(&Self::next_available_project_path(&requested))
+            .map_err(crate::core::loading::LoadError::internal)
     }
 }
 
@@ -720,13 +889,7 @@ mod tests {
 
         // Not recorded by default.
         assert_eq!(
-            state
-                .project
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .surface_elevation,
+            state.project.lock().as_ref().unwrap().surface_elevation,
             None
         );
 
@@ -734,13 +897,7 @@ mod tests {
         let set = state.set_surface_elevation(Some(42.5));
         assert!(set.success, "{:?}", set.error);
         assert_eq!(
-            state
-                .project
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .surface_elevation,
+            state.project.lock().as_ref().unwrap().surface_elevation,
             Some(42.5)
         );
 
@@ -748,13 +905,7 @@ mod tests {
         let clear = state.set_surface_elevation(None);
         assert!(clear.success, "{:?}", clear.error);
         assert_eq!(
-            state
-                .project
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .surface_elevation,
+            state.project.lock().as_ref().unwrap().surface_elevation,
             None
         );
 
@@ -763,13 +914,7 @@ mod tests {
             let result = state.set_surface_elevation(Some(bad));
             assert!(!result.success, "expected {bad} to be rejected");
             assert_eq!(
-                state
-                    .project
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .unwrap()
-                    .surface_elevation,
+                state.project.lock().as_ref().unwrap().surface_elevation,
                 None,
                 "a rejected value must not be stored"
             );
@@ -788,26 +933,14 @@ mod tests {
         assert!(state.set_surface_elevation(Some(10.0)).success);
         assert!(state.set_surface_elevation(Some(20.0)).success);
         assert_eq!(
-            state
-                .project
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .surface_elevation,
+            state.project.lock().as_ref().unwrap().surface_elevation,
             Some(20.0)
         );
 
         let undo = state.undo();
         assert!(undo.success, "{:?}", undo.error);
         assert_eq!(
-            state
-                .project
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .surface_elevation,
+            state.project.lock().as_ref().unwrap().surface_elevation,
             Some(10.0),
             "undo must restore the prior elevation"
         );
@@ -815,13 +948,7 @@ mod tests {
         let redo = state.redo();
         assert!(redo.success, "{:?}", redo.error);
         assert_eq!(
-            state
-                .project
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .surface_elevation,
+            state.project.lock().as_ref().unwrap().surface_elevation,
             Some(20.0),
             "redo must reapply the edit"
         );
@@ -839,4 +966,216 @@ mod tests {
         let available = AppState::next_available_project_path(&base_path);
         assert_eq!(available, temp_dir.path().join("Collision_2.stalx"));
     }
+
+    /// [#576 RV13-1] A link at a name is a name taken - even one that leads
+    /// nowhere yet, or to an empty file. `exists()` and `metadata()` follow the
+    /// link: a dangling one was "free" and a link to an empty file a "placeholder",
+    /// so the create opened the name and SQLite made or wrote the link's target,
+    /// wherever it points.
+    #[cfg(unix)]
+    #[test]
+    fn next_available_project_path_takes_a_link_as_a_name_taken() {
+        let temp_dir = TempDir::new().unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let dir = temp_dir.path();
+        let link = |name: &str, to: &str| {
+            std::os::unix::fs::symlink(elsewhere.path().join(to), dir.join(name)).unwrap();
+        };
+        link("Cave.stalx", "planted.stalx");
+        link("Cave_1.stalx", "planted-1.stalx");
+        std::fs::write(elsewhere.path().join("empty.stalx"), b"").unwrap();
+        link("Empty.stalx", "empty.stalx");
+        // A real empty file is still a placeholder (Android's SAF makes one).
+        std::fs::write(dir.join("Placeholder.stalx"), b"").unwrap();
+
+        for (name, expected) in [
+            ("Cave.stalx", "Cave_2.stalx"),
+            ("Empty.stalx", "Empty_1.stalx"),
+            ("Placeholder.stalx", "Placeholder.stalx"),
+        ] {
+            let available = AppState::next_available_project_path(&dir.join(name));
+            assert_eq!(available, dir.join(expected), "{name}");
+        }
+    }
+
+    /// [#576 RV14-1] A create the write-path policy refuses leaves everything else
+    /// as it was. The check ran on the final path only after the create had
+    /// cancelled whatever open or load was in progress and emitted its "creating
+    /// database" phase, so a refused create stopped a load the user was waiting on
+    /// and showed a progress step before its error.
+    #[test]
+    fn a_refused_create_cancels_no_load_and_emits_no_progress() {
+        struct Recording(std::sync::Mutex<Vec<String>>);
+        impl crate::core::events::EventSink for Recording {
+            fn emit(&self, event: &str, _payload: serde_json::Value) {
+                self.0.lock().unwrap().push(event.to_owned());
+            }
+
+            fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+                false
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let state = AppState::new().unwrap();
+        let events = Arc::new(Recording(std::sync::Mutex::new(Vec::new())));
+        state.set_event_sink(Arc::clone(&events) as Arc<dyn crate::core::events::EventSink>);
+        // An open or a load the user is waiting on.
+        let in_flight = state.start_new_load();
+
+        let checked = std::cell::RefCell::new(Vec::new());
+        let refuse = |path: &std::path::Path| {
+            checked.borrow_mut().push(path.to_path_buf());
+            Err("Refused to write here".to_string())
+        };
+        let refused = state.do_create_project_full_checked(
+            &refuse,
+            "Cave".into(),
+            None,
+            Some(dir.path().to_path_buf()),
+            None,
+            false,
+        );
+
+        let cancelled = in_flight.load(std::sync::atomic::Ordering::SeqCst);
+        let emitted = events.0.lock().unwrap().clone();
+        assert_eq!(
+            refused.map(|_| ()).map_err(|e| e.message),
+            Err("Refused to write here".to_string())
+        );
+        assert_eq!(
+            *checked.borrow(),
+            [dir.path().join("Cave.stalx")],
+            "the check runs on the file the create opens"
+        );
+        assert!(
+            !cancelled && emitted.is_empty(),
+            "a refused create: the load in progress cancelled = {cancelled}; \
+             progress events emitted = {emitted:?} (want false and none)"
+        );
+        assert!(
+            std::fs::read_dir(dir.path()).unwrap().next().is_none(),
+            "a refused create makes nothing"
+        );
+    }
+
+    /// [#576 RV15-2] The pre-check the webview runs before it touches its loading
+    /// state judges the file the create would open - the name resolved and any
+    /// `_N` rename made - and answers what the create would, touching nothing.
+    #[test]
+    fn check_create_target_judges_the_file_the_create_would_open() {
+        let dir = TempDir::new().unwrap();
+        // The folder's `Cave.stalx` is taken, so a create there opens `Cave_1`.
+        std::fs::write(dir.path().join("Cave.stalx"), b"taken").unwrap();
+        struct Silent;
+        impl crate::core::events::EventSink for Silent {
+            fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+
+            fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+                false
+            }
+        }
+        let state = AppState::new().unwrap();
+        // The create needs a sink to reach its check; the pre-check needs none.
+        state.set_event_sink(Arc::new(Silent));
+        let in_flight = state.start_new_load();
+        let checked = std::cell::RefCell::new(Vec::new());
+        let refuse = |path: &std::path::Path| {
+            checked.borrow_mut().push(path.to_path_buf());
+            Err("Refused to write here".to_string())
+        };
+
+        let named_folder = state
+            .check_create_target(&refuse, "Cave", Some(&dir.path().to_path_buf()), None)
+            .map_err(|e| (e.code, e.message));
+        let named_file = state
+            .check_create_target(&refuse, "Ignored", None, Some(dir.path().join("Cave")))
+            .map_err(|e| e.message);
+        let refused_create = state
+            .do_create_project_full_checked(
+                &refuse,
+                "Cave".into(),
+                None,
+                Some(dir.path().to_path_buf()),
+                None,
+                false,
+            )
+            .map(|_| ())
+            .map_err(|e| (e.code, e.message));
+
+        assert_eq!(named_folder, refused_create, "the create's own refusal");
+        assert_eq!(named_file, Err("Refused to write here".to_string()));
+        assert_eq!(
+            *checked.borrow(),
+            [
+                dir.path().join("Cave_1.stalx"),
+                dir.path().join("Cave_1.stalx"),
+                dir.path().join("Cave_1.stalx"),
+            ],
+            "the pre-checks and the create judge the same file"
+        );
+        assert!(
+            !in_flight.load(std::sync::atomic::Ordering::SeqCst),
+            "a pre-check cancels no load"
+        );
+        let accept = |_: &std::path::Path| Ok(());
+        assert!(state
+            .check_create_target(&accept, "Cave", Some(&dir.path().join("new")), None)
+            .is_ok());
+        assert!(
+            !dir.path().join("new").exists() && !dir.path().join("Cave_1.stalx").exists(),
+            "a pre-check makes nothing"
+        );
+        // A name that does not resolve is refused as the create refuses it.
+        assert_eq!(
+            state
+                .check_create_target(&accept, "  ", Some(&dir.path().to_path_buf()), None)
+                .map_err(|e| e.code),
+            Err(crate::models::CommandErrorCode::Io)
+        );
+    }
+
+    /// [#576 RV16-3] With neither a folder nor a file named there is nothing to
+    /// check: the default location is not resolved (resolving it creates the
+    /// default folder) and the check is never asked.
+    #[test]
+    fn check_create_target_without_a_named_target_checks_and_makes_nothing() {
+        let state = AppState::new().unwrap();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let record = |path: &std::path::Path| {
+            asked.borrow_mut().push(path.to_path_buf());
+            Ok(())
+        };
+
+        let answer = state
+            .check_create_target(&record, "Cave", None, None)
+            .map_err(|e| e.message);
+
+        assert_eq!(
+            (answer, asked.borrow().clone()),
+            (Ok(()), Vec::new()),
+            "the answer, and the paths the check was asked about"
+        );
+    }
+}
+
+/// [#576 RV5-F4-2] Each merge group's anchoring datum, as `(a section of the
+/// group, where the datum is now)`: the first datum of the group that resolves,
+/// which is the one [`Project::realign_after_shot_edit`] holds. One entry per
+/// group; a group with no resolvable datum has nothing absolute to hold.
+fn datum_holds(project: &Project) -> Vec<(crate::models::SectionId, (f64, f64))> {
+    let mut covered = std::collections::HashSet::new();
+    let mut holds = Vec::new();
+    for datum in &project.zero_datums {
+        let section_id = datum.station_ref.section_id;
+        if covered.contains(&section_id) {
+            continue;
+        }
+        covered.extend(project.get_merged_section_ids(section_id));
+        covered.insert(section_id);
+        if let Some(at) = project.datum_anchor_position(section_id) {
+            holds.push((section_id, at));
+        }
+    }
+    holds
 }

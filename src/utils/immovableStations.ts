@@ -17,7 +17,7 @@ import { type SurveyData, STATION_FLAG_IS_ZERO_DATUM } from '../types/survey-dat
  */
 export function computeImmovableStationKeys(
   data: SurveyData,
-  alignedClosureIds: ReadonlySet<bigint>,
+  alignedClosureIds: ReadonlySet<number>,
 ): Set<string> {
   const keyOf = (sectionId: number, stationIndex: number): string => `${sectionId}:${stationIndex}`;
 

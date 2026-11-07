@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Map as MaplibreMap } from 'maplibre-gl';
 import { DRAG_PREVIEW_SOURCE } from '../dragPreviewLayers';
 import type { DragPreviewSet } from '../dragPreviewSource';
+import { dropStyle } from '../customRender/__tests__/styleGone';
+import { makeFakeMap } from '../../../../test/factories/fakeMap';
 
 /**
  * Drag-ghost controller (#mem drag latency). Locks the behaviour that replaces
@@ -52,46 +53,6 @@ import { DragGhostController, type DragGhostOptions } from '../dragGhostControll
 import type { GhostRenderData } from '../customRender/surveyGhostLayer';
 
 const GHOST_ID = 'survey-drag-ghost';
-
-interface FakeMap {
-  map: MaplibreMap;
-  sources: Set<string>;
-  layers: Set<string>;
-  setDataCount: number;
-  translateCount: number;
-  repaintCount: number;
-  sourcedataListeners: Array<(e: unknown) => void>;
-}
-
-function makeFakeMap(): FakeMap {
-  const sources = new Set<string>();
-  const layers = new Set<string>();
-  const sourcedataListeners: Array<(e: unknown) => void> = [];
-  const state = { setDataCount: 0, translateCount: 0, repaintCount: 0 };
-  const map = {
-    addSource: (id: string) => sources.add(id),
-    getSource: (id: string) =>
-      sources.has(id) ? { setData: () => { state.setDataCount++; } } : undefined,
-    removeSource: (id: string) => sources.delete(id),
-    addLayer: (layer: { id: string }) => layers.add(layer.id),
-    getLayer: (id: string) => (layers.has(id) ? { id } : undefined),
-    removeLayer: (id: string) => layers.delete(id),
-    setPaintProperty: () => { state.translateCount++; },
-    isSourceLoaded: () => true,
-    triggerRepaint: () => { state.repaintCount++; },
-    on: (_type: string, fn: (e: unknown) => void) => sourcedataListeners.push(fn),
-    off: (_type: string, fn: (e: unknown) => void) => {
-      const i = sourcedataListeners.indexOf(fn);
-      if (i >= 0) sourcedataListeners.splice(i, 1);
-    },
-  } as unknown as MaplibreMap;
-  return {
-    map, sources, layers, sourcedataListeners,
-    get setDataCount() { return state.setDataCount; },
-    get translateCount() { return state.translateCount; },
-    get repaintCount() { return state.repaintCount; },
-  };
-}
 
 const SET: DragPreviewSet = {
   features: [
@@ -172,9 +133,9 @@ describe('per-drag fallback: custom layer fails to initialize', () => {
 
     // A move past the rebake threshold, once the @0 bake lands, re-bakes (setData).
     ctrl.move(200, 0);
-    fake.sourcedataListeners.forEach((fn) => fn({ sourceId: DRAG_PREVIEW_SOURCE }));
+    fake.listeners('sourcedata').forEach((fn) => fn({ sourceId: DRAG_PREVIEW_SOURCE }));
     expect(fake.setDataCount).toBeGreaterThan(1);
-    expect(fake.translateCount).toBeGreaterThan(0);
+    expect(fake.paintCalls.length).toBeGreaterThan(0);
     ctrl.end();
     expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(false);
   });
@@ -243,5 +204,162 @@ describe('a deferred self-disable restore is scoped to the drag that scheduled i
     expect(ctrl.isCustom()).toBe(false);
     expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(true);
     ctrl.end();
+  });
+});
+
+// #576 D16: the lightweight unmount releases the ghost without map work - the
+// map is about to be removed with every layer on it.
+describe('dispose (map-free teardown for the lightweight unmount)', () => {
+  it('drops the stock bake timer and land listener without touching layers', () => {
+    vi.useFakeTimers();
+    try {
+      h.layerState.disabledAfterAdd = true; // custom cannot init -> stock path
+      const fake = makeFakeMap();
+      const ctrl = new DragGhostController(fake.map, makeOptions());
+      expect(ctrl.begin(SET)).toBe('stock');
+      expect(vi.getTimerCount()).toBe(1); // the bake-landed fallback
+      expect(fake.listeners('sourcedata')).toHaveLength(1);
+      const layersBefore = new Set(fake.layers);
+      const translates = fake.paintCalls.length;
+
+      ctrl.dispose();
+
+      expect(vi.getTimerCount()).toBe(0);
+      expect(fake.listeners('sourcedata')).toHaveLength(0);
+      expect(fake.layers).toEqual(layersBefore);
+      expect(fake.paintCalls.length).toBe(translates);
+      expect(ctrl.isCustom()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('invalidates a pending self-disable restore', () => {
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const fake = makeFakeMap();
+    const ctrl = new DragGhostController(fake.map, makeOptions({ scheduleRestore: (fn) => { holder.fn = fn; } }));
+    expect(ctrl.begin(SET)).toBe('custom');
+    h.layerState.last!.onSelfDisable!('gl-error-1');
+    ctrl.dispose();
+    holder.fn!();
+    expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(false);
+  });
+});
+
+describe('a carry cancelled while the WebGL context is lost (#576 NF-MAP-5)', () => {
+  it('end() does not read the missing style', () => {
+    const fake = makeFakeMap();
+    const ctrl = new DragGhostController(fake.map, makeOptions());
+    expect(ctrl.begin(SET)).toBe('custom');
+    dropStyle(fake.map);
+    expect(() => ctrl.end()).not.toThrow();
+    expect(ctrl.isCustom()).toBe(false);
+  });
+});
+
+describe('a context loss between a self-disable and its deferred fallback (#576 RV4-FE-MF-6)', () => {
+  it('the fallback does not read the missing style; the restore re-runs it on a live style', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fake = makeFakeMap();
+    const scheduled: (() => void)[] = [];
+    const ctrl = new DragGhostController(fake.map, makeOptions({ scheduleRestore: (fn) => scheduled.push(fn) }));
+    expect(ctrl.begin(SET)).toBe('custom');
+    ctrl.move(30, 10);
+
+    // A genuine GL error disables the ghost mid-render, then the context goes
+    // before the deferred fallback runs.
+    const ghost = h.layerState.last!;
+    (ghost as unknown as { disabled: boolean }).disabled = true;
+    ghost.onSelfDisable!('gl-error-0x505');
+    const m = fake.map as unknown as Record<string, unknown>;
+    const live = { style: m.style, getLayer: m.getLayer, addLayer: m.addLayer, removeLayer: m.removeLayer };
+    dropStyle(fake.map);
+    expect(() => scheduled[0]!()).not.toThrow();
+    expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(false);
+
+    // The restore: MapLibre has a style again, and glContextRecovery re-adds the
+    // custom ghost, which is still disabled - so the fallback runs now, for real.
+    Object.assign(m, live);
+    fake.layers.delete(GHOST_ID);
+    ctrl.reattach(undefined);
+    expect(scheduled).toHaveLength(2);
+    scheduled[1]!();
+    expect(ctrl.isCustom()).toBe(false);
+    expect(fake.layers.has(GHOST_ID)).toBe(false);
+    expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(true);
+    ctrl.end();
+  });
+});
+
+describe('a STOCK-ghost carry while the WebGL context is lost (#576 RV4-FE-SL2)', () => {
+  it('move() and end() do not read the missing style', () => {
+    // The custom ghost cannot initialize, so the carry runs on the stock ghost.
+    h.layerState.disabledAfterAdd = true;
+    const fake = makeFakeMap();
+    const ctrl = new DragGhostController(fake.map, makeOptions());
+    expect(ctrl.begin(SET)).toBe('stock');
+    const setDataBefore = fake.setDataCount;
+
+    // The loss: every style-backed call, sources and paint included, throws.
+    dropStyle(fake.map);
+    const m = fake.map as unknown as Record<string, unknown>;
+    const thrower = (name: string) => () => {
+      throw new TypeError(`Cannot read properties of null (reading '${name}')`);
+    };
+    m.getSource = thrower('getSource');
+    m.removeSource = thrower('removeSource');
+    m.setPaintProperty = thrower('setPaintProperty');
+
+    let threw: unknown = null;
+    try {
+      // A small move (translate only), the @0 bake landing, then a move past the
+      // rebake threshold (a bake), then the cancel.
+      ctrl.move(2, 1);
+      fake.listeners('sourcedata').forEach((fn) => fn({ sourceId: DRAG_PREVIEW_SOURCE }));
+      ctrl.move(200, 0);
+      ctrl.end();
+    } catch (e) {
+      threw = e;
+    }
+    console.log('[SL2] stock carry during a loss threw:', threw ? String(threw) : 'no');
+    expect(threw).toBeNull();
+    expect(ctrl.isCustom()).toBe(false);
+    // Nothing was pushed into a source the loss took away.
+    expect(fake.setDataCount).toBe(setDataBefore);
+  });
+});
+
+describe('a pick-up while the WebGL context is lost (#576 NF-W4MAP-1)', () => {
+  it('begins idle: nothing thrown, no layer or source added, and the next pick-up draws again', () => {
+    const fake = makeFakeMap();
+    const ctrl = new DragGhostController(fake.map, makeOptions());
+    dropStyle(fake.map);
+    // Every style-backed call MapLibre makes reads the missing style, sources and
+    // paint included (getSource / addSource / setPaintProperty -> this.style.*).
+    const m = fake.map as unknown as Record<string, unknown>;
+    const thrower = (name: string) => () => {
+      throw new TypeError(`Cannot read properties of null (reading '${name}')`);
+    };
+    const addLayer = vi.fn(m.addLayer as () => void);
+    m.addLayer = addLayer;
+    m.getSource = thrower('getSource');
+    m.addSource = thrower('addSource');
+    m.setPaintProperty = thrower('setPaintProperty');
+
+    expect(() => ctrl.begin(SET)).not.toThrow();
+    // Not even attempted: MapLibre's addLayer lazily builds an EMPTY style when
+    // it has none (`_lazyInitEmptyStyle`), which a lost context must not get.
+    expect(addLayer).not.toHaveBeenCalled();
+    expect(fake.layers.size).toBe(0);
+    expect(fake.sources.size).toBe(0);
+    expect(ctrl.isCustom()).toBe(false);
+    expect(() => ctrl.move(4, 2)).not.toThrow();
+    expect(() => ctrl.end()).not.toThrow();
+
+    // The restore brings a live style back; the next pick-up builds its ghost.
+    const live = makeFakeMap();
+    const next = new DragGhostController(live.map, makeOptions());
+    expect(next.begin(SET)).toBe('custom');
+    expect(live.layers.has(GHOST_ID)).toBe(true);
   });
 });

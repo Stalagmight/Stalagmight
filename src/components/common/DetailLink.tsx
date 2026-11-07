@@ -15,11 +15,41 @@
  */
 
 import { useCallback, useRef, type CSSProperties } from 'react';
+import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { useUIStore } from '../../store/uiStore';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { EntitySymbol } from './toolIcons';
 
 export type DetailLinkType = 'station' | 'shot' | 'section';
+
+/**
+ * en.json keys of each link type's text. One whole phrase per type rather than the
+ * type name spliced into a sentence, so a translation can inflect the entity name.
+ */
+const LINK_TEXT: Record<
+  DetailLinkType,
+  { notFoundKey: string; selectKey: string; selectNamedKey: string; selectedKey: string }
+> = {
+  station: {
+    notFoundKey: 'detailLink.station.notFound',
+    selectKey: 'detailLink.station.select',
+    selectNamedKey: 'detailLink.station.selectNamed',
+    selectedKey: 'detailLink.station.selected',
+  },
+  shot: {
+    notFoundKey: 'detailLink.shot.notFound',
+    selectKey: 'detailLink.shot.select',
+    selectNamedKey: 'detailLink.shot.selectNamed',
+    selectedKey: 'detailLink.shot.selected',
+  },
+  section: {
+    notFoundKey: 'detailLink.section.notFound',
+    selectKey: 'detailLink.section.select',
+    selectNamedKey: 'detailLink.section.selectNamed',
+    selectedKey: 'detailLink.section.selected',
+  },
+};
 
 /**
  * Target identifier for station or shot links.
@@ -111,9 +141,9 @@ export function generateTestId(type: DetailLinkType, target: DetailLinkTarget): 
 export function generateAriaLabel(type: DetailLinkType, displayText: string): string {
   const trimmed = displayText.trim();
   if (trimmed === '') {
-    return `Select ${type}`;
+    return i18n.t(LINK_TEXT[type].selectKey);
   }
-  return `Select ${type} ${trimmed}`;
+  return i18n.t(LINK_TEXT[type].selectNamedKey, { name: trimmed });
 }
 
 /**
@@ -132,6 +162,7 @@ export function DetailLink({
   onHoverEnd,
   pillLabel,
 }: DetailLinkProps) {
+  const { t } = useTranslation();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const mouseDownRef = useRef(false);
   const computedTestId = testId ?? generateTestId(type, target);
@@ -155,9 +186,9 @@ export function DetailLink({
     }
     onSelect();
     if (onAnnounce) {
-      onAnnounce(`Selected ${type} ${displayText}`);
+      onAnnounce(t(LINK_TEXT[type].selectedKey, { name: displayText }));
     }
-  }, [type, displayText, onSelect, onAnnounce, isMissing, onHoverEnd]);
+  }, [type, displayText, onSelect, onAnnounce, isMissing, onHoverEnd, t]);
 
   const handleMouseEnter = useCallback(() => {
     if (isMissing || !onHoverStart) return;
@@ -235,7 +266,7 @@ export function DetailLink({
       aria-label={ariaLabel}
       aria-disabled={isMissing}
       data-testid={computedTestId}
-      title={isMissing ? `${type} not found` : undefined}
+      title={isMissing ? t(LINK_TEXT[type].notFoundKey) : undefined}
     >
       {showSymbol ? (
         <>
@@ -256,7 +287,7 @@ export function DetailLink({
         <>
           {displayText}
           {isMissing && (
-            <span className="ml-1" aria-hidden="true" title={`${type} not found`}>
+            <span className="ml-1" aria-hidden="true" title={t(LINK_TEXT[type].notFoundKey)}>
               &#x26A0;
             </span>
           )}

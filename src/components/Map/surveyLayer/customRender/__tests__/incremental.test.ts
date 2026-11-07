@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Map as MaplibreMap } from 'maplibre-gl';
+import { makeFakeMap, type FakeMapOptions } from '../../../../../test/factories/fakeMap';
 import {
   emptySurveyData,
   shotKindToFlags,
@@ -319,20 +319,13 @@ import { SurveyCustomController, type CustomSyncParams } from '../controller';
 import type { CustomRenderData } from '../surveyCustomLayer';
 type Ctrl = InstanceType<typeof SurveyCustomController>;
 
-function makeFakeMap(): MaplibreMap {
-  const existing = new Set<string>(['survey-shots', 'survey-shot-gradients', 'survey-stations']);
-  return {
-    getStyle: () => ({}),
-    getLayer: (id: string) => (existing.has(id) ? { id } : undefined),
-    addLayer: (layer: { id: string; onAdd?: (m: unknown, gl: unknown) => void }) => {
-      existing.add(layer.id);
-      layer.onAdd?.(undefined, undefined);
-    },
-    removeLayer: (id: string) => existing.delete(id),
-    setLayoutProperty: () => {},
-    triggerRepaint: () => {},
-  } as unknown as MaplibreMap;
-}
+/** The three stock layers on a stand-in with no `style`, whose custom layer's
+ *  onAdd runs without a map or GL context. */
+const MAP_OPTIONS: FakeMapOptions = {
+  layers: ['survey-shots', 'survey-shot-gradients', 'survey-stations'],
+  omit: ['style'],
+  onAdd: 'bare',
+};
 
 function params(surveyData: SurveyData, colorCtx: DisplayColorContext = ctx()): CustomSyncParams {
   return { surveyData, gpsOrigin: null, colorCtx, shotWidthPx: 2, stationRadiusPx: 3, stationStrokePx: 1 };
@@ -381,7 +374,7 @@ describe('SurveyCustomController incremental apply', () => {
     let incrementalRuns = 0;
     for (let iter = 0; iter < 40; iter++) {
       const prev = pinnedSurvey();
-      const c = new SurveyCustomController(makeFakeMap());
+      const c = new SurveyCustomController(makeFakeMap(MAP_OPTIONS).map);
       c.sync(params(prev)); // full build (enable)
 
       const next = cloneSurvey(prev);
@@ -402,7 +395,7 @@ describe('SurveyCustomController incremental apply', () => {
       if (h.state.fullUpdates === fuBefore && h.state.lineUploads > luBefore) incrementalRuns++;
 
       // Reference: a fresh controller full-builds `next` from scratch.
-      const ref = new SurveyCustomController(makeFakeMap());
+      const ref = new SurveyCustomController(makeFakeMap(MAP_OPTIONS).map);
       ref.sync(params(next));
       expectDataEqual(dataOf(c), dataOf(ref));
       c.destroy();
@@ -420,19 +413,19 @@ describe('SurveyCustomController incremental apply', () => {
   it('depth-mode recolor via a z-move stays byte-identical', () => {
     const prev = pinnedSurvey();
     const dctx = ctx({ showDepthGradient: true, depthRange: { min: 0, max: 4 } });
-    const c = new SurveyCustomController(makeFakeMap());
+    const c = new SurveyCustomController(makeFakeMap(MAP_OPTIONS).map);
     c.sync(params(prev, dctx));
     const next = cloneSurvey(prev);
     next.stationCoords[5 * 3 + 2] = -2.5; // z change within the depth range
     c.sync(params(next, dctx));
-    const ref = new SurveyCustomController(makeFakeMap());
+    const ref = new SurveyCustomController(makeFakeMap(MAP_OPTIONS).map);
     ref.sync(params(next, dctx));
     expectDataEqual(dataOf(c), dataOf(ref));
   });
 
   it('a structural change falls back to a full rebuild', () => {
     const prev = pinnedSurvey();
-    const c = new SurveyCustomController(makeFakeMap());
+    const c = new SurveyCustomController(makeFakeMap(MAP_OPTIONS).map);
     c.sync(params(prev));
     expect(h.state.fullUpdates).toBe(0); // enable() constructs, does not update()
     const next = cloneSurvey(prev);
@@ -446,14 +439,14 @@ describe('SurveyCustomController incremental apply', () => {
     c.sync(params(trimmed));
     expect(h.state.fullUpdates).toBe(1); // took the full-rebuild path
     expect(h.state.lineUploads).toBe(0);
-    const ref = new SurveyCustomController(makeFakeMap());
+    const ref = new SurveyCustomController(makeFakeMap(MAP_OPTIONS).map);
     ref.sync(params(trimmed));
     expectDataEqual(dataOf(c), dataOf(ref));
   });
 
   it('keeps the drag-hide flag consistent across an incremental edit', () => {
     const prev = pinnedSurvey();
-    const c = new SurveyCustomController(makeFakeMap());
+    const c = new SurveyCustomController(makeFakeMap(MAP_OPTIONS).map);
     c.sync(params(prev));
     // Drag begins: hide section id 2.
     c.setDragHide({ sectionIds: new Set([2]) });
@@ -462,7 +455,7 @@ describe('SurveyCustomController incremental apply', () => {
     next.stationCoords[6 * 3] = next.stationCoords[6 * 3]! + 3;
     c.sync(params(next));
     // A fresh full build of `next` WITH the same hide state is the oracle.
-    const ref = new SurveyCustomController(makeFakeMap());
+    const ref = new SurveyCustomController(makeFakeMap(MAP_OPTIONS).map);
     ref.sync(params(next));
     ref.setDragHide({ sectionIds: new Set([2]) });
     ref.sync(params(next));
@@ -474,7 +467,7 @@ describe('SurveyCustomController incremental apply', () => {
 
   it('applies the segment highlight on the cached buffers and matches a full build', () => {
     const prev = pinnedSurvey();
-    const c = new SurveyCustomController(makeFakeMap());
+    const c = new SurveyCustomController(makeFakeMap(MAP_OPTIONS).map);
     c.sync(params(prev));
     // No emphasis yet.
     expect(Array.from(dataOf(c).circle.highlight).every((v) => v === 0)).toBe(true);
@@ -485,7 +478,7 @@ describe('SurveyCustomController incremental apply', () => {
     expect(Array.from(dataOf(c).line.highlight).some((v) => v === 2)).toBe(true);
     // Setting the highlight BEFORE sync makes the full build reproduce it: the
     // oracle for the cheap path must be byte-identical.
-    const ref = new SurveyCustomController(makeFakeMap());
+    const ref = new SurveyCustomController(makeFakeMap(MAP_OPTIONS).map);
     ref.setHighlight([2]);
     ref.sync(params(prev));
     expectDataEqual(dataOf(c), dataOf(ref));
@@ -497,7 +490,7 @@ describe('SurveyCustomController incremental apply', () => {
 
   it('section hover (level 2) and selection (level 1) merge with hover winning', () => {
     const prev = pinnedSurvey();
-    const c = new SurveyCustomController(makeFakeMap());
+    const c = new SurveyCustomController(makeFakeMap(MAP_OPTIONS).map);
     c.sync(params(prev));
     // Selection alone: connected section id 2 emphasized at SELECTION level (1).
     c.setSectionSelect([2]);
@@ -508,7 +501,7 @@ describe('SurveyCustomController incremental apply', () => {
     expect(Array.from(dataOf(c).line.highlight).some((v) => v === 2)).toBe(true);
     expect(Array.from(dataOf(c).line.highlight).some((v) => v === 1)).toBe(false);
     // Full build with both sources set reproduces the merged levels byte-for-byte.
-    const ref = new SurveyCustomController(makeFakeMap());
+    const ref = new SurveyCustomController(makeFakeMap(MAP_OPTIONS).map);
     ref.setSectionSelect([2]);
     ref.setSectionHover([2]);
     ref.sync(params(prev));

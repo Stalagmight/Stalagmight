@@ -21,8 +21,8 @@ export type BuildMode = 'auto' | 'skip' | 'force';
 
 export interface StartOptions {
   build?: BuildMode;
-  headed?: boolean;
-  freshProfile?: boolean;
+  headed?: boolean | undefined;
+  freshProfile?: boolean | undefined;
 }
 
 export interface StartResult {

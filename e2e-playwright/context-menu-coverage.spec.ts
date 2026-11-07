@@ -6,6 +6,7 @@ import {
   waitForMapReady,
   waitForNoDialogs,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 type StationRef = { section_id: number; station_index: number };
 
@@ -49,11 +50,7 @@ async function setupProjectWithShots(page: Page, shotCount: number): Promise<Men
   await waitForNoDialogs(page);
 
   const ids = await page.evaluate(() => {
-    const e2e = (window as unknown as {
-      __E2E_TEST__?: {
-        projectStore: { getState: () => { project: any; stations: any[] } };
-      };
-    }).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
 
     if (!e2e) return null;
 
@@ -66,7 +63,7 @@ async function setupProjectWithShots(page: Page, shotCount: number): Promise<Men
     return {
       sectionId: section?.id ?? null,
       sectionName: section?.name ?? `Section ${section?.id ?? 0}`,
-      shotIds: (section?.shots ?? []).map((s: any) => s.id),
+      shotIds: (section?.shots ?? []).map((s) => s.id),
       stationRefs: stations.map((s) => s.station_ref),
     };
   });
@@ -168,7 +165,7 @@ async function setupProjectWithStationClosures(
             project: {
               sections: Array<{ id: number }>;
               loop_closures: Array<{
-                id: bigint;
+                id: number;
                 station_a: StationRef;
                 station_b: StationRef;
               }>;
@@ -195,7 +192,7 @@ async function setupProjectWithStationClosures(
 
     const closures = e2e.projectStore.getState().project?.loop_closures ?? [];
     const findByPair = (a: StationRef, b: StationRef) => {
-      return closures.find((closure: any) => {
+      return closures.find((closure) => {
         const direct =
           closure.station_a.section_id === a.section_id &&
           closure.station_a.station_index === a.station_index &&
@@ -235,7 +232,7 @@ async function setupProjectWithStationClosures(
 async function openContextMenu(page: Page, target: Record<string, unknown>) {
   await page.evaluate(
     ({ target }) => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('context-menu', {
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('context-menu', {
         target,
         position: { x: 140, y: 140 },
       });
@@ -246,7 +243,7 @@ async function openContextMenu(page: Page, target: Record<string, unknown>) {
 
 test.describe('Context Menu Coverage', () => {
   test('shot menu sets the shot kind and routes delete dialogs', async ({ page }) => {
-    const { sectionId, shotIds, sectionName } = await setupProjectWithShots(page, 3);
+    const { sectionId, shotIds } = await setupProjectWithShots(page, 3);
 
     const [firstShotId, midShotId] = shotIds;
 
@@ -258,9 +255,9 @@ test.describe('Context Menu Coverage', () => {
 
     await expect.poll(async () => {
       return page.evaluate(({ sectionId, shotId }) => {
-        const state = (window as any).__E2E_TEST__.projectStore.getState();
-        const section = state.project.sections.find((s: any) => s.id === sectionId);
-        const shot = section?.shots.find((s: any) => s.id === shotId);
+        const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
+        const section = state.project!.sections.find((s) => s.id === sectionId);
+        const shot = section?.shots.find((s) => s.id === shotId);
         return shot?.kind ?? null;
       }, { sectionId, shotId: firstShotId });
     }).toBe('Reference');
@@ -303,7 +300,7 @@ test.describe('Context Menu Coverage', () => {
   });
 
   test('station menu exposes add-shot options and merge tool', async ({ page }) => {
-    const { sectionId, stationRefs } = await setupProjectWithShots(page, 3);
+    const { stationRefs } = await setupProjectWithShots(page, 3);
     const firstStation = stationRefs[0];
     const lastStation = stationRefs[stationRefs.length - 1];
 
@@ -330,7 +327,7 @@ test.describe('Context Menu Coverage', () => {
 
     await expect.poll(async () => {
       return page.evaluate(() => {
-        const uiState = (window as any).__E2E_TEST__.uiStore.getState();
+        const uiState = (window as E2EWindow).__E2E_TEST__.uiStore.getState();
         return {
           activeTool: uiState.activeTool,
           mergeStationA: uiState.mergeStationA,
@@ -365,7 +362,7 @@ test.describe('Context Menu Coverage', () => {
 
     await expect.poll(async () => {
       return page.evaluate(() => {
-        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
         return state.project?.station_merges?.length ?? 0;
       });
     }).toBe(0);
@@ -390,9 +387,9 @@ test.describe('Context Menu Coverage', () => {
 
     await expect.poll(async () => {
       return page.evaluate(({ target, removed }) => {
-        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
         const merges = state.project?.station_merges ?? [];
-        const hasRemovedPair = merges.some((merge: any) => {
+        const hasRemovedPair = merges.some((merge) => {
           const direct =
             merge.station_a.section_id === target.section_id &&
             merge.station_a.station_index === target.station_index &&
@@ -424,7 +421,7 @@ test.describe('Context Menu Coverage', () => {
 
     await expect.poll(async () => {
       return page.evaluate(() => {
-        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
         return state.project?.loop_closures?.length ?? 0;
       });
     }).toBe(0);
@@ -449,9 +446,9 @@ test.describe('Context Menu Coverage', () => {
 
     await expect.poll(async () => {
       return page.evaluate((removedClosureId) => {
-        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
         const closures = state.project?.loop_closures ?? [];
-        const hasRemovedClosure = closures.some((closure: any) => closure.id.toString() === removedClosureId);
+        const hasRemovedClosure = closures.some((closure) => closure.id.toString() === removedClosureId);
         return {
           closureCount: closures.length,
           hasRemovedClosure,
@@ -483,7 +480,7 @@ test.describe('Insert Station (#59)', () => {
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
     const call = await page.evaluate(() => {
-      const calls = ((window as any).__MOCK_SPLIT_SHOT_CALLS__ ?? []) as Array<any>;
+      const calls = (window as E2EWindow).__MOCK_SPLIT_SHOT_CALLS__ ?? [];
       return calls[calls.length - 1] ?? null;
     });
     expect(call).toEqual({ sectionId, shotId: firstShotId, distance: 2.5 });
@@ -499,9 +496,7 @@ test.describe('Insert Station (#59)', () => {
     await waitForNoDialogs(page);
 
     const ids = await page.evaluate(() => {
-      const e2e = (window as unknown as {
-        __E2E_TEST__?: { projectStore: { getState: () => { project: any } } };
-      }).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       const section = e2e?.projectStore.getState().project?.sections?.[0];
       return { sectionId: section?.id ?? null, shotId: section?.shots?.[0]?.id ?? null };
     });
@@ -518,7 +513,7 @@ test.describe('Insert Station (#59)', () => {
 
     await page.locator('[data-testid="mode-plan"]').click();
     await expect.poll(async () => {
-      return page.evaluate(() => (window as any).__E2E_TEST__.uiStore.getState().appMode);
+      return page.evaluate(() => (window as E2EWindow).__E2E_TEST__.uiStore.getState().appMode);
     }).toBe('plan');
 
     await openContextMenu(page, { type: 'shot', sectionId, shotId: shotIds[0] });

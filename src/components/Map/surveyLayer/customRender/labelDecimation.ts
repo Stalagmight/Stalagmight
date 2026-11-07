@@ -2,7 +2,7 @@
  * Zoom-band label decimation planning (#customRender labels).
  *
  * The stock shot- and station-label layers thin labels by a zoom-banded
- * `['%', ['get', 'index' | 'globalOrdinal'], N]` filter (SurveyLayer.tsx), with
+ * `['%', ['get', 'index' | 'globalOrdinal'], N]` filter (SurveyLayer.ts), with
  * the station layer additionally always showing the first station of each
  * section (`isFirstInSection`). Section names and comments are NOT decimated.
  *

@@ -89,6 +89,119 @@ async function getToolPicks(page: Page): Promise<{ measureStart: unknown; mergeS
   });
 }
 
+/** The single dialog slot in uiStore - read synchronously, so it is current the moment a handler has run. */
+async function getActiveDialog(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: { uiStore: { getState: () => { activeDialog: string | null } } };
+    }).__E2E_TEST__;
+    return stores?.uiStore.getState().activeDialog ?? null;
+  });
+}
+
+/** What `window` saw of the right-click a {@link armRightClickWitness} call armed. */
+interface RightClickWitness {
+  released: boolean;
+  /** `defaultPrevented` of the `contextmenu` event: true means no native browser menu. */
+  contextMenuPrevented: boolean | null;
+}
+
+/**
+ * Arm a witness for the next right-click: it records the right-button release and
+ * the `contextmenu` event as each bubbles up to `window`. React delegates at the
+ * app root and MapLibre listens on the canvas container, both below `window`, so
+ * once the witness has seen both, the app's own handlers for them have run, along
+ * with the microtasks they queued. That is the positive barrier the "this did NOT
+ * happen" assertions after a right-click wait on, instead of a sleep.
+ */
+async function armRightClickWitness(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const witness = { released: false, contextMenuPrevented: null as boolean | null };
+    (window as unknown as { __rightClickWitness__?: typeof witness }).__rightClickWitness__ = witness;
+    window.addEventListener('pointerup', (e) => {
+      if (e.button === 2) witness.released = true;
+    });
+    window.addEventListener('contextmenu', (e) => {
+      witness.contextMenuPrevented = e.defaultPrevented;
+    });
+  });
+}
+
+async function waitForRightClickWitness(page: Page): Promise<RightClickWitness> {
+  const read = () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __rightClickWitness__?: RightClickWitness }).__rightClickWitness__ ?? {
+          released: false,
+          contextMenuPrevented: null,
+        }
+    );
+  await expect
+    .poll(async () => {
+      const witness = await read();
+      return witness.released && witness.contextMenuPrevented !== null;
+    }, { message: 'the right-click reached window: its release and its contextmenu event', timeout: 5000 })
+    .toBe(true);
+  return read();
+}
+
+/** What {@link holdSegmentPickup} saw of the Move Segment round trips. */
+interface SegmentPickupHold {
+  /** `get_anchored_section_ids` answered, so a segment click can pick up. */
+  anchoredLoaded: boolean;
+  /** `get_rigid_connected_section_ids` was asked and is being held. */
+  requested: boolean;
+}
+
+/**
+ * Hold the Move Segment pickup's round trip open. A segment pickup asks the
+ * backend which sections move with it (`get_rigid_connected_section_ids`) and
+ * puts the ghost up only when the answer comes back, so until
+ * {@link releaseSegmentPickup} the pickup is pending with no ghost on the map.
+ * Wraps the mocked invoke the way undo-redo-dropdown.spec.ts delays `undo_to`,
+ * but on a promise the test resolves rather than a timer.
+ */
+async function holdSegmentPickup(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    type Invoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+    const w = window as unknown as {
+      __TAURI_INTERNALS__: { invoke: Invoke };
+      __segmentPickupHold__?: SegmentPickupHold & { release: () => void };
+    };
+    const originalInvoke = w.__TAURI_INTERNALS__.invoke;
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const hold = { anchoredLoaded: false, requested: false, release: () => release() };
+    w.__segmentPickupHold__ = hold;
+    w.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
+      if (cmd === 'get_rigid_connected_section_ids') {
+        hold.requested = true;
+        await held;
+        // The shared mock has no handler for this command; one section moves.
+        return [args?.sectionId];
+      }
+      const result = await originalInvoke(cmd, args);
+      if (cmd === 'get_anchored_section_ids') hold.anchoredLoaded = true;
+      return result;
+    };
+  });
+}
+
+async function getSegmentPickupHold(page: Page): Promise<SegmentPickupHold> {
+  return page.evaluate(() => {
+    const hold = (window as unknown as { __segmentPickupHold__?: SegmentPickupHold }).__segmentPickupHold__;
+    return { anchoredLoaded: hold?.anchoredLoaded ?? false, requested: hold?.requested ?? false };
+  });
+}
+
+async function releaseSegmentPickup(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    (window as unknown as { __segmentPickupHold__?: { release: () => void } }).__segmentPickupHold__?.release();
+  });
+}
+
 /** The map canvas's own bounding box - `map.project()` is canvas-relative. */
 async function canvasBox(page: Page): Promise<{ x: number; y: number; width: number; height: number }> {
   const box = await page.locator('canvas.maplibregl-canvas').boundingBox();
@@ -346,8 +459,8 @@ test.describe('Map direct manipulation (#409)', () => {
 
     await page.keyboard.press('p');
     await page.keyboard.press('z');
-    // A settle rather than a poll: this proves the tool does NOT change, and a
-    // poll would accept the pre-update value.
+    // settle: this proves the tool does NOT change, and a poll would accept the
+    // pre-update value.
     await page.waitForTimeout(200);
     await expect(mapCanvas).toHaveAttribute('data-active-tool', 'select');
   });
@@ -428,6 +541,119 @@ test.describe('Map direct manipulation (#409)', () => {
     await expect.poll(() => getDragGhostState(page), { timeout: 5000 }).toBeNull();
     // A click is not a pan: the drop moved the survey, not the camera.
     expect(centerDelta(await getMapCenter(page), centerBeforeDrop)).toBe(0);
+  });
+
+  test('Move Station: a still right-click with a ghost in flight is not a drop', async ({ page }) => {
+    await page.keyboard.press('t');
+    await waitForActiveTool(page, 'move_station');
+
+    const station = await mostIsolatedStation(page);
+    const box = await canvasBox(page);
+    await page.mouse.click(box.x + station.x, box.y + station.y);
+    await expect.poll(() => getDragGhostState(page), { timeout: 5000 }).not.toBeNull();
+
+    // Carry the ghost to empty map, then press and release the RIGHT button
+    // without travel: the press stays put exactly like a drop click, so only
+    // the button tells the two apart.
+    const dropAt = await findEmptyPoint(page);
+    await page.mouse.move(box.x + dropAt.x, box.y + dropAt.y, { steps: 10 });
+    await armRightClickWitness(page);
+    await page.mouse.click(box.x + dropAt.x, box.y + dropAt.y, { button: 'right' });
+
+    // Wait until the release has been handled, then read: a poll would accept
+    // the pre-commit value, and this proves the commit does NOT happen.
+    const witness = await waitForRightClickWitness(page);
+    expect(witness.contextMenuPrevented, 'no native browser menu').toBe(true);
+    expect(await getCommittedMoves(page), 'a right-click is not a drop').toBe(0);
+    expect(await getDragGhostState(page), 'the ghost is still in flight').not.toBeNull();
+
+    // The left still click on the same spot is still the drop.
+    await page.mouse.click(box.x + dropAt.x, box.y + dropAt.y);
+    await expect.poll(() => getCommittedMoves(page), { timeout: 5000 }).toBe(1);
+    await expect.poll(() => getDragGhostState(page), { timeout: 5000 }).toBeNull();
+  });
+
+  test('Move Station: a right-click on a station with a ghost in flight opens no menu', async ({ page }) => {
+    await page.keyboard.press('t');
+    await waitForActiveTool(page, 'move_station');
+
+    const carried = await mostIsolatedStation(page);
+    const stations = await waitForDrawnStations(page, 2);
+    // Right-click the station farthest from the one being carried.
+    const distance = (s: { x: number; y: number }) => Math.hypot(s.x - carried.x, s.y - carried.y);
+    const target = stations.reduce((far, s) => (distance(s) > distance(far) ? s : far));
+    expect(distance(target), 'a second station to right-click').toBeGreaterThan(20);
+
+    const box = await canvasBox(page);
+    await page.mouse.click(box.x + carried.x, box.y + carried.y);
+    await expect.poll(() => getDragGhostState(page), { timeout: 5000 }).not.toBeNull();
+
+    // The station menu offers Delete / Merge / Add Shot, any of which would
+    // change the survey under the ghost's captured station ref, so with a ghost
+    // in flight the right-click opens nothing - like the touch long-press.
+    await page.mouse.move(box.x + target.x, box.y + target.y, { steps: 10 });
+    await armRightClickWitness(page);
+    await page.mouse.click(box.x + target.x, box.y + target.y, { button: 'right' });
+
+    const witness = await waitForRightClickWitness(page);
+    expect(witness.contextMenuPrevented, 'no native browser menu').toBe(true);
+    expect(await getActiveDialog(page), 'no context menu over the ghost').toBeNull();
+    await expect(page.getByTestId('context-menu')).toHaveCount(0);
+    expect(await getCommittedMoves(page), 'a right-click is not a drop').toBe(0);
+    expect(await getDragGhostState(page), 'the ghost is still in flight').not.toBeNull();
+
+    // A left still click on empty map is still the drop.
+    const dropAt = await findEmptyPoint(page);
+    await page.mouse.move(box.x + dropAt.x, box.y + dropAt.y, { steps: 10 });
+    await page.mouse.click(box.x + dropAt.x, box.y + dropAt.y);
+    await expect.poll(() => getCommittedMoves(page), { timeout: 5000 }).toBe(1);
+    await expect.poll(() => getDragGhostState(page), { timeout: 5000 }).toBeNull();
+  });
+
+  test('Move Segment: a right-click while the pickup round trip is pending opens no menu', async ({ page }) => {
+    await holdSegmentPickup(page);
+    await page.keyboard.press('v');
+    await waitForActiveTool(page, 'move_segment');
+    await expect
+      .poll(async () => (await getSegmentPickupHold(page)).anchoredLoaded, { timeout: 5000 })
+      .toBe(true);
+
+    const carried = await mostIsolatedStation(page);
+    const stations = await waitForDrawnStations(page, 2);
+    const distance = (s: { x: number; y: number }) => Math.hypot(s.x - carried.x, s.y - carried.y);
+    const target = stations.reduce((far, s) => (distance(s) > distance(far) ? s : far));
+    expect(distance(target), 'a second station to right-click').toBeGreaterThan(20);
+
+    const box = await canvasBox(page);
+    await page.mouse.click(box.x + carried.x, box.y + carried.y);
+    await expect
+      .poll(async () => (await getSegmentPickupHold(page)).requested, { timeout: 5000 })
+      .toBe(true);
+    expect(await getDragGhostState(page), 'no ghost until the round trip returns').toBeNull();
+
+    // The pickup is pending: the ghost goes up when the backend answers, so a
+    // menu opened now would sit under it, the same hazard as with the ghost up.
+    await page.mouse.move(box.x + target.x, box.y + target.y, { steps: 10 });
+    await armRightClickWitness(page);
+    await page.mouse.click(box.x + target.x, box.y + target.y, { button: 'right' });
+
+    const witness = await waitForRightClickWitness(page);
+    expect(witness.contextMenuPrevented, 'no native browser menu').toBe(true);
+    expect(await getActiveDialog(page), 'no context menu while the pickup is pending').toBeNull();
+    await expect(page.getByTestId('context-menu')).toHaveCount(0);
+
+    await releaseSegmentPickup(page);
+    await expect.poll(() => getDragGhostState(page), { timeout: 5000 }).not.toBeNull();
+    expect(await getActiveDialog(page), 'no context menu under the ghost').toBeNull();
+    await expect(page.getByTestId('context-menu')).toHaveCount(0);
+
+    // Escape cancels the ghost and commits nothing, and with the pickup over
+    // the same right-click opens the station menu again.
+    await page.keyboard.press('Escape');
+    await expect.poll(() => getDragGhostState(page), { timeout: 5000 }).toBeNull();
+    expect(await getCommittedMoves(page), 'nothing was committed').toBe(0);
+    await page.mouse.click(box.x + target.x, box.y + target.y, { button: 'right' });
+    await expect(page.getByTestId('context-menu')).toBeVisible({ timeout: 5000 });
   });
 
   test('releasing a drag over floating chrome still ends the drag', async ({ page }) => {

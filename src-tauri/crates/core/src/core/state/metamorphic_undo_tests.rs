@@ -679,16 +679,15 @@ enum Side {
 /// zeroing it would displace the section from its merge partner and make the next
 /// reconcile look like an app defect.
 fn plant_legacy_zero_offset_rows(state: &AppState) {
-    let mut guard = match state.project.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
+    let mut guard = state.project.lock();
     let Some(project) = guard.as_mut() else {
         return;
     };
     let ids: Vec<SectionId> = project.sections.iter().map(|section| section.id).collect();
     for id in ids {
-        project.section_offsets.entry(id).or_insert((0.0, 0.0));
+        if !project.section_offsets().contains_key(&id) {
+            project.set_raw_section_offset(id, (0.0, 0.0));
+        }
     }
 }
 
@@ -727,9 +726,7 @@ impl Twins {
             // from an empty history or "unwind everything" would unwind the
             // prelude too, and the baseline would not be the state they started
             // from.
-            if let Ok(mut stack) = side.undo_stack.lock() {
-                stack.clear();
-            }
+            side.undo_stack.lock().clear();
             // The zero rows planted above must not have come back. This is what
             // makes feeding them worth anything: if the boundary ever stops
             // dropping them, every pair below is being run on a project the app
@@ -737,7 +734,7 @@ impl Twins {
             // measuring the wrong thing.
             let project = side.get_project_state()?;
             let survivors: Vec<(SectionId, (f64, f64))> = project
-                .section_offsets
+                .section_offsets()
                 .iter()
                 .filter(|(_, offset)| {
                     offset.0.abs() <= Project::OFFSET_DUST_M

@@ -25,8 +25,8 @@ use crate::models::ImportReceipt;
 /// (`get_permission` → `str(...level_label)`). Issues #188/#203 describe this as
 /// an integer; that is incorrect for the wire format.
 ///
-/// Variants are ordered ascending so `>=` expresses capability thresholds
-/// (download ≥ `ReadOnly`, upload/lock ≥ `ReadAndWrite`, delete/collab = `Admin`).
+/// Ordered by capability so `>=` expresses thresholds (download >= `ReadOnly`,
+/// upload/lock >= `ReadAndWrite`, delete/collab = `Admin`) - see [`Self::rank`].
 ///
 /// `export_to` without `export` (C3 rule): the file itself is still written
 /// only by the gen_ipc_types example (which takes the file name), but the path
@@ -34,7 +34,7 @@ use crate::models::ImportReceipt;
 /// compute the sibling `./Permission` import - ts-rs diffs the two `EXPORT_TO`
 /// strings, and mixing the default `bindings/` base with the member
 /// `../../bindings/` base makes that diff unrepresentable (the test panics).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../bindings/Permission.ts")]
 pub enum Permission {
     #[serde(rename = "WEB_VIEWER")]
@@ -45,6 +45,42 @@ pub enum Permission {
     ReadAndWrite,
     #[serde(rename = "ADMIN")]
     Admin,
+    /// [#576 B16] A tier the server added after this build shipped. Without it one
+    /// project (or one collaborator grant) carrying such a label failed the WHOLE
+    /// project list / roster, because each is parsed as one value. Ranked BELOW
+    /// every known tier ([`Self::rank`]): every capability check (`>= ReadOnly`,
+    /// `>= ReadAndWrite`, `== Admin`) denies it, the fail-safe direction. Never
+    /// sent back to the server (the permission writes refuse it). Declared last
+    /// only because serde requires the `other` catch-all to be.
+    #[serde(rename = "UNKNOWN")]
+    #[serde(other)]
+    Unknown,
+}
+
+impl Permission {
+    /// The capability rank `Ord` compares: an unknown tier grants less than the
+    /// lowest known one.
+    const fn rank(self) -> u8 {
+        match self {
+            Permission::Unknown => 0,
+            Permission::WebViewer => 1,
+            Permission::ReadOnly => 2,
+            Permission::ReadAndWrite => 3,
+            Permission::Admin => 4,
+        }
+    }
+}
+
+impl PartialOrd for Permission {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Permission {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.rank().cmp(&other.rank())
+    }
 }
 
 /// Project visibility (#206/#207). The server's `ProjectVisibility` is an
@@ -58,6 +94,12 @@ pub enum Visibility {
     Private,
     #[serde(rename = "PUBLIC")]
     Public,
+    /// [#576 B16] A visibility the server added after this build shipped: kept as a
+    /// value instead of failing the project list, shown as unknown, and never sent
+    /// back (the metadata PATCH and the create body leave it out).
+    #[serde(rename = "UNKNOWN")]
+    #[serde(other)]
+    Unknown,
 }
 
 /// A git commit as carried in `latest_commit`. Only the SHA is needed here.
@@ -737,6 +779,13 @@ pub enum DoneResult {
     /// AND the lock are retained so a later retry recovers via ancestry (#193) -
     /// no edits are lost.
     PushUnconfirmed,
+    /// [#576 RV2-R-13] Edits pushed (or there was nothing to push) and editing has
+    /// ended HERE, but the write lock was NOT released: this app session did not
+    /// take it. The lock is held by the same account from somewhere else - another
+    /// window or computer, or a run of this app before a restart - and releasing it
+    /// from here would pull it out from under that session. Like [`Self::Released`]
+    /// the local work is on the server; unlike it, the account still holds the lock.
+    LockHeldElsewhere,
 }
 
 /// Outcome of `speleodb_update` (#197): a read-only refresh of the open project
@@ -921,6 +970,11 @@ pub enum PushResult {
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoErrorDto {
+    /// [#576 C4] The routing code the IPC boundary sends for this failure, one per
+    /// [`SpeleoDbAction`] (`contract::code_for_action`). A command's rejection is
+    /// the [`crate::models::CommandErrorCode`]-carrying `CommandError` built from
+    /// this DTO; `action` stays for the backend's own branches.
+    pub code: crate::models::CommandErrorCode,
     pub message: String,
     pub action: SpeleoDbAction,
     pub status: Option<u16>,
@@ -1017,6 +1071,11 @@ pub struct UnpushedLocalEdits {
     /// When it was last edited (RFC-3339), when known. `None` for an older copy
     /// that never recorded one.
     pub last_edit_at: Option<String>,
+    /// [#576 W53] The copy is there but could not be read (a hot journal, a lock
+    /// another writer holds, damage), so it may or may not hold un-pushed edits:
+    /// the frontend says that instead of claiming edits, and offers the same two
+    /// branches. `false` for a copy that was read and found dirty.
+    pub state_unknown: bool,
 }
 
 #[cfg(test)]
@@ -1071,6 +1130,7 @@ mod tests {
         // guard checks the field SHAPE, not an incidental word in the display
         // text - the real invariant is that no field name/value is the token.)
         let error = serde_json::to_string(&SpeleoErrorDto {
+            code: crate::models::CommandErrorCode::SpeleodbRelogin,
             message: "SpeleoDB returned HTTP 401: not authenticated".to_owned(),
             action: SpeleoDbAction::ReLogin,
             status: Some(401),

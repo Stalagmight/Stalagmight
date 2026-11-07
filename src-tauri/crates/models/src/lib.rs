@@ -9,23 +9,49 @@ pub mod app_dirs;
 pub mod azimuth_reference;
 #[cfg(test)]
 mod azimuth_reference_tests;
+pub mod command_error;
 pub mod comment_split;
 pub mod config;
+pub mod creation_stamp;
 pub mod dive_plan;
 pub mod geo;
 pub mod id_stride;
 pub mod import_receipt;
 pub mod placement_suggest;
+pub mod poison_policy;
+pub mod process_memory;
 pub mod project;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              findings are the evidence a run captures"
+)]
+mod raw_lock_scan_tests;
 pub mod section;
 pub mod shot;
+/// [#576 A8] The one way a test reads production source: see the module doc.
+#[cfg(any(test, feature = "test-support"))]
+pub mod source_scan;
 pub mod speleo_link;
 pub mod station;
+/// [#576 E1] The shared survey-data builders (`shot`, `straight_shot`, ...): see
+/// the module doc.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_fixtures;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+#[cfg(test)]
+mod test_support_probe_tests;
 pub mod undo_mode;
 pub mod warning;
+pub mod zip_entry_bound;
 
 pub use angle::*;
 pub use azimuth_reference::*;
+pub use command_error::*;
+pub use creation_stamp::CreationStamp;
 pub use dive_plan::*;
 pub use geo::*;
 pub use id_stride::*;

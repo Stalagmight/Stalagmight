@@ -3,16 +3,10 @@
  * Tests verify shortcut matching with config, multiple bindings, and spring-loaded behavior.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { normalizeShortcut, parseKeyEvent } from '../../utils/shortcuts';
 import { buildShortcutMap } from '../useKeyboardShortcuts';
 import type { ShortcutsConfig } from '../../types/config';
-
-// useKeyboardShortcuts → stores/telemetry → @tauri-apps/api/core; stub the IPC so
-// importing the real buildShortcutMap here doesn't pull in live Tauri.
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
 
 // Test the helper functions used by useKeyboardShortcuts
 

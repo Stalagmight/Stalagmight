@@ -22,6 +22,13 @@
  * drops the old style without calling it, so the layer still owns live GL
  * objects. {@link reAddCustomLayer} and {@link removeCustomLayer} free them
  * (our layers' `onRemove` is idempotent).
+ *
+ * This module is the one place that follows those events: a per-map tracker with
+ * one set of map listeners, shared by every subscriber ({@link onStyleRestored})
+ * and dropped with the last one (once a restore under way has finished). The
+ * survey map and the Global View subscribe through
+ * `surveyLayer/glContextRecovery.ts` (`watchGlContextLoss`), which takes the
+ * layer-order snapshot and re-adds the layers in that order (#576 D38).
  */
 import type { CustomLayerInterface, Map as MaplibreMap } from 'maplibre-gl';
 
@@ -30,46 +37,79 @@ export interface RestorableCustomLayer extends CustomLayerInterface {
   isDisabled(): boolean;
 }
 
+interface RestoreSubscriber {
+  readonly reattach: () => void;
+  readonly onLoss: (() => void) | undefined;
+}
+
 interface RestoreTracker {
   /** Between a loss and the `style.load` of the rebuilt style. */
   restoring: boolean;
   awaitingLoad: boolean;
-  readonly subscribers: Set<() => void>;
+  readonly subscribers: Set<RestoreSubscriber>;
+  /** Remove the map listeners, a pending `style.load` included. */
+  readonly detach: () => void;
 }
 
 const trackers = new WeakMap<MaplibreMap, RestoreTracker>();
 
+/** Remove the map listeners and forget the tracker (no subscriber is left). */
+function dropTracker(map: MaplibreMap, tracker: RestoreTracker): void {
+  tracker.detach();
+  if (trackers.get(map) === tracker) trackers.delete(map);
+}
+
 function trackerFor(map: MaplibreMap): RestoreTracker {
   const existing = trackers.get(map);
   if (existing) return existing;
-  const tracker: RestoreTracker = { restoring: false, awaitingLoad: false, subscribers: new Set() };
   const onLoad = (): void => {
     tracker.awaitingLoad = false;
     tracker.restoring = false;
-    for (const fn of [...tracker.subscribers]) fn();
+    for (const s of [...tracker.subscribers]) s.reattach();
+    // The last subscriber left during the restore: the tracker stayed for it.
+    if (tracker.subscribers.size === 0) dropTracker(map, tracker);
   };
-  map.on('webglcontextlost', () => {
+  const onLost = (): void => {
     tracker.restoring = true;
-  });
-  map.on('webglcontextrestored', () => {
+    for (const s of [...tracker.subscribers]) s.onLoss?.();
+  };
+  const onRestored = (): void => {
     tracker.restoring = true;
     if (tracker.awaitingLoad) return;
     tracker.awaitingLoad = true;
     map.once('style.load', onLoad);
-  });
+  };
+  const tracker: RestoreTracker = {
+    restoring: false,
+    awaitingLoad: false,
+    subscribers: new Set(),
+    detach: () => {
+      map.off('webglcontextlost', onLost);
+      map.off('webglcontextrestored', onRestored);
+      if (tracker.awaitingLoad) map.off('style.load', onLoad);
+    },
+  };
+  map.on('webglcontextlost', onLost);
+  map.on('webglcontextrestored', onRestored);
   trackers.set(map, tracker);
   return tracker;
 }
 
 /**
  * Run `reattach` once the style rebuilt by a context restore or a worker restart
- * has loaded. Returns an unsubscribe.
+ * has loaded, and `onLoss` on MapLibre's `webglcontextlost` (both paths fire it;
+ * on a worker restart the old style is still in place then). Returns an
+ * unsubscribe; the last one removes the map listeners - once the rebuilt style
+ * has loaded, when it leaves during a restore: until then `isStyleRestoring`
+ * must stay true, and a later subscriber still gets its reattach (#576 RV18-MAP-3).
  */
-export function onStyleRestored(map: MaplibreMap, reattach: () => void): () => void {
+export function onStyleRestored(map: MaplibreMap, reattach: () => void, onLoss?: () => void): () => void {
   const tracker = trackerFor(map);
-  tracker.subscribers.add(reattach);
+  const subscriber: RestoreSubscriber = { reattach, onLoss };
+  tracker.subscribers.add(subscriber);
   return () => {
-    tracker.subscribers.delete(reattach);
+    if (!tracker.subscribers.delete(subscriber) || tracker.subscribers.size > 0) return;
+    if (!tracker.restoring) dropTracker(map, tracker);
   };
 }
 

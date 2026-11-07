@@ -16,10 +16,13 @@ import {
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function KeyboardShortcutsDialog() {
   const { t } = useTranslation();
-  const { closeDialog, openDialog } = useUIStore();
+  const { closeDialog, openDialog } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, openDialog: s.openDialog })),
+  );
   const config = useProjectStore((s) => s.config);
   const shortcuts = config?.shortcuts ?? defaultConfig.shortcuts;
 

@@ -989,30 +989,23 @@ mod tests {
         for (length, depth_in, depth_out, device_pitch) in device_shots {
             // `parse_section` normalises the device's +up reading into the
             // model's +down frame, so this is the pitch a `DmpShot` carries by
-            // the time anything downstream sees it.
+            // the time anything downstream sees it, and the import wizard
+            // copies it into the `ShotData` it sends verbatim.
             let pitch = -device_pitch;
-            let dmp_shot = crate::parsers::dmp::DmpShot {
-                shot_type: crate::parsers::dmp::DmpShotType::Standard,
-                heading_in: 0.0,
-                heading_out: 0.0,
+            let shot_data = ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
                 length,
                 depth_in,
                 depth_out,
-                pitch_in: pitch,
-                pitch_out: pitch,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                temperature: 0.0,
-                hour: 0,
-                minute: 0,
-                second: 0,
-                marker_index: 0,
-                comment: None,
+                pitch_in: Some(pitch),
+                pitch_out: Some(pitch),
+                left: Some(0.0),
+                right: Some(0.0),
+                up: Some(0.0),
+                down: Some(0.0),
+                ..Default::default()
             };
-
-            let shot_data = dmp_shot.to_shot_data();
 
             // The property that makes the cross-check pass rather than an
             // accident of thresholds: descending shots (depth increasing) carry

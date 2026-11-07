@@ -30,36 +30,32 @@
 // Regenerate:  pnpm gen:third-party
 //   (needs: cargo install cargo-about --version 0.9.1 --locked --features cli)
 
-import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { HASHED_INPUTS, hashNormalised } from './gen-third-party-licenses.mjs';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const BUNDLE = 'THIRD-PARTY-LICENSES.md';
-// Must stay in lockstep with HASHED_INPUTS in gen-third-party-licenses.mjs:
-// the two lockfiles plus the generator and its cargo-about config, so a
-// renderer or harvest change also demands a regen, not just a dependency bump.
-const HASHED_INPUTS = [
-  'src-tauri/Cargo.lock',
-  'pnpm-lock.yaml',
-  'scripts/gen-third-party-licenses.mjs',
-  'src-tauri/about.toml',
-];
+// HASHED_INPUTS (the two lockfiles plus the generator and its cargo-about
+// config, so a renderer or harvest change also demands a regen, not just a
+// dependency bump) and the CRLF-normalised hash both come from the generator
+// itself, so the list the checker verifies is the list the generator wrote.
+// They used to be two copies held together by a "lockstep" comment (#576
+// E18(c)). The generator has an isMain guard and only stdlib imports, so this
+// import neither runs it nor needs a `pnpm install`.
+
 // Sibling gates cap reads too; the real bundle is ~0.5 MB, so 32 MB is pure
 // headroom. Fail-closed with its own message rather than mislabeling an
 // unreadable giant as "missing".
-const MAX_BUNDLE_BYTES = 32 * 1024 * 1024;
+export const MAX_BUNDLE_BYTES = 32 * 1024 * 1024;
 
-const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
-// CRLF-normalised to mirror the generator: an autocrlf checkout must verify
-// the same hashes an LF checkout does. Must stay in lockstep with
-// gen-third-party-licenses.mjs's hashNormalised.
-const hashNormalised = (text) => sha256(text.replace(/\r\n/g, '\n'));
 
 // Returns a list of problem strings; empty means the bundle is current.
-export function checkBundle(root) {
+// `maxBytes` exists for the fixture test, which proves the cap with a few KB
+// instead of writing a 33 MB file per run (#576 E18(b)).
+export function checkBundle(root, { maxBytes = MAX_BUNDLE_BYTES } = {}) {
   const bundlePath = path.join(root, BUNDLE);
   let stat;
   try {
@@ -67,8 +63,8 @@ export function checkBundle(root) {
   } catch {
     return [`${BUNDLE} is missing`];
   }
-  if (stat.size > MAX_BUNDLE_BYTES) {
-    return [`${BUNDLE} is ${stat.size} bytes (> ${MAX_BUNDLE_BYTES} cap) - not a generated bundle`];
+  if (stat.size > maxBytes) {
+    return [`${BUNDLE} is ${stat.size} bytes (> ${maxBytes} cap) - not a generated bundle`];
   }
   let body;
   try {

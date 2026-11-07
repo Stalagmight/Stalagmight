@@ -5,18 +5,23 @@ import { useSpeleoStore } from '../speleoStore';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+// [#576 D22] The link bits after a resolve/unresolve are the backend's, on the
+// command's answer, applied by the real `invokeIpc`: only Tauri's `invoke` is mocked.
+vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeIpcMock }));
 
 describe('projectStore warning edits', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     invokeIpcMock.mockImplementation(async (command: string) => {
       if (command === 'get_project_warnings') return [];
+      // A forward edit: the backend dirtied the copy and forgot its Unwind position.
+      if (command === 'resolve_warning' || command === 'unresolve_warning') {
+        return { warnings: [], remote_link: { has_unpushed_edits: true, unwound: false } };
+      }
       return undefined;
     });
     useSpeleoStore.setState({
+      linkPath: null,
       link: {
         permission: 'READ_AND_WRITE',
         editState: 'editing',

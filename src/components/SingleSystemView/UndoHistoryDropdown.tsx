@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useId, type ReactNode } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
+import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useUIStore } from '../../store/uiStore';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { useUnwindTarget, type ChainDirection } from '../../hooks/useUnwindTarget';
@@ -11,7 +13,9 @@ import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { getErrorMessage } from '../../utils/ipc';
 import { setSource } from '../../utils/telemetry';
 import { formatDate, formatRelativeTime, formatNumber } from '../../i18n/format';
-import type { CommandResult, UndoHistoryItem, PreviewData } from '../../types/commands';
+import type { UndoHistoryItem, PreviewData } from '../../types/commands';
+import type { CommandOutcome } from '../../store/commandResult';
+import type { HistoryOutcome } from '../../types/ipc/HistoryOutcome';
 import {
   CircleIcon,
   DashedLineIcon,
@@ -26,6 +30,7 @@ import {
   TargetIcon,
   TrashIcon,
 } from '../common/icons';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * True when `relatedTarget` is a DOM node contained by `container`. WebKit
@@ -289,7 +294,7 @@ export default function UndoHistoryDropdown({
   const isActionInProgressRef = useRef(false);
   // Queue entries include action and context for better error messages
   interface QueuedAction {
-    action: () => Promise<CommandResult>;
+    action: () => Promise<CommandOutcome<HistoryOutcome>>;
     context: {
       description: string;
       commandType: string;
@@ -314,11 +319,9 @@ export default function UndoHistoryDropdown({
   // Token to detect stale hover callbacks (incremented on any close)
   const hoverTokenRef = useRef(0);
   // Track disabled in a ref to avoid closure issues
-  const disabledRef = useRef(disabled);
-  disabledRef.current = disabled;
+  const disabledRef = useLatest(disabled);
   // Track isOpen in a ref for use in async callbacks / event listeners
-  const isOpenRef = useRef(isOpen);
-  isOpenRef.current = isOpen;
+  const isOpenRef = useLatest(isOpen);
   // Unique ID for ARIA attributes
   const menuId = useId();
 
@@ -332,10 +335,8 @@ export default function UndoHistoryDropdown({
   const iHoldLock = useSpeleoStore((s) => holdsWriteLock(s.link));
   // Read from the hover/queue callbacks, which must not re-create themselves every time
   // the lock state changes (the same reason `disabledRef` exists).
-  const iHoldLockRef = useRef(iHoldLock);
-  iHoldLockRef.current = iHoldLock;
-  const hoverableWhenEmptyRef = useRef(hoverableWhenEmpty);
-  hoverableWhenEmptyRef.current = hoverableWhenEmpty;
+  const iHoldLockRef = useLatest(iHoldLock);
+  const hoverableWhenEmptyRef = useLatest(hoverableWhenEmpty);
   // [#303] The chain step past the bottom of THIS stack, in this dropdown's own
   // direction. Undo offers the walk back, redo the walk forward, and each is offered on
   // the same condition: its own stack is exhausted, so the next step is past a commit
@@ -349,8 +350,19 @@ export default function UndoHistoryDropdown({
   const showChainStep = canOfferChainStep && chainTarget !== null;
   const isForward = chainDirection === 'forward';
 
-  const { getUndoStack, getRedoStack, undoTo, redoTo, undo, redo, canUndo, canRedo } = useProjectStore();
-  const { openDialog } = useUIStore();
+  const { getUndoStack, getRedoStack, undoTo, redoTo, undo, redo, canUndo, canRedo } = useProjectStore(
+    useShallow((s) => ({
+      getUndoStack: s.getUndoStack,
+      getRedoStack: s.getRedoStack,
+      undoTo: s.undoTo,
+      redoTo: s.redoTo,
+      undo: s.undo,
+      redo: s.redo,
+      canUndo: s.canUndo,
+      canRedo: s.canRedo,
+    })),
+  );
+  const openDialog = useUIStore((s) => s.openDialog);
 
   // Clear preview/hover state without closing the dropdown (reusable helper)
   const clearPreviewState = useCallback(() => {
@@ -437,7 +449,7 @@ export default function UndoHistoryDropdown({
       isActionInProgressRef.current = true;
       setIsActionInProgress(true);
 
-      let result: CommandResult | undefined;
+      let result: CommandOutcome<HistoryOutcome> | undefined;
       try {
         result = await nextAction();
       } catch (error) {
@@ -461,7 +473,7 @@ export default function UndoHistoryDropdown({
         return;
       }
 
-      // Primary error path: check CommandResult.success (fail closed: treat missing result as error)
+      // Primary error path: check the outcome's `success` (fail closed: treat missing result as error)
       if (!result?.success) {
         console.error(`${mode} action failed:`, result?.error);
         const errorReason = result?.error ?? t('undo.errors.unknownError');
@@ -473,6 +485,8 @@ export default function UndoHistoryDropdown({
         isActionInProgressRef.current = false;
         setIsActionInProgress(false);
         actionQueueRef.current = [];
+        // A move-carry refusal (GHOST-2) is already its own notice: no error dialog.
+        if (isMoveCarryRefusal(result)) return;
         openDialog('error', {
           title: t('undo.errors.failedTitle', { mode: modeLabel }),
           message: buildErrorMessage(errorReason, context),
@@ -519,11 +533,11 @@ export default function UndoHistoryDropdown({
 
     isActionInProgressRef.current = false;
     setIsActionInProgress(false);
-  }, [mode, fetchStack, hardClose, openDialog, t, modeLabel, buildErrorMessage]);
+  }, [mode, fetchStack, hardClose, openDialog, t, modeLabel, buildErrorMessage, iHoldLockRef]);
 
   // Enqueue an action and start processing if idle
   const enqueueAction = useCallback((
-    action: () => Promise<CommandResult>,
+    action: () => Promise<CommandOutcome<HistoryOutcome>>,
     context: { description: string; commandType: string; timestamp: string | null }
   ) => {
     // Immediately dismiss detail preview popup
@@ -601,7 +615,7 @@ export default function UndoHistoryDropdown({
         // Error already logged in fetchStack
       }
     }, 300);
-  }, [fetchStack, resolveChainTarget]);
+  }, [fetchStack, resolveChainTarget, disabledRef, hoverableWhenEmptyRef, iHoldLockRef]);
 
   // Close dropdown with small delay buffer (for mouse leave)
   const closeDropdown = useCallback((event?: React.MouseEvent) => {
@@ -786,6 +800,9 @@ export default function UndoHistoryDropdown({
     scrollActiveItemIntoView,
     handleItemClick,
     hardClose,
+    disabledRef,
+    hoverableWhenEmptyRef,
+    iHoldLockRef,
   ]);
 
   // Handle keyboard navigation when dropdown is open
@@ -871,7 +888,7 @@ export default function UndoHistoryDropdown({
       hardClose();
       onSingleAction();
     }
-  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose, items, t]);
+  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose, items, t, disabledRef, isOpenRef]);
 
   // Close on Escape - use hardClose and return focus to button
   useEffect(() => {

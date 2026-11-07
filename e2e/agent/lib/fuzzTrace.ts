@@ -109,6 +109,7 @@ import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 
 import { shortId } from './crc32';
+import { foldLocalPaths, shareableFailureText, valueShape } from './shareableFailure';
 
 /** Current trace schema. Bumped when a step shape changes incompatibly. */
 export const TRACE_VERSION = 4;
@@ -566,7 +567,9 @@ function recordedEnv(): Record<string, string> {
 
 function gitRev(): string {
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    // stderr discarded, as `build.ts`'s `gitHeadFor` does: the HEAD we could not
+    // read is 'unknown' below, and git's own error can name the checkout.
+    return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch {
     return 'unknown';
   }
@@ -643,6 +646,70 @@ function redactStep(step: TraceStep): TraceStep {
 }
 
 /**
+ * The last segment of a `rel` that opens a CORPUS entry: the entry is named by
+ * the directory its `corpusFile` step materialized into plus this token, never
+ * by its file name.
+ *
+ * A corpus copy keeps its real basename on disk, because a `.mak` names its
+ * sibling `.dat` files and a `.wpj` its `.srv` tree and renaming would break the
+ * very files the corpus exists to exercise. The `corpusFile` step already
+ * carried only the id; the `route` / `fileDialog` step that OPENED the copy
+ * carried `<dir>/<real basename>`, so every corpus trace named its files anyway
+ * - 14 and 17 distinct private names in two traces of one campaign, one of them
+ * still in a 9-step shrink and printed in fuzz-shrink's action list (#576
+ * HFI-13). A replayer resolves the token against the copy its own `corpusFile`
+ * step just made; a token with no such step resolves to nothing and the move is
+ * skipped and counted, exactly like an entry this machine does not have.
+ */
+export const CORPUS_ENTRY_SEGMENT = '@corpus-entry';
+
+/** The `rel` that opens the entry materialized into `dirRel`. */
+export function corpusEntryRel(dirRel: string): string {
+  return `${dirRel}/${CORPUS_ENTRY_SEGMENT}`;
+}
+
+/** Is `rel` a corpus entry reference rather than a path on disk? */
+export function isCorpusEntryRel(rel: string): boolean {
+  return rel.split(/[/\\]/).pop() === CORPUS_ENTRY_SEGMENT;
+}
+
+/** Every session-relative path a step hands to the app or writes to. */
+function stepRels(step: TraceStep): string[] {
+  switch (step.kind) {
+    case 'fileDialog':
+      return step.rel === null ? [] : Array.isArray(step.rel) ? step.rel : [step.rel];
+    case 'route':
+    case 'genFile':
+    case 'export':
+      return [step.rel];
+    case 'mutate':
+      return FILE_ARG_ACTIONS.has(step.action) && typeof step.args[0] === 'string' ? [step.args[0]] : [];
+    default:
+      return [];
+  }
+}
+
+/**
+ * The index of the first step that names a file INSIDE a corpus copy by
+ * anything other than `CORPUS_ENTRY_SEGMENT`, or -1 when none does.
+ *
+ * A trace-level rule rather than a per-step one, because a `rel` is only a
+ * corpus name by virtue of sitting under a directory some `corpusFile` step
+ * materialized into.
+ */
+export function corpusNameLeakAt(steps: readonly TraceStep[]): number {
+  const slash = (rel: string): string => rel.split('\\').join('/').replace(/\/+$/, '');
+  const dirs = steps.flatMap((step) => (step.kind === 'corpusFile' ? [`${slash(step.rel)}/`] : []));
+  if (dirs.length === 0) return -1;
+  return steps.findIndex((step) =>
+    stepRels(step).some((rel) => {
+      const target = slash(rel);
+      return dirs.some((dir) => target.startsWith(dir) && target !== `${dir}${CORPUS_ENTRY_SEGMENT}`);
+    }),
+  );
+}
+
+/**
  * Collects the resolved move list for one run (or, for a per-cycle scenario, one
  * cycle). Observe-only: it never draws, never reads app state and never decides
  * anything.
@@ -675,7 +742,7 @@ export class TraceRecorder {
     stream: string;
     failure: { message: string } | null;
     /** Episode indices that ran with no project open; omitted when none did. */
-    noProjectEpisodes?: readonly number[];
+    noProjectEpisodes?: readonly number[] | undefined;
   }): FuzzTrace {
     return {
       v: TRACE_VERSION,
@@ -719,7 +786,7 @@ export function writeTrace(filePath: string, trace: FuzzTrace): string {
     if (step.kind !== 'corpusFile') return;
     if (!CORPUS_ID.test(step.corpusId)) {
       throw new Error(
-        `refusing to write ${filePath}: step ${index + 1} names a corpus file by something ` +
+        `refusing to write ${foldLocalPaths(filePath)}: step ${index + 1} names a corpus file by something ` +
           `other than its id, and a trace is an artifact people attach to bug reports`,
       );
     }
@@ -728,13 +795,27 @@ export function writeTrace(filePath: string, trace: FuzzTrace): string {
     // exactly why it is refused at the same door as the id.
     if (step.corpusHash !== undefined && !CORPUS_HASH.test(step.corpusHash)) {
       throw new Error(
-        `refusing to write ${filePath}: step ${index + 1} carries a corpusHash that is not a ` +
+        `refusing to write ${foldLocalPaths(filePath)}: step ${index + 1} carries a corpusHash that is not a ` +
           `path hash (16 hex characters), and a trace is an artifact people attach to bug reports`,
       );
     }
   });
+  const leak = corpusNameLeakAt(trace.steps);
+  if (leak >= 0) {
+    throw new Error(
+      `refusing to write ${foldLocalPaths(filePath)}: step ${leak + 1} opens a file inside a corpus copy by its name ` +
+        `rather than as <dir>/${CORPUS_ENTRY_SEGMENT}, and a trace is an artifact people attach to bug reports`,
+    );
+  }
+  // A trace is attached to issues, so its failure is the shareable form -
+  // codes, counts and code locations - with the signature OF that form; the
+  // full text is in the session's actions.jsonl (#576 W21-NF1).
+  const failure =
+    trace.failure === null
+      ? null
+      : { message: shareableFailureText(trace.failure.message), signature: shareableSignature(trace.failure.message) };
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(trace, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(filePath, `${JSON.stringify({ ...trace, failure }, null, 2)}\n`, 'utf8');
   return filePath;
 }
 
@@ -766,7 +847,7 @@ const INPUT_MODES = new Set(['type', 'select', 'check']);
 /** A field that must be a non-empty string. */
 function requireText(value: unknown, field: string, where: string): string {
   if (typeof value !== 'string' || value === '') {
-    throw new Error(`${where} has ${field} ${JSON.stringify(value)}; must be a non-empty string`);
+    throw new Error(`${where} has ${field} ${valueShape(value)}; must be a non-empty string`);
   }
   return value;
 }
@@ -795,10 +876,10 @@ function requireSessionRelative(value: unknown, field: string, where: string): v
     text.startsWith('\\') ||
     /^[A-Za-z]:/.test(text)
   ) {
-    throw new Error(`${where} has an absolute ${field} ${JSON.stringify(text)}; must be session-relative`);
+    throw new Error(`${where} has an absolute ${field} ${valueShape(text)}; must be session-relative`);
   }
   if (text.split(/[/\\]/).some((segment) => segment === '..')) {
-    throw new Error(`${where} has ${field} ${JSON.stringify(text)} escaping the session directory`);
+    throw new Error(`${where} has ${field} ${valueShape(text)} escaping the session directory`);
   }
 }
 
@@ -851,11 +932,11 @@ function requireCorpusHash(value: unknown, field: string, where: string): void {
  * every v2 `rel` becomes a path the replayer writes to or opens.
  */
 function validateStep(step: unknown, index: number, filePath: string): void {
-  const where = `trace ${filePath} step ${index + 1}`;
+  const where = `trace ${foldLocalPaths(filePath)} step ${index + 1}`;
   if (typeof step !== 'object' || step === null) throw new Error(`${where} is not an object`);
   const candidate = step as Partial<TraceStep> & Record<string, unknown>;
   if (typeof candidate.kind !== 'string' || !STEP_KINDS.has(candidate.kind)) {
-    throw new Error(`${where} has kind ${JSON.stringify(candidate.kind)}, which this build does not run`);
+    throw new Error(`${where} has kind ${valueShape(candidate.kind)}, which this build does not run`);
   }
   if (candidate.kind === 'mutate') {
     if (typeof candidate.action !== 'string') {
@@ -871,31 +952,31 @@ function validateStep(step: unknown, index: number, filePath: string): void {
   if (candidate.kind === 'undoTo' || candidate.kind === 'redoTo') {
     const steps = candidate.steps;
     if (typeof steps !== 'number' || !Number.isSafeInteger(steps) || steps < 1) {
-      throw new Error(`${where} jumps ${JSON.stringify(steps)} step(s); must be a positive integer`);
+      throw new Error(`${where} jumps ${valueShape(steps)} step(s); must be a positive integer`);
     }
   }
   if (candidate.kind === 'ui') {
     requireText(candidate.testid, 'testid', where);
     requireText(candidate.label, 'label', where);
     if (candidate.double !== undefined && typeof candidate.double !== 'boolean') {
-      throw new Error(`${where} has double ${JSON.stringify(candidate.double)}; must be a boolean`);
+      throw new Error(`${where} has double ${valueShape(candidate.double)}; must be a boolean`);
     }
   }
   if (candidate.kind === 'input') {
     requireText(candidate.testid, 'testid', where);
     requireText(candidate.label, 'label', where);
     if (typeof candidate.value !== 'string') {
-      throw new Error(`${where} has value ${JSON.stringify(candidate.value)}; must be a string`);
+      throw new Error(`${where} has value ${valueShape(candidate.value)}; must be a string`);
     }
     if (typeof candidate.mode !== 'string' || !INPUT_MODES.has(candidate.mode)) {
-      throw new Error(`${where} has input mode ${JSON.stringify(candidate.mode)}, which this build does not run`);
+      throw new Error(`${where} has input mode ${valueShape(candidate.mode)}, which this build does not run`);
     }
   }
   if (candidate.kind === 'fileDialog') {
     requireText(candidate.trigger, 'trigger', where);
     requireText(candidate.label, 'label', where);
     if (candidate.dialog !== 'open' && candidate.dialog !== 'save') {
-      throw new Error(`${where} has dialog ${JSON.stringify(candidate.dialog)}; must be 'open' or 'save'`);
+      throw new Error(`${where} has dialog ${valueShape(candidate.dialog)}; must be 'open' or 'save'`);
     }
     const rel = candidate.rel;
     if (rel !== null) {
@@ -947,7 +1028,7 @@ function validateStep(step: unknown, index: number, filePath: string): void {
   if (candidate.kind === 'mapClick') {
     const at = candidate.lngLat;
     if (!Array.isArray(at) || at.length !== 2 || !at.every((value) => typeof value === 'number' && Number.isFinite(value))) {
-      throw new Error(`${where} has lngLat ${JSON.stringify(at)}; must be two finite numbers`);
+      throw new Error(`${where} has lngLat ${valueShape(at)}; must be two finite numbers`);
     }
     requireText(candidate.label, 'label', where);
   }
@@ -956,7 +1037,7 @@ function validateStep(step: unknown, index: number, filePath: string): void {
     requireSessionRelative(candidate.rel, 'rel', where);
     requireText(candidate.label, 'label', where);
     if (typeof candidate.options !== 'object' || candidate.options === null) {
-      throw new Error(`${where} has export options ${JSON.stringify(candidate.options)}; must be an object`);
+      throw new Error(`${where} has export options ${valueShape(candidate.options)}; must be an object`);
     }
   }
   if (candidate.kind === 'oracle') {
@@ -967,7 +1048,7 @@ function validateStep(step: unknown, index: number, filePath: string): void {
     requireText(candidate.oracle, 'oracle', where);
     requireText(candidate.label, 'label', where);
     if (typeof candidate.inputs !== 'object' || candidate.inputs === null) {
-      throw new Error(`${where} has oracle inputs ${JSON.stringify(candidate.inputs)}; must be an object`);
+      throw new Error(`${where} has oracle inputs ${valueShape(candidate.inputs)}; must be an object`);
     }
   }
   if (candidate.kind === 'reload') {
@@ -976,7 +1057,7 @@ function validateStep(step: unknown, index: number, filePath: string): void {
     // takes the basename, so this is belt and braces - but it is the difference
     // between a rule and a coincidence of another module's implementation.
     if (/[/\\]/.test(fixture) || fixture === '..') {
-      throw new Error(`${where} names fixture ${JSON.stringify(fixture)}; must be a bare fixture name`);
+      throw new Error(`${where} names fixture ${valueShape(fixture)}; must be a bare fixture name`);
     }
   }
 }
@@ -984,10 +1065,18 @@ function validateStep(step: unknown, index: number, filePath: string): void {
 export function readTrace(filePath: string): FuzzTrace {
   const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as FuzzTrace;
   if (parsed.v !== TRACE_VERSION) {
-    throw new Error(`trace ${filePath} is schema v${parsed.v}; this build reads v${TRACE_VERSION}`);
+    throw new Error(`trace ${foldLocalPaths(filePath)} is schema v${valueShape(parsed.v)}; this build reads v${TRACE_VERSION}`);
   }
-  if (!Array.isArray(parsed.steps)) throw new Error(`trace ${filePath} has no steps array`);
+  if (!Array.isArray(parsed.steps)) throw new Error(`trace ${foldLocalPaths(filePath)} has no steps array`);
   parsed.steps.forEach((step, index) => validateStep(step, index, filePath));
+  // Same non-quoting rule as `requireCorpusId`: the value is a survey's name.
+  const leak = corpusNameLeakAt(parsed.steps);
+  if (leak >= 0) {
+    throw new Error(
+      `trace ${foldLocalPaths(filePath)} step ${leak + 1} opens a file inside a corpus copy by its name. A trace names ` +
+        `a corpus entry as <dir>/${CORPUS_ENTRY_SEGMENT}, never by its file name; re-record it on this build.`,
+    );
+  }
   return parsed;
 }
 
@@ -1036,6 +1125,17 @@ export function failureSignature(message: string): FailureSignature {
   }
 
   return { headline, path: firstPath, error, classifiers: [...classifiers].sort() };
+}
+
+/**
+ * The signature a SHAREABLE artifact carries - a written trace, `fuzz-shrink`'s
+ * output: `failureSignature` over `shareableFailureText`, so it names only what
+ * that text keeps (headline, diff path, classifiers) and is the same for the
+ * full message and for its shareable form. A shrink still compares the FULL
+ * signature in memory.
+ */
+export function shareableSignature(message: string): FailureSignature {
+  return failureSignature(shareableFailureText(message));
 }
 
 function normalizeNumbers(text: string): string {

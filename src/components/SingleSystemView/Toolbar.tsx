@@ -22,6 +22,7 @@ import TableSelectDropdown from './TableSelectDropdown';
 import { SpeleoStatusButton } from './SpeleoStatusButton';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { useGrayscaleTokens } from '../../hooks/useGrayscaleTokens';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, isNavigationTool, type ToolGroupDef } from '../../utils/toolGroups';
 import { isMutatingTool, navigationToolsEnabled } from '../../utils/toolUtils';
@@ -254,6 +255,9 @@ export default function Toolbar({
   // the mutating tools + Import exactly like closure-adjusted mode (T2a). The
   // backend edit gate is the real enforcement; this is the visual parity.
   const editingBlocked = useEditingBlocked();
+  // The placement-mode dim's gray, drawn without a CSS filter (#576 NF-W12DMP-1): see
+  // useGrayscaleTokens. The mode carousel dims itself the same way.
+  const placementGray = useGrayscaleTokens(placementModeActive);
   // Survey shows the full toolbar; Plan/Export show only the non-mutating tools.
   // On top of that, the navigate group (Pan/Zoom) is hidden unless the user opted
   // in (#409) - the map pans on a plain drag and zooms on the wheel under every
@@ -342,8 +346,8 @@ export default function Toolbar({
   // the toolbar EXPANDS again when space is freed). Runs before the step-up effect.
   useLayoutEffect(() => {
     if (condenseRef.current !== 0) setCondenseBoth(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    setCondenseBoth,
     headerWidth,
     appMode,
     dataTableFullScreen,
@@ -424,7 +428,8 @@ export default function Toolbar({
       {/* Left section: hamburger menu, Import, then Undo/Redo */}
       <div
         ref={leftRef}
-        className={`flex items-center ${clusterCls} ${tight ? 'gap-0.5' : 'gap-2'} transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
+        className={`flex items-center ${clusterCls} ${tight ? 'gap-0.5' : 'gap-2'} transition-opacity ${placementModeActive ? 'opacity-45' : ''}`}
+        style={placementGray}
         data-testid="toolbar-file-controls"
       >
         {/* Disabled during placement mode so the file/project actions that moved
@@ -582,7 +587,8 @@ export default function Toolbar({
         ) : (
           <>
             <div
-              className={`flex items-center gap-1 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
+              className={`flex items-center gap-1 transition-opacity ${placementModeActive ? 'opacity-45' : ''}`}
+              style={placementGray}
               data-testid="toolbar-tools-group"
             >
               {toolbarItems.map((item, index) => {

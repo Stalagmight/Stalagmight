@@ -53,7 +53,9 @@ export default function SpeleoDiscardChangesDialog() {
           'success',
         );
       }
-      trackDialogComplete('speleodb-discard-changes');
+      // [#576 RV6b-F1] Refused in the read-only Plan/Export workspace (the notice is
+      // up): close as on Cancel - nothing was discarded, so the dialog did not complete.
+      if (outcome !== 'workspace_read_only') trackDialogComplete('speleodb-discard-changes');
       closeDialog();
     } catch (e) {
       openDialog('error', {

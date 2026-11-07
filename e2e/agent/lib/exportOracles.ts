@@ -11,7 +11,8 @@
  * ## The two mirrors, and why they are copies rather than imports
  *
  * `ensureExtensionMirror` and `escapeCsvMirror` reimplement app code:
- * `src/utils/fileDialogs.ts:49-65` and `src-tauri/src/export/csv.rs:66-79`. The
+ * `ensureExtension` in `src/utils/fileDialogs.ts` (with `lastSeparatorIndex` in
+ * `src/utils/path.ts`) and `src-tauri/src/export/csv.rs:66-79`. The
  * Rust one has no choice. The TypeScript one does, and is still a copy, for the
  * reason every other cross-tier constant in this harness is copied (see
  * `importDialogFuzz.ts`'s `RECEIPT_TOAST_KEY`): `tsconfig.agent.json` compiles
@@ -85,9 +86,9 @@ export type ExportRoute = 'modal' | 'panel' | 'store';
  *   upperTmlu           `names_for_path` lowercases before comparing to "tml"
  *                       (`export/tml.rs:254-264`), so `.TMLU` must take the
  *                       SHORT element names and the plain-XML writer
- *   doubleExtension     `a.tml.txt` - `ensureExtension` REPLACES the last
- *                       extension rather than appending, so the DOM routes
- *                       write `a.tml.tml` and the store route writes the
+ *   doubleExtension     `a.tml.txt` - `.txt` is not a KNOWN extension, so
+ *                       `ensureExtension` APPENDS (#576 D35): the DOM routes
+ *                       write `a.tml.txt.tml`, and the store route writes the
  *                       literal `.txt`, which `write_output`'s `_` arm accepts
  *   noExtension         `names_for_path` falls to SHORT; `write_output` falls
  *                       to plain `fs::write` even for a "tml" export
@@ -187,8 +188,9 @@ export function naturalExtension(format: ExportFormat): string {
     case 'tmlu':
       return 'tmlu';
     case 'diveProfile':
-      // `ProfileChart.onExport` does `ensureExtension(path, '.xml')`
-      // (src/components/SingleSystemView/ProfileChart.tsx:245).
+      // `ProfileChart.onExport` does `resolveSavePath(path, 'xml')`
+      // (src/components/SingleSystemView/ProfileChart.tsx), which forces the
+      // extension through `ensureExtension`.
       return 'xml';
     case 'preview':
       return 'svg';
@@ -201,23 +203,49 @@ export function naturalExtension(format: ExportFormat): string {
 // Mirror 1: the app's extension forcing
 // ---------------------------------------------------------------------------
 
+/** `KNOWN_FILE_EXTENSIONS` in `src/utils/fileDialogs.ts`, transcribed. */
+const KNOWN_FILE_EXTENSIONS_MIRROR: readonly string[] = [
+  'stalx', 'plnx', 'gpx', 'tml', 'tmlu', 'mak', 'dat', 'wpj', 'srv', 'dmp',
+  'csv', 'json', 'png', 'svg', 'pdf', 'xml',
+];
+
 /**
- * `src/utils/fileDialogs.ts:49-65`, transcribed.
+ * `lastSeparatorIndex` (with `isWindowsPath`) in `src/utils/path.ts`,
+ * transcribed: `\` separates only in a Windows-shaped path (a drive letter and
+ * a separator, or a leading `\\`); on Linux and macOS it is an ordinary
+ * file-name character.
+ */
+function lastSeparatorIndexMirror(filePath: string): number {
+  const slash = filePath.lastIndexOf('/');
+  const windows = /^[a-zA-Z]:[/\\]/.test(filePath) || filePath.startsWith('\\\\');
+  return windows ? Math.max(slash, filePath.lastIndexOf('\\')) : slash;
+}
+
+/**
+ * `ensureExtension` in `src/utils/fileDialogs.ts`, transcribed.
  *
- * The behaviour that matters and is easy to misremember: it REPLACES the last
- * extension rather than appending one, and it only looks at the last dot AFTER
- * the last separator - so `/a.b/c` gains `.csv` while `/a/b.txt` becomes
- * `/a/b.csv`. A harness that appended instead would check a path the app never
- * wrote to and call every export a silent failure.
+ * The behaviour that matters and is easy to misremember (#576 D35): a trailing
+ * extension that names a KNOWN file type is REPLACED (`/a/b.svg` becomes
+ * `/a/b.csv`), anything else is kept and APPENDED to (`/a/b.txt` ->
+ * `/a/b.txt.csv`, `CaveA 1.5` -> `CaveA 1.5.csv`), and only the last dot of the
+ * FILE NAME counts - not a directory's (`/a.b/c` gains `.csv`) and not a leading
+ * one (`/x/.hidden` -> `/x/.hidden.csv`). A bare trailing dot is dropped. A
+ * harness that guessed wrong would check a path the app never wrote to and call
+ * every export a silent failure.
  */
 export function ensureExtensionMirror(filePath: string, extension: string): string {
   const normalizedExt = extension.startsWith('.') ? extension.slice(1) : extension;
   const lowerPath = filePath.toLowerCase();
   const lowerExt = normalizedExt.toLowerCase();
   if (lowerPath.endsWith(`.${lowerExt}`)) return filePath;
-  const lastSeparator = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+  const lastSeparator = lastSeparatorIndexMirror(filePath);
   const lastDot = filePath.lastIndexOf('.');
-  if (lastDot > lastSeparator) return `${filePath.slice(0, lastDot + 1)}${normalizedExt}`;
+  if (lastDot > lastSeparator + 1) {
+    const current = filePath.slice(lastDot + 1).toLowerCase();
+    if (current === '' || KNOWN_FILE_EXTENSIONS_MIRROR.includes(current)) {
+      return `${filePath.slice(0, lastDot + 1)}${normalizedExt}`;
+    }
+  }
   return `${filePath}.${normalizedExt}`;
 }
 
@@ -249,6 +277,19 @@ export function finalizeExportPath(selected: string, format: ExportFormat): stri
     return ensureExtensionMirror(selected, 'tml');
   }
   return ensureExtensionMirror(selected, naturalExtension(format));
+}
+
+/**
+ * Does a DOM-route export write somewhere OTHER than the answered path? Only
+ * then can the app's Replace File alert appear (`resolveSavePath` in
+ * src/utils/overwriteGuard.ts checks a rewritten name, never the answer the OS
+ * dialog already confirmed). `plnxSibling` and `openProject` are always
+ * rewritten (`.plnx` / `.stalx` are known extensions, replaced by the
+ * format's), so the scenario must expect, and answer, that alert there
+ * (#576 NF-W2FE-2).
+ */
+export function domRouteRewritesPath(selected: string, format: ExportFormat): boolean {
+  return finalizeExportPath(selected, format) !== selected;
 }
 
 // ---------------------------------------------------------------------------
@@ -1178,6 +1219,109 @@ export function multisetDelta(
   return deltas.sort((p, q) => (p.key < q.key ? -1 : 1));
 }
 
+// ---------------------------------------------------------------------------
+// The one azimuth change a TML round trip is ENTITLED to make
+// ---------------------------------------------------------------------------
+
+/**
+ * A section's RESOLVED azimuth reference, as `Project::azimuth_reference_for`
+ * (`models/project.rs:1169`) returns it: the section's own, else the project
+ * default, else the "nothing recorded" default (magnetic, 0, unknown).
+ */
+export interface SectionAzimuthReference {
+  north: 'magnetic' | 'true' | 'grid';
+  /** Degrees, east positive, as stored. */
+  correction: number;
+  /** False exactly when the source is `CorrectionSource::Unknown`: no correction on record. */
+  onRecord: boolean;
+}
+
+/** The four answers `AzimuthExport::decide` gives, in the same order. */
+export type TmlAzimuthPlan = 'magnetic' | 'true-as-stored' | 'mixed-to-true' | 'magnetic-unresolved';
+
+/** `AzimuthReference::applied_correction`: the stored value, or 0 when it is not finite. */
+function appliedCorrection(reference: SectionAzimuthReference): number {
+  return Number.isFinite(reference.correction) ? reference.correction : 0;
+}
+
+/**
+ * MIRROR of `AzimuthExport::decide` (`export/tml_azimuth.rs:56-108`): which
+ * north the Ariane document declares, and whether its bearings are rewritten.
+ *
+ * `references` holds the resolved reference of every NON-EMPTY section - or,
+ * equivalently, of every SHOT's section: the decision reads only which
+ * references occur (any unknown? do the declared ones agree?), and a section with
+ * no shots has none, which is exactly the Rust's `!section.shots.is_empty()`
+ * filter. Only a section with a correction on record votes; an unknown one
+ * constrains the document to magnetic and forbids the rewrite. "Agree" is the
+ * same north and an applied correction within 1e-12 - the Rust's identity test,
+ * not a tolerance.
+ */
+export function tmlAzimuthPlan(references: readonly SectionAzimuthReference[]): TmlAzimuthPlan {
+  const anyUnknown = references.some((reference) => !reference.onRecord);
+  const declared = references.filter((reference) => reference.onRecord);
+  const first = declared[0];
+  if (first === undefined) return 'magnetic';
+  const uniform = declared.every(
+    (reference) =>
+      reference.north === first.north && Math.abs(appliedCorrection(reference) - appliedCorrection(first)) < 1e-12,
+  );
+  const canRewrite = !anyUnknown;
+  if (!uniform) return canRewrite ? 'mixed-to-true' : 'magnetic-unresolved';
+  switch (first.north) {
+    case 'magnetic':
+      return 'magnetic';
+    case 'true':
+      return anyUnknown ? 'magnetic-unresolved' : 'true-as-stored';
+    case 'grid':
+      return canRewrite ? 'mixed-to-true' : 'magnetic-unresolved';
+  }
+}
+
+/**
+ * The shots AS THE TML EXPORT WRITES THEM - what X6 compares the re-import to.
+ *
+ * On every plan but `mixed-to-true` that is the shots unchanged. On
+ * `mixed-to-true` the exporter pushes each shot's measured mean bearing through
+ * its section's reference (`AzimuthReference::to_true`,
+ * `models/azimuth_reference.rs:232-240`, via `AzimuthExport::emit_reference`):
+ * `normalize(bearing + correction)`, and a zero correction is the identity that
+ * returns its input untouched. The re-import then reads those rotated bearings as
+ * measured true-north ones, so without this fold X6 reported every shot of a
+ * project whose sections carry different declinations (multi-year IGRF) as lost
+ * and gained (#576 HFI-8).
+ *
+ * THIS IS THE FORMAT'S DOCUMENTED LOSS, NOT A TOLERANCE - the same distinction
+ * `lrudSentinel` and `clampedDescent` draw. `docs/ariane-export.md` ("Round-trip
+ * cost of that third case") states that the per-section corrections are gone
+ * after such a round trip and the azimuth multiset legitimately differs, and
+ * decision HFI-8-D1 keeps the rotation (the declination review is #600). The
+ * fold applies exactly that rotation, per section, and nothing else: a bearing
+ * rotated by the wrong section's correction, a length, a descent or an LRUD that
+ * changed - all still fail X6.
+ *
+ * `references[i]` is the resolved reference of `shots[i]`'s section.
+ */
+export function asExportedToTml(
+  shots: readonly ShotIdentity[],
+  references: readonly SectionAzimuthReference[],
+): { shots: ShotIdentity[]; plan: TmlAzimuthPlan; rotated: number } {
+  if (references.length !== shots.length) {
+    // A harness bug, not an oracle verdict: the two lists come from one digest.
+    throw new Error(`asExportedToTml: ${shots.length} shot(s) but ${references.length} reference(s)`);
+  }
+  const plan = tmlAzimuthPlan(references);
+  if (plan !== 'mixed-to-true') return { shots: [...shots], plan, rotated: 0 };
+  let rotated = 0;
+  const out = shots.map((shot, index) => {
+    const correction = appliedCorrection(references[index] as SectionAzimuthReference);
+    if (correction === 0) return shot;
+    rotated += 1;
+    return { ...shot, azimuthIn: normalizeHeading(shot.azimuthIn + correction) };
+  });
+  return { shots: out, plan, rotated };
+}
+
 /**
  * Which COMMENT TEXTS the project gained or lost, wherever they live.
  *
@@ -1250,6 +1394,12 @@ export function checkShotMultiset(
     identityDetail?: string | null;
     /** `commentMultisetDelta`'s answer for the text, pooled over shots + stations. */
     commentDeltas?: readonly MultisetDelta[];
+    /**
+     * The export's azimuth plan, when the caller folded it (`asExportedToTml`).
+     * Only rendered: on `mixed-to-true` the BEFORE side was already rotated, so
+     * a reader knows a remaining azimuth difference is not that documented loss.
+     */
+    azimuthPlan?: TmlAzimuthPlan;
   },
   reproduce: string,
 ): void {
@@ -1268,6 +1418,12 @@ export function checkShotMultiset(
         `0.0 absent-sentinel folded onto null - see docs/ariane-export.md, and \`clampedDescent\` ` +
         `for why the absolute depths are a metric rather than a key):`,
     );
+    if (args.azimuthPlan === 'mixed-to-true') {
+      lines.push(
+        `      (the BEFORE side is already rotated into true north per section correction - the ` +
+          `exporter's documented mixed-declination case, docs/ariane-export.md - so this is not that)`,
+      );
+    }
     for (const delta of args.deltas.slice(0, 8)) {
       lines.push(`      ${delta.key}  x${delta.before} -> x${delta.after}`);
     }
@@ -1431,6 +1587,10 @@ export interface ModeSnapshot {
   hasEligibleClosures: boolean;
 }
 
+/** `AppMode` and `GeometryMode` (`src/store/uiStore.ts`): the words X9 prints as they are. */
+const APP_MODES: ReadonlySet<string> = new Set(['survey', 'plan', 'export']);
+const GEOMETRY_MODES: ReadonlySet<string> = new Set(['measured', 'closureAdjusted']);
+
 /**
  * X9 - Export mode forces the read-only map, the adjusted geometry when there is
  * any to adjust, and gives the previous state back.
@@ -1459,15 +1619,19 @@ export function checkExportModeInvariants(
   args: { before: ModeSnapshot; during: ModeSnapshot; after: ModeSnapshot },
   reproduce: string,
 ): void {
+  // The modes are read off the app's store: a value outside the store's own
+  // words prints as its length, never as text (#576 W51).
   if (args.during.appMode !== 'export') {
-    throw new ExportOracleError(
-      `X9 entering Export mode left appMode at "${args.during.appMode}"\n  ${reproduce}`,
-    );
+    const shown = APP_MODES.has(args.during.appMode) ? args.during.appMode : `${String(args.during.appMode).length} characters`;
+    throw new ExportOracleError(`X9 entering Export mode left appMode at "${shown}"\n  ${reproduce}`);
   }
   if (args.during.hasEligibleClosures && args.during.geometryMode !== 'closureAdjusted') {
+    const shown = GEOMETRY_MODES.has(args.during.geometryMode)
+      ? args.during.geometryMode
+      : `${String(args.during.geometryMode).length} characters`;
     throw new ExportOracleError(
       `X9 Export mode did not force closure-adjusted geometry (geometryMode=` +
-        `"${args.during.geometryMode}") on a project that HAS an adjustable closure\n` +
+        `"${shown}") on a project that HAS an adjustable closure\n` +
         `    the export renders what the map shows, and in Export mode the map is the\n` +
         `    adjusted survey; exporting measured geometry from that screen would produce\n` +
         `    a file that does not match the preview beside it.\n` +

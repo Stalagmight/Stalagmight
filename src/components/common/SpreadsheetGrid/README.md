@@ -35,8 +35,9 @@ It backs the survey data table (`DataTable.tsx`), the raw table view
 - **Column hiding** (controlled `hiddenColumns`, read-only to the grid - hosts
   own the Columns menu) and **reordering** (controlled `columnOrder`, header
   drag).
-- **Host sync props**: `selectedRow` (moves the active cell to an externally
-  selected row, e.g. from the map; never loops back through
+- **Host sync props**: `selectRequest` (`{ row, nonce }`: moves the active cell
+  to an externally selected row, e.g. from the map, once per nonce - a new
+  nonce re-selects even the same row; never loops back through
   `onActiveCellChange`), `hoveredRow` (tints a row with `sg-row-hover`),
   `rowClassName(row, i)` (extra per-row class, e.g. a frozen-row tint), and
   `onRowHover`. The active row carries `data-active="true"`.

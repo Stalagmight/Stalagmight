@@ -4,7 +4,7 @@
 // the moving survey geometry. The preview is rendered from ONE dedicated GeoJSON
 // source that is rebuilt every frame from a captured set of ORIGINAL coordinates
 // plus the current screen-space offset. This module holds the pure, map-free
-// logic so it can be unit-tested and to keep SurveyLayer.tsx off its size ceiling.
+// logic so it can be unit-tested and to keep SurveyLayer.ts off its size ceiling.
 //
 // Why one source rebuilt per frame instead of the old `*-translate` temp layers:
 //   - `line-translate` shifts rendered pixels but NOT tile clipping, so beyond the

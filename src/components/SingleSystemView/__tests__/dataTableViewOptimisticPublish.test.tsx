@@ -25,8 +25,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc');
 
 import DataTable from '../DataTable';
 import { useProjectStore } from '../../../store/projectStore';
@@ -35,19 +34,9 @@ import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
 import type { Station } from '../../../types/project';
 import type { SurveyData } from '../../../types/survey-data';
-
-/** jsdom has no ResizeObserver; DataTable's chrome-offset measurement effect
- *  needs the constructor to exist, but this suite never depends on it firing. */
-class NoopResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-
-async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
+import { invokeIpcMock } from '../../../test/factories/ipc';
+import { NoopResizeObserver } from '../../../test/factories/dom';
+import { microtasks } from '../../../test/factories/async';
 
 function freshConfig(): Config {
   return structuredClone(defaultConfig) as Config;
@@ -64,6 +53,8 @@ const adjustedSurvey = { tag: 'adjusted' } as unknown as SurveyData;
 let releaseSave: (() => void) | null = null;
 
 beforeEach(() => {
+  // jsdom has no ResizeObserver; DataTable's chrome-offset measurement effect
+  // needs the constructor to exist, but this suite never depends on it firing.
   vi.stubGlobal('ResizeObserver', NoopResizeObserver);
   vi.useFakeTimers();
   releaseSave = null;
@@ -128,7 +119,7 @@ describe('data-table view save vs cached adjusted geometry (#357 item 4)', () =>
     // ...and the success path's `loadConfig` re-sync must not drop it either.
     releaseSave?.();
     await act(async () => {
-      await flushMicrotasks();
+      await microtasks(2);
     });
     expect(useProjectStore.getState().stationsAdjusted).toBe(adjustedStations);
     expect(useProjectStore.getState().surveyDataAdjusted).toBe(adjustedSurvey);
@@ -141,7 +132,7 @@ describe('data-table view save vs cached adjusted geometry (#357 item 4)', () =>
     // timer - is what fires the save and the publish alongside it.
     toggleColumn('comment');
     unmount();
-    await flushMicrotasks();
+    await microtasks(2);
 
     expect(
       invokeIpcMock.mock.calls.filter(([command]) => command === 'update_data_table_view')

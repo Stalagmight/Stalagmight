@@ -482,6 +482,53 @@ describe('gasPlanStore segments (#317)', () => {
     expect(useGasPlanStore.getState().gasConfig.dpv).toEqual(rig);
   });
 
+  it('drops loaded span speeds outside the range the engine flies, and says how many (#576 NF-UI-2)', () => {
+    // A hand-edited .plnx: the engine flies only [0.1, 1000] m/min and silently uses the plan
+    // speed for anything else, while the Segments grid showed the stored number as the span's
+    // explicit speed - one number on screen, another in the plan. The load drops them instead,
+    // so the row shows the plan speed it is really flown at, and reports the count for one
+    // notice. The baseline is the dropped snapshot, so the plan loads clean.
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    const waypoints = [1, 2, 3, 4, 5].map((i) => ({ section_id: 1, station_index: i }));
+    const dropped = useGasPlanStore.getState().applyLoadedPlan(10, {
+      ...snapshot,
+      waypoints,
+      segments: [
+        { speed_m_per_min: 0, on_scooter: false },
+        { speed_m_per_min: -12, on_scooter: false },
+        { speed_m_per_min: 5000, on_scooter: false },
+        { speed_m_per_min: 0.05, on_scooter: false },
+        { speed_m_per_min: 12, on_scooter: false },
+        { speed_m_per_min: null, on_scooter: false },
+      ],
+    });
+    expect(useGasPlanStore.getState().segments.map((seg) => seg.speed_m_per_min)).toEqual([
+      null,
+      null,
+      null,
+      null,
+      12,
+      null,
+    ]);
+    expect(dropped).toEqual({ droppedSpeeds: 4 });
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
+  });
+
+  it('keeps every in-range loaded span speed, the range ends included, and reports none dropped', () => {
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    const dropped = useGasPlanStore.getState().applyLoadedPlan(11, {
+      ...snapshot,
+      waypoints: [{ section_id: 1, station_index: 1 }, { section_id: 1, station_index: 2 }],
+      segments: [
+        { speed_m_per_min: 0.1, on_scooter: false },
+        { speed_m_per_min: 1000, on_scooter: false },
+        { speed_m_per_min: 15, on_scooter: false },
+      ],
+    });
+    expect(useGasPlanStore.getState().segments.map((seg) => seg.speed_m_per_min)).toEqual([0.1, 1000, 15]);
+    expect(dropped).toEqual({ droppedSpeeds: 0 });
+  });
+
   it('grounds scootered spans when the load drops an invalid rig, exactly like setDpvRig(null)', () => {
     // The engine gates `on_scooter` off without a rig but still flies the span's auto-filled
     // scooter pace, and a latent flag would spring back to life on the next rig install - a

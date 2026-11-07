@@ -1,0 +1,54 @@
+name: Telemetry Worker
+
+# Type-check the Cloudflare telemetry worker (telemetry-worker/) - #576
+# NF-TSWORKER.
+#
+# The worker is a standalone pnpm project with its own package.json and
+# pnpm-lock.yaml, outside the root install, so the root `pnpm tsc --noEmit` in
+# `check` never sees it, and a deploy type-checks nothing (wrangler bundles
+# with esbuild, which strips types). Its tsconfig names
+# @cloudflare/workers-types, which it now carries, with typescript, as its own
+# devDependencies.
+#
+# Path-filtered (an allowlist): nothing outside the worker can change its
+# outcome. `--ignore-workspace` on every pnpm call is REQUIRED: pnpm walks up
+# to the root pnpm-workspace.yaml otherwise, and then installs the ROOT project
+# instead (exit 0, worker node_modules empty), or re-checks the root install
+# before a `run` (docs/telemetry.md). Safe to block on because `master` is
+# unprotected (#122).
+on:
+  push:
+    branches: [master]
+    paths: ['telemetry-worker/**', '.github/workflows/telemetry-worker.yml']
+  pull_request:
+    branches: [master]
+    paths: ['telemetry-worker/**', '.github/workflows/telemetry-worker.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telemetry-worker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: telemetry-worker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Reads the version from the root package.json `packageManager` pin.
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      # --ignore-scripts: a type-check needs none of wrangler's native
+      # postinstalls (workerd, esbuild, sharp), and the worker has no
+      # build-script approvals of its own.
+      - name: Install (the worker's own lockfile)
+        run: pnpm install --frozen-lockfile --ignore-workspace --ignore-scripts
+      - name: Type-check (tsc -p .)
+        run: pnpm --ignore-workspace run typecheck

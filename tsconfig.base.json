@@ -1,0 +1,39 @@
+{
+  // Shared compiler options for every TypeScript program in the repo root:
+  // tsconfig.json (the app, src/), tsconfig.playwright.json (e2e-playwright/ +
+  // playwright.config.ts) and tsconfig.agent.json (e2e/agent + e2e/lib). Each
+  // of them `extends` this file and adds only what is genuinely per-program:
+  // target/lib, jsx, `types`, interop flags, the incremental cache file and
+  // `include`. Strictness belongs HERE, so the three programs cannot drift
+  // apart again (#576 E11). See docs/linting.md "TypeScript: one shared base".
+  //
+  // telemetry-worker/tsconfig.json does not extend it: the worker is a
+  // standalone pnpm project with its own install and a path-filtered workflow
+  // that only re-runs on telemetry-worker/** changes. It carries a copy of the
+  // strictness flags below: change both.
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    // Type-check only. Without this, a bare `tsc -p <config>` emits a .js next
+    // to every .ts in the program - including the src/ files the Playwright
+    // specs import - and litters the tree with hundreds of untracked files.
+    "noEmit": true,
+
+    "strict": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "strictNullChecks": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true
+  }
+}

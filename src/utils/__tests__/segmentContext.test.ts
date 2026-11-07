@@ -12,29 +12,18 @@ import {
 } from '../segmentContext';
 import type { DmpSection } from '../../types/commands';
 import type { DmpShot } from '../../types/ipc/DmpShot';
+import { makeDmpSection as dmpSectionOf, makeDmpShot as dmpShotOf } from '../../test/factories/dmp';
 
 // ─── Test data helpers ──────────────────────────────────────────────────────
 
 /** Create a standard DMP shot with the given heading (degrees) and length. */
 function makeShot(heading: number, length: number, overrides: Partial<DmpShot> = {}): DmpShot {
-  return {
-    shot_type: 'Standard',
-    heading_in: heading,
-    heading_out: heading,
-    length,
-    depth_in: 0,
-    depth_out: 0,
-    pitch_in: 0,
-    pitch_out: 0,
-    left: 0, right: 0, up: 0, down: 0,
-    temperature: 0, hour: 0, minute: 0, second: 0, marker_index: 0,
-    ...overrides,
-  };
+  return dmpShotOf({ heading_in: heading, heading_out: heading, length, ...overrides });
 }
 
 /** Create a DMP section with shots heading in a single direction. */
 function makeDmpSection(name: string, shots: DmpShot[]): DmpSection {
-  return { version: 1, name, direction: 'in', date: '', shots, content_hash: '' };
+  return dmpSectionOf({ name, date: '', shots, content_hash: '' });
 }
 
 /** Create an importing-type virtual connection. */

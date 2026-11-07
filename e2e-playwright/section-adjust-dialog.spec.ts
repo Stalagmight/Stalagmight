@@ -1,4 +1,4 @@
-import { test, expect, Page } from './fixtures/coverage';
+import { test, expect } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
@@ -6,6 +6,7 @@ import {
   waitForMapReady,
   waitForNoDialogs,
 } from './helpers/app';
+import type { CommandError } from '../src/types/ipc/CommandError';
 
 test.describe('Section Adjust Dialog', () => {
   test.beforeEach(async ({ page }) => {
@@ -223,7 +224,7 @@ test.describe('Section Adjust Dialog', () => {
   test('shows error when apply fails without preview', async ({ page }) => {
     await page.evaluate(() => {
       (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
-        move_section: { success: false, error: 'Move failed' },
+        move_section: { __reject: { code: 'FAILED', message: 'Move failed' } satisfies CommandError },
       };
     });
 

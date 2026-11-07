@@ -16,11 +16,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import SystemTable from '../SystemTable';
 import SystemCard from '../SystemCard';
@@ -40,6 +37,7 @@ import { themeTokens } from '../../../theme/tokens';
 // assemble `system-card-${path}`, it silently stops matching for any path with a
 // character encodeURIComponent touches.
 import { systemCardTestId, systemRowTestId } from '../../../utils/testId';
+import { stubGetErrorMessage, fallbackOr } from '../../../test/factories/ipc';
 
 const MINE = 'aaaaaaaa-1111-1111-1111-111111111111';
 const THEIRS = 'bbbbbbbb-2222-2222-2222-222222222222';

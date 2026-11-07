@@ -2,11 +2,11 @@
  * Struct-of-Arrays representation of a survey's bulk numeric data.
  *
  * Background: the legacy in-memory shape is `Project.sections[].shots[]`
- * (75k+ JS `Shot` objects across 14k+ `Section` arrays) plus a parallel
- * `Station[]` (89k+ `Station` objects). Each object has 5-16 named
+ * (one JS `Shot` object per shot, one array per `Section`) plus a parallel
+ * `Station[]` (one `Station` object per station). Each object has 5-16 named
  * fields and JSC's IsoHeap commits a per-class slab that doesn't
- * decommit on close. After loading 92.stalx once the WebProcess ends
- * up with ~2 GB of committed but-mostly-empty slabs that won't return
+ * decommit on close. After loading a large project once the WebProcess ends
+ * up with gigabytes of committed but-mostly-empty slabs that won't return
  * to the OS without external pressure.
  *
  * This module defines a flat typed-array layout (`SurveyData`) and
@@ -35,8 +35,8 @@ import type { GpsCoordinates } from './ipc/GpsCoordinates';
 import type { AzimuthReference } from './ipc/AzimuthReference';
 import type { SurveyDirection } from './ipc/SurveyDirection';
 
-/** Section metadata kept as small structured objects. ~14k items for
- *  92.stalx; total memory is tiny compared to the shot payload. The
+/** Section metadata kept as small structured objects, one per section;
+ *  total memory is tiny compared to the shot payload. The
  *  `shots[]` array is *gone* - shots live in `SurveyData` keyed by
  *  global index and looked up via `shotOffset` + `shotCount`.
  *
@@ -389,16 +389,13 @@ export function lazyStationArray(data: SurveyData): Station[] {
 
 /**
  * Construct `SurveyData` from the legacy `Project.sections[].shots[]` +
- * `Station[]` shape that `refreshProjectState` still returns (it pulls
- * via JSON IPC, not the binary `load_project_full_binary` route).
+ * `Station[]` shape.
  *
- * This is the migration-window converter - once the JSON IPC is also
- * binary-ized (out of scope for Phase A), this stops being needed.
- *
- * For the binary IPC path, see `buildSurveyData` inside
- * `utils/loadProjectBinary.ts` which builds `SurveyData` directly from
- * the wire bytes without going through legacy objects (faster, but
- * specific to that input shape).
+ * The load and, since #576 A9-D2, the state refresh both decode the binary
+ * envelope, whose `buildSurveyData` (in `utils/loadProjectBinary.ts`) builds
+ * `SurveyData` straight from the wire bytes. What still calls this is the
+ * fallback for a store with no `surveyData` (the adjusted-geometry fetch, the
+ * map layer's flush) and the tests that build fixtures from legacy shapes.
  */
 export function surveyDataFromLegacy(
   sections: import('./ipc/Section').Section[],
@@ -449,6 +446,9 @@ export function surveyDataFromLegacy(
       direction: section.direction,
       quality: section.quality,
       next_shot_id: section.next_shot_id,
+      // As the binary decoder does (absent folds to null, "inherits"), so the two
+      // builders hand out the same section metadata (#576 RV7b-5).
+      azimuth_reference: section.azimuth_reference ?? null,
       shotOffset: cursor,
       shotCount: section.shots.length,
     });

@@ -11,8 +11,9 @@ import type { CrossSectionSuggestion, DmpFile } from '../types/commands';
 import type { OverlapMode } from '../types/config';
 import type { EditableShot } from '../components/common/ShotTableEditor';
 import { isEmittedShot } from '../components/common/emittedShots';
-import { convertToEditableShots } from '../hooks/useImportState';
+import { convertToEditableShots } from './shotConversion';
 import { useProjectStore } from '../store/projectStore';
+import { changedShotFields } from './shotUpdatesDiff';
 import type { SectionEditState, ConfirmedOverlapInfo } from './batchImportHelpers';
 import {
   computeActionableIds,
@@ -24,6 +25,47 @@ import {
   interpolateShots,
   type TargetShotLike,
 } from './overlapHelpers';
+
+/**
+ * [#576 NF-W7F-2] A reading of an EXISTING section as the backend stored it,
+ * from the store's copy.
+ *
+ * The binary envelope carries every shot reading as an f32, so a length stored
+ * as 1.2 reaches the store as 1.2000000476837158 - and copying that into a NEW
+ * import row ("existing data", or an interpolation with it) created the section
+ * with the rounding noise. The shortest decimal that is the same f32 is the
+ * stored value for any reading of up to six significant digits, since an f32
+ * keeps every such decimal apart. A value that is not an f32 at all did not
+ * come through the envelope, and is returned as it is.
+ */
+function storedReading<T extends number | null>(value: T): T {
+  if (value == null || !Number.isFinite(value)) return value;
+  const f32 = Math.fround(value);
+  if (f32 !== value) return value;
+  // Nine significant digits always name an f32 exactly, so the loop returns.
+  for (let digits = 1; digits <= 9; digits++) {
+    const decimal = Number(value.toPrecision(digits));
+    if (Math.fround(decimal) === f32) return decimal as T;
+  }
+  return value;
+}
+
+/** An existing section's shot with its readings as the backend stored them. */
+function storedReadings(shot: TargetShotLike): TargetShotLike {
+  return {
+    azimuth_in: storedReading(shot.azimuth_in),
+    azimuth_out: storedReading(shot.azimuth_out),
+    length: storedReading(shot.length),
+    depth_in: storedReading(shot.depth_in),
+    depth_out: storedReading(shot.depth_out),
+    pitch_in: storedReading(shot.pitch_in),
+    pitch_out: storedReading(shot.pitch_out),
+    left: storedReading(shot.left),
+    right: storedReading(shot.right),
+    up: storedReading(shot.up),
+    down: storedReading(shot.down),
+  };
+}
 
 /**
  * Rescue a section that would lose every shot to deletion (overlaps at both
@@ -226,7 +268,7 @@ export function applyAllOverlapTreatments(
           direction: section.direction === 'out' ? 'out' : 'in',
           quality: 1.0,
           reverse: false,
-          shots: convertToEditableShots(section.shots),
+          shots: convertToEditableShots(section.shots, section.version),
         };
         sectionEdits.set(importSectionIndex, importEdits);
       }
@@ -266,7 +308,9 @@ export function applyAllOverlapTreatments(
               const currentProject = useProjectStore.getState().project;
               const targetSection = currentProject?.sections.find(s => s.id === existingSectionId);
               if (targetSection) {
-                targetShotArray = targetSection.shots;
+                // The values the backend stored, not the store's f32 copy: these
+                // are written into the new import rows (#576 NF-W7F-2).
+                targetShotArray = targetSection.shots.map(storedReadings);
                 targetMapDiag = `existing section ${existingSectionId} (${targetSection.shots.length} shots)`;
               } else {
                 targetMapDiag = `MISS: existing section ${existingSectionId} not found in project`;
@@ -282,7 +326,7 @@ export function applyAllOverlapTreatments(
               } else {
                 const targetDmpSection = dmpFile.sections[targetImportIndex];
                 if (targetDmpSection) {
-                  targetShotArray = convertToEditableShots(targetDmpSection.shots);
+                  targetShotArray = convertToEditableShots(targetDmpSection.shots, targetDmpSection.version);
                   targetMapDiag = `importing section ${targetImportIndex} from DMP (${targetShotArray.length} shots)`;
                 } else {
                   targetMapDiag = `MISS: importing section ${targetImportIndex} not in edits or DMP`;
@@ -423,6 +467,18 @@ export function applyAllOverlapTreatments(
           }
           // existing_data: target keeps its own values - no update needed
 
+          // [#576 F32-EDIT] Only the readings that change: the project's shots hold
+          // their values rounded through an f32 (the binary envelope), so an
+          // unchanged one re-sent from here would write that rounding over the
+          // backend's exact value.
+          if (updates) {
+            updates = changedShotFields(existingShot, updates) as Record<string, number | null>;
+            if (Object.keys(updates).length === 0) {
+              treatedShots.add(treatKey);
+              updates = null;
+            }
+          }
+
           if (updates) {
             if (import.meta.env.DEV) {
               console.warn(
@@ -464,7 +520,7 @@ export function applyAllOverlapTreatments(
             direction: section.direction === 'out' ? 'out' : 'in',
             quality: 1.0,
             reverse: false,
-            shots: convertToEditableShots(section.shots),
+            shots: convertToEditableShots(section.shots, section.version),
           };
           sectionEdits.set(targetImportIndex, targetEdits);
         }

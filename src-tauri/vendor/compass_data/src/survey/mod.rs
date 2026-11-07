@@ -318,6 +318,19 @@ impl SurveyFormat {
             Self::Format15(f) => Some(f.inclination_units.clone()),
         }
     }
+
+    /// Which station each row's LRUDs were measured at, if the format says
+    /// (Stalagmight fork addition). Only the 13- and 15-character formats carry
+    /// the flag; `None` for the shorter ones, which Compass reads as
+    /// [`LRUDAssociation::FromStation`].
+    #[must_use]
+    pub fn lrud_association(&self) -> Option<LRUDAssociation> {
+        match self {
+            Self::Format13(f) => Some(f.lrud_association.clone()),
+            Self::Format15(f) => Some(f.lrud_association.clone()),
+            Self::Format11(_) | Self::Format12(_) | Self::None => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

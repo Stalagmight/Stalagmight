@@ -45,11 +45,6 @@ permissions:
 # All actions are SHA-pinned: the org enforces "Require actions to be pinned to
 # a full-length commit SHA". Tag refs like @v7 are rejected outright.
 
-# Build the bundled SQLite without FTS3/4/5, RTREE, DBSTAT and extension
-# loading, so a hostile .stalx cannot reach them (#608, docs/toolchain.md).
-env:
-  LIBSQLITE3_FLAGS: "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION"
-
 jobs:
   resolve:
     runs-on: ubuntu-latest
@@ -167,9 +162,12 @@ jobs:
         if: runner.environment == 'self-hosted'
         run: sccache --zero-stats || true
 
+      # As in ci.yml's check job (#576 NF-ROOT-PERM): the permission tests fail
+      # as root, so the test binaries of this one command run as an
+      # unprivileged user.
       - name: cargo test
         if: ${{ !inputs.skip_cargo_test }}
-        run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
+        run: ./scripts/ci-cargo-test-unprivileged.sh cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"

@@ -12,7 +12,11 @@
 // lint:ts-file-size:test).
 
 import assert from 'node:assert/strict';
-import { prodLoc, classify, maskNonCode, WARN_LOC, FAIL_LOC } from './check-ts-file-size.mjs';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { prodLoc, classify, maskNonCode, WARN_LOC, FAIL_LOC, listScopedFiles, E2E_ROOTS, isGeneratedE2e } from './check-ts-file-size.mjs';
+import { listSrcFiles, walkFiles, isTestPath, isGeneratedPath, symlinkProblem } from './lib/src-files.mjs';
 
 let passed = 0;
 const failures = [];
@@ -148,6 +152,102 @@ test('a new/grown file over the hard cap reports the budget error', () => {
 test('a grandfathered over-cap file only warns while it is not growing', () => {
   assert.equal(classify('DmpNewImportDialog.tsx', 3657, 3657).level, 'warn');
   assert.equal(classify('DmpNewImportDialog.tsx', 3600, 3657).level, 'warn'); // shrank - still just a warn
+});
+
+// --- scripts/lib/src-files.mjs: the one src/ lister every src gate uses (#576 E16)
+
+test('isTestPath / isGeneratedPath: one predicate pair for every src gate', () => {
+  for (const rel of ['src/a/__tests__/x.ts', 'src/a/x.test.tsx', 'src/a/x.spec.ts', 'src/test/setup.ts']) assert.ok(isTestPath(rel), rel);
+  for (const rel of ['src/a/x.ts', 'src/testing/x.ts', 'src/a/contest.ts']) assert.ok(!isTestPath(rel), rel);
+  assert.ok(isGeneratedPath('src/types/ipc/Shot.ts'));
+  assert.ok(isGeneratedPath('src/types/ipc.generated.ts'));
+  assert.ok(!isGeneratedPath('src/types/ipcHelpers.ts'));
+});
+
+test('listSrcFiles walks untracked files, prunes tests/generated/node_modules, returns symlinks unfollowed', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'src-files-'));
+  try {
+    const mk = (rel, text = 'x') => {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), text);
+    };
+    mk('src/b.tsx');
+    mk('src/a/c.ts');
+    mk('src/a/readme.md');
+    mk('src/__tests__/t.test.ts');
+    mk('src/test/setup.ts');
+    mk('src/types/ipc/Shot.ts');
+    mk('src/node_modules/dep/index.ts');
+    mk('elsewhere.ts');
+    fs.symlinkSync('../elsewhere.ts', path.join(root, 'src', 'linked.ts'));
+    fs.symlinkSync('missing.ts', path.join(root, 'src', 'dangling.ts'));
+    const { files, symlinks } = listSrcFiles(root);
+    assert.deepEqual(files, ['src/a/c.ts', 'src/b.tsx']);
+    assert.deepEqual(symlinks, [
+      { rel: 'src/dangling.ts', target: 'missing.ts' },
+      { rel: 'src/linked.ts', target: '../elsewhere.ts' },
+    ]);
+    assert.match(symlinkProblem(symlinks[1]), /src\/linked\.ts is a symlink \(-> \.\.\/elsewhere\.ts\)/);
+    assert.deepEqual(listSrcFiles(root, { exts: ['.tsx'] }).files, ['src/b.tsx']);
+    assert.deepEqual(walkFiles(root, 'src', { exts: ['.md'] }).files, ['src/a/readme.md']);
+    assert.throws(() => walkFiles(root, 'nope'), /ENOENT/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Every gate prints a symlink's target. One that is absolute or leaves the root
+// names a path on the machine, not the checkout's text (#576 W51).
+test('walkFiles gives a symlink target outside the root as a placeholder, one inside as written', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'src-files-out-'));
+  try {
+    fs.mkdirSync(path.join(root, 'src', 'a'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src', 'b.ts'), 'x');
+    fs.symlinkSync('/qzhome/qzuser/CaveA/x.ts', path.join(root, 'src', 'abs.ts'));
+    fs.symlinkSync('../../qzCaveA/x.ts', path.join(root, 'src', 'up.ts'));
+    fs.symlinkSync('../b.ts', path.join(root, 'src', 'a', 'in.ts'));
+    const { symlinks } = walkFiles(root, 'src', { exts: ['.ts'] });
+    assert.deepEqual(symlinks, [
+      { rel: 'src/a/in.ts', target: '../b.ts' },
+      { rel: 'src/abs.ts', target: '<outside the checkout>' },
+      { rel: 'src/up.ts', target: '<outside the checkout>' },
+    ]);
+    assert.doesNotMatch(symlinks.map(symlinkProblem).join('\n'), /qz/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// --- scope: src/ plus the e2e trees (#576 E8-D2) ------------------------------
+
+test('the ratchet measures e2e-playwright/ and e2e/ (specs included) but not generated replays', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-scope-'));
+  try {
+    const mk = (rel) => {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), 'export {};\n');
+    };
+    for (const rel of ['src/a.ts', 'src/a.test.ts', 'e2e-playwright/x.spec.ts', 'e2e-playwright/mocks/tauri-ipc.ts',
+      'e2e/agent/lib/y.ts', 'e2e/agent/lib/y.test.ts', 'e2e/agent/replays/gen-1.spec.ts', 'e2e/agent/node_modules/z.ts']) mk(rel);
+    assert.deepEqual(listScopedFiles(root).files, [
+      'src/a.ts', 'e2e-playwright/mocks/tauri-ipc.ts', 'e2e-playwright/x.spec.ts', 'e2e/agent/lib/y.test.ts', 'e2e/agent/lib/y.ts',
+    ]);
+    assert.deepEqual(E2E_ROOTS, ['e2e-playwright', 'e2e']);
+    assert.ok(isGeneratedE2e('e2e/agent/replays/gen-1.spec.ts'));
+    assert.ok(!isGeneratedE2e('e2e-playwright/replays.spec.ts'));
+    // A missing e2e root is tolerated (partial checkout).
+    fs.rmSync(path.join(root, 'e2e'), { recursive: true, force: true });
+    assert.deepEqual(listScopedFiles(root).files, ['src/a.ts', 'e2e-playwright/mocks/tauri-ipc.ts', 'e2e-playwright/x.spec.ts']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the committed baseline freezes the IPC mock (the largest e2e file)', () => {
+  const baseline = JSON.parse(fs.readFileSync(new URL('../ts-file-size-baseline.json', import.meta.url), 'utf8'));
+  const mock = baseline.files['e2e-playwright/mocks/tauri-ipc.ts'];
+  assert.ok(mock >= WARN_LOC, `tauri-ipc.ts baseline ${mock} should be frozen (>= ${WARN_LOC})`);
+  assert.equal(classify('e2e-playwright/mocks/tauri-ipc.ts', mock + 1, mock).level, 'error', 'one more line must fail');
 });
 
 // --- report ------------------------------------------------------------------

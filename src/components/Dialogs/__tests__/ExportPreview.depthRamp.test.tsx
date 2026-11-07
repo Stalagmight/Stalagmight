@@ -6,12 +6,9 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { DEFAULT_IMAGE_OPTIONS } from '../../../store/exportStore';
 import type { ExportImageOptions } from '../../../types/commands';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../../utils/ipc');
 
 /**
  * #360, second half. Stamping the theme's depth endpoints onto `export_image`

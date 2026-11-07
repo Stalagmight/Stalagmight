@@ -14,6 +14,32 @@ export function checkDisplayAvailable(): boolean {
   return false;
 }
 
+/**
+ * The environment a headless app gets on a throwaway Xvfb display: `base` with
+ * DISPLAY set to it and the two things a desktop session would otherwise reach
+ * into turned off. Returns a new object; `base` is not changed.
+ *
+ * - GTK is pinned to X11 and WAYLAND_DISPLAY dropped: with WAYLAND_DISPLAY set (a
+ *   Wayland desktop), GTK prefers Wayland and would render the "headless" app onto
+ *   the real compositor, ignoring DISPLAY entirely.
+ * - The accessibility bridge is off (`NO_AT_BRIDGE=1`; #576 NF-W12H-2). GTK and
+ *   WebKit ask the session bus for the AT-SPI bus, and `at-spi-bus-launcher`
+ *   serves it from `$XDG_RUNTIME_DIR/at-spi/bus` - ONE path per runtime dir,
+ *   whatever session bus started it. Several harness runs each under their own
+ *   `dbus-run-session` (one runtime dir) each start a launcher, every launcher
+ *   binds that same path, and an app whose launcher lost the race gets no answer
+ *   there: it logs "Couldn't register with accessibility bus: Did not receive a
+ *   reply", never finishes starting, and its harness dies in `waitForAppReady`
+ *   with "invalid session id". Measured on a Linux host, six sessions released
+ *   at once per round: 11 of 30 died that way over five rounds, 0 of 42 with the
+ *   bridge off. Nothing the harness drives goes through AT-SPI.
+ */
+export function headlessAppEnv(base: NodeJS.ProcessEnv, display: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, DISPLAY: display, GDK_BACKEND: 'x11', NO_AT_BRIDGE: '1' };
+  delete env.WAYLAND_DISPLAY;
+  return env;
+}
+
 export interface XvfbHandle {
   /** The `:N` display the server bound to. */
   display: string;

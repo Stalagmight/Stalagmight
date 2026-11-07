@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -28,6 +29,7 @@ export default function SwapCommentsDialog() {
   const dialogData = useUIStore((s) => s.dialogData);
   const clearMoveCommentSource = useUIStore((s) => s.clearMoveCommentSource);
   const [busy, setBusy] = useState(false);
+  const { t } = useTranslation();
 
   const source = dialogData.source as CommentHolderUI | undefined;
   const target = dialogData.target as CommentHolderUI | undefined;
@@ -67,27 +69,27 @@ export default function SwapCommentsDialog() {
   };
 
   return (
-    <DialogWrapper title="Move comment" onClose={handleCancel} size="md" data-testid="swap-comments-dialog">
+    <DialogWrapper title={t('dialogs.swapComments.title')} onClose={handleCancel} size="md" data-testid="swap-comments-dialog">
       <div className="space-y-4">
         <div>
-          <p className="text-text-secondary text-sm mb-1">Comment being moved:</p>
+          <p className="text-text-secondary text-sm mb-1">{t('dialogs.swapComments.beingMoved')}</p>
           <blockquote className="border-l-2 border-accent pl-3 text-text-primary italic">
             {source.comment}
           </blockquote>
         </div>
         <div>
-          <p className="text-text-secondary text-sm mb-1">Target already has a comment:</p>
+          <p className="text-text-secondary text-sm mb-1">{t('dialogs.swapComments.targetHas')}</p>
           <blockquote className="border-l-2 border-warning pl-3 text-text-primary italic">
             {target.comment}
           </blockquote>
         </div>
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={handleCancel} disabled={busy} data-testid="swap-comments-cancel">Cancel</Button>
+          <Button onClick={handleCancel} disabled={busy} data-testid="swap-comments-cancel">{t('common.actions.cancel')}</Button>
           <Button variant="danger" onClick={handleOverwrite} disabled={busy} data-testid="swap-overwrite">
-            Overwrite
+            {t('dialogs.swapComments.overwrite')}
           </Button>
           <Button variant="primary" onClick={handleSwap} disabled={busy} data-primary-action="" data-testid="swap-swap">
-            Swap
+            {t('dialogs.swapComments.swap')}
           </Button>
         </div>
       </div>

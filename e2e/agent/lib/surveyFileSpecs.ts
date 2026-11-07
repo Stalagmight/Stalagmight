@@ -194,7 +194,9 @@ export function randInt(rng: Rng, min: number, max: number): number {
 }
 
 export function pick<T>(rng: Rng, items: readonly T[]): T {
-  return items[Math.floor(rng() * items.length)];
+  // rng() is in [0, 1), so the index is in range for any non-empty list (an
+  // empty one still yields undefined, exactly as before the flag).
+  return items[Math.floor(rng() * items.length)]!;
 }
 
 /** An integer draw that lands on `extremes` `P_BOUNDARY` of the time. */
@@ -327,7 +329,7 @@ function randomDmpSectionName(rng: Rng, profile: SpecProfile): DmpSectionSpec['n
     // into the preview, the content hash and the imported section title.
     return [randInt(rng, 128, 255), randInt(rng, 128, 255), randInt(rng, 128, 255)];
   }
-  const letter = (): string => DMP_NAME_ALPHABET[randInt(rng, 0, DMP_NAME_ALPHABET.length - 1)];
+  const letter = (): string => DMP_NAME_ALPHABET[randInt(rng, 0, DMP_NAME_ALPHABET.length - 1)]!;
   return `${letter()}${letter()}${letter()}`;
 }
 
@@ -382,8 +384,8 @@ export function randomDmpSpec(rng: Rng, profile: SpecProfile = 'valid'): DmpSpec
  * 25 degrees of azimuth, `max(3% of length, 0.4 m)` of length, 0.30 m of depth
  * per measurement point, with a 0.45 aggregate-score floor. Two independently
  * random sections clear none of that, so the pool comes back empty,
- * `pickFromPool` returns false, and the wizard falls straight through
- * `wizard-no-suggestions` into `manual_placing`. Measured over a 130-cell
+ * `pickFromPool` returns false, and the wizard falls straight into
+ * `manual_placing`. Measured over a 130-cell
  * campaign: 47 steps on `wiz-suggest` against 13,781 total, ZERO clicks on an
  * alternative, and not one confirmed overlap - so the merge-station picker, the
  * overlap modes, `applyAllOverlapTreatments` and the `ExistingShotUpdate` path
@@ -815,8 +817,8 @@ function compassShots(
   const shots: CompassShotSpec[] = [];
   for (let index = 0; index + 1 < stations.length; index++) {
     const shot: CompassShotSpec = {
-      from: stations[index],
-      to: stations[index + 1],
+      from: stations[index]!,
+      to: stations[index + 1]!,
       // Never 0 and never >= 990: both make `length_missing` true and the shot
       // is DROPPED with a warning (`compass.rs:472-474, 1161-1177`). A valid
       // spec that declares shots it does not get is not a valid spec.
@@ -906,7 +908,7 @@ export function randomCompassDatSpec(rng: Rng, profile: SpecProfile = 'valid'): 
       }
       stations.push(`${prefix}${station}${pick(rng, COMPASS_NAME_SUFFIXES)}`);
     }
-    previousLast = stations[stations.length - 1];
+    previousLast = stations[stations.length - 1]!; // the loop above pushed shotCount + 1 >= 2 names
 
     const survey: CompassSurveySpec = {
       caveName,
@@ -950,7 +952,7 @@ export function randomCompassDatSpec(rng: Rng, profile: SpecProfile = 'valid'): 
 const COMPASS_FLAGS: readonly string[] = ['G', 'E', 'I', 'A', 'V', 'EV', 'GEV', 'GIV', 'OT', 'SXP'];
 
 function hexDigit(rng: Rng): string {
-  return '0123456789abcdef'[randInt(rng, 0, 15)];
+  return '0123456789abcdef'[randInt(rng, 0, 15)]!;
 }
 
 /** A hyphenated 32-hex-digit id; `Uuid::parse_str` checks the shape, not the version. */
@@ -1018,11 +1020,12 @@ export function randomCompassProjectSpec(
   // `lex_station_fix` (`project/lexer.rs:419-470`) allows it after `[` and
   // around the unit char and NOWHERE else.
   if (chance(rng, 0.5) && dats.length > 0) {
-    const first = dats[0].dat.surveys[0];
+    const first = dats[0]!.dat.surveys[0];
+    if (first === undefined) throw new Error('the first .dat has no survey to anchor');
     const station: CompassMakStationSpec = {
       // `[alphanumeric*'-_]+` (`project/lexer.rs:415-417`); a station the file
       // actually contains, so the anchor lands on a real station.
-      name: first.shots.length > 0 ? first.shots[0].from : `${first.name}0`,
+      name: first.shots.length > 0 ? first.shots[0]!.from : `${first.name}0`,
       fix: {
         unit: pick(rng, ['m', 'M', 'f', 'F']),
         east: compassNumber(rng, 200000, 800000, 3),
@@ -1318,9 +1321,9 @@ export function randomWallsProjectSpec(
     if (!disjoint && index > 0 && srv.shots.length > 0 && srvs.length > 0) {
       // Tie this file to the previous one by re-using its first station name,
       // which is the only thing that joins two Walls surveys into one component.
-      const anchor = srvs[0].srv.shots[0]?.from;
+      const anchor = srvs[0]!.srv.shots[0]?.from;
       if (anchor !== undefined) {
-        srv.shots = [{ ...srv.shots[0], from: anchor }, ...srv.shots.slice(1)];
+        srv.shots = [{ ...srv.shots[0]!, from: anchor }, ...srv.shots.slice(1)];
       }
     }
     const name = surveyFileName('srv', srv);
@@ -1338,7 +1341,7 @@ export function randomWallsProjectSpec(
   // than always reading the root (`walls/wpj.rs:113-131`).
   const nested = leaves.length > 1 && chance(rng, 0.35);
   const children: WallsWpjEntrySpec[] = nested
-    ? [{ kind: 'book', title: 'Inner Book', children: leaves.slice(1) }, leaves[0]]
+    ? [{ kind: 'book', title: 'Inner Book', children: leaves.slice(1) }, leaves[0]!]
     : leaves;
 
   const root: WallsWpjEntrySpec = {
@@ -1585,7 +1588,7 @@ export interface RenderedFile {
  * `read_utf8` at `encoding.rs:100-104`); `.dat`, `.srv` and `.wpj` go through
  * `encodeLatin1First` because their reader is `read_latin1`.
  */
-export function renderSurveyFiles(spec: GeneratedFileSpec): RenderedFile[] {
+export function renderSurveyFiles(spec: GeneratedFileSpec): [RenderedFile, ...RenderedFile[]] {
   const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
   switch (spec.format) {
     case 'dmp':
@@ -1824,8 +1827,10 @@ export function materializeSurveyFile(
   const files = renderSurveyFiles(spec);
   for (const file of files) {
     if (file.name !== path.basename(file.name) || file.name === '' || file.name.startsWith('.')) {
+      // A spec can come back from a trace, which a forged copy writes, so the
+      // name prints as its length (#576 W51).
       throw new Error(
-        `generated file name must be a plain basename, got ${JSON.stringify(file.name)}`,
+        `generated file name must be a plain basename, got one of ${file.name.length} character(s)`,
       );
     }
   }

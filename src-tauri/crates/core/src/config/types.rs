@@ -308,7 +308,7 @@ pub struct MapDebugConfig {
 }
 
 /// Per-provider cache override
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct ProviderCacheConfig {
     /// Retention TTL for this provider's tiles, in days. Falls back to the
     /// global `tile_ttl_days` when unset.
@@ -328,7 +328,7 @@ pub struct ProviderCacheConfig {
 /// cached strictly under the provider's own `Cache-Control`: stored only where
 /// the response grants it, for no longer than it grants, and revalidated with
 /// the provider's own validator after that.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct CacheConfig {
     /// Whether the tile cache may be used at all. Whether any individual tile
     /// is stored remains the provider's decision, via its `Cache-Control`.
@@ -1609,4 +1609,22 @@ fn migrate_zoom_speed(stored: f64) -> f64 {
         "Migrated legacy map.controls.zoom_speed to zoom levels per wheel notch"
     );
     migrated
+}
+
+/// [#576 D27-32(c)] One setting a save changes: where it is in the config (`path`,
+/// the field names from the top, e.g. `["appearance", "theme"]`) and its new value.
+///
+/// A list of these is what `patch_config` applies onto the LIVE config, so a save
+/// changes only what the user changed. Posting the whole `Config` from a snapshot
+/// taken earlier silently reverted everything the backend recorded in between (the
+/// panel layout and widths, the recent projects, the table views).
+///
+/// `path` is a list rather than a dotted string because some config maps are keyed
+/// by names that contain dots. A path ending in a map's key adds or replaces that
+/// entry; a path naming a map replaces the whole map (how an entry is removed).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct ConfigPatch {
+    pub path: Vec<String>,
+    #[ts(type = "unknown")]
+    pub value: serde_json::Value,
 }

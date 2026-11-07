@@ -2,4 +2,4 @@
 import type { ClosureStrategy } from "./ClosureStrategy";
 import type { StationRef } from "./StationRef";
 
-export interface LoopClosure { id: bigint, station_a: StationRef, station_b: StationRef, path_length: number, misclosure_distance: number, error_percentage: number, horizontal_misclosure: number, vertical_misclosure: number, strategy: ClosureStrategy, is_aligned: boolean, }
+export interface LoopClosure { id: number, station_a: StationRef, station_b: StationRef, path_length: number, misclosure_distance: number, error_percentage: number, horizontal_misclosure: number, vertical_misclosure: number, strategy: ClosureStrategy, is_aligned: boolean, }

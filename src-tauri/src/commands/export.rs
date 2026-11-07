@@ -1,22 +1,25 @@
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, Runtime};
 use ts_rs::TS;
 
 use crate::commands::event_sink::tauri_sink;
+use crate::commands::pool;
+use crate::commands::write_path::{check_write_path, WriteTarget};
 use crate::config::GasConfig;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
-use crate::core::AppState;
+use crate::core::{AppState, CommandError};
 use crate::export::{ExportImageOptions, ProfileFormat};
 use crate::models::{Cylinder, Diver, PlanSegment, Project, StationRef};
 
 /// True when `target` resolves to the same file on disk as the open project's
-/// `.stalx` at `existing`. Image export writes raw bytes (`std::fs::write` /
-/// `pixmap.save_png`), so exporting over the live project database would corrupt
-/// it. `existing` always exists (it is the open DB); `target` may not exist yet
-/// (a fresh export destination), so when it can't be canonicalized directly,
-/// compare its canonicalized parent directory + file name against the
-/// canonicalized project path. Errs toward catching the exact open-DB path
-/// rather than rejecting unrelated destinations.
+/// `.stalx` at `existing`. Every export replaces its destination with a staged
+/// file renamed over it (`export::write_atomic`), so exporting over the live
+/// project database would replace it under the open connection - the project's
+/// data gone from disk. `existing` always exists (it is the open DB); `target`
+/// may not exist yet (a fresh export destination), so when it can't be
+/// canonicalized directly, compare its canonicalized parent directory + file
+/// name against the canonicalized project path. Errs toward catching the exact
+/// open-DB path rather than rejecting unrelated destinations.
 fn is_open_project_file(target: &Path, existing: &Path) -> bool {
     let Ok(existing_canon) = std::fs::canonicalize(existing) else {
         return false;
@@ -63,9 +66,10 @@ fn export_format_impl(
     state: &AppState,
     path: PathBuf,
     format: &str,
+    target: WriteTarget,
     export_fn: fn(&Project, &Path) -> Result<(), anyhow::Error>,
 ) -> Result<(), String> {
-    export_format_with_notes(state, path, format, move |project, path| {
+    export_format_with_notes(state, path, format, target, move |project, path| {
         export_fn(project, path).map(|()| Vec::new())
     })
     .map(|_| ())
@@ -83,9 +87,10 @@ fn export_format_with_notes(
     state: &AppState,
     path: PathBuf,
     format: &str,
+    target: WriteTarget,
     export_fn: impl FnOnce(&Project, &Path) -> Result<Vec<String>, anyhow::Error>,
 ) -> Result<Vec<String>, String> {
-    let project = state.get_project_state().ok_or_else(|| {
+    let project = state.settled_snapshot().ok_or_else(|| {
         tracing::warn!(
             path = ?path,
             purpose = "export project for sharing",
@@ -107,6 +112,8 @@ fn export_format_with_notes(
         );
         return Err("Cannot export over the open project file".to_string());
     }
+    // [#576 C11-D1] The format's own extension, nowhere app-internal or system.
+    check_write_path(&path, target)?;
 
     tracing::info!(
         path = ?path,
@@ -140,22 +147,34 @@ fn export_format_with_notes(
 
 /// Export project data to CSV
 #[tauri::command]
-pub fn export_csv(state: State<AppState>, path: PathBuf) -> Result<(), String> {
-    export_csv_impl(state.inner(), path)
-}
-
-pub(crate) fn export_csv_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
-    export_format_impl(state, path, "csv", crate::export::export_csv)
+pub async fn export_csv<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result<(), CommandError> {
+    pool::run(app, move |state| {
+        export_format_impl(
+            state,
+            path,
+            "csv",
+            WriteTarget::Csv,
+            crate::export::export_csv,
+        )
+        .map_err(CommandError::from)
+    })
+    .await
 }
 
 /// Export project data to JSON
 #[tauri::command]
-pub fn export_json(state: State<AppState>, path: PathBuf) -> Result<(), String> {
-    export_json_impl(state.inner(), path)
-}
-
-pub(crate) fn export_json_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
-    export_format_impl(state, path, "json", crate::export::export_json)
+pub async fn export_json<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result<(), CommandError> {
+    pool::run(app, move |state| {
+        export_format_impl(
+            state,
+            path,
+            "json",
+            WriteTarget::Json,
+            crate::export::export_json,
+        )
+        .map_err(CommandError::from)
+    })
+    .await
 }
 
 /// Export project data to Ariane TML/TMLU.
@@ -164,12 +183,21 @@ pub(crate) fn export_json_impl(state: &AppState, path: PathBuf) -> Result<(), St
 /// not carry about this project's north references. Empty for an ordinary
 /// project; the frontend toasts each one.
 #[tauri::command]
-pub fn export_tml(state: State<AppState>, path: PathBuf) -> Result<Vec<String>, String> {
-    export_tml_impl(state.inner(), path)
-}
-
-pub(crate) fn export_tml_impl(state: &AppState, path: PathBuf) -> Result<Vec<String>, String> {
-    export_format_with_notes(state, path, "tml", crate::export::export_tml)
+pub async fn export_tml<R: Runtime>(
+    app: AppHandle<R>,
+    path: PathBuf,
+) -> Result<Vec<String>, CommandError> {
+    pool::run(app, move |state| {
+        export_format_with_notes(
+            state,
+            path,
+            "tml",
+            WriteTarget::Ariane,
+            crate::export::export_tml,
+        )
+        .map_err(CommandError::from)
+    })
+    .await
 }
 
 /// Export map image with progress events via shared loading-progress infrastructure.
@@ -179,68 +207,68 @@ pub(crate) fn export_tml_impl(state: &AppState, path: PathBuf) -> Result<Vec<Str
 /// Progress is emitted using the shared ProgressEmitter (loading-progress events) for
 /// integration with the LoadingProgress component.
 #[tauri::command]
-pub async fn export_image(
-    state: State<'_, AppState>,
-    app_handle: AppHandle,
+pub async fn export_image<R: Runtime>(
+    app: AppHandle<R>,
     path: PathBuf,
-    mut options: ExportImageOptions,
-) -> Result<(), String> {
-    // Server-populated (#27): the export must colour its distance ramp and
-    // label its penetration with the same graph the app is showing, so this
-    // comes from the live config, never from whatever the frontend sent.
-    options.include_reference_legs = state.get_config().gas.include_reference_legs;
-    let project = state.get_project_state().ok_or_else(|| {
-        tracing::warn!(
-            path = ?path,
-            purpose = "export map image for sharing",
-            format = ?options.format,
-            "Export requested with no project open"
-        );
-        "No project open".to_string()
-    })?;
+    options: ExportImageOptions,
+) -> Result<(), CommandError> {
+    let sink = tauri_sink(app.clone());
+    pool::run(app, move |state| {
+        let mut options = options;
+        // Server-populated (#27): the export must colour its distance ramp and
+        // label its penetration with the same graph the app is showing, so this
+        // comes from the live config, never from whatever the frontend sent.
+        options.include_reference_legs = state.get_config().gas.include_reference_legs;
+        // [#576 NF-W6A-4] One settled version for the project AND its adjusted
+        // geometry (below): two separate reads could pair a project with stations
+        // a command in between had already changed.
+        let settled = state.settled_project().ok_or_else(|| {
+            tracing::warn!(
+                path = ?path,
+                purpose = "export map image for sharing",
+                format = ?options.format,
+                "Export requested with no project open"
+            );
+            "No project open".to_string()
+        })?;
+        let project = &settled.project;
 
-    // Never let an image export clobber a file the open project owns: the raw
-    // file write in `export/image.rs` would overwrite the live database, or the
-    // `.plnx` sibling holding every saved dive plan.
-    //
-    // `is_project_owned_file`, not `is_open_project_file`: this arm used the
-    // narrower `.stalx`-only predicate while the text exports and the dive
-    // profile used the wider one, so a PNG/SVG/PDF aimed at `<project>.plnx`
-    // was written - and the doc comment on `is_project_owned_file` already
-    // claimed the gap was closed.
-    if is_project_owned_file(&path, &project) {
-        tracing::warn!(
-            path = ?path,
-            open_project = ?project.file_path,
-            purpose = "protect the open project database",
-            "Refusing to export an image over a file the open project owns"
-        );
-        return Err("Cannot export over the open project file".to_string());
-    }
+        // Never let an image export clobber a file the open project owns: the raw
+        // file write in `export/image.rs` would overwrite the live database, or the
+        // `.plnx` sibling holding every saved dive plan.
+        //
+        // `is_project_owned_file`, not `is_open_project_file`: this arm used the
+        // narrower `.stalx`-only predicate while the text exports and the dive
+        // profile used the wider one, so a PNG/SVG/PDF aimed at `<project>.plnx`
+        // was written - and the doc comment on `is_project_owned_file` already
+        // claimed the gap was closed.
+        if is_project_owned_file(&path, project) {
+            tracing::warn!(
+                path = ?path,
+                open_project = ?project.file_path,
+                purpose = "protect the open project database",
+                "Refusing to export an image over a file the open project owns"
+            );
+            return Err(CommandError::failed(
+                "Cannot export over the open project file",
+            ));
+        }
+        // [#576 C11-D1] The image format's own extension, nowhere app-internal or system.
+        check_write_path(&path, WriteTarget::Image(options.format))?;
 
-    let format = options.format;
-    let log_path = path.clone();
-
-    // Run heavy export work in spawn_blocking to avoid freezing UI
-    // and ensure progress events are delivered during processing
-    tauri::async_runtime::spawn_blocking(move || {
         tracing::info!(
             path = ?path,
             purpose = "export map image for sharing",
             format = ?options.format,
             "Starting image export"
         );
-        // Render from the memoized closure-adjusted solve so the saved image
-        // matches the on-screen (adjusted) map; falls back to measured
-        // coordinates when there are no eligible closures. Fetch before the
-        // emitter consumes `app_handle`.
-        let adjusted = app_handle
-            .state::<AppState>()
-            .inner()
-            .get_adjusted_stations();
+        // Render from the closure-adjusted solve of that same version (memoized)
+        // so the saved image matches the on-screen (adjusted) map; measured
+        // coordinates where there are no eligible closures.
+        let stations = state.adjusted_stations_of(&settled);
 
         // Use shared ProgressEmitter for consistent progress events
-        let mut emitter = ProgressEmitter::new_for_export(tauri_sink(app_handle));
+        let mut emitter = ProgressEmitter::new_for_export(sink);
 
         // Start preparing phase
         emitter.start_phase(LoadingPhase::ExportPreparing);
@@ -249,12 +277,7 @@ pub async fn export_image(
         emitter.start_phase(LoadingPhase::ExportGenerating);
 
         // Perform the actual export
-        let result = match adjusted {
-            Some(stations) => {
-                crate::export::export_image_with_stations(&project, &path, &options, stations)
-            }
-            None => crate::export::export_image(&project, &path, &options),
-        };
+        let result = crate::export::export_image_with_stations(project, &path, &options, stations);
 
         if result.is_ok() {
             // Writing phase
@@ -280,71 +303,9 @@ pub async fn export_image(
             );
         }
 
-        result.map_err(|e| e.to_string())
+        result.map_err(|e| CommandError::failed(e.to_string()))
     })
     .await
-    .map_err(|e| {
-        tracing::error!(
-            path = ?log_path,
-            purpose = "export map image for sharing",
-            format = ?format,
-            reason = %e,
-            "Image export task panicked"
-        );
-        format!("Export task panicked: {e}")
-    })?
-}
-
-#[cfg(test)]
-pub(crate) fn export_image_impl(
-    state: &AppState,
-    path: PathBuf,
-    mut options: ExportImageOptions,
-) -> Result<(), String> {
-    // See the `export_image` command: config wins over the wire (#27).
-    options.include_reference_legs = state.get_config().gas.include_reference_legs;
-    let project = state.get_project_state().ok_or_else(|| {
-        tracing::warn!(
-            path = ?path,
-            purpose = "export map image for sharing",
-            format = ?options.format,
-            "Export requested with no project open"
-        );
-        "No project open".to_string()
-    })?;
-
-    // Mirror the live command's guard: never clobber a file the open project owns.
-    if is_project_owned_file(&path, &project) {
-        return Err("Cannot export over the open project file".to_string());
-    }
-
-    tracing::info!(
-        path = ?path,
-        purpose = "export map image for sharing",
-        format = ?options.format,
-        "Exporting map image"
-    );
-    match crate::export::export_image(&project, &path, &options) {
-        Ok(()) => {
-            tracing::info!(
-                path = ?path,
-                purpose = "export map image for sharing",
-                format = ?options.format,
-                "Map image export completed"
-            );
-            Ok(())
-        }
-        Err(e) => {
-            tracing::error!(
-                path = ?path,
-                purpose = "export map image for sharing",
-                format = ?options.format,
-                reason = %e,
-                "Map image export failed"
-            );
-            Err(e.to_string())
-        }
-    }
 }
 
 /// The plan inputs a dive-profile export needs - the same tuple `compute_gas_reach_field` takes,
@@ -428,14 +389,15 @@ pub async fn export_dive_profile(
     path: PathBuf,
     format: String,
     request: DiveProfileRequest,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     // Parse BEFORE anything else logs it. `format` is arbitrary caller input, and the refusal
     // branch below records it with Display - a newline-bearing value would forge log records.
     let format = ProfileFormat::from_wire(&format).map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
+        // [#576 RV5-4] Settled: never a project caught in the middle of a command.
         let project = state
-            .get_project_state()
+            .settled_snapshot()
             .ok_or_else(|| "No project open".to_string())?;
         let refuse = |path: &PathBuf| {
             tracing::warn!(
@@ -449,6 +411,8 @@ pub async fn export_dive_profile(
         if is_project_owned_file(&path, &project) {
             return Err(refuse(&path));
         }
+        // [#576 C11-D1] The profile format's own extension, nowhere app-internal or system.
+        check_write_path(&path, WriteTarget::DiveProfile(format))?;
         let rendered = render_profile_for(&project, request, format)?;
         tracing::info!(
             path = ?path,
@@ -462,9 +426,11 @@ pub async fn export_dive_profile(
         if is_project_owned_file(&path, &project) {
             return Err(refuse(&path));
         }
-        std::fs::write(&path, rendered).map_err(|e| {
-            tracing::error!(path = ?path, reason = %e, "Dive profile export failed");
-            e.to_string()
+        // Staged and renamed over `path` (#576 B9), so a write that fails part-way keeps the
+        // previous profile instead of leaving a truncated one under its name.
+        crate::export::write_atomic_bytes(&path, rendered.as_bytes()).map_err(|e| {
+            tracing::error!(path = ?path, reason = %format!("{e:#}"), "Dive profile export failed");
+            format!("{e:#}")
         })?;
         tracing::info!(
             path = ?path,
@@ -474,7 +440,8 @@ pub async fn export_dive_profile(
         Ok(())
     })
     .await
-    .map_err(|e| format!("Dive profile export task panicked: {e}"))?
+    .map_err(|e| CommandError::internal(format!("Dive profile export task panicked: {e}")))?
+    .map_err(CommandError::from)
 }
 
 /// Render the planned dive profile as text WITHOUT writing it, for the clipboard (#299).
@@ -482,16 +449,18 @@ pub async fn export_dive_profile(
 pub async fn render_dive_profile_text(
     app_handle: AppHandle,
     request: DiveProfileRequest,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
+        // [#576 RV5-4] Settled: never a project caught in the middle of a command.
         let project = state
-            .get_project_state()
+            .settled_snapshot()
             .ok_or_else(|| "No project open".to_string())?;
         render_profile_for(&project, request, ProfileFormat::PlainText)
     })
     .await
-    .map_err(|e| format!("Dive profile render task panicked: {e}"))?
+    .map_err(|e| CommandError::internal(format!("Dive profile render task panicked: {e}")))?
+    .map_err(CommandError::from)
 }
 
 /// Generate the SVG markup that `export_image` would write, without
@@ -505,28 +474,27 @@ pub async fn render_dive_profile_text(
 pub async fn preview_svg_export(
     app_handle: AppHandle,
     mut options: ExportImageOptions,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         // Same config-wins rule as the export itself, so the preview cannot
         // disagree with the file it is previewing (#27).
         options.include_reference_legs = state.get_config().gas.include_reference_legs;
-        let project = state
-            .get_project_state()
+        // [#576 RV5-4, NF-W6A-4] Settled, and the project and its adjusted geometry
+        // from that one settled version, exactly as the export takes them.
+        let settled = state
+            .settled_project()
             .ok_or_else(|| "No project open".to_string())?;
-        // Render from the memoized closure-adjusted solve so the preview matches
-        // the on-screen (adjusted) map; falls back to measured coordinates when
-        // there are no eligible closures.
-        match state.inner().get_adjusted_stations() {
-            Some(stations) => {
-                crate::export::generate_svg_string_with_stations(&project, &options, stations)
-            }
-            None => crate::export::generate_svg_string(&project, &options),
-        }
-        .map_err(|e| e.to_string())
+        // Render from the closure-adjusted solve (memoized) so the preview matches
+        // the on-screen (adjusted) map; measured coordinates where there are no
+        // eligible closures.
+        let stations = state.adjusted_stations_of(&settled);
+        crate::export::generate_svg_string_with_stations(&settled.project, &options, stations)
+            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("Preview task panicked: {e}"))?
+    .map_err(|e| CommandError::internal(format!("Preview task panicked: {e}")))?
+    .map_err(CommandError::from)
 }
 
 #[cfg(test)]

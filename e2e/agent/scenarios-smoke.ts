@@ -8,7 +8,8 @@
  */
 import { createSession } from './createSession';
 import { listScenarios, runScenario } from './scenarios';
-import { runSweep, newOracleState } from './lib/oracles';
+import { findingsSummary, runSweep, newOracleState } from './lib/oracles';
+import { progressLogger, scenarioFailOutput, shareableErrorText } from './lib/shareableFailure';
 import { callStoreAction } from './lib/stores';
 
 // Small iteration counts for a fast gate; the real stress values are the
@@ -107,7 +108,11 @@ async function main(): Promise<void> {
       try {
         const metrics = await runScenario(name, session, {
           iterations: SMOKE_ITERATIONS[name],
-          log: (m) => process.stdout.write(`   · ${m}\n`),
+          // Shareable progress lines (#576 W23-NF3); the full text goes to actions.jsonl.
+          log: progressLogger(
+            (m) => process.stdout.write(`   · ${m}\n`),
+            session.hasRecorder ? session.recorder : undefined,
+          ),
         });
         const sweep = await runSweep(session, oracle, { full: true, recorder: session.recorder });
         const fatal = sweep.findings.filter((f) => f.severity === 'fatal');
@@ -119,11 +124,16 @@ async function main(): Promise<void> {
         const label = fatal.length ? 'FAIL' : sweep.findings.length ? 'PASS+findings' : 'PASS';
         process.stdout.write(
           `${label}: ${name} (${metrics.durationMs}ms) ${JSON.stringify(metrics.metrics)}` +
-            `${sweep.findings.length ? ` findings=${JSON.stringify(sweep.findings)}` : ''}\n`,
+            // Counts only (#576 HFI2-F2): a log finding's message names the data.
+            `${sweep.findings.length ? ` findings=${findingsSummary(sweep.findings)}` : ''}\n`,
         );
       } catch (err) {
         failed = true;
-        process.stdout.write(`FAIL: ${name} threw: ${err instanceof Error ? err.message : String(err)}\n`);
+        // Shareable form only (#576 W21-NF1); the full text goes to actions.jsonl.
+        if (session.hasRecorder) {
+          session.recorder.event('scenario-failure', { scenario: name, message: err instanceof Error ? err.message : String(err) });
+        }
+        process.stdout.write(scenarioFailOutput(name, err));
       }
     }
   } finally {
@@ -135,6 +145,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W23-NF2): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });

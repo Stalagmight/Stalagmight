@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type AppMode } from '../../store/uiStore';
+import { useGrayscaleTokens } from '../../hooks/useGrayscaleTokens';
 import { ExportIcon, MapIcon, SlidersIcon, type IconProps } from '../common/icons';
 import type { ComponentType } from 'react';
 
@@ -38,6 +39,8 @@ export function ModeCarousel({
   const { t } = useTranslation();
   const appMode = useUIStore((s) => s.appMode);
   const setAppMode = useUIStore((s) => s.setAppMode);
+  // Dimmed to gray without a CSS filter (#576 NF-W12DMP-1): see useGrayscaleTokens.
+  const grayStyle = useGrayscaleTokens(disabled);
 
   return (
     // `max-w-full` is load-bearing, not cosmetic (#260): in the Toolbar's final
@@ -54,8 +57,9 @@ export function ModeCarousel({
     // introduce a vertical one.
     <div
       className={`inline-flex max-w-full overflow-x-auto overflow-y-hidden rounded border border-border ${
-        disabled ? 'opacity-45 grayscale' : ''
+        disabled ? 'opacity-45' : ''
       }`}
+      style={grayStyle}
       role="group"
       aria-label={t('modeCarousel.aria')}
       data-testid="mode-carousel"

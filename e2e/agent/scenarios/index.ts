@@ -17,6 +17,7 @@ import { importDialogFuzz } from './importDialogFuzz';
 import { exportRoundtripFuzz } from './exportRoundtripFuzz';
 import { rapidProjectCycle } from './rapidProjectCycle';
 import { fractalStress } from './fractalStress';
+import { valueShape } from '../lib/shareableFailure';
 
 const SCENARIOS: Scenario[] = [
   seedLargeProject,
@@ -45,8 +46,8 @@ export function getScenario(name: string): Scenario | undefined {
 }
 
 export interface RunScenarioOpts {
-  seed?: number;
-  iterations?: number;
+  seed?: number | undefined;
+  iterations?: number | undefined;
   log?: (message: string) => void;
 }
 
@@ -57,10 +58,15 @@ export async function runScenario(
 ): Promise<ScenarioMetrics> {
   const scenario = REGISTRY[name];
   if (!scenario) {
-    throw new Error(`unknown scenario "${name}"; known: ${listScenarios().join(', ') || '(none)'}`);
+    // The name is not one of ours: the caller's text (an MCP argument, a replay
+    // spec's recorded call), so it prints as its shape (#576 W51).
+    throw new Error(`unknown scenario ${valueShape(name)}; known: ${listScenarios().join(', ') || '(none)'}`);
   }
-  const seed = opts.seed ?? 1;
-  const iterations = opts.iterations ?? scenario.defaultIterations;
+  // Numbers whatever the caller read them from (#576 W51): `fuzz-shrink` takes
+  // them out of a trace and a replay spec out of an actions.jsonl, which a
+  // forged copy can fill with text, and both print in the progress lines.
+  const seed = Number(opts.seed ?? 1);
+  const iterations = Number(opts.iterations ?? scenario.defaultIterations);
   const ctx = makeContext(target, seed, opts.log);
   ctx.log(`scenario ${name} start (seed=${seed}, iterations=${iterations})`);
   const start = Date.now();

@@ -9,6 +9,7 @@ import { formatStationId } from '../../utils/formatters';
 import { formatFixed } from '../../i18n/format';
 import { gasAssumptionsSummary } from '../../utils/gasAssumptionsSummary';
 import { formatGasLength, formatPressure, formatVolume } from '../../utils/formatGas';
+import { stageDropReached } from '../../utils/gasReach';
 import { ChevronRightIcon } from '../common/icons';
 import { GasAssumptionsSections, REQUIRED_STAGES } from './GasAssumptionsSections';
 import { DivePlanBar } from './DivePlanBar';
@@ -266,14 +267,20 @@ export function GasPlanPanel() {
         bar,
         distance: reachField.stage_drop_distances_m[i] ?? null,
         // Dragged deeper than the safe drop (#246): breathing into reserve, flagged red. The
-        // engine is the single source of truth for this, same as the pressure.
-        overReserve: reachField.stage_drop_over_reserve[i] === true,
+        // engine is the single source of truth for this, same as the pressure. Only for a drop the
+        // dive reaches - the same rule the map marker applies (`useGasPlanDropMarkers`).
+        overReserve:
+          stageDropReached(reachField, i) && reachField.stage_drop_over_reserve[i] === true,
+        // A pinned drop the dive turns short of (#576 RV8c-2-D3): no pressure to leave the stage
+        // at - it is carried the whole dive.
+        reached: stageDropReached(reachField, i),
         // Whether the diver moved this drop (so we offer a reset back to the strategy spot).
         overridden: stageDropOverrides[i] != null,
       }))
     : [];
   const hasStageDrops = stageDrops.length > 0;
   const anyOverReserve = stageDrops.some((d) => d.overReserve);
+  const anyNotReached = stageDrops.some((d) => !d.reached);
 
   // Route metrics (backend single source of truth), shown once a real route is known. Gate on the
   // route having at least one LEG - not just final_turn_ref - so a degenerate single-station route
@@ -702,10 +709,13 @@ export function GasPlanPanel() {
                   <dd
                     data-testid={`gas-readout-stage${i + 1}-drop`}
                     data-over-reserve={String(drop.overReserve)}
-                    className={`text-right font-mono ${drop.overReserve ? 'text-error' : ''}`}
+                    data-reached={String(drop.reached)}
+                    className={`text-right font-mono ${drop.overReserve ? 'text-error' : ''} ${
+                      drop.reached ? '' : 'opacity-60'
+                    }`}
                   >
-                    {formatPressure(drop.bar, units)}
-                    {drop.distance != null && (
+                    {drop.reached ? formatPressure(drop.bar, units) : t('gasPanel.readout.dropNotReached')}
+                    {drop.reached && drop.distance != null && (
                       <span className="opacity-60">
                         {' @ '}
                         {formatGasLength(drop.distance, units)}
@@ -720,6 +730,11 @@ export function GasPlanPanel() {
                   className="col-span-2 text-error"
                 >
                   {t('gasPanel.readout.overReserveWarning')}
+                </div>
+              )}
+              {anyNotReached && (
+                <div data-testid="gas-readout-drop-not-reached" className="col-span-2 opacity-80">
+                  {t('gasPanel.readout.dropNotReachedWarning')}
                 </div>
               )}
               <dt className="opacity-70">{t('gasPanel.readout.budget')}</dt>

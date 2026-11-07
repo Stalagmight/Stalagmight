@@ -433,19 +433,17 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import type { Scenario, ScenarioContext } from './framework';
-import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
+import { disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import { HOSTILE_COMMENTS } from '../lib/surveyFileSpecs';
 import { shotSetDelta, describeShotSetDelta } from '../lib/projectSnapshot';
+import { TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
+import { fuzzFixture } from '../lib/fuzzKnobs';
+import { foldThenCut } from '../lib/fixtureCorpus';
+import { valueShape } from '../lib/shareableFailure';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
+import { MoveLog, openReplay, RERUN_WITH, writeRunTrace } from '../lib/fuzzHarness';
 import {
-  defaultTracePath,
-  readTrace,
-  TraceRecorder,
-  writeTrace,
-  type FuzzTrace,
-  type TraceStep,
-} from '../lib/fuzzTrace';
-import {
-  canonicalizeUuids,
+  asExportedToTml,
   checkByteIdentity,
   checkConvergence,
   checkExportModeInvariants,
@@ -460,6 +458,7 @@ import {
   csvTextViolations,
   exportBaseName,
   ExportOracleError,
+  domRouteRewritesPath,
   finalizeExportPath,
   multisetDelta,
   newToastKeys,
@@ -467,11 +466,10 @@ import {
   naturalExtension,
   PROJECT_OWNED_SHAPES,
   type ExportAttempt,
-  type ExportFormat,
   type ExportRoute,
-  type ModeSnapshot,
   type OptionSnapshot,
   type PathShape,
+  type SectionAzimuthReference,
   type ShotIdentity,
 } from '../lib/exportOracles';
 import {
@@ -486,6 +484,7 @@ import {
   enabledFormats,
   hasDiveRoute,
   isDataFormat,
+  isExportFormat,
   isImageFormat,
   modalIsOpen,
   openModal,
@@ -554,21 +553,13 @@ const EXPECTED_DEFAULT_OPTIONS: OptionSnapshot = {
 };
 
 // ---------------------------------------------------------------------------
-// Knobs. Read at CALL time, never frozen at import.
+// Knobs. Read at CALL time, never frozen at import. The fixture and the trace
+// replay/record paths are the shared ones in `lib/fuzzKnobs.ts`.
 // ---------------------------------------------------------------------------
 
-function fixtureName(): string {
-  return process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
-}
 function movesPerEpisode(): number {
   const raw = Number(process.env.STALAGMIGHT_FUZZ_EXPORT_MOVES);
   return Number.isInteger(raw) && raw > 0 ? raw : 3;
-}
-function replayTracePath(): string {
-  return process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
-}
-function traceOutPath(): string {
-  return process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
 }
 
 // ---------------------------------------------------------------------------
@@ -629,6 +620,12 @@ interface ProjectDigest {
   open: boolean;
   sections: number;
   shots: ShotIdentity[];
+  /**
+   * Each shot's section reference, PARALLEL to `shots`, resolved the way
+   * `Project::azimuth_reference_for` does. X6 needs it to know what the TML
+   * export does to a bearing - see `asExportedToTml`.
+   */
+  shotReferences: SectionAzimuthReference[];
   uuids: string[];
   /**
    * The same uuids, grouped BY SECTION.
@@ -668,9 +665,27 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
     const state = await core.invoke('get_project_state');
     const project = state && state.project ? state.project : state;
     if (!project || !Array.isArray(project.sections)) {
-      return { open: false, sections: 0, shots: [], uuids: [], uuidsBySection: [], commentParts: [], missingUuids: 0, duplicateUuids: 0, filePath: null };
+      return { open: false, sections: 0, shots: [], shotReferences: [], uuids: [], uuidsBySection: [], commentParts: [], missingUuids: 0, duplicateUuids: 0, filePath: null };
     }
+    // A section's azimuth reference, resolved as Project::azimuth_reference_for
+    // does: the section's own, else the project default, else nothing recorded
+    // (magnetic, 0, source unknown). Wire shape per src-tauri/bindings: north is
+    // a lowercase string, a non-finite correction serializes as null (read as 0,
+    // which is what applied_correction makes of it), and source is the string
+    // "unknown" / "file_declared" / "manual" or an object such as
+    // {"igrf_auto":{"epoch_year":2018}}. Only "unknown" (or no source) means no
+    // correction is on record.
+    const resolveReference = (raw) => {
+      if (!raw || typeof raw !== 'object') return { north: 'magnetic', correction: 0, onRecord: false };
+      const north = raw.north === 'true' || raw.north === 'grid' ? raw.north : 'magnetic';
+      const correction = typeof raw.correction === 'number' ? raw.correction : 0;
+      const source = raw.source;
+      const onRecord =
+        (typeof source === 'string' && source !== 'unknown') || (typeof source === 'object' && source !== null);
+      return { north: north, correction: correction, onRecord: onRecord };
+    };
     const shots = [];
+    const shotReferences = [];
     const uuids = [];
     const uuidsBySection = [];
     const commentParts = [];
@@ -679,6 +694,12 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
       const parts = text.split('\u200b');
       for (let i = 0; i < parts.length; i++) if (parts[i] !== '') commentParts.push(parts[i]);
     };
+    // The bearing the app draws and the Ariane export writes (#576 NF-AN5-1):
+    // the circular mean of the two FORWARD readings, the same arithmetic as
+    // the models crate's average_azimuth_of. A round trip collapses the pair
+    // onto it, so keying either reading alone would report a moved shot.
+    const wrap = (x) => ((x % 360) + 360) % 360;
+    const drawnBearing = (a, b) => wrap(a + (wrap(b - a + 540) - 180) / 2);
     let missing = 0;
     const seen = Object.create(null);
     let duplicates = 0;
@@ -686,7 +707,11 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
       if (!section || !Array.isArray(section.shots)) continue;
       const sectionUuids = [];
       uuidsBySection.push(sectionUuids);
+      const reference = resolveReference(
+        section.azimuth_reference != null ? section.azimuth_reference : project.default_azimuth_reference,
+      );
       for (const shot of section.shots) {
+        shotReferences.push(reference);
         const uuid = typeof shot.uuid === 'string' ? shot.uuid : '';
         if (uuid === '') missing += 1;
         else {
@@ -704,7 +729,7 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
           // (No backticks: this is inside a template literal.)
           uuid: uuid,
           length: Number(shot.length) || 0,
-          azimuthIn: Number(shot.azimuth_in) || 0,
+          azimuthIn: drawnBearing(Number(shot.azimuth_in) || 0, Number(shot.azimuth_out) || 0),
           depthIn: Number(shot.depth_in) || 0,
           depthOut: Number(shot.depth_out) || 0,
           lrud: [
@@ -737,6 +762,7 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
       open: true,
       sections: project.sections.length,
       shots: shots,
+      shotReferences: shotReferences,
       uuids: uuids,
       uuidsBySection: uuidsBySection,
       commentParts: commentParts,
@@ -763,7 +789,7 @@ export const exportRoundtripFuzz: Scenario = {
   defaultIterations: 30,
 
   async run(ctx: ScenarioContext, { iterations }): Promise<void> {
-    const fixture = fixtureName();
+    const fixture = fuzzFixture();
     const sessionDir = ctx.artifactsDir;
     if (!sessionDir) {
       throw new Error(`${SCENARIO} needs a session artifacts dir to write its exports into`);
@@ -775,25 +801,16 @@ export const exportRoundtripFuzz: Scenario = {
     ctx.setMetric('roundtripEnabled', roundtripEnabled() ? 1 : 0);
 
     // ---- replay wiring ---------------------------------------------------
-    const replayPath = replayTracePath();
-    const traceOut = traceOutPath();
-    const replay: FuzzTrace | null = replayPath ? readTrace(replayPath) : null;
-    if (replay && replay.scenario !== SCENARIO) {
-      throw new Error(`trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`);
-    }
-    // The recorded moves resolve their paths against THAT project, so replaying
-    // them on a different fixture drives exports of a different survey: an
-    // invented failure, or a green run, either way not the recorded bug.
-    if (replay && replay.fixture !== fixture) {
-      throw new Error(
-        `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${fixture}; ` +
-          `re-run with STALAGMIGHT_FUZZ_FIXTURE=${replay.fixture} ` +
-          `(pnpm agent:scenario --trace restores it for you).`,
-      );
-    }
+    // `openReplay` refuses a trace recorded by another scenario or on another
+    // fixture: the recorded moves resolve their paths against THAT project, so
+    // replaying them on a different fixture drives exports of a different
+    // survey - an invented failure, or a green run, either way not the recorded
+    // bug.
+    const { replayPath, traceOut, replay } = openReplay(SCENARIO, fixture, RERUN_WITH);
 
     const recorder = new TraceRecorder();
-    const history: string[] = [];
+    const moveLog = new MoveLog();
+    const { note } = moveLog;
 
     /**
      * The trace a failure should point at.
@@ -805,30 +822,21 @@ export const exportRoundtripFuzz: Scenario = {
      */
     const dumpTrace = (failure: { message: string } | null): string | null => {
       if (replay !== null) return replayPath;
-      const target = traceOut || defaultTracePath(sessionDir, SCENARIO, ctx.seed);
-      try {
-        return writeTrace(
-          target,
-          recorder.build({
-            scenario: SCENARIO,
-            seed: ctx.seed,
-            iterations,
-            fixture,
-            stream: 'export-v1',
-            failure,
-          }),
-        );
-      } catch {
-        return null;
-      }
+      return writeRunTrace(
+        ctx,
+        recorder,
+        { scenario: SCENARIO, iterations, fixture, stream: 'export-v1' },
+        failure,
+        traceOut,
+      );
     };
 
     /**
      * Annotated on the CONST so TypeScript treats a `fail(...)` call as
-     * never-returning - the same form `importDialogFuzz.ts` uses.
+     * never-returning.
      */
     const fail: (message: string) => never = (message: string): never => {
-      const tail = history.slice(-HISTORY_TAIL);
+      const tail = moveLog.history.slice(-HISTORY_TAIL);
       const tracePath = dumpTrace({ message });
       throw new Error(
         `${message}\n\n  last ${tail.length} move(s):\n` +
@@ -847,10 +855,6 @@ export const exportRoundtripFuzz: Scenario = {
         if (err instanceof ExportOracleError) fail(err.message);
         throw err;
       }
-    };
-
-    const note = (line: string): void => {
-      history.push(line);
     };
 
     const integrity = async (): Promise<Integrity> =>
@@ -1080,7 +1084,7 @@ export const exportRoundtripFuzz: Scenario = {
         ctx.metric(`preview:${preview.mounted ? (preview.error ? 'error' : preview.svgBytes > 0 ? 'rendered' : 'blank') : 'absent'}`);
         if (preview.mounted && preview.error !== null) {
           ctx.metric('previewError');
-          note(`preview error: ${preview.error.slice(0, 120)}`);
+          note(`preview error: ${foldThenCut(preview.error, 120)}`);
         }
         rmrf(moveDir);
         return;
@@ -1103,6 +1107,13 @@ export const exportRoundtripFuzz: Scenario = {
           ctx.metric('skip:save-picker-unconsumed');
           rmrf(moveDir);
           return;
+        }
+        // The Replace File alert (answered Replace by clickAndAnswerSave). Only
+        // a path the app rewrote can raise it; one on any other move is the
+        // app asking about a name the OS dialog already confirmed.
+        if (answered.sawOverwritePrompt) {
+          ctx.metric(`overwritePrompt:${draw.shape}`);
+          if (!domRouteRewritesPath(requested, draw.format)) ctx.metric('overwritePrompt:unrewrittenPath');
         }
         toastKeys = newToastKeys(toastsBefore, await readToastSnapshot(ctx));
         // A UI route has no promise to inspect. The app's own report is the
@@ -1342,7 +1353,7 @@ export const exportRoundtripFuzz: Scenario = {
       //
       // X7 still covers the hostile comments where they belong: at the file
       // level, where it asserts they survive a .tmlu write and a parse_tml read.
-      await loadFixtureWithoutUndoHistory(ctx, fixtureName());
+      await loadFixtureWithoutUndoHistory(ctx, fuzzFixture());
       await disableAutoSave(ctx);
       const original = await readProjectDigest(ctx);
       const dir = path.join(episodeDir, 'roundtrip');
@@ -1361,7 +1372,7 @@ export const exportRoundtripFuzz: Scenario = {
       const importedOnce = await freshProjectWithImport('roundtrip-a', t1);
       if (!importedOnce.ok) {
         ctx.metric('x5:import-refused');
-        ctx.log(`x5: first import refused (${importedOnce.error ?? 'no message'})`);
+        ctx.log(`x5: first import failed: ${importedOnce.error ?? 'no message'}`);
         rmrf(dir);
         return;
       }
@@ -1378,10 +1389,20 @@ export const exportRoundtripFuzz: Scenario = {
       // can come back as several - #412, by design). Collapsing both sides onto
       // one synthetic section asks the question that survives the trip.
       const identity = shotSetDelta(flatUuidSnapshot(original.uuids), flatUuidSnapshot(afterFirst.uuids));
+      // The BEFORE side as the TML export writes it. On a project whose
+      // sections carry different declinations the exporter rotates every
+      // bearing into true north (docs/ariane-export.md, the third case) and the
+      // re-import reads them as measured true-north ones - a documented loss
+      // that decision HFI-8-D1 keeps, so X6 compares against the rotated
+      // bearings instead of reporting every shot as lost and gained (#576
+      // HFI-8). `asExportedToTml` states what it folds and what still fails.
+      const exported = asExportedToTml(original.shots, original.shotReferences);
+      if (exported.plan === 'mixed-to-true') ctx.metric('x6:rotatedToTrue', exported.rotated);
       guarded(() =>
         checkShotMultiset(
           {
-            deltas: multisetDelta(original.shots, afterFirst.shots),
+            deltas: multisetDelta(exported.shots, afterFirst.shots),
+            azimuthPlan: exported.plan,
             // LOSSES ONLY, and the asymmetry is forced by what this tier can
             // see rather than chosen to quiet a red.
             //
@@ -1418,7 +1439,7 @@ export const exportRoundtripFuzz: Scenario = {
       // change in how often the exporter moves a branch's datum shows up in the
       // metrics rather than silently not mattering. `clampedDescent` states why
       // this is a metric and not an assertion.
-      const datumShifts = multisetDelta(original.shots, afterFirst.shots, strictShotKey);
+      const datumShifts = multisetDelta(exported.shots, afterFirst.shots, strictShotKey);
       if (datumShifts.length > 0) ctx.metric('x6:absoluteDepthShifts', datumShifts.length);
 
       // X6b: importing the SAME file again must not leave two shots on one
@@ -1523,7 +1544,7 @@ export const exportRoundtripFuzz: Scenario = {
       ]);
       if (!created.ok) {
         ctx.metric('skip:hostile-section-refused');
-        ctx.log(`x7: createSection refused (${created.err ?? 'no message'})`);
+        ctx.log(`x7: createSection failed: ${created.err ?? 'no message'}`);
         rmrf(dir);
         return;
       }
@@ -1551,7 +1572,7 @@ export const exportRoundtripFuzz: Scenario = {
                 .join('\n') +
               (result.missing.length > 0
                 ? `\n    ${result.missing.length} seeded comment(s) did not survive at all: ` +
-                  `${JSON.stringify(result.missing.map((c) => c.slice(0, 40)))}`
+                  `${JSON.stringify(result.missing.map((c) => foldThenCut(c, 40)))}`
                 : '') +
               `\n    escape_csv (src-tauri/src/export/csv.rs:66-79) neutralises a leading\n` +
               `    = + - @ TAB or CR with an apostrophe and then RFC-4180-quotes anything\n` +
@@ -1621,7 +1642,7 @@ export const exportRoundtripFuzz: Scenario = {
       if (lost.length > 0) {
         fail(
           `X7 ${lost.length} hostile comment(s) did not survive a .tmlu write + parse_tml read\n` +
-            `    ${JSON.stringify(lost.map((c) => c.slice(0, 40)))}\n` +
+            `    ${JSON.stringify(lost.map((c) => foldThenCut(c, 40)))}\n` +
             `    Leading/trailing whitespace is already excused (the reader trims every text\n` +
             `    field by design - see docs/ariane-import.md), so this is CONTENT loss:\n` +
             `    escaping that dropped or mangled a character the document may legally carry.\n` +
@@ -1705,7 +1726,7 @@ export const exportRoundtripFuzz: Scenario = {
 
       // X8b: a project switch drops the panel's set.
       const dirty = await readPanelOptions(ctx);
-      await loadFixtureWithoutUndoHistory(ctx, fixtureName());
+      await loadFixtureWithoutUndoHistory(ctx, fuzzFixture());
       await disableAutoSave(ctx);
       const afterSwitch = await readPanelOptions(ctx);
       guarded(() => checkExportStoreReset({ dirty, afterSwitch, defaults }, reproduce));
@@ -1759,7 +1780,7 @@ export const exportRoundtripFuzz: Scenario = {
       // A direct project switch mid-Export: `applyDisplaySettings` clears the
       // snapshot and forces survey, so the later exit must be a no-op rather
       // than a restore of the PREVIOUS project's geometry.
-      await loadFixtureWithoutUndoHistory(ctx, fixtureName());
+      await loadFixtureWithoutUndoHistory(ctx, fuzzFixture());
       await disableAutoSave(ctx);
       const afterLoad = await readModeSnapshot(ctx);
       if (afterLoad.appMode !== 'survey') {
@@ -1809,7 +1830,9 @@ export const exportRoundtripFuzz: Scenario = {
       }
       const dialog = (await ctx.readStore('ui', 'activeDialog')) as { value?: unknown };
       if (dialog.value !== null && dialog.value !== undefined) {
-        fail(`E1 teardown left activeDialog = ${JSON.stringify(dialog.value)}\n  ${reproduce}`);
+        // A store value (`activeDialog: string | null`): it prints as a test id does,
+        // the words of the app's source and other text as its length (#576 W51).
+        fail(`E1 teardown left activeDialog = ${shareableTestId(dialog.value)}\n  ${reproduce}`);
       }
       // The panel's option set is per-project state; a close resets it, and E1
       // is where that contract is asserted rather than merely relied on.
@@ -1881,7 +1904,7 @@ export const exportRoundtripFuzz: Scenario = {
       const extension = inputs.extension;
       if (extension !== 'tml' && extension !== 'tmlu') {
         throw new Error(
-          `trace step for oracle ${name} names extension ${JSON.stringify(extension)}, ` +
+          `trace step for oracle ${name} names extension ${valueShape(extension)}, ` +
             `which this build does not export`,
         );
       }
@@ -1947,7 +1970,7 @@ export const exportRoundtripFuzz: Scenario = {
       const found = ORACLE_NAMES.find((name) => name === step.oracle);
       if (found === undefined) {
         throw new Error(
-          `refusing to replay oracle "${step.oracle}": ${SCENARIO} runs ${ORACLE_NAMES.join(', ')}`,
+          `refusing to replay oracle ${valueShape(step.oracle)}: ${SCENARIO} runs ${ORACLE_NAMES.join(', ')}`,
         );
       }
       return found;
@@ -1968,17 +1991,22 @@ export const exportRoundtripFuzz: Scenario = {
       const route = options.route;
       const shape = options.shape;
       if (route !== 'modal' && route !== 'panel' && route !== 'store') {
-        throw new Error(`trace step names route ${JSON.stringify(route)}, which this build does not run`);
+        throw new Error(`trace step names route ${valueShape(route)}, which this build does not run`);
       }
       if (typeof shape !== 'string' || !PATH_SHAPE_NAMES.has(shape)) {
-        throw new Error(`trace step names path shape ${JSON.stringify(shape)}, which this build does not run`);
+        throw new Error(`trace step names path shape ${valueShape(shape)}, which this build does not run`);
+      }
+      // Refused like a route or a shape: the format names metric keys and moves,
+      // and a trace's text is a forged copy's to choose (#576 W51).
+      if (!isExportFormat(step.format)) {
+        throw new Error(`trace step names format ${valueShape(step.format)}, which this build does not export`);
       }
       const imageOptions = options.imageOptions as ImageOptionDraw | undefined;
       if (imageOptions === undefined || typeof imageOptions !== 'object') {
         throw new Error('trace export step carries no image options');
       }
       return {
-        format: step.format as ExportFormat,
+        format: step.format,
         route: route as ExportRoute,
         shape: shape as PathShape,
         imageOptions,
@@ -2045,7 +2073,7 @@ export const exportRoundtripFuzz: Scenario = {
             // step naming a different one would walk around that check from
             // inside the file.
             throw new Error(
-              `trace ${replayPath} reloads ${step.fixture} but was recorded on ${replay.fixture}; ` +
+              `trace ${replayPath} reloads ${valueShape(step.fixture)} but was recorded on ${replay.fixture}; ` +
                 `its steps resolve against the recorded project`,
             );
           }

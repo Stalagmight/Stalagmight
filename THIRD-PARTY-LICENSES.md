@@ -1,7 +1,7 @@
 # Third-party licenses
 
 Stalagmight's shipped binaries include the open-source packages listed below:
-631 Rust crates and 58 npm packages. Each distinct license
+630 Rust crates and 57 npm packages. Each distinct license
 text is reproduced verbatim, as those licenses require. Stalagmight itself is
 licensed AGPL-3.0-or-later; see [LICENSE](LICENSE).
 
@@ -10,11 +10,11 @@ from the dependency lockfiles - do not edit by hand. CI fails if this file is
 stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
-Cargo.lock=cfd2ee7af87c00bb20ef701d1958056c8701da9072cd87b75c41907a4b3f2985
-pnpm-lock.yaml=0fdfd981c7d0b4501862c826a85107c7215a26e0e458742aea8fb1b914f08549
-gen-third-party-licenses.mjs=ebb68f24487c3cca49f60ec5c0867729efa22850dc3fc7d5780e163eb707c1f1
-about.toml=a6751e567d54df96b63b6e14089a1763d14443b34a815b085dbb45a57436d455
-bundle-body=6d83ed7d7f8a1f356246b800abcae5149a32bb1a9a699eff40f8f3a0b18c58db
+Cargo.lock=33173ec43e331f913e33883d86c83935891805155824341332f4f775267eaba4
+pnpm-lock.yaml=d97c965ee56f623ec9547f748d12d4f34fbf2323ad678d38851f5b7c9d6d56de
+gen-third-party-licenses.mjs=0960ccfe71c05a14c5a27618a2f6408ecc2c38be1bc5cb85bb706739ca4bb96d
+about.toml=d2768e49653dc612b768e450ef73aab5e97964c9365bcf0fc2b68cd50cde9f0d
+bundle-body=e13e698676bdeac4debe89b1d6bb16fc7f3f1f1dc0bf3da88a1e14d3faadb586
 -->
 
 ## npm packages
@@ -1787,7 +1787,7 @@ SOFTWARE.
 
 ### MIT OR Apache-2.0
 
-Applies to: `@tauri-apps/plugin-dialog 2.5.0`, `@tauri-apps/plugin-fs 2.4.5`, `@tauri-apps/plugin-opener 2.5.3`
+Applies to: `@tauri-apps/plugin-dialog 2.5.0`, `@tauri-apps/plugin-opener 2.5.3`
 
 ````text
 SPDXVersion: SPDX-2.1
@@ -9087,34 +9087,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-````
-
-### MIT License
-
-Applies to: `utm 0.1.6`
-
-````text
-The MIT License (MIT)
-
-Copyright (c) 2015 Peter J. Gadomski
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 ````
 
 ### MIT License

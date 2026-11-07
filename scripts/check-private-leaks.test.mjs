@@ -11,7 +11,13 @@
 // Run: node scripts/check-private-leaks.test.mjs  (also a CI leak-scan step).
 
 import assert from 'node:assert/strict';
-import { findLeaks, isExcluded, isAttributionFile, RULES, gateFails, looksBinary } from './check-private-leaks.mjs';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import {
+  findLeaks, findPathLeaks, isExcluded, isAttributionFile, RULES, gateFails, looksBinary, scan, report,
+} from './check-private-leaks.mjs';
+import { parseLsFilesStage, makeReader, hasBinaryExt, MAX_SCAN_BYTES } from './lib/tracked-files.mjs';
 
 let passed = 0;
 const failures = [];
@@ -208,6 +214,124 @@ test('looksBinary flags a NUL byte so an undecidable file fails closed (#241)', 
 
 test('every rule regex carries the global flag (required by the exec loop)', () => {
   for (const r of RULES) assert.ok(r.re.global, `${r.id} regex must be /g`);
+});
+
+// --- scan(): wiring through an injected reader (#576 E16 / NF-LINK) -------------
+
+const buf = (s) => Buffer.from(s, 'utf8');
+
+test('scan reports a planted marker and passes a clean file', () => {
+  const r = scan(['a.ts', 'b.ts'], (rel) => buf(rel === 'a.ts' ? 'ask Daniel' : 'clean'));
+  assert.equal(r.scanned, 2);
+  assert.deepEqual(r.violations.map((v) => [v.rel, v.ruleId]), [['a.ts', 'maintainer-name']]);
+  assert.equal(report(r, () => {}, () => {}), 1);
+  assert.equal(report(scan(['b.ts'], () => buf('clean')), () => {}, () => {}), 0);
+});
+
+test('a symlink is scanned as its link text and NEVER followed', () => {
+  // The old gate read the link's target file with readFileSync: a link out of
+  // the repo had foreign content scanned, and the link text was never checked.
+  const r = scan([{ rel: 'docs/notes.md', symlink: true }], () => ({ symlink: '../personaldocs/notes.md' }));
+  assert.deepEqual(r.violations.map((v) => [v.ruleId, v.link]), [['private-doc-or-tool', true]]);
+  const lines = [];
+  report(r, () => {}, (m) => lines.push(m));
+  assert.ok(lines.some((l) => l.includes('docs/notes.md (symlink target):1')), lines.join('\n'));
+});
+
+test('a dangling symlink no longer fails as "unreadable": its clean text passes', () => {
+  const r = scan([{ rel: 'x.md', symlink: true }], () => ({ symlink: 'nowhere.md' }));
+  assert.equal(r.skipped.length, 0);
+  assert.deepEqual(r.symlinks, ['x.md']);
+  assert.equal(report(r, () => {}, () => {}), 0);
+});
+
+test('a symlink with a binary extension is still scanned (its content is text)', () => {
+  const r = scan([{ rel: 'docs/logo.png', symlink: true }], () => ({ symlink: '/home/daniel/logo.png' }));
+  assert.equal(r.violations.length, 1);
+  assert.ok(isExcluded('docs/logo.png'), 'a regular .png is still excluded');
+});
+
+test('oversized, unreadable, NUL-bearing and unrecognised reads each fail closed', () => {
+  const big = scan(['big.md'], () => Buffer.alloc(6 * 1024 * 1024, 0x61));
+  assert.match(big.skipped[0].reason, /cap/);
+  const gone = scan(['gone.md'], () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); });
+  assert.match(gone.skipped[0].reason, /ENOENT/);
+  const nul = scan(['weird.ts'], () => Buffer.from([0x61, 0x00]));
+  assert.match(nul.skipped[0].reason, /NUL/);
+  const odd = scan(['odd.ts'], () => null);
+  assert.equal(odd.skipped.length, 1);
+  for (const r of [big, gone, nul, odd]) assert.equal(report(r, () => {}, () => {}), 1);
+});
+
+test('scan never reads an excluded path (exclusion precedes the read)', () => {
+  const read = [];
+  scan(['src-tauri/vendor/x.rs', 'docs/a.png', 'ok.ts'], (rel) => {
+    read.push(rel);
+    return buf('clean');
+  });
+  assert.deepEqual(read, ['ok.ts']);
+});
+
+// --- paths are scanned too (#576 E18(e)) -------------------------------------------
+
+test('a marker only in the PATH fails, though the content is clean', () => {
+  const r = scan(['docs/personaldocs-plan.md'], () => buf('clean ascii text'));
+  assert.deepEqual(r.violations.map((v) => [v.ruleId, v.path]), [['private-doc-or-tool', true]]);
+  const lines = [];
+  assert.equal(report(r, () => {}, (m) => lines.push(m)), 1);
+  assert.ok(lines.some((l) => l.includes('docs/personaldocs-plan.md (path)')), lines.join('\n'));
+});
+
+test('a marker in the name of an EXCLUDED file (binary, vendored) still fails', () => {
+  const read = [];
+  const r = scan(['docs/daniel-headshot.png', 'src-tauri/vendor/x/anzu.rs'], (rel) => { read.push(rel); return buf(''); });
+  assert.deepEqual(read, [], 'excluded content is still never read');
+  assert.deepEqual(r.violations.map((v) => v.ruleId).sort(), ['maintainer-name', 'private-cloud-infra']);
+});
+
+test('the root-attribution exemption covers content, never the path', () => {
+  assert.equal(findPathLeaks('README.md').length, 0);
+  // A root attribution file may credit a name in its CONTENT...
+  assert.equal(scan(['CHANGELOG.md'], () => buf('thanks Daniel')).violations.length, 0);
+  // ...but a path is checked without that exemption.
+  assert.equal(findPathLeaks('docs/daniel/README.md').length, 1);
+});
+
+// --- scripts/lib/tracked-files.mjs: the shared reader both guards use -------------
+
+test('parseLsFilesStage reads the symlink mode and de-duplicates conflict stages', () => {
+  const out = '100644 aaa 0\tREADME.md\0' + '120000 bbb 0\tAGENTS.md\0'
+    + '100644 ccc 1\tsrc/x.ts\0' + '100644 ddd 2\tsrc/x.ts\0';
+  assert.deepEqual(parseLsFilesStage(out), [
+    { rel: 'README.md', symlink: false },
+    { rel: 'AGENTS.md', symlink: true },
+    { rel: 'src/x.ts', symlink: false },
+  ]);
+});
+
+test('makeReader returns a link\'s target string (live or dangling) and a file\'s bytes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracked-files-'));
+  try {
+    fs.writeFileSync(path.join(root, 'real.md'), 'ask Daniel');
+    fs.symlinkSync('real.md', path.join(root, 'live.md'));
+    fs.symlinkSync('missing.md', path.join(root, 'dangling.md'));
+    const read = makeReader(root);
+    assert.deepEqual(read('live.md'), { symlink: 'real.md' }, 'a live link must not be followed');
+    assert.deepEqual(read('dangling.md'), { symlink: 'missing.md' });
+    assert.equal(read('real.md').toString('utf8'), 'ask Daniel');
+    // End to end: the live link's text is clean even though its target is not.
+    const r = scan([{ rel: 'live.md', symlink: true }], read);
+    assert.equal(r.violations.length, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('both whole-tree guards share one binary-extension set and one size cap', () => {
+  assert.ok(hasBinaryExt('a/b.PNG'));
+  assert.ok(!hasBinaryExt('a/b.svg'));
+  assert.ok(!hasBinaryExt('a.d/Makefile'), 'a dot in a DIRECTORY name is not an extension');
+  assert.equal(MAX_SCAN_BYTES, 5 * 1024 * 1024);
 });
 
 // --- report -------------------------------------------------------------------

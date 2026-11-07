@@ -7,6 +7,7 @@ import { ExpandIcon, ShrinkIcon } from '../common/icons';
 import { DialogWrapper } from './DialogWrapper';
 import type { Shot, SectionData } from '../../types/project';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
+import { useBulkEditReportToast } from '../common/useBulkEditReportToast';
 import type { CellEdit } from '../common/SpreadsheetGrid/types';
 import {
   type ShotDraft,
@@ -49,6 +50,7 @@ import { getNumberFormatLocale } from '../../i18n/format';
 import { nextShotKind } from '../../utils/shotKind';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useShallow } from 'zustand/react/shallow';
 
 /** Grid height to assume before the first measurement, and under jsdom (which
  *  has no ResizeObserver). Tall enough that virtualization renders rows. */
@@ -72,9 +74,24 @@ interface SavedFormState {
 
 export default function ImportDialog() {
   const { t } = useTranslation();
-  const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme, showToast } =
-    useUIStore();
-  const { createSection, createSectionAndMerge, moveSection, project } = useProjectStore();
+  const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      openDialog: s.openDialog,
+      startPlacementMode: s.startPlacementMode,
+      dialogData: s.dialogData,
+      resolvedTheme: s.resolvedTheme,
+      showToast: s.showToast,
+    })),
+  );
+  const { createSection, createSectionAndMerge, moveSection, project } = useProjectStore(
+    useShallow((s) => ({
+      createSection: s.createSection,
+      createSectionAndMerge: s.createSectionAndMerge,
+      moveSection: s.moveSection,
+      project: s.project,
+    })),
+  );
   const precision = useDecimalPrecision();
   const editingBlocked = useEditingBlocked();
   const gridLabels = useGridLabels('dataTable.shotNoun');
@@ -280,19 +297,7 @@ export default function ImportDialog() {
   // What the grid could not fully apply (columns clipped past the last one,
   // cells rejected as read-only or out of range) - the same report the data
   // table surfaces, rather than a paste that silently lands short.
-  const onPasteReport = useCallback(
-    ({ written, clipped, skipped }: { written: number; clipped: number; skipped: number }) => {
-      const parts: string[] = [];
-      if (written > 0) parts.push(t('dataTable.pasteReport.written', { count: written }));
-      if (clipped > 0) parts.push(t('dataTable.pasteReport.clipped', { count: clipped }));
-      if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
-      if (parts.length > 0) {
-        const kind = clipped > 0 || skipped > 0 ? 'warning' : 'success';
-        showToast(parts.join(' \u00b7 '), TOAST_KEYS.NEW_SECTION_PASTE, kind);
-      }
-    },
-    [t, showToast]
-  );
+  const onPasteReport = useBulkEditReportToast(TOAST_KEYS.NEW_SECTION_PASTE);
 
   const onInsertRows = useCallback(
     (beforeIndex: number, count: number) => {

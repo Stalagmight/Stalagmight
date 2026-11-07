@@ -32,8 +32,8 @@ import type { TmlFile, TmlSection, TmlShot } from '../../../types/commands';
 
 const shot = (overrides: Partial<TmlShot> = {}): TmlShot =>
   ({
-    id: 1n,
-    from_id: 0n,
+    id: 1,
+    from_id: 0,
     shot_type: 'Real',
     azimuth: 0,
     length: 10,
@@ -51,7 +51,7 @@ const shot = (overrides: Partial<TmlShot> = {}): TmlShot =>
     excluded: false,
     latitude: 0,
     longitude: 0,
-    closure_to_id: 0n,
+    closure_to_id: 0,
     section: 'S',
     ...overrides,
   }) as TmlShot;
@@ -63,8 +63,8 @@ const section = (name: string, shots: TmlShot[]): TmlSection => ({
   date: null,
   color: '#3b82f6',
   is_branch_split: false,
-  start_ariane_id: 0n,
-  end_ariane_id: 0n,
+  start_ariane_id: 0,
+  end_ariane_id: 0,
   start_depth: 0,
 });
 
@@ -80,9 +80,9 @@ const tmlFile: TmlFile = {
   first_start_absolute_elevation: 0,
   geo_coding: null,
   sections: [
-    section('A', [shot({ id: 1n }), shot({ id: 2n })]),
-    section('B', [shot({ id: 3n, excluded: true })]),
-    section('C', [shot({ id: 4n, shot_type: 'Closure' }), shot({ id: 5n })]),
+    section('A', [shot({ id: 1 }), shot({ id: 2 })]),
+    section('B', [shot({ id: 3, excluded: true })]),
+    section('C', [shot({ id: 4, shot_type: 'Closure' }), shot({ id: 5 })]),
   ],
   closures: [{ from_section_index: 0, from_station_index: 0, to_section_index: 2, to_station_index: 1 }],
 };

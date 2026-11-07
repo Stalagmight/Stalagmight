@@ -50,7 +50,16 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { checkBuildFreshness } from './lib/build';
 import { agentBuildMode } from '../lib/env';
-import { failureDetail } from './lib/fuzzMatrixReport';
+import {
+  cellVerdict,
+  failHeadline,
+  failureDetail,
+  matrixSummary,
+  parseMetrics,
+  type CellVerdict,
+} from './lib/fuzzMatrixReport';
+import { RUN_START_ENV, runStartMs } from './lib/recorder';
+import { foldLocalPaths, shareableErrorText, shareableFailureText } from './lib/shareableFailure';
 import {
   BASE_PORT,
   INHERITED_ENV_BLOCKLIST,
@@ -95,6 +104,8 @@ interface RunResult {
   fixture: string;
   seed: number;
   axis: AxisValue | null;
+  /** `lib/fuzzMatrixReport.ts` `cellVerdict`: a LOST cell reached no verdict at all. */
+  verdict: CellVerdict;
   passed: boolean;
   durationMs: number;
   metrics: Record<string, number>;
@@ -106,13 +117,18 @@ interface RunResult {
   detail: string;
 }
 
+/**
+ * In the crash form (#576 W51): the headline as a `fatal:` line prints it,
+ * folded, and any further line counted - a message can carry a path the user gave.
+ */
 function bail(message: string): never {
-  process.stderr.write(`${message}\n${USAGE}\n`);
+  process.stderr.write(`${shareableFailureText(message, [], 'the rest of the message is not printed')}\n${USAGE}\n`);
   process.exit(2);
 }
 
+/** `KEY=value`, folded (#576 W51): an axis value is the user's, and a knob can take a path. */
 function axisLabel(axis: AxisValue | null): string {
-  return axis ? `${axis.key}=${axis.value}` : '';
+  return axis ? foldLocalPaths(`${axis.key}=${axis.value}`) : '';
 }
 
 const live = new Set<ChildProcess>();
@@ -128,26 +144,6 @@ function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
-/** Metrics live at the tail of a PASS line, before an optional ` findings=[...]`. */
-function parseMetrics(line: string): Record<string, number> {
-  const marker = line.match(/\(\d+ms\)\s/);
-  if (!marker || marker.index === undefined) return {};
-  let json = line.slice(marker.index + marker[0].length);
-  const findingsAt = json.indexOf(' findings=');
-  if (findingsAt >= 0) json = json.slice(0, findingsAt);
-  try {
-    const parsed: unknown = JSON.parse(json);
-    if (!parsed || typeof parsed !== 'object') return {};
-    const out: Record<string, number> = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
 function runOne(
   cell: { fixture: string; seed: number; axis: AxisValue | null },
   slot: number,
@@ -157,7 +153,7 @@ function runOne(
   const { fixture, seed, axis } = cell;
   const startedAt = Date.now();
   process.stdout.write(
-    `${label} start ${fixture} seed=${seed}${axis ? ` ${axisLabel(axis)}` : ''} slot=${slot} ` +
+    `${label} start ${foldLocalPaths(fixture)} seed=${seed}${axis ? ` ${axisLabel(axis)}` : ''} slot=${slot} ` +
       `port=${BASE_PORT + slot * PORT_STRIDE} display=:${TOP_DISPLAY - slot}\n`,
   );
 
@@ -197,22 +193,29 @@ function runOne(
       const allLines = outLines.concat(stderr.join('').split('\n'));
       const passLine = outLines.find((line) => line.startsWith('PASS: '));
       const failIndex = outLines.findIndex((line) => line.startsWith('FAIL: '));
-      const passed = !spawnError && code === 0 && Boolean(passLine);
+      const verdict = cellVerdict({
+        spawnFailed: spawnError !== undefined,
+        timedOut,
+        code,
+        sawPass: passLine !== undefined,
+        sawFail: failIndex >= 0,
+      });
+      const passed = verdict === 'pass';
 
       let headline = '';
-      if (spawnError) headline = `spawn failed: ${spawnError.message}`;
+      // Folded (#576 W51): a spawn error names the tsx binary in the checkout.
+      if (spawnError) headline = `spawn failed: ${foldLocalPaths(spawnError.message)}`;
       else if (timedOut) headline = `timed out after ${Math.round(CHILD_TIMEOUT_MS / 60000)}min (process group killed)`;
       else if (!passed && failIndex >= 0) {
-        const failLine = outLines[failIndex].slice('FAIL: '.length).trim();
-        headline = failLine.endsWith('threw:')
-          ? `${failLine} ${(outLines.slice(failIndex + 1).find((line) => line.trim()) ?? '').trim()}`
-          : failLine;
+        headline = failHeadline(outLines, failIndex);
       } else if (!passed) headline = `child exited code=${code} signal=${signal ?? 'none'} with no FAIL line`;
+      if (verdict === 'lost') headline = `LOST (no verdict): ${headline}`;
 
       resolve({
         fixture,
         seed,
         axis,
+        verdict,
         passed,
         durationMs: Date.now() - startedAt,
         metrics: passLine ? parseMetrics(passLine) : {},
@@ -232,7 +235,7 @@ function secs(ms: number): string {
 
 function printDone(result: RunResult, label: string): void {
   process.stdout.write(
-    `${label} ${result.passed ? 'PASS ' : 'FAIL '} ${result.fixture} seed=${result.seed}` +
+    `${label} ${result.verdict === 'lost' ? 'LOST ' : result.passed ? 'PASS ' : 'FAIL '} ${foldLocalPaths(result.fixture)} seed=${result.seed}` +
       `${result.axis ? ` ${axisLabel(result.axis)}` : ''} ` +
       `(${secs(result.durationMs)})${result.passed ? '' : ` ${result.headline}`}\n`,
   );
@@ -242,19 +245,21 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
   const withAxis = results.some((r) => r.axis !== null);
   const rows = results.map((r) =>
     [
-      r.fixture,
+      foldLocalPaths(r.fixture),
       String(r.seed),
-      ...(withAxis ? [r.axis ? r.axis.value : ''] : []),
-      r.passed ? 'PASS' : 'FAIL',
+      ...(withAxis ? [r.axis ? foldLocalPaths(r.axis.value) : ''] : []),
+      r.verdict === 'lost' ? 'LOST' : r.passed ? 'PASS' : 'FAIL',
       secs(r.durationMs),
       r.headline,
     ],
   );
   const axisKey = results.find((r) => r.axis !== null)?.axis?.key ?? 'axis';
   const header = ['fixture', 'seed', ...(withAxis ? [axisKey] : []), 'result', 'duration', 'detail'];
-  const widths = header.map((h, i) => Math.max(h.length, ...rows.map((row) => row[i].length)));
+  // Every row has one cell per header column (both split on the same withAxis),
+  // so `row[i]` and `widths[i]` are in range.
+  const widths = header.map((h, i) => Math.max(h.length, ...rows.map((row) => row[i]!.length)));
   const line = (cells: string[]): string =>
-    cells.map((cell, i) => (i === cells.length - 1 ? cell : cell.padEnd(widths[i]))).join('  ').trimEnd();
+    cells.map((cell, i) => (i === cells.length - 1 ? cell : cell.padEnd(widths[i]!))).join('  ').trimEnd();
 
   process.stdout.write(`\n=== fuzz matrix: ${results.length} cell(s) ===\n${line(header)}\n`);
   for (const row of rows) process.stdout.write(`${line(row)}\n`);
@@ -263,10 +268,13 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
   if (failures.length) {
     process.stdout.write('\n=== repro commands ===\n');
     for (const failure of failures) {
-      const prefix = `STALAGMIGHT_FUZZ_FIXTURE=${failure.fixture}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}`;
+      // Folded (#576 W51): a fixture, and a `reproduce:` line Node printed itself
+      // in an uncaught error, can name a path under the home directory.
+      const fixture = foldLocalPaths(failure.fixture);
+      const prefix = `STALAGMIGHT_FUZZ_FIXTURE=${fixture}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}`;
       process.stdout.write(
-        `${failure.fixture} seed=${failure.seed}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}: ` +
-          `${failure.reproduce || `(no reproduce line) ${prefix} pnpm agent:scenario ${opts.scenario} --seed ${failure.seed}`}\n`,
+        `${fixture} seed=${failure.seed}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}: ` +
+          `${foldLocalPaths(failure.reproduce) || `(no reproduce line) ${prefix} pnpm agent:scenario ${opts.scenario} --seed ${failure.seed}`}\n`,
       );
       // ALWAYS, not just when there is no repro line. A matrix cell's child
       // process and its session are gone by the time anyone reads this, so a
@@ -303,12 +311,7 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
   );
   for (const key of Object.keys(merged).sort()) process.stdout.write(`  ${key} = ${merged[key]}\n`);
 
-  const serialMs = results.reduce((sum, r) => sum + r.durationMs, 0);
-  process.stdout.write(
-    `\nwall clock ${secs(wallMs)}; serial-equivalent ${secs(serialMs)}; ` +
-      `speedup ${(serialMs / Math.max(wallMs, 1)).toFixed(2)}x\n` +
-      `${failures.length} failed / ${results.length} run(s)\n`,
-  );
+  process.stdout.write(`\n${matrixSummary(results, wallMs).join('\n')}\n`);
 }
 
 /**
@@ -328,7 +331,7 @@ function parseOrBail(argv: string[]): Options {
 async function main(): Promise<void> {
   const opts = parseOrBail(process.argv.slice(2));
   for (const note of opts.notes) process.stdout.write(`${note}\n`);
-  if (!fs.existsSync(TSX_BIN)) bail(`tsx not found at ${TSX_BIN}; run pnpm install`);
+  if (!fs.existsSync(TSX_BIN)) bail(`tsx not found at ${foldLocalPaths(TSX_BIN)}; run pnpm install`);
   const dropped = INHERITED_ENV_BLOCKLIST.filter((key) => process.env[key] !== undefined);
   if (dropped.length > 0) {
     process.stdout.write(
@@ -358,6 +361,10 @@ async function main(): Promise<void> {
   });
 
   const startedAt = Date.now();
+  // Session retention reads "this run" as the whole MATRIX, not one cell: every
+  // cell inherits this, so a trace a finished cell left behind outlives the
+  // cells that start after it (#576 HFI-6, `recorder.ts` `pruneProtection`).
+  process.env[RUN_START_ENV] = String(Math.floor(runStartMs()));
   const results: RunResult[] = [];
   // WARM-UP: from a cold tree the first cell runs ALONE, because each child does
   // its own `build: 'auto'` and K concurrent cargo builds would just queue on the
@@ -368,10 +375,12 @@ async function main(): Promise<void> {
   const freshness = checkBuildFreshness({ mode: opts.release ? 'release' : agentBuildMode() });
   let next = 0;
   if (cells.length > 1 && workers > 1 && !freshness.fresh) {
-    const first = cells[0];
+    const first = cells[0]!;
     next = 1;
     const label = `[1/${cells.length}]`;
-    process.stdout.write(`${label} warm-up alone (rebuild needed: ${freshness.reasons.join('; ')})\n`);
+    // Folded (#576 W51), as session.ts folds its `Rebuilding:` line: a reason can
+    // name the checkout a build stamp came from.
+    process.stdout.write(`${label} warm-up alone (rebuild needed: ${foldLocalPaths(freshness.reasons.join('; '))})\n`);
     const warm = await runOne(first, 0, opts, label);
     results.push(warm);
     printDone(warm, label);
@@ -383,7 +392,7 @@ async function main(): Promise<void> {
         for (;;) {
           const index = next++;
           if (index >= cells.length) return;
-          const cell = cells[index];
+          const cell = cells[index]!;
           const label = `[${index + 1}/${cells.length}]`;
           const result = await runOne(cell, slot, opts, label);
           results.push(result);
@@ -405,6 +414,8 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   for (const child of live) killGroup(child, 'SIGKILL');
-  process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W23-NF2): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });

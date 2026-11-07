@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import type { DeleteShotImpact } from '../../types/commands';
 import type { StationRef } from '../../types/project';
 import { EntityBlob } from '../common/EntityBlob';
@@ -34,11 +35,12 @@ export type ShotImpactRelationships = Pick<
 
 export default function DeleteShotImpactDetails({
   impact,
-  title = 'This deletion will update station relationships:',
+  title,
 }: {
   impact: ShotImpactRelationships | null;
   title?: string;
 }) {
+  const { t } = useTranslation();
   if (!impact) return null;
 
   const hasDetails =
@@ -54,11 +56,11 @@ export default function DeleteShotImpactDetails({
 
   return (
     <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm space-y-2">
-      <p className="font-medium text-warning">{title}</p>
+      <p className="font-medium text-warning">{title ?? t('dialogs.deleteShotImpact.defaultTitle')}</p>
       <div className="space-y-2 text-text-secondary">
         {impact.removed_merges.length > 0 && (
           <div>
-            <p className="font-medium">Removed merges</p>
+            <p className="font-medium">{t('dialogs.deleteShotImpact.removedMerges')}</p>
             <ul className="list-disc list-inside">
               {impact.removed_merges.map((pair, index) => (
                 <li key={`removed-merge-${index}`}><Pair a={pair.station_a} b={pair.station_b} /></li>
@@ -69,7 +71,7 @@ export default function DeleteShotImpactDetails({
 
         {impact.removed_closures.length > 0 && (
           <div>
-            <p className="font-medium">Removed closures</p>
+            <p className="font-medium">{t('dialogs.deleteShotImpact.removedClosures')}</p>
             <ul className="list-disc list-inside">
               {impact.removed_closures.map((closure) => {
                 const closureId = closure.closure_id.toString();
@@ -85,7 +87,7 @@ export default function DeleteShotImpactDetails({
 
         {impact.replacement_merges.length > 0 && (
           <div>
-            <p className="font-medium">Replacement merges</p>
+            <p className="font-medium">{t('dialogs.deleteShotImpact.replacementMerges')}</p>
             <ul className="list-disc list-inside">
               {impact.replacement_merges.map((pair, index) => (
                 <li key={`replacement-merge-${index}`}><Pair a={pair.station_a} b={pair.station_b} /></li>
@@ -96,7 +98,7 @@ export default function DeleteShotImpactDetails({
 
         {impact.replacement_closure_updates.length > 0 && (
           <div>
-            <p className="font-medium">Replacement closures</p>
+            <p className="font-medium">{t('dialogs.deleteShotImpact.replacementClosures')}</p>
             <ul className="list-disc list-inside">
               {impact.replacement_closure_updates.map((update) => {
                 const closureId = update.closure_id.toString();
@@ -112,7 +114,7 @@ export default function DeleteShotImpactDetails({
 
         {impact.closure_to_merge.length > 0 && (
           <div>
-            <p className="font-medium">Closures becoming merges</p>
+            <p className="font-medium">{t('dialogs.deleteShotImpact.closuresToMerges')}</p>
             <ul className="list-disc list-inside">
               {impact.closure_to_merge.map((pair, index) => (
                 <li key={`closure-to-merge-${index}`}><Pair a={pair.station_a} b={pair.station_b} /></li>
@@ -124,10 +126,10 @@ export default function DeleteShotImpactDetails({
         {(impact.merge_rewire_skipped || impact.closure_rewire_skipped) && (
           <div className="text-warning">
             {impact.merge_rewire_skipped && (
-              <p>Some merge connectivity could not be preserved (only same-section candidates).</p>
+              <p>{t('dialogs.deleteShotImpact.mergeRewireSkipped')}</p>
             )}
             {impact.closure_rewire_skipped && (
-              <p>Some closures could not be replaced (no valid replacement or duplicate).</p>
+              <p>{t('dialogs.deleteShotImpact.closureRewireSkipped')}</p>
             )}
           </div>
         )}

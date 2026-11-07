@@ -19,12 +19,6 @@ workspace = true
 # [dev-dependencies] entry, so production builds compile exactly what they did
 # before the split.
 test-support = []
-# Forwards to the telemetry member: the per-endpoint coverage test in
-# metrics.rs is gated on `#[cfg(all(test, feature = "telemetry"))]` and needs
-# the real registry (`EVENT_NAMES`), which only exists with the feature on.
-# The root crate's own `telemetry` feature forwards here, so a featured
-# workspace build turns every layer on together.
-telemetry = ["stalagmight-telemetry/telemetry"]
 
 [dependencies]
 stalagmight-models = { path = "../models" }
@@ -63,6 +57,9 @@ keyring = { version = "3", default-features = false, features = ["apple-native"]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 [dev-dependencies]
+# The shared test helpers (`stalagmight_models::test_support`): opt-in
+# prerequisites fail the test naming what is missing (#576 E13).
+stalagmight-models = { path = "../models", features = ["test-support"] }
 # Test-only and acyclic: the env-gated live tests in mod.rs seed a real server
 # round trip - exporting a project to `.tml` and opening the extracted `.stalx`.
 stalagmight-export = { path = "../export" }

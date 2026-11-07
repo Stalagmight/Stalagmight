@@ -11,6 +11,7 @@
 use chrono::Utc;
 use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
 use stalagmight_lib::core::{Command, PersistStack, UndoData, UndoEntry, UndoStack, Validator};
+use stalagmight_lib::models::test_fixtures::straight_shot;
 use stalagmight_lib::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Project, Section, SectionData,
     SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, StationMerge, StationRef,
@@ -30,14 +31,7 @@ fn create_test_project() -> Project {
 
 fn create_shot_data(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
     // Use same azimuth for in/out (the function averages them)
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in,
-        depth_out,
-        ..Default::default()
-    }
+    straight_shot(azimuth, length).with_depths(depth_in, depth_out)
 }
 
 fn create_section_with_shots(name: &str, shots: Vec<ShotData>) -> SectionData {
@@ -549,6 +543,7 @@ fn test_undo_clears_redo_stack() {
 #[test]
 fn test_batch_command_structure() {
     let entry = UndoEntry {
+        replayed_at: None,
         command_bytes: None,
         command: Command::CreateSection {
             name: Some("Test".to_string()),
@@ -872,7 +867,7 @@ fn test_move_section_offset() {
     ));
 
     // Manually set section offset
-    project.section_offsets.insert(0, (10.0, 20.0));
+    project.set_section_offset(0, (10.0, 20.0));
 
     let stations = project.compute_station_coordinates();
 
@@ -894,7 +889,7 @@ fn test_move_preserves_shot_data() {
     let original_length = project.get_section(0).unwrap().shots[0].length;
 
     // Apply offset
-    project.section_offsets.insert(0, (100.0, 100.0));
+    project.set_section_offset(0, (100.0, 100.0));
 
     // Shot data should be unchanged
     let new_length = project.get_section(0).unwrap().shots[0].length;
@@ -1833,13 +1828,13 @@ fn test_save_load_with_section_offsets() {
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.section_offsets.insert(0, (15.5, -20.3));
+    project.set_section_offset(0, (15.5, -20.3));
 
     let mut db = Database::in_memory().unwrap();
     db.save_project(&project).unwrap();
     let loaded = db.load_project().unwrap();
 
-    let offset = loaded.section_offsets.get(&0).unwrap();
+    let offset = loaded.section_offsets().get(&0).unwrap();
     assert!((offset.0 - 15.5).abs() < 0.0001);
     assert!((offset.1 - (-20.3)).abs() < 0.0001);
 }

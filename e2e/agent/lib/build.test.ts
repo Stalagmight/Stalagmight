@@ -827,6 +827,20 @@ describe('writeBuildStamp', () => {
     // And the guard in sourceStaleReason accepts what the real writer wrote.
     expect(sourceStaleReason(buildStartedAtMs - 1, written?.binaryMtimeMs ?? 0, written)).toBeNull();
   });
+
+  it('reports a stamp it could not write by its errno code, never by the path (#576 W51)', () => {
+    // A directory where the stamp file should be: the write fails with EISDIR.
+    const blocked = path.join(dir, 'qzCaveA');
+    fs.mkdirSync(blocked);
+    const lines: string[] = [];
+    writeBuildStamp(
+      { viteE2E: true, e2eFeature: false, viteMode: 'production', mode: 'debug', features: '', buildStartedAtMs: 0 },
+      (line) => lines.push(line),
+      binaryFile,
+      blocked,
+    );
+    expect(lines).toEqual(['Warning: could not write E2E build stamp (EISDIR); next start will rebuild.']);
+  });
 });
 
 describe('hashDistIndex', () => {

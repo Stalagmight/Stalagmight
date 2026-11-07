@@ -114,7 +114,6 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Search for "zoom"
       await page.locator('[data-testid="shortcuts-search"]').fill('zoom');
-      await page.waitForTimeout(100);
 
       // Zoom-related actions should be visible
       await expect(page.locator('[data-testid="shortcut-row-zoom"]')).toBeVisible();
@@ -132,7 +131,6 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Search for "Ctrl+Z" (undo binding)
       await page.locator('[data-testid="shortcuts-search"]').fill('Ctrl+Z');
-      await page.waitForTimeout(100);
 
       // Undo action (which has Ctrl+Z) should be visible
       await expect(page.locator('[data-testid="shortcut-row-undo"]')).toBeVisible();
@@ -147,11 +145,11 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Search for something specific
       await page.locator('[data-testid="shortcuts-search"]').fill('undo');
-      await page.waitForTimeout(100);
+      // The filter applied (so the clear below has something to undo).
+      await expect(page.locator('[data-testid="shortcut-row-select"]')).not.toBeVisible();
 
       // Clear search
       await page.locator('[data-testid="shortcuts-search"]').fill('');
-      await page.waitForTimeout(100);
 
       // All categories and actions should be visible again
       await expect(page.locator('[data-testid="shortcut-category-tools"]')).toBeVisible();
@@ -284,8 +282,12 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await page.keyboard.press('K');
       await waitForRecording(page, 'shortcut-primary-merge', false);
 
-      // Clear any previous error
-      await page.waitForTimeout(100);
+      // Wait for the first assignment to commit (merge's key badge reads exactly
+      // K, its default is M; an exact match, since `hasText: 'K'` would match the
+      // recorder's "Press keys..." prompt); only then does "no error" prove the
+      // first assignment raised none, so the one asserted below comes from the second.
+      await expect(primaryRecorder.locator('span').filter({ hasText: /^K$/ }).first()).toBeVisible();
+      await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
 
       // Try to assign same key to secondary slot
       const secondaryRecorder = page.locator('[data-testid="shortcut-secondary-merge"]');
@@ -496,8 +498,8 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await expect.poll(activeTool).toBe('select');
 
       await page.keyboard.press('M');
-      // A settle, not a poll: this proves the tool does NOT change, and a poll
-      // would accept the pre-update value.
+      // settle: proves the tool does NOT change, and a poll would accept the
+      // pre-update value.
       await page.waitForTimeout(100);
       expect(await activeTool()).toBe('select'); // Should stay as select
     });
@@ -769,11 +771,21 @@ test.describe('Visual Regression - Shortcuts', () => {
     await page.keyboard.press('Q');
     await waitForRecording(page, 'shortcut-primary-select', false);
 
-    // Add secondary binding
+    // Add secondary binding. [#576 RV6b-F3] Not Ctrl+Q: with the whole default Config
+    // that is quit's binding, so the recording was refused with the conflict error and
+    // the screenshot below showed the error state, not a customized one. Ctrl+Shift+Q is
+    // bound to nothing by default.
     const secondaryRecorder = page.locator('[data-testid="shortcut-secondary-select"]');
     await secondaryRecorder.click();
-    await page.keyboard.press('Control+Q');
+    await page.keyboard.press('Control+Shift+Q');
     await waitForRecording(page, 'shortcut-secondary-select', false);
+
+    // Both bindings took, and nothing was refused - the state the screenshot is named for.
+    await expect(page.locator('[data-testid="shortcut-error"]')).toHaveCount(0);
+    await expect(selectRecorder).toContainText('Q');
+    await expect(secondaryRecorder).toContainText(KEY.Ctrl);
+    await expect(secondaryRecorder).toContainText(KEY.Shift);
+    await expect(secondaryRecorder).toContainText('Q');
 
     // Take screenshot showing customized state
     await page.screenshot({

@@ -1,5 +1,6 @@
 import { useLayoutEffect, useEffect, useId, useRef, type ReactNode, useCallback, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { Button, IconButton } from '../common/Button';
 import { CloseIcon } from '../common/icons';
 import { pushDialog, popDialog } from '../../utils/dialogStack';
@@ -120,6 +121,7 @@ export function DialogWrapper({
   onKeyDown,
   hidden = false,
 }: DialogWrapperProps) {
+  const { t } = useTranslation();
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const dialogContentRef = useRef<HTMLDivElement>(null);
@@ -262,14 +264,14 @@ export function DialogWrapper({
       // Priority 4: first enabled button that is NOT the close X button
       const buttons = el.querySelectorAll<HTMLElement>('button:not(:disabled)');
       for (const btn of buttons) {
-        if (btn.getAttribute('aria-label') !== 'Close dialog' && isVisibleAndAccessible(btn, el)) {
+        if (!btn.hasAttribute('data-dialog-close') && isVisibleAndAccessible(btn, el)) {
           focusElement(btn);
           return;
         }
       }
 
       // Priority 5: fallback to the close X button
-      const closeBtn = el.querySelector<HTMLElement>('button[aria-label="Close dialog"]');
+      const closeBtn = el.querySelector<HTMLElement>('button[data-dialog-close]');
       if (closeBtn) {
         focusElement(closeBtn);
       }
@@ -377,12 +379,15 @@ export function DialogWrapper({
           <h2 id={titleId} className="text-lg font-medium">{title}</h2>
           <IconButton
             data-testid={testId ? `${testId}-close` : 'dialog-close'}
+            // Marks the X for the initial-focus pass above: its aria-label is
+            // translated, so it cannot be found by text.
+            data-dialog-close=""
             type="button"
             onClick={requestClose}
             icon={<CloseIcon size={14} />}
             size="sm"
             variant="ghost"
-            aria-label="Close dialog"
+            aria-label={t('dialogs.dialogWrapper.closeDialog')}
             className="text-text-secondary hover:text-text-primary"
           />
         </div>
@@ -413,15 +418,15 @@ export function DialogWrapper({
             className="relative bg-panel border border-border rounded-lg shadow-xl max-w-sm w-full mx-4"
           >
             <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-              <h2 id="confirm-discard-title" className="text-lg font-medium">Unsaved Changes</h2>
+              <h2 id="confirm-discard-title" className="text-lg font-medium">{t('dialogs.dialogWrapper.discardTitle')}</h2>
             </div>
             <div className="p-4 space-y-4">
-              <p>You have unsaved changes. Are you sure you want to close?</p>
-              <p className="text-text-secondary text-sm">Your changes will be lost.</p>
+              <p>{t('dialogs.dialogWrapper.discardMessage')}</p>
+              <p className="text-text-secondary text-sm">{t('dialogs.dialogWrapper.discardNote')}</p>
               <div className="flex justify-end gap-2 pt-4 border-t border-border">
-                <Button type="button" onClick={handleCancelDiscard} data-testid="dirty-dialog-keep-editing">Cancel</Button>
+                <Button type="button" onClick={handleCancelDiscard} data-testid="dirty-dialog-keep-editing">{t('common.actions.cancel')}</Button>
                 <Button type="button" variant="danger" onClick={handleConfirmDiscard} data-testid="dirty-dialog-discard">
-                  Discard Changes
+                  {t('dialogs.dialogWrapper.discard')}
                 </Button>
               </div>
             </div>

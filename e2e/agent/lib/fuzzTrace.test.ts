@@ -19,15 +19,18 @@ import {
   type TraceStep,
   traceHasWellFormedFlows,
   TraceRecorder,
+  corpusEntryRel,
   describeSteps,
   failureSignature,
   planReplay,
   readTrace,
   restoreTraceEnv,
   sameSignature,
+  shareableSignature,
   shrinkableSteps,
   writeTrace,
 } from './fuzzTrace';
+import { shareableFailureText } from './shareableFailure';
 
 /** Verbatim shape of an undo-persistence-fuzz roundtrip failure (finding 12). */
 const FINDING_12 = [
@@ -180,7 +183,13 @@ describe('TraceRecorder', () => {
       const file = path.join(dir, 'nested', 'trace.json');
       writeTrace(file, trace);
       const read = readTrace(file);
-      expect(read).toEqual(trace);
+      // The failure is written in its shareable form (#576 W21-NF1); the rest round trips as is.
+      expect({ ...read, failure: null }).toEqual({ ...trace, failure: null });
+      expect(read.failure).toEqual({
+        message: shareableFailureText(FINDING_12),
+        signature: shareableSignature(FINDING_12),
+      });
+      expect(read.failure?.signature.classifiers).toEqual(['stale-id-writes-to-the-wrong-shot']);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -216,6 +225,44 @@ describe('TraceRecorder', () => {
       expect(
         readTrace(write([{ kind: 'undo' }, { kind: 'undoTo', steps: 3 }, { kind: 'save' }])).steps,
       ).toHaveLength(3);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a forged step without quoting the value it carries (#576 W51)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fuzz-trace-test-'));
+    try {
+      const refusal = (step: unknown, v: unknown = TRACE_VERSION): string => {
+        const file = path.join(dir, `forged-${Math.random().toString(36).slice(2)}.json`);
+        fs.writeFileSync(file, JSON.stringify({ v, steps: [step] }));
+        try {
+          readTrace(file);
+        } catch (err) {
+          return (err as Error).message;
+        }
+        throw new Error('the forged trace was accepted');
+      };
+      const forged = [
+        refusal({ kind: '## qzCaveA' }),
+        refusal({ kind: 'ui', testid: ['qzCaveA'], label: 'x' }),
+        refusal({ kind: 'input', testid: 'a', value: 'v', mode: 'qzCaveA', label: 'x' }),
+        refusal({ kind: 'fileDialog', trigger: 'a', dialog: 'qzCaveA', rel: null, label: 'x' }),
+        refusal({ kind: 'genFile', rel: '/home/qzCaveA/x.dmp', spec: {}, label: 'x' }),
+        refusal({ kind: 'route', rel: 'in/../qzCaveA', label: 'x' }),
+        refusal({ kind: 'mapClick', lngLat: [-87.123, 20.456, 7], label: 'x' }),
+        refusal({ kind: 'export', format: 'tml', options: 'qzCaveA', rel: 'a.tml', label: 'x' }),
+        refusal({ kind: 'reload', fixture: 'qzCaveA/x.stalx' }),
+        refusal({ kind: 'undo' }, 'qzCaveA'),
+      ];
+      for (const message of forged) {
+        expect(message).not.toContain('qzCaveA');
+        expect(message).not.toContain('-87.123');
+      }
+      expect(forged[0]).toMatch(/has kind a string of 10 character\(s\), which this build does not run/);
+      expect(forged[6]).toMatch(/has lngLat an array of 3 item\(s\)/);
+      // A number is a number, so a jump width still prints as itself.
+      expect(refusal({ kind: 'undoTo', steps: -5 })).toMatch(/jumps -5 step\(s\)/);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -354,9 +401,10 @@ describe('schema v4 steps', () => {
       corpusId: string;
       corpusHash?: string;
     }[];
-    expect(folded.corpusId).toBe(corpusFileId(rel));
-    expect(folded.corpusHash).toBe(corpusPathHash(rel));
-    expect(idOnly.corpusHash).toBeUndefined();
+    // Two records were made just above.
+    expect(folded!.corpusId).toBe(corpusFileId(rel));
+    expect(folded!.corpusHash).toBe(corpusPathHash(rel));
+    expect(idOnly!.corpusHash).toBeUndefined();
     expect(JSON.stringify(recorder.snapshot())).not.toContain('cave-system');
   });
 
@@ -635,7 +683,9 @@ describe('a written trace never names a corpus file', () => {
       rel: 'fuzz-files/corpus-1',
       label: `corpus #${corpusFileId(PRIVATE_CORPUS_REL)}`,
     });
-    recorder.record({ kind: 'route', rel: 'fuzz-files/corpus-1/a.dmp', label: 'route corpus dmp' });
+    // The opened entry is named by its directory's token, never by the copy's
+    // basename (#576 HFI-13) - `writeTrace` refuses the basename.
+    recorder.record({ kind: 'route', rel: corpusEntryRel('fuzz-files/corpus-1'), label: 'route corpus dmp' });
     return recorder.build({
       scenario: 'import-dialog-fuzz',
       seed: 3,

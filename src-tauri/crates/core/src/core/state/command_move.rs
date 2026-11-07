@@ -202,28 +202,6 @@ impl AppState {
                 next_update = Some((new_len, new_azi, new_depth_in, pitch));
             }
 
-            // Special case: moving station 0 should move the section offset so the
-            // rest of the geometry stays in place. Shot 0 is adjusted below to
-            // compensate for the offset shift.
-            // Note: can't use project.adjust_section_offset() here because `section`
-            // is a live &mut borrow from project.sections - hence the associated
-            // `write_section_offset`, which takes the map (a disjoint field borrow)
-            // and drops the key when the move lands the offset back within dust of
-            // the origin, instead of leaving an inert entry behind (#413 finding 2,
-            // and the invariant on that function).
-            if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
-                let current = project
-                    .section_offsets
-                    .get(&station_ref.section_id)
-                    .copied()
-                    .unwrap_or((0.0, 0.0));
-                crate::models::Project::write_section_offset(
-                    &mut project.section_offsets,
-                    station_ref.section_id,
-                    (current.0 + total_dx, current.1 + total_dy),
-                );
-            }
-
             // Apply updates after validation
             if let Some((new_len, new_azi, new_depth_out, pitch)) = prev_update {
                 if let Some(shot) = section.shots.get_mut(idx - 1) {
@@ -245,6 +223,17 @@ impl AppState {
                     shot.pitch_in = Some(pitch);
                     shot.pitch_out = Some(pitch);
                 }
+            }
+
+            // Special case: moving station 0 moves the section offset so the rest
+            // of the geometry stays in place (shot 0 was adjusted above to
+            // compensate). Applied once the `section` borrow has ended, through
+            // `adjust_section_offset` - i.e. `write_section_offset`, which drops
+            // the key when the move lands the offset back within dust of the
+            // origin instead of leaving an inert entry behind (#413 finding 2).
+            // Independent of the shot edits above, so the order is immaterial.
+            if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
+                project.adjust_section_offset(station_ref.section_id, total_dx, total_dy);
             }
 
             // Clear station offset (now incorporated into shot data)

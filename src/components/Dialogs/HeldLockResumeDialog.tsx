@@ -213,7 +213,10 @@ export default function HeldLockResumeDialog() {
       // would also DISCARD them (`clearHeldLocks` drops the whole list, including
       // rows that were cleanly releasable) with no way to re-raise the prompt
       // until the next login scan.
-      if (!(await startEditing())) return;
+      // `resumeHeldLock`: the user resumes a lock this account holds (typically this
+      // app before a restart), so the session claims it and Done releases it as usual
+      // (#576 RV2-R-13-RESTART).
+      if (!(await startEditing({ resumeHeldLock: true }))) return;
       // The lock stays held on purpose: hand the shell over to the project.
       clearHeldLocks();
       closeHeldLockPrompt();

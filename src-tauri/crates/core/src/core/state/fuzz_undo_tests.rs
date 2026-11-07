@@ -229,7 +229,7 @@
 //!   far from both ends. `Project::OFFSET_DUST_M` is now 1e-6 m, two decades
 //!   above the worst residue measured past the georeference ceiling and four
 //!   below `MERGE_ALIGNMENT_INVARIANT_M`; the constant's doc carries the whole
-//!   argument, and two tests in `models/project/tests.rs` re-run the measurement
+//!   argument, and two tests in `models/project/tests/merge_and_offset_tests.rs` re-run the measurement
 //!   and pin the clearances. A scale-aware gate was rejected on purpose: the
 //!   bound has to stay a pure function of the value written, or two routes
 //!   disagree BY DESIGN.
@@ -336,7 +336,7 @@
 //!   user `DeleteShot`, and the load and Repair sweeps still convert everything
 //!   they find. Pinned at the MODEL level by
 //!   `removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one` and
-//!   its `remove_appended_first_shot` sibling in `models/project/tests.rs`, which
+//!   its `remove_appended_first_shot` sibling in `models/project/tests/orphan_closure_tests.rs`, which
 //!   is where it has to live now: the entry above converged the forward path, so
 //!   a project holding a pre-existing convertible orphan is no longer
 //!   constructible through the command API and this shape cannot be built from
@@ -381,7 +381,7 @@
 //!   computes - see that function and docs/undo-redo.md. `COMBINED=1 SEEDS=40
 //!   ITERATIONS=300` is 40/40 on both halves after it, and the reductions are
 //!   pinned in `open_undo_bugs_tests.rs` (six tests, from the birth route to the
-//!   save/reopen convergence) and `models/project/tests.rs` (three).
+//!   save/reopen convergence) and `models/project/tests/double_anchor_repair_tests.rs` (three).
 //! * RESOLVED as FINDING 20, and now FIXED. `HORIZON=1 SEEDS=1 ITERATIONS=2000`
 //!   left a merged pair 1.58 cm apart after an `updateShot`, because
 //!   `realign_after_shot_edit` returned early when the edited section's merge
@@ -794,6 +794,7 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 
 use tempfile::TempDir;
 
+use super::fuzz_crossing_tests::{attributable_to_reload, attributable_to_save};
 use super::AppState;
 use crate::core::undo::history_view::UndoHistoryItem;
 use crate::core::{Command, CommandResult};
@@ -809,6 +810,7 @@ use crate::models::{
 // what keeps these tests off other files; what it buys is ONE dir for the whole
 // test, whose path the test can name and hand to a worker thread
 // (`ConfigHandoff`). It is held for the whole test because the saves are.
+use crate::test_fixtures::state_with_project;
 use crate::test_helpers::isolated_config;
 
 // ===========================================================================
@@ -1030,7 +1032,7 @@ pub(super) struct Diff {
     pub(super) actual: String,
 }
 
-const ABSENT: &str = "<absent>";
+pub(super) const ABSENT: &str = "<absent>";
 /// Diffs collected before the walk gives up. Enough to classify and to read.
 const MAX_DIFFS: usize = 60;
 /// The walk collects ONE more than it reports.
@@ -1480,7 +1482,7 @@ impl StaleTargets {
 /// spellings are the same defect seen through a different starting state, and a
 /// classifier that knew only the first silently stopped classifying as soon as
 /// the section already had an offset.
-fn offset_key_of(path: &str) -> Option<(SectionId, Option<usize>)> {
+pub(super) fn offset_key_of(path: &str) -> Option<(SectionId, Option<usize>)> {
     let rest = path.strip_prefix("section_offsets.")?;
     match rest.split_once('[') {
         None => rest.parse().ok().map(|id| (id, None)),
@@ -1533,7 +1535,7 @@ struct ShotTarget {
 /// A prefix-walking version got this wrong for a trailing `#` (`section_offsets.5`
 /// did not match `section_offsets.#`), which silently un-classified finding 2 -
 /// the failure mode a clever matcher invites and a boring one does not.
-fn path_is(diff: &Diff, pattern: &str) -> bool {
+pub(super) fn path_is(diff: &Diff, pattern: &str) -> bool {
     let mut normalized = String::with_capacity(diff.path.len());
     let mut in_digits = false;
     for ch in diff.path.chars() {
@@ -1627,34 +1629,6 @@ fn classify(diff: &Diff, ctx: &MoveCtx) -> Option<&'static str> {
         .iter()
         .find(|classifier| (classifier.matches)(diff, ctx))
         .map(|classifier| classifier.id)
-}
-
-/// Changes a SAVE makes to live state with no undo entry of its own
-/// (`AppState::save_project`), subtracted only from comparisons that cross a
-/// save. Deliberately narrow by direction: an anchor may only be GAINED, a uuid
-/// filled in, an offset entry dropped.
-fn attributable_to_save(diff: &Diff) -> bool {
-    ((path_is(diff, "sections[#].gauge_shot_uuid")
-        || path_is(diff, "sections[#].gauge_neighbour_uuid"))
-        && diff.expected == "null"
-        && diff.actual != "null")
-        || (path_is(diff, "sections[#].shots[#].uuid")
-            && (diff.expected == ABSENT || diff.expected == "null")
-            && diff.actual != ABSENT)
-        || (path_is(diff, "section_offsets.#") && diff.actual == ABSENT)
-}
-
-/// Derived geometry a RELOAD re-solves from scratch: `redrive_offsets_after_load`
-/// ends in an unconditional `resolve_offsets()` ("Zero-trust: never honor a
-/// persisted derivable offset"), so `section_offsets` and the station offsets
-/// derived from them are RECOMPUTED rather than restored.
-fn attributable_to_reload(diff: &Diff) -> bool {
-    // BOTH spellings of an offset difference: the whole key when it is present
-    // on one side only, and the element when it exists on both and the differ
-    // recurses into the pair. The re-solve recomputes the whole map, so the two
-    // are the same fact - and matching only the first left every value change
-    // across a reload reading as unexplained.
-    offset_key_of(&diff.path).is_some() || diff.path.starts_with("station_offsets")
 }
 
 // A block of DIFF SUBTRACTIONS lived here, each stripping one known bug's shape
@@ -2765,7 +2739,7 @@ pub(super) fn topology_signature(state: &AppState) -> String {
         bucket(project.loop_closures.len()),
         cyclic,
         bucket(project.zero_datums.len()),
-        bucket(project.section_offsets.len()),
+        bucket(project.section_offsets().len()),
         bucket(project.station_comments.len()),
         diverged,
     )
@@ -3199,13 +3173,13 @@ impl Fuzzer {
     /// model's authority on the window is the app, not what this asked for.
     fn new_with_config(seed: u32, closures: bool, drawn: Option<DrawnConfig>) -> Self {
         let state = AppState::new().unwrap();
-        if let (Some(config), Ok(mut stack)) = (drawn, state.undo_stack.lock()) {
-            stack.set_history_limit(config.history_limit);
+        if let Some(config) = drawn {
+            state
+                .undo_stack
+                .lock()
+                .set_history_limit(config.history_limit);
         }
-        let history_limit = state
-            .undo_stack
-            .lock()
-            .map_or(DEFAULT_HISTORY_LIMIT, |stack| stack.history_limit());
+        let history_limit = state.undo_stack.lock().history_limit();
         let mut rng = Rng::new(seed);
         build_project(&state, &mut rng, closures);
         let mut fuzzer = Self {
@@ -3240,9 +3214,7 @@ impl Fuzzer {
         // The builder's own commands are undoable, so the stacks are not empty.
         // Clear them: the model measures depth from a known floor, and the
         // builder's history is scaffolding rather than something to fuzz over.
-        if let Ok(mut stack) = fuzzer.state.undo_stack.lock() {
-            stack.clear();
-        }
+        fuzzer.state.undo_stack.lock().clear();
         assert_eq!(fuzzer.undo_len(), 0, "setup left undo entries behind");
         assert_eq!(fuzzer.redo_len(), 0, "setup left redo entries behind");
         let base = fuzzer.snapshot();
@@ -3925,21 +3897,19 @@ impl Fuzzer {
         // the same entries in the same order. Read straight off the stack so the
         // two halves of a row cannot drift apart: `serialize_entry` is what
         // `rows_to_persist` calls (core/undo/persistence.rs).
-        let payloads: Vec<(String, String)> = self.state.undo_stack.lock().map_or_else(
-            |_| Vec::new(),
-            |stack| {
-                stack
-                    .undo_entries()
-                    .chain(stack.redo_entries())
-                    .map(|entry| {
-                        (
-                            serde_json::to_string(&entry.command).unwrap_or_default(),
-                            serde_json::to_string(&entry.undo_data).unwrap_or_default(),
-                        )
-                    })
-                    .collect()
-            },
-        );
+        let payloads: Vec<(String, String)> = {
+            let stack = self.state.undo_stack.lock();
+            stack
+                .undo_entries()
+                .chain(stack.redo_entries())
+                .map(|entry| {
+                    (
+                        serde_json::to_string(&entry.command).unwrap_or_default(),
+                        serde_json::to_string(&entry.undo_data).unwrap_or_default(),
+                    )
+                })
+                .collect()
+        };
         undo.iter()
             .enumerate()
             .map(|(index, item)| (format!("undo[{index}]"), item))
@@ -5777,7 +5747,7 @@ impl Fuzzer {
         let peak = &mut self.outcome.peak;
         peak.sections = peak.sections.max(project.sections.len());
         peak.stations = peak.stations.max(stations);
-        peak.section_offsets = peak.section_offsets.max(project.section_offsets.len());
+        peak.section_offsets = peak.section_offsets.max(project.section_offsets().len());
         peak.station_offsets = peak.station_offsets.max(project.station_offsets.len());
         peak.station_comments = peak.station_comments.max(project.station_comments.len());
         peak.merges = peak.merges.max(project.station_merges.len());
@@ -8125,15 +8095,7 @@ fn measure_adjusted_solve_determinism() {
     // `plan_adjustment_anchors` requires before it enters
     // `adjust_least_squares` at all. `Move` is not enough - it is applied
     // directly - so the strategy is named explicitly rather than drawn.
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "SolveDeterminism".to_string(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("SolveDeterminism");
     let mut rng = Rng::new(1);
     let section = |name: &str, count: usize, rng: &mut Rng| -> SectionId {
         let shots: Vec<ShotData> = (0..count).map(|_| random_shot(rng)).collect();

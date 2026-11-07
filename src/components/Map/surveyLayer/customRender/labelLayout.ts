@@ -253,6 +253,14 @@ export function shapeLabel(text: string, kind: LabelKind, atlas: GlyphAtlas): Sh
   return { glyphCount: glyphs.length, glyphs };
 }
 
+/** One cached shape in {@link ShapeCache}'s recency list. */
+interface ShapeCacheNode {
+  readonly key: string;
+  readonly value: ShapedLabel;
+  older: ShapeCacheNode | null;
+  newer: ShapeCacheNode | null;
+}
+
 /**
  * Bounded LRU cache of {@link ShapedLabel} keyed by `(kind, text)`, shared across
  * camera-driven rebuilds so a pan / zoom-out re-scope only RE-PROJECTS + RE-COLLIDES
@@ -260,12 +268,24 @@ export function shapeLabel(text: string, kind: LabelKind, atlas: GlyphAtlas): Sh
  * the dominant CPU cost of a build on a large survey). Safe to share a
  * {@link ShapedLabel} across builds: it is immutable and stores ATLAS PIXEL rects,
  * whose origins never move (the atlas grows by doubling height, so a glyph's
- * `(ax, ay)` is stable - see `glyphAtlas.ts`). Insertion-ordered {@link Map} gives
- * O(1) LRU: a hit re-inserts (moves to newest); an overflow evicts the oldest key.
+ * `(ax, ay)` is stable - see `glyphAtlas.ts`).
+ *
+ * Recency is a doubly-linked list beside the {@link Map}: a hit moves its node to
+ * the newest end, an overflow unlinks the oldest - both O(1), and neither
+ * re-inserts into nor iterates the Map. It used to lean on the Map's insertion
+ * order instead (a hit was `delete` + `set`, an overflow evicted
+ * `keys().next()`). In WebKit's JavaScriptCore that iterator walks over every
+ * slot deleted at the front of the table since its last rehash, so once a build
+ * shaped more distinct labels than the cap, each eviction cost a scan of all the
+ * ones before it: on a 384k-shot import (#576 NF-W12BE-3) the label builds spent
+ * about 18 of a 27 s main-thread block on those two lines (sampled in the real
+ * app: 16.1k samples on the eviction, 2.4k on the re-insert).
  */
 export class ShapeCache {
-  private readonly entries = new Map<string, ShapedLabel>();
+  private readonly entries = new Map<string, ShapeCacheNode>();
   private readonly max: number;
+  private oldest: ShapeCacheNode | null = null;
+  private newest: ShapeCacheNode | null = null;
 
   /** @param max Cap on cached labels; the survey label charset is tiny so a few
    *  thousand distinct `(kind, text)` pairs covers a large survey's viewport. */
@@ -278,23 +298,44 @@ export class ShapeCache {
     const key = `${kind}\0${text}`;
     const hit = this.entries.get(key);
     if (hit !== undefined) {
-      // LRU touch: re-insert so it becomes the newest (Map keeps insertion order).
-      this.entries.delete(key);
-      this.entries.set(key, hit);
-      return hit;
+      // LRU touch: move to the newest end of the recency list.
+      this.unlink(hit);
+      this.append(hit);
+      return hit.value;
     }
-    const shaped = shapeLabel(text, kind, atlas);
-    this.entries.set(key, shaped);
-    if (this.entries.size > this.max) {
-      const oldest = this.entries.keys().next().value;
-      if (oldest !== undefined) this.entries.delete(oldest);
+    const node: ShapeCacheNode = { key, value: shapeLabel(text, kind, atlas), older: null, newer: null };
+    this.entries.set(key, node);
+    this.append(node);
+    if (this.entries.size > this.max && this.oldest !== null) {
+      const evicted = this.oldest;
+      this.unlink(evicted);
+      this.entries.delete(evicted.key);
     }
-    return shaped;
+    return node.value;
   }
 
   /** Drop all cached shapes (e.g. after an atlas reset). */
   clear(): void {
     this.entries.clear();
+    this.oldest = null;
+    this.newest = null;
+  }
+
+  private append(node: ShapeCacheNode): void {
+    node.older = this.newest;
+    node.newer = null;
+    if (this.newest !== null) this.newest.newer = node;
+    this.newest = node;
+    if (this.oldest === null) this.oldest = node;
+  }
+
+  private unlink(node: ShapeCacheNode): void {
+    if (node.older !== null) node.older.newer = node.newer;
+    else this.oldest = node.newer;
+    if (node.newer !== null) node.newer.older = node.older;
+    else this.newest = node.older;
+    node.older = null;
+    node.newer = null;
   }
 
   /** Current cached entry count (for tests / diagnostics). */

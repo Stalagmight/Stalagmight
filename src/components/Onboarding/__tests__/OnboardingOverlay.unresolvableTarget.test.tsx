@@ -6,10 +6,7 @@ import type { ActiveOnboardingStep } from '../../../hooks/useOnboarding';
 // Partial mock: the overlay reads `map.controls.show_navigation_tools` off the
 // project store, and `src/i18n/index.ts` (pulled in by that store) needs the
 // real `initReactI18next`.
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys());
 
 const step: ActiveOnboardingStep = {
   id: 'segment-placement',

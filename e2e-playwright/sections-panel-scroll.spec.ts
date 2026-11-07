@@ -60,16 +60,26 @@ async function setSelection(page: Page, selection: unknown): Promise<void> {
  * following un-hover restore isn't overwritten by a late re-measure scroll, and
  * so a captured baseline reflects the settled (measured) layout.
  */
-async function waitForScrollStable(page: Page, list: Locator, timeout = 3000): Promise<number> {
-  let prev = await list.evaluate((el) => el.scrollTop);
-  const start = Date.now();
-  while (Date.now() - start < timeout) {
-    await page.waitForTimeout(80);
-    const cur = await list.evaluate((el) => el.scrollTop);
-    if (cur === prev) return cur;
-    prev = cur;
-  }
-  return prev;
+async function waitForScrollStable(_page: Page, list: Locator, timeout = 3000): Promise<number> {
+  // The re-measure runs on animation frames, so wait for frames, not wall time:
+  // scrollTop unchanged across STABLE_FRAMES consecutive frames (or the timeout).
+  return list.evaluate(
+    (el, { timeoutMs, stableFrames }) =>
+      new Promise<number>((resolve) => {
+        const start = performance.now();
+        let prev = el.scrollTop;
+        let stable = 0;
+        const tick = () => {
+          const cur = el.scrollTop;
+          stable = cur === prev ? stable + 1 : 0;
+          prev = cur;
+          if (stable >= stableFrames || performance.now() - start > timeoutMs) resolve(cur);
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+    { timeoutMs: timeout, stableFrames: 5 },
+  );
 }
 
 /**
@@ -299,7 +309,8 @@ test.describe('Sections panel scrolling', () => {
 
     // Un-hover: the list stays at the selected section, not back at the top.
     await setExternalSectionHover(page, null);
-    // Give the restore effect a chance to (wrongly) run, then assert it didn't.
+    // settle: give the restore effect a chance to (wrongly) run, then assert it
+    // didn't - a poll would accept the unchanged value on its first read.
     await page.waitForTimeout(150);
     expect(await list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   });

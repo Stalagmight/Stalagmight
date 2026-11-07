@@ -1,5 +1,7 @@
-import { useEffect, useRef, useCallback } from 'react';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { useEffect, useCallback } from 'react';
+import { useLatest } from './useLatest';
+import type { UnlistenFn } from '@tauri-apps/api/event';
+import { IPC_EVENTS, listenIpc, type IpcEventName } from '../utils/ipcEvents';
 import { invokeIpc } from '../utils/ipc';
 import { useNetworkStore } from '../store/networkStore';
 
@@ -21,8 +23,7 @@ export function useNetworkStatus() {
   const triggerTileReload = useNetworkStore((s) => s.triggerTileReload);
 
   // Ref to avoid stale closures in event handlers
-  const isOnlineRef = useRef(isOnline);
-  isOnlineRef.current = isOnline;
+  const isOnlineRef = useLatest(isOnline);
 
   const goOnline = useCallback(() => {
     if (!isOnlineRef.current) {
@@ -30,25 +31,47 @@ export function useNetworkStatus() {
       triggerTileReload();
       console.info('[useNetworkStatus] Online - tiles reloading');
     }
-  }, [setOnline, triggerTileReload]);
+  }, [setOnline, triggerTileReload, isOnlineRef]);
 
   const goOffline = useCallback(() => {
     if (isOnlineRef.current) {
       setOnline(false);
       console.info('[useNetworkStatus] Offline');
     }
-  }, [setOnline]);
+  }, [setOnline, isOnlineRef]);
 
   // Listen for Tauri tile transport events + browser online/offline
   useEffect(() => {
-    const unlisteners: Promise<UnlistenFn>[] = [];
+    // Registered the way useBeforeUnload / useLaunchWithFile do it: await listen()
+    // inside try/catch, so a rejected registration is handled where it fails instead
+    // of escaping as an unhandled rejection, and release a listener that resolves
+    // after cleanup as soon as it arrives.
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    // The real unlisten is async (it awaits an IPC round trip) and nothing awaits
+    // it, so a failed release is reported here like a failed registration.
+    const release = (event: string, unlisten: UnlistenFn) => {
+      void new Promise<void>((resolve) => resolve(unlisten())).catch((e: unknown) => {
+        console.warn(`[useNetworkStatus] ${event} listener release failed:`, e);
+      });
+    };
+    const register = async (event: IpcEventName, handler: () => void) => {
+      try {
+        const unlisten = await listenIpc(event, handler);
+        if (disposed) release(event, unlisten);
+        else unlisteners.push(() => release(event, unlisten));
+      } catch (e) {
+        // Tauri event API not available - the browser online/offline events below still apply
+        console.warn(`[useNetworkStatus] ${event} listener not available:`, e);
+      }
+    };
 
-    unlisteners.push(listen('tile-transport-error', () => goOffline()));
-    unlisteners.push(listen('tile-transport-success', () => goOnline()));
+    void register(IPC_EVENTS.TILE_TRANSPORT_ERROR, () => goOffline());
+    void register(IPC_EVENTS.TILE_TRANSPORT_SUCCESS, () => goOnline());
 
     const handleBrowserOnline = () => {
       // Browser reports online - verify with backend
-      invokeIpc<boolean>('get_network_status', undefined, { purpose: 'check network status' })
+      invokeIpc('get_network_status', undefined, { purpose: 'check network status' })
         .then((online) => { if (online) goOnline(); })
         .catch(() => { /* ignore - tile events will confirm */ });
     };
@@ -58,7 +81,8 @@ export function useNetworkStatus() {
     window.addEventListener('offline', handleBrowserOffline);
 
     return () => {
-      unlisteners.forEach((p) => p.then((fn) => fn()));
+      disposed = true;
+      unlisteners.forEach((fn) => fn());
       window.removeEventListener('online', handleBrowserOnline);
       window.removeEventListener('offline', handleBrowserOffline);
     };
@@ -70,7 +94,7 @@ export function useNetworkStatus() {
 
     const poll = async () => {
       try {
-        const online = await invokeIpc<boolean>('get_network_status', undefined, { purpose: 'check network status' });
+        const online = await invokeIpc('get_network_status', undefined, { purpose: 'check network status' });
         if (online) goOnline();
       } catch {
         // Still offline

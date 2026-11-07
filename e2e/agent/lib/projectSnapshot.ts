@@ -328,9 +328,11 @@ export function describeDiffs(diffs: readonly SnapshotDiff[]): string {
  * undocumented way".
  *
  * Deliberately narrow, by value as well as by path: a gauge anchor may only go
- * from null to a value (capture_missing_*), a uuid may only be filled in, and an
- * offset entry may only disappear (the orphan retain). A gauge anchor CHANGING
- * from one value to another, or an offset entry appearing, is not on this list.
+ * from null to a value (capture_missing_*), a uuid may only be filled in, an
+ * offset entry may only disappear (the orphan retain), and a section's creation
+ * time may only appear, as an RFC 3339 stamp. A gauge anchor CHANGING from one
+ * value to another, an offset entry appearing, or a creation time changing, is
+ * not on this list.
  */
 export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [
   {
@@ -359,7 +361,41 @@ export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [
       'carries a FOREIGN KEY to sections(id), so an orphan would abort the whole save. ' +
       'Disappearance only.',
   },
+  {
+    id: 'save-stamps-section-creation-times',
+    pathPattern: /^project\.sections\[\d+\]\.created_at$/,
+    accepts: (diff) => diff.expected === ABSENT && isRfc3339Text(diff.actual),
+    description:
+      'save_project calls stamp_section_creation_times() (project_io.rs, #576 NF-W14BE-1), giving ' +
+      'a section with no creation time (new, or its stored one unreadable) the save time, on the ' +
+      'model. Absent -> an RFC 3339 stamp only: a stamp the section already has is written back ' +
+      'byte for byte (#576 RV14-2), so one changing or going is not this.',
+  },
 ];
+
+/**
+ * True when `rendered` (a diff value as `show` renders it: JSON text) is a JSON
+ * string holding an RFC 3339 date-time that names a real moment.
+ */
+function isRfc3339Text(rendered: string): boolean {
+  let value: unknown;
+  try {
+    value = JSON.parse(rendered);
+  } catch {
+    return false;
+  }
+  if (typeof value !== 'string') return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return false;
+  const [, , month, day, hour, minute, second] = match.map(Number);
+  const inRange =
+    month !== undefined && month >= 1 && month <= 12 &&
+    day !== undefined && day >= 1 && day <= 31 &&
+    hour !== undefined && hour <= 23 &&
+    minute !== undefined && minute <= 59 &&
+    second !== undefined && second <= 60;
+  return inRange && !Number.isNaN(Date.parse(value));
+}
 
 /**
  * Derived geometry a RELOAD re-solves from scratch.

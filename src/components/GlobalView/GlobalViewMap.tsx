@@ -1,4 +1,5 @@
-import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useMemo, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { useTranslation } from 'react-i18next';
 import * as maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
@@ -10,12 +11,13 @@ import { getTileConfig } from '../../utils/tileConfig';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
-import { useNetworkStore } from '../../store/networkStore';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { testIdPart } from '../../utils/testId';
 import { MapAttribution } from '../Map/MapAttribution';
-import { createMap } from '../Map/createMap';
+import { createSurveyMap, SATELLITE_SOURCE_ID } from '../Map/createSurveyMap';
+import { useContextLossToast } from '../Map/useContextLossToast';
+import { useShallow } from 'zustand/react/shallow';
 import { MapUnavailable } from '../Map/MapUnavailable';
 
 /** Local storage key for persisting map position/zoom. */
@@ -113,22 +115,56 @@ interface GlobalViewMapProps {
   onZoomHandled?: () => void;
 }
 
+/** The spinning ring a marker shows while its system's geometry loads. */
+function createMarkerSpinner(strokeLight: string, strokeColor: string): HTMLDivElement {
+  const spinner = document.createElement('div');
+  spinner.className = 'marker-spinner';
+  spinner.style.cssText = `
+    width: 10px;
+    height: 10px;
+    border: 2px solid ${strokeLight};
+    border-top-color: ${strokeColor};
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  `;
+  return spinner;
+}
+
+/** Stable empty defaults: a `new Map()` default parameter is a new object on every
+ *  render, which every effect depending on these props would see as a change. Typed,
+ *  so the props' values are checked where they are read (#576 NF-W3UI-4). */
+const NO_GEOMETRY = new Map<string, SurveyGeometry>();
+const NO_GEOMETRY_STATES = new Map<string, SystemGeometryState>();
+
+/** A shot endpoint as `[lng, lat]`, or null unless it holds two finite numbers. The
+ *  geometry is IPC data typed `Array<number>`, so the length is not guaranteed. */
+function endpointLngLat(point: readonly number[]): [number, number] | null {
+  const [lng, lat] = point;
+  return lng !== undefined && lat !== undefined && Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null;
+}
+
+interface GlobalViewMapInnerProps extends GlobalViewMapProps {
+  /** Rebuild the map on a new WebGL context (the lost-context toast's action). */
+  onReloadMap: () => void;
+}
+
 /**
  * Map component for GlobalView showing all GPS-positioned systems.
  * Uses MapLibre GL JS with satellite tiles.
  */
-const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(function GlobalViewMap(
+const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerProps>(function GlobalViewMap(
   {
     projects,
     selectedProjectId,
     onProjectSelect,
     onProjectOpen,
-    geometryData = new Map(),
-    geometryStates = new Map(),
+    geometryData = NO_GEOMETRY,
+    geometryStates = NO_GEOMETRY_STATES,
     searchTerm = '',
     onContextMenu,
     zoomToSystem,
     onZoomHandled,
+    onReloadMap,
   },
   ref
 ) {
@@ -143,12 +179,15 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   const [webgl2Unavailable, setWebgl2Unavailable] = useState(false);
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
+  // Read by the marker tooltip at hover time: the markers are built once per
+  // system set (#576 D10), so a precision captured at build time went stale when
+  // the user changed it in Settings (#576 RV3-FE-NITS).
+  const precisionRef = useLatest(precision);
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   // Buffer for geometry data that arrives before map is ready
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
   // Store searchTerm in ref for access during map initialization (avoids stale closure)
-  const searchTermRef = useRef(searchTerm);
-  searchTermRef.current = searchTerm;
+  const searchTermRef = useLatest(searchTerm);
   // Flag to suppress persistence for "Fit All" button (temporary override per spec)
   const suppressNextPersistRef = useRef(false);
 
@@ -159,13 +198,26 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     selectSystem,
     toggleSystemSelection,
     cancelPendingLoads,
-  } = useGlobalViewStore();
+  } = useGlobalViewStore(
+    useShallow((s) => ({
+      loadGeometryBatch: s.loadGeometryBatch,
+      selectedSystemIds: s.selectedSystemIds,
+      selectSystem: s.selectSystem,
+      toggleSystemSelection: s.toggleSystemSelection,
+      cancelPendingLoads: s.cancelPendingLoads,
+    })),
+  );
 
   // View mode state (persisted in localStorage)
   const [viewMode, setViewMode] = useViewMode();
   // Store viewMode in ref for callbacks that need current value without closure staleness
-  const viewModeRef = useRef<ViewMode>(viewMode);
-  viewModeRef.current = viewMode;
+  const viewModeRef = useLatest<ViewMode>(viewMode);
+  // Read by the marker creation effect and the marker click handlers, so that
+  // effect re-runs only when the SET of systems changes (#576 D10): a loading-state
+  // or selection change restyles the existing markers (styles effect below)
+  // instead of tearing down and rebuilding every marker's DOM.
+  const geometryStatesRef = useLatest(geometryStates);
+  const selectedProjectIdRef = useLatest(selectedProjectId);
 
   // The FPS-driven tolerance throttle was removed with the GeoJSON source (#mem):
   // GlobalSurveyLayer now serves bulk geometry as on-demand vector tiles, which
@@ -173,16 +225,24 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   // source simplification) has no vector-tile equivalent, so there is nothing
   // left for an FPS monitor to throttle.
 
-  // Filter to only projects with GPS coordinates (null check only, no sentinel)
-  const gpsProjects = projects.filter((p) => p.gps_center !== null);
+  // Filter to only projects with GPS coordinates (null check only, no sentinel).
+  // Memoized (#576 D10): four effects depend on it, and a fresh array on every
+  // render re-ran the lazy-load effect on every store write - which, with a
+  // failing system, retried it in an endless loop.
+  const gpsProjects = useMemo(() => projects.filter((p) => p.gps_center !== null), [projects]);
 
-  // Store gpsProjects and geometryData in refs for imperative handle
-  const gpsProjectsRef = useRef(gpsProjects);
-  const geometryDataRef = useRef(geometryData);
-  useEffect(() => {
-    gpsProjectsRef.current = gpsProjects;
-    geometryDataRef.current = geometryData;
-  }, [gpsProjects, geometryData]);
+  // The latest systems and geometry, for the imperative handle and the map's
+  // `load` handler (which is registered once, on mount).
+  const gpsProjectsRef = useLatest(gpsProjects);
+  const geometryDataRef = useLatest(geometryData);
+
+  // Store callbacks in refs to avoid stale closures in map event handlers
+  // (declared before the init effect, whose listeners call them)
+  const onProjectSelectRef = useLatest(onProjectSelect);
+  const onProjectOpenRef = useLatest(onProjectOpen);
+  const selectSystemRef = useLatest(selectSystem);
+  const toggleSystemSelectionRef = useLatest(toggleSystemSelection);
+  const onContextMenuRef = useLatest(onContextMenu);
 
   // Expose imperative handle for parent to get system centroids
   useImperativeHandle(ref, () => ({
@@ -199,23 +259,25 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           let sumLat = 0;
 
           for (const shot of geometry.shots) {
-            const fromKey = `${shot.from[0]},${shot.from[1]}`;
-            const toKey = `${shot.to[0]},${shot.to[1]}`;
-
-            if (!stations.has(fromKey)) {
-              stations.add(fromKey);
-              sumLng += shot.from[0];
-              sumLat += shot.from[1];
-            }
-            if (!stations.has(toKey)) {
-              stations.add(toKey);
-              sumLng += shot.to[0];
-              sumLat += shot.to[1];
+            // An endpoint without two finite numbers used to be summed anyway and
+            // turned the whole centroid into NaN, so the arrow keys could never
+            // reach the system (#576 NF-W3UI-4). Skip it instead.
+            for (const point of [shot.from, shot.to]) {
+              const lngLat = endpointLngLat(point);
+              if (!lngLat) continue;
+              const key = `${lngLat[0]},${lngLat[1]}`;
+              if (stations.has(key)) continue;
+              stations.add(key);
+              sumLng += lngLat[0];
+              sumLat += lngLat[1];
             }
           }
 
           if (stations.size > 0) {
             centroids.set(project.file_path, [sumLng / stations.size, sumLat / stations.size]);
+          } else if (project.gps_center) {
+            // No usable station position: the same fallback as no geometry.
+            centroids.set(project.file_path, project.gps_center);
           }
         } else if (project.gps_center) {
           // Fall back to gps_center if no geometry loaded
@@ -225,7 +287,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       return centroids;
     },
-  }), []);
+  }), [geometryDataRef, gpsProjectsRef]);
 
   // Calculate raw bounds (no padding) for all systems
   // Note: These are the actual bounds of all systems, without any span limiting
@@ -293,6 +355,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     }
     return rawBounds;
   }, [calculateRawBounds]);
+  const calculateBoundsRef = useLatest(calculateBounds);
 
   // Soft bounds (20% padding) - animate back if user pans beyond this
   const softBoundsRef = useRef<maplibregl.LngLatBounds | null>(null);
@@ -328,7 +391,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
-    const bounds = calculateBounds();
+    // Through the ref like the load handler below: this effect runs once, on
+    // mount (its cleanup tears the map down), so it must not depend on
+    // calculateBounds. At mount the ref already holds the current one.
+    const bounds = calculateBoundsRef.current();
     const defaultCenter = bounds.getCenter();
 
     // Try to restore persisted map state
@@ -339,14 +405,14 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       : [defaultCenter.lng, defaultCenter.lat];
     const initialZoom = persistedState?.zoom ?? 10;
 
-    // Build map options - only include maxBounds if we have GPS projects
+    // No maxBounds - allow free panning and zooming
     const tileConfig = getTileConfig();
-    const mapOptions: maplibregl.MapOptions = {
+    map.current = createSurveyMap({
       container: mapContainer.current,
       style: {
         version: 8,
         sources: {
-          'satellite-tiles': {
+          [SATELLITE_SOURCE_ID]: {
             type: 'raster',
             tiles: tileConfig.tiles,
             tileSize: tileConfig.tileSize,
@@ -359,7 +425,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           {
             id: 'satellite-tiles',
             type: 'raster',
-            source: 'satellite-tiles',
+            source: SATELLITE_SOURCE_ID,
             paint: {
               'raster-opacity': 1,
             },
@@ -370,27 +436,15 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       zoom: initialZoom,
       minZoom: 0, // Dynamic minZoom set after load based on system bounds
       maxZoom: tileConfig.maxZoom,
-      attributionControl: false, // Hide provider badge
-    };
-
-    // No maxBounds - allow free panning and zooming
-    const created = createMap(mapOptions);
-    if (!created) {
+      // MapLibre's keyboard handler would double-zoom with the app's shortcuts.
+      keyboard: false,
+      boxZoom: true,
+    });
+    // No WebGL2 context (createMap.ts): show MapUnavailable in place of the map.
+    if (!map.current) {
       setWebgl2Unavailable(true);
       return;
     }
-    map.current = created;
-
-    // Disable rotation
-    map.current.dragRotate.disable();
-    map.current.touchPitch.disable();
-    // Two-finger twist rotates by default; the global view is a top-down plan,
-    // so a pinch must zoom only.
-    map.current.touchZoomRotate.disableRotation();
-
-    // Disable MapLibre's built-in keyboard handler to prevent conflicts with our shortcuts
-    // Per memory: disable the map library's built-in keyboard handler to prevent double-zoom
-    map.current.keyboard.disable();
 
     // Add navigation controls
     map.current.addControl(
@@ -405,10 +459,15 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     );
 
     map.current.on('load', () => {
+      // The style loads asynchronously, so the systems may have changed since
+      // this effect ran on mount: read them (and their bounds) as they are NOW.
+      // The mount-time list used to drop a system that arrived in between from
+      // the first fit and from the buffered geometry (#576 D17).
+      const projectsNow = gpsProjectsRef.current;
       // Fit to bounds after load only if no persisted state
       // (persisted state is already applied via initial center/zoom)
-      if (gpsProjects.length > 0 && map.current && !persistedState) {
-        map.current.fitBounds(bounds, { padding: 50, maxZoom: 15 });
+      if (projectsNow.length > 0 && map.current && !persistedState) {
+        map.current.fitBounds(calculateBoundsRef.current(), { padding: 50, maxZoom: 15 });
       }
 
       // Initialize survey layer now that map is loaded
@@ -444,7 +503,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         // Only apply if still in survey mode (user may have toggled to markers while map was loading)
         if (pendingGeometryRef.current && pendingGeometryRef.current.size > 0 && viewModeRef.current === 'survey') {
           const systems: SystemGeometry[] = [];
-          for (const project of gpsProjects) {
+          for (const project of projectsNow) {
             const geometry = pendingGeometryRef.current.get(project.file_path);
             if (geometry) {
               systems.push({ metadata: project, geometry });
@@ -585,32 +644,22 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       map.current?.remove();
       map.current = null;
     };
-  }, []);
+  }, [calculateBoundsRef, gpsProjectsRef, onContextMenuRef, onProjectOpenRef, onProjectSelectRef, searchTermRef, selectSystemRef, toggleSystemSelectionRef, viewModeRef]);
 
-  // Reload stale satellite tiles after offline→online recovery
-  const tileReloadGeneration = useNetworkStore((s) => s.tileReloadGeneration);
-  useEffect(() => {
-    if (!map.current || !mapLoaded || tileReloadGeneration === 0) return;
-    const source = map.current.getSource('satellite-tiles');
-    if (source && 'clearTiles' in source) {
-      (source as any).clearTiles();
-      map.current.triggerRepaint();
-    }
-  }, [tileReloadGeneration, mapLoaded]);
+  // A WebGL context that is lost and does not come back within a few seconds
+  // leaves every system's survey blank for good: say so, and offer the rebuild
+  // (#576 D38-LOST).
+  useContextLossToast(map, mapLoaded, onReloadMap);
 
-  // Store callbacks in refs to avoid stale closures in map event handlers
-  const onProjectSelectRef = useRef(onProjectSelect);
-  const onProjectOpenRef = useRef(onProjectOpen);
-  const selectSystemRef = useRef(selectSystem);
-  const toggleSystemSelectionRef = useRef(toggleSystemSelection);
-  const onContextMenuRef = useRef(onContextMenu);
+  // E2E handle on the Global View map (the survey map's is `__stalagmight_map__`).
   useEffect(() => {
-    onProjectSelectRef.current = onProjectSelect;
-    onProjectOpenRef.current = onProjectOpen;
-    selectSystemRef.current = selectSystem;
-    toggleSystemSelectionRef.current = toggleSystemSelection;
-    onContextMenuRef.current = onContextMenu;
-  }, [onProjectSelect, onProjectOpen, selectSystem, toggleSystemSelection, onContextMenu]);
+    if (!(import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VITE_E2E === '1')) return undefined;
+    const w = window as unknown as { __stalagmight_global_map__?: maplibregl.Map };
+    if (map.current) w.__stalagmight_global_map__ = map.current;
+    return () => {
+      delete w.__stalagmight_global_map__;
+    };
+  }, [mapLoaded]);
 
   // Update survey layer when geometry data changes (from props)
   useEffect(() => {
@@ -692,12 +741,19 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
   // Lazy load geometry for visible systems when map loads or moveend
   // Only load when in survey mode
+  //
+  // #576 D10-D1, retry on user action only: a system whose load failed stays an
+  // error marker. This effect re-runs on exactly the user's retry actions -
+  // switching (back) to the survey view, or the recent list reloading (a new
+  // `projects` array) - so only its first pass retries failed systems; a map
+  // move loads newly visible ones and leaves failures alone. Clicking an error
+  // marker retries that one system (marker effect below).
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
     // Don't load geometry when in markers-only mode
     if (viewMode !== 'survey') return;
 
-    const loadVisibleSystems = () => {
+    const loadVisibleSystems = (retryErrors: boolean) => {
       if (!map.current) return;
       // Check ref for current mode (avoid stale closure)
       if (viewModeRef.current !== 'survey') return;
@@ -724,20 +780,20 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       // Load systems sequentially in priority order (loadGeometryBatch handles this)
       // Don't await - let it run in background so map stays responsive
-      loadGeometryBatch(visibleSystems);
+      void loadGeometryBatch(visibleSystems, { retryErrors });
     };
 
     // Load visible systems now
-    loadVisibleSystems();
+    loadVisibleSystems(true);
 
     // Load visible systems on map movement
-    const handleMoveEnd = () => loadVisibleSystems();
+    const handleMoveEnd = () => loadVisibleSystems(false);
     map.current.on('moveend', handleMoveEnd);
 
     return () => {
       map.current?.off('moveend', handleMoveEnd);
     };
-  }, [mapLoaded, gpsProjects, loadGeometryBatch, viewMode]);
+  }, [mapLoaded, gpsProjects, loadGeometryBatch, viewMode, viewModeRef]);
 
   // Show error popup for a failed geometry load
   const showErrorPopup = useCallback((filePath: string, name: string, error: string, lng: number, lat: number) => {
@@ -778,7 +834,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       .addTo(map.current);
   }, [t]);
 
-  // Update markers when projects or selection changes
+  // Create the markers when the set of systems (or the theme) changes. Loading
+  // state and selection are read from refs and kept current by the styles and
+  // visibility effects below, so the markers are not rebuilt on every system load
+  // (#576 D10: N systems loading rebuilt all N markers about 2N times).
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
 
@@ -820,8 +879,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       if (!project.gps_center) continue;
 
       const [lng, lat] = project.gps_center;
-      const loadingState = geometryStates.get(project.file_path)?.state ?? 'idle';
-      const isSelected = selectedProjectId === project.file_path;
+      const loadingState = geometryStatesRef.current.get(project.file_path)?.state ?? 'idle';
+      const isSelected = selectedProjectIdRef.current === project.file_path;
 
       // Use same color as survey mode (deterministic based on file path)
       // Error state overrides with red
@@ -860,19 +919,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       el.appendChild(inner);
 
       // Add spinner for loading state
-      if (loadingState === 'loading') {
-        const spinner = document.createElement('div');
-        spinner.className = 'marker-spinner';
-        spinner.style.cssText = `
-          width: 10px;
-          height: 10px;
-          border: 2px solid ${strokeLight};
-          border-top-color: ${strokeColor};
-          border-radius: 50%;
-          animation: spin 0.8s linear infinite;
-        `;
-        inner.appendChild(spinner);
-      }
+      if (loadingState === 'loading') inner.appendChild(createMarkerSpinner(strokeLight, strokeColor));
 
       // Hover effect - scale inner element (grows uniformly from center)
       el.addEventListener('mouseenter', () => {
@@ -890,10 +937,11 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
           // Format length like survey view
           let lengthStr: string;
+          const lengthDigits = precisionRef.current.length;
           if (totalLength >= 1000) {
-            lengthStr = `${formatFixed(totalLength / 1000, undefined, precision.length)} ${t('common.units.kilometers')}`;
+            lengthStr = `${formatFixed(totalLength / 1000, undefined, lengthDigits)} ${t('common.units.kilometers')}`;
           } else {
-            lengthStr = `${formatFixed(totalLength, undefined, precision.length)} ${t('common.units.meters')}`;
+            lengthStr = `${formatFixed(totalLength, undefined, lengthDigits)} ${t('common.units.meters')}`;
           }
 
           // Build tooltip content using DOM to prevent XSS (matches survey view format)
@@ -964,20 +1012,24 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       // Click handler - for error markers, show error popup instead of selecting
       el.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (loadingState === 'error') {
+        // The state NOW, not at creation: the marker outlives its loads.
+        const errorState = geometryStatesRef.current.get(project.file_path);
+        if (errorState?.state === 'error') {
           // Show error popup on click of red error marker
-          const errorState = geometryStates.get(project.file_path);
-          const errorMsg = errorState?.error ?? 'Unknown error';
+          const errorMsg = errorState.error ?? 'Unknown error';
           showErrorPopup(project.file_path, project.name, errorMsg, lng, lat);
+          // The user's retry (#576 D10-D1): a file that was locked or still being
+          // copied may load now. Survey view only - markers mode loads no geometry.
+          if (viewModeRef.current === 'survey') void useGlobalViewStore.getState().loadGeometry(project.file_path);
         } else {
-          onProjectSelect(project.file_path);
+          onProjectSelectRef.current(project.file_path);
         }
       });
 
       // Double-click handler
       el.addEventListener('dblclick', (e) => {
         e.stopPropagation();
-        onProjectOpen(project.file_path);
+        onProjectOpenRef.current(project.file_path);
       });
 
       // Context menu handler (right-click) - use ref to avoid stale closures
@@ -1058,9 +1110,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       markersRef.current.set(project.file_path, marker);
     }
-  }, [gpsProjects, selectedProjectId, mapLoaded, onProjectSelect, onProjectOpen, geometryStates, resolvedTheme, t]);
+  }, [gpsProjects, mapLoaded, resolvedTheme, t, geometryStatesRef, onContextMenuRef, onProjectOpenRef, onProjectSelectRef, precisionRef, selectedProjectIdRef, viewModeRef]);
 
-  // Update marker styles when selection, loading states, or theme changes
+  // Update marker styles when selection, loading states, or theme changes:
+  // colours, border, the loading spinner and the loading-state data attribute.
   useEffect(() => {
     const strokeColor = getThemeColor('--cc-stroke-color');
     const strokeLight = getThemeColor('--cc-stroke-light');
@@ -1087,10 +1140,15 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         : `0 2px 4px ${shadow}`;
 
       const spinner = inner.querySelector('.marker-spinner') as HTMLElement | null;
-      if (spinner) {
+      if (loadingState !== 'loading') {
+        spinner?.remove();
+      } else if (spinner) {
         spinner.style.borderColor = strokeLight;
         spinner.style.borderTopColor = strokeColor;
+      } else {
+        inner.appendChild(createMarkerSpinner(strokeLight, strokeColor));
       }
+      el.dataset.loadingState = loadingState;
     });
   }, [selectedProjectId, geometryStates, resolvedTheme]);
 
@@ -1212,6 +1270,17 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       </div>
     </div>
   );
+});
+
+/**
+ * Owns the map's generation: "Reload map" on the lost-WebGL-context toast bumps
+ * it, which remounts the map - map.remove() on the dead context, then a fresh map
+ * (new canvas, new context) from the same props (#576 D38-LOST).
+ */
+const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(function GlobalViewMapHost(props, ref) {
+  const [generation, setGeneration] = useState(0);
+  const reloadMap = useCallback(() => setGeneration((g) => g + 1), []);
+  return <GlobalViewMapInner key={generation} ref={ref} {...props} onReloadMap={reloadMap} />;
 });
 
 export default GlobalViewMap;

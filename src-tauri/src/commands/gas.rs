@@ -2,7 +2,7 @@ use tauri::Manager;
 
 use crate::config::GasConfig;
 use crate::core::state::dive_plan::{MAX_SEGMENTS, MAX_WAYPOINTS};
-use crate::core::AppState;
+use crate::core::{AppState, CommandError};
 use crate::models::{Cylinder, Diver, GasReachField, PlanSegment, StationRef};
 
 /// Bound a plan's per-span segment list, mirroring the way-point cap in [`validate_plan_inputs`].
@@ -128,7 +128,7 @@ pub async fn compute_gas_reach_field(
     // sends it (empty when nothing is dragged); the engine clamps each pinned drop before it can
     // move the budget, so a stray ref can only fall through to the default.
     stage_drop_overrides: Vec<Option<StationRef>>,
-) -> Result<Option<GasReachField>, String> {
+) -> Result<Option<GasReachField>, CommandError> {
     // This command re-runs on every gas-input keystroke, so the way-point cap inside is a compute
     // amplifier guard on the hottest path there is.
     let (diver, cylinders, gas_config) =
@@ -151,7 +151,7 @@ pub async fn compute_gas_reach_field(
     .await
     // A JoinError (engine panic / cancellation) is a real backend bug, so surface it as
     // Err rather than collapsing it to Ok(None) - which is reserved for "no project open".
-    .map_err(|e| format!("gas reach computation failed: {e}"))?;
+    .map_err(|e| CommandError::internal(format!("gas reach computation failed: {e}")))?;
     Ok(field)
 }
 

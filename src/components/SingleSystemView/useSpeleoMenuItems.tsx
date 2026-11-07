@@ -53,6 +53,9 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
   // `editState === 'editing' && !forceEditing`. That spelling had already drifted at
   // one of its six call sites, which is why `holdsWriteLock` exists.
   const holdsLock = useSpeleoStore((s) => holdsWriteLock(s.link));
+  // [#576 RV4-FE-SP4] Discard replaces the survey, which the read-only Plan and Export
+  // workspaces refuse (as RV2-R-15 does for Restore); this menu is reachable there.
+  const workspaceReadOnly = useUIStore((s) => s.appMode !== 'survey');
   const { busy, startEditing, update, done } = useSpeleoActions();
   // No page argument: the plain project page is the one a "take me to this project"
   // row should land on.
@@ -162,7 +165,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
             testIdPrefix="speleodb-menu-discard-changes-icon"
           />
         ),
-        disabled: busy || !hasUnpushedEdits,
+        disabled: busy || !hasUnpushedEdits || workspaceReadOnly,
         onClick: () => openDialog('speleodb-discard-changes'),
       },
       {
@@ -245,6 +248,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
     forceEditing,
     holdsLock,
     hasUnpushedEdits,
+    workspaceReadOnly,
     unwoundNotEdited,
     forceEditAllowed,
     busy,

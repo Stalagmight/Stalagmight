@@ -12,32 +12,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import { SpeleoStatusButton } from '../SpeleoStatusButton';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
 import { UNPUSHED_ACCENT } from '../../../utils/speleoLocalState';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../../test/factories/ipc';
+import { makeSpeleoLink } from '../../../test/factories/speleo';
 
 /** Read-only (no lock held), nothing local outstanding. */
-const CLEAN_UNLOCKED: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'read-only',
-  lockHolder: null,
-  lockedByOther: false,
-  hasUnpushedEdits: false,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: true,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+const CLEAN_UNLOCKED: SpeleoLinkState = makeSpeleoLink({ forceEditAllowed: true });
 
 const seed = (o: Partial<SpeleoLinkState> = {}) =>
   useSpeleoStore.setState({ link: { ...CLEAN_UNLOCKED, ...o }, banner: null, busy: false });

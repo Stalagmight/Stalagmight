@@ -16,6 +16,7 @@ import { applyAllOverlapTreatments } from '../overlapTreatment';
 import type { SectionEditState, ConfirmedOverlapInfo } from '../batchImportHelpers';
 import type { CrossSectionSuggestion, DmpFile } from '../../types/commands';
 import type { EditableShot } from '../../components/common/ShotTableEditor';
+import { makeDmpFile } from '../../test/factories/dmp';
 
 const measured = (id: number, length: number, overrides: Partial<EditableShot> = {}): EditableShot =>
   ({
@@ -88,7 +89,7 @@ const suggestion: CrossSectionSuggestion = {
   targetImportIndex: 1,
 };
 
-const dmpFile: DmpFile = { version: 1, sections: [] };
+const dmpFile: DmpFile = makeDmpFile();
 const noConfirmed = new Map<number, ConfirmedOverlapInfo>();
 
 /** The target section's original shots: ids 0..2 mirror the DMP ordering, with

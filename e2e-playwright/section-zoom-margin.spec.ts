@@ -155,94 +155,55 @@ async function assertSectionOffScreen(page: Page, sectionId: number): Promise<vo
 }
 
 /**
- * Project all station coordinates belonging to a section to screen pixels
- * using map.project(), and compute margin percentages from each viewport edge.
+ * Project every DRAWN station of a section to screen pixels with map.project(),
+ * and compute margin percentages from each viewport edge.
  * Returns null if data is not yet available or map is still moving (for use in polling).
  *
- * GPS origin comes from config.map.satellite_gps_origin in the project store.
- * zoom_max comes from config.map.zoom_max in the project store.
+ * Station positions come from the app's drawn-geometry hook
+ * (`__stalagmight_geometry__`, the same index the renderer and hit-testing use),
+ * i.e. exactly the lng/lat that is painted. This used to re-derive them from the
+ * station metres with an inlined flat 111 320 m/deg conversion that claimed to be
+ * "the same algorithm as utils/coordinates.ts" - which is now an ellipsoidal
+ * (WGS84) transform, so the copy measured a slightly different survey than the one
+ * on screen (#576 NF-EXP-2). zoom_max comes from config.map.zoom_max in the
+ * project store.
  */
 async function getStationScreenMargins(page: Page, sectionId: number): Promise<MarginResult | null> {
   return page.evaluate((secId) => {
-    const stores = (window as unknown as {
+    const w = window as unknown as {
       __E2E_TEST__?: {
-        projectStore: {
-          getState: () => {
-            project: {
-              sections: Array<{ id: number }>;
-            } | null;
-            stations: Array<{
-              station_ref: { section_id: number };
-              coordinates: { x: number; y: number };
-            }>;
-            config: {
-              map: {
-                satellite_gps_origin: { latitude: number; longitude: number };
-                zoom_max: number;
-              };
-            } | null;
-          };
-        };
+        projectStore: { getState: () => { config: { map: { zoom_max: number } } | null } };
       };
-    }).__E2E_TEST__;
-
-    const map = (window as unknown as {
       __stalagmight_map__?: {
         project: (lngLat: [number, number]) => { x: number; y: number };
         getContainer: () => HTMLElement;
         getZoom: () => number;
         isMoving: () => boolean;
       };
-    }).__stalagmight_map__;
-
-    if (!stores || !map) return null;
+      __stalagmight_geometry__?: () => {
+        stations: Array<{ sectionId: number; lngLat: [number, number] }>;
+      } | null;
+    };
+    const map = w.__stalagmight_map__;
+    const geometry = w.__stalagmight_geometry__?.();
+    if (!w.__E2E_TEST__ || !map || !geometry) return null;
 
     // Only measure when map is idle
     if (map.isMoving()) return null;
 
-    const state = stores.projectStore.getState();
-    const sectionStations = state.stations.filter(
-      (s) => s.station_ref.section_id === secId,
-    );
-
-    if (sectionStations.length === 0) return null;
-
-    // Get GPS origin from config (same source as MapCanvas.tsx line 74)
-    const gpsOrigin = state.config?.map.satellite_gps_origin;
-    if (!gpsOrigin) return null;
+    const lngLats = geometry.stations.filter((s) => s.sectionId === secId).map((s) => s.lngLat);
+    if (lngLats.length === 0) return null;
 
     // Read zoom_max from config instead of hard-coding
-    const zoomMax = state.config?.map.zoom_max ?? 22;
-
-    // Replicate metersToMapCoords inline (same algorithm as utils/coordinates.ts)
-    const METERS_PER_DEG_LAT = 111_320;
-    function metersToMapCoords(
-      east: number,
-      north: number,
-      originLat: number,
-      originLng: number,
-    ): [number, number] {
-      const metersPerDegLng = METERS_PER_DEG_LAT * Math.cos((originLat * Math.PI) / 180);
-      const lng = originLng + east / metersPerDegLng;
-      const lat = originLat + north / METERS_PER_DEG_LAT;
-      return [lng, lat];
-    }
+    const zoomMax = w.__E2E_TEST__.projectStore.getState().config?.map.zoom_max ?? 22;
 
     const container = map.getContainer();
     const containerWidth = container.clientWidth;
     const containerHeight = container.clientHeight;
     const zoom = map.getZoom();
 
-    // Project all section stations to screen coordinates
-    const points = sectionStations.map((station) => {
-      const lngLat = metersToMapCoords(
-        station.coordinates.x,
-        station.coordinates.y,
-        gpsOrigin.latitude,
-        gpsOrigin.longitude,
-      );
-      return map.project(lngLat);
-    });
+    // Project the section's drawn stations to screen coordinates
+    const points = lngLats.map((lngLat) => map.project(lngLat));
 
     // Compute minimum margin from each edge as percentage
     let minLeft = Infinity;
@@ -395,7 +356,8 @@ test.describe('Section zoom margin', () => {
     ).toBe(sectionId);
 
     // ...but the camera must not have moved (no zoom-to-section on single click).
-    // Allow any erroneous animation a moment to start, then assert unchanged.
+    // settle: allow any erroneous animation a moment to start, then assert the
+    // camera is unchanged - a poll would pass before it began.
     await page.waitForTimeout(400);
     const after = await page.evaluate(() => {
       const m = (window as unknown as {
@@ -517,7 +479,8 @@ test.describe('Section zoom margin', () => {
         return m ? !m.isMoving() : false;
       });
     const settle = async () => {
-      // Ride past the post-action re-fit delay (180ms here + 100ms in MapCanvas).
+      // settle: ride past the post-action re-fit delay (180ms here + 100ms in
+      // MapCanvas); the assertions after it check that no re-fit moved the camera.
       await page.waitForTimeout(400);
       await expect.poll(mapIdle, { timeout: 15000 }).toBe(true);
     };

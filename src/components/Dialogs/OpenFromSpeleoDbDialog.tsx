@@ -4,7 +4,8 @@ import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
 import { invokeIpc } from '../../utils/ipc';
-import { speleoErrorAction, humanizeSpeleoError } from '../../utils/speleoError';
+import { humanizeSpeleoError } from '../../utils/speleoError';
+import { errorCode } from '../../utils/commandError';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoAdoptConfirm } from './SpeleoAdoptConfirm';
@@ -59,7 +60,7 @@ export default function OpenFromSpeleoDbDialog() {
   const [pendingAdopt, setPendingAdopt] = useState<SpeleoProjectSummary | null>(null);
 
   const refreshProjects = async (isCancelled: () => boolean = () => false) => {
-    const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
+    const list = await invokeIpc('speleodb_list_projects');
     if (!isCancelled()) {
       setProjects(list);
       setListFailed(false);
@@ -73,13 +74,13 @@ export default function OpenFromSpeleoDbDialog() {
       // user to the login prompt.
       let status: SpeleoSessionStatus;
       try {
-        status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
+        status = await invokeIpc('speleodb_session');
         if (cancelled) return;
         setSession(status);
       } catch (e) {
         if (cancelled) return;
         // A dead token surfaces here - drop the session and prompt a re-login.
-        if (speleoErrorAction(e) === 'ReLogin') clearSession();
+        if (errorCode(e) === 'SPELEODB_RELOGIN') clearSession();
         setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
         setPhase('logged-out');
         return;
@@ -100,7 +101,7 @@ export default function OpenFromSpeleoDbDialog() {
         if (cancelled) return;
         setListFailed(true);
         setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
-        if (speleoErrorAction(e) === 'ReLogin') {
+        if (errorCode(e) === 'SPELEODB_RELOGIN') {
           clearSession();
           setPhase('logged-out');
         } else {
@@ -126,7 +127,7 @@ export default function OpenFromSpeleoDbDialog() {
       await refreshProjects();
     } catch (e) {
       setListFailed(true);
-      if (speleoErrorAction(e) === 'ReLogin') {
+      if (errorCode(e) === 'SPELEODB_RELOGIN') {
         clearSession();
         setPhase('logged-out');
       }
@@ -259,7 +260,10 @@ export default function OpenFromSpeleoDbDialog() {
                             p.permission ? 'bg-accent-10 text-accent' : 'bg-error-10 text-error'
                           }`}
                         >
-                          {p.permission ?? t('speleodb.browser.noAccess')}
+                          {/* [#576 RV4-FE-SP-5] The localized level, not the wire enum. */}
+                          {p.permission
+                            ? t(`speleodb.collaborators.levels.${p.permission}`)
+                            : t('speleodb.browser.noAccess')}
                         </span>
                         <span className="px-1.5 py-0.5 rounded text-xs bg-panel border border-border text-text-secondary">
                           {p.type_tag}

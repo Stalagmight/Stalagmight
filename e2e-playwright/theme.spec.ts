@@ -147,24 +147,10 @@ function assertColorsApproximatelyEqual(
   expect(Math.abs(parsed.b - expected.b)).toBeLessThanOrEqual(tolerance);
 }
 
-// Dark theme --cc-background is #1a1a2e -> rgb(26, 26, 46)
-const DARK_BG = { r: 26, g: 26, b: 46 };
 // Light theme --cc-background is #f5f0e8 -> rgb(245, 240, 232)
 const LIGHT_BG = { r: 245, g: 240, b: 232 };
 // Cave theme --cc-background is #0e0d0c -> rgb(14, 13, 12)
 const CAVE_BG = { r: 14, g: 13, b: 12 };
-// Dracula theme --cc-background is #282a36 -> rgb(40, 42, 54)
-const DRACULA_BG = { r: 40, g: 42, b: 54 };
-// One Dark theme --cc-background is #282c34 -> rgb(40, 44, 52)
-const ONE_DARK_BG = { r: 40, g: 44, b: 52 };
-// Solarized Light theme --cc-background is #fdf6e3 -> rgb(253, 246, 227)
-const SOLARIZED_LIGHT_BG = { r: 253, g: 246, b: 227 };
-// Catppuccin Latte theme --cc-background is #eff1f5 -> rgb(239, 241, 245)
-const CATPPUCCIN_LATTE_BG = { r: 239, g: 241, b: 245 };
-// Nord theme --cc-background is #2e3440 -> rgb(46, 52, 64)
-const NORD_BG = { r: 46, g: 52, b: 64 };
-// Catppuccin Mocha theme --cc-background is #1e1e2e -> rgb(30, 30, 46)
-const CATPPUCCIN_MOCHA_BG = { r: 30, g: 30, b: 46 };
 // Light theme --cc-map-background is #faf7f2 -> rgb(250, 247, 242).
 // This is the token themeColors.ts feeds to MapLibre's background layer, so it
 // is what the user perceives as "the app background" (#332).

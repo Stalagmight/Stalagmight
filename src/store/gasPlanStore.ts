@@ -178,6 +178,27 @@ function mergeSegments(before: PlanSegment, after: PlanSegment, speed: number): 
 }
 
 /**
+ * A loaded plan's span speeds, with every one the engine would not fly - outside
+ * `[MIN_SEGMENT_SPEED_M_PER_MIN, MAX_SEGMENT_SPEED_M_PER_MIN]`, or not a finite number -
+ * dropped back to inheriting the plan speed (#576 NF-UI-2). Only a hand-edited or foreign
+ * `.plnx` carries one: the Segments grid never stores such a speed. Left in place it showed
+ * in the grid as the span's explicit speed while the engine silently flew the plan speed,
+ * so dropping it changes no planned number - it makes the row say what is flown.
+ */
+function dropOutOfRangeSpeeds(segments: PlanSegment[]): { segments: PlanSegment[]; dropped: number } {
+  let dropped = 0;
+  const out = segments.map((seg) => {
+    const v = seg.speed_m_per_min;
+    if (v === null || (Number.isFinite(v) && v >= MIN_SEGMENT_SPEED_M_PER_MIN && v <= MAX_SEGMENT_SPEED_M_PER_MIN)) {
+      return seg;
+    }
+    dropped += 1;
+    return { ...seg, speed_m_per_min: null };
+  });
+  return { segments: dropped > 0 ? out : segments, dropped };
+}
+
+/**
  * The five plan pins, reduced to bare station refs, in one fixed slot order (#310).
  *
  * Everything anchor-related walks this shape, so an anchor, an `unresolved` flag and the pin it
@@ -528,12 +549,14 @@ interface GasPlanState {
   /** #244: apply a loaded plan's snapshot to the inputs and mark it the clean baseline.
    *  Sets all six gas inputs at once (the reach-field effect recomputes) and nulls the
    *  cached field so a stale overlay never shows under the new plan. `anchors` are the ones the
-   *  backend resolved the snapshot's refs FROM (#310), so a load needs no capture round trip. */
+   *  backend resolved the snapshot's refs FROM (#310), so a load needs no capture round trip.
+   *  Returns how many span speeds the load dropped as out of range (#576 NF-UI-2), for the
+   *  caller's one notice. */
   applyLoadedPlan: (
     planId: number,
     snapshot: DivePlanSnapshot,
     anchors?: LoadedPlanAnchors | null
-  ) => void;
+  ) => { droppedSpeeds: number };
   /** #244: after a successful Save / Save as, rebind the baseline to the EXACT snapshot that
    *  was persisted (passed in, not re-derived - so an edit made during the async save can't
    *  read clean-but-stale) under the given plan id. */
@@ -1146,6 +1169,14 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
     // clean rather than instantly dirty.
     const rigDropped =
       snapshot.gas_config.dpv != null && dpvRigInvalid(snapshot.gas_config.dpv);
+    // Grounding first (a grounded span's speed is nulled for its own reason), then the range.
+    const speedsChecked = dropOutOfRangeSpeeds(
+      rigDropped
+        ? snapshot.segments.map((seg) =>
+            seg.on_scooter ? { on_scooter: false, speed_m_per_min: null } : seg
+          )
+        : snapshot.segments
+    );
     // A plan written before segments existed carries none, and a hand-edited one can carry any
     // number; either way the panel and the engine need exactly one per span from the first render.
     const normalized: DivePlanSnapshot = {
@@ -1162,11 +1193,7 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       // auto-filled scooter pace, and a flag left latent here would spring back to life on the
       // next rig install - a scootered plan reappearing from a rig the load just refused.
       segments: normalizeSegments(
-        rigDropped
-          ? snapshot.segments.map((seg) =>
-              seg.on_scooter ? { on_scooter: false, speed_m_per_min: null } : seg
-            )
-          : snapshot.segments,
+        speedsChecked.segments,
         snapshot.waypoints.length,
         planSpeed(snapshot.gas_config)
       ),
@@ -1216,6 +1243,7 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       // a pin whose anchor no longer places, so a loaded plan's pins are placeable by definition.)
       unresolved: noFlagsFor(pins),
     });
+    return { droppedSpeeds: speedsChecked.dropped };
   },
   markPlanSaved: (planId, baseline) =>
     set({ loadedPlanId: planId, loadedPlanBaseline: baseline }),

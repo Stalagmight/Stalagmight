@@ -13,17 +13,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 // Real copy, so the assertions below are about what the user actually reads.
 import '../../i18n';
 import SpeleoStorageChoiceDialog from './SpeleoStorageChoiceDialog';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
 const SESSION_ONLY = {
   logged_in: true,

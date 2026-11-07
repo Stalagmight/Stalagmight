@@ -329,17 +329,13 @@ describe('import fuzzer testid allowlists', () => {
     // it are never exercised at all.
     const screens = new Set(GENERATORS.flatMap((generator) => [...generator.screens]));
     const uncovered = [...IN_FLOW_SCREENS].filter((screen) => !screens.has(screen));
-    // The exceptions are named rather than tolerated. `wiz-init`, `wiz-blank`
-    // and `wiz-no-suggest` are transient wizard phases that render no control of
-    // their own, and `first-run` is the telemetry modal, whose only choice the
-    // scenario makes once at startup - so progress forcing is the only thing
-    // that ever acts on any of the four.
-    //
-    // `wiz-no-suggest` joined that list deliberately: the bridge's settle
-    // predicate waits through it, because it is the sub-paint gap between the
-    // suggestion pool running dry and `manual_placing` starting, and the walk is
-    // better spent on `wiz-manual`, where the placement options actually live.
-    expect(uncovered.sort()).toEqual(['first-run', 'wiz-blank', 'wiz-init', 'wiz-no-suggest']);
+    // The exceptions are named rather than tolerated. `wiz-init` and `wiz-blank`
+    // are transient wizard phases that render no control of their own, and
+    // `first-run` is the telemetry modal, whose only choice the scenario makes
+    // once at startup - so progress forcing is the only thing that ever acts on
+    // any of the three. (`wiz-no-suggest` is gone: the wizard no longer renders
+    // the frame it classified, #576 NF-W8D4-1.)
+    expect(uncovered.sort()).toEqual(['first-run', 'wiz-blank', 'wiz-init']);
     for (const screen of NON_FLOW_SCREENS) {
       expect(screens.has(screen), `${screen} needs a generator too`).toBe(true);
     }

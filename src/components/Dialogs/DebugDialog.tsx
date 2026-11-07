@@ -63,6 +63,7 @@ type LevelFilter = 'all' | 'ERROR' | 'WARN' | 'INFO' | 'DEBUG' | 'TRACE';
 const LEVEL_RANK: Record<string, number> = { ERROR: 0, WARN: 1, INFO: 2, DEBUG: 3, TRACE: 4 };
 
 function LogLine({ line }: { line: string }) {
+  const { t } = useTranslation();
   const { level, target, message, fields } = parseLine(line);
   const style = LEVEL_STYLES[level] ?? DEFAULT_STYLE;
   const isFrontend = target === '[frontend]';
@@ -76,7 +77,7 @@ function LogLine({ line }: { line: string }) {
       </span>
       {isFrontend ? (
         <span className="shrink-0 text-[10px] font-semibold rounded px-1 py-px bg-accent text-accent-on">
-          FE
+          {t('debugDialog.frontendBadge')}
         </span>
       ) : (
         <span className="text-text-secondary shrink-0 text-[11px] opacity-70">{target}</span>
@@ -107,7 +108,7 @@ export default function DebugDialog() {
 
   const fetchLogs = useCallback(async (): Promise<boolean> => {
     try {
-      const result = await invokeIpc<string[]>('get_recent_logs', undefined, { purpose: 'fetch recent debug logs' });
+      const result = await invokeIpc('get_recent_logs', undefined, { purpose: 'fetch recent debug logs' });
       setLogs(result);
       setError(null);
       return true;
@@ -171,7 +172,7 @@ export default function DebugDialog() {
 
   return (
     <DialogWrapper
-      title="Debug Logs"
+      title={t('debugDialog.title')}
       onClose={handleClose}
       size="5xl"
       overflow="hidden"
@@ -181,10 +182,10 @@ export default function DebugDialog() {
         {/* Toolbar */}
         <div className="flex items-center gap-2 mb-2 flex-wrap">
           <Button size="sm" onClick={handleRefresh} data-testid="debug-refresh-button">
-            Refresh
+            {t('debugDialog.refresh')}
           </Button>
           <Button size="sm" onClick={handleCopy} data-testid="debug-copy-button">
-            Copy
+            {t('common.actions.copy')}
           </Button>
 
           <div className="w-px h-5 bg-border mx-1" />
@@ -204,14 +205,14 @@ export default function DebugDialog() {
                 }`}
                 data-testid={`debug-filter-${lvl.toLowerCase()}`}
               >
-                {lvl === 'all' ? 'All' : lvl}
+                {lvl === 'all' ? t('debugDialog.filterAll') : lvl}
                 {count != null && <span className="ml-1 opacity-60">({count})</span>}
               </button>
             );
           })}
 
           <span className="text-xs text-text-secondary ml-auto">
-            {filteredLogs.length}/{logs.length} entries
+            {t('debugDialog.entries', { shown: filteredLogs.length, total: logs.length })}
           </span>
         </div>
 
@@ -229,7 +230,7 @@ export default function DebugDialog() {
             filteredLogs.map((line, i) => <LogLine key={i} line={line} />)
           ) : (
             <div className="text-text-secondary p-4 text-center">
-              {logs.length === 0 ? 'No log entries yet.' : 'No entries match this filter.'}
+              {logs.length === 0 ? t('debugDialog.empty') : t('debugDialog.noMatches')}
             </div>
           )}
         </div>

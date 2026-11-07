@@ -11,67 +11,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys());
 
 vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ config: null }),
 }));
 
 export const mockDialogWrapperSpy = vi.fn();
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({
-    children,
-    'data-testid': testId,
-    ...props
-  }: {
-    children: React.ReactNode;
-    'data-testid'?: string;
-    [k: string]: unknown;
-  }) => {
-    mockDialogWrapperSpy({ 'data-testid': testId, ...props });
-    return <div data-testid={testId}>{children}</div>;
-  },
-}));
+vi.mock('../DialogWrapper', async () =>
+  (await import('../../../test/factories/components')).dialogWrapperStub({
+    testId: true,
+    spy: (props) => mockDialogWrapperSpy(props),
+  }),
+);
 
 import ZeroDatumSelectionDialog from '../ZeroDatumSelectionDialog';
-import type { DmpFile, DmpSection, DmpShot } from '../../../types/commands';
+import type { DmpFile, DmpSection } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
 import en from '../../../i18n/locales/en.json';
-
-function dmpShot(): DmpShot {
-  return {
-    shot_type: 'Standard',
-    heading_in: 10,
-    heading_out: 10,
-    length: 5,
-    depth_in: 0,
-    depth_out: 0,
-    pitch_in: 0,
-    pitch_out: 0,
-    left: 0,
-    right: 0,
-    up: 0,
-    down: 0,
-    temperature: 0,
-    hour: 0,
-    minute: 0,
-    second: 0,
-    marker_index: 0,
-  };
-}
+import { makeDmpSection, makeDmpShots } from '../../../test/factories/dmp';
 
 function dmpFile(): DmpFile {
-  const section: DmpSection = {
-    version: 1,
-    name: 'Anchor',
-    direction: 'in',
-    date: '2026-01-01',
-    shots: Array.from({ length: 3 }, dmpShot),
-    content_hash: 'hash-anchor',
-  };
+  const section: DmpSection = makeDmpSection({ shots: makeDmpShots(3) });
   return { version: 1, sections: [section] } as unknown as DmpFile;
 }
 

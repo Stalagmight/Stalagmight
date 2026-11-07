@@ -1,4 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+// A class component cannot call `useTranslation`, so the fallback reads the shared instance.
+import i18n from '../../i18n';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -33,7 +35,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           data-testid="error-boundary-fallback"
         >
           <p className="text-sm font-medium">
-            {this.props.panelName} encountered an error
+            {i18n.t('errorBoundary.panelError', { panel: this.props.panelName })}
           </p>
           {this.state.error?.message && (
             <p className="text-xs text-text-secondary/70 max-w-xs text-center break-words">
@@ -45,7 +47,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             data-testid="error-boundary-reset"
             className="px-3 py-1.5 text-sm rounded border border-border bg-panel text-text-primary hover:bg-border transition-colors"
           >
-            Try Again
+            {i18n.t('errorBoundary.tryAgain')}
           </button>
         </div>
       );

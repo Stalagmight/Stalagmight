@@ -18,20 +18,14 @@ import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { useExportStore, DEFAULT_IMAGE_OPTIONS } from '../exportStore';
 import type { DisplaySettings } from '../../types/loading';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
 const loadBinaryMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 vi.mock('../../utils/loadProjectBinary', () => ({
   loadProjectFullBinary: loadBinaryMock,
-}));
-
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue(undefined),
 }));
 
 describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
@@ -45,7 +39,7 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
     });
 
     loadBinaryMock.mockResolvedValue({
-      loadingId: 1n,
+      loadingId: 1,
       // A local project (#270): the load result carries the backend's is_remote.
       isRemote: false,
       project: {
@@ -62,7 +56,7 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
         section_offsets: {},
         imported_file_hashes: [],
         imported_section_hashes: [],
-        next_closure_id: 1n,
+        next_closure_id: 1,
       },
       stations: [],
       surveyData: { shots: [], stations: [] },
@@ -101,7 +95,7 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
       autosaveFailure: null,
       isDirty: false,
       loading: {
-        loadingId: 0n,
+        loadingId: 0,
         clientOpId: 0,
         isLoading: false,
         overallProgress: 0,

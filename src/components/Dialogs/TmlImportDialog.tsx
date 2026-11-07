@@ -1,23 +1,25 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
+import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useUIStore } from '../../store/uiStore';
-import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { getErrorMessage } from '../../utils/ipc';
 import {
   completeImportToSingleView,
   finalizeDeferredSaveWarnings,
   finishImportWithoutOrphanSuggestions,
+  suggestOrphanPlacementsAfterImport,
   importFailureMessage,
+  isImportCancelled,
   surfaceImportFailure,
   type ImportFailure,
 } from '../../utils/saveFeedback';
-import { formatPhaseLabel } from '../../utils/loadingPhaseLabel';
 import { extractFilename } from '../../utils/path';
-import { clamp } from '../../utils/clamp';
-import { formatNumber } from '../../i18n/format';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
+import { ImportProgress } from './ImportProgress';
+import { ImportCancelButton } from './ImportCancelButton';
 import { WizardMapPanel } from './WizardMapPanel';
 import { WizardScrollBody } from './WizardScrollBody';
 import { WIZARD_MAP_PANEL_MAX_WIDTH } from '../SingleSystemView/layoutConstants';
@@ -31,11 +33,12 @@ import {
   type TmlFileAnchor,
   type TmlPlacementState,
 } from './TmlPlacementStep';
-import type { TmlFile, OrphanPlacementSuggestion } from '../../types/commands';
+import type { TmlFile } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import type { VirtualShotMode } from '../../types/project';
 import { computeTmlImportStats } from '../../utils/tmlImportStats';
 import { computeTmlPreviewLayout, isOfferableCoordinate } from '../../utils/tmlPreviewLayout';
+import { useShallow } from 'zustand/react/shallow';
 
 interface TmlImportDialogProps {
   tmlFile: TmlFile;
@@ -57,6 +60,8 @@ interface DiscardTarget {
 }
 
 /** Why the dialog is asking what to do with the just-created empty project. */
+/** `message`: for `failed`, the error; for `cancel`, the note that the import itself
+ *  was cancelled (shown plainly - a cancel is not an error). */
 type Residue = { kind: 'cancel' | 'failed'; message?: string; project: DiscardTarget };
 
 /**
@@ -93,9 +98,25 @@ function discardTarget(): DiscardTarget {
 
 export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogProps) {
   const { t } = useTranslation();
-  const { executeTmlImport, calculateFileHash, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
-  const loading = useProjectStore((state) => state.loading);
-  const { closeDialog, openDialog, setView, triggerFitToBounds, setImportContext, showToast } = useUIStore();
+  const { executeTmlImport, calculateFileHash, startLoading, setLoadingProgress, resetLoading } = useProjectStore(
+    useShallow((s) => ({
+      executeTmlImport: s.executeTmlImport,
+      calculateFileHash: s.calculateFileHash,
+      startLoading: s.startLoading,
+      setLoadingProgress: s.setLoadingProgress,
+      resetLoading: s.resetLoading,
+    })),
+  );
+  const { closeDialog, openDialog, setView, triggerFitToBounds, setImportContext, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      openDialog: s.openDialog,
+      setView: s.setView,
+      triggerFitToBounds: s.triggerFitToBounds,
+      setImportContext: s.setImportContext,
+      showToast: s.showToast,
+    })),
+  );
 
   const [isImporting, setIsImporting] = useState(false);
   const [isDiscarding, setIsDiscarding] = useState(false);
@@ -260,7 +281,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         // Non-fatal: import without provenance rather than blocking on it.
       }
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: hash the file this dialog opened with, once (calculateFileHash is a stable store action)
   }, []);
 
   const fileName = useMemo(() => {
@@ -285,12 +306,6 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   // coordinates do not parse - which is a reason to hold the Import button, not
   // to send "you decide".
   const rootPlacement = placementPayload(placement, fileAnchor);
-
-  // `clamp` passes NaN through, and an unseeded/garbled progress event would
-  // then render as "NaN%" and an invalid bar width.
-  const overallProgress = Number.isFinite(loading.overallProgress)
-    ? Math.round(clamp(loading.overallProgress, 0, 100))
-    : 0;
 
   // Escape / backdrop must not silently drop the option choices the user made.
   // The placement choice counts only once it diverges from the default this
@@ -346,6 +361,17 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         // failure reports the same way whichever surface takes it (the router
         // stamps `trackDialogComplete` too).
         trackDialogComplete('tml-import');
+        // A cancelled import is not a failure (#576 RV4-FE-MISC4): the same
+        // keep/discard question, with the cancelled wording the router's toast
+        // uses - never the backend's own line in an error box.
+        if (failure.phase === 'command' && isImportCancelled(failure.code)) {
+          setResidue({
+            kind: 'cancel',
+            message: t('dialogs.importFailure.cancelled'),
+            project: discardTarget(),
+          });
+          return;
+        }
         setResidue({
           kind: 'failed',
           message: importFailureMessage(failure),
@@ -373,7 +399,10 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       resetLoading();
 
       if (!result.success) {
-        reportFailure({ phase: 'command', error: result.error });
+        // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
+        // Nothing is running then, so the footer goes back to its idle Cancel.
+        if (isMoveCarryRefusal(result)) setIsImporting(false);
+        else reportFailure({ phase: 'command', error: result.error, code: result.code });
         return;
       }
 
@@ -397,25 +426,20 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       // Same shape as WallsImportDialog.
       const sectionIds = result.section_ids ?? [];
 
-      // Check for orphan placement opportunities. The suggest call is the
-      // ONLY thing wrapped in try/catch here (non-fatal - a failed lookup
-      // just skips the suggestion step); `finishImportWithoutOrphanSuggestions`
-      // sits outside it and completes the import exactly once, so a throw
-      // partway through IT can never fall through to a duplicate completion.
+      // Check for orphan placement opportunities. Only the lookup may fail
+      // softly here (it skips the suggestion step, and says so - #576
+      // NF-DMPS-1); `finishImportWithoutOrphanSuggestions` runs outside it and
+      // completes the import exactly once, so a throw partway through IT can
+      // never fall through to a duplicate completion.
       if (sectionIds.length > 0) {
-        let suggestions: OrphanPlacementSuggestion[] = [];
-        try {
-          suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
-            'suggest_orphan_placements',
-            { newlyImportedSectionIds: sectionIds },
-            { purpose: 'suggest orphan placements after TML import' }
-          );
-        } catch {
-          // Non-fatal: proceed without orphan detection
-        }
+        const suggestions = await suggestOrphanPlacementsAfterImport(
+          sectionIds,
+          'suggest orphan placements after TML import',
+          importUi
+        );
         if (suggestions.length > 0) {
           setSource('dialog');
-          openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
+          openDialog('orphan-placement', { suggestions, receipt: result.import_receipt ?? undefined });
           return;
         }
         await finishImportWithoutOrphanSuggestions('tml-import', importUi, sectionIds, result.import_receipt);
@@ -427,7 +451,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       resetLoading();
       reportFailure({ phase: 'transport', error: e, format: 'TML' });
     }
-  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, virtualShotMode, allSelected, selectedSections, rootPlacement, tmlFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
+  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, virtualShotMode, allSelected, selectedSections, rootPlacement, tmlFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading, t]);
 
   const handleCancel = useCallback(() => {
     if (isImporting) return;
@@ -510,6 +534,11 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
             >
               {residue.message}
             </div>
+          )}
+          {residue.kind === 'cancel' && residue.message && (
+            <p className="text-text-primary text-sm" data-testid="tml-import-residue-cancelled">
+              {residue.message}
+            </p>
           )}
           <p className="text-text-secondary">{t('dialogs.tmlImport.residue.body')}</p>
 
@@ -717,27 +746,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         {/* In-dialog progress: by import time the view is 'single', so the
             GlobalView overlay that renders these phases is not mounted and a
             large file would otherwise show only a busy button (#411 C3). */}
-        {isImporting && (
-          <div className="space-y-1" data-testid="tml-import-progress">
-            <div className="flex justify-between text-xs text-text-secondary">
-              <span data-testid="tml-import-progress-phase">
-                {formatPhaseLabel(t, loading.phase, loading.phaseIndex, loading.phaseCount)}
-              </span>
-              <span>{formatNumber(overallProgress)}%</span>
-            </div>
-            <div className="h-1.5 bg-border rounded-full overflow-hidden">
-              <div
-                className="h-full bg-accent transition-all duration-300"
-                style={{ width: `${overallProgress}%` }}
-                role="progressbar"
-                aria-label={t('loading.overall.aria')}
-                aria-valuenow={overallProgress}
-                aria-valuemin={0}
-                aria-valuemax={100}
-              />
-            </div>
-          </div>
-        )}
+        {isImporting && <ImportProgress testIdPrefix="tml-import" />}
 
       </div>
       </div>
@@ -750,9 +759,15 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           is what keeps the primary action reachable however long the section
           list gets. */}
         <div className="flex justify-end gap-2 px-4 py-4 border-t border-border bg-panel">
-          <Button onClick={handleCancel} disabled={isImporting} data-testid="tml-import-cancel">
-            {t('dialogs.tmlImport.cancel')}
-          </Button>
+          {/* While the import runs, Cancel asks the backend to stop it
+              (RV4-FE-MISC1); Escape stays a no-op (`handleCancel`). */}
+          {isImporting ? (
+            <ImportCancelButton data-testid="tml-import-cancel">{t('dialogs.tmlImport.cancel')}</ImportCancelButton>
+          ) : (
+            <Button onClick={handleCancel} data-testid="tml-import-cancel">
+              {t('dialogs.tmlImport.cancel')}
+            </Button>
+          )}
           <Button
             data-primary-action=""
             data-testid="tml-import-confirm"

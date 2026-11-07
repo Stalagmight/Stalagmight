@@ -14,15 +14,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { SpreadsheetGrid } from '../SpreadsheetGrid';
 import type { GridColumn } from '../types';
-
-/** jsdom has no ResizeObserver; the grid measures its scroller with one on
- *  mount. This suite never depends on it firing - `availWidth` stays 0, which
- *  makes every rendered width the pinned/declared one. */
-class NoopResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
+import { NoopResizeObserver } from '../../../../test/factories/dom';
 
 interface Row {
   a: string;
@@ -57,6 +49,9 @@ describe('SpreadsheetGrid column-width persistence', () => {
     // useColumnWidths instead of `orderedKeys` makes `note` read as an orphan
     // while it is hidden, so resizing `a` silently drops the width the user set
     // on `note` - and it comes back at the default the moment it is re-shown.
+    // jsdom has no ResizeObserver; the grid measures its scroller with one on
+    // mount. This suite never depends on it firing - `availWidth` stays 0, which
+    // makes every rendered width the pinned/declared one.
     vi.stubGlobal('ResizeObserver', NoopResizeObserver);
     const onColumnWidthsChange = vi.fn();
     render(

@@ -231,6 +231,13 @@ hazards over long runs.
     that owns the key, because silently reordering would ignore what was asked
     for. Parsing lives in `e2e/agent/lib/fuzzMatrixArgs.ts` so a unit test can
     assert the refusal list is the same list the per-cell environment writes.
+    A cell whose child died without printing PASS or FAIL (a spawn failure,
+    the per-cell timeout, an app that never attached) is LOST, not failed:
+    it reads `LOST` in the table, the summary counts lost and failed apart,
+    and the speedup is NOT reported - a lost cell's duration is an attach
+    timeout, so the ratio would measure nothing (#576 HFI-7: a matrix that
+    lost 9 of 12 cells used to print "speedup 3.91x"). The run then ends
+    `MATRIX INCOMPLETE: N of M cell(s) produced no verdict` and exits non-zero.
   - `pnpm agent:mcp` - run the server standalone (for an external MCP client).
   - `pnpm agent:bridge <dir>` - file-based access to the same server for plain
     shells and subagents without an MCP client: append JSON tool calls to
@@ -253,7 +260,7 @@ children). That default is a deliberate trade, not inertia.
 - Every `debug_assert!` in a live path - `core/state/command_comment.rs:71`,
   four in `core/loading.rs`, `models/project/reverse.rs:379`,
   `models/project/classify.rs:244`, `core/state/undo_restore.rs:264`,
-  `core/state/speleodb_pull.rs:1685`, `persistence/sqlite.rs:519`. Each is an
+  `core/state/speleodb_adopt.rs:936`, `persistence/sqlite.rs:519`. Each is an
   invariant check the app performs on itself during exactly the mutations a
   fuzzer drives.
 - `Project::debug_assert_merge_alignment` (`models/project/offsets.rs:546`), whose
@@ -293,6 +300,42 @@ one profile and not the other has a second candidate explanation, and the
 comparison to reach for is the same seed in the same profile. (The WDIO tier
 builds its DEBUG binary with `--features e2e` for this reason; the agent
 harness deliberately does not, to leave its default build unchanged.)
+
+**Single-instance is off in both harness profiles (#576 HFI-7).** The release
+harness build drops `tauri-plugin-single-instance` at compile time, through
+`e2e`. The debug build keeps the plugin compiled in but does not REGISTER it
+when `STALAGMIGHT_TEST_HOOKS=1`, which every harness session sets for its app
+and a normal launch never does (`commands::launch::single_instance_enabled`);
+a release binary ignores that variable, so production behaviour is unchanged.
+Before, the debug build registered it, and the plugin claims one name on the
+D-Bus session bus per app identifier: on any machine with a session bus,
+parallel sessions killed each other (the second app was terminated and its
+argv forwarded to the first, so its harness never attached), and a harness run
+started while the user's own Stalagmight was open forwarded its launch into the
+user's app. Unsetting `DBUS_SESSION_BUS_ADDRESS` did not help - zbus falls back
+to `$XDG_RUNTIME_DIR/bus`.
+
+**No accessibility bridge on the virtual display (#576 NF-W12H-2).** A session
+on a throwaway Xvfb starts its app with `NO_AT_BRIDGE=1` (beside the X11 pin;
+`headlessAppEnv` in `e2e/lib/display.ts`); a `headed: true` session keeps the
+desktop's environment. The cause is outside this repo: GTK and WebKit ask the
+session bus for the AT-SPI accessibility bus, the bus activates
+`at-spi-bus-launcher`, and the launcher serves that bus from
+`$XDG_RUNTIME_DIR/at-spi/bus` - one path per runtime directory, whichever
+session bus started it. Several runs started together, each under its own
+`dbus-run-session` (one runtime directory), each start a launcher that binds that
+same path; an app whose launcher lost the race logs `Couldn't register with
+accessibility bus: Did not receive a reply`, never finishes starting, and its
+harness dies in `waitForAppReady` with WebDriver `invalid session id`. Measured
+on the Linux harness host, six sessions released at once per round: 11 of 30
+died that way over five rounds; with the bridge off, 0 of 42; with a private
+`XDG_RUNTIME_DIR` per `dbus-run-session`, 0 of 18. Nothing the harness drives
+goes through AT-SPI. An older checkout, or anything else that launches a GTK app
+beside harness runs, can take the second workaround:
+`XDG_RUNTIME_DIR=$(mktemp -d) dbus-run-session -- ...` (`mktemp -d` makes the
+directory 0700, as a runtime directory must be). The cells of one
+`agent:fuzz-matrix` run share its bus and so its one launcher; the race is
+between separate `dbus-run-session`s.
 
 **Cost.** One-time cold release build: about 3.5 minutes wall clock on the
 self-hosted runner (`Finished release profile [optimized] in 2m 08s` plus the
@@ -573,6 +616,19 @@ so it can only ever touch a temp copy.
 | `STALAGMIGHT_FUZZ_STREAM` | `v1` restores the ORIGINAL generator set, weights and value ranges, reproducing the legacy draw stream byte for byte. The default v2 stream adds the delete/split family, batches, comment moves, synthetic imports, boundary-biased values and per-run swarm weights - and necessarily draws differently, so v1-era repro lines need this variable. `v3` is v2 PLUS the import group; see below. |
 | `STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P` | v3 only: share of generated input files drawn from the corruption catalog rather than written clean. Default 0.2. The same knob, with the same default, that `import-dialog-fuzz` uses. |
 | `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | INERT. It used to keep a run going past a mismatch that was entirely a classified known bug; every classifier is deleted now that the findings are fixed, so there is nothing left to allow. Still read, and still named in the failure's `reproduce:` line, so a tolerant-looking invocation cannot be mistaken for one that relaxed something. |
+
+`STALAGMIGHT_FUZZ_FIXTURE`, `_ALLOW_KNOWN_BUGS`, `_DUMP_HISTORY` and the
+`_TRACE` / `_REPLAY` pair (below) have one definition, `e2e/agent/lib/fuzzKnobs.ts`,
+read at call time. The module is shared; not every knob is: all four fuzz
+scenarios read the fixture and the trace pair, only the two undo fuzzers read
+`_ALLOW_KNOWN_BUGS` and `_DUMP_HISTORY`. The per-run plumbing
+those scenarios used to copy from each other - the replay refusals, the move log
+with its in-flight move, the trace writer and the failure shape - is
+`lib/fuzzHarness.ts`; the undo-model half the two undo fuzzers share (the fused
+step, the model/stack/integrity assertions, the epoch-attributed mismatch check
+of `lib/fuzzSnapshotCheck.ts`, the save/reload boundary) is
+`lib/undoFuzzHarness.ts`. None of it draws from a PRNG, which is what lets it be
+shared without moving a seed's action sequence.
 
 Fixture choice is load-bearing, not cosmetic. The fractal fixture has no loop
 closures, no zero datums and a non-null surveyor on all 32 sections; naharon has
@@ -867,8 +923,10 @@ It covers all five importable families - mNemo `.dmp`, Ariane `.tml`/`.tmlu`,
 Compass `.dat`/`.mak`, Walls `.srv`/`.wpj` and GPX - which is not just five
 parsers but two flow SHAPES: `.dmp` is the only additive import, and every other
 extension routes to `new-project-for-import` whether or not a project is open
-(with one open it goes through `import-as-new-project`, whose confirm closes the
-project first). So a non-DMP flow always creates a project in the middle of
+(with one open it goes through `import-as-new-project`: its confirm parses the
+file while the project stays open, and only after a good parse closes it -
+asking first, with the parsed file carried, when it has unsaved changes or a
+SpeleoDB hand-back). So a non-DMP flow always creates a project in the middle of
 itself. `STALAGMIGHT_FUZZ_IMPORT_FORMAT` is a csv of family names that restricts
 the draw, and it is the natural third matrix axis.
 
@@ -880,7 +938,7 @@ real survey files. Generated files reach the parsers' edges; real files reach th
 shapes nobody would think to generate. A run with no corpus counts
 `corpus:absent` and is exactly as valid, just narrower.
 
-**Nothing a corpus run writes ever names a corpus file.** An entry is identified
+**Nothing a corpus run publishes names a corpus file.** An entry is identified
 everywhere by `corpusFileId`, a 5-hex fold of its relative path
 (`e2e/agent/lib/fixtureCorpus.ts`), because a survey filename can name a cave, a
 landowner or an unreleased project - and a metric key, a log line, a failure
@@ -894,6 +952,240 @@ so a caller that hands over a path gets it folded before the step is stored; and
 assembled it. The corpus ROOT is not recorded either -
 `STALAGMIGHT_FUZZ_CORPUS_DIR` is an absolute path on the recorder's disk, so it
 is excluded from the trace's `env` header and never restored on replay.
+
+**The step that OPENS a corpus copy names it by a token, not by its file
+(#576 HFI-13).** The copy under `fuzz-files/corpus-N/` keeps its real names -
+a `.mak` names its `.dat` files and a `.wpj` its `.srv` tree, so renaming would
+break the very files the corpus exists to exercise - and the `route` /
+`fileDialog` step after a `corpusFile` step used to record
+`fuzz-files/corpus-N/<real basename>`: every corpus trace named its files, a
+shrunk one still did, and `fuzz-shrink` printed the name in its minimal action
+list. That step now records `fuzz-files/corpus-N/@corpus-entry`
+(`fuzzTrace.corpusEntryRel`), which a replay resolves against the copy its own
+`corpusFile` step just made (an unbound token is a missing file, skipped and
+counted), and `writeTrace` / `readTrace` refuse a step that names a file inside
+a corpus copy any other way - without quoting it. What the APP echoes back - an
+import error quoting the path it was handed - is folded by one per-process list
+(`fixtureCorpus.redactCorpusText`, filled as entries are copied, each name
+matched in every form JSON and Rust's `{:?}` write it in, at any depth: a
+quote or backslash escaped, any control or non-ASCII character as itself,
+`\u{hex}` or `\uXXXX`, #576 RV16-1, RV17-1; percent-encoded as a `file://`
+URL writes it, and in both Unicode normal forms, NFC and NFD, RV18-W23-5; a
+space as a form encoder's `+`, and any character but a letter, a digit and
+`-._~` as an HTML character reference, `&#233;`, `&#xE9;` or `&amp;`,
+RV19b-P5 - but not a change of case, another named HTML entity, base64 or a
+part of a name; a name folds from three characters, or from two with one
+outside ASCII, RV19b-P4) that the
+scenario's failure message, `agent:scenario`'s FAIL/findings lines,
+`fuzz-shrink`'s output, the sweep's findings (`findings/` JSON included), every
+line of the session's `actions.jsonl` (a tool's params and result, its error,
+events; the recorder folds each line, and the MCP server folds a result before
+each cap - the 16 KB one too, as the fuzzer folds a stall's error line before
+cutting it, RV18-W23-6) and every MCP tool result and error all pass through
+(`redactCorpusValue` folds a value string by string), and so does every
+`state/` snapshot the recorder writes (`Recorder.writeState`; a store snapshot
+taken after a corpus import carries the copy's path). Not covered, because they
+are not published: the copies themselves and the app's own log files.
+Screenshots (`screenshots/`, the one in each `findings/` entry, and a
+journey's checkpoints in `journeys/<journey>/`) are images of the app, so
+nothing can fold them: they show a corpus file name wherever the UI prints one,
+and the app's own text - station, section and project names - wherever the UI
+shows it. They are not for sharing (see the list below, #576 W33-NF5). No
+report or trace embeds them - `report.md` lists `screenshots/` and the
+`findings/` entries by path only, labelled not for sharing, and a fuzz trace
+carries no image. Attach the trace and the printed failure, not the session
+directory.
+
+**What a run shares carries codes, counts and code locations (#576 HFI2-F2,
+W21-NF1, W21-NF2).** The app's text names the data it is about - a section, a
+project, a station - which no corpus fold knows: a log line, a panic message,
+the error boundary's text, `check_project_integrity` messages, an IPC rejection
+that quotes its arguments, an undo diff's values, a leftover temp file's name.
+So every artifact meant for an issue keeps only codes, counts and code
+locations:
+
+- The PASS/FAIL line of `agent:scenario`, `agent:scenarios` and
+  `agent:journeys` prints findings as counts per severity, kind and code
+  (`findings={"warning:log-warn@stalagmight_parsers::tml":2}`; a log finding's
+  code is its line's log target, `oracles.logLineCode`).
+- A scenario that threw prints `FAIL: <name> threw:`, its headline, the
+  `reproduce:` and `trace:` lines, diff paths (`at project.sections[3].name`)
+  and classifier ids, and one count line for each run of other lines
+  (`lib/shareableFailure.ts`). It is fail-closed: a line is kept only if its
+  shape is one the harness writes, so a new oracle that quotes the app is
+  covered. A shape is the whole line's, not its label, since the app's text
+  can start `trace:` too (#576 RV19b-P2): a `reproduce:` line runs `pnpm
+  agent:...` or `run_scenario("...")`, a `trace:` line is one path to a
+  `.json` trace, and a diff path is lower-case field names and indices. An
+  `ipc <command>:` / `eval:` / `javascript error:` headline keeps
+  the prefix and the length of the app's text. Every line it keeps has the
+  checkout folded to `<repo>` and the home directory to `~`
+  (`foldLocalPaths`), so a `reproduce:` line's fixture path or a session
+  directory in a headline does not name the user.
+- A fuzz trace's `failure` is that form, with the signature of that form.
+  `fuzz-shrink` prints that shareable signature and checks it against the
+  trace header; ddmin still compares full signatures, in memory.
+- A scenario's progress lines (`   . <line>`) print in the headline form
+  (`shareableProgressLine`): folded, and the app's text after a `<what>
+  failed:` prefix replaced by its length. A scenario reports the app's text in
+  a progress line only at the end of such a line; `shareableRunnerOutput.test.ts`
+  checks every value a `ctx.log` call interpolates against the list of harness
+  values (counts, seeds, ids, paths) or that rule. The full line is a
+  `scenario-progress` event in `actions.jsonl`.
+- `agent:journeys` prints its progress lines (`   · <line>`) the same way
+  (#576 W33-NF1): a failed check's observed detail ends a `- failed:` line and
+  a failed checkpoint's error a `(non-gating) failed:` line, so both print as
+  their length. Its PASS/FAIL line gives an `aborted:` reason in the headline
+  form, its further lines counted (`journeys/framework.ts`
+  `journeyVerdictLine`). `shareableRunnerOutput.test.ts` checks every value the
+  framework's lines interpolate, and that every check label and checkpoint
+  name is a literal. The full lines are `scenario-progress` events in
+  `actions.jsonl`; the full checks and reason are in the session's
+  `uat/run.jsonl`.
+- `agent:journeys -- --ledger` commits its run record to `docs/uat/runs/` in
+  the same form (#576 W39-NF1, `journeys/ledger.ts` `ledgerRecord`): a failed
+  check's observed detail as its length, the abort reason as the verdict line
+  prints it, and each sweep finding as its severity, kind and code. It keeps
+  only the fields it names, so a field added to a journey result later stays
+  in `uat/run.jsonl` until it is added there.
+- A harness crash - a runner's `fatal:` line, `fuzz-shrink`'s `shrink
+  failed:`, and the `fatal:` line of `agent:smoke`, `agent:mcp`,
+  `agent:bridge`, `agent:mcp:smoke` (whose `unexpected exception` check too,
+  #576 W39-NF3), `ipc-payload-probe.ts` (whose `probe failed:` too, #576
+  W33-NF6) and `session-http-probe.ts` (its `FAILED:` line, #576 W51) -
+  prints the error's name, its headline
+  in the same form, and its stack frames, folded; the other lines of its
+  message are counted (`shareableErrorText`). A crash in session setup can
+  carry an IPC rejection or a page script's error, so the raw stack is not
+  printed, by these or any other file of the harness
+  (`shareableRunnerOutput.test.ts`).
+- `agent:mcp:smoke`'s check lines (#576 W41-NF1) print a count the smoke
+  took and the names of the tools it found missing as they are, the
+  crash-marker finding as `finding.json` carries it, `app_start`'s error as a
+  crash headline, and any other value a tool returned (a store value, the seed
+  result, a map position) as its length (`mcpSmokeOutput.test.ts`). The tools
+  that return those record their full results in the session's
+  `actions.jsonl`. The server's stderr - an `app_start` build's output, whose
+  cargo `Compiling` and Tauri `Built application at:` lines name the checkout -
+  is passed through a line at a time with the checkout folded to `<repo>` and
+  the home directory to `~` (#576 RV19b-P8, `lib/foldedLines.ts`), and so is
+  it by `agent:bridge`, which inherited it before (#576 W51).
+- A session that builds - `agent:scenario`, `agent:journeys`, `agent:smoke`
+  and the MCP server's `app_start`, and the Tier 2 OS helper's `cargo build
+  --release` (`os/helper.ts`, #576 W51) - passes `pnpm tauri build`'s stdout and
+  stderr to its own stderr the same way, a line at a time with the checkout
+  folded to `<repo>` and the home directory to `~`, and folds its `Rebuilding:`
+  reasons and build log lines too (#576 W47-NF3, `lib/build.ts`
+  `runBuildCommand`, `buildOutput.test.ts`).
+- `fuzz-matrix` prints a failed cell's FAIL block as the child wrote it. For
+  a cell that died without one, it prints the last lines of the child's output
+  fail-closed (`shareableTail`): the session and verdict lines, progress lines
+  and crash headlines in the forms above, stack frames, and one count line for
+  each run of other lines (an uncaught error Node printed itself, a build's
+  output).
+- `findings/<n>/finding.json` and `report.md` carry the shareable projection
+  of each finding (`scripts/lib/shareable-finding.mjs`): a panic's `file:line`
+  and thread but only its message's length, the error boundary's text length,
+  the number of integrity messages, leftover temp files counted by suffix, a
+  log finding named by its target.
+- `report.md`'s steps give an `ipc` / `store_action` call's argument shapes,
+  not its values (`rename_station({oldName: string(9), newName: string(9)})`:
+  field-name keys, string lengths, value types, array lengths; only a boolean
+  or null keeps its value, and a key that is not a lowercase-led identifier is
+  only counted), and a `type_text` step the length of its text (#576
+  RV18-W23-3). So does every other value a step carries (#576 W33-NF2): an
+  `eval` / `driver_script` step gives its script's length, a `seed` step the
+  length of the project name it chose and a fixture's extension only (as a
+  `file_dialog_answer` step gives a file), a `select_option` step the length
+  of the chosen value, and a map position - `map_click`'s `lngLat`,
+  `map_view`'s `set` - its shape, since a coordinate is where the cave is.
+  Screen coordinates, a seed and an iteration count, a button or a dialog's
+  kind, and command, store, action, scenario and screenshot names stay when
+  they have the form the harness writes them in - a number, a word of the
+  tool's fixed set, identifier characters - and so do the header's session
+  id, commit, display and each step's number and tool; any other value, which
+  only a forged or hand-edited log holds, is its shape (#576 W49-NF1). A
+  test id or a selector keeps its structure and the words the
+  app's own source uses (#576 RV19b-P1, `scripts/lib/shareable-selector.mjs`):
+  a test id - and an `#id`, an `id=` value or an attribute's value in a
+  selector - keeps each word between `-` and `_` that is a number or a word of
+  the production source under `src/`, and the span from the first other word
+  to the last is its length
+  (`testid=publish-to-speleodb-dialog-collab-remove-<17 characters>`,
+  `system-card-<25 characters>` for a card keyed by a file path). Text a
+  selector matches is its length whatever its words: WebdriverIO's `=text`,
+  `*=text`, `span=text`, `aria/label`, an xpath string that is not an
+  attribute's value (`//td[text()='<13 characters>']`), and the value of an
+  attribute that holds text, such as `aria-label`, `title` or `placeholder`.
+  Tags, classes, combinators and xpath axes stay, their words judged as a test
+  id's are. A `press_keys` step lists its named
+  keys (`["Control", 1 character]`, `[5 characters, "Enter"]`): `browser.keys`
+  types any key that is not a WebDriver key name, so a run of single
+  characters can spell a name, and each such run is a count of characters
+  (#576 W39-NF2). An `os_keys` step lists its chord the same way: its
+  modifiers and named keys, and any other key - a letter, a digit - as a count
+  of characters (`["cmd", 1 character]`), since a run of one-key chords spells
+  text too (#576 RV19b-P6).
+- What a runner echoes back prints as its shape, its length or a count (#576 W51,
+  `valueShape` in `lib/shareableFailure.ts`): a refused flag or argument of
+  `fuzz-matrix`, `fuzz-shrink`, `agent:scenario` and `ipc-payload-probe.ts`, an
+  unknown scenario or journey name, a bad `STALAGMIGHT_AGENT_PLATFORM`,
+  `STALAGMIGHT_AGENT_WINDOW_RECT` or `STALAGMIGHT_AGENT_DISPLAYS` entry, and
+  what a trace file holds when it is refused or printed back (its header's
+  scenario, seed and iterations, a refused step value). A trace's knob name
+  prints when it reads `STALAGMIGHT_[A-Z0-9_]+`, its values, the fixture and
+  every path folded. A store value a scenario reports on the first line of an
+  error - an open dialog, an undo entry's command type - keeps only the words
+  of the app's source, as a test id does; a section name or a leftover temp
+  file prints as its length or a count, and a metric key holds codes only
+  (`mapSkip:<code>`). `agent:smoke`'s `started:` line is folded and its
+  integrity check gives `<n> message(s), save_blocked=<bool>`;
+  `ipc-payload-probe.ts` gives serde's rejection as its length.
+- Every print and write site is checked in the source, not one at a time
+  (#576 W51, `e2e/agent/lib/printSites/`). `printSites.test.ts` scans every
+  non-test file of `e2e/agent`, `e2e/lib` and `scripts/` for what prints or
+  writes - `console.*`, `process.stdout`/`stderr.write`, `ctx.log`, a
+  `ctx.metric` key (the PASS/FAIL line prints the metrics), an error's
+  message (a runner prints its first line), a `report.md` step, a
+  file write or copy, a child process whose output is ours (`stdio:
+  'inherit'`, `execSync`'s default stderr), a sink handed on as a value - and
+  fails on any value that reaches a shareable one unless it goes through a
+  helper above, sits where the runner withholds it (after the first
+  ` failed: ` of a first line, or on a later line), or has an entry in its
+  group's allow-list (`allowRunners.ts`, `allowLib.ts`, `allowScenarios.ts`,
+  `allowScripts.ts`) saying why it is a code, a count, a length, an integer, a
+  word the harness writes or a path folded by `foldLocalPaths`. A bare name is
+  allowed only in the function it was checked in, a path only folded. Every
+  file write is listed as shareable or private, every private one by a name
+  in the list below, and every shell, Python, PowerShell and Rust program
+  under those directories is classified too. A new site fails the test until
+  it is one of those.
+
+**Not for sharing** - the full text, for triage where the run happened: the
+session's `actions.jsonl` (each `finding` event with its detail, each
+`scenario-failure` event with the whole failure message, each
+`scenario-progress` event with the whole progress line), `agent:journeys`'
+`uat/run.jsonl` (each check's detail, each abort reason), the screenshots
+(`screenshots/`, `findings/<n>/screenshot.png`, the journey checkpoints in
+`journeys/<journey>/`), the crash-marker copies in
+`findings/<n>/`, the `state/` snapshots, `tauri-driver.log`
+(`tauri-wd.log` on macOS), and the app's own log files. Also private, each
+written where a run or a tool runs (#576 W51): the fixture copies,
+the corpus copies and
+the generated survey files a run puts under its session directory;
+the E2E build stamp beside the built binary (it records the checkout's
+absolute path); the app's own config.toml, which a session's profile setup
+rewrites; the MCP server's tool results, which the agent driving it reads
+(store values, eval results, the app's errors, `app_start`'s paths), and
+the MCP bridge's `requests.jsonl` and `responses.jsonl`, their copy on disk;
+the replay spec `generate-replay.mjs` writes (replay.spec.ts: each step's
+exact parameters - typed text, scripts, IPC arguments); the dev server's
+agent bridge files under .agent-bridge/ (its token, the mirrored webview
+console, eval results); and the coverage merge's outputs under
+docs/coverage/ (istanbul JSON keyed by absolute source paths).
+`report.md`'s Evidence list still names `actions.jsonl`,
+`tauri-driver.log` and `screenshots/` for whoever triages the run, labelled
+local triage only, not for sharing (#576 RV18-W23-7, W33-NF5).
 
 **`corpusId` labels; `corpusHash` resolves.** The 5-hex crc20 is 20 bits, which
 is ample for telling two files apart in one run's output and far too little to
@@ -973,8 +1265,38 @@ picker). They are separate PRNG streams so that adding the second left the
 first's draws bit-identical, which bounds how far the existing repro lines
 moved - the convention `mulberry32`'s header states.
 
+**A stall is a failure like any other (#576 HFI-9).** Every in-page call goes
+through WebDriver's `execute/async`, which `lib/sessionShared.ts` gives 30 s,
+and a fused UI step that outran it used to end the run on a bare
+`WebDriverError: The operation was aborted due to timeout` - no move, no
+`reproduce:` line, no trace - because only oracle failures went through `fail`.
+The run now catches every error it did not raise itself. A WebDriver timeout
+becomes `STALL: execute/async did not return within the WebDriver budget - the
+page stopped answering`, with the stalled move named, the move history ending
+on it as IN FLIGHT, the reproduce line, and a trace whose LAST step is the move
+that never returned, so a replay stalls where the recording did. Any other
+error keeps its own first line as the headline and gets the same treatment. A
+stall skips the in-page cleanup (every call would wait out the budget again),
+and a stall inside a map click is no longer swallowed as `map-unavailable`. The
+`bridgeStepMsMax` metric is still what says how close a PASSING run came.
+
 The open findings it has produced are written up in the scenario file's header,
 each with the `reproduce:` line that still runs.
+
+Not bit-identical run to run (#576 NF-E12-2), and not because of the draws: the
+same seed draws the same moves and the same trace, and the rounded metrics
+match. Two observed values vary, both read off the live app rather than computed
+by the scenario. A RELATIVE map click is an offset from the map's current centre
+(`mapCentre()`, `map.getCenter()`), and the camera reaches its centre through the
+fit-to-bounds easing, whose last frame depends on frame timing - so the absolute
+point differs in the 14th significant digit (well below a pixel; the trace stores
+the absolute point, so a replay clicks exactly what the recording clicked). The
+`domNodes` metric counts `document.querySelectorAll('*')` after the episode's
+teardown, while toasts from the episode (5-9 s dwell) may or may not still be
+mounted - the observed 158 / 172 differ by about one toast's subtree (one
+toast adds 13 nodes in the browser tier; the 14 on the harness host was not
+broken down there). Neither is a rounding or ordering defect in the harness;
+compare runs on the trace and the rounded metrics, not on these two.
 
 ### export-roundtrip-fuzz
 
@@ -992,10 +1314,11 @@ verbatim, which is the only way the backend's own guards are reached. Each route
 is asserted against its own contract rather than forced to agree move for move.
 
 Ten destination-path shapes, each aimed at a rule somewhere in the stack:
-`NAME.TMLU` (the exporter lowercases before comparing), `a.tml.txt` (the
-extension is replaced, not appended), no extension, a trailing dot, a name
-carrying U+202E, a ~200-character name, `%`/`"`/space, and the two that name a
-file the open project owns - its `.stalx` and the `.plnx` dive-plan sibling.
+`NAME.TMLU` (the exporter lowercases before comparing), `a.tml.txt` (`.txt`
+is no known extension, so the app appends: `a.tml.txt.tml`), no extension, a
+trailing dot, a name carrying U+202E, a ~200-character name, `%`/`"`/space,
+and the two that name a file the open project owns - its `.stalx` and the
+`.plnx` dive-plan sibling.
 
 | Env var | Effect |
 |---|---|
@@ -1065,6 +1388,18 @@ shot changes section - so X5 now asserts a fixed POINT rather than a fixed index
 and reports `x5:settledAt:N`.
 
 Both fixtures are green.
+
+**Sections with different declinations (#576 HFI-8).** When every section has a
+correction on record but they disagree - multi-year IGRF is enough - the TML
+exporter rotates every bearing into true north and the re-import reads the
+rotated bearings as measured ones (`docs/ariane-export.md`, the third case, a
+documented loss that decision HFI-8-D1 keeps for now; the declination review is
+#600). X6 reported every shot of such a project as lost and gained. It now
+compares the re-import against the shots AS EXPORTED: `asExportedToTml` mirrors
+`AzimuthExport::decide` over each shot's resolved section reference and, on the
+mixed-to-true plan only, rotates each bearing by its own section's correction
+(`x6:rotatedToTrue` counts them). Anything else - a bearing rotated by the
+wrong section's correction, a length, a descent - still fails.
 
 ### Three tiers, and which one gates CI
 
@@ -1147,10 +1482,15 @@ is the same failure rather than a lookalike. A replayed run says so in its
 
 The recording's ENVIRONMENT is part of the repro, so `--trace` restores the
 header's `STALAGMIGHT_*` knobs (fixture, tolerance, stream, the persistence
-ones) and prints what it restored. It has to happen before `./scenarios` is
-imported - the fuzz scenarios freeze those knobs into module-level constants at
-import time - which is why both `agent:scenario` and `agent:fuzz-shrink` import
-the registry dynamically. A trace recorded by a different scenario, or on a
+ones) and prints what it restored. Every knob is read at call time
+(`lib/fuzzKnobs.ts`), so the restore only has to precede the run; both
+`agent:scenario` and `agent:fuzz-shrink` still do it before importing the
+registry (dynamically), so a knob some module read at import time would not
+undo it. So are its SEED and ITERATION COUNT: `agent:scenario --trace` runs at
+the header's `seed` and `iterations` unless `--seed` / `--iterations` are given
+(#576 NF-E12-1; before, a 1-cycle undoPersistenceFuzz trace replayed 12 cycles,
+since each of its iterations replays the whole trace, and a seed-16 undoRedoFuzz
+trace ran and reported seed 1). A trace recorded by a different scenario, or on a
 different fixture, is REFUSED: the steps carry resolved section and shot ids, so
 replaying them against another project drives moves at ids that do not exist
 there and reports an invented failure (or none) while the operator believes they
@@ -1278,11 +1618,15 @@ Added under a small, always-safe surface:
   `{entries, latest_seq, dropped}` where `dropped` is true when the ring rotated
   past the checkpoint.
 - **Rust panic hook** (`src-tauri/crates/telemetry/src/logging/panic_hook.rs`): writes a
-  synchronous crash-marker JSON `crash-<pid>-<millis>.json` into the log
+  synchronous crash-marker JSON `crash-<pid>-<millis>-<seq>.json` into the log
   directory (message, location, thread, `Backtrace::force_capture()`) and logs
   `PANIC: ...` to the ring. The marker is the durable signal (the file log layer
   can drop tail lines on abort). A thread panic leaves the app alive but the
-  marker is fatal regardless.
+  marker is fatal regardless. A panic the code catches on purpose - an
+  importer step under `import_runner::guarded`, which fails that import with
+  an error - is not a crash: it runs inside `panic_hook::catching`, writes no
+  marker, and logs `Caught panic: ...` at ERROR instead of `PANIC:` (#576
+  RV3-R-12), so the oracle sees an error line, not a fatal finding.
 - **Frontend global error capture** (`src/utils/globalErrorCapture.ts`):
   `window` `error` / `unhandledrejection` -> `console.error` with the
   `[unhandled-error]` / `[unhandled-rejection]` prefixes (the oracle contract),
@@ -1336,7 +1680,8 @@ mutating because every later `os_*` step depends on that consent, and
 ## Artifacts layout
 
 ```
-.agent-artifacts/sessions/<yyyymmdd-hhmmss-rand>/
+.agent-artifacts/sessions/<yyyymmdd-hhmmss>-<ms>-p<pid>-<rand>/
+  owner                # the owning harness pid, written when the dir is claimed
   actions.jsonl        # the action log (JSONL contract above)
   screenshots/         # <seq>-<name>.png
   state/               # state snapshots
@@ -1348,7 +1693,29 @@ mutating because every later `os_*` step depends on that consent, and
   report.md            # if a report was generated here
 ```
 
-Gitignored; the 20 newest sessions are kept.
+Gitignored; the 20 newest sessions are kept, plus any older one that is still
+in use.
+
+**One directory per session, claimed atomically (#576 HFI-14).** The id used to
+be the wall-clock second plus `getTime() % 100000` - the clock again - so two
+harness processes starting in the same millisecond shared one directory, one
+`owner` file (two pids concatenated), one `pids` file and one fixture copy, and
+each tore the other down. `recorder.allocateSessionDir` now builds the id from
+the second (so a sorted listing stays chronological), the millisecond, the pid
+and a random tail, creates the directory with an EXCLUSIVE `mkdir` (EEXIST means
+draw again, never share) and writes `owner` in the same breath, before anything
+can prune or reap it.
+
+**Retention never deletes a session that is in use (#576 HFI-6).** Every new
+session prunes all but the newest 20, and it used to do so with no liveness
+check: in a parallel campaign a sibling still running lost its `actions.jsonl`
+mid-run, and a finished cell's failure trace was gone before anyone could shrink
+it. `pruneOldSessions` now skips a directory whose `owner` pid is alive (and is
+not this process - an earlier session of this process stays prunable), or that
+holds a trace in `traces/` written at or after the run start. The run start is
+the process start, or `STALAGMIGHT_AGENT_RUN_START_MS` when that is earlier;
+`agent:fuzz-matrix` sets it for its cells so "the run" is the whole matrix, and a
+hand-rolled runner of many `agent:scenario` processes can export it the same way.
 
 ## Troubleshooting
 
@@ -1367,5 +1734,18 @@ Gitignored; the 20 newest sessions are kept.
 - Orphan `tauri-driver` / `WebKitWebDriver` after an unclean server kill -> the
   next `app_start` scoped-reaps PIDs recorded in each session's `pids` file
   (verified by `/proc/<pid>/comm`); it never broadly `pkill`s.
+- `invalid session id` in `waitForAppReady` while other runs start, and the
+  session's `tauri-driver.log` stops after the config load with `Couldn't
+  register with accessibility bus` -> the AT-SPI launcher race between
+  `dbus-run-session`s (see "No accessibility bridge on the virtual display"
+  above). The harness avoids it for a headless app; for anything else, give each
+  `dbus-run-session` its own `XDG_RUNTIME_DIR`.
 - Second instance -> set `STALAGMIGHT_AGENT_BASE_PORT` to move the driver/native
   ports (default 4544 / 5544, probed +1 up to +10).
+- `app_start` never gets a WebDriver session (the backend starts, `POST /session`
+  times out) -> check the environment for `WEBKIT_INSPECTOR_HTTP_SERVER` or
+  `JSC_useJITDump`. tauri-driver and the app inherit the harness server's
+  environment, and with either one set the session does not attach; the same
+  run without the variable does. Unset both for harness runs. To profile the
+  frontend over the WebKit remote inspector, launch the app binary directly
+  and drive it over the inspector instead of through the harness.

@@ -1,15 +1,16 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
 import { systemCardTestId } from './helpers/testIds';
+import { recordIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
 
 /**
  * E2E for the destructive "Delete project" action (#118) - distinct from the
  * non-destructive "Remove from recent". Covers the GlobalView context-menu item,
  * its single-selection gating, and the confirm-dialog flow.
  *
- * The mocked `delete_project` (mocks/tauri-ipc.ts) just returns success, so these
- * assert the UI wiring; the recents-removal side effect is covered by the store
- * (vitest) and Rust tests.
+ * The mocked `delete_project` (mocks/tauri-ipc.ts) drops the path from the
+ * mocked recents list, as the backend does, so the confirm test can see the
+ * card go; the file-system side is covered by the store (vitest) and Rust tests.
  */
 
 const ALPHA = '/projects/cave-alpha.stalx';
@@ -35,7 +36,7 @@ test.describe('GlobalView - Delete project (destructive)', () => {
     await expect(page.getByTestId('context-menu-delete')).toBeVisible();
   });
 
-  test('Delete project opens a confirm dialog naming the project, and confirming deletes', async ({ page }) => {
+  test('Delete project opens a confirm dialog naming the project, and confirming deletes @smoke', async ({ page }) => {
     await page.getByTestId(systemCardTestId(ALPHA)).click({ button: 'right' });
     await page.getByTestId('context-menu-delete').click();
 
@@ -45,10 +46,16 @@ test.describe('GlobalView - Delete project (destructive)', () => {
     await expect(dialog).toContainText('/projects/cave-alpha.stalx');
     await expect(dialog).toContainText('It cannot be undone');
 
+    await recordIpcCalls(page, ['delete_project']);
     await page.getByTestId('delete-project-confirm').click();
-    // A successful delete closes the dialog.
+    // A successful delete closes the dialog...
     await expect(dialog).toBeHidden();
-    // Other loadable projects are unaffected.
+    // ...after sending exactly one delete, for ALPHA's file...
+    const calls = await waitForIpcCall(page, 'delete_project');
+    expect(calls.map((c) => c.args.path)).toEqual([ALPHA]);
+    // ...and ALPHA leaves the list (the recents refresh after the delete),
+    // while the other loadable projects are unaffected.
+    await expect(page.getByTestId(systemCardTestId(ALPHA))).toHaveCount(0);
     await expect(page.getByTestId(systemCardTestId(BETA))).toBeVisible();
   });
 

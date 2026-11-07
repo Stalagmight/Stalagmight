@@ -213,6 +213,27 @@ export function computeMergeOptions(
   return options;
 }
 
+/**
+ * The merge offset a suggestion opens with: the backend's
+ * `preferredMergeOffset` when it is one of `options`, else the deepest overlap;
+ * `null` when there is no option at all.
+ *
+ * The preferred offset is the one the matcher scored best among those that pass
+ * crossing clearance (`placement_suggest.rs`), so defaulting to the deepest
+ * instead joins the section - and trims its overlap - at a station the matcher
+ * ranked lower or skipped. One rule for both placement dialogs (#576 D12): the
+ * import wizard used to apply it and then overwrite it with the deepest.
+ */
+export function defaultMergeOffset(
+  options: MergeOption[],
+  preferredOffset: number | null | undefined,
+): number | null {
+  const preferred = preferredOffset != null
+    ? options.find((option) => option.offset === preferredOffset)
+    : undefined;
+  return (preferred ?? options[options.length - 1])?.offset ?? null;
+}
+
 // ─── Shot transformations ───────────────────────────────────────────────────
 
 /** Average two nullable numbers; returns null if both are null. */

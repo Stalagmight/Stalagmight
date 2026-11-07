@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 const sectionSeeds: SectionSeed[] = [
   {
@@ -310,10 +311,10 @@ test.describe('Panel Interactions', () => {
     // Drive the table to a section with shots via the app-wide selection
     // (the table follows external selection; its header no longer has a section dropdown)
     await page.evaluate(() => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       const section = e2e.projectStore
         .getState()
-        .project?.sections?.find((s: any) => s.name === 'Main Passage');
+        .project?.sections?.find((s) => s.name === 'Main Passage');
       if (!section) throw new Error('Main Passage section not found');
       e2e.uiStore.getState().setSelection({ type: 'section', sectionId: section.id });
     });

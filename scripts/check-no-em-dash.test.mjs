@@ -50,11 +50,32 @@ test('fires on every other banned code point', () => {
     [0x2013, 'U+2013 en dash'],
     [0x2015, 'U+2015 horizontal bar'],
     [0x2212, 'U+2212 minus sign'],
+    [0xfe58, 'U+FE58 small em dash'],
+    [0xfe63, 'U+FE63 small hyphen-minus'],
+    [0xff0d, 'U+FF0D fullwidth hyphen-minus'],
+    [0x2e3a, 'U+2E3A two-em dash'],
+    [0x2e3b, 'U+2E3B three-em dash'],
+    [0xfe31, 'U+FE31 vertical em dash'],
+    [0xfe32, 'U+FE32 vertical en dash'],
+    [0x2e40, 'U+2E40 double hyphen'],
+    [0x2e17, 'U+2E17 double oblique hyphen'],
+    [0x058a, 'U+058A Armenian hyphen'],
+    [0x2e5d, 'U+2E5D oblique hyphen'],
   ].map(([code, name]) => ({ code, name }))) {
     const hits = findDashes(`value ${ch(code)} other`);
     assert.equal(hits.length, 1, `${name} did not fire`);
     assert.equal(hits[0].name, name);
   }
+});
+
+test('fires on U+00AD soft hyphen, which renders as NOTHING inside a word', () => {
+  // The strongest case of the "a reviewer cannot see it" rationale: mid-word a
+  // soft hyphen is invisible, so `pro<U+00AD>ject` and `project` look identical
+  // in review and in a diff while comparing unequal (a test ID, a store key).
+  const hits = findDashes(`data-testid="pro${ch(0x00ad)}ject-row"`);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].name, 'U+00AD soft hyphen');
+  assert.equal(hits[0].col, 17);
 });
 
 test('fires on U+2010, which is visually identical to an ASCII hyphen', () => {
@@ -71,10 +92,10 @@ test('the en dash fires even in a numeric range (issue #293 q6-B)', () => {
   assert.equal(findDashes(`azimuth 0${ch(0x2013)}360`).length, 1);
 });
 
-test('BANNED covers exactly the seven code points this test pins', () => {
+test('BANNED covers exactly the nineteen code points this test pins', () => {
   assert.deepEqual(
-    BANNED.map((b) => b.code).sort(),
-    [0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212],
+    BANNED.map((b) => b.code).sort((a, b) => a - b),
+    [0x00ad, 0x058a, 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212, 0x2e17, 0x2e3a, 0x2e3b, 0x2e40, 0x2e5d, 0xfe31, 0xfe32, 0xfe58, 0xfe63, 0xff0d],
   );
 });
 
@@ -235,15 +256,65 @@ test('a NUL-bearing non-binary file is skipped AND fails the gate', () => {
   assert.equal(report(r, () => {}, () => {}), 1);
 });
 
-test('a symlink is not followed, and does NOT fail the gate', () => {
+test('a symlink is scanned as its link text, not followed, and a clean one passes', () => {
   // AGENTS.md -> CLAUDE.md is a real tracked symlink. Dereferencing it would let
-  // a fork PR point the scanner outside the repo; failing on it would block a
-  // legitimate link whose target is scanned on its own.
-  const r = scan(['AGENTS.md', 'CLAUDE.md'], (rel) => (rel === 'AGENTS.md' ? null : buf('clean')));
+  // a fork PR point the scanner outside the repo; its published content is the
+  // target string "CLAUDE.md", which is what gets scanned (NF-LINK).
+  const r = scan([{ rel: 'AGENTS.md', symlink: true }, 'CLAUDE.md'], (rel) => (rel === 'AGENTS.md' ? { symlink: 'CLAUDE.md' } : buf('clean')));
   assert.deepEqual(r.symlinks, ['AGENTS.md']);
   assert.equal(r.skipped.length, 0);
-  assert.equal(r.scanned, 1);
+  assert.equal(r.scanned, 2);
   assert.equal(report(r, () => {}, () => {}), 0);
+});
+
+test('a banned dash in a symlink TARGET string fails (it used to be skipped unread)', () => {
+  const r = scan([{ rel: 'docs/link.md', symlink: true }], () => ({ symlink: `plan${ch(0x2014)}draft.md` }));
+  assert.equal(r.violations.length, 1);
+  assert.equal(r.violations[0].link, true);
+  const lines = [];
+  assert.equal(report(r, () => {}, (m) => lines.push(m)), 1);
+  assert.ok(lines.some((l) => l.includes('"docs/link.md" (symlink target):1:5')), lines.join('\n'));
+});
+
+test('a dangling symlink is just its (clean) link text: no read error, no fail', () => {
+  // The leak guard used to fail this as unreadable while this guard passed it;
+  // both now read the link text, so both give the same verdict.
+  const r = scan([{ rel: 'x.md', symlink: true }], () => ({ symlink: 'nowhere.md' }));
+  assert.equal(r.skipped.length, 0);
+  assert.equal(report(r, () => {}, () => {}), 0);
+});
+
+test('a symlink with a binary extension is still scanned (its content is text)', () => {
+  const r = scan([{ rel: 'docs/logo.png', symlink: true }], () => ({ symlink: `a${ch(0x2013)}b.png` }));
+  assert.equal(r.violations.length, 1);
+  assert.ok(isExcluded('docs/logo.png'), 'a regular .png is still excluded');
+});
+
+test('a banned dash only in a file PATH fails, though the content is clean (#576 E18(e))', () => {
+  const r = scan([`docs/plan${ch(0x2014)}draft.md`], () => buf('clean ascii text'));
+  assert.equal(r.violations.length, 1);
+  assert.equal(r.violations[0].path, true);
+  const lines = [];
+  assert.equal(report(r, () => {}, (m) => lines.push(m)), 1);
+  assert.ok(lines.some((l) => l.includes('(path):10  U+2014 em dash')), lines.join('\n'));
+});
+
+test('a dash in the name of an EXCLUDED file still fails; its content is still not read', () => {
+  const read = [];
+  const r = scan([`docs/logo${ch(0x2013)}dark.png`, `src-tauri/vendor/a${ch(0x2010)}b.rs`], (rel) => { read.push(rel); return buf(''); });
+  assert.deepEqual(read, []);
+  assert.equal(r.violations.length, 2);
+});
+
+test('the CLAUDE.md ALLOW budget covers its content, never a path', () => {
+  const r = scan([`CLAUDE${ch(0x2014)}.md`], () => buf('clean'));
+  assert.equal(r.violations.length, 1, 'ALLOW rows are per file CONTENT; a path hit is never budgeted');
+});
+
+test('a reader result that is neither bytes nor a symlink fails closed', () => {
+  const r = scan(['odd.md'], () => null);
+  assert.equal(r.skipped.length, 1);
+  assert.equal(report(r, () => {}, () => {}), 1);
 });
 
 // --- CI log safety -------------------------------------------------------------

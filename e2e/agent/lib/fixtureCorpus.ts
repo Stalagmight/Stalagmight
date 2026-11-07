@@ -399,7 +399,7 @@ export function corpusLookup(reference: string): CorpusLookup {
       ? (entry) => entry.id
       : (entry) => entry.relPath;
   const matches = entries.filter((entry) => key(entry) === reference);
-  if (matches.length === 1) return { outcome: 'found', entry: matches[0], matches: 1 };
+  if (matches.length === 1) return { outcome: 'found', entry: matches[0]!, matches: 1 };
   if (matches.length === 0) return { outcome: 'missing', entry: null, matches: 0 };
   return { outcome: 'ambiguous', entry: null, matches: matches.length };
 }
@@ -602,7 +602,7 @@ export function materializeCorpusEntry(
       const segments = file.rel.split('/');
       for (const segment of segments) names.add(segment);
       if (segments.length > 1) {
-        const top = segments[0];
+        const top = segments[0]!;
         if (!createdTop.includes(top) && !fs.existsSync(path.join(destDir, top))) createdTop.push(top);
         fs.mkdirSync(path.dirname(path.join(destDir, ...segments)), { recursive: true });
       } else if (!createdTop.includes(file.rel)) {
@@ -674,4 +674,347 @@ export function describeCorpus(inventory: CorpusInventory): string {
         `resolve to nothing on replay - a trace's pathHash is what resolves them`
       : '')
   );
+}
+
+/**
+ * What printed output must never contain once an entry has been copied, and
+ * what to say instead - ONE list per PROCESS.
+ *
+ * The copy keeps its real names on disk (see `materializeCorpusEntry`), and the
+ * app echoes them back: an import that fails quotes the path it was handed, and
+ * that text reaches a scenario's failure message, the error log the oracle sweep
+ * reports, and whatever a runner prints. The scenario that materializes the copy
+ * is the only code that knows the names, and the runners that print are not in
+ * its closure - so the list lives here, beside the rule, and every printer runs
+ * its text through `redactCorpusText` (#576 HFI-13). Empty, and therefore a
+ * no-op, in any process that never copied a corpus entry.
+ */
+const REDACTED_DIRS: Redaction[] = [];
+const REDACTED_NAMES: Redaction[] = [];
+/**
+ * A path segment this short identifies nothing, and replacing it everywhere
+ * would garble every line it occurs in (a Walls `.PATH` folder named `1`, a
+ * Compass folder `A2`). Counted in characters (code points of the composed
+ * form), so one letter macOS writes decomposed is one.
+ */
+export const MIN_REDACTED_NAME = 3;
+/**
+ * The minimum for a name with a character outside ASCII (#576 RV19b-P4). The
+ * garbling reason is ASCII's: the harness writes ASCII, so a name in another
+ * script occurs only where the app's text quotes it - and two CJK characters
+ * are a whole cave name.
+ */
+const MIN_REDACTED_NON_ASCII_NAME = 2;
+
+/** Is `name` long enough to fold (`MIN_REDACTED_NAME`, `MIN_REDACTED_NON_ASCII_NAME`)? */
+function foldsName(name: string): boolean {
+  const chars = Array.from(name.normalize('NFC')).length;
+  return chars >= MIN_REDACTED_NAME || (chars >= MIN_REDACTED_NON_ASCII_NAME && /[^\x00-\x7f]/.test(name));
+}
+
+/** One registered name (or copy directory), and what it folds to. */
+interface Redaction {
+  /** The name as it is on disk, or one of its Unicode normal forms; the list is ordered by its length. */
+  readonly text: string;
+  readonly say: string;
+  /**
+   * A run of the name that every form keeps verbatim (letters, digits and
+   * `-._~`, which no escape and no URL encoder touches), checked with
+   * `includes` before the pattern runs; empty when the name has none.
+   */
+  readonly anchor: string;
+  readonly pattern: RegExp;
+}
+
+/** One or more backslashes: an escape written once, or escaped again (JSON of a `{:?}` form, and so on). */
+const BACKSLASHES = '\\\\+';
+/** A byte `{:?}` writes as `\xHH`, after its backslashes. */
+const BYTE = 'x[0-9A-Fa-f]{2}';
+/**
+ * Where a character sits in the name, which decides how its escapes take the
+ * backslashes in front of them (#576 RV18-W23-1). Taken as `BACKSLASHES`
+ * everywhere, a run of N backslashes was tried from each of its N backslashes
+ * and read to its end each time, and two runs side by side (a backslash of the
+ * name before an escaped character) split it every way there is: 40k
+ * backslashes took seconds, a 1 MB line did not finish.
+ * - `first`: an escape starts where a run of backslashes (or of `\xHH` bytes)
+ *   starts, never inside one. It folds the same text - a match from inside a
+ *   run also matches from the run's start, the extra backslashes taken in -
+ *   and each run is read once.
+ * - `afterBackslash`: the name's backslash before it (`BACKSLASHES`) has taken
+ *   the run, so an escape takes exactly one more backslash and a quote none.
+ *   `\\+\\u` and `\\+"` match what `\\+\\+u` and `\\+\\*"` did, one way only.
+ * - `inside`: after any other character, as before - the match comes to a run
+ *   from that character, so at the run's start.
+ */
+type CharAt = 'first' | 'afterBackslash' | 'inside';
+/** Escapes that name a control character, Rust's (`\0`) and JSON's (`\b`, `\f`) together. */
+const NAMED_ESCAPES: Readonly<Record<string, string>> = { '\n': 'n', '\r': 'r', '\t': 't', '\0': '0', '\b': 'b', '\f': 'f' };
+
+/** `value` in hex, at least `width` digits, each letter matching either case. */
+function hexPattern(value: number, width: number): string {
+  return value
+    .toString(16)
+    .padStart(width, '0')
+    .replace(/[a-f]/g, (digit) => `[${digit}${digit.toUpperCase()}]`);
+}
+
+/** What a URL encoder leaves as it is (RFC 3986 unreserved); every other character it may write `%HH`. */
+const UNRESERVED = /^[A-Za-z0-9._~-]$/;
+
+/** `c` percent-encoded: its UTF-8 bytes, each `%HH` in either case. */
+function percentPattern(c: string): string {
+  return Array.from(Buffer.from(c, 'utf8'), (byte) => `%${hexPattern(byte, 2)}`).join('');
+}
+
+/** The named references an HTML writer uses for markup characters. */
+const HTML_NAMED: Readonly<Record<string, string>> = { '&': 'amp', '<': 'lt', '>': 'gt', '"': 'quot', "'": 'apos' };
+
+/**
+ * `c` as an HTML writer may write it (#576 RV19b-P5): a numeric character
+ * reference, decimal or hex in either case with any leading zeros, and for a
+ * markup character its named one (`&amp;`).
+ */
+function htmlPattern(c: string): string {
+  const code = c.codePointAt(0) ?? 0;
+  const named = HTML_NAMED[c];
+  return [`&#0*${code};`, `&#[xX]0*${hexPattern(code, 1)};`, ...(named === undefined ? [] : [`&${named};`])].join('|');
+}
+
+/**
+ * What one character of a name can look like in text the app wrote and the
+ * harness read back (#576 RV17-1). Printable ASCII is itself - `"` and `\` with
+ * any number of backslashes in front, one level of escaping per layer (Rust's
+ * `{:?}`, then JSON around it). Every other character - a control, and ANY
+ * non-ASCII one - is itself or one of its escapes, at any depth: Rust's
+ * `\u{hex}` (`{:?}` writes it for a combining mark, a no-break or zero-width
+ * space, a C1 control, ... - the set follows Unicode, so it is not listed),
+ * JSON's `\uXXXX` (an ASCII-only encoder writes one for every non-ASCII
+ * character, past U+FFFF a surrogate pair), and a control's named escape.
+ * U+FFFD also stands for bytes that are not UTF-8: Node reads such a file name
+ * with U+FFFD in their place, and Rust's `{:?}` of the path writes them `\xHH`.
+ * Any character but a letter, a digit and `-._~` is also its percent-encoding,
+ * as a `file://` URL writes it (`Caf%C3%A9%20Nord.srv`, #576 RV18-W23-5), and
+ * its HTML character reference (`htmlPattern`); a space is also the `+` a form
+ * encoder writes (#576 RV19b-P5).
+ * `at` is where `c` sits in the name (`CharAt`).
+ */
+function charPattern(c: string, at: CharAt): string {
+  const lead = at === 'afterBackslash' ? '\\\\' : at === 'first' ? `(?<!\\\\)${BACKSLASHES}` : BACKSLASHES;
+  // Its percent-encoding and its HTML references.
+  const encoded = `${percentPattern(c)}|${htmlPattern(c)}`;
+  if (c === '"') {
+    const quote = at === 'afterBackslash' ? '"' : at === 'first' ? '(?<!\\\\)\\\\*"' : '\\\\*"';
+    return `(?:${quote}|${encoded})`;
+  }
+  if (c === '\\') return `(?:${lead}|${encoded})`;
+  const code = c.codePointAt(0) ?? 0;
+  if (code >= 0x20 && code < 0x7f) {
+    const literal = c.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
+    if (UNRESERVED.test(c)) return literal;
+    return `(?:${literal}|${encoded}${c === ' ' ? '|\\+' : ''})`;
+  }
+  let json = '';
+  for (let i = 0; i < c.length; i++) json += `${i === 0 ? lead : BACKSLASHES}u${hexPattern(c.charCodeAt(i), 4)}`;
+  const forms = [c, `${lead}u\\{0*${hexPattern(code, 1)}\\}`, json, encoded];
+  const named = NAMED_ESCAPES[c];
+  if (named !== undefined) forms.push(`${lead}${named}`);
+  if (code === 0xfffd) {
+    const notAfterByte = at === 'first' ? `(?<!\\\\${BYTE})` : '';
+    forms.push(`${notAfterByte}${lead}${BYTE}(?:${BACKSLASHES}${BYTE})*`);
+  }
+  return `(?:${forms.join('|')})`;
+}
+
+function redactionFor(text: string, say: string): Redaction {
+  const runs = text.match(/[A-Za-z0-9._~-]+/g) ?? [];
+  const anchor = runs.reduce((longest, run) => (run.length > longest.length ? run : longest), '');
+  const chars = Array.from(text);
+  const at = (i: number): CharAt => (i === 0 ? 'first' : chars[i - 1] === '\\' ? 'afterBackslash' : 'inside');
+  return { text, say, anchor, pattern: new RegExp(chars.map((c, i) => charPattern(c, at(i))).join('')) };
+}
+
+/**
+ * Every tag the fold writes (`Redaction.say`), and the longest one's length.
+ * The fold leaves each of these as it finds it (#576 W33-NF4): a line is folded
+ * more than once on its way out (a tool result folded, cut, and folded again
+ * into the action log), and a corpus name that occurs inside a tag - `corpus`,
+ * `file`, the id - turned `<corpus #id>/file` into `<<corpus #id>/file #id>/...`
+ * on the second fold, and on the first when an earlier name's tag held it.
+ */
+const FOLD_TAGS = new Set<string>();
+let longestFoldTag = 0;
+const TAG_OPEN = '<corpus #';
+const TAG_FILE = '/file';
+
+/**
+ * Register one materialized entry: its copy directory, and every file and
+ * directory name the copy created at any depth (`MaterializedCorpusEntry.names`),
+ * each matched in every escaped form it can take (`charPattern`), folded to the
+ * same tag.
+ */
+export function registerCorpusRedactions(id: string, destination: string, names: readonly string[]): void {
+  const tag = `${TAG_OPEN}${id}>`;
+  // Each in both Unicode normal forms too (#576 RV18-W23-5): a macOS file name
+  // comes decomposed (`e` then U+0301), and a layer that normalizes it on the
+  // way writes it composed (U+00E9) - or the other way round.
+  const add = (list: Redaction[], text: string, say: string): void => {
+    for (const form of new Set([text, text.normalize('NFC'), text.normalize('NFD')])) {
+      if (!list.some((entry) => entry.text === form)) list.push(redactionFor(form, say));
+    }
+    FOLD_TAGS.add(say);
+    longestFoldTag = Math.max(longestFoldTag, say.length);
+  };
+  if (destination !== '') add(REDACTED_DIRS, destination, tag);
+  for (const name of names) {
+    if (!foldsName(name)) continue;
+    add(REDACTED_NAMES, name, `${tag}${TAG_FILE}`);
+  }
+  // Longest first, so a name that is a prefix of another cannot leave the
+  // other's tail behind (`cave` before `cave-north.srv` would print `-north.srv`,
+  // and `corpus-3` before `corpus-30` would tag the wrong entry).
+  REDACTED_DIRS.sort((a, b) => b.text.length - a.text.length);
+  REDACTED_NAMES.sort((a, b) => b.text.length - a.text.length);
+}
+
+/**
+ * `text` cut at every tag the fold writes (`FOLD_TAGS`), as `[raw, tag, raw,
+ * ..., raw]` - raw text at every even index. A tag reads from `<corpus #` to the
+ * first `>`, and on through `/file` when that is a tag too; any other text that
+ * starts `<corpus #` is raw, so a name in it still folds. Linear in `text`: no
+ * stretch is searched for `>` twice, and a candidate longer than every tag is
+ * not looked up.
+ */
+function splitAtTags(text: string): string[] {
+  const parts: string[] = [];
+  let from = 0;
+  let close = -1;
+  for (let at = text.indexOf(TAG_OPEN); at !== -1; ) {
+    if (close < at) close = text.indexOf('>', at + TAG_OPEN.length);
+    if (close === -1) break;
+    let tag: string | null = null;
+    if (close + 1 - at <= longestFoldTag) {
+      const head = text.slice(at, close + 1);
+      if (text.startsWith(TAG_FILE, close + 1) && FOLD_TAGS.has(head + TAG_FILE)) tag = head + TAG_FILE;
+      else if (FOLD_TAGS.has(head)) tag = head;
+    }
+    if (tag === null) {
+      at = text.indexOf(TAG_OPEN, at + 1);
+      continue;
+    }
+    parts.push(text.slice(from, at), tag);
+    from = at + tag.length;
+    at = text.indexOf(TAG_OPEN, from);
+  }
+  parts.push(text.slice(from));
+  return parts;
+}
+
+/**
+ * `run` (raw text) with every match of `entry` replaced by its tag, pushed onto
+ * `parts` as `raw, tag, raw, ..., raw`. Each search runs on what follows the
+ * last match as a string of its own, so a match is an edge exactly as the tag
+ * that replaces it is to the next fold (#576 W33-NF4). Searched in place, a
+ * name that ends in a backslash and was written twice in a row folded once:
+ * its backslash read as an escape of the second one's opening quote
+ * (`(?<!\\)` in `charPattern`), so the second one printed - until a second
+ * fold, which saw a tag there instead, folded it.
+ *
+ * The run of backslashes a match opens with - the escape of the name's first
+ * character, `\"` or `\u00e9` - is left as raw text before the tag, its length
+ * in `lent` at the tag's index (0 at a raw part's), for a shorter name that ends
+ * in a backslash to fold with (#576 W39-NF5): names fold longest first, and in
+ * `qzab\"qzlonger.dmp` the longer name took the backslash of `qzab\`, which
+ * then printed. `redactCorpusText` gives the tag back what no name took.
+ */
+function foldRun(run: string, entry: Redaction, parts: string[], lent: number[]): void {
+  let rest = run;
+  for (let match = entry.pattern.exec(rest); match !== null; match = entry.pattern.exec(rest)) {
+    const opening = /^\\+/.exec(match[0])?.[0].length ?? 0;
+    parts.push(rest.slice(0, match.index + opening), entry.say);
+    lent.push(0, opening);
+    rest = rest.slice(match.index + match[0].length);
+  }
+  parts.push(rest);
+  lent.push(0);
+}
+
+/**
+ * `text` with every registered copy directory and corpus name replaced by the
+ * entry's publishable tag. Directories go first, so a full path is folded whole
+ * rather than leaving `<corpus #id>/<basename>` behind.
+ *
+ * A tag is never folded again, whether this call wrote it or `text` already
+ * held it (#576 W33-NF4): each name is looked for only in the raw text between
+ * tags, so folding a folded line changes nothing.
+ */
+export function redactCorpusText(text: string): string {
+  let parts = splitAtTags(text);
+  let lent = parts.map(() => 0);
+  for (const list of [REDACTED_DIRS, REDACTED_NAMES]) {
+    for (const entry of list) {
+      if (entry.anchor !== '' && !parts.some((part, i) => i % 2 === 0 && part.includes(entry.anchor))) continue;
+      const next: string[] = [];
+      const nextLent: number[] = [];
+      for (let i = 0; i < parts.length; i++) {
+        if (i % 2 === 0) foldRun(parts[i]!, entry, next, nextLent);
+        else {
+          next.push(parts[i]!);
+          nextLent.push(lent[i]!);
+        }
+      }
+      parts = next;
+      lent = nextLent;
+    }
+  }
+  // What a match lent (`foldRun`) and no name ending in a backslash took is the
+  // escape of the match's first character: its tag takes it back, so the line
+  // reads as it did before W39-NF5.
+  for (let i = 1; i < parts.length; i += 2) {
+    const back = lent[i]!;
+    if (back > 0 && parts[i - 1]!.endsWith('\\'.repeat(back))) parts[i - 1] = parts[i - 1]!.slice(0, -back);
+  }
+  return parts.join('');
+}
+
+/**
+ * `text` folded, THEN cut to its first `max` characters (#576 W33-NF3). The
+ * order is the point (RV18-W23-6): a cut through a corpus name leaves a stub
+ * that no fold matches, and its start prints. A cut through a tag leaves only
+ * a piece of the tag.
+ */
+export function foldThenCut(text: string, max: number): string {
+  return redactCorpusText(text).slice(0, max);
+}
+
+/**
+ * `value` as it may be recorded: every string in it, keys included, through
+ * `redactCorpusText` (#576 RV13-4). String by string rather than over the JSON
+ * text, so a name that JSON would escape (a quote, a backslash) is still found,
+ * and folding cannot break the encoding. A value with `toJSON` (a Date) is
+ * folded in the form JSON would write. Returns `value` itself when no corpus
+ * entry was copied in this process.
+ */
+export function redactCorpusValue(value: unknown): unknown {
+  if (REDACTED_DIRS.length === 0 && REDACTED_NAMES.length === 0) return value;
+  return foldValue(value);
+}
+
+function foldValue(value: unknown): unknown {
+  if (typeof value === 'string') return redactCorpusText(value);
+  if (Array.isArray(value)) return value.map(foldValue);
+  if (value === null || typeof value !== 'object') return value;
+  const toJSON = (value as { toJSON?: unknown }).toJSON;
+  if (typeof toJSON === 'function') return foldValue((toJSON as () => unknown).call(value));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactCorpusText(key), foldValue(item)]));
+}
+
+/**
+ * An error's message as it may be recorded or returned: `err.message` (or the
+ * thrown value as text) through `redactCorpusText`. An import that fails quotes
+ * the corpus copy it was handed, and the MCP server records a tool's error in the
+ * session's action log, which the repro report prints (#576 RV12-F1).
+ */
+export function publishableErrorMessage(err: unknown): string {
+  return redactCorpusText(err instanceof Error ? err.message : String(err));
 }

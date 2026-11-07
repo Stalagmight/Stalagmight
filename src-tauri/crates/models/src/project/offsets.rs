@@ -10,6 +10,90 @@ use tracing::error;
 
 use crate::{ClosureStrategy, LoopClosure, SectionId, StationKey, StationMerge, StationRef};
 
+/// [#576 RV15-4] Test-only: the panic [`Project::debug_assert_merge_alignment`]
+/// raises in test builds, held back on this thread while a test holds the guard
+/// [`merge_alignment_assert::suspend`] returns (the `error!` log still fires). A
+/// test that checks merge alignment itself, more tightly, suspends it so that its
+/// own check is the one that fails and says what it measured - otherwise the
+/// product's 0.01 m tripwire inside the command shadows it.
+#[cfg(test)]
+pub(super) mod merge_alignment_assert {
+    use std::cell::Cell;
+
+    thread_local! {
+        /// How many guards are alive on this thread ([#576 RV17-5]: a count,
+        /// not a saved flag, so the order the guards drop in does not matter).
+        static DEPTH: Cell<u32> = const { Cell::new(0) };
+    }
+
+    /// Holds the panic back until dropped. Nested guards count: the suspension
+    /// ends when the last live guard drops, whichever order they drop in
+    /// ([#576 RV16-4]: a nested guard used to end the outer suspension;
+    /// [#576 RV17-5]: putting back a saved flag left the thread suspended when
+    /// the outer guard dropped first).
+    #[must_use = "the panic is held back only while the guard lives"]
+    pub(in crate::project) struct Suspended {
+        _private: (),
+    }
+
+    impl Drop for Suspended {
+        fn drop(&mut self) {
+            DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        }
+    }
+
+    pub(in crate::project) fn suspend() -> Suspended {
+        DEPTH.with(|d| d.set(d.get().saturating_add(1)));
+        Suspended { _private: () }
+    }
+
+    pub(super) fn is_suspended() -> bool {
+        DEPTH.with(Cell::get) > 0
+    }
+
+    mod tests {
+        use super::{is_suspended, suspend};
+
+        /// [#576 RV16-4] A guard restores what it found, so an inner suspension
+        /// ending does not end the outer one early.
+        #[test]
+        fn dropping_a_nested_guard_keeps_the_outer_suspension() {
+            assert!(!is_suspended());
+            let outer = suspend();
+            {
+                let _inner = suspend();
+                assert!(is_suspended());
+            }
+            let after_inner = is_suspended();
+            drop(outer);
+            let after_outer = is_suspended();
+            assert_eq!(
+                (after_inner, after_outer),
+                (true, false),
+                "suspended after the inner guard dropped, after the outer guard dropped"
+            );
+        }
+
+        /// [#576 RV17-5] Dropped out of order - the outer guard first - the
+        /// suspension still lasts while any guard lives and ends with the last.
+        #[test]
+        fn dropping_the_outer_guard_first_still_ends_with_the_last_guard() {
+            assert!(!is_suspended());
+            let outer = suspend();
+            let inner = suspend();
+            drop(outer);
+            let after_outer = is_suspended();
+            drop(inner);
+            let after_inner = is_suspended();
+            assert_eq!(
+                (after_outer, after_inner),
+                (true, false),
+                "suspended after the outer guard dropped, after the inner guard dropped"
+            );
+        }
+    }
+}
+
 use super::union_find::UnionFind;
 use super::Project;
 
@@ -208,9 +292,10 @@ impl Project {
     /// * this function is THE write point, and everything routes through it -
     ///   [`Self::adjust_section_offset`], [`Self::set_section_offset`],
     ///   [`Self::restore_section_offsets`], the offset solver, the closure solve,
-    ///   the move tools, the undo restore arms, and the two sites that cannot call
-    ///   a `&mut self` method because they hold a live borrow of `self.sections`
-    ///   (`Project::apply_station_move_internal`, `AppState::move_station`);
+    ///   the move tools, the undo restore arms, and the site that cannot call a
+    ///   `&mut self` method because it holds a live borrow of `self.sections`
+    ///   (`Project::apply_station_move_internal`). The map is private (#576
+    ///   A10), so code outside this module cannot write it any other way;
     /// * [`Self::normalize_section_offsets`] enforces it on a map this app did not
     ///   write - a `.stalx` from a build that predates the invariant, and the
     ///   snapshot payload of an undo entry persisted by one.
@@ -265,6 +350,27 @@ impl Project {
         }
     }
 
+    /// [#576 B35(h)] Reset every non-finite component of a station offset to 0,
+    /// keeping the finite ones, and return how many offsets had one.
+    ///
+    /// The station-offset twin of the section-offset guard at the load boundary
+    /// and in `save_project`'s heals. A station offset is added straight into
+    /// world coordinates, so one infinite component turns that station - and the
+    /// gap metrics and loop-closure solve that read it - into infinities. NaN
+    /// cannot be stored in a `REAL NOT NULL` column, but +/-Inf can. Takes the map
+    /// so the persistence loader can run it before a `Project` exists.
+    pub fn sanitize_station_offsets(offsets: &mut HashMap<StationKey, (f64, f64, f64)>) -> usize {
+        let finite = |v: f64| if v.is_finite() { v } else { 0.0 };
+        let mut sanitized = 0;
+        for offset in offsets.values_mut() {
+            if !(offset.0.is_finite() && offset.1.is_finite() && offset.2.is_finite()) {
+                *offset = (finite(offset.0), finite(offset.1), finite(offset.2));
+                sanitized += 1;
+            }
+        }
+        sanitized
+    }
+
     /// Drop every `section_offsets` entry that violates the invariant on
     /// [`Self::write_section_offset`], and report how many went.
     ///
@@ -298,6 +404,31 @@ impl Project {
         );
     }
 
+    /// Every displaced section's offset, read-only (#576 A10). Writes go
+    /// through [`Self::set_section_offset`] / [`Self::adjust_section_offset`] /
+    /// [`Self::remove_section_offset`], i.e. through
+    /// [`Self::write_section_offset`], so no caller can store the dust-zero
+    /// spelling of "not displaced".
+    ///
+    /// The map itself is private, so nothing outside this module can store a
+    /// value past that invariant:
+    ///
+    /// ```compile_fail
+    /// let mut project = stalagmight_models::Project::new("CaveA".to_owned(), None);
+    /// project.section_offsets.insert(0, (1.0, 2.0));
+    /// ```
+    ///
+    /// ```
+    /// let mut project = stalagmight_models::Project::new("CaveA".to_owned(), None);
+    /// project.set_section_offset(0, (1.0, 2.0));
+    /// project.set_section_offset(1, (0.0, 0.0));
+    /// assert_eq!(project.section_offsets().get(&0), Some(&(1.0, 2.0)));
+    /// assert!(!project.section_offsets().contains_key(&1));
+    /// ```
+    pub fn section_offsets(&self) -> &HashMap<SectionId, (f64, f64)> {
+        &self.section_offsets
+    }
+
     /// Set an exact offset value (for undo restoration / initial placement).
     pub fn set_section_offset(&mut self, id: SectionId, offset: (f64, f64)) {
         Self::write_section_offset(&mut self.section_offsets, id, offset);
@@ -306,6 +437,25 @@ impl Project {
     /// Remove a section's offset entry entirely.
     pub fn remove_section_offset(&mut self, id: SectionId) {
         self.section_offsets.remove(&id);
+    }
+
+    /// [#576 A10] Drop the offset of every section that no longer exists and
+    /// return how many were dropped: `save_project`'s orphan heal (the SQLite
+    /// row carries a FOREIGN KEY to `sections(id)`, so one orphan would abort
+    /// the whole save). Removal only, so it cannot break the dust-zero invariant.
+    pub fn drop_orphan_section_offsets(&mut self) -> usize {
+        let existing: HashSet<SectionId> = self.sections.iter().map(|s| s.id).collect();
+        let before = self.section_offsets.len();
+        self.section_offsets.retain(|id, _| existing.contains(id));
+        before - self.section_offsets.len()
+    }
+
+    /// Store `value` for `id` exactly as given, UNCHECKED - for tests that must
+    /// build a state the writers above refuse (a dust-zero, non-finite or orphan
+    /// row, a legacy file's map). Never compiled into a production build.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_raw_section_offset(&mut self, id: SectionId, value: (f64, f64)) {
+        self.section_offsets.insert(id, value);
     }
 
     /// Apply the same delta to every section in a merge group.
@@ -721,7 +871,8 @@ impl Project {
                     }
                     #[cfg(test)]
                     debug_assert!(
-                        dist < Self::MERGE_ALIGNMENT_INVARIANT_M,
+                        merge_alignment_assert::is_suspended()
+                            || dist < Self::MERGE_ALIGNMENT_INVARIANT_M,
                         "Merge alignment violated after {context}: stations {a_ref:?} and {b_ref:?} \
                          are {dist:.6}m apart (threshold {threshold}m). \
                          A=({ax:.6}, {ay:.6}), B=({bx:.6}, {by:.6})",

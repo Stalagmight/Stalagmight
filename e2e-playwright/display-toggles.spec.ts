@@ -272,7 +272,7 @@ test.describe('Selection Blocking When Hidden', () => {
     expect(box).not.toBeNull();
 
     // Click on the known station location
-    await page.mouse.click(box!.x + targetStation.x, box!.y + targetStation.y);
+    await page.mouse.click(box!.x + targetStation!.x, box!.y + targetStation!.y);
 
     // Verify selection is blocked (no station selected)
     await expect.poll(async () => {
@@ -317,7 +317,7 @@ test.describe('Selection Blocking When Hidden', () => {
   test('no hover effect on hidden stations', async ({ page }) => {
     // Wait for the stations to be drawn, then take their positions.
     // waitForDrawnStations guarantees at least one, so no empty-data skip is needed.
-    const [targetStation] = await waitForDrawnStations(page, 1);
+    const [targetStation] = await waitForDrawnStations(page, 1); // guarantees at least one
 
     // Hide stations
     await openDisplayMenu(page);
@@ -330,7 +330,7 @@ test.describe('Selection Blocking When Hidden', () => {
     expect(box).not.toBeNull();
 
     // Move mouse to known station position
-    await page.mouse.move(box!.x + targetStation.x, box!.y + targetStation.y);
+    await page.mouse.move(box!.x + targetStation!.x, box!.y + targetStation!.y);
 
     // Verify no hovered station
     await expect.poll(async () => {
@@ -690,6 +690,7 @@ test.describe('Merge Tool Interaction', () => {
 
   test('merge operation canceled when stations hidden mid-merge', async ({ page }) => {
     // Unlike draw, merge requires visible stations to select targets
+    // In range: beforeEach waited for at least one drawn station.
     const [station] = await getStationScreenPositions(page);
 
     // Switch to merge tool
@@ -699,7 +700,7 @@ test.describe('Merge Tool Interaction', () => {
     await page.evaluate((ref) => {
       const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { setMergeStationA: (ref: unknown) => void } } } }).__E2E_TEST__;
       stores?.uiStore?.getState()?.setMergeStationA(ref);
-    }, { section_id: station.sectionId, station_index: station.stationIndex });
+    }, { section_id: station!.sectionId, station_index: station!.stationIndex });
 
     // Verify merge station A is set
     await expect.poll(async () => {

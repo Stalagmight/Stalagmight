@@ -11,11 +11,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { act, render, screen, waitFor, renderHook } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import SystemTable from '../SystemTable';
 import SystemCard from '../SystemCard';
@@ -25,6 +22,7 @@ import type { ProjectMetadata } from '../../../types/project';
 import { useSpeleoLocalStates } from '../../../hooks/useSpeleoLocalStates';
 import { UNPUSHED_ACCENT, type SpeleoLocalStateMap } from '../../../utils/speleoLocalState';
 import { testIdPart } from '../../../utils/testId';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../../test/factories/ipc';
 
 const DIRTY = 'aaaaaaaa-1111-1111-1111-111111111111';
 const CLEAN = 'bbbbbbbb-2222-2222-2222-222222222222';

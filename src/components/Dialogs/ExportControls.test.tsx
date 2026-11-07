@@ -22,7 +22,7 @@ import userEvent from '@testing-library/user-event';
 
 // The text assertions below need live i18n; today it loads transitively through
 // projectStore's own import, but that is nobody's contract - import it directly.
-import '../../i18n';
+import i18n from '../../i18n';
 
 vi.mock('../../utils/fileDialogs', () => ({
   saveDialog: vi.fn(),
@@ -30,10 +30,7 @@ vi.mock('../../utils/fileDialogs', () => ({
   ensureExtension: vi.fn((p: string) => p),
 }));
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-}));
+vi.mock('../../utils/telemetry', async () => (await import('../../test/factories/telemetry')).telemetryWith());
 
 import ExportControls from './ExportControls';
 import { useProjectStore } from '../../store/projectStore';
@@ -137,6 +134,33 @@ describe('TML export unanchored-section notice', () => {
     expect(dialog).toHaveTextContent('Nothing is discarded');
     expect(dialog).not.toHaveTextContent('entrance');
     expect(saveDialog).not.toHaveBeenCalled();
+  });
+
+  // [#576 NF-W8FE-1] The fix the notice names is the station context menu's item,
+  // read from that item's own key: a renamed menu item cannot leave the notice
+  // quoting a label that is no longer there.
+  it.each([
+    ['all unanchored', [] as number[]],
+    ['some unanchored', [1]],
+  ])('quotes the context-menu item by its own label (%s)', async (_case, anchored) => {
+    const original = i18n.t('contextMenu.setZeroDatum');
+    i18n.addResource('en', 'translation', 'contextMenu.setZeroDatum', 'TEST anchor item');
+    try {
+      getAnchoredSectionIds.mockResolvedValue(anchored);
+      useProjectStore.setState({
+        project: buildProject([section(1), section(2), section(3)], anchored.length ? [ZERO_DATUM] : []),
+        getAnchoredSectionIds,
+        exportTml,
+      });
+
+      render(<ExportControls {...baseProps} />);
+      await userEvent.click(screen.getByTestId('export-button'));
+
+      const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
+      expect(dialog).toHaveTextContent('choose "TEST anchor item"');
+    } finally {
+      i18n.addResource('en', 'translation', 'contextMenu.setZeroDatum', original);
+    }
   });
 
   it('uses singular wording for exactly one unanchored section', async () => {

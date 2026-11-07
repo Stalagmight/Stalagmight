@@ -16,6 +16,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 
+import '../../i18n';
 import { DialogWrapper } from './DialogWrapper';
 
 let rafCallbacks: FrameRequestCallback[];
@@ -106,5 +107,30 @@ describe('DialogWrapper initial-focus rAF (#289)', () => {
     // heuristic would run against the (inert) main content and pull focus
     // out of the confirm overlay.
     expect(alertWrapper).toHaveFocus();
+  });
+
+  // #576 D20: the X button's aria-label is translated now, so the Priority 4
+  // pass ("first enabled button that is NOT the close X") cannot recognise it
+  // by its English label. In another language it used to land on the X, the
+  // first button in DOM order, instead of the dialog's own first button.
+  it('skips the close X in any language (it is found by marker, not by label)', async () => {
+    const { default: i18n } = await import('../../i18n');
+    i18n.addResourceBundle('xx', 'translation', { dialogs: { dialogWrapper: { closeDialog: 'Fermer' } } }, true, true);
+    // jsdom lays nothing out; give every element a box so Priority 4 can pick one.
+    vi.spyOn(HTMLElement.prototype, 'getClientRects').mockReturnValue([{}] as unknown as DOMRectList);
+    await i18n.changeLanguage('xx');
+    try {
+      render(
+        <DialogWrapper title="Focus test" onClose={() => {}}>
+          <button type="button" data-testid="body-button">Go</button>
+        </DialogWrapper>,
+      );
+      expect(screen.getByLabelText('Fermer')).toBeInTheDocument();
+      rafCallbacks.forEach((cb) => cb(0));
+      expect(screen.getByTestId('body-button')).toHaveFocus();
+    } finally {
+      vi.restoreAllMocks();
+      await i18n.changeLanguage('en');
+    }
   });
 });

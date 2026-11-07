@@ -31,6 +31,9 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
  *   HIDDEN while the dialog that issued the verb is open (`PUSH_FAILURE_DIALOGS`):
  *   that dialog stays open on failure and renders the same error inline, and a
  *   banner behind its modal scrim is dimmed, unreadable and unclickable.
+ * - `lock_lost` (#576 B35(e)) - the backend switched editing off because SpeleoDB
+ *   says the write lock this session was editing under is gone or someone else's.
+ *   Names the new holder; with nobody on the mutex it offers Start editing.
  * None of these block editing or pushing.
  *
  * Above all of them sits the #213 force-edit banner (big-red, derived from
@@ -117,6 +120,8 @@ export function SpeleoBanner() {
   // #260: keep the failed attempt's own context so Retry replays the same verb with
   // the same commit message (narrowed once here - the JSX callbacks close over it).
   const pushFailed = banner.kind === 'push_failed' ? banner : null;
+  // #576 B35(e): who holds the lock now, when the server named somebody.
+  const lockLost = banner.kind === 'lock_lost' ? banner : null;
 
   // A total lookup rather than a ternary chain: the chain's final `else` was
   // `concurrent_session`, so a new banner kind would have silently rendered THAT
@@ -128,6 +133,10 @@ export function SpeleoBanner() {
     concurrent_session: () => t('speleodb.banner.concurrentSession'),
     push_failed: () =>
       t('speleodb.banner.pushFailed', { message: pushFailed?.message ?? '' }),
+    lock_lost: () =>
+      lockLost?.holder
+        ? t('speleodb.banner.lockLostTo', { email: lockLost.holder })
+        : t('speleodb.banner.lockLost'),
   };
   const text = TEXT[banner.kind]();
 
@@ -171,6 +180,20 @@ export function SpeleoBanner() {
         {/* #270: the retry verb needs the edit gate open. Read-only (a token loss,
             a re-verify divergence) makes an upload impossible, so offer the step
             that makes one possible instead of a button that cannot upload. */}
+        {/* #576 B35(e): with nobody on the mutex, Start editing takes the lock back
+            and fences the copy. With someone else on it there is nothing to start -
+            the toolbar already says who - so only Dismiss is offered. */}
+        {lockLost && !lockLost.holder && (
+          <button
+            type="button"
+            onClick={() => void startEditing()}
+            disabled={busy}
+            className="text-xs underline disabled:opacity-50"
+            data-testid="speleo-banner-lock-lost-start-editing"
+          >
+            {t('speleodb.banner.startEditingToRetry')}
+          </button>
+        )}
         {pushFailed &&
           (editing ? (
             <button

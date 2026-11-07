@@ -66,7 +66,6 @@ export const IMPORT_GUARDED_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
   'zero-datum-config',
   'wiz-init',
   'wiz-suggest',
-  'wiz-no-suggest',
   'wiz-manual',
   'wiz-placing',
   'wiz-done',
@@ -96,7 +95,6 @@ export const IN_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
   'zero-datum-config',
   'wiz-init',
   'wiz-suggest',
-  'wiz-no-suggest',
   'wiz-manual',
   'wiz-placing',
   'wiz-done',
@@ -141,13 +139,11 @@ export const IN_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
  * real GTK chooser and hang the webview. The path is typed instead
  * (`project-save-path-input`), which is the same code path minus the picker.
  *
- * `tml-import-cancel` is in the list but there is no mid-import cancel to
- * fuzz: it is `disabled={isImporting}` and `handleCancel` early-returns while
- * an import is running (`TmlImportDialog.tsx`), so a TML import cannot be
- * abandoned once started. The bridge's settle loop waits for
- * `tml-import-progress` to clear for exactly that reason - there is nothing
- * actionable during that window, and a window that OUTLASTS the settle cap is
- * a hang, which the WEDGE oracle then reports.
+ * `tml-import-cancel` is in the list, but its mid-import form is not fuzzed.
+ * While an import runs it asks the backend to stop it (#576 RV4-FE-MISC1,
+ * `ImportCancelButton`); the bridge's settle loop waits for
+ * `tml-import-progress` to clear instead of acting in that window, and a window
+ * that OUTLASTS the settle cap is a hang, which the WEDGE oracle then reports.
  */
 export const TESTID_INVENTORY: readonly string[] = [
   // --- entry points ---------------------------------------------------------
@@ -401,13 +397,6 @@ export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>
   'zero-datum-select': ['zero-datum-section-card-*', 'zero-datum-selection-skip'],
   'zero-datum-config': ['zero-datum-config-confirm'],
   'wiz-suggest': ['confirm-button'],
-  // No entry for `wiz-no-suggest`: the bridge's settle predicate waits through
-  // that frame now (see `busy()` in importDialogBridge.ts), so the walk arrives
-  // at `wiz-manual` instead - which is where the placement options actually are.
-  // A frame that OUTLASTS the settle cap still reaches the digest, is still
-  // classified, and is still escapable through the entry below; it just has no
-  // advancing move, which is honest, because the app is mid-transition and there
-  // is nothing on it to press.
   // PLACE ON MAP first, then the footer's Place, then Skip.
   //
   // `segment-place-button` alone could not advance this screen. It is
@@ -469,7 +458,6 @@ export const ESCAPE_PATH: Readonly<Record<ScreenId, readonly string[]>> = {
   'zero-datum-config': ['dirty-dialog-discard', 'zero-datum-config-cancel', 'key:Escape'],
   'wiz-init': ['cancel-button', 'key:Escape'],
   'wiz-suggest': ['cancel-button', 'key:Escape'],
-  'wiz-no-suggest': ['cancel-button', 'key:Escape'],
   'wiz-manual': ['cancel-button', 'key:Escape'],
   'wiz-placing': ['cancel-button', 'key:Escape'],
   'wiz-done': ['cancel-button', 'key:Escape'],

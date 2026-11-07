@@ -2,6 +2,60 @@ import type { DmpSection, DmpShot } from '../types/commands';
 import type { ShotData } from '../types/project';
 import type { EditableShot } from '../components/common/ShotTableEditor';
 import { isEmittedShot } from '../components/common/emittedShots';
+import { normalizeAzimuth } from './azimuth';
+
+const DEFAULT_EXCLUDED_DMP_SHOT_LENGTH = 1;
+
+/**
+ * DMP imports skip length-1 standard shots by default.
+ */
+export function isImportableDmpShot(shot: DmpShot): boolean {
+  if (shot.shot_type !== 'Standard') {
+    return false;
+  }
+  return Math.abs(shot.length - DEFAULT_EXCLUDED_DMP_SHOT_LENGTH) > 1e-9;
+}
+
+/**
+ * Convert DMP shots to EditableShots.
+ *
+ * `version` is the section's DMP version (`DmpSection.version`). It decides
+ * which fields are readings. A v2 record has no temperature bytes, and a v2 or
+ * v3 record has no LRUD bytes (they arrive with v4); the parser fills `0` for
+ * each, which must not reach the project as a measured 0 degrees or a measured
+ * zero-width passage (#576 NF-AN4-3), so such a row carries none. The marker
+ * index is in every version's record.
+ *
+ * Headings are wrapped into [0, 360) here (#576 RV2-FE-D7). A DMP heading is a
+ * raw `i16 * 0.1`, so a damaged dump can carry 400 or -30; the core import gate
+ * stores every azimuth wrapped (B24-D2), so the wizard shows - and validates -
+ * the bearing that will be stored instead of flagging 400 as out of range while
+ * the import silently keeps 40. A non-finite reading passes through untouched.
+ */
+export function convertToEditableShots(shots: DmpShot[], version: number): EditableShot[] {
+  const recordsTemperature = version >= 3;
+  const recordsLrud = version >= 4;
+  return shots
+    .filter(isImportableDmpShot)
+    .map((shot, index) => ({
+      id: index,
+      azimuth_in: normalizeAzimuth(shot.heading_in),
+      azimuth_out: normalizeAzimuth(shot.heading_out),
+      length: shot.length,
+      depth_in: shot.depth_in,
+      depth_out: shot.depth_out,
+      pitch_in: shot.pitch_in,
+      pitch_out: shot.pitch_out,
+      left: recordsLrud ? shot.left : null,
+      right: recordsLrud ? shot.right : null,
+      up: recordsLrud ? shot.up : null,
+      down: recordsLrud ? shot.down : null,
+      comment: shot.comment || null,
+      kind: 'Normal' as const,
+      temperature: recordsTemperature ? shot.temperature : null,
+      marker_index: shot.marker_index,
+    }));
+}
 
 /**
  * Convert an EditableShot to a ShotData for the backend.
@@ -21,8 +75,8 @@ export function editableShotToShotData(shot: EditableShot): ShotData {
     down: shot.down,
     comment: shot.comment,
     kind: shot.kind ?? 'Normal',
-    marker_index: null,
-    temperature: null,
+    marker_index: shot.marker_index ?? null,
+    temperature: shot.temperature ?? null,
   };
 }
 
@@ -71,30 +125,4 @@ export function editableShotsToDmpSection(raw: DmpSection, shots: EditableShot[]
     }));
 
   return { ...raw, shots: syntheticShots };
-}
-
-/**
- * Calculate station positions for a section based on shots.
- * Returns positions in local coordinates (station 0 at origin).
- */
-export function calculateStationPositions(shots: EditableShot[]): Array<{ x: number; y: number }> {
-  const positions: Array<{ x: number; y: number }> = [{ x: 0, y: 0 }];
-
-  let x = 0;
-  let y = 0;
-
-  for (const shot of shots) {
-    // Calculate heading from azimuth_in and azimuth_out average
-    const heading = (shot.azimuth_in + shot.azimuth_out) / 2;
-    // Convert heading to radians (heading is in degrees, 0 = north)
-    const radians = ((90 - heading) * Math.PI) / 180;
-    // Calculate dx, dy
-    const dx = shot.length * Math.cos(radians);
-    const dy = shot.length * Math.sin(radians);
-    x += dx;
-    y += dy;
-    positions.push({ x, y });
-  }
-
-  return positions;
 }

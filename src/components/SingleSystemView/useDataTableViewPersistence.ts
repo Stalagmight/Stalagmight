@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc } from '../../utils/ipc';
+import { chainSettingWrite } from '../../utils/settingWriteChain';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 
 type AngleMode = 'avg' | 'inout' | 'off';
@@ -225,23 +226,28 @@ export function useDataTableViewPersistence(
           },
         });
       }
-      void invokeIpc(
-        'update_data_table_view',
-        {
-          columnOrder: shotColumnOrder,
-          hiddenColumns: hidden,
-          azimuthMode,
-          inclinationMode,
-          stationColumnOrder,
-          stationHiddenColumns: stationHidden,
-          columnWidths: shotColumnWidths,
-          stationColumnWidths,
-        },
-        { purpose: 'persist data-table view state' }
+      // [#576 SETTINGS-ORDER] In save order: the unmount flush and a remount's first
+      // save can both be in flight, and the older view must not land last.
+      void chainSettingWrite('update_data_table_view', () =>
+        invokeIpc(
+          'update_data_table_view',
+          {
+            columnOrder: shotColumnOrder,
+            hiddenColumns: hidden,
+            azimuthMode,
+            inclinationMode,
+            stationColumnOrder,
+            stationHiddenColumns: stationHidden,
+            columnWidths: shotColumnWidths,
+            stationColumnWidths,
+          },
+          { purpose: 'persist data-table view state' }
+        )
+          // Re-sync the in-memory config: a remount re-seeds from it, so a stale
+          // copy would silently revert what was just saved to disk. In the config
+          // chain, behind the settings saves made before it ([#576 RV6b-3]).
+          .then(() => useProjectStore.getState().reloadConfigInOrder())
       )
-        // Re-sync the in-memory config: a remount re-seeds from it, so a stale
-        // copy would silently revert what was just saved to disk.
-        .then(() => useProjectStore.getState().loadConfig())
         .catch((e) => {
           if (lastSavedViewRef.current === snapshot) {
             lastSavedViewRef.current = previouslySaved;
@@ -249,7 +255,7 @@ export function useDataTableViewPersistence(
             // success path does. Without it a remount would seed from values
             // that never reached disk and treat them as saved, which is exactly
             // the retry the rollback above exists to preserve (#357 item 5).
-            void useProjectStore.getState().loadConfig();
+            void useProjectStore.getState().reloadConfigInOrder();
           }
           console.error('Failed to save data-table view state:', e);
           // #357 item 5: the rollback above makes a later change RETRY, but on its

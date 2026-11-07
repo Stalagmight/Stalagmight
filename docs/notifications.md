@@ -41,7 +41,7 @@ against this page first.
 | Surface | Use for | Persistence | Examples in the codebase |
 |---|---|---|---|
 | Modal dialog | User must acknowledge/decide before continuing; data at risk | Until dismissed; app inert behind it | `ErrorDialog`, `ImportReceiptDialog` (only when the receipt has a warning, is empty, converted units, or created a zero datum, #411), corruption recovery |
-| Banner / indicator | Ongoing conditions | Until the condition clears | integrity banner (`App.tsx`), `SpeleoBanner`, `OfflineIndicator`, read-only badges (`MapTopLeftOverlay`) |
+| Banner / indicator | Ongoing conditions | Until the condition clears | integrity banner (`App.tsx`), `InternalErrorBanner` (the backend recovered from a crash; until restart, #576 A11), `SpeleoBanner`, `OfflineIndicator`, read-only badges (`MapTopLeftOverlay`) |
 | Toast | Transient outcome of an action whose result is off-screen or non-obvious | Auto-dismiss (5-9 s by kind) | save confirmations, blocked-edit notice, export results, warning-free non-converted import receipt (#411) |
 | Log only | Internal, recoverable, debug | n/a | `console.warn`/`console.error` |
 
@@ -62,10 +62,12 @@ toast (explicit kind, registered key, localized)
 
 ## Toast rules
 
-The one toast system is `showToast(message, key, kind)` on the UI store
+The one toast system is `showToast(message, key, kind, options?)` on the UI store
 (`src/store/uiStore.ts`), rendered by `src/components/common/ToastStack.tsx`
 (bottom-left stack, capacity-managed, hover pauses the stack, sr-only live
-regions). Read the comment blocks in those two files plus
+regions). `options` (`ToastOptions`) exists for the one sanctioned exception
+below - an `action` button and `persistent` - and nothing else passes it. Read
+the comment blocks in those two files plus
 `src/utils/toastCapacity.ts` for mechanics; this section is about usage.
 
 - **`kind` is mandatory.** Never rely on the `info` default. Severity mapping:
@@ -82,7 +84,13 @@ regions). Read the comment blocks in those two files plus
 - **Nothing critical or must-act rides a toast.** Toasts auto-dismiss; a message the
   user cannot afford to miss, or that carries a required action, is a dialog or
   banner (Carbon: actionable notifications must persist). Toasts here have no action
-  buttons by design - do not add them per-callsite.
+  buttons by design - do not add them per-callsite. The one sanctioned exception
+  (#576 D38-LOST): when the map's WebGL context is lost and not restored, the
+  `render-context-lost` toast carries **Reload map** and is `persistent` - it does
+  not fade, and the code that raised it dismisses it by key
+  (`dismissToastByKey`) once the context comes back
+  (`src/components/Map/useContextLossToast.ts`). It persists, as Carbon asks of
+  an actionable notification, rather than auto-dismissing.
 - **Keep it to one line** (~60 characters): what happened, then what to do if
   anything. Details belong in a dialog.
 - Keyboard-shortcut confirmation toasts are additionally gated by the
@@ -143,10 +151,21 @@ regions). Read the comment blocks in those two files plus
 
 ## Command-failure contract
 
-- **`success: false` never dies silently.** Precedence: a specific handler first
-  (read-only `EDIT_DISABLED` notice, divergence prompt, the save/import routers);
-  when nothing specific claims the failure, `executeCommandInner`'s catch-all
-  error toast (key `command-failed`) surfaces `result.error`. The catch-all
+- **Route on the code, show the message.** A command the backend refuses rejects
+  with a `CommandError` (#576 C4, docs/architecture.md "Command results and
+  errors"): its `code` (`CommandErrorCode`) is what decides the surface, its
+  `message` is display-only. Never decide anything from the message text - no
+  `startsWith`, `includes` or regex on it - and never put a code marker into one.
+  A failure that needs a surface of its own gets a code of its own.
+- **A refused command never dies silently.** The store's mutations answer
+  `success: false` with the refusal's `code` and `error` (its message).
+  Precedence: a specific handler, chosen by code, first (the edit-gate codes
+  `EDIT_DISABLED` / `WORKSPACE_READ_ONLY` / `NEWER_FILE_EDIT_DISABLED` /
+  `ADOPTION_IN_PROGRESS` -> the read-only notice; `EDIT_REVERIFY_DIVERGED` ->
+  the divergence prompt; the save/import routers on their codes); when nothing
+  specific claims the failure,
+  `executeCommandInner`'s catch-all error toast (key `command-failed`) surfaces
+  the message. The catch-all
   yields while ANY dialog is open - dialogs own their inline errors and are open
   when they issue commands - so a panel or map flow must NOT add its own
   failure toast for an `executeCommand`-backed action; the catch-all is the
@@ -155,12 +174,14 @@ regions). Read the comment blocks in those two files plus
   global, so a non-dialog command failing while an unrelated dialog happens to
   be open is still silent - the cost of never double-messaging a dialog.
   Undo/redo keep their own equivalent fallback (same localized default).
-- **`CommandResult::with_warning` (code `"SYSTEM"`) is exclusive to the deferred-
-  save contract** (#92/#104): "imported but could not save" keeps
-  `success: true` + warning so data survives exit. Never route ordinary warnings
-  through it; import-quality warnings ride `CommandResult.import_receipt`.
-- Genuine IPC rejections (transport errors) re-sync state and re-throw; the caller
-  that initiated the action owns surfacing them under the rules above.
+- **`CommandResult::with_warning` (warning code `"SYSTEM"`) is exclusive to the
+  deferred-save contract** (#92/#104): "imported but could not save" is a SUCCESS
+  whose `ImportOutcome.warnings` carry it, so data survives exit. Never route
+  ordinary warnings through it; import-quality warnings ride
+  `ImportOutcome.import_receipt`.
+- Any other rejection (a transport failure, Tauri's own plain-string argument
+  error) re-syncs state and re-throws; the caller that initiated the action owns
+  surfacing it under the rules above.
 
 ## Copy
 

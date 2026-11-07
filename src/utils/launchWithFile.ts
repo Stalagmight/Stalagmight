@@ -37,15 +37,17 @@
  *    `pendingBackendCheck` remembers to look again once the screen clears, so
  *    skipping the fetch holds the request rather than losing it.
  */
-import { useEffect, useRef } from 'react';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { useEffect } from 'react';
+import { useLatest } from '../hooks/useLatest';
+import type { UnlistenFn } from '@tauri-apps/api/event';
+import { IPC_EVENTS, listenIpc } from './ipcEvents';
 import { useUIStore, isScreenBusy } from '../store/uiStore';
 import { invokeIpc } from './ipc';
 import { routeOpenedFile } from './openOrImport';
 import { setProjectActionSource } from './telemetry';
 
-/** Payload-free nudge from the backend; mirrors `LAUNCH_FILE_EVENT` in Rust. */
-export const LAUNCH_FILE_EVENT = 'launch-file-queued';
+/** Payload-free nudge from the backend (`core::events::LaunchFileQueued`, generated). */
+export const LAUNCH_FILE_EVENT = IPC_EVENTS.LAUNCH_FILE_QUEUED;
 
 /** Error title for every open the OS asked for. */
 const LAUNCH_ERROR_TITLE = 'Open Failed';
@@ -129,7 +131,7 @@ async function runDrain(): Promise<void> {
     return;
   }
   pendingBackendCheck = false;
-  const fetched = await invokeIpc<string[]>('take_pending_launch_files', undefined, {
+  const fetched = await invokeIpc('take_pending_launch_files', undefined, {
     purpose: 'collect files the OS asked us to open',
   });
   deferred = deferred.concat(fetched);
@@ -175,8 +177,7 @@ function drainInBackground(): void {
 export function useLaunchWithFile(ready: boolean): void {
   // The listener is registered once and lives for the app's lifetime, so it
   // reads readiness through a ref rather than closing over a stale `ready`.
-  const readyRef = useRef(ready);
-  readyRef.current = ready;
+  const readyRef = useLatest(ready);
 
   useEffect(() => {
     let disposed = false;
@@ -184,7 +185,7 @@ export function useLaunchWithFile(ready: boolean): void {
 
     void (async () => {
       try {
-        const listener = await listen(LAUNCH_FILE_EVENT, () => {
+        const listener = await listenIpc(LAUNCH_FILE_EVENT, () => {
           if (readyRef.current) drainInBackground();
         });
         if (disposed) listener();
@@ -218,7 +219,7 @@ export function useLaunchWithFile(ready: boolean): void {
       unlisten?.();
       unsubscribe();
     };
-  }, []);
+  }, [readyRef]);
 
   useEffect(() => {
     // Covers both the cold launch (queued before the webview existed) and any

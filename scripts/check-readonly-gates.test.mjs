@@ -72,6 +72,53 @@ test('does not lose a real comparison that follows a // inside an earlier string
   assert.equal(countClosureAdjustedComparisons(line), 1);
 });
 
+// --- per-match counting and block comments (#576 E2-D2) --------------------------
+
+test('REGRESSION: two comparisons on ONE line count as two (it counted lines)', () => {
+  // Counting lines let a second raw gate ride along on an already-allowlisted
+  // line: the exact-count allowlist could not see it.
+  const line = "if (mode === 'closureAdjusted' || other !== 'closureAdjusted') a();";
+  assert.equal(countClosureAdjustedComparisons(line), 2);
+  assert.equal(countClosureAdjustedComparisons("const x = 'closureAdjusted' === m && m === 'closureAdjusted';"), 2);
+});
+
+test('REGRESSION: a comparison inside a /* block comment */ does not count', () => {
+  assert.equal(countClosureAdjustedComparisons("/* geometryMode === 'closureAdjusted' is read-only */"), 0);
+  const multi = ['/**', " * Was: if (geometryMode === 'closureAdjusted') return;", ' */', "if (m === 'closureAdjusted') a();"].join('\n');
+  assert.equal(countClosureAdjustedComparisons(multi), 1);
+});
+
+test('a `case \'closureAdjusted\':` label counts as a comparison (switch bypass)', () => {
+  const sw = ['switch (geometryMode) {', "  case 'closureAdjusted':", '    return;', '}'].join('\n');
+  assert.equal(countClosureAdjustedComparisons(sw), 1);
+  assert.equal(countClosureAdjustedComparisons("case 'measured':"), 0);
+});
+
+test('rule B ignores a mention inside a block comment, and still sees code after it', () => {
+  assert.ok(!usesIsMapReadOnly('/* composed from isMapReadOnly plus the speleo lock */'));
+  assert.ok(!usesSpeleoReadOnly(['/*', ' * see selectSpeleoReadOnly', ' */'].join('\n')));
+  assert.ok(usesIsMapReadOnly('/* note */ useUIStore(isMapReadOnly);'));
+});
+
+test('a template-literal comparison counts like a quoted one, in every form (#576 RV3-FE-12)', () => {
+  assert.equal(countClosureAdjustedComparisons('if (geometryMode === `closureAdjusted`) return;'), 1);
+  assert.equal(countClosureAdjustedComparisons('if (`closureAdjusted` !== geometryMode) return;'), 1);
+  assert.equal(countClosureAdjustedComparisons('switch (m) { case `closureAdjusted`: return; }'), 1);
+  assert.equal(countClosureAdjustedComparisons("const a = m === `closureAdjusted` || m === 'closureAdjusted';"), 2);
+  // Mismatched delimiters are not a comparison against the literal.
+  assert.equal(countClosureAdjustedComparisons("const s = m === `closureAdjusted';"), 0);
+});
+
+test('a regex literal holding /* does not hide a later comparison (#576 RV3-FE-12)', () => {
+  const text = ['export const LEADING_SLASHES = /^\\/*/;', "export const hidden = geometryMode === 'closureAdjusted';", '/* end */'].join('\n');
+  assert.equal(countClosureAdjustedComparisons(text), 1);
+});
+
+test('a quoted /* does not hide a later real comparison', () => {
+  const text = ["const glob = 'fixtures/*.dmp';", "if (m === 'closureAdjusted') a();"].join('\n');
+  assert.equal(countClosureAdjustedComparisons(text), 1);
+});
+
 // --- stripLineComment -------------------------------------------------------------
 
 test('stripLineComment leaves a URL inside a string literal intact', () => {

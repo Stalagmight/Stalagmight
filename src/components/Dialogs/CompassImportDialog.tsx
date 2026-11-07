@@ -1,20 +1,24 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
+import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useUIStore } from '../../store/uiStore';
-import { invokeIpc } from '../../utils/ipc';
 import {
   completeImportToSingleView,
   finalizeDeferredSaveWarnings,
   finishImportWithoutOrphanSuggestions,
+  suggestOrphanPlacementsAfterImport,
   surfaceImportFailure,
 } from '../../utils/saveFeedback';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import type { CompassFile, CompassSurveySummary, InvalidShotCounts, OrphanPlacementSuggestion } from '../../types/commands';
+import { ImportProgress } from './ImportProgress';
+import { ImportCancelButton } from './ImportCancelButton';
+import type { CompassFile, CompassSurveySummary, InvalidShotCounts } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
 import { importButtonLabel } from '../../utils/importButtonLabel';
+import { useShallow } from 'zustand/react/shallow';
 
 interface CompassImportDialogProps {
   compassFile: CompassFile;
@@ -75,8 +79,32 @@ function surveyLandingShotCount(
 
 export default function CompassImportDialog({ compassFile, filePath }: CompassImportDialogProps) {
   const { t } = useTranslation();
-  const { executeCompassImport, calculateFileHash, checkDuplicateImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
-  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore();
+  const {
+    executeCompassImport,
+    calculateFileHash,
+    checkDuplicateImport,
+    startLoading,
+    setLoadingProgress,
+    resetLoading,
+  } = useProjectStore(
+    useShallow((s) => ({
+      executeCompassImport: s.executeCompassImport,
+      calculateFileHash: s.calculateFileHash,
+      checkDuplicateImport: s.checkDuplicateImport,
+      startLoading: s.startLoading,
+      setLoadingProgress: s.setLoadingProgress,
+      resetLoading: s.resetLoading,
+    })),
+  );
+  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      openDialog: s.openDialog,
+      setView: s.setView,
+      triggerFitToBounds: s.triggerFitToBounds,
+      showToast: s.showToast,
+    })),
+  );
 
   const [isImporting, setIsImporting] = useState(false);
   const [fileHash, setFileHash] = useState<string | null>(null);
@@ -99,7 +127,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
       }
       setHashChecked(true);
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: hash the file this dialog opened with, once (the store actions are stable)
   }, []);
 
   const fileName = useMemo(() => extractFilename(filePath), [filePath]);
@@ -147,7 +175,10 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
       resetLoading();
 
       if (!result.success) {
-        surfaceImportFailure('compass-import', importUi, { phase: 'command', error: result.error });
+        // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
+        // Nothing is running then, so the footer goes back to its idle Cancel.
+        if (isMoveCarryRefusal(result)) setIsImporting(false);
+        else surfaceImportFailure('compass-import', importUi, { phase: 'command', error: result.error, code: result.code });
         return;
       }
 
@@ -171,25 +202,20 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
       // Same shape as WallsImportDialog.
       const sectionIds = result.section_ids ?? [];
 
-      // Check for orphan placement opportunities. The suggest call is the
-      // ONLY thing wrapped in try/catch here (non-fatal - a failed lookup
-      // just skips the suggestion step); `finishImportWithoutOrphanSuggestions`
-      // sits outside it and completes the import exactly once, so a throw
-      // partway through IT can never fall through to a duplicate completion.
+      // Check for orphan placement opportunities. Only the lookup may fail
+      // softly here (it skips the suggestion step, and says so - #576
+      // NF-DMPS-1); `finishImportWithoutOrphanSuggestions` runs outside it and
+      // completes the import exactly once, so a throw partway through IT can
+      // never fall through to a duplicate completion.
       if (sectionIds.length > 0) {
-        let suggestions: OrphanPlacementSuggestion[] = [];
-        try {
-          suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
-            'suggest_orphan_placements',
-            { newlyImportedSectionIds: sectionIds },
-            { purpose: 'suggest orphan placements after Compass import' }
-          );
-        } catch {
-          // Non-fatal: proceed without orphan detection
-        }
+        const suggestions = await suggestOrphanPlacementsAfterImport(
+          sectionIds,
+          'suggest orphan placements after Compass import',
+          importUi
+        );
         if (suggestions.length > 0) {
           setSource('dialog');
-          openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
+          openDialog('orphan-placement', { suggestions, receipt: result.import_receipt ?? undefined });
           return;
         }
         await finishImportWithoutOrphanSuggestions('compass-import', importUi, sectionIds, result.import_receipt);
@@ -204,8 +230,15 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
     }
   }, [executeCompassImport, filePath, fileHash, includeExcluded, applyCorrections, commentsOnStations, compassFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 
+  // Escape / the close button do nothing while the import runs: closing would
+  // orphan its result. The footer Cancel stops it instead (RV4-FE-MISC1).
   return (
-    <DialogWrapper title={t('dialogs.compassImport.title')} onClose={closeDialog} size="lg" data-testid="compass-import-dialog">
+    <DialogWrapper
+      title={t('dialogs.compassImport.title')}
+      onClose={isImporting ? () => {} : closeDialog}
+      size="lg"
+      data-testid="compass-import-dialog"
+    >
       <div className="space-y-4">
         {/* Header info */}
         <div className="space-y-1">
@@ -335,11 +368,19 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
           {t('dialogs.compassImport.options.includeExcluded')}
         </label>
 
+        {/* In-dialog progress (#576 NF-W3P-1): an import into an open project runs in
+            Single System View, where GlobalView's loading overlay is not mounted. */}
+        {isImporting && <ImportProgress testIdPrefix="compass-import" />}
+
         {/* Footer - sticky at the bottom of the scrolling body (mirrors
             TmlImportDialog's idiom; see its comment for the assumptions this
             relies on, incl. DialogWrapper's default `p-4` body padding). */}
         <div className="sticky -bottom-4 -mx-4 -mb-4 flex justify-end gap-2 px-4 py-4 border-t border-border bg-panel">
-          <Button onClick={closeDialog} data-testid="compass-import-cancel">{t('dialogs.compassImport.cancel')}</Button>
+          {isImporting ? (
+            <ImportCancelButton data-testid="compass-import-cancel">{t('dialogs.compassImport.cancel')}</ImportCancelButton>
+          ) : (
+            <Button onClick={closeDialog} data-testid="compass-import-cancel">{t('dialogs.compassImport.cancel')}</Button>
+          )}
           <Button
             data-primary-action=""
             data-testid="compass-import-confirm"

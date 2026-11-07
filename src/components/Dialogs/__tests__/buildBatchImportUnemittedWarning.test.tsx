@@ -32,43 +32,15 @@ vi.mock('../SectionPreview', async (importOriginal) => ({
 vi.mock('maplibre-gl', () => ({ default: {} }));
 
 import { buildBatchImport } from '../DmpNewImportDialog';
-import type { DmpFile, DmpSection, DmpShot } from '../../../types/commands';
+import type { DmpFile, DmpSection } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
 import type { SectionEditState } from '../../../utils/batchImportHelpers';
 import type { VirtualConnection } from '../../../utils/segmentContext';
 import type { EditableShot } from '../../common/ShotTableEditor';
-
-function dmpShot(): DmpShot {
-  return {
-    shot_type: 'Standard',
-    heading_in: 10,
-    heading_out: 10,
-    length: 5,
-    depth_in: 0,
-    depth_out: 0,
-    pitch_in: 0,
-    pitch_out: 0,
-    left: 0,
-    right: 0,
-    up: 0,
-    down: 0,
-    temperature: 0,
-    hour: 0,
-    minute: 0,
-    second: 0,
-    marker_index: 0,
-  };
-}
+import { makeDmpFile, makeDmpSection, makeDmpShots } from '../../../test/factories/dmp';
 
 function dmpSection(name: string, shotCount: number): DmpSection {
-  return {
-    version: 1,
-    name,
-    direction: 'in',
-    date: '2026-01-01',
-    shots: Array.from({ length: shotCount }, dmpShot),
-    content_hash: `hash-${name}`,
-  };
+  return makeDmpSection({ name, shots: makeDmpShots(shotCount), content_hash: `hash-${name}` });
 }
 
 function editableShot(id: number): EditableShot {
@@ -111,10 +83,7 @@ function edits(name: string, shotCount: number): SectionEditState {
  * has been placed and moves on.
  */
 function build(alreadyImported: Map<number, number> | undefined) {
-  const dmpFile: DmpFile = {
-    version: 1,
-    sections: [dmpSection('Segment', 3), dmpSection('AlreadyDone', 4)],
-  };
+  const dmpFile: DmpFile = makeDmpFile({ sections: [dmpSection('Segment', 3), dmpSection('AlreadyDone', 4)] });
   const selectionConfig: DmpSelectionConfig = {
     selectedIndices: new Set([0, 1]),
     defaultSurveyor: 'S',
@@ -176,7 +145,7 @@ describe('buildBatchImport unemitted-reachable warning', () => {
   it('does not warn when the only reachable-but-unemitted section produced nothing (every shot deleted)', () => {
     // Section 0 is anchored (reachable) but every shot was deleted in the
     // wizard's shot table, so it emits nothing - `emptySections`, not a gap.
-    const dmpFile: DmpFile = { version: 1, sections: [dmpSection('Segment', 3)] };
+    const dmpFile: DmpFile = makeDmpFile({ sections: [dmpSection('Segment', 3)] });
     const selectionConfig: DmpSelectionConfig = {
       selectedIndices: new Set([0]),
       defaultSurveyor: 'S',
@@ -219,7 +188,7 @@ describe('buildBatchImport unemitted-reachable warning', () => {
     // resolver can build neither a `from_existing` nor a `from_importing`
     // placement for it - a real, unexplained gap that is not `alreadyImported`,
     // not `deferredImportSet`, and not `emptySections`.
-    const dmpFile: DmpFile = { version: 1, sections: [dmpSection('Segment', 3)] };
+    const dmpFile: DmpFile = makeDmpFile({ sections: [dmpSection('Segment', 3)] });
     const selectionConfig: DmpSelectionConfig = {
       selectedIndices: new Set([0]),
       defaultSurveyor: 'S',

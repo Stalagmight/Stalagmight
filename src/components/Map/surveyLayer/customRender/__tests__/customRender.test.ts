@@ -811,9 +811,10 @@ describe('SurveyCustomLayer first-frames GL-error probe', () => {
       circle: { stationCount: 4, byteLength: 40 },
     }) as unknown as CustomRenderData;
 
-  /** Minimal GL stub: only NO_ERROR + a scripted getError() are touched here. */
-  const fakeGl = (getError: () => number): WebGL2RenderingContext =>
-    ({ NO_ERROR: 0, getError }) as unknown as WebGL2RenderingContext;
+  /** Minimal GL stub: only NO_ERROR, a scripted getError() and isContextLost()
+   *  are touched here. */
+  const fakeGl = (getError: () => number, lost = false): WebGL2RenderingContext =>
+    ({ NO_ERROR: 0, getError, isContextLost: () => lost }) as unknown as WebGL2RenderingContext;
 
   afterEach(() => vi.restoreAllMocks());
 
@@ -849,6 +850,19 @@ describe('SurveyCustomLayer first-frames GL-error probe', () => {
     expect(onSelfDisable).toHaveBeenCalledWith('gl-error-0x502');
     const lastWarn = warn.mock.calls[warn.mock.calls.length - 1];
     expect(lastWarn?.[0]).toContain('[customRender] GL error 0x502');
+  });
+
+  // #576 D38: a frame drawn just as the context is lost reports
+  // CONTEXT_LOST_WEBGL; the layer is fine and is re-added on restore, so the
+  // probe must not latch it dead.
+  it('does not self-disable on the error a lost context reports', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const onSelfDisable = vi.fn();
+    const layer = new SurveyCustomLayer('id', null, onSelfDisable);
+    const CONTEXT_LOST_WEBGL = 0x9242;
+    probe(layer).checkFrameError(fakeGl(() => CONTEXT_LOST_WEBGL, true), fakeData());
+    expect(layer.isDisabled()).toBe(false);
+    expect(onSelfDisable).not.toHaveBeenCalled();
   });
 });
 

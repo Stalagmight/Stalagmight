@@ -129,7 +129,7 @@ export function interpolateHue(h1: number, h2: number, t: number): number {
   }
 
   // Interpolate and normalize to 0-360
-  let result = h1 + diff * t;
+  const result = h1 + diff * t;
   return ((result % 360) + 360) % 360;
 }
 

@@ -6,6 +6,13 @@
 
 pub mod config;
 pub mod core;
+/// [#576 E1] The shared `AppState` and survey-data fixtures: see the module doc.
+#[cfg(any(test, feature = "test-support"))]
+#[expect(
+    clippy::expect_used,
+    reason = "test fixtures: a failed setup step fails the calling test"
+)]
+pub mod test_fixtures;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_helpers;
 pub mod tile_providers;

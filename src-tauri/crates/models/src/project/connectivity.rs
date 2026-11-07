@@ -9,6 +9,42 @@ impl Project {
     /// Both merges and closures are treated as bidirectional edges.
     /// Returns a set containing the given section and all transitively connected sections.
     pub fn get_connected_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
+        self.connected_section_ids_skipping(section_id, &HashSet::new())
+    }
+
+    /// [`Self::get_connected_section_ids`] from `a`'s section, leaving out every
+    /// closure that joins exactly `a` and `b` (either way round): the sections
+    /// a walk between the two can reach with their own closure edge lifted out
+    /// (#576 RV19a-9, the path-length fallback).
+    pub(crate) fn connected_section_ids_without_pair(
+        &self,
+        a: StationRef,
+        b: StationRef,
+    ) -> HashSet<SectionId> {
+        let pair: HashSet<usize> = self
+            .loop_closures
+            .iter()
+            .enumerate()
+            .filter(|(_, closure)| {
+                let (x, y) = (
+                    self.resolve_key(&closure.station_a),
+                    self.resolve_key(&closure.station_b),
+                );
+                (x == Some(a) && y == Some(b)) || (x == Some(b) && y == Some(a))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        self.connected_section_ids_skipping(a.section_id, &pair)
+    }
+
+    /// The BFS behind both: merges and closures as edges, the closures at the
+    /// `skipped` positions of `loop_closures` left out (positions, not ids: a
+    /// legacy project can hold several closures with id 0).
+    fn connected_section_ids_skipping(
+        &self,
+        section_id: SectionId,
+        skipped: &HashSet<usize>,
+    ) -> HashSet<SectionId> {
         let mut connected = HashSet::new();
         let mut queue = vec![section_id];
 
@@ -27,7 +63,10 @@ impl Project {
                     }
                 }
                 // Follow closures as edges (bidirectional, same as merges)
-                for closure in &self.loop_closures {
+                for (index, closure) in self.loop_closures.iter().enumerate() {
+                    if skipped.contains(&index) {
+                        continue;
+                    }
                     if closure.station_a.section_id == current {
                         if !connected.contains(&closure.station_b.section_id) {
                             queue.push(closure.station_b.section_id);

@@ -44,6 +44,9 @@ import {
   type ImportScreenDigest,
   type ImportScreenSpec,
 } from '../lib/importScreenDigest';
+import { toastKeysRaised } from '../lib/importFlowOracles';
+import { valueShape } from '../lib/shareableFailure';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import { SELECT_TESTIDS, TESTID_INVENTORY } from './importDialogModel';
 
 /**
@@ -389,7 +392,7 @@ export async function injectScreenDigest(ctx: ScenarioContext): Promise<void> {
  * than four so the settle rule cannot drift between the move path and the
  * observe path.
  */
-const HELPERS = `
+export const HELPERS = `
   const SCREEN = ${SCREEN};
   if (!SCREEN) throw new Error('the import screen digest is not injected');
   const q = (id) => (/["\\\\]/.test(id) ? null : document.querySelector('[data-testid="' + id + '"]'));
@@ -409,25 +412,12 @@ const HELPERS = `
    * The wizard BUSY markers, the TML import's progress marker, plus the wizard
    * being MOUNTED-BUT-HIDDEN.
    *
-   * \`tml-import-progress\` is here because there is nothing to do while it is
-   * up: \`tml-import-cancel\` is \`disabled={isImporting}\` and \`handleCancel\`
-   * early-returns anyway, so a TML import cannot be abandoned once started. A
-   * progress marker that OUTLASTS the settle cap is a hang, and the digest then
-   * reports a screen whose controls are all disabled, which is what the WEDGE
-   * oracle is for.
-   * \`wizard-no-suggestions\` is here for the same reason and is worth spelling
-   * out, because it LOOKS like a screen and is not one. It renders while
-   * \`phase === 'suggesting'\` with no current suggestion, which happens only in
-   * the gap between the pool running dry and \`transitionToPlacingOrManual\`
-   * setting \`isImporting\` - and that call sets it synchronously, so the frame
-   * rarely survives a paint. It carries no control of its own either: the footer
-   * renders nothing for a suggestion-less \`suggesting\` phase, leaving the
-   * wizard's standing Cancel and Back. The real "nothing could be placed
-   * automatically" surface is \`manual_placing\`, which is where this transition
-   * lands and which has four placement modes, a map placement and a shot table
-   * on it. Waiting through the gap sends the walk THERE instead of spending
-   * steps on an empty pane. Measured: over 130 cells the digest never once
-   * sampled this frame, so the two generators that named it never ran.
+   * \`tml-import-progress\` is here because the walk does not act while it is
+   * up. \`tml-import-cancel\` stays live during an import (#576 RV4-FE-MISC1: it
+   * asks the backend to stop it, \`ImportCancelButton\`), but that mid-import
+   * cancel is not fuzzed: the walk waits for the import to settle. A progress
+   * marker that OUTLASTS the settle cap is a hang, which is what the WEDGE oracle
+   * is for.
    *
    * That last one is \`DialogWrapper\`'s \`hidden\` prop, which
    * \`DmpNewImportDialog\` sets while \`autoStartManualPlacementPending\` is true:
@@ -447,11 +437,27 @@ const HELPERS = `
   const busy = () =>
     shown('wizard-calculating') ||
     shown('wizard-importing-zero-datum') ||
-    shown('wizard-early-importing') ||
     shown('wizard-placing') ||
-    shown('wizard-no-suggestions') ||
     shown('tml-import-progress') ||
-    (!!q('dmp-new-import-dialog') && !shown('dmp-new-import-dialog'));
+    (!!q('dmp-new-import-dialog') && !shown('dmp-new-import-dialog')) ||
+    orphanAcceptRunning();
+  /**
+   * An orphan-placement Accept (or Accept all) in flight (#576 HFI2-F4). It
+   * awaits mergeStations and then the overlap treatment's setShotKind /
+   * updateShot, each an undo entry, and holds every button of the dialog
+   * \`disabled\` (\`processing\`) until the chain ends. A settle that returned
+   * mid-chain gave the next move an undo depth still climbing, and OVERLAP
+   * MODES blamed the picker for the Accept's pushes. Read off the disabled
+   * attribute, not visibility: a hidden dialog's chain is still running.
+   */
+  function orphanAcceptRunning() {
+    const ids = ['orphan-accept', 'orphan-accept-all', 'orphan-close'];
+    for (let i = 0; i < ids.length; i++) {
+      const el = q(ids[i]);
+      if (el && el.disabled === true) return true;
+    }
+    return false;
+  }
   const marker = () => {
     const ui = window.__E2E_TEST__ && window.__E2E_TEST__.uiStore
       ? window.__E2E_TEST__.uiStore.getState()
@@ -524,7 +530,7 @@ const HELPERS = `
 export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepOutcome> {
   if (!isDispatchable(move)) {
     throw new Error(
-      `refusing to drive ${move.kind} on "${move.testid}": not in the import fuzzer's allowlist. ` +
+      `refusing to drive ${move.kind} on "${shareableTestId(move.testid)}": not in the import fuzzer's allowlist. ` +
         `A recorded trace can only replay the controls the generators produce.`,
     );
   }
@@ -844,7 +850,7 @@ export async function answerKeyboardFileDialog(
   value: string | null,
 ): Promise<DialogOutcome> {
   if (!ARMABLE_KEYS.has(chord)) {
-    throw new Error(`refusing to arm a picker for "${chord}": not in the import fuzzer's armable-key set`);
+    throw new Error(`refusing to arm a picker for ${valueShape(chord)}: not in the import fuzzer's armable-key set`);
   }
   return ctx.eval<DialogOutcome>(
     `
@@ -962,22 +968,38 @@ export interface RouteOutcome {
    */
   dialogAtDispatch: string | null;
   placementAtDispatch: boolean;
+  /**
+   * Keys of the toasts the route raised or refreshed, read from
+   * `uiStore.toasts` on the tick it returned (#576 HFI2-F3); null when the
+   * store has no toast stack. The router's refusal IS its toast, and a toast
+   * judged off the settled digest could have faded first.
+   */
+  toastsRaised: string[] | null;
 }
 
 export async function routeFile(ctx: ScenarioContext, absolutePath: string): Promise<RouteOutcome> {
   return ctx.eval<RouteOutcome>(
     `
+    const toastKeysRaised = ${toastKeysRaised.toString()};
     const route = window.__E2E_TEST__ && window.__E2E_TEST__.routeOpenedFile;
     const store = window.__E2E_TEST__ && window.__E2E_TEST__.uiStore;
     const ui = store ? store.getState() : null;
+    const toasts = () => {
+      const now = store ? store.getState() : null;
+      return now && Array.isArray(now.toasts) ? now.toasts : null;
+    };
     const out = {
       routed: false,
       dialogAtDispatch: ui && ui.activeDialog !== undefined && ui.activeDialog !== null ? ui.activeDialog : null,
       placementAtDispatch: !!(ui && ui.placementMode),
+      toastsRaised: null,
     };
     if (typeof route !== 'function') return out;
+    const before = toasts();
     await route(args[0], 'Import Failed');
     out.routed = true;
+    const after = toasts();
+    out.toastsRaised = before && after ? toastKeysRaised(before, after) : null;
     return out;
   `,
     [absolutePath],

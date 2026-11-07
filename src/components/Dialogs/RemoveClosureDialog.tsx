@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -8,9 +9,10 @@ import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 interface ClosureChoice {
-  closureId: bigint;
+  closureId: number;
   stationRef: StationRef;
 }
 
@@ -19,8 +21,13 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
 }
 
 export default function RemoveClosureDialog() {
-  const { closeDialog, dialogData } = useUIStore();
-  const { project, stations, removeLoopClosure } = useProjectStore();
+  const { t } = useTranslation();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
+  const { project, stations, removeLoopClosure } = useProjectStore(
+    useShallow((s) => ({ project: s.project, stations: s.stations, removeLoopClosure: s.removeLoopClosure })),
+  );
 
   const anchorStation = dialogData.anchorStation as StationRef | undefined;
   const closuresFromDialog = dialogData.closures as ClosureChoice[] | undefined;
@@ -68,7 +75,7 @@ export default function RemoveClosureDialog() {
 
   const getStationDisplayLabel = (ref: StationRef): ReactNode => {
     const section = project?.sections.find((item) => item.id === ref.section_id);
-    const sectionLabel = section?.name?.trim() || `Section ${ref.section_id}`;
+    const sectionLabel = section?.name?.trim() || t('dialogs.removeClosure.sectionFallback', { id: ref.section_id });
     return (
       <span className="inline-flex items-center gap-1.5 align-middle">
         <EntityBlob entity="station">{formatStationId(ref.section_id, ref.station_index)}</EntityBlob>
@@ -85,13 +92,13 @@ export default function RemoveClosureDialog() {
     try {
       const result = await removeLoopClosure(selectedClosure.closureId);
       if (!result.success) {
-        setError(result.error ?? 'Failed to remove closure');
+        setError(result.error ?? t('dialogs.removeClosure.removeFailed'));
         return;
       }
       trackDialogComplete('remove-closure');
       closeDialog();
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to remove closure'));
+      setError(getErrorMessage(e, t('dialogs.removeClosure.removeFailed')));
     } finally {
       setIsLoading(false);
     }
@@ -99,11 +106,11 @@ export default function RemoveClosureDialog() {
 
   if (!anchorStation) {
     return (
-      <DialogWrapper title="Remove Closure" onClose={closeDialog} size="md" data-testid="remove-closure-dialog">
+      <DialogWrapper title={t('dialogs.removeClosure.title')} onClose={closeDialog} size="md" data-testid="remove-closure-dialog">
         <div className="space-y-4">
-          <p className="text-error text-sm">Station not found.</p>
+          <p className="text-error text-sm">{t('dialogs.removeClosure.notFound')}</p>
           <div className="flex justify-end">
-            <Button onClick={closeDialog} data-testid="remove-closure-close">Close</Button>
+            <Button onClick={closeDialog} data-testid="remove-closure-close">{t('common.actions.close')}</Button>
           </div>
         </div>
       </DialogWrapper>
@@ -111,7 +118,7 @@ export default function RemoveClosureDialog() {
   }
 
   return (
-    <DialogWrapper title="Remove Closure" onClose={closeDialog} size="md" data-testid="remove-closure-dialog">
+    <DialogWrapper title={t('dialogs.removeClosure.title')} onClose={closeDialog} size="md" data-testid="remove-closure-dialog">
       <div className="space-y-4">
         {error && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
@@ -120,7 +127,7 @@ export default function RemoveClosureDialog() {
         )}
 
         <p className="text-sm text-text-secondary">
-          Select a closure connected to this station to remove.
+          {t('dialogs.removeClosure.intro')}
         </p>
 
         <div className="space-y-2 max-h-56 overflow-y-auto border border-border rounded p-2">
@@ -144,20 +151,20 @@ export default function RemoveClosureDialog() {
           })}
           {closures.length === 0 && (
             <p className="text-sm text-text-secondary" data-testid="remove-closure-empty">
-              No closures found.
+              {t('dialogs.removeClosure.empty')}
             </p>
           )}
         </div>
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={closeDialog} disabled={isLoading} data-testid="remove-closure-cancel">Cancel</Button>
+          <Button onClick={closeDialog} disabled={isLoading} data-testid="remove-closure-cancel">{t('common.actions.cancel')}</Button>
           <Button
             variant="primary"
             onClick={handleConfirm}
             disabled={isLoading || !selectedClosure}
             data-testid="remove-closure-confirm"
           >
-            {isLoading ? 'Removing...' : 'Remove'}
+            {isLoading ? t('dialogs.removeClosure.removing') : t('common.actions.remove')}
           </Button>
         </div>
       </div>

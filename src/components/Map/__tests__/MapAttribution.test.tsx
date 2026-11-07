@@ -15,14 +15,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpc = vi.fn();
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: (...args: unknown[]) => invokeIpc(...args),
-}));
+vi.mock('../../../utils/ipc');
 
 import '../../../i18n';
 import { MapAttribution, primarySourceName } from '../MapAttribution';
 import { resetTileAttributionCache } from '../../../hooks/useTileAttribution';
+import { invokeIpcMock as invokeIpc } from '../../../test/factories/ipc';
 
 const FALLBACK = 'Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community';
 const LIVE = 'Source: Esri, Somebody New, and the GIS User Community';

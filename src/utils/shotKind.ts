@@ -48,16 +48,6 @@ export function isVirtualShotKind(kind: ShotKind): boolean {
   return kind !== 'Normal';
 }
 
-/**
- * Plain-English names for surfaces that have no i18n wiring yet (the context
- * menu and the draw-shot dialog hardcode every other label too).
- */
-export const SHOT_KIND_MENU_LABEL: Record<ShotKind, string> = {
-  Normal: 'Permanent',
-  Jump: 'Jump',
-  Reference: 'Reference',
-};
-
 /** i18n key for each kind's user-facing name. */
 export const SHOT_KIND_LABEL_KEY: Record<ShotKind, string> = {
   Normal: 'shotKind.normal',

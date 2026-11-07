@@ -32,10 +32,12 @@
  * impossible there. That is what keeps a ddmin-cut trace RUNNABLE.
  */
 import type { ScenarioContext } from './framework';
+import { foldThenCut } from '../lib/fixtureCorpus';
+import { valueShape } from '../lib/shareableFailure';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import {
   DATA_FORMATS,
   IMAGE_FORMATS,
-  naturalExtension,
   PATH_SHAPES,
   type ExportFormat,
   type ExportRoute,
@@ -67,7 +69,7 @@ export function enabledFormats(): ExportFormat[] {
     const found = ALL_FORMATS.find((format) => format === name);
     if (found === undefined) {
       throw new Error(
-        `STALAGMIGHT_FUZZ_EXPORT_FORMATS names "${name}", which is not a format this scenario ` +
+        `STALAGMIGHT_FUZZ_EXPORT_FORMATS names ${valueShape(name)}, which is not a format this scenario ` +
           `exports; known: ${ALL_FORMATS.join(',')}`,
       );
     }
@@ -249,6 +251,11 @@ function weightedPick(ctx: ScenarioContext, formats: readonly ExportFormat[]): E
   return formats[formats.length - 1] as ExportFormat;
 }
 
+/** Is `value` a format this scenario exports? A trace's `format` is checked with it before it names anything. */
+export function isExportFormat(value: unknown): value is ExportFormat {
+  return typeof value === 'string' && ALL_FORMATS.some((format) => format === value);
+}
+
 /** Is this a `data`-type export in `ExportControls` terms? */
 export function isDataFormat(format: ExportFormat): boolean {
   return DATA_FORMATS.includes(format);
@@ -304,6 +311,11 @@ export const EXPORT_TESTIDS: ReadonlySet<string> = new Set([
   // save dialog whenever any section is unanchored
   'tml-unanchored-warning-continue',
   'tml-unanchored-warning-cancel',
+  // the Replace File alert (#576 D35): raised after the save dialog when the
+  // app's extension fix-up renamed the answer onto a file that exists (or whose
+  // existence it could not probe). Answered inside `clickAndAnswerSave`.
+  'overwrite-rewritten-replace',
+  'overwrite-rewritten-cancel',
 ]);
 
 export function isAllowedTestId(testid: string): boolean {
@@ -545,7 +557,7 @@ export interface ClickOutcome {
 export async function clickControl(ctx: ScenarioContext, testid: string): Promise<ClickOutcome> {
   if (!isAllowedTestId(testid)) {
     throw new Error(
-      `refusing to click "${testid}": not in export-roundtrip-fuzz's allowlist. A recorded trace ` +
+      `refusing to click "${shareableTestId(testid)}": not in export-roundtrip-fuzz's allowlist. A recorded trace ` +
         `can only replay the controls this scenario drives.`,
     );
   }
@@ -572,7 +584,7 @@ export async function selectValue(
   value: string,
 ): Promise<ClickOutcome> {
   if (!isAllowedTestId(testid)) {
-    throw new Error(`refusing to drive select "${testid}": not in export-roundtrip-fuzz's allowlist`);
+    throw new Error(`refusing to drive select "${shareableTestId(testid)}": not in export-roundtrip-fuzz's allowlist`);
   }
   return ctx.eval<ClickOutcome>(
     `
@@ -614,7 +626,7 @@ export async function setCheckbox(
   want: boolean,
 ): Promise<ClickOutcome> {
   if (!isAllowedTestId(testid)) {
-    throw new Error(`refusing to drive checkbox "${testid}": not in export-roundtrip-fuzz's allowlist`);
+    throw new Error(`refusing to drive checkbox "${shareableTestId(testid)}": not in export-roundtrip-fuzz's allowlist`);
   }
   return ctx.eval<ClickOutcome>(
     `
@@ -662,6 +674,13 @@ export interface SaveDialogOutcome {
   consumed: boolean;
   /** Did the TML unanchored-sections notice appear instead? */
   sawUnanchoredNotice: boolean;
+  /**
+   * Did the Replace File alert appear after the picker (#576 D35)? It is
+   * answered Replace, so the move still exports: every path it can name is the
+   * scenario's own scratch file, and leaving it open would block every later
+   * move behind a modal (NF-W2FE-2).
+   */
+  sawOverwritePrompt: boolean;
   /** `activeDialog` right after the move settled. */
   activeDialog: string | null;
   toastKeys: string[];
@@ -686,6 +705,14 @@ export interface SaveDialogOutcome {
  * unanchored, so the answer is simply never consumed, and the caller re-arms it
  * on `tml-unanchored-warning-continue` - which is the same function called with
  * `skipTmlAnchorCheck`.
+ *
+ * THE REPLACE FILE ALERT. A consumed answer whose name the app rewrites (a
+ * known extension replaced, an unknown one appended - `domRouteRewritesPath`)
+ * goes through `resolveSavePath`, which asks before writing over an existing
+ * file at the NEW name and asks anyway when it cannot probe it. The
+ * `plnxSibling` and `openProject` shapes are always rewritten, so their moves
+ * can stop on that alert; it is answered here (Replace) and reported as
+ * `sawOverwritePrompt`.
  */
 export async function clickAndAnswerSave(
   ctx: ScenarioContext,
@@ -693,7 +720,7 @@ export async function clickAndAnswerSave(
   path: string | null,
 ): Promise<SaveDialogOutcome> {
   if (!isAllowedTestId(triggerTestId)) {
-    throw new Error(`refusing to arm a save picker on "${triggerTestId}": not in the allowlist`);
+    throw new Error(`refusing to arm a save picker on "${shareableTestId(triggerTestId)}": not in the allowlist`);
   }
   return ctx.eval<SaveDialogOutcome>(
     `
@@ -708,9 +735,9 @@ export async function clickAndAnswerSave(
     if (queue.length > 0) throw new Error('a save dialog answer is already pending');
 
     const el = q(trigger);
-    if (!el) return { performed: false, reason: 'absent', consumed: false, sawUnanchoredNotice: false, activeDialog: null, toastKeys: [] };
+    if (!el) return { performed: false, reason: 'absent', consumed: false, sawUnanchoredNotice: false, sawOverwritePrompt: false, activeDialog: null, toastKeys: [] };
     if (!isVisible(el) || isOff(el)) {
-      return { performed: false, reason: 'not-actionable', consumed: false, sawUnanchoredNotice: false, activeDialog: null, toastKeys: [] };
+      return { performed: false, reason: 'not-actionable', consumed: false, sawUnanchoredNotice: false, sawOverwritePrompt: false, activeDialog: null, toastKeys: [] };
     }
 
     const id = 'export-fuzz-' + Date.now() + '-' + Math.floor(Math.random() * 1e9);
@@ -744,12 +771,23 @@ export async function clickAndAnswerSave(
     }
     await settle(capMs);
 
+    // The Replace File alert sits between the picker and the write; answer it
+    // so the export runs and no modal outlives the move.
+    let sawPrompt = false;
+    if (consumed && shown('overwrite-rewritten-prompt')) {
+      sawPrompt = true;
+      const replace = q('overwrite-rewritten-replace');
+      if (replace) dispatchClick(replace);
+      await settle(capMs);
+    }
+
     const state = ui();
     return {
       performed: true,
       reason: consumed ? null : 'unconsumed',
       consumed: consumed,
       sawUnanchoredNotice: sawNotice,
+      sawOverwritePrompt: sawPrompt,
       activeDialog: state.activeDialog == null ? null : String(state.activeDialog),
       toastKeys: toastKeys(),
     };
@@ -760,7 +798,7 @@ export async function clickAndAnswerSave(
 
 export interface ActionOutcome {
   ok: boolean;
-  /** The rejection message, or the CommandResult's error. Never named `error`. */
+  /** The rejection message, or the refused outcome's error. Never named `error`. */
   err: string | null;
 }
 
@@ -794,8 +832,8 @@ export async function callProjectAction(
     if (typeof fn !== 'function') return { ok: false, err: 'no such projectStore action: ' + action };
     try {
       const result = await fn(...rest);
-      // A CommandResult-shaped answer reports its own failure in-band; unwrap it
-      // here so the caller has ONE thing to check.
+      // A store mutation's outcome reports its own refusal in-band (\`success: false\`,
+      // #576 C4); unwrap it here so the caller has ONE thing to check.
       if (result && typeof result === 'object' && result.success === false) {
         return { ok: false, err: result.error == null ? 'command reported failure' : String(result.error) };
       }
@@ -875,7 +913,7 @@ export interface PreviewState {
  * something the container could not render.
  */
 export async function readPreview(ctx: ScenarioContext): Promise<PreviewState> {
-  return ctx.eval<PreviewState>(
+  const state = await ctx.eval<PreviewState>(
     `
     ${HELPERS}
     const host = q('export-preview') || q('export-mode-preview');
@@ -886,11 +924,14 @@ export async function readPreview(ctx: ScenarioContext): Promise<PreviewState> {
     return {
       mounted: true,
       loading: !!loadingNode,
-      error: errorNode ? (errorNode.textContent || '').slice(0, 300) : null,
+      error: errorNode ? errorNode.textContent || '' : null,
       svgBytes: svg ? svg.outerHTML.length : 0,
     };
   `,
   );
+  // The page sends the whole message: folded, THEN cut, so a cut cannot split a
+  // corpus name the fold then cannot match (#576 RV19b-P3).
+  return state.error === null ? state : { ...state, error: foldThenCut(state.error, 300) };
 }
 
 /** Does the gas plan currently have a route a dive profile could be built from? */

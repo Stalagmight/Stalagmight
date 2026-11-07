@@ -24,9 +24,7 @@ function pickOption(testId: string, value: string) {
 const executeBatch = vi.fn().mockResolvedValue({ success: true });
 const closeDialog = vi.fn();
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).translationStub());
 
 const dialogData: { shots?: unknown } = {};
 
@@ -39,17 +37,11 @@ vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ executeBatch }),
 }));
 
-vi.mock('../../../utils/telemetry', () => ({ trackDialogComplete: vi.fn() }));
+vi.mock('../../../utils/telemetry', async () => (await import('../../../test/factories/telemetry')).telemetryStubs());
 
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+vi.mock('../DialogWrapper', async () => (await import('../../../test/factories/components')).dialogWrapperStub());
 
-vi.mock('../../common/Button', () => ({
-  Button: ({ children, ...rest }: React.ComponentProps<'button'>) => (
-    <button {...rest}>{children}</button>
-  ),
-}));
+vi.mock('../../common/Button', async () => (await import('../../../test/factories/components')).buttonStub());
 
 import UnrecognisedShotKindDialog from '../UnrecognisedShotKindDialog';
 

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
@@ -54,6 +55,53 @@ function toForm(m: SpeleoProjectMetadata): SpeleoMetadataForm {
   };
 }
 
+function sameForm(a: SpeleoMetadataForm, b: SpeleoMetadataForm): boolean {
+  return (
+    a.name === b.name &&
+    a.description === b.description &&
+    a.country === b.country &&
+    a.visibility === b.visibility &&
+    a.latitude === b.latitude &&
+    a.longitude === b.longitude
+  );
+}
+
+/** The baseline and the form move together, so one update can decide both. */
+interface MetadataState {
+  baseline: SpeleoProjectMetadata | null;
+  form: SpeleoMetadataForm | null;
+}
+
+/**
+ * [#576 D26] Fold a freshly loaded server truth in: the baseline always moves, and
+ * the form takes the new truth for every field except the ones the user has typed
+ * (those that differ from the previous baseline's form), which keep what was typed.
+ * A reload used to replace both, discarding what was being typed.
+ *
+ * Field by field, not the whole form (#576 RV4-FE-SP2): keeping the entire previous
+ * form left every UNTOUCHED field on its old value, which then differed from the new
+ * baseline, so the next Save PATCHed it and silently reverted what another client had
+ * changed. Latitude and longitude travel as one pair, as the PATCH sends them.
+ */
+function foldLoaded(prev: MetadataState, loaded: SpeleoProjectMetadata): MetadataState {
+  const fresh = toForm(loaded);
+  const typed = prev.form;
+  if (typed === null || prev.baseline === null) return { baseline: loaded, form: fresh };
+  const was = toForm(prev.baseline);
+  const keep = <K extends keyof SpeleoMetadataForm>(key: K): SpeleoMetadataForm[K] =>
+    typed[key] !== was[key] ? typed[key] : fresh[key];
+  const coordinatesTyped = typed.latitude !== was.latitude || typed.longitude !== was.longitude;
+  const form: SpeleoMetadataForm = {
+    name: keep('name'),
+    description: keep('description'),
+    country: keep('country'),
+    visibility: keep('visibility'),
+    latitude: coordinatesTyped ? typed.latitude : fresh.latitude,
+    longitude: coordinatesTyped ? typed.longitude : fresh.longitude,
+  };
+  return { baseline: loaded, form: sameForm(form, fresh) ? fresh : form };
+}
+
 /**
  * The open remote project's server metadata: load, edit, and PATCH back only what
  * changed (#206). Editing needs READ_AND_WRITE or higher; a read-only user gets the
@@ -77,13 +125,25 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // The last server truth we loaded / saved - the baseline changed fields diff against.
-  const [baseline, setBaseline] = useState<SpeleoProjectMetadata | null>(null);
-  const [form, setForm] = useState<SpeleoMetadataForm | null>(null);
+  // `baseline` is the last server truth we loaded / saved - what changed fields diff
+  // against; `form` is the user's editable copy.
+  const [{ baseline, form }, setMetadata] = useState<MetadataState>({
+    baseline: null,
+    form: null,
+  });
   const [saving, setSaving] = useState(false);
   const [enablingRendering, setEnablingRendering] = useState(false);
+  // [#576 D26] The sequence number of the newest load. A reply applies only while
+  // it is still the newest one issued (an older reply resolving later must not
+  // overwrite a newer one), and the effect's cleanup bumps it so nothing lands after
+  // unmount or after the effect re-ran. The neighbouring loaders guard the same way
+  // (SpeleoRevisionHistory, SpeleoCollaboratorsTab).
+  const loadSeq = useRef(0);
 
   const reload = useCallback(async () => {
+    loadSeq.current += 1;
+    const seq = loadSeq.current;
+    const current = () => seq === loadSeq.current;
     // A project with no link has no server metadata; the dialog shows its
     // not-linked message instead of the form, so skip the doomed round trip.
     if (!isLinked) {
@@ -93,23 +153,31 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
     setLoading(true);
     setLoadError(null);
     try {
-      const meta = await invokeIpc<SpeleoProjectMetadata>('speleodb_get_project_metadata');
-      setBaseline(meta);
-      setForm(toForm(meta));
+      const meta = await invokeIpc('speleodb_get_project_metadata');
+      if (!current()) return;
+      setMetadata((prev) => foldLoaded(prev, meta));
     } catch (e) {
-      setLoadError(humanizeSpeleoError(e, t('speleodb.projectSettings.loadFailed')));
+      if (!current()) return;
+      // Translated when the error happens rather than closing over `t`: `t` changes
+      // identity on a language switch, which re-ran this load over the open form.
+      setLoadError(humanizeSpeleoError(e, i18n.t('speleodb.projectSettings.loadFailed')));
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
-  }, [isLinked, t]);
+  }, [isLinked]);
 
   useEffect(() => {
     void reload();
+    return () => {
+      loadSeq.current += 1;
+    };
   }, [reload]);
 
   const update = useCallback(
     <K extends keyof SpeleoMetadataForm>(key: K, value: SpeleoMetadataForm[K]) => {
-      setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
+      setMetadata((prev) =>
+        prev.form ? { ...prev, form: { ...prev.form, [key]: value } } : prev,
+      );
     },
     [],
   );
@@ -156,9 +224,8 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
       longitude: coordinatesChanged ? lonNum : null,
     };
     try {
-      const updated = await invokeIpc<SpeleoProjectMetadata>('speleodb_patch_project', { patch });
-      setBaseline(updated);
-      setForm(toForm(updated));
+      const updated = await invokeIpc('speleodb_patch_project', { patch });
+      setMetadata({ baseline: updated, form: toForm(updated) });
       // The backend folds a name change into the local .stalx; mirror it in the UI.
       // A lightweight in-memory set (not set_project_name_for_path) avoids marking the
       // project dirty for a rename that is already persisted server- and file-side.
@@ -203,7 +270,9 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
       // rendering-disabled banner drop + link re-seed), then mirror the flag into this
       // hook's local baseline and toast. It throws on failure.
       await useSpeleoStore.getState().enableRendering();
-      setBaseline((prev) => (prev ? { ...prev, exclude_geojson: false } : prev));
+      setMetadata((prev) =>
+        prev.baseline ? { ...prev, baseline: { ...prev.baseline, exclude_geojson: false } } : prev,
+      );
       showToast(t('speleodb.projectSettings.rendering.enabled'), TOAST_KEYS.SPELEODB_PROJECT_SETTINGS, 'success');
     } catch (e) {
       showToast(

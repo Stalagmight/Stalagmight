@@ -41,9 +41,18 @@ export default function TelemetryOptInDialog({
       };
 
       try {
-        await invokeIpc('update_config', { config: updatedConfig }, {
-          purpose: 'save telemetry opt-in choice',
-        });
+        // [#576 D27-32(c)] The two settings this prompt owns, applied onto the
+        // backend's live config - not the whole config it was handed at mount.
+        await invokeIpc(
+          'patch_config',
+          {
+            patches: [
+              { path: ['general', 'telemetry_enabled'], value: enabled },
+              { path: ['general', 'telemetry_opt_in_shown'], value: true },
+            ],
+          },
+          { purpose: 'save telemetry opt-in choice' },
+        );
         onConfigChanged(updatedConfig);
 
         // Enable/disable JS-side collection + notify Rust collector

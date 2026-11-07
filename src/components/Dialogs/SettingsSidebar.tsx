@@ -225,7 +225,7 @@ export function SettingsSidebar({
                   {hasError && (
                     <span
                       className="w-2 h-2 rounded-full bg-error flex-shrink-0"
-                      aria-label="Has validation errors"
+                      aria-label={t('settings.sidebar.hasErrors')}
                       data-testid={`settings-tab-error-${category.id}`}
                     />
                   )}

@@ -1,5 +1,7 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupMockedPage, selectDropdownOption } from './helpers/app';
+import { setIpcOverrides } from './helpers/ipcOverrides';
+import type { MockReply } from './mocks/ipc/types';
 
 /**
  * First mocked-tier coverage for the Ariane (.tml/.tmlu) import journey (#411).
@@ -10,8 +12,15 @@ import { setupMockedPage, selectDropdownOption } from './helpers/app';
  * IPC mock serves (no .tml fixture is read anywhere).
  *
  * The mocked file is 2 sections / 5 shots, one of them excluded, one virtual,
- * with 1 loop closure, so the dialog's optional controls and the receipt's
+ * with 1 loop closure, so the dialog's optional controls and the preview's
  * counts are all observable.
+ *
+ * [#576 E3] The import itself is canned: the mock lands the file as the default
+ * options would, whatever was sent, and answers its receipt. What each option
+ * changes about the landed sections, kinds, merges, closures and receipt counts is
+ * the backend's (parsers tml tests, core command_import and mock_narrowing_tests).
+ * This spec asserts what the dialog shows, what it sends, and that the reply is
+ * rendered.
  */
 
 const TML_PATH = '/mock/synthetic-cavern.tml';
@@ -122,20 +131,15 @@ test.describe('Ariane TML import journey', () => {
 
     const sections = await getImportedSections(page);
     expect(sections.map((section) => section.name)).toEqual(['Main Line', 'Side Passage']);
-    // Excluded shot dropped: 2 kept in Main Line, 2 in Side Passage.
-    // No kind assertions here: the default Auto mode classifies virtual shots
-    // via the backend's chain rule, which the IPC mock deliberately does not
-    // model - kinds are only asserted under the override modes below.
-    expect(sections.map((section) => section.kinds.length)).toEqual([2, 2]);
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
-    expect(calls[0].includeExcluded).toBe(false);
-    expect(calls[0].commentsOnStations).toBe(true);
-    expect(calls[0].virtualShotMode).toBe('Auto');
+    expect(calls[0]!.includeExcluded).toBe(false);
+    expect(calls[0]!.commentsOnStations).toBe(true);
+    expect(calls[0]!.virtualShotMode).toBe('Auto');
   });
 
-  test('the excluded-shot toggle sends includeExcluded and lands the extra shot', async ({ page }) => {
+  test('the excluded-shot toggle counts the extra shot in the preview and sends includeExcluded', async ({ page }) => {
     await openTmlImportDialog(page, TML_PATH, 'Excluded Shot Import');
 
     await page.getByTestId('tml-include-excluded').check();
@@ -143,24 +147,20 @@ test.describe('Ariane TML import journey', () => {
     await expect(page.getByTestId('tml-shot-count')).toHaveText('5');
     await page.getByTestId('tml-import-confirm').click();
 
-    // Toast, not modal (warning-free receipt, #411/#420) - and the summary
-    // must count the opted-in excluded shot.
+    // Toast, not modal (warning-free receipt, #411/#420). The receipt's counts are
+    // the backend's answer (#576 E3: what an opted-in excluded shot adds to it is
+    // pinned in Rust); the smoke test above pins how a receipt renders.
     await expect(
       page.getByTestId('toast').filter({ hasText: 'Ariane TML import' })
-    ).toContainText('Ariane TML import: 2 sections - 5 shots - 1 loop reconstructed', {
-      timeout: 15000,
-    });
+    ).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
-    expect(calls[0].includeExcluded).toBe(true);
-
-    const sections = await getImportedSections(page);
-    expect(sections.map((section) => section.kinds.length)).toEqual([3, 2]);
+    expect(calls[0]!.includeExcluded).toBe(true);
   });
 
-  test('the virtual-shot override imports references instead of jumps', async ({ page }) => {
+  test('the virtual-shot override sends AllReferences', async ({ page }) => {
     await openTmlImportDialog(page, TML_PATH, 'Virtual Shot Import');
 
     await selectDropdownOption(page, 'tml-virtual-shot-mode', 'AllReferences');
@@ -174,13 +174,10 @@ test.describe('Ariane TML import journey', () => {
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
-    expect(calls[0].virtualShotMode).toBe('AllReferences');
-
-    const sections = await getImportedSections(page);
-    expect(sections[1]?.kinds).toEqual(['Normal', 'Reference']);
+    expect(calls[0]!.virtualShotMode).toBe('AllReferences');
   });
 
-  test('the all-jumps override imports jumps regardless of topology', async ({ page }) => {
+  test('the all-jumps override sends AllJumps', async ({ page }) => {
     await openTmlImportDialog(page, TML_PATH, 'All Jumps Import');
 
     await selectDropdownOption(page, 'tml-virtual-shot-mode', 'AllJumps');
@@ -194,10 +191,7 @@ test.describe('Ariane TML import journey', () => {
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
-    expect(calls[0].virtualShotMode).toBe('AllJumps');
-
-    const sections = await getImportedSections(page);
-    expect(sections[1]?.kinds).toEqual(['Normal', 'Jump']);
+    expect(calls[0]!.virtualShotMode).toBe('AllJumps');
   });
 
   test('an imperial file reports the unit conversion in the dialog and the receipt', async ({ page }) => {
@@ -206,6 +200,29 @@ test.describe('Ariane TML import journey', () => {
     await expect(page.getByTestId('tml-import-dialog')).toContainText(
       'Converted from imperial to metric'
     );
+
+    // The backend's receipt for a converted file carries its unit note; the receipt
+    // must surface it (#576 E3: the mock answers canned, so the spec seeds the reply).
+    await setIpcOverrides(page, {
+      execute_tml_import: {
+        warnings: [],
+        remote_link: null,
+        section_ids: [1, 2],
+        import_receipt: {
+          source_format: 'Ariane TML',
+          file_name: 'synthetic-imperial-cavern.tmlu',
+          sections_found: 2,
+          sections_imported: 2,
+          shot_count: 4,
+          closures_requested: 1,
+          closures_created: 1,
+          unit_conversion: 'Lengths converted from feet to meters',
+          warnings: [],
+          info: [],
+          zero_datum_created: null,
+        },
+      } satisfies MockReply<'execute_tml_import'>,
+    });
 
     await page.getByTestId('tml-import-confirm').click();
 
@@ -285,7 +302,6 @@ test.describe('Ariane TML import journey', () => {
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.selectedSections).toEqual([1]);
-    expect((await getImportedSections(page)).map((s) => s.name)).toEqual(['Side Passage']);
   });
 
   test('unticking every section disables Import', async ({ page }) => {

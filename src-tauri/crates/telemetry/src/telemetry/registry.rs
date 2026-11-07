@@ -32,165 +32,12 @@ pub const SOURCE_NAMES: &[&str] = &[
 
 /// Known event base names (the `:source` suffix is appended at runtime). The
 /// canonical vocabulary the coverage tests check against; order is irrelevant.
+///
+/// `command.<name>` is NOT listed (#576 C3): its vocabulary is the IPC command
+/// manifest generated from `generate_handler!` (`src/types/ipc/IpcCommands.ts`),
+/// and `invokeIpc`, typed by that manifest, tracks every registered command
+/// except telemetry's own. Listing them here only duplicated the registry.
 pub const EVENT_NAMES: &[&str] = &[
-    // ── Commands ──
-    // `adjust_loop_closures` was removed when closure adjustment became a
-    // non-destructive display mode. Its name is kept in the vocabulary for
-    // historical continuity; it has no live handler, so the command/undo
-    // coverage tests skip it via REMOVED_COMMANDS.
-    "command.adjust_loop_closures",
-    "command.attempt_repair",
-    "command.calculate_file_hash",
-    "command.can_redo",
-    "command.can_undo",
-    "command.cancel_loading",
-    "command.check_duplicate_import",
-    "command.check_merge_connectivity",
-    "command.check_section_hashes",
-    "command.clear_tile_cache",
-    "command.close_project",
-    "command.take_unrecognised_shot_kinds",
-    "command.take_pending_launch_files",
-    "command.compute_gas_reach_field",
-    "command.count_unanchored_sections",
-    "command.create_loop_closure",
-    "command.create_project_full",
-    "command.create_section",
-    "command.create_section_and_merge",
-    "command.create_shot",
-    "command.debug_trigger_panic",
-    "command.delete_dive_plan",
-    "command.delete_last_shot_and_section",
-    "command.delete_section",
-    "command.delete_shot",
-    "command.delete_shot_and_split",
-    "command.execute_batch",
-    "command.execute_gpx_import",
-    "command.execute_tml_import",
-    "command.export_csv",
-    "command.export_dive_profile",
-    "command.export_image",
-    "command.export_json",
-    "command.export_salvageable_data",
-    "command.export_tml",
-    "command.fetch_tile",
-    "command.get_anchored_section_ids",
-    "command.get_cache_stats",
-    "command.get_config",
-    "command.get_network_status",
-    "command.get_project_state",
-    "command.get_project_warnings",
-    "command.get_recent_logs",
-    "command.get_recent_logs_since",
-    "command.get_redo_stack",
-    "command.get_rigid_connected_section_ids",
-    "command.get_section_relationships",
-    "command.get_segment_geometry",
-    "command.get_survey_geometry_for_file",
-    "command.get_tile_attribution",
-    "command.get_tile_fetch_stats",
-    "command.get_tile_providers",
-    "command.get_undo_stack",
-    "command.history_discarded",
-    "command.import_dmp",
-    "command.import_sections",
-    "command.list_backups",
-    "command.list_dive_plans",
-    "command.list_recent_projects",
-    "command.load_display_settings",
-    "command.load_dive_plan",
-    "command.load_project_full",
-    "command.merge_projects",
-    "command.merge_stations",
-    "command.move_comment",
-    "command.move_section",
-    "command.move_segment",
-    "command.move_station",
-    "command.parse_gpx",
-    "command.parse_tml",
-    "command.plan_anchors_for_refs",
-    "command.plan_refs_for_anchors",
-    "command.preview_delete_shot",
-    "command.push_frontend_log",
-    "command.redo",
-    "command.redo_to",
-    "command.reload_config",
-    "command.remove_from_recent_projects",
-    "command.remove_loop_closure",
-    "command.remove_zero_datum",
-    "command.render_dive_profile_text",
-    // Retained for telemetry-ID stability; the command was removed (#57). See REMOVED_COMMANDS.
-    "command.resolve_all_warnings",
-    "command.resolve_warning",
-    "command.restore_from_backup",
-    "command.reverse_section",
-    "command.save_display_setting",
-    "command.save_dive_plan",
-    "command.save_project",
-    // Recent-projects rename-by-path command (recent-projects metadata panel;
-    // project need not be open).
-    "command.set_project_name_for_path",
-    "command.set_shot_kind",
-    "command.set_station_comment",
-    "command.set_zero_datum",
-    "command.speleodb_add_collaborator",
-    "command.speleodb_add_team",
-    "command.speleodb_adopt_ariane",
-    "command.speleodb_delete_project",
-    "command.speleodb_done",
-    "command.speleodb_force_edit",
-    "command.speleodb_get_project_metadata",
-    "command.speleodb_get_revisions",
-    "command.speleodb_link_status",
-    "command.speleodb_list_collaborators",
-    "command.speleodb_list_projects",
-    "command.speleodb_list_teams",
-    "command.speleodb_local_project_states",
-    "command.speleodb_login",
-    "command.speleodb_logout",
-    "command.speleodb_open_project",
-    "command.speleodb_open_project_discarding_local",
-    "command.speleodb_patch_project",
-    "command.speleodb_publish",
-    "command.speleodb_push",
-    "command.speleodb_release_all_locks",
-    "command.speleodb_release_current_lock",
-    "command.speleodb_release_lock",
-    "command.speleodb_release_lock_acquired_here",
-    "command.speleodb_remove_collaborator",
-    "command.speleodb_remove_team",
-    "command.speleodb_restore_revision",
-    "command.speleodb_dump_candidates",
-    "command.speleodb_retry_keychain",
-    "command.speleodb_search_users",
-    "command.speleodb_session",
-    "command.speleodb_set_collaborator",
-    "command.speleodb_set_exclude_geojson",
-    "command.speleodb_set_team",
-    "command.speleodb_set_undo_mode",
-    "command.speleodb_set_token_storage",
-    "command.speleodb_start_editing",
-    "command.speleodb_take_remote",
-    "command.speleodb_unlink",
-    "command.speleodb_remove_link_at",
-    "command.speleodb_unwind_target",
-    "command.speleodb_rewind_target",
-    "command.speleodb_discard_changes",
-    "command.speleodb_update",
-    "command.split_shot_at_distance",
-    "command.suggest_all_import_placements",
-    "command.suggest_import_placement",
-    "command.suggest_orphan_placements",
-    "command.undo",
-    "command.undo_to",
-    "command.unmerge_station_pair",
-    "command.unmerge_stations",
-    "command.unresolve_warning",
-    "command.update_config",
-    "command.update_panel_layout",
-    "command.update_panel_sizes",
-    "command.update_section",
-    "command.update_shot",
     // ── Action: tools (93-104) ──
     "action.tool.comment",
     "action.tool.delete",
@@ -479,66 +326,31 @@ pub const EVENT_NAMES: &[&str] = &[
     // ── Dwell: other (287-288) ──
     "dwell.global-view",
     "dwell.placement",
-    "command.track_imported_file",
     "action.dialog.delete-shot-choice",
     "dialog-cancel.delete-shot-choice",
     "dwell.dialog.delete-shot-choice",
     "action.select-add.section",
-    "command.load_project_full_binary",
-    "command.get_memory_stats",
-    "command.parse_compass",
-    "command.execute_compass_import",
     // compass-import dialog (action/cancel/dwell trio).
     "action.dialog.compass-import",
     "dialog-cancel.compass-import",
     "dwell.dialog.compass-import",
-    // SVG stick-map export preview command.
-    "command.preview_svg_export",
     // Folder-access permission guidance dialog (action/cancel/dwell trio).
     "action.dialog.save-permission",
     "dialog-cancel.save-permission",
     "dwell.dialog.save-permission",
-    // Structural-integrity IPC commands (check + repair).
-    "command.check_project_integrity",
-    "command.repair_project_integrity",
     // Closure-adjusted display mode (measured ↔ closure-adjusted) toggle + state.
     // Only the non-default state ("closureAdjusted") is emitted.
     "action.toggle.geometryMode",
     "display-state.geometryMode:closureAdjusted",
-    // Lazy IPC query that returns the closure-adjusted station coordinates.
-    "command.get_adjusted_stations",
-    // Per-station along-cave distance query backing the distance-gradient overlay.
-    "command.get_station_distances_from",
-    // Data-table spreadsheet editing: persisted view config + raw-table browsing
-    // (fullscreen data table).
-    "command.update_data_table_view",
-    // Same, for the new-section dialog's grid (its own column layout).
-    "command.update_new_section_view",
-    // Same again for the edit-section dialog's shot grid.
-    "command.update_edit_section_view",
-    "command.update_import_shots_view",
-    "command.update_gas_config",
-    "command.get_raw_table_names",
-    "command.get_raw_table",
-    // Ruler tool: along-cave-line distance + path shots between two endpoints (#26).
-    "command.get_along_line_distance",
-    // Per-project settings: validation thresholds stored in the .stalx (#57).
-    "command.update_project_settings",
-    // Entrance elevation edit, project settings dialog (#465).
-    "command.set_surface_elevation",
     // Project Settings dialog (#57).
     "action.dialog.project-settings",
     "dialog-cancel.project-settings",
     "dwell.dialog.project-settings",
-    // Delete-project command + its confirm dialog (action/cancel/dwell trio) (#118).
-    "command.delete_project",
+    // Delete-project confirm dialog (action/cancel/dwell trio) (#118).
     "action.dialog.delete-project",
     "dialog-cancel.delete-project",
     "dwell.dialog.delete-project",
     // Bulk shot deletion: contiguous-range preview + split/shift commands (#95).
-    "command.preview_delete_shot_range",
-    "command.delete_shot_range_split",
-    "command.delete_shot_range_shift",
     "undo-after.delete_shot_range_split",
     "undo-after.delete_shot_range_shift",
     // Bulk-delete dialog (action/cancel/dwell trio) (#95).
@@ -641,9 +453,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.project-settings",
     "active-dwell.dialog.delete-project",
     "active-dwell.dialog.bulk-delete",
-    // Walls (.wpj/.srv) survey import.
-    "command.parse_walls",
-    "command.execute_walls_import",
     // walls-import dialog (action/cancel/dwell + active-dwell mirror).
     "action.dialog.walls-import",
     "dialog-cancel.walls-import",
@@ -1108,7 +917,39 @@ mod tests {
         //   + 1 the discarded-history banner (#473) asks the backend whether the
         //       project it just opened could read its edit history at all:
         //       command.history_discarded = 737.
-        assert_eq!(EVENT_NAMES.len(), 737);
+        //   + 1 the frontend reports its workspace mode so the backend can refuse
+        //       edits in the read-only Plan/Export workspaces (#576 C5):
+        //       command.set_workspace_mode = 738.
+        //   + 1 the frontend re-asks the open file's flags (newer-format stamp,
+        //       unreadable link row) after a SpeleoDB in-place tree swap (#576
+        //       NF-W2F-1): command.speleodb_open_file_flags = 739.
+        //   + 1 a settings save applies only the settings it changed (#576
+        //       D27-32(c)): command.patch_config = 740.
+        //   - 1 command.track_imported_file, removed entirely (not via
+        //       REMOVED_COMMANDS): the IPC command was registered but no frontend
+        //       ever called it - import_sections tracks the hash itself - so the
+        //       name was never emitted (#576 NF-TRACK-IMPORTED) = 739.
+        //   - 178 command.* entries: the command vocabulary is the generated IPC
+        //       command manifest, not a hand copy of it (#576 C3) = 561.
+        assert_eq!(EVENT_NAMES.len(), 561);
+    }
+
+    /// [#576 C3] `command.<name>` comes from the generated IPC command manifest;
+    /// a hand-listed copy here is the duplicate that change removed, and would
+    /// silently drift from `generate_handler!` again.
+    #[test]
+    fn command_events_are_not_hand_listed() {
+        let listed: Vec<&str> = EVENT_NAMES
+            .iter()
+            .copied()
+            .filter(|name| name.starts_with("command."))
+            .collect();
+        assert!(
+            listed.is_empty(),
+            "{} command.* event(s) listed by hand; their vocabulary is the IPC command \
+             manifest (src/types/ipc/IpcCommands.ts): {listed:?}",
+            listed.len()
+        );
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

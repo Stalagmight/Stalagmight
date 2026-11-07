@@ -16,13 +16,12 @@ import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../speleoStore';
 import type { DisplaySettings } from '../../types/loading';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
 const loadBinaryMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc');
 vi.mock('../../utils/loadProjectBinary', () => ({ loadProjectFullBinary: loadBinaryMock }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 
 const displaySettings: DisplaySettings = {
   showStations: true,
@@ -45,7 +44,7 @@ const displaySettings: DisplaySettings = {
 /** Resolves the load with the backend's `is_remote` verdict for this project. */
 const mockLoad = (isRemote: boolean) =>
   loadBinaryMock.mockResolvedValue({
-    loadingId: 1n,
+    loadingId: 1,
     isRemote,
     project: {
       name: 'Loaded Cave',
@@ -61,7 +60,7 @@ const mockLoad = (isRemote: boolean) =>
       section_offsets: {},
       imported_file_hashes: [],
       imported_section_hashes: [],
-      next_closure_id: 1n,
+      next_closure_id: 1,
     },
     stations: [],
     surveyData: { shots: [], stations: [] },
@@ -121,7 +120,7 @@ beforeEach(() => {
     recentProjects: [],
     autosaveFailure: null,
     isDirty: false,
-    loading: { loadingId: 0n, clientOpId: 0, isLoading: false, overallProgress: 0 },
+    loading: { loadingId: 0, clientOpId: 0, isLoading: false, overallProgress: 0 },
   });
 });
 

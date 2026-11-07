@@ -6,30 +6,37 @@ import { HelpTooltip } from '../common/HelpTooltip';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
 import { formatLength } from '../../utils/formatStats';
-import { circularMeanDegrees } from '../../utils/angles';
+import { walkStations } from '../../utils/stationWalk';
+import { DMP_AZIMUTH_REFERENCE } from '../../utils/importSectionConfig';
 import type { DmpFile, DmpShot } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 
 /**
  * Lightweight SVG preview of a section shape.
  * Avoids the cost of a full MapLibre instance per card.
+ *
+ * The shape is the backend's walk (`walkStations`, #576 D15) over the shots the
+ * import keeps, with the reference every mNemo section is recorded with - not
+ * `computeStationsFromDmpShots`, whose module loads MapLibre.
  */
 function SectionMiniPreview({ shots, size = 140 }: { shots: DmpShot[]; size?: number }) {
-  const points = useMemo(() => {
-    const stations: Array<{ x: number; y: number }> = [{ x: 0, y: 0 }];
-    for (const shot of shots) {
-      if (shot.shot_type !== 'Standard') continue;
-      const prev = stations[stations.length - 1];
-      if (!prev) continue;
-      const azimuth = circularMeanDegrees(shot.heading_in, shot.heading_out);
-      const rad = (azimuth * Math.PI) / 180;
-      stations.push({
-        x: prev.x + shot.length * Math.sin(rad),
-        y: prev.y + shot.length * Math.cos(rad),
-      });
-    }
-    return stations;
-  }, [shots]);
+  const { t } = useTranslation();
+  const points = useMemo(
+    () =>
+      walkStations(
+        shots
+          .filter((shot) => shot.shot_type === 'Standard')
+          .map((shot) => ({
+            azimuth_in: shot.heading_in,
+            azimuth_out: shot.heading_out,
+            length: shot.length,
+            depth_in: shot.depth_in,
+            depth_out: shot.depth_out,
+          })),
+        DMP_AZIMUTH_REFERENCE
+      ),
+    [shots]
+  );
 
   const svgPath = useMemo(() => {
     if (points.length < 2) return null;
@@ -73,7 +80,7 @@ function SectionMiniPreview({ shots, size = 140 }: { shots: DmpShot[]; size?: nu
         </>
       ) : (
         <text x={size / 2} y={size / 2} textAnchor="middle" dominantBaseline="middle" fill="var(--cc-text-secondary)" fontSize={12}>
-          No shots
+          {t('dialogs.zeroDatumSelection.noShots')}
         </text>
       )}
     </svg>

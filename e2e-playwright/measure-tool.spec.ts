@@ -110,6 +110,9 @@ test.describe('Measure tool - dual distance + tint (#26)', () => {
     await clickStation(page, 0);
     await clickStation(page, 1);
     await expect(page.locator('[data-testid="measure-readout"]')).toBeVisible();
+    // settle: the readout must outlive the REMOVED 5 s auto-clear timer; only
+    // real time past 5 s can show that no such timer fires (page.clock would have
+    // to be installed before load and also freezes the map's own animation clock).
     await page.waitForTimeout(5500);
     await expect(page.locator('[data-testid="measure-readout"]')).toBeVisible();
   });

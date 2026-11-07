@@ -3,7 +3,196 @@ use chrono::Utc;
 use rusqlite::{params, Connection, Transaction};
 use std::path::Path;
 
-use super::{BackupInfo, Database, SalvagedData, SalvagedSection};
+use super::{BackupInfo, BackupKind, Database, RestoreOutcome, SalvagedData, SalvagedSection};
+
+/// [#576 C15] Where a restore stages the candidate before installing it: beside
+/// the project, so the install is a same-filesystem rename. Not a name the
+/// backup listing offers.
+const RESTORE_STAGING_SUFFIX: &str = ".restore-staging";
+/// [#576 C15] Where the backup listing checks a candidate that has a rollback
+/// journal beside it (rolling the journal back is a write, so it happens on a
+/// copy). Not a name the backup listing offers.
+const CHECK_STAGING_SUFFIX: &str = ".restore-check";
+/// [#576 B27(f)] Where Repair writes its compacted copy before renaming it over
+/// the project. Not `.tmp`: that is what the listing offers as an interrupted
+/// save.
+const REPAIR_STAGING_SUFFIX: &str = ".repair-staging";
+
+/// `path` with `suffix` appended to its file name (`CaveA.stalx` + `.x` ->
+/// `CaveA.stalx.x`).
+pub(super) fn sibling(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = path
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("project"))
+        .to_os_string();
+    name.push(suffix);
+    path.with_file_name(name)
+}
+
+/// SQLite's rollback journal for `path`.
+fn journal_of(path: &Path) -> std::path::PathBuf {
+    sibling(path, "-journal")
+}
+
+/// A restore's step 3: rename the staged file over the project (behind the
+/// test-only fault hook, since a failing rename has no organic trigger here).
+fn install_staged(staging: &Path, project: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    fault::check_install()?;
+    std::fs::rename(staging, project)
+}
+
+/// Test-only fault injection for a restore's install rename (#576 RV3-R-6): on
+/// Windows it fails when another process holds the project open, which a test
+/// cannot arrange portably.
+#[cfg(test)]
+pub(super) mod fault {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FAIL_INSTALL: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Every restore install on this thread fails until the guard drops.
+    pub(in crate::persistence::sqlite) fn fail_restore_install() -> FailingInstall {
+        FAIL_INSTALL.with(|fail| fail.set(true));
+        FailingInstall
+    }
+
+    /// Clears the injection on drop, so a failed assertion cannot leak it into
+    /// the next test on the same thread.
+    pub(in crate::persistence::sqlite) struct FailingInstall;
+
+    impl Drop for FailingInstall {
+        fn drop(&mut self) {
+            FAIL_INSTALL.with(|fail| fail.set(false));
+        }
+    }
+
+    pub(super) fn check_install() -> std::io::Result<()> {
+        if FAIL_INSTALL.with(Cell::get) {
+            return Err(std::io::Error::other("injected install failure"));
+        }
+        Ok(())
+    }
+}
+
+/// The safety copy a restore keeps of the file it replaces.
+struct PreRestoreCopy {
+    path: std::path::PathBuf,
+    /// The project's rollback journal moved to `<path>-journal` with it.
+    took_journal: bool,
+}
+
+/// Remove `path` and its journal, ignoring "not there".
+fn remove_with_journal(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(journal_of(path));
+}
+
+/// Copy `from` (and its rollback journal, when there is one) to `to`, replacing
+/// whatever was at `to`.
+fn copy_with_journal(from: &Path, to: &Path) -> std::io::Result<()> {
+    remove_with_journal(to);
+    std::fs::copy(from, to)?;
+    let journal = journal_of(from);
+    if journal.exists() {
+        std::fs::copy(&journal, journal_of(to))?;
+    }
+    Ok(())
+}
+
+/// What the listing calls a file beside the project named `stem`, or `None`
+/// when it is not a restore candidate.
+fn classify_candidate(stem: &str, name: &str) -> Option<(BackupKind, Option<u32>)> {
+    let rest = name.strip_prefix(stem)?;
+    // A journal, WAL or shared-memory file is part of another file, never a
+    // candidate of its own; the staging names are this module's own scratch.
+    if rest.is_empty()
+        || [
+            "-journal",
+            "-wal",
+            "-shm",
+            RESTORE_STAGING_SUFFIX,
+            CHECK_STAGING_SUFFIX,
+            REPAIR_STAGING_SUFFIX,
+        ]
+        .iter()
+        .any(|suffix| rest.ends_with(suffix))
+    {
+        return None;
+    }
+    if let Some(number) = rest.strip_prefix(".pre-restore") {
+        return match number {
+            "" => Some((BackupKind::PreRestore, None)),
+            _ => number
+                .strip_prefix('.')
+                .and_then(|n| n.parse::<u32>().ok())
+                .map(|n| (BackupKind::PreRestore, Some(n))),
+        };
+    }
+    if rest.contains(".backup") {
+        return Some((BackupKind::Backup, None));
+    }
+    if rest.to_ascii_lowercase().ends_with(".tmp") {
+        return Some((BackupKind::InterruptedSave, None));
+    }
+    None
+}
+
+/// How long a restore check waits out a competing writer on the candidate: the
+/// 5000 ms every other open path has (`busy_timeout_tests`).
+const CANDIDATE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+impl Database {
+    /// [#576 NF-FIX5-3] Wrap a connection a restore check opened on a candidate,
+    /// with the busy timeout set here rather than left to whatever the caller's
+    /// open happened to configure (rusqlite's default today), so the wait the
+    /// busy-timeout test pins on every other open path holds on this one too.
+    ///
+    /// [#576 RV18-1] A candidate is an existing file like any other, so the
+    /// schema guard (#608) runs here, before quick_check evaluates the file's
+    /// CHECKs or anything else reads it: a file every open would refuse is never
+    /// offered as usable, nor installed over the project.
+    pub(super) fn for_candidate_check(conn: Connection) -> Result<Self> {
+        conn.busy_timeout(CANDIDATE_BUSY_TIMEOUT)
+            .context("Failed to set the busy timeout on a restore candidate")?;
+        super::check_schema(&conn)?;
+        Ok(Self { conn })
+    }
+}
+
+/// The checks a restore candidate has to pass, on a connection that already
+/// sees its committed contents: the schema guard, quick_check, and a project
+/// inside.
+///
+/// The reasons are worded for the dialog; SQLite's own error goes to the log.
+fn check_candidate_connection(conn: Connection) -> std::result::Result<(), String> {
+    let unreadable = |e: &anyhow::Error| {
+        tracing::info!(error = %e, purpose = "check a restore candidate", "Candidate refused");
+        let refused = e
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<super::RefusedSchemaObject>());
+        if let Some(refused) = refused {
+            format!(
+                "it contains {} named \"{}\", which Stalagmight never creates",
+                refused.what,
+                refused.display_name()
+            )
+        } else if format!("{e:#}").contains("integrity check failed") {
+            "it fails the database integrity check".to_string()
+        } else {
+            "it is not a readable project file".to_string()
+        }
+    };
+    let db = Database::for_candidate_check(conn).map_err(|e| unreadable(&e))?;
+    db.validate_integrity().map_err(|e| unreadable(&e))?;
+    match db.has_project_data() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("it holds no project".to_string()),
+        Err(e) => Err(unreadable(&e)),
+    }
+}
 
 impl Database {
     /// Write a self-contained snapshot of an on-disk `.stalx` to `dest` using
@@ -401,6 +590,12 @@ impl Database {
 
     /// Open a database for recovery purposes, skipping integrity checks.
     /// This allows reading whatever data is still accessible from a corrupt file.
+    ///
+    /// [#576 RV18-1] The schema guard (#608) is not skipped: it reads only the
+    /// schema, which SQLite has to parse before it can read any table of a
+    /// damaged file anyway, and the salvage that follows must not run SQL the
+    /// file chose. It is the salvage's lenient form (#576 RV19a-12): a type
+    /// cell that lost its case ('Table') is checked, not refused.
     pub fn open_for_recovery(path: &Path) -> Result<Self> {
         tracing::info!("Opening database for recovery at: {:?}", path);
 
@@ -408,15 +603,18 @@ impl Database {
             anyhow::bail!("File does not exist");
         }
 
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        // Read-only, leaving nothing beside a WAL-mode file (#576 W35-NF-1).
+        let conn = super::open::connect_for_reading(path)
             .context("Failed to open database for recovery")?;
+        super::schema_guard::check_schema_for_salvage(&conn)?;
 
         let db = Self { conn };
         // Skip integrity check intentionally - we know the file may be corrupt
         Ok(db)
     }
 
-    /// Attempt to repair a corrupt database using REINDEX + VACUUM.
+    /// Attempt to repair a corrupt database using REINDEX + a rewrite of every
+    /// readable page.
     ///
     /// Always creates a backup first (`path.stalx.backup`, with numeric
     /// suffixes to avoid overwriting existing backups).
@@ -429,19 +627,46 @@ impl Database {
         let backup_path = Self::create_numbered_backup(path)?;
         tracing::info!("Created backup at: {:?}", backup_path);
 
-        // 2. Open read-write (skip our integrity check wrapper)
+        // 2. Open read-write (skip our integrity check wrapper). [#576 RV18-1] The
+        // schema guard still runs (#608), before REINDEX evaluates an expression
+        // index or the final quick_check a CHECK: a file every open refuses is
+        // left as it is, beside the plain copy step 1 took of it.
         let conn = Connection::open(path).context("Failed to open database for repair")?;
+        super::check_schema(&conn)?;
 
         // 3. Rebuild indexes
         if let Err(e) = conn.execute_batch("REINDEX;") {
             tracing::warn!(error = %e, "REINDEX failed, continuing with VACUUM");
         }
 
-        // 4. VACUUM rebuilds the entire database from readable pages
-        conn.execute_batch("VACUUM;")
-            .context("VACUUM failed - database may be too damaged to repair")?;
+        // 4. Rewrite the database from its readable pages. [#576 B27(f)] `VACUUM
+        // INTO` a sibling + rename, NOT a plain `VACUUM`: that one rewrites
+        // through SQLite's temp directory (`SQLITE_TMPDIR` / `TMPDIR` / `/tmp`),
+        // a small tmpfs on many Linux systems, so a large project could not be
+        // repaired at all. The sibling sits where the project already fits - the
+        // same reasoning as `sanitize_push_snapshot` - and a leftover from a
+        // killed run is removed first (`VACUUM INTO` refuses an existing target).
+        let staging = sibling(path, REPAIR_STAGING_SUFFIX);
+        remove_with_journal(&staging);
+        if let Err(e) = conn.execute("VACUUM INTO ?1", params![staging.to_string_lossy()]) {
+            remove_with_journal(&staging);
+            return Err(anyhow::Error::from(e)
+                .context("VACUUM failed - database may be too damaged to repair"));
+        }
+        // Closed before the rename: Windows cannot replace a file SQLite holds.
+        drop(conn);
+        if let Err(e) = std::fs::rename(&staging, path) {
+            remove_with_journal(&staging);
+            return Err(anyhow::Error::from(e)
+                .context("Could not replace the project with its repaired copy"));
+        }
 
         // 5. Verify result
+        #[cfg(test)]
+        super::open::between_opens::run(path);
+        let conn = Connection::open(path).context("Failed to reopen the repaired database")?;
+        // Another open of the file: guarded like the first (#608, #576 RV19a-8).
+        super::check_schema(&conn)?;
         let check: String = conn
             .query_row("PRAGMA quick_check", [], |row| row.get(0))
             .unwrap_or_else(|_| "error".to_string());
@@ -514,7 +739,17 @@ impl Database {
         Ok(salvaged)
     }
 
-    /// List backup files for a given project path.
+    /// List the files the recovery dialog offers to restore a project from.
+    ///
+    /// [#576 C15] Every candidate is labelled and checked: backups (Repair's
+    /// numbered copies and the pre-upgrade copy), an interrupted save's `.tmp`,
+    /// and the files earlier restores replaced (`.pre-restore.N`, which used to
+    /// be left out - so a restore could not be undone from the dialog). A
+    /// candidate that does not open, has a schema every open refuses (#608),
+    /// fails the quick integrity check or holds no project is still listed - so
+    /// the user sees it exists - but marked
+    /// unusable with the reason. Journals, staging files and the project itself
+    /// are never offered.
     pub fn list_backups(path: &Path) -> Vec<BackupInfo> {
         let mut backups = Vec::new();
         let Some(parent) = path.parent() else {
@@ -525,25 +760,32 @@ impl Database {
         if let Ok(entries) = std::fs::read_dir(parent) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                // Match patterns: file.stalx.backup, file.stalx.backup.1, file.stalx.tmp
-                let is_backup = name.starts_with(&*stem)
-                    && (name.contains(".backup") || name.to_ascii_lowercase().ends_with(".tmp"));
-                if is_backup {
-                    if let Ok(meta) = entry.metadata() {
-                        backups.push(BackupInfo {
-                            path: entry.path().display().to_string(),
-                            size_bytes: meta.len(),
-                            modified_at: meta
-                                .modified()
-                                .ok()
-                                .map(|t| {
-                                    let dt: chrono::DateTime<Utc> = t.into();
-                                    dt.to_rfc3339()
-                                })
-                                .unwrap_or_default(),
-                        });
-                    }
+                let Some((kind, restore_number)) = classify_candidate(&stem, &name) else {
+                    continue;
+                };
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                if !meta.is_file() {
+                    continue;
                 }
+                let problem = Self::check_restore_candidate(&entry.path()).err();
+                backups.push(BackupInfo {
+                    path: entry.path().display().to_string(),
+                    size_bytes: meta.len(),
+                    modified_at: meta
+                        .modified()
+                        .ok()
+                        .map(|t| {
+                            let dt: chrono::DateTime<Utc> = t.into();
+                            dt.to_rfc3339()
+                        })
+                        .unwrap_or_default(),
+                    kind,
+                    restore_number,
+                    usable: problem.is_none(),
+                    problem,
+                });
             }
         }
 
@@ -552,25 +794,236 @@ impl Database {
         backups
     }
 
+    /// [#576 C15] Can `candidate` be restored? It must open, pass the schema
+    /// guard (#608) and the quick integrity check and hold a project - as a
+    /// restore would install it, i.e.
+    /// together with the rollback journal beside it if there is one - and the
+    /// check must not change it.
+    ///
+    /// Without a journal the file is self-contained and is opened read-only
+    /// (leaving nothing beside a WAL-mode file, #576 W35-NF-1). With one, its
+    /// committed contents only appear once the journal is rolled back, which is
+    /// a write, so that happens on a copy beside it that is removed again.
+    fn check_restore_candidate(candidate: &Path) -> std::result::Result<(), String> {
+        if !journal_of(candidate).exists() {
+            let conn = super::open::connect_for_reading(candidate)
+                .map_err(|e| format!("it cannot be opened ({e})"))?;
+            return check_candidate_connection(conn);
+        }
+        let staging = sibling(candidate, CHECK_STAGING_SUFFIX);
+        let checked = copy_with_journal(candidate, &staging)
+            .map_err(|e| format!("it could not be checked ({e})"))
+            .and_then(|()| {
+                let conn =
+                    Connection::open(&staging).map_err(|e| format!("it cannot be opened ({e})"))?;
+                check_candidate_connection(conn)
+            });
+        remove_with_journal(&staging);
+        checked
+    }
+
+    /// [#576 C15, NF-AN2-7] Replace the project at `project` with the restore
+    /// candidate `candidate`, safely:
+    ///
+    /// 1. The candidate (with its rollback journal, if one is beside it - an
+    ///    interrupted save's `.tmp` can have one) is copied to a staging file
+    ///    beside the project and checked there: opening it read-write rolls the
+    ///    journal back to the last committed state, then the schema guard
+    ///    (#608), quick_check and a project inside. A candidate that fails is
+    ///    refused here, with nothing
+    ///    else touched. The candidate itself is never changed.
+    /// 2. The current project file is kept as a NUMBERED safety copy
+    ///    (`.pre-restore.N`, the first free N), never overwriting an earlier one,
+    ///    and a rollback journal left beside it moves aside WITH it: it belongs to
+    ///    that file, and left in place it would be rolled back into the restored
+    ///    one on the next open. If the copy cannot be made, nothing is restored.
+    /// 3. The staged file is renamed over the project - one atomic step, so an
+    ///    interruption leaves either the old file or the restored one, never a
+    ///    half-copied mix. If the rename fails, step 2 is undone: the journal
+    ///    goes back beside the project and the safety copy is removed.
+    pub fn restore_from_backup(project: &Path, candidate: &Path) -> Result<RestoreOutcome> {
+        if !candidate.exists() {
+            anyhow::bail!("Backup file not found: {}", candidate.display());
+        }
+        if candidate == project {
+            anyhow::bail!("A project cannot be restored from itself");
+        }
+
+        // 1. Stage and check.
+        let staging = sibling(project, RESTORE_STAGING_SUFFIX);
+        copy_with_journal(candidate, &staging).with_context(|| {
+            format!(
+                "Could not copy {} beside the project to check it",
+                candidate.display()
+            )
+        })?;
+        let checked = Connection::open(&staging)
+            .map_err(|e| format!("it cannot be opened ({e})"))
+            .and_then(check_candidate_connection);
+        if let Err(problem) = checked {
+            remove_with_journal(&staging);
+            anyhow::bail!(
+                "This file cannot be restored: {problem}. Your project file was not changed."
+            );
+        }
+        // The check's read rolled any copied journal back and deleted it; one still
+        // there would be applied to the project after the rename.
+        if journal_of(&staging).exists() {
+            remove_with_journal(&staging);
+            anyhow::bail!(
+                "The copy of {} still had an unfinished write after checking; nothing \
+                 was restored and your project file was not changed",
+                candidate.display()
+            );
+        }
+
+        // 2. Keep the file being replaced, with its journal.
+        let safety_copy = if project.exists() {
+            match Self::keep_pre_restore_copy(project) {
+                Ok(copy) => Some(copy),
+                Err(e) => {
+                    remove_with_journal(&staging);
+                    return Err(e.context(
+                        "Could not keep a copy of your current project file, so nothing was \
+                         restored",
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
+        // 3. Install.
+        if let Err(e) = install_staged(&staging, project) {
+            remove_with_journal(&staging);
+            let message = Self::undo_pre_restore_copy(project, safety_copy.as_ref());
+            return Err(anyhow::Error::from(e).context(message));
+        }
+        let safety_copy = safety_copy.map(|copy| copy.path);
+        tracing::info!(
+            project = ?project,
+            candidate = ?candidate,
+            safety_copy = ?safety_copy,
+            purpose = "restore a project from the recovery dialog",
+            "Restored the project from a backup"
+        );
+        Ok(RestoreOutcome { safety_copy })
+    }
+
+    /// [#576 RV3-R-6] Undo step 2 of a restore whose install failed, and say what
+    /// the user is left with. The project's rollback journal goes back beside it
+    /// (left with the safety copy, the project's pages opened torn), and the
+    /// safety copy - a duplicate of an unchanged file, and torn itself once its
+    /// journal is gone - is removed.
+    fn undo_pre_restore_copy(project: &Path, copy: Option<&PreRestoreCopy>) -> String {
+        const UNCHANGED: &str =
+            "Could not put the restored file in place; your project file was not changed";
+        let Some(copy) = copy else {
+            return UNCHANGED.to_string();
+        };
+        if copy.took_journal {
+            if let Err(e) = std::fs::rename(journal_of(&copy.path), journal_of(project)) {
+                tracing::error!(
+                    project = ?project,
+                    safety_copy = ?copy.path,
+                    error = %e,
+                    purpose = "restore a project from the recovery dialog",
+                    "Could not move the project's journal back after a failed restore"
+                );
+                return format!(
+                    "Could not put the restored file in place, and the record of an unfinished \
+                     write that belongs to your project could not be moved back beside it ({e}). \
+                     It is kept with the safety copy {}: restore that copy to get your project \
+                     back as it was",
+                    copy.path.file_name().unwrap_or_default().to_string_lossy()
+                );
+            }
+        }
+        if project.exists() {
+            let _ = std::fs::remove_file(&copy.path);
+        }
+        UNCHANGED.to_string()
+    }
+
+    /// [#576 C15] Copy `project` to the first free `<name>.pre-restore.N` (from
+    /// 1), never overwriting, and move a rollback journal left beside `project`
+    /// to `<name>.pre-restore.N-journal`, so the copy and its journal stay a pair.
+    fn keep_pre_restore_copy(project: &Path) -> Result<PreRestoreCopy> {
+        for n in 1..=10_000u32 {
+            let copy = sibling(project, &format!(".pre-restore.{n}"));
+            if copy.symlink_metadata().is_ok() {
+                continue;
+            }
+            let mut target = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&copy)
+                .with_context(|| format!("create {}", copy.display()))?;
+            let written = std::fs::File::open(project)
+                .and_then(|mut source| std::io::copy(&mut source, &mut target))
+                .and_then(|_| target.sync_all());
+            drop(target);
+            if let Err(e) = written {
+                let _ = std::fs::remove_file(&copy);
+                return Err(anyhow::Error::from(e).context(format!("write {}", copy.display())));
+            }
+            let journal = journal_of(project);
+            let took_journal = journal.exists();
+            if took_journal {
+                if let Err(e) = std::fs::rename(&journal, journal_of(&copy)) {
+                    let _ = std::fs::remove_file(&copy);
+                    return Err(anyhow::Error::from(e)
+                        .context("move the project's unfinished-write journal aside"));
+                }
+            }
+            return Ok(PreRestoreCopy {
+                path: copy,
+                took_journal,
+            });
+        }
+        anyhow::bail!("Too many earlier pre-restore copies beside the project")
+    }
+
     /// Create a numbered backup: file.stalx.backup, .backup.1, .backup.2, etc.
+    ///
+    /// [#576 NF-W3-3] With the project's rollback journal, when it has one: a
+    /// project frozen mid-write holds pages its journal undoes, so the main
+    /// file copied alone is torn, while the pair opens as the last committed
+    /// state (the restore list never offers the journal on its own).
     pub(super) fn create_numbered_backup(path: &Path) -> Result<std::path::PathBuf> {
         let base = path.with_extension("stalx.backup");
         if !base.exists() {
-            std::fs::copy(path, &base)?;
+            copy_with_journal(path, &base)?;
             return Ok(base);
         }
         for i in 1..100 {
             let numbered = path.with_extension(format!("stalx.backup.{i}"));
             if !numbered.exists() {
-                std::fs::copy(path, &numbered)?;
+                copy_with_journal(path, &numbered)?;
                 return Ok(numbered);
             }
         }
         anyhow::bail!("Too many existing backups (max 100)")
     }
 
+    /// Whether the salvage can read the table `name`: a `sqlite_master` row of
+    /// type `table` in any ASCII case. [#576 W52-6] The salvage's schema guard
+    /// checks a type cell that lost its case ('Table') as the table it is
+    /// (`check_schema_for_salvage`, RV19a-12), and SQLite reads it, so the
+    /// summary below reads it too: under [`Self::table_exists`]'s exact match a
+    /// 'Table' project table was reported as "Project table is empty", beside
+    /// the full project the salvage read back from it.
+    fn salvage_table_exists(&self, name: &str) -> Result<bool> {
+        let exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE lower(type) = 'table' AND name = ?1",
+            params![name],
+            |row| row.get(0),
+        )?;
+        Ok(exists > 0)
+    }
+
     pub(super) fn try_read_project_metadata(&self) -> Result<Option<(String, Option<String>)>> {
-        if !self.table_exists("project")? {
+        if !self.salvage_table_exists("project")? {
             return Ok(None);
         }
         let count: i64 = self
@@ -588,7 +1041,7 @@ impl Database {
     }
 
     pub(super) fn try_read_sections(&self) -> Result<Vec<SalvagedSection>> {
-        if !self.table_exists("sections")? {
+        if !self.salvage_table_exists("sections")? {
             return Ok(Vec::new());
         }
         let mut stmt = self
@@ -611,7 +1064,7 @@ impl Database {
     }
 
     pub(super) fn try_read_shot_count(&self) -> Result<usize> {
-        if !self.table_exists("shots")? {
+        if !self.salvage_table_exists("shots")? {
             return Ok(0);
         }
         let count: i64 = self
@@ -621,7 +1074,7 @@ impl Database {
     }
 
     pub(super) fn try_read_merge_count(&self) -> Result<usize> {
-        if !self.table_exists("station_merges")? {
+        if !self.salvage_table_exists("station_merges")? {
             return Ok(0);
         }
         let count: i64 = self
@@ -635,10 +1088,6 @@ impl Database {
 #[expect(
     clippy::expect_used,
     reason = "unit test fixtures fail loudly on setup errors"
-)]
-#[expect(
-    clippy::print_stderr,
-    reason = "a permission-dependent test announces why it skipped, or the skip is invisible"
 )]
 mod tests {
     use super::{Database, Path};
@@ -872,15 +1321,10 @@ mod tests {
         std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o555))
             .expect("make the staging dir unwritable");
         // ...unless we are root, for whom the mode bits are advisory. Probe the
-        // property this test actually depends on rather than the uid behind it -
-        // `unsafe_code` is denied crate-wide, so `geteuid` is not available here.
-        if std::fs::File::create(staging.join(".root-probe")).is_ok() {
-            let _ = std::fs::remove_file(staging.join(".root-probe"));
-            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
-                .expect("restore permissions so tempdir can clean up");
-            eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
-            return;
-        }
+        // property this test depends on rather than the uid behind it, and fail
+        // when the bits do not bite: a skip would pass on nothing (#576
+        // NF-ROOT-PERM; CI runs the Rust tests unprivileged).
+        crate::models::test_support::assert_dir_refuses_new_files(&staging);
         let result = Database::sanitize_push_snapshot(&snapshot, false, None);
         std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
             .expect("restore permissions so tempdir can clean up");
@@ -908,19 +1352,19 @@ mod tests {
         // tmp-directory hazard is guarded at the source: a future edit that reaches
         // back for `VACUUM;` silently reinstates "a small /tmp blocks every push on a
         // large project".
-        let src = include_str!("repair.rs");
-        let start = src
-            .find("pub fn sanitize_push_snapshot")
-            .expect("sanitize fn present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+        // A sanctioned source scan (#576 A8-D2, docs/testing-recipes.md "Source scans").
+        use crate::models::source_scan::{fn_body, prod_region};
+        let src = prod_region(include_str!("repair.rs"), "pub fn sanitize_push_snapshot");
+        let body = fn_body(src, "pub fn sanitize_push_snapshot(");
         assert!(
             body.contains("VACUUM INTO ?1"),
-            "sanitize must compact via VACUUM INTO a sibling"
+            "RULE (no plain VACUUM on the push path): sanitize must compact via VACUUM \
+             INTO a sibling"
         );
         assert!(
             !body.contains("\"VACUUM;\"") && !body.contains("execute_batch(\"VACUUM"),
-            "sanitize must NOT run a plain VACUUM (it rewrites through SQLITE_TMPDIR)"
+            "RULE (no plain VACUUM on the push path): sanitize must NOT run a plain VACUUM \
+             (it rewrites through SQLITE_TMPDIR)"
         );
     }
 

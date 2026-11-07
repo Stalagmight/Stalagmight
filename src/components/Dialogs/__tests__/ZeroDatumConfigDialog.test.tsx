@@ -27,27 +27,12 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { useState } from 'react';
 
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: 33 + index * 33,
-        size: 33,
-      })),
-    getTotalSize: () => count * 33,
-    scrollToIndex: () => {},
-  }),
-}));
+vi.mock('@tanstack/react-virtual', () => import('../../../test/factories/virtualizer'));
 import { render, screen, fireEvent } from '@testing-library/react';
 
-// Partial mock: `src/i18n/index.ts` (pulled in by the number formatters) needs
-// the real `initReactI18next`.
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+// Real i18n: the station options ("Station N") and the parsed-GPS line
+// ("Lat: ..., Lon: ...") asserted below render from en.json.
+import '../../../i18n';
 
 // SectionPreview draws on a MapLibre canvas, which jsdom cannot run. The pick
 // it feeds is exercised through the dropdown instead.
@@ -119,47 +104,18 @@ import { buildZeroDatumSectionConfig } from '../../../utils/importSectionConfig'
 import type {
   DmpFile,
   DmpSection,
-  DmpShot,
   ImportPlacement,
   ImportSectionConfig,
 } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
+import { makeDmpSection, makeDmpShots } from '../../../test/factories/dmp';
 
 /** Ten importable shots, so the dialog offers stations 0..10. */
 const SHOT_COUNT = 10;
 const PICK = 5;
 
-function dmpShot(): DmpShot {
-  return {
-    shot_type: 'Standard',
-    heading_in: 10,
-    heading_out: 10,
-    length: 5,
-    depth_in: 0,
-    depth_out: 0,
-    pitch_in: 0,
-    pitch_out: 0,
-    left: 0,
-    right: 0,
-    up: 0,
-    down: 0,
-    temperature: 0,
-    hour: 0,
-    minute: 0,
-    second: 0,
-    marker_index: 0,
-  };
-}
-
 function dmpFile(): DmpFile {
-  const section: DmpSection = {
-    version: 1,
-    name: 'Anchor',
-    direction: 'in',
-    date: '2026-01-01',
-    shots: Array.from({ length: SHOT_COUNT }, dmpShot),
-    content_hash: 'hash-anchor',
-  };
+  const section: DmpSection = makeDmpSection({ shots: makeDmpShots(SHOT_COUNT) });
   return { version: 1, sections: [section] } as unknown as DmpFile;
 }
 
@@ -779,5 +735,55 @@ describe('ZeroDatumConfigDialog GPS hints', () => {
     fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '120, 45' } });
     expect(screen.getByTestId('zero-datum-gps-error')).toBeInTheDocument();
     expect(screen.getByTestId('zero-datum-gps-transposed-warning')).toBeInTheDocument();
+  });
+
+  it('does not show the swap hint for a far-north UTM point (#576 D39e)', () => {
+    // Svalbard, 78.96N: a grid reference cannot have its axes swapped.
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '33X 512345 8765432' } });
+    expect(screen.getByTestId('zero-datum-gps-parsed')).toHaveTextContent('Lat: 78.958757');
+    expect(screen.queryByTestId('zero-datum-gps-transposed-warning')).not.toBeInTheDocument();
+  });
+
+  it('says how UTM "33S" was read and confirms the value it previews (#576 D37)', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '33S 512345 8765432' } });
+    expect(screen.getByTestId('zero-datum-gps-parsed')).toHaveTextContent('Lat: -11.168093');
+    expect(screen.getByTestId('zero-datum-gps-note')).toHaveTextContent('southern hemisphere');
+    fireEvent.click(screen.getByTestId('zero-datum-config-confirm'));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onConfirm.mock.calls[0]![0].gps.latitude).toBeCloseTo(-11.1680928, 5);
+  });
+
+  it('keeps the sign of a -0 DDM degree and says the minus sign won (#576 D39e)', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: "-0°30.5'N 87°18.5'W" } });
+    expect(screen.getByTestId('zero-datum-gps-parsed')).toHaveTextContent('Lat: -0.508333');
+    expect(screen.getByTestId('zero-datum-gps-note')).toHaveTextContent('minus sign');
+  });
+
+  it('rejects a UTM band letter the northing cannot have and keeps Confirm disabled', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '33U 512345 8765432' } });
+    expect(screen.getByTestId('zero-datum-gps-error')).toHaveTextContent('band U');
+    expect(screen.queryByTestId('zero-datum-gps-parsed')).not.toBeInTheDocument();
+    expect(screen.getByTestId('zero-datum-config-confirm')).toBeDisabled();
+  });
+
+  it('badges the format actually read', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: "20°30'N 87°18'W" } });
+    expect(screen.getByTestId('zero-datum-gps-format')).toHaveTextContent('DDM');
+  });
+
+  it('clears the note and the hint with the text', () => {
+    renderDialog();
+    const input = screen.getByTestId('zero-datum-gps-input');
+    fireEvent.change(input, { target: { value: '33S 512345 8765432' } });
+    expect(screen.getByTestId('zero-datum-gps-note')).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: '' } });
+    expect(screen.queryByTestId('zero-datum-gps-note')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('zero-datum-gps-parsed')).not.toBeInTheDocument();
+    expect(screen.getByTestId('zero-datum-config-confirm')).toBeDisabled();
   });
 });

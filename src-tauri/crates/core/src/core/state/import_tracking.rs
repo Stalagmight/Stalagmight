@@ -7,10 +7,7 @@ use super::AppState;
 impl AppState {
     /// Check if a file hash has already been imported to the project
     pub fn check_duplicate_import(&self, hash: &str) -> Result<bool> {
-        let proj_guard = self
-            .project
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to lock project"))?;
+        let proj_guard = self.project.lock();
 
         if let Some(project) = proj_guard.as_ref() {
             Ok(project.imported_file_hashes.contains(&hash.to_string()))
@@ -21,9 +18,7 @@ impl AppState {
 
     /// Track an imported file hash in the project
     pub fn track_imported_file(&self, hash: String) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         if let Some(project) = proj_guard.as_mut() {
             if !project.imported_file_hashes.contains(&hash) {
@@ -40,10 +35,7 @@ impl AppState {
     /// Batch-check which section hashes have already been imported.
     /// Returns a parallel `Vec<bool>` (true = already imported).
     pub fn check_section_hashes(&self, hashes: &[String]) -> Result<Vec<bool>> {
-        let proj_guard = self
-            .project
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to lock project"))?;
+        let proj_guard = self.project.lock();
 
         if let Some(project) = proj_guard.as_ref() {
             Ok(hashes
@@ -71,9 +63,7 @@ impl AppState {
         file_hashes: &[String],
         section_hashes: &[String],
     ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
@@ -101,9 +91,7 @@ impl AppState {
 
     /// Batch-track imported section hashes, skipping duplicates.
     pub fn track_section_hashes(&self, hashes: Vec<String>) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         if let Some(project) = proj_guard.as_mut() {
             let mut added = 0usize;

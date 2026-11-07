@@ -10,11 +10,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 const closeDialog = vi.fn();
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, opts?: Record<string, unknown>) => (opts ? `${key}:${JSON.stringify(opts)}` : key),
-  }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).translationStub('keyAndOptions'));
 
 const dialogData: { path?: string; fileName?: string } = {};
 
@@ -38,21 +34,16 @@ vi.mock('../../../store/projectStore', () => ({
 vi.mock('../../../utils/openOrImport', () => ({ routeOpenedFile: vi.fn() }));
 
 let peekedSource: string | undefined;
-vi.mock('../../../utils/telemetry', () => ({
-  trackDialogComplete: vi.fn(),
-  clearProjectActionSource: vi.fn(),
-  peekProjectActionSource: () => peekedSource,
-}));
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryStubs({
+    clearProjectActionSource: vi.fn(),
+    peekProjectActionSource: () => peekedSource,
+  }),
+);
 
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+vi.mock('../DialogWrapper', async () => (await import('../../../test/factories/components')).dialogWrapperStub());
 
-vi.mock('../../common/Button', () => ({
-  Button: ({ children, ...rest }: React.ComponentProps<'button'>) => (
-    <button {...rest}>{children}</button>
-  ),
-}));
+vi.mock('../../common/Button', async () => (await import('../../../test/factories/components')).buttonStub());
 
 import { routeOpenedFile } from '../../../utils/openOrImport';
 import { trackDialogComplete, clearProjectActionSource } from '../../../utils/telemetry';

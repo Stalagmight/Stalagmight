@@ -7,6 +7,10 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import { clearIpcOverrideKeys, setIpcOverrides } from './helpers/ipcOverrides';
+import type { E2EWindow } from './helpers/e2eWindow';
+import type { IpcCommands } from '../src/types/ipc/IpcCommands';
+import type { CommandError } from '../src/types/ipc/CommandError';
 
 /**
  * E2E tests for the data table's draft "new shot" rows.
@@ -47,9 +51,9 @@ interface ShotSnapshot {
 
 async function getShots(page: Page): Promise<ShotSnapshot[]> {
   return page.evaluate(() => {
-    const e2e = (window as any).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
     const shots = e2e?.projectStore.getState().project?.sections?.[0]?.shots ?? [];
-    return shots.map((s: any) => ({
+    return shots.map((s) => ({
       id: s.id,
       length: s.length,
       azimuth_in: s.azimuth_in,
@@ -63,7 +67,10 @@ async function getCreateShotCalls(
   page: Page,
 ): Promise<Array<{ sectionId: number; afterShotId: number | null; beforeShotId: number | null }>> {
   return page.evaluate(() => {
-    const calls = ((window as any).__MOCK_CREATE_SHOT_CALLS__ ?? []) as Array<any>;
+    // Each entry is the args the app invoked create_shot with.
+    const calls = ((window as E2EWindow).__MOCK_CREATE_SHOT_CALLS__ ?? []) as Array<
+      IpcCommands['create_shot']['args']
+    >;
     return calls.map((c) => ({
       sectionId: c?.sectionId ?? null,
       afterShotId: c?.afterShotId ?? null,
@@ -141,6 +148,25 @@ test.describe('Draft shot rows', () => {
     const calls = await getCreateShotCalls(page);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ afterShotId: shots[2]!.id, beforeShotId: null });
+  });
+
+  // #576 NF-W3UI-1: the backend mints a uuid for every shot it creates, and uuid
+  // anchors (plan pins, the distance origin) resolve through it; the mock's
+  // create_shot used to leave the new shot without one. Read off the mock backend's
+  // project: the store refreshes through the binary envelope, which carries no uuid
+  // (#576 A9-D2).
+  test('the committed shot carries a uuid of its own, as the backend mints one', async ({ page }) => {
+    await fillDraftRow(page, 3, '5');
+    await expect(page.getByTestId('grid-row-4')).toHaveClass(/sg-row-draft/);
+    const uuids = await page.evaluate(() => {
+      const shots = (window as E2EWindow).__E2E_MOCKS__!.getCurrentProject()!.sections[0]!.shots as Array<{
+        uuid?: string | null;
+      }>;
+      return shots.map((s) => s.uuid ?? null);
+    });
+    expect(uuids).toHaveLength(4);
+    expect(uuids[3]).toEqual(expect.any(String));
+    expect(new Set(uuids).size).toBe(4);
   });
 
   test('insert above the first shot anchors before it and marks missing cells immediately', async ({ page }) => {
@@ -283,5 +309,64 @@ test.describe('Draft shot rows', () => {
     await expect(page.getByTestId('grid-row-4')).toHaveCount(0);
     await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
     expect((await getShots(page)).map((s) => s.length)).toEqual([10, 20, 30]);
+  });
+
+  test('a refused create_shot keeps the typed draft row, and editing it retries (DRAFT-1)', async ({ page }) => {
+    await setIpcOverrides(page, {
+      create_shot: { __reject: { code: 'FAILED', message: 'Simulated refusal' } satisfies CommandError },
+    });
+    await fillDraftRow(page, 3, '5');
+
+    // The failure notice is the feedback; what was typed stays in the row.
+    await expect(page.getByText('Simulated refusal').first()).toBeVisible();
+    await expect(page.getByTestId('grid-row-3')).toHaveClass(/sg-row-draft/);
+    await expect(page.getByTestId('grid-cell-3-length')).toHaveText('5.0');
+    await expect(page.getByTestId('grid-cell-3-depth_out')).toHaveText('2.0');
+    expect((await getShots(page)).map((s) => s.length)).toEqual([10, 20, 30]);
+
+    // Editing the row sends it again; this time the backend accepts it.
+    await clearIpcOverrideKeys(page, ['create_shot']);
+    await fillCell(page, 3, 'length', '6');
+    await expect.poll(async () => (await getShots(page)).map((s) => s.length)).toEqual([10, 20, 30, 6]);
+    await expect(page.getByTestId('grid-row-4')).toHaveClass(/sg-row-draft/);
+    await expect(page.getByTestId('grid-cell-4-length')).toHaveText('');
+  });
+
+  test('a value typed while the new row is being saved reaches the created shot, once (#576 D39(f))', async ({
+    page,
+  }) => {
+    // A slow create_shot, as on a large survey: the row stays editable while it is in flight.
+    const CREATE_DELAY_MS = 1500;
+    await page.evaluate((delay) => {
+      type Invoke = (cmd: string, args?: unknown, opts?: unknown) => Promise<unknown>;
+      const w = window as unknown as { __TAURI_INTERNALS__: { invoke: Invoke }; __draftCalls__?: string[] };
+      const calls: string[] = [];
+      w.__draftCalls__ = calls;
+      const original = w.__TAURI_INTERNALS__.invoke;
+      w.__TAURI_INTERNALS__.invoke = async (cmd, args, opts) => {
+        if (cmd === 'create_shot' || cmd === 'update_shot') calls.push(cmd);
+        if (cmd === 'create_shot') await new Promise((resolve) => setTimeout(resolve, delay));
+        return original(cmd, args, opts);
+      };
+    }, CREATE_DELAY_MS);
+
+    await fillDraftRow(page, 3, '5'); // the last required field starts create_shot
+    await fillCell(page, 3, 'left', '2.5'); // typed while it is on the wire
+
+    const newShotLeft = () =>
+      page.evaluate(() => {
+        const shots = (window as E2EWindow).__E2E_TEST__.projectStore.getState().project!.sections[0]!.shots;
+        return shots.length === 4 ? shots[3]!.left : `shots=${shots.length}`;
+      });
+    await expect.poll(newShotLeft, { timeout: 5000 }).toBe(2.5);
+    await expect(page.getByTestId('grid-cell-3-left')).toHaveText('2.5');
+    // settle: proves NO second create_shot of this row is sent - a poll would pass on its
+    // first read. Long enough for a second create of the same row to have landed, had one been sent.
+    await page.waitForTimeout(CREATE_DELAY_MS + 500);
+    expect(await page.evaluate(() => (window as unknown as { __draftCalls__: string[] }).__draftCalls__)).toEqual([
+      'create_shot',
+      'update_shot',
+    ]);
+    expect((await getShots(page)).map((s) => s.length)).toEqual([10, 20, 30, 5]);
   });
 });

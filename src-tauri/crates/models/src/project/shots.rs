@@ -19,16 +19,65 @@ use super::{
 /// on the frontend in `src/utils/shotSplit.ts`.
 pub const MIN_SPLIT_CHILD_LENGTH_M: f64 = 0.01;
 
+/// [#576 HFI-10] The merge partners of every station - and its loop-closure
+/// partners, when built with closures - each stored key resolved ONCE, for a BFS
+/// that asks for one station's neighbors at every node. The BFS used to re-resolve
+/// every merge and closure at every node it visited: O(visited x links)
+/// `resolve_key` calls per search, which on a Walls project with hundreds of
+/// thousands of shots and thousands of merges made the integrity check's
+/// orphan-closure pass take seconds.
+///
+/// A station's partner list is in the order the per-node scan produced it - merges
+/// in project order, then closures in project order, one partner per link - and a
+/// link contributes exactly what that scan's `if a is the station { b } else if b
+/// is the station { a }` did, including nothing when an end does not resolve.
+pub(super) struct LinkPartners {
+    by_station: HashMap<StationRef, Vec<StationRef>>,
+}
+
+impl LinkPartners {
+    pub(super) fn of(project: &Project, include_closures: bool) -> Self {
+        let mut by_station: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        let mut link = |a: Option<StationRef>, b: Option<StationRef>| {
+            if let (Some(a), Some(b)) = (a, b) {
+                by_station.entry(a).or_default().push(b);
+                if b != a {
+                    by_station.entry(b).or_default().push(a);
+                }
+            }
+        };
+        for merge in &project.station_merges {
+            link(
+                project.resolve_key(&merge.station_a),
+                project.resolve_key(&merge.station_b),
+            );
+        }
+        if include_closures {
+            for closure in &project.loop_closures {
+                link(
+                    project.resolve_key(&closure.station_a),
+                    project.resolve_key(&closure.station_b),
+                );
+            }
+        }
+        Self { by_station }
+    }
+
+    fn of_station(&self, station_ref: StationRef) -> &[StationRef] {
+        self.by_station.get(&station_ref).map_or(&[], Vec::as_slice)
+    }
+}
+
 impl Project {
     /// Stations adjacent to `station_ref` through shots (skipping `excluded_shot`)
-    /// and merges, plus loop closures when `include_closures` is true. Pass
-    /// `false` to ask "are these connected by the *survey itself*" - used to tell
+    /// and merges, plus loop closures when `links` was built with them. Without
+    /// closures it asks "are these connected by the *survey itself*" - used to tell
     /// a true loop from a detached pair when deciding closure-vs-merge.
     fn station_neighbors_excluding_shot(
         &self,
+        links: &LinkPartners,
         station_ref: StationRef,
         excluded_shot: Option<(SectionId, usize)>,
-        include_closures: bool,
     ) -> Vec<StationRef> {
         let mut neighbors = Vec::new();
         let Some(section) = self.get_section(station_ref.section_id) else {
@@ -53,25 +102,9 @@ impl Project {
             }
         }
 
-        // Merges (resolve stored keys to positional refs)
-        for merge in &self.station_merges {
-            if self.key_is_ref(&merge.station_a, station_ref) {
-                neighbors.extend(self.resolve_key(&merge.station_b));
-            } else if self.key_is_ref(&merge.station_b, station_ref) {
-                neighbors.extend(self.resolve_key(&merge.station_a));
-            }
-        }
-
-        // Closures (all strategies)
-        if include_closures {
-            for closure in &self.loop_closures {
-                if self.key_is_ref(&closure.station_a, station_ref) {
-                    neighbors.extend(self.resolve_key(&closure.station_b));
-                } else if self.key_is_ref(&closure.station_b, station_ref) {
-                    neighbors.extend(self.resolve_key(&closure.station_a));
-                }
-            }
-        }
+        // Merges, then closures (all strategies) when `links` carries them - their
+        // stored keys resolved to positional refs once, by `LinkPartners::of`.
+        neighbors.extend_from_slice(links.of_station(station_ref));
 
         neighbors
     }
@@ -86,15 +119,14 @@ impl Project {
         if station_a == station_b {
             return true;
         }
+        let links = LinkPartners::of(self, include_closures);
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
         visited.insert(station_a);
         queue.push_back(station_a);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in
-                self.station_neighbors_excluding_shot(current, excluded_shot, include_closures)
-            {
+            for neighbor in self.station_neighbors_excluding_shot(&links, current, excluded_shot) {
                 if visited.insert(neighbor) {
                     if neighbor == station_b {
                         return true;
@@ -119,13 +151,14 @@ impl Project {
         if zero_datum_set.contains(&station_ref) {
             return true;
         }
+        let links = LinkPartners::of(self, true);
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
         visited.insert(station_ref);
         queue.push_back(station_ref);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot, true) {
+            for neighbor in self.station_neighbors_excluding_shot(&links, current, excluded_shot) {
                 if visited.insert(neighbor) {
                     if zero_datum_set.contains(&neighbor) {
                         return true;
@@ -149,6 +182,9 @@ impl Project {
         }
         let shot = section.add_shot(data);
         let shot_id = shot.id;
+        let appended_at = section.shots.len() - 1;
+        // An append moves no other shot: index just the new one (#576 A10).
+        self.index_appended_shot(section_id, appended_at);
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
     }
@@ -316,6 +352,8 @@ impl Project {
         let shot =
             section.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
+        // The insert moved every later shot of the section (#576 A10).
+        self.reindex_section_shot_uuids(section_id);
         // Station keys are position-independent: no ref-shifting on insert (the
         // junction the new shot extends from keeps its anchor; shots beyond keep
         // theirs). The new shot's displacement still shifts stations > pos+1 in
@@ -374,6 +412,8 @@ impl Project {
         let shot =
             section.insert_shot_before_with_id(before_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
+        // The insert moved every later shot of the section (#576 A10).
+        self.reindex_section_shot_uuids(section_id);
         // Prepend is the one insert that shifts identity: the old section-start
         // station is now *after* the new first shot, so re-anchor any ref on this
         // section that was `SectionStart` to `AfterShot(new_shot)`. Every other
@@ -463,6 +503,8 @@ impl Project {
             .insert_shot_before_with_id(shot_id, head_data.clone(), None, None)
             .ok_or_else(|| format!("Failed to insert split shot before {shot_id}"))?;
         let new_shot_id = new_shot.id;
+        // The insert moved every later shot of the section (#576 A10).
+        self.reindex_section_shot_uuids(section_id);
 
         self.debug_assert_merge_alignment("split_shot_at_distance");
         self.touch();
@@ -1039,13 +1081,17 @@ impl Project {
     /// Neighbors of `station_ref` for range-delete connectivity checks: like
     /// [`Self::station_neighbors_excluding_shot`] but skips ALL shot edges at
     /// positions `start_pos..=end_pos` in `section_id` (the gap-closed range).
-    fn range_neighbors(
+    /// Merges, then closures when `links` was built with them.
+    ///
+    /// [#576 NF-W12BE-4] The links come from a [`LinkPartners`] the search builds
+    /// once; this used to re-resolve every merge and closure at every node.
+    pub(super) fn range_neighbors(
         &self,
+        links: &LinkPartners,
         station_ref: StationRef,
         section_id: SectionId,
         start_pos: usize,
         end_pos: usize,
-        include_closures: bool,
     ) -> Vec<StationRef> {
         let mut neighbors = Vec::new();
         let Some(section) = self.get_section(station_ref.section_id) else {
@@ -1064,22 +1110,7 @@ impl Project {
         if idx < section.shots.len() && !in_range(idx) {
             neighbors.push(StationRef::new(station_ref.section_id, (idx + 1) as u32));
         }
-        for merge in &self.station_merges {
-            if self.key_is_ref(&merge.station_a, station_ref) {
-                neighbors.extend(self.resolve_key(&merge.station_b));
-            } else if self.key_is_ref(&merge.station_b, station_ref) {
-                neighbors.extend(self.resolve_key(&merge.station_a));
-            }
-        }
-        if include_closures {
-            for closure in &self.loop_closures {
-                if self.key_is_ref(&closure.station_a, station_ref) {
-                    neighbors.extend(self.resolve_key(&closure.station_b));
-                } else if self.key_is_ref(&closure.station_b, station_ref) {
-                    neighbors.extend(self.resolve_key(&closure.station_a));
-                }
-            }
-        }
+        neighbors.extend_from_slice(links.of_station(station_ref));
         neighbors
     }
 
@@ -1087,7 +1118,7 @@ impl Project {
     /// `start_pos..=end_pos` and without passing through a `removed` station?
     /// Used to detect a loop around a to-be-gap-closed interior range so the
     /// check sees the post-delete topology rather than each original single shot.
-    fn stations_connected_excluding_range(
+    pub(super) fn stations_connected_excluding_range(
         &self,
         a: StationRef,
         b: StationRef,
@@ -1100,12 +1131,13 @@ impl Project {
         if a == b {
             return true;
         }
+        let links = LinkPartners::of(self, include_closures);
         let mut visited = HashSet::new();
         visited.insert(a);
         let mut queue = VecDeque::new();
         queue.push_back(a);
         while let Some(cur) = queue.pop_front() {
-            for nb in self.range_neighbors(cur, section_id, start_pos, end_pos, include_closures) {
+            for nb in self.range_neighbors(&links, cur, section_id, start_pos, end_pos) {
                 if removed.contains(&nb) {
                     continue;
                 }
@@ -1123,7 +1155,7 @@ impl Project {
     /// Does `station` reach a zero datum WITHOUT using a shot in the range or
     /// passing through a `removed` station (datums on removed stations don't
     /// count - they are themselves being deleted)?
-    fn station_reaches_datum_excluding_range(
+    pub(super) fn station_reaches_datum_excluding_range(
         &self,
         station: StationRef,
         section_id: SectionId,
@@ -1140,12 +1172,13 @@ impl Project {
         if datum_set.contains(&station) {
             return true;
         }
+        let links = LinkPartners::of(self, true);
         let mut visited = HashSet::new();
         visited.insert(station);
         let mut queue = VecDeque::new();
         queue.push_back(station);
         while let Some(cur) = queue.pop_front() {
-            for nb in self.range_neighbors(cur, section_id, start_pos, end_pos, true) {
+            for nb in self.range_neighbors(&links, cur, section_id, start_pos, end_pos) {
                 if removed.contains(&nb) {
                     continue;
                 }
@@ -1403,6 +1436,8 @@ impl Project {
                 .remove_shot(shot_id)
                 .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?
         };
+        // The removal moved every later shot of the section (#576 A10).
+        self.reindex_section_shot_uuids(section_id);
 
         // Station keys are position-independent - no ref-shifting on delete. The
         // deleted station's own refs were rewired above; every surviving ref keeps
@@ -1595,6 +1630,8 @@ impl Project {
             .get_section_mut(section_id)
             .and_then(|section| section.remove_shot(shot_id))
             .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+        // Removing the first shot moved every other one (#576 A10).
+        self.reindex_section_shot_uuids(section_id);
 
         // Same duty `remove_shot_with_rewire` discharges after ITS retains
         // and its shot removal, for the same reason and in the same place: dropping

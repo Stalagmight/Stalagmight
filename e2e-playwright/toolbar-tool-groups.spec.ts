@@ -43,15 +43,15 @@ async function pressUntilFocused(
   key: string,
   maxAttempts = 5,
 ): Promise<void> {
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+  // Retry the press (focus walks one stop per key), but wait on focus rather
+  // than sleeping between tries.
+  let attempts = 0;
+  await expect(async () => {
+    attempts += 1;
+    expect(attempts, `${key} never moved focus to the target`).toBeLessThanOrEqual(maxAttempts);
     await page.keyboard.press(key);
-    const isFocused = await locator.evaluate((el) => el === document.activeElement);
-    if (isFocused) {
-      return;
-    }
-    await page.waitForTimeout(25);
-  }
-  await expect(locator).toBeFocused({ timeout: 2000 });
+    await expect(locator).toBeFocused({ timeout: 250 });
+  }).toPass({ timeout: 5000 });
 }
 
 // ---------------------------------------------------------------------------

@@ -16,10 +16,7 @@ import userEvent from '@testing-library/user-event';
 import { HelpTooltip } from '../HelpTooltip';
 import { DialogWrapper } from '../../Dialogs/DialogWrapper';
 
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys());
 
 describe('HelpTooltip', () => {
   it('is focusable and exposes button semantics with a short aria-label (not the full tooltip text)', () => {

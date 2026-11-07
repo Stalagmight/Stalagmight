@@ -3,12 +3,7 @@
  * Tests request state management for triggerCenterOnStation and triggerCenterOnShot.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-
-// Mock Tauri invoke to prevent noisy console warnings
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+import { describe, it, expect, beforeEach } from 'vitest';
 
 import { useUIStore } from '../uiStore';
 

@@ -11,24 +11,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-  setSource: vi.fn(),
-}));
-vi.mock('../../utils/ipc', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/ipc')>()),
-  invokeIpc: vi.fn(),
-}));
+vi.mock('../../utils/telemetry', async () =>
+  (await import('../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
+);
+vi.mock('../../utils/ipc');
 
 import CompassImportDialog from './CompassImportDialog';
-import { invokeIpc } from '../../utils/ipc';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { CommandResult, CompassFile, ValidationWarning } from '../../types/commands';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
-
-const invokeIpcMock = vi.mocked(invokeIpc);
+import { invokeIpcMock } from '../../test/factories/ipc';
 
 const SAVE_WARNING: ValidationWarning = {
   code: 'SYSTEM',
@@ -282,5 +275,30 @@ describe('CompassImportDialog honest shot count (#437, #550)', () => {
     const footnote = screen.getByTestId('compass-shot-count-footnote');
     expect(footnote).toHaveTextContent('3 invalid');
     expect(footnote).not.toHaveTextContent('excluded');
+  });
+});
+
+/** #576 NF-DMPS-1: the orphan lookup failing is said, not swallowed (see the TML sibling). */
+describe('CompassImportDialog orphan lookup failure (#576 NF-DMPS-1)', () => {
+  it('says so in a warning toast and still completes the import', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    executeCompassImport.mockResolvedValue(ok([], [1]));
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'suggest_orphan_placements') throw new Error('orphan matcher unavailable (test)');
+      return 0; // count_unanchored_sections
+    });
+    render(<CompassImportDialog compassFile={compassFile} filePath="/tmp/cave.dat" />);
+
+    await clickImport();
+
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled()); // the import completed
+    expect(showToast).toHaveBeenCalledWith(
+      'Imported, but unattached sections could not be matched: orphan matcher unavailable (test)',
+      'orphan-lookup-failed',
+      'warning',
+    );
+    expect(openDialog).not.toHaveBeenCalledWith('orphan-placement', expect.anything());
   });
 });

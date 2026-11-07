@@ -12,9 +12,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 import { useUIStore } from '../uiStore';
 

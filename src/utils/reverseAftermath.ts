@@ -5,30 +5,28 @@
  * stored `StationKey` (merges, loop closures, zero datums, station offsets and
  * comments). What it cannot reach is the frontend's own POSITIONAL references -
  * `StationRef { section_id, station_index }` held in UI selection, the merge
- * tool's staging, the move-comment pickup and the distance-gradient origin.
+ * tool's staging and the move-comment pickup.
  *
  * Those are the dangerous kind of stale: a reverse renumbers station `i` to
  * `N - i`, so every one of them stays *in range* and simply starts naming a
  * different physical station. Nothing errors. The merge tool would merge the
- * wrong end; the distance ramp would silently re-root from the far end while
- * still looking correct.
+ * wrong end. Selection, merge staging, the move-comment pickup and the comment
+ * popover are therefore cleared, matching what every other structural mutation
+ * does (ConfirmDialog, BulkDeleteDialog, DeleteShotChoice).
  *
- * The distance-gradient origin is mirrored (the user's chosen root stays on the
- * physical station they picked); selection, merge staging, the move-comment
- * pickup and the comment popover are cleared, matching what every other
- * structural mutation does (ConfirmDialog, BulkDeleteDialog, DeleteShotChoice).
+ * The GAS PLAN's pins used to be mirrored here and no longer are (#310), and nor
+ * is the distance-gradient origin (#576 D39(g)). Mirroring only ever answered a
+ * reverse; a delete or an insert renumbers just as silently and had no answer at
+ * all. Both now hold backend ANCHORS - a station named by the shots either side
+ * of it - re-resolved around every mutation (`flushPlanAnchors` / `remapPlanPins`
+ * below, and `utils/distanceOriginAnchor.ts`), which is reverse-proof by
+ * construction and covers the other edits for free. The one origin still
+ * mirrored here is one whose anchor could not be TAKEN: nothing re-resolves it,
+ * so the reverse keeps the answer it had before the anchors (see
+ * `applyReverseAftermath`).
  *
- * The GAS PLAN's pins used to be mirrored here too and no longer are (#310).
- * Mirroring only ever answered a reverse; a delete or an insert renumbers just
- * as silently and had no answer at all. The pins now hold backend ANCHORS -
- * a station named by the shots either side of it - and are re-resolved from
- * them around every mutation (`flushPlanAnchors` / `remapPlanPins` below), which
- * is reverse-proof by construction and covers the other edits for free.
- *
- * The same mirror has to run again whenever an undo or redo flips the numbering
- * BACK - otherwise Ctrl+Z restores the old numbering while the origin stays
- * mirrored onto the opposite physical station. The backend answers "which
- * sections, against which shot count"
+ * The clears have to run again whenever an undo or redo flips the numbering
+ * BACK. The backend answers "which sections, against which shot count"
  * outright on `CommandResult.reversed_sections`, because the geometry cannot: a
  * reverse keeps every world coordinate, so a section that was reversed AND moved
  * in one action matches neither arrangement afterwards.
@@ -41,6 +39,7 @@
  */
 import type { Section, SectionId, StationRef } from '../types/project';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
+import type { OriginCapture } from './distanceOriginAnchor';
 import { selectHasPins, useGasPlanStore } from '../store/gasPlanStore';
 import { useUIStore } from '../store/uiStore';
 
@@ -83,29 +82,22 @@ export function isIdentityTransform(transform: ReverseTransform): boolean {
   return transform.sign === 1 && transform.shift === 0;
 }
 
-/** True when `transforms` actually renumbered `sectionId`; an identity entry did not. */
-function flipsSection(
-  transforms: Map<SectionId, ReverseTransform>,
-  sectionId: SectionId
-): boolean {
-  const transform = transforms.get(sectionId);
-  return transform !== undefined && !isIdentityTransform(transform);
-}
-
 /**
  * Apply a composed transform to one index, clamping ONCE at the end.
  *
- * Clamped, not a bare affine map: a plan pin outlives the shots it was dropped
- * on (its only reset is a project switch), so `station_index` can already sit
- * past the end of a shortened section - and `shotCount - index` then goes
- * NEGATIVE. `StationRef.station_index` is a `u32`, so serde rejects the whole
- * `compute_gas_reach_field` payload and the reach overlay fails permanently on
- * one poisoned pin rather than degrading. The backend's import-side mirror clamps
- * for the same reason. An already-broken pin lands on an end station instead of a
- * negative index; it was not naming a real station either way, and the clamp
- * keeps every other pin working.
+ * Clamped, not a bare affine map. Its one production ref (via `mirrorRef`, from
+ * `applyReverseAftermath`) is a distance-gradient origin whose anchor could not
+ * be taken: nothing re-resolves that origin, so an earlier delete can have left
+ * its `station_index` past the end of a shortened section - and
+ * `shotCount - index` then goes NEGATIVE. `StationRef.station_index` is a `u32`,
+ * so serde would reject the `get_station_distances_from` payload the origin
+ * feeds, and the gradient would fail on every refetch rather than degrade. (The
+ * gas plan's pins, which this clamp was first written for, no longer pass here:
+ * they are re-resolved from backend anchors, #310.) An out-of-range ref lands on
+ * an end station instead of a negative index; it was not naming a real station
+ * either way.
  *
- * ONCE is load-bearing: clamping per step would send an out-of-range pin
+ * ONCE is load-bearing: clamping per step would send an out-of-range ref
  * `p -> 0 -> shotCount` across two reverses that between them changed nothing.
  * Composing first and clamping at the end keeps a net no-op a no-op.
  */
@@ -151,15 +143,20 @@ export function remapPlanPins(): Promise<void> {
 }
 
 /**
- * Compose a `CommandResult.reversed_sections` log into one transform per section.
+ * Compose a renumbering log into one transform per section: a forward edit's
+ * `reversed_sections` (`ReverseOutcome`, `BatchOutcome`) or an undo/redo's
+ * `reversed_steps` (`HistoryOutcome`).
  *
  * Taken from the backend rather than inferred from the geometry: a reverse keeps
  * every station's world position, so a section that was reversed AND moved in
  * the same action matches NEITHER arrangement afterwards and a position diff
  * reports nothing for it, leaving its pins on the opposite end.
  *
- * The entries arrive in step order and WITH REPEATS, each carrying the shot count
- * in force AT ITS STEP. `m_c(i) = c - i`, so over counts `c1..ck` the composition
+ * The entries arrive in step order, each carrying the shot count in force AT ITS
+ * STEP. A forward edit names a section at most once (the backend nets a batch's
+ * repeats by parity, `Command::reversed_section_ids`); a multi-step undo/redo
+ * names it once per step that reversed it, and those steps' counts can differ.
+ * `m_c(i) = c - i`, so over counts `c1..ck` the composition
  * is `i -> A + s*i` with `s = (-1)^k` and `A_m = c_m - A_(m-1)` (`A_0 = 0`). Two
  * equal counts collapse to the exact identity; two different ones (a `CreateShot`
  * undone between two reverses of the same section) leave a pure shift, which is
@@ -210,20 +207,31 @@ export function composeReverseTransforms(
  * of reverses that cancelled out renumbered nothing, so the user's selection and
  * half-staged merge are still valid.
  */
-export function applyReverseAftermath(transforms: Map<SectionId, ReverseTransform>): void {
+export function applyReverseAftermath(
+  transforms: Map<SectionId, ReverseTransform>,
+  origin: OriginCapture | null = null
+): void {
   if (Array.from(transforms.values()).every(isIdentityTransform)) return;
 
-  // The gas plan is deliberately absent here (#310): its pins and its saved-plan baseline are
-  // re-resolved from backend anchors by `remapPlanPins`, which the same seam already awaited
-  // before this ran. Mirroring them a second time would apply the shift twice.
+  // The gas plan (#310) and an anchored distance-gradient origin (#576 D39(g)) are deliberately
+  // absent here: both are re-resolved from backend anchors (`remapPlanPins`,
+  // `remapDistanceOrigin`), which the same seam already awaited before this ran. Mirroring them
+  // as well would apply the shift twice.
   const ui = useUIStore.getState();
-  const origin = ui.distanceGradientOrigin;
-  if (origin !== null && flipsSection(transforms, origin.section_id)) {
-    // Same reasoning as the plan pins: the penetration ramp is rooted on a
-    // station the user chose, and its only other reset is a project switch, so
-    // without this the ramp silently re-roots from the opposite end of the
-    // section while the origin ring and the DetailPanel badge agree with it.
-    ui.setDistanceGradientOrigin(mirrorRef(origin, transforms));
+
+  // An origin whose anchor could not be taken (`origin` is the capture from before this edit)
+  // was re-resolved by nothing, so it is mirrored here as it was before the anchors - only while
+  // it is still the station that failed: a pick since was made against the new numbering.
+  const current = ui.distanceGradientOrigin;
+  if (
+    origin !== null &&
+    !origin.anchored &&
+    current !== null &&
+    current.section_id === origin.ref.section_id &&
+    current.station_index === origin.ref.station_index
+  ) {
+    const mirrored = mirrorRef(current, transforms);
+    if (mirrored !== current) ui.setDistanceGradientOrigin(mirrored);
   }
 
   // Cleared instead - there is no "same place" for a highlight, and a

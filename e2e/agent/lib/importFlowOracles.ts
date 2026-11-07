@@ -31,6 +31,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { foldThenCut } from './fixtureCorpus';
 import type { ImportScreenDigest } from './importScreenDigest';
 import { describeDiffs, diffSnapshots } from './projectSnapshot';
 import { isLeftoverTempName } from './oracles';
@@ -95,6 +96,67 @@ export function checkIpcContract(lines: readonly string[], what: string, detail:
     `S6 IPC CONTRACT: the app sent arguments the backend could not deserialize (${rejected.length} line(s))`,
     [`after: ${what}`, ...rejected.slice(0, 4), ...detail],
   );
+}
+
+/** The part of `uiStore.toasts` an oracle reads (`ToastItem`). */
+export interface ToastLike {
+  id: number;
+  revision: number;
+  key: string;
+  leaving?: boolean;
+}
+
+/**
+ * Keys of the toasts raised or refreshed between two readings of the toast
+ * stack: an `id` not there before, or a `revision` bumped (a de-duplicated
+ * repeat of a key). Leaving toasts are not counted.
+ *
+ * SELF-CONTAINED: `routeFile` injects it into the webview by its source text.
+ */
+export function toastKeysRaised(before: readonly ToastLike[], after: readonly ToastLike[]): string[] {
+  const seen = new Set(before.map((t) => `${t.id}:${t.revision}`));
+  return after.filter((t) => !t.leaving && !seen.has(`${t.id}:${t.revision}`)).map((t) => String(t.key));
+}
+
+/**
+ * IMPORT GATE (#576 HFI2-F3): did the router SAY it refused? Read off the toasts
+ * the route raised, on the tick it returned (`RouteOutcome.toastsRaised`). The
+ * settled digest is up to `STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS` (12 s) later when
+ * a wizard calculation holds the settle, and a warning toast lives about 9 s, so
+ * the digest missed a refusal that was made and shown. The digest is the
+ * fallback only when the route's reading is missing.
+ */
+export function importGateRefusalSeen(
+  raisedByRoute: readonly string[] | null | undefined,
+  digestToasts: readonly string[],
+  key: string,
+): boolean {
+  return raisedByRoute ? raisedByRoute.includes(key) : digestToasts.includes(key);
+}
+
+/** The toast the DMP wizard raises when it refuses to delete frozen rows. */
+const FROZEN_DELETE_TOAST = 'dmp-wizard-frozen-delete';
+
+/**
+ * FROZEN DELETE: a delete of an all-frozen selection is refused, and says so.
+ *
+ * Judged on the grid's DATA rows (`dataRows`, #576 HFI2-F5). `rows` counts the
+ * rendered window of a virtualized grid, which grows when the grid first
+ * measures its box, so a refused delete read as "rows 15 -> 24".
+ */
+export function checkFrozenDelete(
+  before: Pick<ImportScreenDigest, 'rows' | 'dataRows'>,
+  after: Pick<ImportScreenDigest, 'rows' | 'dataRows' | 'toast'>,
+): void {
+  if (after.dataRows !== before.dataRows) {
+    fail('FROZEN DELETE: an all-frozen selection was deleted anyway', [
+      `data rows ${before.dataRows} -> ${after.dataRows} (rendered ${before.rows} -> ${after.rows}); ` +
+        'the wizard must refuse and say so',
+    ]);
+  }
+  if (!after.toast.includes(FROZEN_DELETE_TOAST)) {
+    fail('FROZEN DELETE: the refusal was SILENT', [`no ${FROZEN_DELETE_TOAST} toast; toasts=${JSON.stringify(after.toast)}`]);
+  }
 }
 
 function fail(headline: string, detail: string[] = []): never {
@@ -201,7 +263,8 @@ export function receiptClaimFrom(digest: ImportScreenDigest): ReceiptClaim | nul
   if (!digest.receipt) return null;
   const parsed = parseReceiptSummary(digest.receipt.summary);
   return {
-    summary: digest.receipt.summary,
+    // A failure quotes it: folded, then cut to the 300 the page used to cut at (#576 W33-NF3).
+    summary: foldThenCut(digest.receipt.summary, 300),
     sections: parsed.sections,
     shots: parsed.shots,
     shown: digest.receipt.shown,

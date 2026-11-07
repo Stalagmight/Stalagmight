@@ -16,8 +16,9 @@
  * then `pnpm agent:fuzz-shrink` it".
  *
  * A replay RESTORES the environment the recording ran under (fixture, tolerance,
- * stream, the persistence knobs) before the scenario modules are imported, and
- * refuses a trace recorded by a different scenario. Both matter: the recorded
+ * stream, the persistence knobs) before the scenario modules are imported, runs
+ * at the recording's seed and iteration count unless `--seed` / `--iterations`
+ * say otherwise, and refuses a trace recorded by a different scenario. Both matter: the recorded
  * steps carry RESOLVED section and shot ids, so replaying them against another
  * fixture drives moves at ids that do not exist there and reports an invented
  * failure - or passes green - while the operator believes they are looking at
@@ -32,74 +33,26 @@
  * so it works as a one-off gate too.
  */
 import * as path from 'path';
-import { readTrace, restoreTraceEnv } from './lib/fuzzTrace';
-
-interface Args {
-  name: string;
-  seed?: number;
-  iterations?: number;
-  release: boolean;
-  /** Replay a recorded trace instead of drawing moves. */
-  trace?: string;
-}
+import { readTrace, restoreTraceEnv, type FuzzTrace } from './lib/fuzzTrace';
+import { parseScenarioArgs, scenarioRunOptions } from './lib/scenarioRunArgs';
+import { foldLocalPaths, progressLogger, scenarioFailOutput, shareableErrorText, valueShape } from './lib/shareableFailure';
 
 /**
- * Numeric flags, validated exactly as `fuzz-matrix.ts` validates the same two:
- * a seed is any INTEGER (its `--seeds` ranges accept negatives), an iteration
- * count is a POSITIVE one.
- *
- * `Number.isFinite` alone was not enough: it accepts `0`, `-5` and `3.7`, and
- * `runScenario` passes the count straight through, so `--iterations 0` skipped
- * the fuzz loop entirely and still printed PASS - a green verdict for a run that
- * exercised nothing.
+ * Values from outside as printed before the registry is loaded (#576 W51) - the
+ * CLI, and a trace from wherever the user got it: a scenario name of the
+ * registry's shape (lower-case words, digits and dashes, as `fuzz-matrix
+ * --scenario` validates it), a knob name of the harness's (`STALAGMIGHT_` and
+ * upper-case words) and a revision print as they are, anything else by its
+ * shape (`valueShape`: a number as itself).
  */
-function integerFlag(flag: string, raw: string): number {
-  if (!/^-?\d+$/.test(raw)) throw new Error(`flag ${flag} needs an integer, got "${raw}"`);
-  return Number(raw);
-}
-
-function positiveIntFlag(flag: string, raw: string): number {
-  if (!/^\d+$/.test(raw) || Number(raw) < 1) {
-    throw new Error(`flag ${flag} needs a positive integer, got "${raw}"`);
-  }
-  return Number(raw);
-}
-
-function parseArgs(argv: string[]): Args {
-  const [name, ...rest] = argv;
-  if (!name) {
-    // The known-scenario list is NOT printed here: `./scenarios` is imported
-    // after the replay env is restored, and importing it early to build this
-    // message would freeze the fuzz scenarios' knobs against the wrong
-    // environment. `main` names them once the registry is loaded.
-    throw new Error('usage: pnpm agent:scenario <name> [--seed N] [--iterations M] [--release] [--trace FILE]');
-  }
-  const args: Args = { name, release: false };
-  for (let i = 0; i < rest.length; i += 1) {
-    const flag = rest[i];
-    if (flag === '--release') {
-      args.release = true;
-      continue;
-    }
-    if (flag === '--trace') {
-      const value = rest[i + 1];
-      if (value === undefined) throw new Error('--trace needs a path');
-      i += 1;
-      args.trace = value;
-      continue;
-    }
-    if (flag !== '--seed' && flag !== '--iterations') throw new Error(`unknown flag ${flag}`);
-    const raw = rest[i + 1];
-    if (raw === undefined) throw new Error(`flag ${flag} needs a value`);
-    i += 1;
-    if (flag === '--seed') args.seed = integerFlag(flag, raw);
-    else args.iterations = positiveIntFlag(flag, raw);
-  }
-  return args;
-}
+const scenarioName = (name: string): string => (/^[a-z][a-z0-9-]{1,63}$/.test(name) ? name : valueShape(name));
+const envKey = (key: string): string => (/^STALAGMIGHT_[A-Z0-9_]{1,64}$/.test(key) ? key : valueShape(key));
+const gitRev = (rev: unknown): string =>
+  typeof rev === 'string' && /^(?:[0-9a-f]{7,40}|unknown)$/.test(rev) ? rev.slice(0, 12) : valueShape(rev);
 
 async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseScenarioArgs(process.argv.slice(2));
+  let trace: FuzzTrace | null = null;
 
   // Set BEFORE `session.start()`: `agentBuildMode()` is read at call time, which
   // is what lets a flag parsed after this module's imports still take effect.
@@ -109,18 +62,20 @@ async function main(): Promise<void> {
   // the env var and the two are interchangeable.
   if (args.trace) {
     const tracePath = path.resolve(args.trace);
-    const trace = readTrace(tracePath);
+    trace = readTrace(tracePath);
     if (trace.scenario !== args.name) {
       throw new Error(
-        `trace ${tracePath} was recorded by "${trace.scenario}", not "${args.name}"; ` +
+        `trace ${foldLocalPaths(tracePath)} was recorded by "${scenarioName(trace.scenario)}", not "${scenarioName(args.name)}"; ` +
           `its steps carry that scenario's resolved ids. Run it as: ` +
-          `pnpm agent:scenario ${trace.scenario} --trace ${args.trace}`,
+          `pnpm agent:scenario ${scenarioName(trace.scenario)} --trace ${foldLocalPaths(args.trace)}`,
       );
     }
-    // The recording's own environment is part of the repro. Restored here, i.e.
-    // before `./scenarios` is imported below, because the fuzz scenarios freeze
-    // FIXTURE / ALLOW_KNOWN_BUGS / REPAIR / DUMP_HISTORY into module-level
-    // consts at import time; a restore after that would be a no-op.
+    // The recording's own environment is part of the repro. Every knob is read
+    // at call time (`lib/fuzzKnobs.ts`, undoRedoFuzz's `repairEnabled`), so any
+    // point before the run would do; it is restored here, before `./scenarios`
+    // is even imported, so that stays true should a module ever read one at
+    // import time. Its seed and iteration count are the other half of the repro
+    // and go to `runScenario` below (`scenarioRunOptions`, #576 NF-E12-1).
     //
     // Through `restoreTraceEnv`, which applies the recorder's own prefix filter:
     // a trace is a file from wherever the user got it, and this process goes on
@@ -133,11 +88,13 @@ async function main(): Promise<void> {
     const { applied, refused, cleared } = restoreTraceEnv(trace.env);
     process.env.STALAGMIGHT_FUZZ_REPLAY = tracePath;
     const restored = applied.filter(([key]) => changed.has(key));
+    const runAt = scenarioRunOptions(args, trace);
     process.stdout.write(
-      `replaying ${trace.steps.length} step(s) recorded by ${trace.scenario} on ${trace.fixture} ` +
-        `(seed ${trace.seed}, rev ${trace.gitRev.slice(0, 12)})\n` +
+      `replaying ${trace.steps.length} step(s) recorded by ${scenarioName(trace.scenario)} on ${foldLocalPaths(String(trace.fixture))} ` +
+        `(seed ${valueShape(trace.seed)}, ${valueShape(trace.iterations)} iteration(s), rev ${gitRev(trace.gitRev)}); ` +
+        `running at seed ${String(runAt.seed)}, ${String(runAt.iterations)} iteration(s)\n` +
         (restored.length > 0
-          ? `  restored from the trace: ${restored.map(([key, value]) => `${key}=${value}`).join(' ')}\n`
+          ? `  restored from the trace: ${restored.map(([key, value]) => `${envKey(key)}=${foldLocalPaths(String(value))}`).join(' ')}\n`
           : '') +
         // Printed for the same reason `restored` is: a knob the shell set and
         // the recording did not is a difference between this run and that one,
@@ -145,10 +102,10 @@ async function main(): Promise<void> {
         // recording. The recording ran on those knobs' DEFAULTS.
         (cleared.length > 0
           ? `  cleared ${cleared.length} knob(s) the recording did not have, back to their defaults: ` +
-            `${cleared.join(', ')}\n`
+            `${cleared.map(envKey).join(', ')}\n`
           : '') +
         (refused.length > 0
-          ? `  REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.join(', ')}\n`
+          ? `  REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.map(envKey).join(', ')}\n`
           : ''),
     );
   }
@@ -162,9 +119,10 @@ async function main(): Promise<void> {
   // refusal in #422 - and the macOS backend it should pick (`MacSession`,
   // tauri-wd) was unreachable from here.
   const { createSession } = await import('./createSession');
-  const { runSweep, newOracleState } = await import('./lib/oracles');
+  const { findingsSummary, runSweep, newOracleState } = await import('./lib/oracles');
   if (!getScenario(args.name)) {
-    throw new Error(`unknown scenario "${args.name}"; known: ${listScenarios().join(', ')}`);
+    // Not a registry name, so its shape (#576 W51): it is the user's text.
+    throw new Error(`unknown scenario, ${valueShape(args.name)}; known: ${listScenarios().join(', ')}`);
   }
 
   const session = createSession();
@@ -176,9 +134,14 @@ async function main(): Promise<void> {
 
   try {
     const metrics = await runScenario(args.name, session, {
-      ...(args.seed === undefined ? {} : { seed: args.seed }),
-      ...(args.iterations === undefined ? {} : { iterations: args.iterations }),
-      log: (line) => process.stdout.write(`   . ${line}\n`),
+      // A replay runs at the trace's seed and iteration count unless a flag says
+      // otherwise (#576 NF-E12-1); a fresh run passes only the flags given.
+      ...scenarioRunOptions(args, trace),
+      // Shareable progress lines (#576 W23-NF3); the full text goes to actions.jsonl.
+      log: progressLogger(
+        (line) => process.stdout.write(`   . ${line}\n`),
+        session.hasRecorder ? session.recorder : undefined,
+      ),
     });
     const sweep = await runSweep(session, newOracleState(), { full: true, recorder: session.recorder });
     const fatal = sweep.findings.filter((finding) => finding.severity === 'fatal');
@@ -187,11 +150,24 @@ async function main(): Promise<void> {
       `${fatal.length ? 'FAIL' : 'PASS'}: ${args.name} seed=${metrics.seed} iterations=${metrics.iterations} ` +
         `mode=${started.buildMode} ` +
         `(${metrics.durationMs}ms) ${JSON.stringify(metrics.metrics)}` +
-        `${sweep.findings.length ? ` findings=${JSON.stringify(sweep.findings)}` : ''}\n`,
+        // Counts per severity, kind and code only (#576 HFI2-F2): a finding's
+        // message is the app's log line, which names sections and projects of
+        // the loaded data. The text stays in the session's actions.jsonl.
+        `${sweep.findings.length ? ` findings=${findingsSummary(sweep.findings)}` : ''}\n`,
     );
   } catch (err) {
     failed = true;
-    process.stdout.write(`FAIL: ${args.name} threw:\n${err instanceof Error ? err.message : String(err)}\n`);
+    // The shareable form - headline, reproduce/trace lines, diff paths and
+    // counts - is what this prints (#576 W21-NF1): the full message quotes the
+    // app (integrity messages, IPC rejection lines, diff values). The full text
+    // goes to the session's actions.jsonl, which is not for sharing.
+    if (session.hasRecorder) {
+      session.recorder.event('scenario-failure', {
+        scenario: args.name,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+    process.stdout.write(scenarioFailOutput(args.name, err));
   } finally {
     await session.stop('scenario-run');
   }
@@ -200,6 +176,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W23-NF2): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });

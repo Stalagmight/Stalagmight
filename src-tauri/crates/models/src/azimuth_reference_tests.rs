@@ -20,6 +20,7 @@
     reason = "test module: a failed unwrap is the failure report"
 )]
 
+use crate::test_fixtures::straight_shot;
 use crate::{
     AzimuthReference, CorrectionSource, NorthReference, Project, Section, SectionData, SectionId,
     ShotData, StationRef,
@@ -27,17 +28,6 @@ use crate::{
 
 /// 10 degrees east: big enough that a dropped correction cannot pass as noise.
 const TEST_CORRECTION: f64 = 10.0;
-
-fn shot(azimuth: f64, length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in: 0.0,
-        depth_out: 0.0,
-        ..Default::default()
-    }
-}
 
 fn project_with(shots: Vec<ShotData>, reference: Option<AzimuthReference>) -> (Project, SectionId) {
     let mut project = Project::new("declination".to_string(), None);
@@ -70,7 +60,7 @@ fn station_xy(project: &Project, section_id: SectionId, index: u32) -> (f64, f64
 #[test]
 fn the_correction_rotates_the_geometry_and_never_the_reading() {
     let reference = AzimuthReference::magnetic(TEST_CORRECTION, CorrectionSource::FileDeclared);
-    let (project, id) = project_with(vec![shot(0.0, 10.0)], Some(reference));
+    let (project, id) = project_with(vec![straight_shot(0.0, 10.0)], Some(reference));
 
     let stored = &project.get_section(id).unwrap().shots[0];
     assert_eq!(stored.azimuth_in, 0.0, "the measured reading must not move");
@@ -89,7 +79,11 @@ fn the_correction_rotates_the_geometry_and_never_the_reading() {
 /// because upgrading moves nobody.
 #[test]
 fn a_section_with_no_reference_walks_exactly_where_it_always_did() {
-    let shots = vec![shot(37.5, 12.0), shot(191.25, 7.5), shot(400.0, 3.0)];
+    let shots = vec![
+        straight_shot(37.5, 12.0),
+        straight_shot(191.25, 7.5),
+        straight_shot(400.0, 3.0),
+    ];
     let (with_none, id_a) = project_with(shots.clone(), None);
     let (with_default, id_b) = project_with(shots, Some(AzimuthReference::default()));
 
@@ -112,7 +106,7 @@ fn a_section_with_no_reference_walks_exactly_where_it_always_did() {
 #[test]
 fn the_section_reference_wins_over_the_project_default() {
     let (mut project, id) = project_with(
-        vec![shot(0.0, 10.0)],
+        vec![straight_shot(0.0, 10.0)],
         Some(AzimuthReference::magnetic(
             TEST_CORRECTION,
             CorrectionSource::Manual,
@@ -146,7 +140,11 @@ fn the_section_reference_wins_over_the_project_default() {
 fn reversing_a_corrected_section_keeps_every_station_where_it_was() {
     let reference = AzimuthReference::magnetic(TEST_CORRECTION, CorrectionSource::FileDeclared);
     let (mut project, id) = project_with(
-        vec![shot(0.0, 40.0), shot(75.0, 30.0), shot(310.0, 30.0)],
+        vec![
+            straight_shot(0.0, 40.0),
+            straight_shot(75.0, 30.0),
+            straight_shot(310.0, 30.0),
+        ],
         Some(reference),
     );
     let before: Vec<(f64, f64)> = (0..4).map(|i| station_xy(&project, id, i)).collect();
@@ -170,7 +168,7 @@ fn reversing_a_corrected_section_keeps_every_station_where_it_was() {
 #[test]
 fn restoring_a_section_from_its_identity_keeps_the_reference() {
     let reference = AzimuthReference::grid(-3.25, CorrectionSource::IgrfAuto { epoch_year: 2019 });
-    let (project, id) = project_with(vec![shot(0.0, 10.0)], Some(reference));
+    let (project, id) = project_with(vec![straight_shot(0.0, 10.0)], Some(reference));
     let section = project.get_section(id).unwrap();
 
     let identity = crate::SectionIdentity::of(section);

@@ -2,13 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
-import type { CommandResult } from '../../types/commands';
+import type { SaveOutcome } from '../../types/ipc/SaveOutcome';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 /**
  * Save a Copy: an explicit destination on a SpeleoDB-managed project writes a
@@ -38,13 +35,14 @@ describe('projectStore.saveProject detached-copy result', () => {
     const project = { file_path: '/cache/p1/project.stalx' } as never;
     useProjectStore.setState({ project, isDirty: true, integrityIssues: [] } as never);
     invokeIpcMock.mockResolvedValue({
-      success: true,
+      saved_path: null,
       unlinked_copy_path: '/home/diver/copy.stalx',
-    } as CommandResult);
+      warnings: [],
+    } satisfies SaveOutcome);
 
     const result = await useProjectStore.getState().saveProject('/home/diver/copy.stalx');
 
-    expect(result?.unlinked_copy_path).toBe('/home/diver/copy.stalx');
+    expect(result).toMatchObject({ success: true, unlinked_copy_path: '/home/diver/copy.stalx' });
     // The open project is untouched - same object, same path, still dirty.
     expect(useProjectStore.getState().project).toBe(project);
     expect(useProjectStore.getState().isDirty).toBe(true);
@@ -70,9 +68,10 @@ describe('projectStore.saveProject detached-copy result', () => {
       integrityIssues: ['duplicate_shot_uuid'],
     } as never);
     invokeIpcMock.mockResolvedValue({
-      success: true,
+      saved_path: null,
       unlinked_copy_path: '/home/diver/copy.stalx',
-    } as CommandResult);
+      warnings: [],
+    } satisfies SaveOutcome);
 
     await useProjectStore.getState().saveProject('/home/diver/copy.stalx');
 

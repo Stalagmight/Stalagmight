@@ -34,9 +34,7 @@ impl AppState {
             return CommandResult::failure("Shot has a non-finite (NaN/inf) value".to_string());
         }
 
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
@@ -171,9 +169,7 @@ impl AppState {
         updates: ShotUpdates,
         enforce_frozen: bool,
     ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
@@ -263,9 +259,7 @@ impl AppState {
     }
 
     pub(super) fn delete_shot(&self, section_id: SectionId, shot_id: ShotId) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
@@ -283,6 +277,10 @@ impl AppState {
             );
         }
 
+        // The removed station's comment keys, legacy ones included (#576
+        // RV19a-19): the model drops only its canonical key, and a legacy
+        // `Index` key left behind names the next station once the shot is gone.
+        let mut comment_keys = Vec::new();
         if let Ok(impact) = project.preview_delete_shot(section_id, shot_id) {
             if impact.shift_blocked {
                 let reasons = if impact.shift_blocked_reasons.is_empty() {
@@ -292,10 +290,14 @@ impl AppState {
                 };
                 return CommandResult::failure(format!("{reasons} Use split instead."));
             }
+            comment_keys = Self::comment_keys_naming(project, &[impact.removed_station]);
         }
 
         match project.remove_shot_with_rewire(section_id, shot_id) {
             Ok(_) => {
+                for key in &comment_keys {
+                    project.station_comments.remove(key);
+                }
                 tracing::debug!(
                     section_id,
                     shot_id,
@@ -338,9 +340,7 @@ impl AppState {
         shot_id: ShotId,
         appended_into_empty_section: bool,
     ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());

@@ -2,8 +2,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::warn;
 
 use crate::config::ClosureAdjustmentConfig;
-use crate::{ClosureRef, ClosureStrategy, Coordinates, Section, SectionId, Station, StationRef};
+use crate::{
+    ClosureRef, ClosureStrategy, Coordinates, Section, SectionId, Station, StationKey, StationRef,
+};
 
+use super::closure::ClosureRemeasure;
 use super::Project;
 
 impl Project {
@@ -273,7 +276,9 @@ impl Project {
             }
         }
 
-        // Per-section XY walk + individual station offsets.
+        // Per-section XY walk + individual station offsets, every offset key
+        // resolved once (#576 NF-W12BE-4) rather than all of them per station.
+        let station_offsets = self.resolved_station_offsets();
         let mut out: HashMap<StationRef, Coordinates> = HashMap::with_capacity(station_list.len());
         for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
             let (offset_x, offset_y) = self
@@ -294,7 +299,7 @@ impl Project {
                 let sr = StationRef::new(section.id, idx as u32);
                 let z = depth.get(&sr).copied().unwrap_or(0.0);
                 let mut coords = Coordinates::new(cur.0, cur.1, z);
-                if let Some((ox, oy, oz)) = self.station_offset_for_ref(sr) {
+                if let Some(&(ox, oy, oz)) = station_offsets.get(&sr) {
                     coords.x += ox;
                     coords.y += oy;
                     coords.z += oz;
@@ -542,6 +547,11 @@ impl Project {
     /// partially-adjusted geometry instead of the measured fallback the warning
     /// promises.
     ///
+    /// Only the working copy's station coordinates come back, and they read no
+    /// closure metric, so the solve does not re-measure the copy's closures
+    /// ([`ClosureRemeasure::Skip`]): that was a path search per closure, on
+    /// every cache miss, for values dropped with the copy (#576 W38-NF-3).
+    ///
     /// Cost: the rollback snapshots the working copy once per eligible component,
     /// so a cache-miss solve clones the project `O(eligible components)` times.
     /// In practice that is one or two clones (most surveys are a single connected
@@ -557,9 +567,12 @@ impl Project {
         let mut working = self;
         for anchor in anchors {
             let snapshot = working.clone();
-            if let Err(e) =
-                working.adjust_loop_closures(anchor, ClosureStrategy::LeastSquaresWeighted, config)
-            {
+            if let Err(e) = working.adjust_loop_closures_with(
+                anchor,
+                ClosureStrategy::LeastSquaresWeighted,
+                config,
+                ClosureRemeasure::Skip,
+            ) {
                 working = snapshot;
                 warn!(
                     error = %e,
@@ -629,6 +642,9 @@ impl Project {
         );
         let t_phase = std::time::Instant::now();
 
+        // Every station offset key resolved once (#576 NF-W12BE-4): the walk used
+        // to resolve all of them at every station.
+        let station_offsets = self.resolved_station_offsets();
         let mut stations: Vec<(StationRef, Coordinates)> = Vec::new();
         let mut station_count = 0u32;
 
@@ -649,7 +665,7 @@ impl Project {
                 .unwrap_or(0.0);
             let mut station_coords = Coordinates::new(current_xy.0, current_xy.1, z);
             // Apply station offset if exists
-            if let Some((ox, oy, oz)) = self.station_offset_for_ref(first_station_ref) {
+            if let Some(&(ox, oy, oz)) = station_offsets.get(&first_station_ref) {
                 station_coords = Coordinates::new(
                     station_coords.x + ox,
                     station_coords.y + oy,
@@ -680,7 +696,7 @@ impl Project {
                 let z = station_depths.get(&station_ref).copied().unwrap_or(0.0);
                 let mut station_coords = Coordinates::new(current_xy.0, current_xy.1, z);
                 // Apply station offset if exists
-                if let Some((ox, oy, oz)) = self.station_offset_for_ref(station_ref) {
+                if let Some(&(ox, oy, oz)) = station_offsets.get(&station_ref) {
                     station_coords = Coordinates::new(
                         station_coords.x + ox,
                         station_coords.y + oy,
@@ -707,11 +723,129 @@ impl Project {
         stations
     }
 
-    /// Merge groups (transitive closure of `station_merges`): each station in a
-    /// group maps to its group index. Union by size, so a pathological merge order
-    /// stays near-linear (#596). Member order is unchanged from the pre-#596 code
-    /// (`a`'s group, then `b`'s): `merged_with` is read in that order by the frontend.
-    fn merge_groups(&self) -> (HashMap<StationRef, usize>, Vec<Vec<StationRef>>) {
+    /// Attach each station's merge (`merged_with`) and loop-closure (`closures_with`)
+    /// relationships. `merged_with` lists every other member of the station's merge
+    /// group, so its output is quadratic in group size by contract (the IPC shape the
+    /// frontend reads); geometry-only consumers use [`Self::compute_station_positions`].
+    fn attach_station_relationships(&self, stations_out: &mut Vec<Station>) {
+        let mut stations = std::mem::take(stations_out);
+        let t_phase = std::time::Instant::now();
+
+        // Mark merged stations - build merge groups (transitive closure)
+        let (station_to_group, groups) = self.station_merge_groups();
+
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            groups = groups.len(),
+            "compute_station_coordinates: union-find groups"
+        );
+        let t_phase = std::time::Instant::now();
+
+        // Now assign merged_with for each station based on their group
+        for station in &mut stations {
+            if let Some(&group_id) = station_to_group.get(&station.station_ref) {
+                for member in &groups[group_id] {
+                    if *member != station.station_ref {
+                        station.merged_with.push(*member);
+                    }
+                }
+            }
+        }
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: merged_with"
+        );
+        let t_phase = std::time::Instant::now();
+
+        // [#576 HFI-10] The passes below find a station by its ref. They used to
+        // compare every station once per zero datum and once per station comment -
+        // (datums + comments) x stations comparisons per call, a third of the import
+        // of a Walls project with hundreds of thousands of shots - and, for the
+        // closure refs, once per loop closure (#576 NF-W12BE-2). `stations` is laid
+        // out by the walk above, section by section and station 0..=shots, so the
+        // ref names its slot directly.
+        let layout = StationLayout::of(&self.sections);
+
+        self.populate_closures_with(&mut stations, &station_to_group, &groups, &layout);
+
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            closures = self.loop_closures.len(),
+            "compute_station_coordinates: closures_with"
+        );
+        let t_phase = std::time::Instant::now();
+
+        Self::chain_closure_partners(&mut stations, &layout);
+
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: closure-chain transitivity"
+        );
+        let t_phase = std::time::Instant::now();
+
+        // Mark zero datums
+        for zd in &self.zero_datums {
+            let Some(sr) = self.resolve_key(&zd.station_ref) else {
+                continue;
+            };
+            for i in layout.positions(&stations, sr) {
+                let station = &mut stations[i];
+                station.is_zero_datum = true;
+                station.gps_coordinates = Some(zd.gps);
+            }
+        }
+
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: zero datums"
+        );
+        let t_phase = std::time::Instant::now();
+
+        // Assign station comments.
+        //
+        // [#576 NF-W12BE-3, W30-6] Two stored keys can name one station - a legacy
+        // positional `Index` beside the canonical key, or `Index(0)` beside
+        // `SectionStart`. The re-anchor on open and on a snapshot restore joins
+        // the keys that resolve, but one that does not (a row past the end of its
+        // section) stays `Index`, and an edit that gives the section that station
+        // (a shot prepended or appended) makes it name a station that has, or then
+        // gets, a key of its own; nothing re-anchors it then. The rule: a station
+        // shows what the save writes for it - the comments of all its keys joined,
+        // in the save's order (`Project::one_row_per_station` with
+        // `join_station_comment`: the canonical key's comment first, then the
+        // others by key). It used to show only the comment of the key that sorted
+        // first while the save joined them, so a reopen showed text the station
+        // had not shown.
+        let comments: Vec<(&StationKey, StationRef, String)> = self
+            .station_comments
+            .iter()
+            .filter_map(|(key, comment)| Some((key, self.resolve_key(key)?, comment.clone())))
+            .collect();
+        for (sr, comment) in self.one_row_per_station(comments, super::join_station_comment) {
+            for i in layout.positions(&stations, sr) {
+                stations[i].comment = Some(comment.clone());
+            }
+        }
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: station comments"
+        );
+
+        *stations_out = stations;
+    }
+
+    /// Merge groups - the transitive closure of the station merges: each merged
+    /// station's group, and every group's members in the order the merges joined
+    /// them (a self-merge lists its station twice). A merge with an end that does
+    /// not resolve joins nothing.
+    ///
+    /// Union by size, so a pathological merge order stays near-linear (#596).
+    /// Member order is unchanged from the pre-#596 code (`a`'s group, then `b`'s):
+    /// `merged_with` is read in that order by the frontend.
+    pub(super) fn station_merge_groups(
+        &self,
+    ) -> (HashMap<StationRef, usize>, Vec<Vec<StationRef>>) {
+        // Union-Find logic: a map of station_ref -> group_id
         let mut station_to_group: HashMap<StationRef, usize> = HashMap::new();
         let mut groups: Vec<VecDeque<StationRef>> = Vec::new();
 
@@ -776,44 +910,22 @@ impl Project {
         )
     }
 
-    /// Attach each station's merge (`merged_with`) and loop-closure (`closures_with`)
-    /// relationships. `merged_with` lists every other member of the station's merge
-    /// group, so its output is quadratic in group size by contract (the IPC shape the
-    /// frontend reads); geometry-only consumers use [`Self::compute_station_positions`].
-    fn attach_station_relationships(&self, stations_out: &mut Vec<Station>) {
-        let mut stations = std::mem::take(stations_out);
-        let t_phase = std::time::Instant::now();
-
-        // Mark merged stations - build merge groups (transitive closure)
-        // First, build a map of station_ref -> group_id using Union-Find logic
-        let (station_to_group, groups) = self.merge_groups();
-
-        tracing::debug!(
-            ms = t_phase.elapsed().as_millis() as u64,
-            groups = groups.len(),
-            "compute_station_coordinates: union-find groups"
-        );
-        let t_phase = std::time::Instant::now();
-
-        // Now assign merged_with for each station based on their group
-        for station in &mut stations {
-            if let Some(&group_id) = station_to_group.get(&station.station_ref) {
-                for member in &groups[group_id] {
-                    if *member != station.station_ref {
-                        station.merged_with.push(*member);
-                    }
-                }
-            }
-        }
-        tracing::debug!(
-            ms = t_phase.elapsed().as_millis() as u64,
-            "compute_station_coordinates: merged_with"
-        );
-        let t_phase = std::time::Instant::now();
-
-        // Populate closures_with for each station from loop_closures
-        // For each closure, both endpoint stations (and their merged equivalents)
-        // get a ClosureRef entry. Transitive closures go through merged stations.
+    /// Populate closures_with for each station from loop_closures.
+    /// For each closure, both endpoint stations (and their merged equivalents)
+    /// get a ClosureRef entry. Transitive closures go through merged stations.
+    ///
+    /// [#576 NF-W12BE-2] Each closure visits the stations of its two groups, read
+    /// off `layout`; it used to test every station against both groups, closures x
+    /// stations comparisons. The entries and their order are the scan's: a station
+    /// takes them closure by closure in `loop_closures` order, a station in both
+    /// groups takes A's entries only, and a member no station holds gets nothing.
+    fn populate_closures_with(
+        &self,
+        stations: &mut [Station],
+        station_to_group: &HashMap<StationRef, usize>,
+        groups: &[Vec<StationRef>],
+        layout: &StationLayout,
+    ) {
         for closure in &self.loop_closures {
             let (Some(a_ref), Some(b_ref)) = (
                 self.resolve_key(&closure.station_a),
@@ -837,9 +949,16 @@ impl Project {
                 continue;
             }
 
+            // Each member once, even one a self-merge put in its group twice, as the
+            // scan's `contains` visited each station once.
+            let mut visited: HashSet<StationRef> = HashSet::new();
             // For each station in A's group, add direct ref to B and transitive refs to B's merged partners
-            for station in &mut stations {
-                if a_group.contains(&station.station_ref) {
+            for &member in &a_group {
+                if !visited.insert(member) {
+                    continue;
+                }
+                for i in layout.positions(stations, member) {
+                    let station = &mut stations[i];
                     // Direct closure to station_b (skip self-references)
                     if station.station_ref != b_ref {
                         let via = if station.station_ref == a_ref {
@@ -865,7 +984,15 @@ impl Project {
                             });
                         }
                     }
-                } else if b_group.contains(&station.station_ref) {
+                }
+            }
+            // A member of both groups took A's branch only (the scan's `else if`).
+            for &member in &b_group {
+                if !visited.insert(member) {
+                    continue;
+                }
+                for i in layout.positions(stations, member) {
+                    let station = &mut stations[i];
                     // Direct closure to station_a (skip self-references)
                     if station.station_ref != a_ref {
                         let via = if station.station_ref == b_ref {
@@ -894,126 +1021,129 @@ impl Project {
                 }
             }
         }
+    }
 
-        tracing::debug!(
-            ms = t_phase.elapsed().as_millis() as u64,
-            closures = self.loop_closures.len(),
-            "compute_station_coordinates: closures_with"
-        );
-        let t_phase = std::time::Instant::now();
-
-        // Closure-chain transitivity: when a station has direct closures to multiple
-        // other stations, those other stations should see transitive closures to each
-        // other via the shared station.
+    /// Closure-chain transitivity: when a station has direct closures to multiple
+    /// other stations, those other stations should see transitive closures to each
+    /// other via the shared station.
+    ///
+    /// Example: Station X has closures to Y and Z.
+    ///   Y should see: transitive closure to Z (via X)
+    ///   Z should see: transitive closure to Y (via X)
+    ///
+    /// The closure_id used is the one connecting the shared station to the far endpoint,
+    /// so the metrics displayed correspond to that specific loop closure.
+    ///
+    /// [#576 NF-W12BE-2] A partner's station is read off `layout`, where it used to
+    /// be found by a scan of every station per entry.
+    fn chain_closure_partners(stations: &mut [Station], layout: &StationLayout) {
+        // For each station with 2+ direct (non-transitive) closures, create
+        // chain-transitive refs between all pairs of its closure partners.
         //
-        // Example: Station X has closures to Y and Z.
-        //   Y should see: transitive closure to Z (via X)
-        //   Z should see: transitive closure to Y (via X)
-        //
-        // The closure_id used is the one connecting the shared station to the far endpoint,
-        // so the metrics displayed correspond to that specific loop closure.
-        {
-            // Collect direct (non-transitive) closure refs for each station
-            let mut direct_closures: HashMap<StationRef, Vec<(u64, StationRef)>> = HashMap::new();
-            for station in &stations {
-                for cr in station.closures() {
-                    if !cr.is_transitive {
-                        direct_closures
-                            .entry(station.station_ref)
-                            .or_default()
-                            .push((cr.closure_id, cr.station_ref));
-                    }
-                }
-            }
-
-            // For each station with 2+ direct closures, create chain-transitive refs
-            // between all pairs of its closure partners
-            let mut chain_transitive_refs: Vec<(StationRef, ClosureRef)> = Vec::new();
-            for (shared_ref, endpoints) in &direct_closures {
-                if endpoints.len() < 2 {
-                    continue;
-                }
-                for i in 0..endpoints.len() {
-                    for j in 0..endpoints.len() {
-                        if i == j {
-                            continue;
-                        }
-                        let (_, target_i) = &endpoints[i];
-                        let (closure_j, target_j) = &endpoints[j];
-
-                        // target_i should see transitive closure to target_j via shared_ref
-                        // using closure_j's id (the closure connecting shared_ref to target_j)
-                        if target_i != target_j {
-                            chain_transitive_refs.push((
-                                *target_i,
-                                ClosureRef {
-                                    closure_id: *closure_j,
-                                    station_ref: *target_j,
-                                    via_station: Some(*shared_ref),
-                                    is_transitive: true,
-                                },
-                            ));
-                        }
-                    }
-                }
-            }
-
-            // Apply chain-transitive refs, avoiding duplicates
-            for (station_ref, new_ref) in chain_transitive_refs {
-                if let Some(station) = stations.iter_mut().find(|s| s.station_ref == station_ref) {
-                    let already_exists = station.closures().iter().any(|cr| {
-                        cr.station_ref == new_ref.station_ref
-                            && cr.via_station == new_ref.via_station
-                    });
-                    if !already_exists {
-                        station.closures_mut().push(new_ref);
-                    }
-                }
-            }
-        }
-
-        tracing::debug!(
-            ms = t_phase.elapsed().as_millis() as u64,
-            "compute_station_coordinates: closure-chain transitivity"
-        );
-        let t_phase = std::time::Instant::now();
-
-        // Mark zero datums
-        for zd in &self.zero_datums {
-            let Some(sr) = self.resolve_key(&zd.station_ref) else {
+        // [#576 HFI-15] In `stations` order (section order, then station index),
+        // each shared station's partners in the order its direct refs were pushed
+        // (`loop_closures` order). The shared stations used to come out of a fresh
+        // `HashMap`, whose iteration order changes with every map, so one project
+        // state came back with these refs permuted on each recompute.
+        let mut chain_transitive_refs: Vec<(StationRef, ClosureRef)> = Vec::new();
+        for station in stations.iter() {
+            let shared_ref = &station.station_ref;
+            let endpoints: Vec<(u64, StationRef)> = station
+                .closures()
+                .iter()
+                .filter(|cr| !cr.is_transitive)
+                .map(|cr| (cr.closure_id, cr.station_ref))
+                .collect();
+            if endpoints.len() < 2 {
                 continue;
-            };
-            for station in &mut stations {
-                if station.station_ref == sr {
-                    station.is_zero_datum = true;
-                    station.gps_coordinates = Some(zd.gps);
+            }
+            for i in 0..endpoints.len() {
+                for j in 0..endpoints.len() {
+                    if i == j {
+                        continue;
+                    }
+                    let (_, target_i) = &endpoints[i];
+                    let (closure_j, target_j) = &endpoints[j];
+
+                    // target_i should see transitive closure to target_j via shared_ref
+                    // using closure_j's id (the closure connecting shared_ref to target_j)
+                    if target_i != target_j {
+                        chain_transitive_refs.push((
+                            *target_i,
+                            ClosureRef {
+                                closure_id: *closure_j,
+                                station_ref: *target_j,
+                                via_station: Some(*shared_ref),
+                                is_transitive: true,
+                            },
+                        ));
+                    }
                 }
             }
         }
 
-        tracing::debug!(
-            ms = t_phase.elapsed().as_millis() as u64,
-            "compute_station_coordinates: zero datums"
-        );
-        let t_phase = std::time::Instant::now();
-
-        // Assign station comments
-        for (key, comment) in &self.station_comments {
-            let Some(sr) = self.resolve_key(key) else {
-                continue;
-            };
-            for station in &mut stations {
-                if station.station_ref == sr {
-                    station.comment = Some(comment.clone());
+        // Apply chain-transitive refs, avoiding duplicates
+        for (station_ref, new_ref) in chain_transitive_refs {
+            // The first station holding the ref, as the scan's `find` took.
+            if let Some(&i) = layout.positions(stations, station_ref).first() {
+                let station = &mut stations[i];
+                let already_exists = station.closures().iter().any(|cr| {
+                    cr.station_ref == new_ref.station_ref && cr.via_station == new_ref.via_station
+                });
+                if !already_exists {
+                    station.closures_mut().push(new_ref);
                 }
             }
         }
-        tracing::debug!(
-            ms = t_phase.elapsed().as_millis() as u64,
-            "compute_station_coordinates: station comments"
-        );
+    }
+}
 
-        *stations_out = stations;
+/// [#576 HFI-10] Where each section's stations sit in the vector
+/// [`Project::compute_station_coordinates_with_progress`] builds: every section in
+/// project order, its stations `0..=shots` in a row.
+struct StationLayout {
+    /// Per section id, `(first position, station count)` of each section carrying it.
+    slots: HashMap<SectionId, Vec<(usize, usize)>>,
+    /// Stations the layout accounts for: the vector's length when it holds.
+    total: usize,
+}
+
+impl StationLayout {
+    fn of(sections: &[Section]) -> Self {
+        let mut slots: HashMap<SectionId, Vec<(usize, usize)>> = HashMap::new();
+        let mut total = 0usize;
+        for section in sections {
+            let count = section.shots.len() + 1;
+            slots.entry(section.id).or_default().push((total, count));
+            total += count;
+        }
+        Self { slots, total }
+    }
+
+    /// Every position of `stations` holding `sr`, in vector order - what a scan
+    /// comparing each station's ref would visit. Read off the layout, and checked
+    /// against the vector: should the layout ever not describe it, the scan answers.
+    fn positions(&self, stations: &[Station], sr: StationRef) -> Vec<usize> {
+        let idx = sr.station_index as usize;
+        let slotted: Vec<usize> = self
+            .slots
+            .get(&sr.section_id)
+            .into_iter()
+            .flatten()
+            .filter(|&&(_, count)| idx < count)
+            .map(|&(first, _)| first + idx)
+            .collect();
+        let holds = stations.len() == self.total
+            && slotted
+                .iter()
+                .all(|&i| stations.get(i).is_some_and(|s| s.station_ref == sr));
+        if holds {
+            slotted
+        } else {
+            (0..stations.len())
+                .filter(|&i| stations[i].station_ref == sr)
+                .collect()
+        }
     }
 }
 
@@ -1022,19 +1152,26 @@ impl Project {
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
+#[expect(
+    clippy::print_stdout,
+    reason = "test module: the regression tests print the values they check"
+)]
+mod view_remeasure_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+#[expect(
+    clippy::print_stdout,
+    reason = "test module: the regression test prints the value it checks"
+)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::straight_shot;
     use crate::{LoopClosure, SectionData, ShotData, StationMerge};
     use chrono::Utc;
-
-    fn shot(azimuth: f64, length: f64) -> ShotData {
-        ShotData {
-            azimuth_in: azimuth,
-            azimuth_out: azimuth,
-            length,
-            ..Default::default()
-        }
-    }
 
     fn add_section(project: &mut Project, shots: Vec<ShotData>) -> SectionId {
         project
@@ -1075,9 +1212,9 @@ mod tests {
     /// end), so this is the fixture the incidence tie-break exists for.
     fn project_with_a_one_shot_loop() -> (Project, SectionId, SectionId) {
         let mut project = Project::new("one-shot loop".to_string(), None);
-        let a = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        let a = add_section(&mut project, vec![straight_shot(0.0, 10.0)]);
         // 0.25 m longer, so the loop does not quite close.
-        let b = add_section(&mut project, vec![shot(0.0, 10.25)]);
+        let b = add_section(&mut project, vec![straight_shot(0.0, 10.25)]);
         project.ensure_shot_uuids();
         project.station_merges.push(StationMerge {
             station_a: project.key_for_ref(StationRef::new(a, 0)).unwrap(),
@@ -1161,10 +1298,14 @@ mod tests {
     #[test]
     fn the_gauge_of_an_untouched_project_is_the_legacy_one() {
         let mut project = Project::new("mixed".to_string(), None);
-        let one = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        let one = add_section(&mut project, vec![straight_shot(0.0, 10.0)]);
         let three = add_section(
             &mut project,
-            vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
+            vec![
+                straight_shot(0.0, 10.0),
+                straight_shot(90.0, 10.0),
+                straight_shot(180.0, 10.0),
+            ],
         );
         project.ensure_shot_uuids();
         project.station_merges.push(StationMerge {
@@ -1196,7 +1337,11 @@ mod tests {
         let mut project = Project::new("append".to_string(), None);
         let s = add_section(
             &mut project,
-            vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
+            vec![
+                straight_shot(0.0, 10.0),
+                straight_shot(90.0, 10.0),
+                straight_shot(180.0, 10.0),
+            ],
         );
         project.ensure_shot_uuids();
         // Capture happens on save; do it directly here.
@@ -1207,7 +1352,7 @@ mod tests {
         assert_eq!(anchor_index(&project, s), 3, "station 0 is now station 3");
 
         // Extending the passage must not disturb it.
-        project.add_shot(s, shot(270.0, 10.0)).unwrap();
+        project.add_shot(s, straight_shot(270.0, 10.0)).unwrap();
         assert_eq!(
             anchor_index(&project, s),
             3,
@@ -1223,7 +1368,7 @@ mod tests {
     #[test]
     fn the_gauge_of_a_one_shot_section_follows_a_reverse() {
         let mut project = Project::new("one shot".to_string(), None);
-        let s = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        let s = add_section(&mut project, vec![straight_shot(0.0, 10.0)]);
         project.ensure_shot_uuids();
         project.capture_missing_gauge_anchors();
         assert!(
@@ -1248,7 +1393,10 @@ mod tests {
     #[test]
     fn an_uncaptured_section_still_uses_the_legacy_gauge() {
         let mut project = Project::new("legacy".to_string(), None);
-        let s = add_section(&mut project, vec![shot(0.0, 10.0), shot(90.0, 10.0)]);
+        let s = add_section(
+            &mut project,
+            vec![straight_shot(0.0, 10.0), straight_shot(90.0, 10.0)],
+        );
         project.ensure_shot_uuids();
         assert!(project.sections[0].gauge_shot_uuid.is_none());
         assert_eq!(anchor_index(&project, s), 0);
@@ -1265,7 +1413,11 @@ mod tests {
         let mut project = Project::new("one section".to_string(), None);
         let s = add_section(
             &mut project,
-            vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
+            vec![
+                straight_shot(0.0, 10.0),
+                straight_shot(90.0, 10.0),
+                straight_shot(180.0, 10.0),
+            ],
         );
         project.ensure_shot_uuids();
 
@@ -1291,7 +1443,11 @@ mod tests {
         let mut project = Project::new("due north".to_string(), None);
         let s = add_section(
             &mut project,
-            vec![shot(0.0, 10.0), shot(0.0, 10.0), shot(0.0, 10.0)],
+            vec![
+                straight_shot(0.0, 10.0),
+                straight_shot(0.0, 10.0),
+                straight_shot(0.0, 10.0),
+            ],
         );
         project.ensure_shot_uuids();
 
@@ -1341,6 +1497,75 @@ mod tests {
         );
     }
 
+    /// [#576 HFI-15] A station's `closures_with` is a function of the project: the
+    /// chain-transitive entries (a closure partner's other closures, seen through
+    /// the shared station) came out in a fresh `HashMap`'s iteration order, which
+    /// changes with every map, so the same project state was reported in a
+    /// different order on each recompute - and the undo fuzzer read the reorder as
+    /// "undo did not restore". Station X closes to three hubs and each hub closes
+    /// to one spoke, so X sees three chain-transitive closures (to each spoke, via
+    /// its hub).
+    #[test]
+    fn closures_with_comes_back_in_one_order_on_every_recompute() {
+        let mut project = Project::new("closure order".to_string(), None);
+        let sections: Vec<SectionId> = (0..7)
+            .map(|_| add_section(&mut project, vec![straight_shot(0.0, 10.0)]))
+            .collect();
+        project.ensure_shot_uuids();
+        let end_of = |i: usize| StationRef::new(sections[i], 1);
+        // X = 0; hubs 1, 2, 3; spokes 4, 5, 6.
+        for (id, (a, b)) in [(0, 1), (0, 2), (0, 3), (1, 4), (2, 5), (3, 6)]
+            .into_iter()
+            .enumerate()
+        {
+            project.loop_closures.push(LoopClosure {
+                id: id as u64 + 1,
+                station_a: project.key_for_ref(end_of(a)).unwrap(),
+                station_b: project.key_for_ref(end_of(b)).unwrap(),
+                path_length: 20.0,
+                misclosure_distance: 0.0,
+                error_percentage: 0.0,
+                horizontal_misclosure: 0.0,
+                vertical_misclosure: 0.0,
+                strategy: ClosureStrategy::LeastSquaresWeighted,
+                is_aligned: false,
+            });
+        }
+        let x = end_of(0);
+        let closures_of_x = |project: &Project| -> Vec<(u64, StationRef, Option<StationRef>)> {
+            project
+                .compute_station_coordinates()
+                .into_iter()
+                .find(|s| s.station_ref == x)
+                .unwrap()
+                .closures()
+                .iter()
+                .map(|c| (c.closure_id, c.station_ref, c.via_station))
+                .collect()
+        };
+
+        let first = closures_of_x(&project);
+        let chained: Vec<_> = first.iter().filter(|(_, _, via)| via.is_some()).collect();
+        assert_eq!(
+            chained.len(),
+            3,
+            "X sees each spoke through its hub: {first:?}"
+        );
+        // Each recompute builds a fresh map; 32 of them all agreeing by chance on
+        // the base was (1/6)^31 for three entries.
+        let orders: Vec<_> = (0..32).map(|_| closures_of_x(&project)).collect();
+        let differing = orders.iter().filter(|o| **o != first).count();
+        println!(
+            "[HFI-15] {differing} of 32 recomputes ordered X's closures differently from the first"
+        );
+        assert_eq!(
+            differing,
+            0,
+            "first: {first:?}, a later one: {:?}",
+            orders.iter().find(|o| **o != first)
+        );
+    }
+
     /// `2 * pairs` one-shot sections whose start stations are merged in the order
     /// that made the old union quadratic: each new pair forms a small group, then
     /// joins the big one, and "move b into a" re-pointed the whole big group.
@@ -1348,7 +1573,7 @@ mod tests {
         use crate::station::{StationAnchor, StationKey};
         let mut project = Project::new("Big group".to_string(), None);
         let ids: Vec<SectionId> = (0..2 * pairs)
-            .map(|_| add_section(&mut project, vec![shot(90.0, 1.0)]))
+            .map(|_| add_section(&mut project, vec![straight_shot(90.0, 1.0)]))
             .collect();
         let merge = |a: SectionId, b: SectionId| StationMerge {
             station_a: StationKey::new(a, StationAnchor::SectionStart),
@@ -1368,7 +1593,7 @@ mod tests {
         let project = adversarial_merge_order(10_000);
 
         let started = std::time::Instant::now();
-        let (station_to_group, groups) = project.merge_groups();
+        let (station_to_group, groups) = project.station_merge_groups();
         let elapsed = started.elapsed();
 
         assert_eq!(station_to_group.len(), 20_000);
@@ -1385,7 +1610,7 @@ mod tests {
         use crate::station::{StationAnchor, StationKey};
         let mut project = Project::new("Order".to_string(), None);
         let ids: Vec<SectionId> = (0..5)
-            .map(|_| add_section(&mut project, vec![shot(90.0, 1.0)]))
+            .map(|_| add_section(&mut project, vec![straight_shot(90.0, 1.0)]))
             .collect();
         let key = |i: usize| StationKey::new(ids[i], StationAnchor::SectionStart);
         let merge = |a: usize, b: usize| StationMerge {
@@ -1399,7 +1624,7 @@ mod tests {
             project.station_merges.push(m);
         }
 
-        let (station_to_group, groups) = project.merge_groups();
+        let (station_to_group, groups) = project.station_merge_groups();
         let expected: Vec<StationRef> = (0..5)
             .filter_map(|i| project.resolve_key(&key(i)))
             .collect();

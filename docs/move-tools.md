@@ -21,7 +21,7 @@ Click a station to begin dragging it. If the station shares coordinates with oth
 **Hover**: Only stations get hover highlight. Shot hover is suppressed.
 
 **Drag flow**:
-1. Click on station &rarr; `handleMoveDragStart` (MapCanvas) &rarr; immovable guard check
+1. Click on station &rarr; `handleMoveDragStart` (`useMoveDrag.ts`) &rarr; immovable guard check
 2. `beginStationDragPreview()` (SurveyLayer) &rarr; BFS to find co-located stations, create temp layers + dynamic sources for connected shots
 3. Per-mousemove: `updateStationDragPreview(dx, dy)` updates *-translate and rebuilds connected shot geometry. Snap-to-merge detection runs each frame (see [Snap-to-Merge](#snap-to-merge)).
 4. On the release of a press that stayed put (see [The drop is click-gated](#the-drop-is-click-gated)): if snapped, opens merge/closure dialog. Otherwise if movement > 1mm, `commitDragPreview()` + `moveStation()` backend call (batched for co-located stations)
@@ -120,7 +120,8 @@ drop from a pan is not who owns the button but how far the press travelled:
 
 | Gesture while carrying | What happens |
 |------------------------|--------------|
-| Press and release under `CUSTOM_PAN_CLAIM_PX` (3px) of travel - a **click** | The drop: commit, or the snap-merge dialog |
+| Primary-button press and release under `CUSTOM_PAN_CLAIM_PX` (3px) of travel - a **click** | The drop: commit, or the snap-merge dialog |
+| A still right- or middle-click | Nothing: the ghost stays in flight. Only the primary button drops, and a right-click opens no context menu while carrying, on a station or shot or not (and no native browser menu) |
 | Press, travel, release - a **drag** | MapLibre pans; nothing commits, the ghost stays in flight and keeps following the cursor |
 | Release outside the canvas | Never reaches `handlePointerUp`; the drag-release forwarder ends MapLibre's pan, the ghost survives |
 | Escape | Cancels the ghost outright (the `moveDrag` Escape effect), pan or no pan |
@@ -144,6 +145,52 @@ the selection toggle - is already ignored under the move tools by
 On touch this falls out for free: `touchAction: 'manipulation'`, so one finger
 pans, a tap drops, and a pinch moves both fingers far past the threshold and
 therefore cannot drop anything.
+
+## Integrity while carrying
+
+The ghost and the commit it ends in are computed against the survey as it stood
+at the **pickup**, and station refs are positional (`section_id:station_index`).
+Any other edit landing between the pickup and the drop could therefore make the
+commit move the wrong station or apply a stale offset. So while a carry is in
+flight no other survey mutation runs (GHOST-2, #576).
+
+A carry is **in flight** from the pickup click until the drop click starts its
+commit, or until it is cancelled. For Move Segment that includes the pending
+`getConnectedSectionIds` window, before the ghost is even up. The snap-merge
+dialog phase counts too, and that dialog's confirm is the carry's own commit.
+
+A **survey mutation** is any IPC command whose backend handler calls
+`AppState::guard_mutation`. Read-only queries (`check_merge_connectivity`,
+`get_*`, `can_undo`, ...) and app-config writes are not mutations.
+
+| Rule | What happens | Where it lives |
+|------|--------------|----------------|
+| R1: another mutation is issued | Not sent. The carry is cancelled as Escape cancels it, one `move-cancelled` warning toast says neither change happened, and the caller gets a refused result (`success: false`). Not refused: the direct `invokeIpc` routes that replace the survey instead of editing it, none of whose handlers calls `guard_mutation`. These are SpeleoDB revision restore/view, take-remote and open (`speleodb_restore_revision`, `speleodb_take_remote`, `speleodb_open_project` and its `_discarding_local` variant), and the corruption-recovery dialog's backup restore and repair (`restore_from_backup`, `attempt_repair`), which rewrite the file that failed to load and reach the open survey only through the dialog's Re-open. The carry is cancelled once the replacement reaches the store: by R2 when a load changes the project identity or the generation, and by R4 when `applySpeleoTreeReplacement` (restore/view, take-remote, and an open of the project already on screen) resets the tool to Select ahead of its refresh | `refuseMutationDuringCarry` in `src/store/moveCarry.ts`, called at ISSUE time (before `runSerialized`) by `executeCommand` and `executeUndoRedo` in `projectStore`, and by the routes that bypass them: `resolveWarning`, `unresolveWarning`, `repairProjectIntegrity` and the DMP wizard's four direct `import_sections` calls |
+| R2: the survey changes underneath | `projectTreeGeneration` moves off the one captured at pickup (a refresh after a mutation that was already in flight, a SpeleoDB tree replacement, an import, a config refetch, the save-path heal): cancelled, with a toast. A project load, create or close (the project's `created_at` identity changes) cancels it silently: the ghost goes with its survey. Also when `isEditingBlockedNow()` turns true (Plan/Export, Closures Computed View, lost SpeleoDB lock), with its own toast | Store subscriptions in `src/components/Map/useMoveCarryGuards.ts` |
+| R3: the commit is stale | The carry's own commit is re-checked inside the serialized section, right before `invokeIpc`, because it can queue behind a mutation that was in flight. A generation mismatch refuses it with nothing sent, restores the preview (`endDragPreview`) and toasts. A snap-merge dialog confirmed after its carry was cancelled sends nothing | `commitMoveCarry` marks the one command the commit issues (`takeMoveCarryCommit`); `refuseStaleCarryCommit` runs in `executeCommandInner` |
+| R4: another tool is chosen | Switching to anything but the three move tools, or entering placement mode (DMP / new-section placement), cancels the carry silently, so one click can never both drop the ghost and run another tool's action. Switching among the move tools keeps it | `useMoveCarryGuards.ts` |
+| R5: one cancel routine | Escape, R1, R2 and R4 all run `cancelMoveCarryState` (`useMoveDrag.ts`), which also closes a snap-merge dialog this carry opened. R3 restores the preview through the same registration | `useMoveDrag.ts` |
+
+Choices worth knowing:
+
+- **Refused at the chokepoint, not disabled in the UI.** The carry does not feed
+  `useEditingBlocked`, so nothing is greyed out and no tool is reset by a
+  pickup. The user can still reach every panel while carrying; whatever they
+  change there cancels the move instead.
+- **One notice.** A refusal is recognisable with `isMoveCarryRefusal(result)`,
+  so callers that would surface a failure of their own stay quiet: Project
+  Settings skips its error toast, the undo history dropdown its error dialog,
+  the import dialogs (TML/Compass/Walls/GPX) stay open instead of routing to
+  `surfaceImportFailure`, Repair skips its "failed" toast (the refusal is thrown,
+  since `IntegrityRepairResult` has no failure shape), and the Warnings "Ignore"
+  action checks before it calls `resolveWarning` (whose boolean result cannot say
+  why it failed). Dialogs that show `result.error` inline show the refusal text,
+  which is accurate. The failed result is not followed by a refresh: nothing
+  changed, the table and editors read the store, and a refresh would mint a new
+  generation.
+- **Toasts.** A refused mutation and a survey change toast, and so does editing
+  becoming blocked: none of them is something the user did to the move. A tool
+  switch, like Escape, is the user's own gesture and stays silent.
 
 ## Ctrl+Drag Panning
 
@@ -218,13 +265,22 @@ A window-level `mouseup` handler (`handleMouseUpGlobal`) clears pan state if the
 
 ### Override Rules (highest priority first)
 
-1. **Ctrl held**: `grab` (overrides everything except active drag)
-2. **Ctrl+drag active**: `grabbing`
-3. **Hovering interactive feature**: `pointer` (unless anchored/immovable)
-4. **Hovering anchored/immovable feature**: `default` (no pointer)
-5. **No hover**: Tool default cursor
+1. **Ctrl+drag or middle-drag active**: `grabbing`
+2. **Placement mode**: `crosshair`, whatever is hovered or held
+3. **Hovering interactive feature**: `pointer` (unless anchored/immovable) - also while Ctrl is held, since Ctrl+click toggles that feature's selection
+4. **Move Station / Move Shot, nothing movable hovered** (anchored/immovable included): `default`, unless Ctrl is held
+5. **Ctrl held** (any tool but Pan): `grab`
+6. **Otherwise**: the tool's resting cursor (`toolCursor`)
 
 Move Station and Move Shot use `default` as their base cursor (with `pointer` on hover) rather than `move`, so the user sees a clear distinction between "hovering a movable feature" and "not hovering anything".
+
+One owner applies these rules: `src/components/Map/mapCursor.ts` is the only
+code that writes the survey canvas's `style.cursor` (#576 D3). MapCanvas pushes
+the tool, Ctrl, placement and pan state into it and SurveyLayer pushes its hover
+verdict (pointer or not, after the anchored/immovable suppression); the owner
+derives the cursor from all of them at once, so the order the inputs arrive in
+cannot change what shows. Six writers used to race here, which shipped #24 and
+#316 and let a hover or a modifier pan take a placement's crosshair away.
 
 ---
 
@@ -239,6 +295,10 @@ Move Station and Move Shot use `default` as their base cursor (with `pointer` on
 | `segmentDragTokenRef` | Connected section fetch | Discard stale async results if drag cancelled or restarted |
 | `customPanActiveRef` | Click capture handler | Block DOM click events during Ctrl+drag cooldown |
 | Movement threshold (1mm) | `handleMoveDragEnd` | Distinguish click from drag; skip backend call for sub-millimeter moves |
+| `refuseMutationDuringCarry` | `executeCommand` / `executeUndoRedo` and the direct mutation routes | Refuse any other survey mutation while a carry is in flight, cancelling the carry ([Integrity while carrying](#integrity-while-carrying)) |
+| `refuseStaleCarryCommit` | `executeCommandInner`, right before `invokeIpc` | Refuse the carry's own commit when the survey generation moved since the pickup |
+| `useMoveCarryGuards` | MapCanvas | Cancel the carry when the survey changes, editing becomes blocked, or the tool leaves the move tools |
+| `isMoveCarryLive` | `promptSnapMerge`, after `checkMergeConnectivity` | Open no snap-merge dialog for a carry cancelled while the check was out |
 
 ---
 
@@ -246,7 +306,13 @@ Move Station and Move Shot use `default` as their base cursor (with `pointer` on
 
 | File | Responsibility |
 |------|---------------|
-| `src/components/Map/MapCanvas.tsx` | Drag state management, Ctrl+drag panning, immovable/anchored computation, snap-to-merge detection |
-| `src/components/Map/SurveyLayer.tsx` | Hover detection, visual state (feature-state), drag preview layers, cursor management |
+| `src/components/Map/MapCanvas.tsx` | Immovable/anchored computation, the carry token and its guards, the pointer handlers and the drop's click gate (`pressClientRef`) |
+| `src/components/Map/useMoveDrag.ts` | Drag state, pickup / per-move preview / drop, snap-to-merge detection and prompt, the one carry cancel routine |
+| `src/components/Map/useModifierPan.ts` | Ctrl+drag / middle-drag panning and the Ctrl-held tracking |
+| `src/components/Map/SurveyLayer.ts` | Hover detection, visual state (feature-state), the drag-preview entry points, the hover verdict for the cursor |
+| `src/components/Map/surveyLayer/dragPreviewController.ts` | The drag preview session: capture (`beginStationDragPreview` BFS), drag exclusion, overlay follow, commit / end |
+| `src/components/Map/mapCursor.ts` | The one writer of the canvas cursor: precedence of pan, placement, hover, Ctrl and tool |
 | `src/hooks/useMapTools.ts` | Per-tool click/hover handlers, immovable guards, drag initiation callbacks |
 | `src/components/Map/surveyLayer/ghostFeatures.ts` | Ghost section preview GeoJSON (`buildGhostFeatures`) |
+| `src/store/moveCarry.ts` | The carry registry: in flight or not, the R1 refusal, the commit marker and the R3 stale check |
+| `src/components/Map/useMoveCarryGuards.ts` | The map-side cancels: survey changed, editing blocked, tool switched |

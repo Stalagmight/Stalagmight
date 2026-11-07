@@ -11,11 +11,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-  setSource: vi.fn(),
-}));
+vi.mock('../../utils/telemetry', async () =>
+  (await import('../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
+);
 
 import GpxPlacementDialog from './GpxPlacementDialog';
 import { useProjectStore } from '../../store/projectStore';
@@ -166,5 +164,34 @@ describe('GpxPlacementDialog warning surfacing (#110)', () => {
 
     await waitFor(() => expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: converted }));
     expect(showToast).not.toHaveBeenCalled();
+  });
+});
+
+// #576 C10: GPX now runs on the shared import runner, which reports the
+// Reading -> Converting -> Applying -> Finalizing phases like the other
+// importers; the dialog shows the loading overlay for them, and takes it down
+// whether the import succeeds or the call throws.
+describe('GpxPlacementDialog import progress (#576 C10)', () => {
+  it('shows the loading overlay while the import runs', async () => {
+    let finish: (r: CommandResult) => void = () => {};
+    executeGpxImport.mockReturnValue(new Promise<CommandResult>((resolve) => (finish = resolve)));
+
+    render(<GpxPlacementDialog />);
+    await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
+
+    await waitFor(() => expect(useProjectStore.getState().loading.isLoading).toBe(true));
+    expect(useProjectStore.getState().loading.phase).toBe('import_parsing');
+    finish(ok([], RECEIPT));
+    await waitFor(() => expect(useProjectStore.getState().loading.isLoading).toBe(false));
+  });
+
+  it('takes the overlay down when the import call throws', async () => {
+    executeGpxImport.mockRejectedValue(new Error('ipc gone'));
+
+    render(<GpxPlacementDialog />);
+    await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
+
+    await waitFor(() => expect(openDialog).toHaveBeenCalled());
+    expect(useProjectStore.getState().loading.isLoading).toBe(false);
   });
 });

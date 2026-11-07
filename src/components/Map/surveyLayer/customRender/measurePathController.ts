@@ -13,6 +13,7 @@
 // via `onFatal` while dropping the dead layer, rather than vanishing silently.
 
 import type * as maplibregl from 'maplibre-gl';
+import { hasLiveStyle } from '../../mapUtils';
 import { SurveyMeasurePathLayer, type MeasurePathRenderData } from './surveyMeasurePathLayer';
 import {
   addCustomLayer,
@@ -72,7 +73,7 @@ export class MeasurePathController {
   constructor(
     private readonly map: maplibregl.Map,
     deps: MeasurePathDeps = {},
-    private readonly layerId = 'survey-measure-path-custom',
+    readonly layerId = 'survey-measure-path-custom',
   ) {
     this.makeLayer =
       deps.makeLayer ??
@@ -132,22 +133,6 @@ export class MeasurePathController {
     this.add(data, beforeIdCandidates);
   }
 
-  /** Re-add the layer after MapLibre rebuilt the style without it (context
-   *  restore / worker restart, see styleRestore.ts). */
-  reattach(): void {
-    const layer = this.layer;
-    if (!layer) return;
-    const restorable = layer as unknown as RestorableCustomLayer;
-    if (!reAddCustomLayer(this.map, restorable, this.resolveBeforeId(this.beforeIdCandidates))) {
-      removeCustomLayer(this.map, layer);
-      this.layer = null;
-      this.lastData = null;
-      this.emitFatal(layer.getDisabledReason() ?? 'unknown');
-      return;
-    }
-    this.map.triggerRepaint();
-  }
-
   /** Remove the custom measure-path layer (idempotent). */
   clear(): void {
     this.generation++;
@@ -160,6 +145,27 @@ export class MeasurePathController {
   /** Tear down on SurveyLayer destroy. */
   destroy(): void {
     this.clear();
+  }
+
+  /**
+   * Re-add the live layer after MapLibre rebuilt the style without it (a WebGL
+   * context restore or a worker restart; see surveyLayer/glContextRecovery.ts);
+   * its onAdd re-uploads from the layer's data (reAddCustomLayer first frees what
+   * a worker restart left behind). Without a `beforeId` it goes at the anchors of
+   * the last {@link setPath}, as on add. A re-add that cannot draw drops the
+   * layer and reports the failure, as on add. No-op when no path is shown.
+   */
+  reattach(beforeId?: string): void {
+    const layer = this.layer;
+    if (!layer) return;
+    const restorable = layer as unknown as RestorableCustomLayer;
+    if (!reAddCustomLayer(this.map, restorable, beforeId ?? this.resolveBeforeId(this.beforeIdCandidates))) {
+      const reason = layer.getDisabledReason() ?? 'unknown';
+      this.clear();
+      this.emitFatal(reason);
+      return;
+    }
+    this.map.triggerRepaint();
   }
 
   /** Create + add the layer at the resolved z-order. Drops the dead layer and
@@ -212,7 +218,10 @@ export class MeasurePathController {
     this.scheduleRestore(() => {
       if (gen !== this.generation) return; // superseded by a clear / new path
       this.selfDisableScheduled = false;
-      removeCustomLayer(this.map, this.layer);
+      // The style is gone when the map was removed or lost its WebGL context before
+      // this deferred teardown ran: MapLibre took the layer with it (its onRemove
+      // ran), so there is nothing left to remove (#576 NF-MAP-3).
+      if (hasLiveStyle(this.map)) removeCustomLayer(this.map, this.layer);
       this.layer = null;
       this.emitFatal(reason);
     });

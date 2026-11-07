@@ -98,6 +98,27 @@ test.describe('Structural-integrity banner', () => {
     await expect(page.getByTestId('integrity-banner')).toBeVisible();
   });
 
+  test('Repair is disabled with a reason while the workspace is read-only (#576 D39(a))', async ({ page }) => {
+    await seedAndCheck(page, ['Station merge #0 station_a references missing section 42']);
+    // Plan is a read-only workspace: the banner and the issue list stay, Repair does not run.
+    await page.getByTestId('mode-plan').click();
+    const startEntrance = page.getByTestId('gas-start-entrance');
+    if (await startEntrance.isVisible().catch(() => false)) await startEntrance.click();
+
+    await page.getByTestId('integrity-review-button').click();
+    const dialog = page.getByTestId('integrity-dialog');
+    await expect(dialog.getByTestId('integrity-dialog-list')).toContainText('missing section 42');
+    await expect(page.getByTestId('integrity-dialog-repair')).toBeDisabled();
+    await expect(page.getByTestId('integrity-dialog-repair-blocked')).toHaveText('Switch to Survey to repair');
+
+    // Back in Survey the same dialog repairs.
+    await page.getByTestId('integrity-dialog-cancel').click();
+    await page.getByTestId('mode-survey').click();
+    await page.getByTestId('integrity-review-button').click();
+    await expect(page.getByTestId('integrity-dialog-repair')).toBeEnabled();
+    await expect(page.getByTestId('integrity-dialog-repair-blocked')).toHaveCount(0);
+  });
+
   test('banner can be dismissed without opening the dialog', async ({ page }) => {
     await seedAndCheck(page, ['Zero datum #0 references missing section 7']);
     await expect(page.getByTestId('integrity-banner')).toContainText('1 integrity issue');

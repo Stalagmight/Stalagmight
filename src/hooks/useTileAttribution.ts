@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { invokeIpc } from '../utils/ipc';
 import { PROVIDER_ATTRIBUTION } from '../utils/tileConfig';
-import type { TileAttribution } from '../types/tile';
 
 /**
  * Attribution for one tile provider, as the UI consumes it.
@@ -58,7 +57,7 @@ export function loadTileAttribution(provider: string): Promise<ResolvedTileAttri
     return value;
   };
 
-  const request = invokeIpc<TileAttribution>(
+  const request = invokeIpc(
     'get_tile_attribution',
     { provider },
     { purpose: 'display map imagery attribution' },

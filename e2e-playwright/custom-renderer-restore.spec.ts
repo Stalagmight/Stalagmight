@@ -17,8 +17,9 @@ import {
 /**
  * MapLibre 6 rebuilds the style from `style.serialize()` after a WebGL context
  * loss and after a worker restart, and custom layers cannot be serialized, so
- * both paths drop every survey custom layer (#606). `styleRestore.ts` re-adds
- * them. Each test forces one restore path for real and requires the same style
+ * both paths drop every survey custom layer (#606).
+ * `surveyLayer/glContextRecovery.ts` re-adds them, timed by
+ * `customRender/styleRestore.ts` (#576 D38). Each test forces one restore path for real and requires the same style
  * layers back, custom and stock, in the same order, and survey ink at a shot
  * midpoint again.
  */

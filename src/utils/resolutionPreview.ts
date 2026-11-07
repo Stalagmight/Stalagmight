@@ -15,10 +15,14 @@ export interface Pt {
   y: number;
 }
 
-/** Horizontal (plan) projection of a slope length given its depth change. */
-export function horizontalLength(slopeLength: number, depthChange: number): number {
-  return Math.sqrt(Math.max(0, slopeLength * slopeLength - depthChange * depthChange));
-}
+/**
+ * Horizontal (plan) projection of a slope length given its depth change: the
+ * station walk's one copy of `horizontal_length_from_slope` (#576 NF-W4M-5),
+ * overflow guard included - the bare `sqrt(l^2 - dz^2)` this used to be turned
+ * a tape long enough to overflow its square into NaN, where the backend's
+ * scales into [0, 1] first and stays finite.
+ */
+export { horizontalLength } from './stationWalk';
 
 /**
  * Ghost endpoint for a proposed shot edit, or `null` when the planar model

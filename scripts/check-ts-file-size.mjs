@@ -1,4 +1,5 @@
-// File-size ratchet for the frontend TypeScript tree (src/**/*.{ts,tsx}).
+// File-size ratchet for the TypeScript trees: the frontend (src/**/*.{ts,tsx})
+// and, since #576 (E8-D2), the two test-automation trees e2e-playwright/ and e2e/.
 //
 // Port of scripts/check-rust-file-size.mjs (#157) to TypeScript/TSX (#275). Same
 // motivation: several components (DmpNewImportDialog, SurveyLayer, MapCanvas)
@@ -24,16 +25,24 @@
 //     stop growing.
 // Anything at/above `WARN_LOC` that isn't a violation prints a non-fatal warning.
 //
-// Scope: filesystem-walked `src/**/*.ts` + `src/**/*.tsx` (mirrors the Rust
-// ratchet's listRustFiles walk, not `git ls-files` - an untracked file must
-// still be caught), excluding:
-//   - test files: `__tests__/` directories, `*.test.*`, `*.spec.*`
-//   - generated IPC types: `src/types/ipc/**`, `src/types/ipc.generated.ts`
-//     (ts-rs output - see CLAUDE.md "IPC Types Are Generated")
-//   - `src/test/**` (test harness/setup, not production code)
+// Scope: filesystem-walked via the shared scripts/lib/src-files.mjs lister (not
+// `git ls-files` - an untracked file must still be caught):
+//   - `src/**/*.{ts,tsx}`, excluding its one test/generated predicate pair:
+//     test files (`__tests__/`, `*.test.*`, `*.spec.*`, `src/test/**`) and the
+//     generated IPC types (`src/types/ipc/**`, `src/types/ipc.generated.ts`,
+//     ts-rs output - see CLAUDE.md "IPC Types Are Generated");
+//   - every `.ts`/`.tsx` under E2E_ROOTS (`e2e-playwright/`, `e2e/`) - specs,
+//     helpers and the IPC mock included, since there the test code IS the code
+//     (the mock alone is ~4.8k LOC) - except the generated replay specs under
+//     `e2e/agent/replays/` (`pnpm agent:replay:gen` output).
+// The same thresholds apply everywhere; today's large e2e files are baselined
+// and frozen like any other. A symlink in scope is never followed and FAILS the
+// gate (it cannot be measured without reading something the gate did not walk).
 //
-// Runs in the `check` job (ci.yml), next to the Rust file-size step. The strip
-// heuristic is pinned by scripts/check-ts-file-size.test.mjs.
+// Runs in BOTH the `check` job (which sees src/ and e2e/ changes) and the
+// `smoke` job (which sees e2e-playwright/ changes - `check` path-ignores them).
+//
+// The strip heuristic is pinned by scripts/check-ts-file-size.test.mjs.
 //
 // Usage:  node scripts/check-ts-file-size.mjs            (pnpm lint:ts-file-size)
 //         node scripts/check-ts-file-size.mjs --update    (regenerate the baseline)
@@ -41,9 +50,32 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { listSrcFiles, walkFiles, symlinkProblem } from './lib/src-files.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC_DIR = path.join(REPO_ROOT, 'src');
+
+// The test-automation trees (#576 E8-D2), and the one generated part of them.
+export const E2E_ROOTS = ['e2e-playwright', 'e2e'];
+export function isGeneratedE2e(rel) {
+  return rel.startsWith('e2e/agent/replays/');
+}
+
+// Every in-scope file as {files, symlinks}, repo-relative. A missing e2e root
+// is tolerated (a partial checkout); src/ is required (main() checks it).
+export function listScopedFiles(root = REPO_ROOT) {
+  const files = [];
+  const symlinks = [];
+  const add = (r) => {
+    files.push(...r.files);
+    symlinks.push(...r.symlinks);
+  };
+  add(listSrcFiles(root));
+  for (const dir of E2E_ROOTS) {
+    if (fs.existsSync(path.join(root, dir))) add(walkFiles(root, dir, { exts: ['.ts', '.tsx'], skip: isGeneratedE2e }));
+  }
+  return { files, symlinks };
+}
 const BASELINE_PATH = path.join(REPO_ROOT, 'ts-file-size-baseline.json');
 
 // Thresholds are owned by the script (the single source of truth). The baseline
@@ -54,17 +86,6 @@ const BASELINE_PATH = path.join(REPO_ROOT, 'ts-file-size-baseline.json');
 // right next to the grown file, so it's review-visible, not silent.)
 export const WARN_LOC = 1500;
 export const FAIL_LOC = 2000;
-
-// Test files - excluded from the metric entirely (mirrors the Rust ratchet's
-// whole-file test exclusion; TS tests never live inline in a production file).
-const TEST_PATH_RE = /(^|\/)__tests__(\/|$)/;
-const TEST_NAME_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
-
-// Generated IPC types (ts-rs output) and the test harness/setup tree - neither
-// is production code subject to the ratchet.
-const GENERATED_RE = /^src\/types\/ipc\//;
-const GENERATED_FILE_RE = /^src\/types\/ipc\.generated\.ts$/;
-const TEST_HARNESS_RE = /^src\/test\//;
 
 // Files allowed to exceed the budget without ratcheting, each with a written
 // reason. The baseline already grandfathers today's large files, so this is only
@@ -202,42 +223,13 @@ function relPosix(full) {
   return path.relative(REPO_ROOT, full).split(path.sep).join('/');
 }
 
-function isExcluded(rel) {
-  if (TEST_PATH_RE.test(rel) || TEST_NAME_RE.test(rel)) return true;
-  if (GENERATED_RE.test(rel) || GENERATED_FILE_RE.test(rel)) return true;
-  if (TEST_HARNESS_RE.test(rel)) return true;
-  return false;
-}
-
-// Walks the filesystem rather than `git ls-files` (mirrors the Rust ratchet's
-// listRustFiles) so an untracked file can't dodge the gate by never being
-// staged. `node_modules` is skipped as a defensive measure in case a dep tree
-// ever lands under src (it doesn't today).
-function listTsFiles(dir) {
-  const out = [];
-  const entries = fs
-    .readdirSync(dir, { withFileTypes: true })
-    .sort((a, b) => a.name.localeCompare(b.name));
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === 'node_modules') continue;
-      out.push(...listTsFiles(full));
-    } else if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx'))) {
-      out.push(full);
-    }
-  }
-  return out;
-}
-
 // Map repo-relative path -> production LOC for every scoped .ts/.tsx file.
-function measureTree(warnings = []) {
+// Symlinks in scope land in `symlinkErrors` (each fails the gate).
+function measureTree(warnings = [], symlinkErrors = []) {
   const out = {};
-  for (const full of listTsFiles(SRC_DIR)) {
-    const rel = relPosix(full);
-    if (isExcluded(rel)) continue;
-    out[rel] = prodLoc(fs.readFileSync(full, 'utf8'), warnings);
-  }
+  const { files, symlinks } = listScopedFiles(REPO_ROOT);
+  for (const link of symlinks) symlinkErrors.push(symlinkProblem(link));
+  for (const rel of files) out[rel] = prodLoc(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'), warnings);
   return out;
 }
 
@@ -250,7 +242,7 @@ function loadBaseline() {
     // clean diagnostic, not an uncaught SyntaxError. `--update` rebuilds from
     // scratch and never calls this, so it can always self-heal a corrupt file.
     console.error(
-      `check-ts-file-size: ${relPosix(BASELINE_PATH)} is not valid JSON (${e.message}). ` +
+      `check-ts-file-size: ${relPosix(BASELINE_PATH)} is not valid JSON (${e.code || e.message}). ` +
         `Fix it, or regenerate with: pnpm lint:ts-file-size --update`,
     );
     process.exit(1);
@@ -263,9 +255,10 @@ function writeBaseline(measured) {
   const payload = {
     _README:
       'Generated by scripts/check-ts-file-size.mjs --update. Production code LOC ' +
-      '(blank/comment lines stripped) per non-test .ts/.tsx file under src, found ' +
-      'by a filesystem walk (untracked files included, matching the Rust ratchet), ' +
-      'excluding generated IPC types and the test harness. warn_loc/fail_loc ' +
+      '(blank/comment lines stripped) per .ts/.tsx file: non-test files under src ' +
+      '(generated IPC types and the test harness excluded) and every file under ' +
+      'e2e-playwright and e2e (generated e2e/agent/replays excluded), found by a ' +
+      'filesystem walk (untracked files included, matching the Rust ratchet). warn_loc/fail_loc ' +
       'echo the script constants (the script asserts they match). The CI `check` ' +
       'job runs the script in check mode: a file at/above warn_loc is frozen (may ' +
       'shrink, not grow), no new file may be born at/above warn_loc, and no ' +
@@ -332,12 +325,13 @@ export function classify(rel, loc, base) {
 
 function main() {
   if (!fs.existsSync(SRC_DIR)) {
-    console.error(`check-ts-file-size: ${SRC_DIR} not found.`);
+    console.error(`check-ts-file-size: ${relPosix(SRC_DIR)} not found.`);
     return 1;
   }
 
   const warnings = [];
-  const measured = measureTree(warnings);
+  const symlinkErrors = [];
+  const measured = measureTree(warnings, symlinkErrors);
 
   // --update rebuilds the baseline from scratch (writing the script's own
   // thresholds), so it neither loads nor validates the old file - it always
@@ -368,7 +362,7 @@ function main() {
   }
 
   const recorded = baseline.files ?? {};
-  const errors = [];
+  const errors = [...symlinkErrors];
   const softWarnings = [];
 
   for (const rel of Object.keys(measured).sort()) {
@@ -405,7 +399,7 @@ function main() {
   }
 
   console.log(
-    `✓ TS file-size: ${Object.keys(measured).length} non-test files checked, ` +
+    `✓ TS file-size: ${Object.keys(measured).length} files checked (src, e2e-playwright, e2e), ` +
       `none over the ${FAIL_LOC}-LOC budget or grown past baseline ` +
       `(${softWarnings.length} at/above the ${WARN_LOC} warn line).`,
   );

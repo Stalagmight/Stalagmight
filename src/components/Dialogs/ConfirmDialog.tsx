@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
@@ -7,10 +9,26 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { DeleteShotImpact, SectionRelationships } from '../../types/commands';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function ConfirmDialog() {
-  const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
-  const { deleteShot, deleteSection, deleteLastShotAndSection, deleteShotAndSplit } = useProjectStore();
+  const { t } = useTranslation();
+  const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      dialogData: s.dialogData,
+      clearSelection: s.clearSelection,
+      setSelection: s.setSelection,
+    })),
+  );
+  const { deleteShot, deleteSection, deleteLastShotAndSection, deleteShotAndSplit } = useProjectStore(
+    useShallow((s) => ({
+      deleteShot: s.deleteShot,
+      deleteSection: s.deleteSection,
+      deleteLastShotAndSection: s.deleteLastShotAndSection,
+      deleteShotAndSplit: s.deleteShotAndSplit,
+    })),
+  );
 
   const type = dialogData.type as 'station' | 'shot' | 'section' | 'last-shot' | undefined;
   const message = dialogData.message as string | undefined;
@@ -48,7 +66,7 @@ export default function ConfirmDialog() {
   // Fetch relationships when dialog opens for any deletion that removes a section
   useEffect(() => {
     if (removesSection && sectionId !== undefined) {
-      invokeIpc<SectionRelationships>('get_section_relationships', { sectionId }, { purpose: 'fetch section relationships for deletion' })
+      invokeIpc('get_section_relationships', { sectionId }, { purpose: 'fetch section relationships for deletion' })
         .then(setRelationships)
         .catch(() => setRelationships(null));
     } else {
@@ -59,14 +77,15 @@ export default function ConfirmDialog() {
   // Fetch delete impact for shot deletions (edge shots)
   useEffect(() => {
     if (type === 'shot' && !removesSection && !splitRequired && sectionId !== undefined && shotId !== undefined) {
-      invokeIpc<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId }, { purpose: 'preview shot deletion impact' })
+      invokeIpc('preview_delete_shot', { sectionId, shotId }, { purpose: 'preview shot deletion impact' })
         .then((result) => {
           setShotImpact(result);
           setShotImpactError(null);
         })
         .catch((e) => {
           setShotImpact(null);
-          setShotImpactError(getErrorMessage(e, 'Failed to load shot impacts'));
+          // i18n.t, not the hook's t: this IPC effect must not re-fetch on a language change.
+          setShotImpactError(getErrorMessage(e, i18n.t('dialogs.confirm.errors.loadImpactsFailed')));
         });
     } else {
       setShotImpact(null);
@@ -86,7 +105,7 @@ export default function ConfirmDialog() {
       // Last remaining shot: delete shot + entire section
       const result = await deleteLastShotAndSection(sectionId, shotId);
       if (!result.success) {
-        setDeleteError(result.error ?? 'Failed to delete shot');
+        setDeleteError(result.error ?? t('dialogs.confirm.errors.deleteShot'));
         return false;
       }
       clearSelection();
@@ -98,11 +117,11 @@ export default function ConfirmDialog() {
         const result = await deleteShotAndSplit(
           sectionId,
           shotId,
-          splitNameA.trim() || 'Section A',
-          splitNameB.trim() || 'Section B',
+          splitNameA.trim() || t('dialogs.confirm.defaultSplitNameA'),
+          splitNameB.trim() || t('dialogs.confirm.defaultSplitNameB'),
         );
         if (!result.success) {
-          setDeleteError(result.error ?? 'Failed to split section');
+          setDeleteError(result.error ?? t('dialogs.confirm.errors.splitSection'));
           return false;
         }
         // Select section A (keeps original ID) after split
@@ -113,7 +132,7 @@ export default function ConfirmDialog() {
         // Last remaining shot: delete shot + section
         const result = await deleteLastShotAndSection(sectionId, shotId);
         if (!result.success) {
-          setDeleteError(result.error ?? 'Failed to delete shot');
+          setDeleteError(result.error ?? t('dialogs.confirm.errors.deleteShot'));
           return false;
         }
         clearSelection();
@@ -122,7 +141,7 @@ export default function ConfirmDialog() {
       // Edge shot (or legacy caller without position data): simple delete
       const result = await deleteShot(sectionId, shotId);
       if (!result.success) {
-        setDeleteError(result.error ?? 'Failed to delete shot');
+        setDeleteError(result.error ?? t('dialogs.confirm.errors.deleteShot'));
         return false;
       }
       clearSelection();
@@ -131,7 +150,7 @@ export default function ConfirmDialog() {
     if (type === 'section' && sectionId !== undefined) {
       const result = await deleteSection(sectionId);
       if (!result.success) {
-        setDeleteError(result.error ?? 'Failed to delete section');
+        setDeleteError(result.error ?? t('dialogs.confirm.errors.deleteSection'));
         return false;
       }
       clearSelection();
@@ -152,7 +171,7 @@ export default function ConfirmDialog() {
     } catch (e) {
       // A genuine IPC/transport failure rejects (distinct from a returned
       // {success:false}); surface it too rather than leaving the click dead.
-      setDeleteError(getErrorMessage(e, 'Delete failed'));
+      setDeleteError(getErrorMessage(e, t('dialogs.confirm.errors.deleteFailed')));
     }
     if (!shouldClose) {
       setIsSubmitting(false);
@@ -171,30 +190,30 @@ export default function ConfirmDialog() {
   const getTitle = () => {
     switch (type) {
       case 'station':
-        return 'Delete Station';
+        return t('dialogs.confirm.title.station');
       case 'shot':
-        return splitRequired ? 'Delete Shot & Split Section' : 'Delete Shot';
+        return splitRequired ? t('dialogs.confirm.title.shotSplit') : t('dialogs.confirm.title.shot');
       case 'last-shot':
-        return 'Delete Shot & Section';
+        return t('dialogs.confirm.title.lastShot');
       case 'section':
-        return 'Delete Section';
+        return t('dialogs.confirm.title.section');
       default:
-        return 'Confirm';
+        return t('dialogs.confirm.title.default');
     }
   };
 
   const getDefaultMessage = () => {
     switch (type) {
       case 'station':
-        return 'Deleting a station will delete all connected shots. Are you sure?';
+        return t('dialogs.confirm.message.station');
       case 'shot':
-        return 'Are you sure you want to delete this shot?';
+        return t('dialogs.confirm.message.shot');
       case 'last-shot':
-        return 'Deleting the last shot will remove the entire section. Continue?';
+        return t('dialogs.confirm.message.lastShot');
       case 'section':
-        return 'Are you sure you want to delete this section and all its shots?';
+        return t('dialogs.confirm.message.section');
       default:
-        return 'Are you sure?';
+        return t('dialogs.confirm.message.default');
     }
   };
 
@@ -213,14 +232,14 @@ export default function ConfirmDialog() {
 
         {type === 'station' && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-            Note: To delete a station, delete the shots connected to it instead.
+            {t('dialogs.confirm.stationNote')}
           </div>
         )}
 
         {type === 'shot' && splitRequired && (
           <div className="space-y-3">
             <div>
-              <label className="block text-sm text-text-secondary mb-1">Section A name (first half)</label>
+              <label className="block text-sm text-text-secondary mb-1">{t('dialogs.confirm.splitNameA')}</label>
               <input
                 type="text"
                 value={splitNameA}
@@ -230,7 +249,7 @@ export default function ConfirmDialog() {
               />
             </div>
             <div>
-              <label className="block text-sm text-text-secondary mb-1">Section B name (second half)</label>
+              <label className="block text-sm text-text-secondary mb-1">{t('dialogs.confirm.splitNameB')}</label>
               <input
                 type="text"
                 value={splitNameB}
@@ -244,22 +263,22 @@ export default function ConfirmDialog() {
 
         {removesSection && hasRelationships && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm space-y-1">
-            <p className="font-medium text-warning">The following relationships will also be removed:</p>
+            <p className="font-medium text-warning">{t('dialogs.confirm.relationshipsRemoved')}</p>
             <ul className="list-disc list-inside text-text-secondary">
               {relationships!.merges.length > 0 && (
-                <li>{relationships!.merges.length} station merge{relationships!.merges.length !== 1 ? 's' : ''}</li>
+                <li>{t('dialogs.confirm.stationMerges', { count: relationships!.merges.length })}</li>
               )}
               {relationships!.closures.length > 0 && (
-                <li>{relationships!.closures.length} loop closure{relationships!.closures.length !== 1 ? 's' : ''}</li>
+                <li>{t('dialogs.confirm.loopClosures', { count: relationships!.closures.length })}</li>
               )}
               {relationships!.has_section_offset && (
-                <li>1 section offset</li>
+                <li>{t('dialogs.confirm.sectionOffset')}</li>
               )}
               {relationships!.station_offset_count > 0 && (
-                <li>{relationships!.station_offset_count} station offset{relationships!.station_offset_count !== 1 ? 's' : ''}</li>
+                <li>{t('dialogs.confirm.stationOffsets', { count: relationships!.station_offset_count })}</li>
               )}
               {relationships!.zero_datum_count > 0 && (
-                <li>{relationships!.zero_datum_count} zero datum{relationships!.zero_datum_count !== 1 ? 's' : ''}</li>
+                <li>{t('dialogs.confirm.zeroDatums', { count: relationships!.zero_datum_count })}</li>
               )}
             </ul>
           </div>
@@ -274,7 +293,7 @@ export default function ConfirmDialog() {
             )}
             <DeleteShotImpactDetails
               impact={shotImpact}
-              title="Deleting this shot will update station relationships:"
+              title={t('dialogs.confirm.impactTitle')}
             />
           </>
         )}
@@ -289,7 +308,7 @@ export default function ConfirmDialog() {
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} data-testid="confirm-dialog-cancel">Cancel</Button>
+          <Button onClick={closeDialog} data-testid="confirm-dialog-cancel">{t('common.actions.cancel')}</Button>
           <Button
             data-testid="confirm-dialog-confirm"
             variant="danger"
@@ -297,7 +316,7 @@ export default function ConfirmDialog() {
             disabled={type === 'station' || isSubmitting}
             data-primary-action=""
           >
-            {splitRequired ? 'Delete & Split' : 'Delete'}
+            {splitRequired ? t('dialogs.confirm.deleteAndSplit') : t('common.actions.delete')}
           </Button>
         </div>
       </div>

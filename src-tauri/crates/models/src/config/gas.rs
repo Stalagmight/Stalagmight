@@ -93,18 +93,20 @@ pub enum ReservePreset {
 
 /// Editable reserve constants (PRD §5.1) - kept out of the engine as named, tunable values
 /// rather than magic literals. `stage_reserve_bar` is the gas held back in each stage under the
-/// **Half Minus** strategy (default 30 bar): a stage is breathed from `fill` down to its drop
-/// pressure `(fill + reserve)/2`, contributing `(fill - reserve)/2` of IN gas (the other half is
-/// breathed back down to `reserve` on the picked-up exit). The two `recalc_hold_*` constants are
-/// the back-gas held pressures (100 / 70 bar) for the Phase-2 return-leg recalc - carried now so
-/// the config shape is stable across phases; that compute path is not implemented yet.
+/// **Half Minus** strategy (default 30 bar): a stage spends `(basis - reserve)/2` of its gauge on
+/// the way in - dropped at `fill - (basis - reserve)/2`, i.e. `(fill + reserve)/2` at or below
+/// rated - and the other half is breathed back down to `reserve` on the picked-up exit. The two
+/// `recalc_hold_*` constants are the back-gas held pressures (100 / 70 bar) for the Phase-2
+/// return-leg recalc - carried now so the config shape is stable across phases; that compute path
+/// is not implemented yet.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
 pub struct ReserveProfile {
     #[serde(default = "default_stage_reserve_bar")]
     pub stage_reserve_bar: f64,
-    /// Extra gas (bar) held back from EVERY budget-role cylinder under **All-thirds** (#245), on top
-    /// of the thirds reserve - a diver-set conservatism knob for teams of two or specific caves.
-    /// Default 0 (plain thirds). Only ever shrinks usable gas (the safe direction).
+    /// Extra pressure (bar) held back in EVERY budget-role cylinder under **All-thirds** (#245), on
+    /// top of the thirds reserve: each tank's turn pressure rises by this many bar - a diver-set
+    /// conservatism knob for teams of two or specific caves. Default 0 (plain thirds). Only ever
+    /// shrinks usable gas (the safe direction).
     #[serde(default = "default_all_thirds_safety_margin_bar")]
     pub all_thirds_safety_margin_bar: f64,
     #[serde(default = "default_recalc_hold_stage2_bar")]
@@ -180,6 +182,10 @@ impl DpvRig {
     /// must still leave a working one able to cover the scootered line; **not halved**, because the
     /// primary only ever flies in and the backup only ever flies out, so each is asked for one
     /// direction and halving on top would reserve for a double failure.
+    ///
+    /// The cap counts metres at cruise. A span ridden slower drains each unit's battery by its
+    /// own clock, so it is charged more than a metre per metre - whichever unit it drains harder
+    /// (`range_per_metre` in `project/gas/scooter.rs`).
     pub fn usable_range_m(&self) -> f64 {
         let weaker = self.primary.range_m().min(self.backup.range_m());
         (weaker * (1.0 - self.range_reserve_fraction)).max(0.0)
@@ -241,8 +247,10 @@ pub struct GasConfig {
     /// do swim and you would rather have the old, inclusive numbers.
     #[serde(default)]
     pub include_reference_legs: bool,
-    /// `true` (default) = the conservative "call-it-an-80" derate covers real-gas Z; `false`
-    /// = precise `fill × volume × Z` for the few who want it (PRD §5.3).
+    /// `true` (default) = the conservative "call-it-an-80" convention: every strategy's share of a
+    /// cylinder's gauge is taken of `min(fill, rated)`, so an overfill never earns a larger share;
+    /// `false` = of the fill, for the few who want it (PRD §5.3). Either way the credited gas is
+    /// the Z-corrected gas from the real fill down to the resulting turn or drop pressure.
     #[serde(default = "default_true")]
     pub conservative_tank_gas: bool,
     /// Optional DPV rig (#317). `None` = no scooter, and the engine behaves exactly as it did

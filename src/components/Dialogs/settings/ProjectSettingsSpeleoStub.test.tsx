@@ -10,21 +10,9 @@ import { ProjectSettingsDialog } from '../ProjectSettingsDialog';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { makeSpeleoLink } from '../../../test/factories/speleo';
 
-const LINK: SpeleoLinkState = {
-  permission: 'ADMIN',
-  editState: 'read-only',
-  lockHolder: null,
-  lockedByOther: false,
-  hasUnpushedEdits: false,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+const LINK: SpeleoLinkState = makeSpeleoLink({ permission: 'ADMIN' });
 
 let openDialog: ReturnType<typeof vi.fn>;
 

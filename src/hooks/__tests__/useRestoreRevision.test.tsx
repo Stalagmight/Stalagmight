@@ -12,14 +12,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc');
 
 import { useRestoreRevision, type RestoreRevisionArgs } from '../useRestoreRevision';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
 const ARGS: RestoreRevisionArgs = {
   projectId: 'p1',

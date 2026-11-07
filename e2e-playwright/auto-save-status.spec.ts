@@ -7,6 +7,9 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import { recordIpcCalls, getIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
+import type { E2EWindow } from './helpers/e2eWindow';
+import type { CommandError } from '../src/types/ipc/CommandError';
 
 /**
  * E2E tests for Auto-Save Status Bar indicator.
@@ -61,6 +64,30 @@ test.describe('Auto-Save Status Bar', () => {
     await expect(saveStatus).toContainText(/saved/i);
   });
 
+  // The autosave canary (#576 RV3-FE-7): the real debounce, end to end. The
+  // footer counts down after an edit, the timer sends an AUTOSAVE (not a manual
+  // save) when it runs out, and the footer returns to Saved. Fake timers are
+  // installed after the project opens, so the mock config's 30 s interval is
+  // crossed with fastForward instead of being waited out.
+  test('an edit counts down, autosaves and returns to Saved @smoke', async ({ page }) => {
+    await createProject(page, 'Autosave Canary');
+    const saveStatus = page.getByTestId('save-status');
+    await expect(saveStatus).toHaveText('Saved');
+
+    await page.clock.install();
+    await recordIpcCalls(page, ['save_project']);
+    await seedProjectWithSections(page, [sectionSeed]);
+
+    await expect(saveStatus).toHaveText(/^Auto-save in \d+s$/);
+    expect(await getIpcCalls(page, 'save_project')).toHaveLength(0);
+
+    await page.clock.fastForward(31_000);
+
+    const [call] = await waitForIpcCall(page, 'save_project');
+    expect(call.args.isAutosave).toBe(true);
+    await expect(saveStatus).toHaveText('Saved');
+  });
+
   test('shows unsaved changes indicator after modification', async ({ page }) => {
     await createProjectWithSection(page);
 
@@ -69,7 +96,7 @@ test.describe('Auto-Save Status Bar', () => {
 
     // Mark project as dirty by modifying a shot via the store
     await page.evaluate(() => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return;
       const state = e2e.projectStore.getState();
       const section = state.project?.sections?.[0];
@@ -105,7 +132,7 @@ test.describe('Auto-Save Status Bar', () => {
 
     // Mark project as dirty
     await page.evaluate(() => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return;
       const state = e2e.projectStore.getState();
       const section = state.project?.sections?.[0];
@@ -130,14 +157,14 @@ test.describe('Auto-Save Status Bar', () => {
 
     // Override save_project to return error
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
-      overrides.save_project = { success: false, error: 'Disk full' };
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
+      overrides.save_project = { __reject: { code: 'FAILED', message: 'Disk full' } satisfies CommandError };
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     // Mark dirty and trigger save
     await page.evaluate(() => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return;
       const state = e2e.projectStore.getState();
       const section = state.project?.sections?.[0];
@@ -154,7 +181,7 @@ test.describe('Auto-Save Status Bar', () => {
 
     // Clean up override
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       delete overrides.save_project;
     });
   });

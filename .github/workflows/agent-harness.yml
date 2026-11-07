@@ -24,11 +24,6 @@ concurrency:
 permissions:
   contents: read
 
-# Build the bundled SQLite without FTS3/4/5, RTREE, DBSTAT and extension
-# loading, so a hostile .stalx cannot reach them (#608, docs/toolchain.md).
-env:
-  LIBSQLITE3_FLAGS: "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION"
-
 jobs:
   harness:
     # Upstream-only: the job hard-pins a self-hosted runner forks don't have, so

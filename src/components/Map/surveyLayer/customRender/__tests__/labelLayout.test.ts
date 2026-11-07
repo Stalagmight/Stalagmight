@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   shapeLabel,
   shapedExtent,
@@ -320,5 +320,59 @@ describe('ShapeCache', () => {
     cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas); // touch 'a' → now newest
     cache.get(LABEL_KIND.SECTION_NAME, 'c', atlas); // evicts 'b' (now oldest), not 'a'
     expect(cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas)).toBe(a); // 'a' survived
+  });
+
+  // #576 NF-W12BE-3: a hit and an eviction are O(1). The cache used to evict
+  // `keys().next()` and touch with `delete` + `set`; JavaScriptCore's Map iterator
+  // walks every slot deleted at the front since the last rehash, so a label build
+  // larger than the cap paid a scan per eviction (18 of 27 s on a 384k-shot import).
+  it('evicts and touches without iterating or re-inserting into its Map (#576 NF-W12BE-3)', () => {
+    const atlas = makeAtlas();
+    const cache = new ShapeCache(2);
+    cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas);
+    cache.get(LABEL_KIND.SECTION_NAME, 'b', atlas);
+    const keys = vi.spyOn(Map.prototype, 'keys');
+    const del = vi.spyOn(Map.prototype, 'delete');
+    const set = vi.spyOn(Map.prototype, 'set');
+    try {
+      cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas); // hit
+      expect(del).not.toHaveBeenCalled();
+      expect(set).not.toHaveBeenCalled();
+      cache.get(LABEL_KIND.SECTION_NAME, 'c', atlas); // miss + eviction of 'b'
+      expect(keys).not.toHaveBeenCalled();
+      expect(del).toHaveBeenCalledTimes(1);
+    } finally {
+      keys.mockRestore();
+      del.mockRestore();
+      set.mockRestore();
+    }
+    expect(cache.size).toBe(2);
+  });
+
+  it('keeps exactly the LRU contents of a reference model over a long random workload', () => {
+    const atlas = makeAtlas();
+    const max = 5;
+    const cache = new ShapeCache(max);
+    const shapes = new Map<string, unknown>();
+    let order: string[] = []; // reference: oldest first
+    let seed = 7;
+    const rnd = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed;
+    };
+    for (let i = 0; i < 2000; i++) {
+      const text = String(rnd() % 9);
+      const got = cache.get(LABEL_KIND.SECTION_NAME, text, atlas);
+      if (order.includes(text)) {
+        expect(got).toBe(shapes.get(text)); // a hit returns the cached object
+        order = [...order.filter((t) => t !== text), text];
+      } else {
+        expect(got).not.toBe(shapes.get(text)); // a miss shapes afresh
+        shapes.set(text, got);
+        order = [...order, text];
+        if (order.length > max) order = order.slice(1);
+      }
+      expect(cache.size).toBe(order.length);
+    }
   });
 });

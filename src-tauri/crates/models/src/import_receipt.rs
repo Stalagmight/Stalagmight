@@ -37,6 +37,14 @@ pub struct ImportReceipt {
     /// for the same replay/cache back-compat reason as `info`.
     #[serde(default)]
     pub zero_datum_created: Option<String>,
+    /// How many warnings [`Self::cap_warnings`] has folded into the summary
+    /// line so far (#576 C17). A receipt is capped more than once - by the
+    /// import, then again each time another source's warnings are put in
+    /// front - and each cap must recognise the previous one's summary instead
+    /// of counting it as a warning. Bookkeeping only: never sent over IPC.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub hidden_warnings: usize,
 }
 
 /// Make a file-controlled string fit to cross IPC and be rendered as UI text: drop
@@ -80,12 +88,21 @@ impl ImportReceipt {
             warnings: Vec::new(),
             info: Vec::new(),
             zero_datum_created: None,
+            hidden_warnings: 0,
         }
     }
 
     /// Keep at most this many individual warnings before folding the rest
     /// into a single summary entry.
     const MAX_WARNINGS: usize = 50;
+
+    /// The entry standing in for `hidden` folded warnings.
+    fn summary_line(hidden: usize) -> String {
+        format!(
+            "... and {hidden} more warning{}",
+            if hidden == 1 { "" } else { "s" }
+        )
+    }
     /// Clamp each warning string to this many characters.
     const MAX_WARNING_LEN: usize = 300;
 
@@ -96,19 +113,74 @@ impl ImportReceipt {
     /// folded into one "... and N more warnings" summary), each clamped to
     /// [`Self::MAX_WARNING_LEN`] chars on a char boundary (never a raw byte
     /// slice - a warning can embed arbitrary user-controlled text).
+    ///
+    /// Capping again is safe (#576 C17): the summary an earlier cap left is
+    /// taken out first and its count carried, so there is only ever one
+    /// summary line and it counts everything hidden so far.
     pub fn cap_warnings(&mut self) {
+        if self.hidden_warnings > 0 {
+            let summary = Self::summary_line(self.hidden_warnings);
+            if let Some(at) = self.warnings.iter().rposition(|w| *w == summary) {
+                self.warnings.remove(at);
+            }
+        }
         if self.warnings.len() > Self::MAX_WARNINGS {
-            let overflow = self.warnings.len() - Self::MAX_WARNINGS;
+            self.hidden_warnings += self.warnings.len() - Self::MAX_WARNINGS;
             self.warnings.truncate(Self::MAX_WARNINGS);
-            self.warnings.push(format!(
-                "... and {overflow} more warning{}",
-                if overflow == 1 { "" } else { "s" }
-            ));
+        }
+        if self.hidden_warnings > 0 {
+            self.warnings.push(Self::summary_line(self.hidden_warnings));
         }
         for warning in &mut self.warnings {
             if let Some((cut, _)) = warning.char_indices().nth(Self::MAX_WARNING_LEN) {
                 warning.truncate(cut);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ImportReceipt;
+
+    /// #576 C17: a receipt is capped more than once - by the import itself,
+    /// then again when the importer's or the deferred save's warnings are put
+    /// in front. Each cap must account for what the earlier ones hid: one
+    /// summary line, with the total.
+    #[test]
+    fn capping_twice_keeps_one_summary_with_the_total() {
+        let mut receipt = ImportReceipt::empty();
+        receipt.warnings = (0..60).map(|i| format!("shot {i} looks odd")).collect();
+        receipt.cap_warnings();
+        assert_eq!(
+            receipt.warnings.last().map(String::as_str),
+            Some("... and 10 more warnings")
+        );
+
+        let mut leading = vec!["save note 0".to_string(), "save note 1".to_string()];
+        leading.append(&mut receipt.warnings);
+        receipt.warnings = leading;
+        receipt.cap_warnings();
+
+        assert_eq!(receipt.warnings.len(), 51);
+        assert_eq!(receipt.warnings[0], "save note 0");
+        assert_eq!(
+            receipt.warnings.last().map(String::as_str),
+            Some("... and 12 more warnings"),
+            "62 warnings, 50 shown"
+        );
+        assert_eq!(
+            receipt
+                .warnings
+                .iter()
+                .filter(|w| w.starts_with("... and "))
+                .count(),
+            1
+        );
+
+        // A cap with nothing new over the limit changes nothing.
+        let before = receipt.warnings.clone();
+        receipt.cap_warnings();
+        assert_eq!(receipt.warnings, before);
     }
 }

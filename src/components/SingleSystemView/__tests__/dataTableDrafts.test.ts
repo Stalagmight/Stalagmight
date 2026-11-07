@@ -9,6 +9,7 @@ import {
   materializeDraft,
   draftMissing,
   completeDraftData,
+  lateDraftEdits,
   commitAnchorArgs,
   overflowDraft,
   respawnsBlank,
@@ -17,26 +18,10 @@ import {
 } from '../dataTableDrafts';
 import { AZIMUTH_AVG_KEY } from '../dataTableEdits';
 import type { Shot } from '../../../types/project';
+import { makeShot } from '../../../test/factories/survey';
 
-const shot = (id: number, over: Partial<Shot> = {}): Shot => ({
-  id,
-  azimuth_in: 90,
-  azimuth_out: 90,
-  length: 10,
-  depth_in: 0,
-  depth_out: 1,
-  pitch_in: null,
-  pitch_out: null,
-  left: null,
-  right: null,
-  up: null,
-  down: null,
-  comment: null,
-  kind: 'Normal' as const,
-  marker_index: null,
-  temperature: null,
-  ...over,
-});
+const shot = (id: number, over: Partial<Shot> = {}): Shot =>
+  makeShot({ id, azimuth_in: 90, azimuth_out: 90, depth_out: 1, ...over });
 
 const draft = (key: number, anchor: ShotDraft['anchor'], data: ShotDraft['data'] = {}): ShotDraft => ({
   key,
@@ -270,6 +255,35 @@ describe('draftMissing', () => {
   it('clears the azimuth mark when either leg is present', () => {
     const m = draftMissing(draft(-2, { afterShotId: 1 }, { azimuth_out: 10 }), noHidden, 'avg');
     expect(m.cells.has(AZIMUTH_AVG_KEY)).toBe(false);
+  });
+});
+
+describe('lateDraftEdits (#576 D39(f))', () => {
+  const required = { length: 5, depth_in: 0, depth_out: 1, azimuth_in: 90 };
+  const sentFrom = (data: ShotDraft['data']) => completeDraftData(draft(-2, 'end', data))!;
+
+  it('returns the fields typed after the create payload was taken', () => {
+    const sent = sentFrom(required);
+    expect(lateDraftEdits(sent, draft(-2, 'end', { ...required, left: 2.5, comment: 'sump' }))).toEqual({
+      left: 2.5,
+      comment: 'sump',
+    });
+  });
+
+  it('is empty when nothing changed, including the azimuth leg that was sent as a duplicate', () => {
+    const sent = sentFrom(required);
+    expect(lateDraftEdits(sent, draft(-2, 'end', required))).toEqual({});
+  });
+
+  it('carries a back reading typed after the front one was duplicated into it', () => {
+    const sent = sentFrom(required);
+    expect(lateDraftEdits(sent, draft(-2, 'end', { ...required, azimuth_out: 271 }))).toEqual({ azimuth_out: 271 });
+  });
+
+  it('leaves out a required field cleared since - a shot cannot hold a blank one - but keeps the rest', () => {
+    const sent = sentFrom(required);
+    const { length: _cleared, ...withoutLength } = required;
+    expect(lateDraftEdits(sent, draft(-2, 'end', { ...withoutLength, up: 3 }))).toEqual({ up: 3 });
   });
 });
 

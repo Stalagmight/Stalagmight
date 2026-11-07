@@ -15,15 +15,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useAutoSave } from '../useAutoSave';
 import { useProjectStore } from '../../store/projectStore';
 import type { CommandResult } from '../../types/commands';
-
-/** A save the test resolves by hand, so ordering is stated rather than timed. */
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
+import { deferred } from '../../test/factories/async';
 
 const FAILED: CommandResult = {
   success: false,

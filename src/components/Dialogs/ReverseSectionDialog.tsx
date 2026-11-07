@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
@@ -6,6 +7,7 @@ import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useShallow } from 'zustand/react/shallow';
 
 
 /**
@@ -18,8 +20,13 @@ import { DialogWrapper } from './DialogWrapper';
  * travel is a survey convention - so it is an explicit, unticked choice here.
  */
 export default function ReverseSectionDialog() {
-  const { closeDialog, dialogData } = useUIStore();
-  const { reverseSection, executeBatch, project } = useProjectStore();
+  const { t } = useTranslation();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
+  const { reverseSection, executeBatch, project } = useProjectStore(
+    useShallow((s) => ({ reverseSection: s.reverseSection, executeBatch: s.executeBatch, project: s.project })),
+  );
 
   const sectionIds = (dialogData.sectionIds as number[] | undefined) ?? [];
   const [swapLeftRight, setSwapLeftRight] = useState(false);
@@ -44,7 +51,7 @@ export default function ReverseSectionDialog() {
   const changingCount = changing.length;
 
   const isMulti = changingCount > 1;
-  const title = isMulti ? `Reverse ${changingCount} Sections` : 'Reverse Section';
+  const title = isMulti ? t('dialogs.reverseSection.titleMulti', { count: changingCount }) : t('dialogs.reverseSection.title');
 
   const handleConfirm = async () => {
     if (isSubmitting || changingCount === 0 || hasMissing) return;
@@ -55,7 +62,7 @@ export default function ReverseSectionDialog() {
     // read-only mode must refuse here rather than mutate. Re-checked now, not at
     // open time, because the mode can flip while the dialog is up.
     if (isEditingBlockedNow()) {
-      setError('Editing is disabled in the current view.');
+      setError(t('dialogs.reverseSection.editingDisabled'));
       return;
     }
 
@@ -95,7 +102,7 @@ export default function ReverseSectionDialog() {
               }))
             );
       if (!result.success) {
-        setError(result.error ?? 'Failed to reverse section');
+        setError(result.error ?? t('dialogs.reverseSection.reverseFailed'));
         setIsSubmitting(false);
         return;
       }
@@ -120,8 +127,8 @@ export default function ReverseSectionDialog() {
       <div className="space-y-4">
         <p className="text-text-secondary">
           {isMulti
-            ? `Renumber ${changingCount} sections end-to-end, so each section's last station becomes station 0.`
-            : 'Renumber this section end-to-end, so the last station becomes station 0.'}
+            ? t('dialogs.reverseSection.introMulti', { count: changingCount })
+            : t('dialogs.reverseSection.intro')}
         </p>
 
         {sections.length > 0 && (
@@ -131,11 +138,11 @@ export default function ReverseSectionDialog() {
           >
             {sections.map((s) => (
               <li key={s.id}>
-                {s.name ?? `Section ${s.id}`}
+                {s.name ?? t('dialogs.reverseSection.sectionFallback', { id: s.id })}
                 {s.shots.length > 0 && (
                   <span className="text-text-tertiary">
                     {' '}
-                    (station 0 &rarr; {s.shots.length}, station {s.shots.length} &rarr; 0)
+                    {t('dialogs.reverseSection.stationMapping', { last: s.shots.length })}
                   </span>
                 )}
               </li>
@@ -144,9 +151,7 @@ export default function ReverseSectionDialog() {
         )}
 
         <p className="text-sm text-text-tertiary">
-          The cave does not move: every station keeps its position on the map, and merges, loop
-          closures, zero datums and comments stay on the station they were set on. Only the
-          numbering direction changes.
+          {t('dialogs.reverseSection.caveDoesNotMove')}
         </p>
 
         <label className="flex items-start gap-2 text-sm cursor-pointer">
@@ -158,10 +163,9 @@ export default function ReverseSectionDialog() {
             data-testid="reverse-swap-lr"
           />
           <span>
-            <span className="text-text-primary">Swap left/right passage measurements</span>
+            <span className="text-text-primary">{t('dialogs.reverseSection.swapLeftRight')}</span>
             <span className="block text-text-tertiary">
-              Tick this if LRUD was recorded facing along the survey direction, so what was on the
-              left is now on the right. Leave it unticked to keep the values as recorded.
+              {t('dialogs.reverseSection.swapLeftRightHint')}
             </span>
           </span>
         </label>
@@ -171,8 +175,7 @@ export default function ReverseSectionDialog() {
             className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm"
             data-testid="reverse-stale"
           >
-            One or more of the selected sections no longer exists. Close this and pick the
-            sections again.
+            {t('dialogs.reverseSection.stale')}
           </div>
         )}
 
@@ -186,7 +189,7 @@ export default function ReverseSectionDialog() {
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} data-testid="reverse-section-cancel">Cancel</Button>
+          <Button onClick={closeDialog} data-testid="reverse-section-cancel">{t('common.actions.cancel')}</Button>
           <Button
             variant="primary"
             onClick={handleConfirm}
@@ -194,7 +197,7 @@ export default function ReverseSectionDialog() {
             data-primary-action=""
             data-testid="reverse-confirm"
           >
-            {isMulti ? `Reverse ${changingCount} Sections` : 'Reverse'}
+            {isMulti ? t('dialogs.reverseSection.confirmMulti', { count: changingCount }) : t('dialogs.reverseSection.confirm')}
           </Button>
         </div>
       </div>

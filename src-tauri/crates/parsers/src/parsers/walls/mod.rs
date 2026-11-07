@@ -7,7 +7,7 @@
 //! inclination-or-depth-gauge, foresight/backsight survey model into
 //! Stalagmight's depth-based import configs, mirroring [`crate::parsers::compass`]:
 //!
-//! - `.WPJ` is a flat, indented, ISO-8859-1 line file: `.BOOK`/`.ENDBOOK`
+//! - `.WPJ` is a flat, indented, Windows-1252 line file: `.BOOK`/`.ENDBOOK`
 //!   nest, `.SURVEY` is a leaf, `.NAME` is the base filename (`.SRV` default
 //!   extension), `.STATUS` is a bitfield (skip `DETACHED`/`TYPE_OTHER`), and
 //!   `.OPTIONS` (`#units` args) + `.REF` (UTM/lat-long reference) inherit
@@ -498,3 +498,18 @@ pub fn parse_walls(path: &Path) -> Result<ParsedWalls> {
 pub mod test_support;
 #[cfg(test)]
 pub(crate) mod tests;
+
+// #576 NF-FIX3R-3: loop closures onto points the merges already joined.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod closure_tests;
+
+// #576 NF-FIX3R-2: one read per .SRV, one byte budget per .WPJ.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod wpj_budget_tests;
+
+// #576 RV4-R-P2: only a survey that was read is reported as read from outside.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod wpj_outside_rv4_tests;

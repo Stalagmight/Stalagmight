@@ -16,25 +16,19 @@ import userEvent from '@testing-library/user-event';
 // The grid is virtualized and jsdom gives the virtualizer no layout to measure, so without
 // this mock it renders zero rows and every cell query fails - the same shim the grid's own
 // component tests use.
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: 33 + index * 33,
-        size: 33,
-      })),
-    getTotalSize: () => count * 33,
-    scrollToIndex: () => {},
-  }),
-}));
+vi.mock('@tanstack/react-virtual', () => import('../../test/factories/virtualizer'));
 
+import type { TFunction } from 'i18next';
 import { SegmentsTable } from './SegmentsTable';
+import { buildSegmentColumns } from './segmentsGridColumns';
+import { SEG_COL } from './segmentsGridEdits';
 import { useGasPlanStore } from '../../store/gasPlanStore';
+import { useUIStore } from '../../store/uiStore';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import { defaultConfig } from '../../types/config';
 import { segmentColor } from '../../utils/segmentColors';
 import type { DpvRig, GasReachField } from '../../types/ipc.generated';
+import { NoopResizeObserver } from '../../test/factories/dom';
 
 const A = { section_id: 1, station_index: 2 };
 const B = { section_id: 1, station_index: 5 };
@@ -83,11 +77,7 @@ function fakeField(overrides: Partial<GasReachField> = {}): GasReachField {
 beforeAll(() => {
   // jsdom has no ResizeObserver; the grid measures its scroller with one.
   if (typeof ResizeObserver === 'undefined') {
-    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    };
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = NoopResizeObserver;
   }
 });
 
@@ -317,6 +307,116 @@ describe('SegmentsTable', () => {
       render(<SegmentsTable />);
       editCell('segment-cell-0-speed', '0.01');
       expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBe(0.1);
+    });
+  });
+
+  /**
+   * D39d: a speed of 0 or below is no pace at all - clamped to 0.1 m/min it inflates the
+   * span's gas use and collapses reach. The pre-grid PositiveNumberField never committed one;
+   * the grid refuses it through the speed column's `validate`, the same way the Cylinders grid
+   * refuses a negative pressure. Positive values keep the clamp above.
+   */
+  describe('speed <= 0 is rejected, not clamped (D39d)', () => {
+    it('the speed column validate refuses <= 0 and accepts positives and a clear', () => {
+      const t = ((key: string) => key) as unknown as TFunction;
+      const speed = buildSegmentColumns({
+        t,
+        units: 'metric',
+        hasRig: false,
+        boundaryLabelAt: () => '',
+        boundaryTitleAt: () => undefined,
+        parksAfter: () => false,
+        inheritedSpeedDisplay: 10,
+        onToggleScooter: () => {},
+      }).find((col) => col.key === SEG_COL.speed);
+      const row = { speed_m_per_min: null, on_scooter: false };
+      for (const value of [0, -0, -12, -0.05]) {
+        expect(speed?.validate?.(value, row)).toBe('gasPanel.segments.nonPositiveSpeed');
+      }
+      // Under-range and over-range positives still commit (the reducer clamps them), and a
+      // cleared cell (`null`) is the return-to-inherited gesture, never an error.
+      for (const value of [0.05, 18, 5000, null]) {
+        expect(speed?.validate?.(value, row)).toBeNull();
+      }
+    });
+
+    it('rejects a typed 0 or negative speed: no commit, the editor stays open and flashes', () => {
+      useGasPlanStore.setState({ reachField: fakeField() });
+      render(<SegmentsTable />);
+
+      for (const typed of ['0', '-12']) {
+        editCell('segment-cell-0-speed', typed);
+        const editor = screen.getByTestId('segment-cell-editor');
+        expect(editor).toHaveValue(typed);
+        expect(screen.getByTestId('segment-invalid-flash')).toBeInTheDocument();
+        fireEvent.keyDown(editor, { key: 'Escape' });
+        expect(screen.queryByTestId('segment-cell-editor')).not.toBeInTheDocument();
+      }
+
+      expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBeNull();
+      // Nothing reached `setSegments`, so the cached field was never nulled for a recompute.
+      expect(useGasPlanStore.getState().reachField).not.toBeNull();
+    });
+
+    it('skips a pasted 0 or negative speed and reports it as skipped', () => {
+      useGasPlanStore.getState().addWaypoint(A);
+      useGasPlanStore.getState().addWaypoint(B);
+      const toasts: { message: string; key: string; kind: string }[] = [];
+      const original = useUIStore.getState().showToast;
+      useUIStore.setState({
+        showToast: (message: string, key: string, kind: string) => toasts.push({ message, key, kind }),
+      });
+      try {
+        render(<SegmentsTable />);
+        fireEvent.mouseDown(screen.getByTestId('segment-cell-0-speed'));
+        fireEvent.paste(scroller(), { clipboardData: { getData: () => '-12\n0\n15' } });
+
+        expect(useGasPlanStore.getState().segments.map((s) => s.speed_m_per_min)).toEqual([
+          null,
+          null,
+          15,
+        ]);
+        // The skipped-paste surfacing (#590): the two refused cells are reported, not dropped
+        // silently.
+        expect(toasts).toHaveLength(1);
+        expect(toasts[0]?.key).toBe(TOAST_KEYS.PLAN_SEGMENTS_PASTE);
+        expect(toasts[0]?.kind).toBe('warning');
+        expect(toasts[0]?.message).toContain('2 skipped');
+      } finally {
+        useUIStore.setState({ showToast: original });
+      }
+    });
+
+    it('reports a fill that meets a refused speed instead of dropping it silently (#576 FILL-1)', () => {
+      // A stored speed of 0, as only a hand-edited plan file can carry: Fill down copies it
+      // into the next two spans, whose column refuses it. Nothing is written - and now the
+      // diver is told, the way a paste would tell them.
+      useGasPlanStore.setState({
+        segments: [
+          { speed_m_per_min: 0, on_scooter: false },
+          { speed_m_per_min: 12, on_scooter: false },
+          { speed_m_per_min: 14, on_scooter: false },
+        ],
+      });
+      const toasts: { message: string; key: string; kind: string }[] = [];
+      const original = useUIStore.getState().showToast;
+      useUIStore.setState({
+        showToast: (message: string, key: string, kind: string) => toasts.push({ message, key, kind }),
+      });
+      try {
+        render(<SegmentsTable />);
+        fireEvent.mouseDown(screen.getByTestId('segment-cell-0-speed'));
+        fireEvent.mouseDown(screen.getByTestId('segment-cell-2-speed'), { shiftKey: true });
+        fireEvent.keyDown(scroller(), { key: 'd', ctrlKey: true });
+
+        expect(useGasPlanStore.getState().segments.map((s) => s.speed_m_per_min)).toEqual([0, 12, 14]);
+        expect(toasts).toHaveLength(1);
+        expect(toasts[0]?.key).toBe(TOAST_KEYS.PLAN_SEGMENTS_PASTE);
+        expect(toasts[0]?.kind).toBe('warning');
+        expect(toasts[0]?.message).toBe('2 skipped (invalid)');
+      } finally {
+        useUIStore.setState({ showToast: original });
+      }
     });
   });
 

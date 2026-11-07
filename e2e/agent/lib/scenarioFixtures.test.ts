@@ -20,6 +20,13 @@ describe('agent fixture resolution', () => {
     expect(fixtureSourcePath('../../outside.stalx')).toBe(fixtureSourcePath('outside.stalx'));
   });
 
+  it('names a missing fixture on a later line than the one a runner prints (#576 W51)', () => {
+    const destinationDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-fixture-missing-'));
+    expect(() => materializeFixture('qzCaveA.stalx', destinationDir)).toThrow(
+      new Error('fixture missing from e2e/fixtures/\n  name: qzCaveA.stalx'),
+    );
+  });
+
   it('refreshes a reused session fixture from the tracked source', () => {
     const destinationDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-fixture-refresh-'));
     const copied = materializeFixture(DEFAULT_FIXTURE, destinationDir);

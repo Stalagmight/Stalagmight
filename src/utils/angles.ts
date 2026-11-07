@@ -1,50 +1,30 @@
 /**
  * Angle utilities for cave survey calculations.
+ *
+ * The two azimuth helpers here are the ones in `azimuth.ts`, which mirror the
+ * backend (#576 D14). This file used to carry its own bodies: a unit-vector
+ * mean and a normaliser that folded NaN to 0. They agreed with the backend for
+ * ordinary shots but not for exactly opposite legs, so the DataTable's Avg
+ * column showed 198.43 for legs 100/280 next to a map and warning previews that
+ * used the backend's 10, and an edit of that cell rotated both legs by the
+ * wrong amount. One implementation means one answer on screen.
  */
+import { averageAzimuth, normalizeAzimuth } from './azimuth';
 
 /**
- * Normalize an angle to the range [0, 360).
+ * Normalize an angle to the range [0, 360); see `normalizeAzimuth`.
  *
- * @param degrees - Angle in degrees (can be any value, including negative)
- * @returns Normalized angle in range [0, 360)
+ * A non-finite angle passes through unchanged rather than becoming 0: "no
+ * bearing" turned into due north passes range validation and saves.
  */
-export function normalizeAngle(degrees: number): number {
-  // Handle non-finite values
-  if (!Number.isFinite(degrees)) {
-    return 0;
-  }
-
-  let result = degrees % 360;
-  if (result < 0) {
-    result += 360;
-  }
-  // Handle -0 by adding 0
-  return result + 0;
-}
+export const normalizeAngle = normalizeAzimuth;
 
 /**
- * Compute circular mean of two angles in degrees.
- * Handles wrap-around correctly (e.g., 350 and 10 averages to ~0, not 180).
- *
- * @param a - First angle in degrees
- * @param b - Second angle in degrees
- * @returns Circular mean in range [0, 360)
+ * Mean of two azimuth legs in degrees, across the short arc (350 and 10 give
+ * 0, not 180); see `averageAzimuth`. Exactly opposite legs have no mean, and
+ * the tie resolves the way the backend resolves it (to `a - 90`).
  */
-export function circularMeanDegrees(a: number, b: number): number {
-  const aRad = (a * Math.PI) / 180;
-  const bRad = (b * Math.PI) / 180;
-
-  // Average the unit vectors
-  const x = (Math.cos(aRad) + Math.cos(bRad)) / 2;
-  const y = (Math.sin(aRad) + Math.sin(bRad)) / 2;
-
-  // Convert back to angle
-  let result = Math.atan2(y, x) * (180 / Math.PI);
-  if (result < 0) result += 360;
-  // Normalize to [0, 360) range (handles edge case where result is exactly 360)
-  if (result >= 360) result -= 360;
-  return result;
-}
+export const circularMeanDegrees = averageAzimuth;
 
 /**
  * The bearing a pair of azimuth legs displays: the circular mean of two measured

@@ -10,8 +10,36 @@
 
 mod model;
 mod physics;
+mod pinned;
+mod range_route;
 mod scooter;
 
+#[cfg(test)]
+mod half_minus_gauge_tests;
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "the printed plans are the evidence a run captures"
+)]
+mod pin_decides_route_tests;
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "the printed sweep counts are the evidence a run captures"
+)]
+mod pin_monotone_tests;
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "the printed sweep counts are the evidence a run captures"
+)]
+mod pin_route_tests;
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "the printed sweep counts are the evidence a run captures"
+)]
+mod route_sweep_tests;
 #[cfg(test)]
 mod tests;
 
@@ -26,6 +54,7 @@ pub use model::{
     TankMaterial, Team,
 };
 use physics::{deliverable_gas, edge_gas, edge_gas_basis};
+use range_route::{RangedTail, Step};
 use scooter::{resolve_segments, scooter_drop_index, scooter_range_limit, ResolvedSegment};
 /// The bounds a stored per-span speed must fall inside to be honoured (outside them the span
 /// inherits the plan speed). Re-exported because the `.plnx` merge and the frontend's own segment
@@ -82,10 +111,15 @@ impl Project {
     ///
     /// A pinned drop redefines how much of that stage is breathed IN: the litres consumed to reach
     /// the pinned station (its route gas minus the cumulative at the prior drop), hard-clamped to
-    /// `[0, tank-empty]`.
-    /// The penetration budget becomes `base + Σ(actual - safe)`, so a drop dragged **shallower**
-    /// strands surplus stage gas (budget shrinks → reach shortens) and one dragged **deeper** breathes
-    /// into reserve (budget grows → reach extends, flagged `stage_drop_over_reserve`). Non-overridden
+    /// `[0, tank-empty]`. The penetration budget becomes `base + Σ(min(breathed, safe) - safe)`, so
+    /// a drop dragged **shallower** strands surplus stage gas (budget shrinks → reach shortens) and
+    /// one dragged **deeper** is shown where it was put, flagged `stage_drop_over_reserve`, but buys
+    /// no reach (#576): no plan reaches further than the same plan without its moved drops. The
+    /// pin decides the route (#576 RV8c-2): the dive passes it, doubling back to the endpoint if
+    /// the pin is off its passage, and a dive whose gas runs out first turns on the way there and
+    /// reports the drop as not reached (`gas/pinned.rs`). The reach overlay of a pinned plan shows
+    /// only where that dive goes: each station priced at its pass on the route through the pins, or
+    /// after passing them, as a way point prices it (RV8c-2-D4). Non-overridden
     /// downstream drops keep their safe pressure but shift position as the cumulative shifts; the
     /// back-gas turn pressure is independent of the stage drops and is unchanged. The reach math stays
     /// exact-litres (from the graph); only the moved drop's readout pressure is inverted from the Z
@@ -119,8 +153,9 @@ impl Project {
     /// line to a station must be within [`DpvRig::usable_range_m`]. It never touches the gas half.
     /// The exit mirrors the entry span for span - you collect the units where you parked them - so
     /// `gas_out == gas_in` and the fraction reserves stay correct as they are. What a metre of
-    /// scootered line COSTS against that cap depends on the span's speed, since the cap converts
-    /// battery minutes into metres at the units' cruise (see [`scooter::range_per_metre`]).
+    /// scootered line COSTS against that cap depends on the span's speed, since the cap counts
+    /// metres at cruise while each unit's battery runs by its own clock (see
+    /// [`scooter::range_per_metre`]).
     pub fn compute_gas_reach_field_with_overrides(
         &self,
         origin: Option<&StationRef>,
@@ -132,6 +167,36 @@ impl Project {
         gas_config: &GasConfig,
         stage_drop_overrides: &[Option<StationRef>],
     ) -> GasReachField {
+        self.gas_reach_field_and_chain(
+            origin,
+            endpoint,
+            waypoints,
+            segments,
+            diver,
+            cylinders,
+            gas_config,
+            stage_drop_overrides,
+        )
+        .0
+    }
+
+    /// [`Self::compute_gas_reach_field_with_overrides`], with the route the plan commits before
+    /// its open tail: the stations of the walk through the way points and, for a pinned plan, the
+    /// pins after them. The field does not report it (a dive that turns before a pin shows only
+    /// part of it), and it is what tells a change that sends a leg another way (#576
+    /// NF-W12GAS-1-D2, a lower scooter range) from one that only moves the turn along it - the
+    /// pin sweeps compare it.
+    pub(crate) fn gas_reach_field_and_chain(
+        &self,
+        origin: Option<&StationRef>,
+        endpoint: Option<&StationRef>,
+        waypoints: &[StationRef],
+        segments: &[PlanSegment],
+        diver: &Diver,
+        cylinders: &[Cylinder],
+        gas_config: &GasConfig,
+        stage_drop_overrides: &[Option<StationRef>],
+    ) -> (GasReachField, Vec<StationRef>) {
         // Disabled tanks (#245) are excluded from EVERY gas computation - budget, gauges, stage
         // drops. Filter once here so no downstream helper has to know about `enabled`; rig (vec)
         // order is preserved, so "stage 1/2" still means the first/second enabled Stage cylinder.
@@ -279,6 +344,7 @@ impl Project {
             &resolved_waypoints,
             &plan_segments,
             in_rmv,
+            scooter_limit,
             degenerate,
         );
 
@@ -312,10 +378,7 @@ impl Project {
             })
             .collect();
 
-        // Base penetration budget (litres), then fold in the override deltas: the cumulative stage
-        // thresholds, per-drop readout bars, over-reserve flags, and the budget change all come out of
-        // one walk over the plans. `apply` returns the STRATEGY defaults untouched for an empty
-        // override list, so this stays byte-identical to the no-override field.
+        // Base penetration budget (litres): what the strategy alone credits, before any pin.
         let base_budget = penetration_budget(
             active,
             gas_config.default_reserve,
@@ -328,36 +391,44 @@ impl Project {
             self.resolve_key(&key)
                 .and_then(|sr| station_index.get(&sr).copied())
         });
-        // The un-overridden route: what the STRATEGY alone would fly, on the base budget. It serves
-        // two purposes for the override walk, and BOTH need a route rather than the global field:
-        //   - its drop positions are the "defaults" a release-in-place must reproduce, so a jiggle
-        //     stays a true no-op (#246);
-        //   - it is the basis a pinned drop is scored against. A drop is a position ALONG the route,
-        //     so the gas it has cost is the route's cumulative gas at that position - NOT
-        //     `gas_in[station]`, which is the cheapest way to reach that station after the way-point
-        //     chain and corresponds to no pass the diver actually makes once a route doubles back
-        //     (#298). Scoring against `gas_in` reads a return-leg drop as if it were made on the way
-        //     in, which inflates the budget: the unsafe direction (§6).
-        // Using the BASE route keeps the ordering acyclic - the final route depends on the budget,
-        // which depends on these very overrides - and the two coincide whenever the delta is 0.
-        let default_thresholds = cumulative(plans.iter().map(|p| p.safe_in_litres));
-        let base_view = budget_view(&walk, endpoint_idx, base_budget, scooter_limit);
-        let default_drop_nodes = default_drop_stations(&base_view, &default_thresholds);
-
-        let (thresholds, stage_drop_bars, stage_drop_over_reserve, budget_delta) =
-            apply_stage_drop_overrides(
-                &plans,
-                &resolved_overrides,
-                &base_view,
-                &walk,
-                &default_drop_nodes,
-                conservative,
-            );
+        // [#576 RV8c-2-D1, decided "pin decides the route"] A pinned drop is a point the dive
+        // passes, like a way point: the route flies the way points, then every pin they do not
+        // already pass, in drop order, then on to the endpoint - or, with none, to the deepest
+        // station beyond the last pin. `None` when no stage is pinned (or no pin resolves to a
+        // station the walk can reach): the plan is then the strategy's own, byte for byte.
+        //
+        // The pinned route does not depend on the budget - only where the dive TURNS on it does -
+        // so the gas each pin has cost is read off it before the budget exists, and the ordering
+        // stays acyclic: route, then arrival gas, then budget, then the turn.
+        let pinned = pinned::pinned_walk(
+            &adj,
+            &lens,
+            &roots,
+            &resolved_waypoints,
+            &walk,
+            &resolved_overrides,
+            &plan_segments,
+            in_rmv,
+            scooter_limit,
+        );
+        let no_pins = vec![None; plans.len()];
+        let (pin_chain_idx, pinned_chain_gas): (&[Option<usize>], &[f64]) = match &pinned {
+            Some(p) => (&p.pin_chain_idx, &p.walk(&walk).chain_gas),
+            None => (&no_pins, &[]),
+        };
+        // Fold the pins into the drops: the cumulative stage thresholds, per-drop readout bars,
+        // over-reserve flags and the budget change all come out of one walk over the plans. With no
+        // pin this returns the STRATEGY defaults untouched, so the field stays byte-identical to
+        // the no-override one.
+        let (thresholds, stage_drop_bars, over_at_pin, budget_delta) =
+            price_stage_drops(&plans, pin_chain_idx, pinned_chain_gas);
         // A pathological-but-valid cylinder (huge finite fill × volume) can overflow deliverable_gas
         // to a non-finite budget; treat that as all-unreachable (0.0) rather than leaking NaN/Inf to
         // the gauge readout. The staged paths already `.max(0.0)`-guard; this mirrors them. The
-        // override budget is always `≥ back-gas ≥ 0` (every contribution is `≥ 0`), so the `.max(0.0)`
-        // is only a finite-guard floor - a shallow drag can never drive the budget negative.
+        // pinned budget is always `≥ back-gas ≥ 0` (every contribution is `≥ 0`), so the `.max(0.0)`
+        // is only a finite-guard floor - a shallow pin can never drive the budget negative - and
+        // never above `base_budget` (each credit is capped at the stage's safe IN gas), so no pin
+        // can reach further than the plan without it (#576).
         let budget_litres = base_budget + budget_delta;
         let budget_litres = if budget_litres.is_finite() {
             budget_litres.max(0.0)
@@ -370,7 +441,64 @@ impl Project {
         // something is reachable). Per-stage drop points are placed on that route only where a
         // threshold exists (none for All-thirds / a fell-back staged rig / a Free rig with no stage
         // usable).
-        let view = budget_view(&walk, endpoint_idx, budget_litres, scooter_limit);
+        //
+        // A pinned plan's masks, route, turnaround and drop markers all come from the pinned walk
+        // ([`pinned::pinned_view`]): the overlay paints only where the dive through the pins can be,
+        // each station priced at its pass or after the pins, as a way point prices it (#576
+        // RV8c-2-D4) - a pin that strands gas shrinks it, and no pin can grow it on gas. That
+        // includes the dive that runs out of gas before a pin (#576 RV8c-2-D3): it turns where the
+        // gas says on the way there, and the drop it never reaches is reported past the turnaround
+        // (`full_route` keeps the stations up to the pin for exactly that). The scooter range is
+        // priced on the same walk, so every station the pinned dive passes or turns at is painted
+        // (#576 RV9a-1).
+        //
+        // The plan without pins prices each station on a route its scooter can fly (#576
+        // NF-W11GAS-1-D1, "price along the route"): round a loop the gas-cheapest way can run out of
+        // range while another way is in range on gas the diver has, and the dive takes that way.
+        // Any station the pinned walk paints is reached by a route that plan considers, on no more
+        // gas and no more range, so no pin paints a station the plan without pins leaves dark.
+        let ranged = range_route::ranged_tail(
+            &adj,
+            &lens,
+            &roots,
+            &walk,
+            &plan_segments,
+            in_rmv,
+            scooter_limit,
+        );
+        let plain_view = budget_view(
+            &walk,
+            ranged.as_ref(),
+            endpoint_idx,
+            budget_litres,
+            scooter_limit,
+            None,
+        );
+        let (view, full_route) = match &pinned {
+            Some(p) => {
+                // The pinned dive's tail, from its last pin on, takes the ways its range covers
+                // as the plan without pins' does (#576 NF-W12GAS-1-D2).
+                let pinned_tail = p.ranged_tail(
+                    &adj,
+                    &lens,
+                    &roots,
+                    &walk,
+                    &plan_segments,
+                    in_rmv,
+                    scooter_limit,
+                );
+                pinned::pinned_view(
+                    p,
+                    &walk,
+                    pinned_tail.as_ref(),
+                    plain_view,
+                    endpoint_idx,
+                    budget_litres,
+                    scooter_limit,
+                )
+            }
+            None => (plain_view, None),
+        };
         let BudgetView {
             reachable,
             can_end_at,
@@ -382,6 +510,8 @@ impl Project {
             route_gas,
             route_time,
             scooter_bound: turn_on_scooter_range,
+            turn_scoot,
+            turn_time,
         } = view;
 
         // Turn frontier: stations the diver could END at that border one they could not (out of
@@ -395,7 +525,9 @@ impl Project {
         //
         // Stations on the committed chain are excluded outright: the diver has already said they
         // are going to the way points, so a station on the way there is transit, not a
-        // destination. Picking one would route out past it to the way point and back.
+        // destination. Picking one would route out past it to the way point and back. A pinned
+        // plan's chain runs on through its pins (#576 RV8c-2-D4), so the way to a pin is transit
+        // too: picking a station on it routes out to the pin and back (D2).
         //
         // ⚠ That exclusion has to be settled across zero-cost ties, exactly like `reach_gas`. A
         // merge or an aligned closure holds ONE physical station as several graph nodes joined at
@@ -404,9 +536,11 @@ impl Project {
         // place with the same gas - and the twin is usually the one carrying the side passage, so
         // it borders the out-of-budget ground and lands on the frontier. The result is a turn dot
         // drawn on top of a committed route station, which is the bug this exclusion exists to stop.
+        let flown = pinned.as_ref().map_or(&walk, |p| p.walk(&walk));
+        let committed: Vec<StationRef> = flown.chain.iter().map(|&i| station_refs[i]).collect();
         let mut on_chain = vec![false; n];
         let mut chain_queue: VecDeque<usize> = VecDeque::new();
-        for &node in &walk.chain {
+        for &node in &flown.chain {
             if !on_chain[node] {
                 on_chain[node] = true;
                 chain_queue.push_back(node);
@@ -429,16 +563,25 @@ impl Project {
 
         let route_refs: Vec<StationRef> = route_nodes.iter().map(|&i| station_refs[i]).collect();
         let final_turn_ref = route_target.map(|i| station_refs[i]);
-        // Drop indices along the route (not refs): a way-point route can revisit a station, so an
-        // index is the only unambiguous handle. No target means no plan, hence no drops.
+        // The stations a drop marker can stand on: the route, then - only when the dive turns
+        // before a pin (#576 RV8c-2-D3) - the rest of the way to the last pin, so a drop the dive
+        // never reaches is still named at the station it was pinned to, past the turnaround.
+        let (beyond_nodes, beyond_gas) = full_route.unwrap_or_default();
+        let marker_refs: Vec<StationRef> = route_refs
+            .iter()
+            .copied()
+            .chain(beyond_nodes.iter().map(|&i| station_refs[i]))
+            .collect();
+        // Drop indices along those stations (not refs): a way-point route can revisit a station,
+        // so an index is the only unambiguous handle. No target means no plan, hence no drops.
         let drop_indices: Vec<usize> = if route_target.is_some() {
-            place_stage_drops(&route_gas, &thresholds)
+            place_stage_drops(&route_gas, &beyond_gas, &thresholds, pin_chain_idx)
         } else {
             Vec::new()
         };
         let stage_drop_refs: Vec<StationRef> = drop_indices
             .iter()
-            .filter_map(|&j| route_refs.get(j).copied())
+            .filter_map(|&j| marker_refs.get(j).copied())
             .collect();
         // `place_stage_drops` only ever returns in-range indices, so the filter_map above cannot
         // drop one. Assert it loudly rather than let a future change silently shorten
@@ -449,6 +592,14 @@ impl Project {
             drop_indices.len(),
             "a stage drop fell off the route - refs would misalign with the gauges"
         );
+        // A drop past the turnaround is one the dive never reaches: the stage is carried the
+        // whole dive, so nothing is breathed into its reserve at the pin - the marker reads "not
+        // reached", never "over reserve".
+        let stage_drop_over_reserve: Vec<bool> = over_at_pin
+            .iter()
+            .zip(&drop_indices)
+            .map(|(&over, &j)| over && j < route_refs.len())
+            .collect();
         let leg_kinds = self.route_leg_kinds(&route_refs);
         let route = route_legs(&route_refs, &leg_kinds);
 
@@ -458,38 +609,42 @@ impl Project {
         // on-screen highlight length (a 2-D plan-view projection, and closure-adjusted in Plan) -
         // the two intentionally differ. `route_swim` excludes zero-distance merge/closure ties so a
         // loop closure's misclosure gap (never swum) doesn't inflate the distance or skew the depth.
-        let route_pts: Vec<Coordinates> = route_refs
+        let marker_pts: Vec<Coordinates> = marker_refs
             .iter()
             .filter_map(|r| station_index.get(r).map(|&i| coords[i]))
             .collect();
-        let route_swim: Vec<bool> = route_refs
+        let marker_swim: Vec<bool> = marker_refs
             .windows(2)
             .map(|w| is_swim_leg(&w[0], &w[1]))
             .collect();
-        // route_pts (one coord per ref) and route_swim (one flag per leg) must stay aligned, or
+        // marker_pts (one coord per ref) and marker_swim (one flag per leg) must stay aligned, or
         // route_metrics would apply a leg's flag to the wrong segment. The filter_map above can only
-        // drop a ref absent from station_index - impossible today (route_refs come from station_refs,
+        // drop a ref absent from station_index - impossible today (the refs come from station_refs,
         // which are station_index's keys) - so assert it loudly rather than silently mis-weighting if
         // a future graph change ever introduces a ref that isn't in the index.
         debug_assert_eq!(
-            route_pts.len(),
-            route_refs.len(),
+            marker_pts.len(),
+            marker_refs.len(),
             "route_pts dropped a route ref - the swim mask would misalign"
         );
+        let route_pts = &marker_pts[..route_refs.len().min(marker_pts.len())];
+        let route_swim = &marker_swim[..route_refs.len().saturating_sub(1).min(marker_swim.len())];
         let (route_line_length_m, route_max_depth_m, route_avg_depth_m) =
-            route_metrics(&route_pts, &route_swim);
+            route_metrics(route_pts, route_swim);
         // Per-stage drop DISTANCE (metres, swum from origin), aligned with `stage_drop_refs`, for the
         // Plan readout - same swum-distance basis as `route_line_length_m`. Read at the drop's route
         // INDEX, so a route that doubles back over a station reports the distance of the pass the
-        // drop actually sits on.
-        let cum_route_distance = cumulative_distances(&route_pts, &route_swim);
+        // drop actually sits on; a drop past the turnaround reads the distance along the way to it.
+        let cum_marker_distance = cumulative_distances(&marker_pts, &marker_swim);
+        let cum_route_distance = &cum_marker_distance[..route_pts.len()];
         let stage_drop_distances_m: Vec<f64> = drop_indices
             .iter()
-            .map(|&j| cum_route_distance.get(j).copied().unwrap_or(0.0))
+            .map(|&j| cum_marker_distance.get(j).copied().unwrap_or(0.0))
             .collect();
         // The same drop indices the distances above are read at, published so a profile marker can
         // be drawn on the right PASS of a route that doubles back (#299). `stage_drop_refs` names
-        // only the station, which is ambiguous there.
+        // only the station, which is ambiguous there. An index past the route's last station is a
+        // drop the dive does not reach (#576 RV8c-2-D3).
         let stage_drop_route_indices: Vec<u32> = drop_indices
             .iter()
             .map(|&j| u32::try_from(j).unwrap_or(u32::MAX))
@@ -550,9 +705,9 @@ impl Project {
                 .collect();
             build_route_profile(
                 &route_refs,
-                &route_pts,
+                route_pts,
                 &leg_kinds,
-                &cum_route_distance,
+                cum_route_distance,
                 &route_gas,
                 &route_time,
                 &ExitLegRates {
@@ -568,28 +723,11 @@ impl Project {
 
         // Scooter readouts (#317), read off the walk's riders AT THE ROUTE TARGET rather than
         // re-derived from the route's coordinates - the two would diverge the moment a route
-        // doubled back over a station.
-        //
-        // ⚠ Reading `scoot_in`/`time_in` here is right for every target, INCLUDING one that sits on
-        // the committed chain, and the reason is worth spelling out because the gas twin of this
-        // line is not interchangeable. `route_gas` has to mix `chain_gas` and `gas_in` because it
-        // reports a value per route node. These report only the TOTAL at the end of the route, and
-        // `scoot_in[t] = cum_scoot + last_leg_scoot[t]` is exactly that total in all three cases:
-        // the target is the final way point (last-leg cost 0, so the total is the chain's), an
-        // earlier chain station (the route really does fly back to it, and the last-leg cost is
-        // that return), or off-chain (chain plus tail). So no `chain_scoot` vector is needed HERE.
-        // The profile is the other case: it reports a value per route node, so it needs the
-        // per-node `chain_time` exactly as `route_gas` needs `chain_gas`.
-        let scooter_distance_m = route_target.map_or(0.0, |t| {
-            walk.scoot_in
-                .get(t)
-                .copied()
-                .filter(|s| s.is_finite())
-                .unwrap_or(0.0)
-        });
-        let route_runtime_min = route_target
-            .and_then(|t| walk.time_in.get(t).copied())
-            .filter(|t| t.is_finite());
+        // doubled back over a station. The view carries them ([`BudgetView::turn_scoot`]): the
+        // walk's after-chain totals for every target the plain field picks, the chain's own totals
+        // for a pinned dive that turns before its pin.
+        let scooter_distance_m = route_target.map_or(0.0, |_| turn_scoot);
+        let route_runtime_min = route_target.and(turn_time);
         // The park point is the boundary after the last scootered segment, so it is a way point by
         // construction. Resolving it through the ORIGINAL `waypoints` (not the graph) keeps it a
         // station the diver named.
@@ -604,26 +742,21 @@ impl Project {
             .and_then(|k| waypoints.get(k).copied());
         let scooter_range_limit_m = gas_config.dpv.as_ref().map(|rig| rig.usable_range_m());
 
-        // Back-gas turn gauge - computed here so the UI never re-derives the budget math; honours the
-        // conservative cap + effective strategy. Free averages the diver's per-tank turn directly.
-        let margin = gas_config.reserve_profile.all_thirds_safety_margin_bar;
-        let backgas_turn_bar = match effective {
-            ReservePreset::Free => free_backgas_turn(active, conservative),
-            ReservePreset::AllThirds => all_thirds_backgas_turn(active, margin, conservative),
-            _ => backgas_turn_pressure(active, backgas_fraction(effective), conservative),
-        };
-
-        // Per-row "usable gas" column (#245) - over the ORIGINAL cylinders (all rows), so disabled
-        // and non-budget rows read 0 and the frontend maps it 1:1 to the table by index.
-        let cylinder_usable_bars = cylinder_usable_bars(
-            cylinders,
-            effective,
-            gas_config.reserve_profile.stage_reserve_bar,
-            margin,
-            conservative,
+        // Back-gas turn gauge - computed here so the UI never re-derives the budget math. It reads
+        // the same per-cylinder gauge rule as the budget (`in_usable_bar`), so the turn the diver
+        // obeys and the reach the map draws describe the same gas.
+        let profile = &gas_config.reserve_profile;
+        let backgas_turn_bar = backgas_turn_bar(
+            active,
+            &in_usable_bars(active, effective, profile, conservative),
         );
 
-        GasReachField {
+        // Per-row "usable gas" column (#245) - over the ORIGINAL cylinders (all rows), so disabled
+        // and non-budget rows read 0 and the frontend maps it 1:1 to the table by index. Each entry
+        // is `fill - turn/drop`, the bar the budget credits that tank.
+        let cylinder_usable_bars = in_usable_bars(cylinders, effective, profile, conservative);
+
+        let field = GasReachField {
             station_refs,
             gas_to_reach,
             reachable,
@@ -651,7 +784,8 @@ impl Project {
             scooter_drop_ref,
             route_runtime_min,
             turn_on_scooter_range,
-        }
+        };
+        (field, committed)
     }
 
     /// The connecting shot's kind for each ordered route leg; `None` for a cross-section tie (a
@@ -739,8 +873,11 @@ struct WaypointWalk {
     /// Scooter RANGE (metres) spent reaching every station after the whole chain, accumulated along
     /// the SAME gas-optimal path as `gas_in` - the destination price, the analogue of `gas_in`.
     /// Capped against the rig's usable range to decide whether the dive can END here. Equal to the
-    /// scootered line's length at or above cruise; larger below it, where a metre costs more than a
-    /// metre of the allowance (`scooter::range_per_metre`).
+    /// scootered line's length where the weaker unit is ridden at or above its cruise and binds;
+    /// larger otherwise, where a metre drains one unit's clock faster than the cap's metres assume
+    /// (`scooter::range_per_metre`). The plan without pins prices its open tail on the routes its
+    /// scooter can fly instead ([`range_route`], #576 NF-W11GAS-1-D1); a pinned plan's walk keeps
+    /// this one.
     scoot_in: Vec<f64>,
     /// The overlay's scootered distance: `scoot_in` lowered to the pass-through value on chain
     /// stations and settled across zero-cost ties, exactly as `reach_gas` is to `gas_in`. Keeping
@@ -764,7 +901,14 @@ struct WaypointWalk {
     /// precisely what made the chart and the `route_runtime_min` readout disagree (#317).
     chain: Vec<usize>,
     chain_gas: Vec<f64>,
+    /// The scooter-range twin of `chain_gas`: what a dive that turns ON the chain has spent
+    /// (#576 RV8c-2-D3, a pinned dive that turns before its pin).
+    chain_scoot: Vec<f64>,
     chain_time: Vec<f64>,
+    /// The Dijkstra gas of the leg that ENDED at the final way point, measured from that leg's
+    /// own start. Empty without way points. A pinned plan reads it to tell the passage beyond its
+    /// last pin from a backtrack ([`pinned::PinnedWalk`]).
+    last_leg_in: Vec<f64>,
     /// Cumulative gas at each way point, in order; `None` from the first one that stalls.
     waypoint_gas: Vec<Option<f64>>,
     /// Where each way point sits in `chain`, in order; `None` from the first one that stalls. The
@@ -773,11 +917,42 @@ struct WaypointWalk {
     waypoint_chain_idx: Vec<Option<usize>>,
 }
 
+/// The gas scale and the [scooter range metres, minutes] riders per metre of line for leg `k`.
+///
+/// Leg `k` is flown on segment `k`. `resolve_segments` guarantees one segment per user way-point
+/// leg with a finite positive speed; the legs a pinned plan appends after the last way point
+/// (#576 RV8c-2-D1) are past it, so they fly the last segment. An empty list is a bug rather than
+/// an input - but if one ever appears, price the leg at INFINITY (nothing beyond it is reachable)
+/// rather than at a speed of infinity, which would scale the leg's whole cost to ZERO and hand
+/// back free penetration.
+fn leg_scales(segments: &[ResolvedSegment], k: usize, in_rmv: f64) -> (f64, [f64; 2]) {
+    let Some(seg) = segments
+        .get(k.min(segments.len().saturating_sub(1)))
+        .copied()
+    else {
+        return (f64::INFINITY, [0.0, f64::INFINITY]);
+    };
+    let speed = seg.speed_m_per_min;
+    // [scooter range metres, minutes] per metre of line on this segment. The range rider is NOT
+    // a flat 1 per metre: it charges whichever unit's battery clock the span drains harder,
+    // which climbs below cruise (see `scooter::range_per_metre`). It is 0 on a swum span.
+    let riders = [seg.range_per_metre, 1.0 / speed];
+    (in_rmv / speed, riders)
+}
+
 /// Walk the ordered way points: one Dijkstra per leg, each seeded at the previous way point, with
 /// the legs' costs accumulated. `waypoints` carries `None` for an entry that no longer resolves to a
 /// station. A `None` entry, or one the graph cannot reach, **stalls** the walk - every later way
 /// point reports `None` and the whole field goes unreachable, because a plan that silently skipped a
 /// mandated point would over-state reach (the unsafe direction, §6).
+///
+/// Each leg commits the gas-cheapest way to its way point - unless that way spends more than
+/// `scooter_limit` of range by the time it gets there and another way is in range: the leg then
+/// takes the cheapest gas among the ways in range (#576 NF-W12GAS-1-D2, [`range_route::ranged_leg`]),
+/// priced edge by edge along it, so the chain's gas, range and time are that way's. A leg no way
+/// reaches in range keeps the gas-cheapest way, and the plan turns where the range runs out on it.
+/// The legs' Dijkstras themselves (`pred`, `gas_in`, `last_leg_in`) are the gas-cheapest ones,
+/// seeded at the way point, whichever way the chain took to it.
 fn waypoint_walk(
     adj: &[Vec<(usize, f64)>],
     lens: &[Vec<(usize, f64)>],
@@ -785,6 +960,7 @@ fn waypoint_walk(
     waypoints: &[Option<usize>],
     segments: &[ResolvedSegment],
     in_rmv: f64,
+    scooter_limit: f64,
     degenerate: bool,
 ) -> WaypointWalk {
     let n = adj.len();
@@ -798,29 +974,14 @@ fn waypoint_walk(
             pred: vec![usize::MAX; n],
             chain: Vec::new(),
             chain_gas: Vec::new(),
+            chain_scoot: Vec::new(),
             chain_time: Vec::new(),
+            last_leg_in: Vec::new(),
             waypoint_gas: vec![None; waypoints.len()],
             waypoint_chain_idx: vec![None; waypoints.len()],
         };
     }
-    // Leg `k` is flown on segment `k`. `resolve_segments` guarantees one segment per leg with a
-    // finite positive speed, so a missing entry is a bug rather than an input - but if one ever
-    // appears, price the leg at INFINITY (nothing beyond it is reachable) rather than at a speed of
-    // infinity, which would scale the leg's whole cost to ZERO and hand back free penetration.
-    let leg_scales = |k: usize| {
-        let Some(seg) = segments.get(k).copied() else {
-            return (f64::INFINITY, [0.0, f64::INFINITY]);
-        };
-        let speed = seg.speed_m_per_min;
-        // [scooter range metres, minutes] per metre of line on this segment. The range rider is NOT
-        // a flat 1 per metre: below the rig's cruise it climbs, because the cap converts battery
-        // minutes to metres at cruise and only there (see `scooter::range_per_metre`). It is 0 on a
-        // swum span.
-        let riders = [seg.range_per_metre, 1.0 / speed];
-        (in_rmv / speed, riders)
-    };
-
-    let (mut cost_scale, mut rider_scales) = leg_scales(0);
+    let (mut cost_scale, mut rider_scales) = leg_scales(segments, 0, in_rmv);
     let mut leg = Project::dijkstra_scaled_with_riders(adj, lens, roots, cost_scale, rider_scales);
     let mut cum = 0.0_f64;
     let mut cum_scoot = 0.0_f64;
@@ -832,6 +993,7 @@ fn waypoint_walk(
     let mut waypoint_gas: Vec<Option<f64>> = Vec::with_capacity(waypoints.len());
     let mut waypoint_chain_idx: Vec<Option<usize>> = Vec::with_capacity(waypoints.len());
     let mut stalled = false;
+    let mut last_leg_in: Vec<f64> = Vec::new();
     for (k, w) in waypoints.iter().enumerate() {
         let reached = (!stalled)
             .then_some(*w)
@@ -846,20 +1008,48 @@ fn waypoint_walk(
         // Commit this leg's path. Its first node is the previous leg's way point, which already
         // closes the chain, so skip it rather than emitting a zero-length duplicate.
         let skip = usize::from(!chain.is_empty());
-        for &node in path_to(&leg.2, w).iter().skip(skip) {
-            chain.push(node);
-            chain_gas.push(cum + leg.0.get(node).copied().unwrap_or(0.0));
-            chain_scoot.push(cum_scoot + leg.1[0].get(node).copied().unwrap_or(0.0));
-            chain_time.push(cum_time + leg.1[1].get(node).copied().unwrap_or(0.0));
+        // The gas-cheapest way, unless it is out of range at the way point and another way is in
+        // range (NF-W12GAS-1-D2): that way's steps carry what the route has spent, from the chain
+        // so far, so they are committed as they are.
+        let out_of_range =
+            cum_scoot + leg.1[0].get(w).copied().unwrap_or(f64::INFINITY) > scooter_limit;
+        let in_range_way = out_of_range
+            .then(|| {
+                let starts: Vec<(usize, f64, f64, f64)> = match chain.last() {
+                    Some(&from) => vec![(from, cum, cum_scoot, cum_time)],
+                    None => roots.iter().map(|&r| (r, 0.0, 0.0, 0.0)).collect(),
+                };
+                let scales = range_route::LegScales::of(segments, k, in_rmv);
+                range_route::ranged_leg(adj, lens, &starts, w, scales, scooter_limit)
+            })
+            .flatten();
+        if let Some(steps) = in_range_way {
+            for step in steps.iter().skip(skip) {
+                chain.push(step.node);
+                chain_gas.push(step.gas);
+                chain_scoot.push(step.scoot);
+                chain_time.push(step.time);
+            }
+            if let Some(end) = steps.last() {
+                (cum, cum_scoot, cum_time) = (end.gas, end.scoot, end.time);
+            }
+        } else {
+            for &node in path_to(&leg.2, w).iter().skip(skip) {
+                chain.push(node);
+                chain_gas.push(cum + leg.0.get(node).copied().unwrap_or(0.0));
+                chain_scoot.push(cum_scoot + leg.1[0].get(node).copied().unwrap_or(0.0));
+                chain_time.push(cum_time + leg.1[1].get(node).copied().unwrap_or(0.0));
+            }
+            cum += leg.0.get(w).copied().unwrap_or(0.0);
+            cum_scoot += leg.1[0].get(w).copied().unwrap_or(0.0);
+            cum_time += leg.1[1].get(w).copied().unwrap_or(0.0);
         }
-        cum += leg.0.get(w).copied().unwrap_or(0.0);
-        cum_scoot += leg.1[0].get(w).copied().unwrap_or(0.0);
-        cum_time += leg.1[1].get(w).copied().unwrap_or(0.0);
         waypoint_gas.push(Some(cum));
         // The loop above just pushed this way point's own node last, so the chain now ends on it.
         waypoint_chain_idx.push(chain.len().checked_sub(1));
-        (cost_scale, rider_scales) = leg_scales(k + 1);
-        leg = Project::dijkstra_scaled_with_riders(adj, lens, &[w], cost_scale, rider_scales);
+        (cost_scale, rider_scales) = leg_scales(segments, k + 1, in_rmv);
+        let next = Project::dijkstra_scaled_with_riders(adj, lens, &[w], cost_scale, rider_scales);
+        last_leg_in = std::mem::replace(&mut leg, next).0;
     }
     let (dist, riders, pred) = leg;
     let [leg_scoot, leg_time] = riders;
@@ -914,7 +1104,9 @@ fn waypoint_walk(
         pred,
         chain,
         chain_gas,
+        chain_scoot,
         chain_time,
+        last_leg_in,
         waypoint_gas,
         waypoint_chain_idx,
     }
@@ -969,6 +1161,10 @@ struct BudgetView {
     /// answer depends on which rule picked the target. Surfaced as
     /// `GasReachField::turn_on_scooter_range`.
     scooter_bound: bool,
+    /// Scooter range spent and runtime at `target` (0 / `None` without one): the readouts the
+    /// field reports for the dive's own turn (`scooter_distance_m`, `route_runtime_min`).
+    turn_scoot: f64,
+    turn_time: Option<f64>,
 }
 
 /// Apply a budget to the walked field. Computed twice per field - once on the base budget to locate
@@ -986,7 +1182,8 @@ struct BudgetView {
 /// the plan choosing a destination at random. Walking toward the pick instead keeps the answer to
 /// the question actually being asked - "how far toward X can I get on this gas?"
 ///
-/// Returns `(target, toward_endpoint, bound_by_range)`. The third is
+/// Returns `(target, tail, toward_endpoint, bound_by_range)`: `tail` is the last leg's route to the
+/// target with what it has spent at each station (empty without a target). The fourth is
 /// `GasReachField::turn_on_scooter_range`, and it is derived HERE - per branch - because the only
 /// definition that is not a false-positive machine is **"relaxing the DPV range cap would move the
 /// target farther"**, and which station answers that depends on which rule picked the target. A
@@ -994,17 +1191,34 @@ struct BudgetView {
 /// is out of range, however comfortably the dive reaches its endpoint - and because gas scales with
 /// depth while range scales with length alone, a shallow distant passage trips it routinely.
 ///
-/// `range_bound[i]` is the per-node witness "the diver has the gas to end at `i`, but it is out of
-/// scooter range" - built in [`budget_view`] off the same two vectors as `can_end_at`, so the two
-/// can never disagree about which cap excluded a station.
+/// `range_bound[i]` is the per-node witness "the diver has the gas to end at `i`, but no route in
+/// range ends there on it" - built in [`budget_view`] off `can_end_at`, so the two can never
+/// disagree about which cap excluded a station.
+///
+/// A scooter plan takes each station's route from `ranged` - the cheapest gas among the routes its
+/// range covers (#576 NF-W11GAS-1-D1, NF-W12GAS-1-D2) - and the walk's own route where that has
+/// none. Without `ranged` every route is the walk's.
+///
+/// `candidates`, when given, are the only stations the deepest fallback may pick (a pinned plan's
+/// stations beyond its last pin, D1); `deepest` is already the arg-max over them, and the range
+/// question below asks about them alone.
 fn route_target(
     endpoint: Option<usize>,
     walk: &WaypointWalk,
+    ranged: Option<&RangedTail>,
     can_end_at: &[bool],
     range_bound: &[bool],
-    deepest: Option<usize>,
-    deepest_gas: f64,
-) -> (Option<usize>, bool, bool) {
+    deepest: (Option<usize>, f64),
+    caps: (f64, f64),
+    candidates: Option<&[bool]>,
+) -> (Option<usize>, Vec<Step>, bool, bool) {
+    let (deepest, deepest_gas) = deepest;
+    let (budget_litres, scooter_limit) = caps;
+    let tail = |t: usize| {
+        ranged
+            .and_then(|r| r.route_to(t))
+            .unwrap_or_else(|| range_route::walk_route(walk, t))
+    };
     // The deepest-anywhere fallback's own range question: with the cap lifted, could the arg-max
     // land FARTHER than it did? Only a gas-affordable, out-of-range station that costs strictly
     // more gas than the winner can move it. The `> deepest_gas` clause is the whole difference from
@@ -1014,20 +1228,29 @@ fn route_target(
         walk.gas_in
             .iter()
             .zip(range_bound)
-            .any(|(&g, &bound)| bound && g > deepest_gas)
+            .enumerate()
+            .any(|(i, (&g, &bound))| bound && g > deepest_gas && is_candidate(candidates, i))
+    };
+    let fallback = || {
+        (
+            deepest,
+            deepest.map(tail).unwrap_or_default(),
+            false,
+            deepest_is_range_bound(),
+        )
     };
     let Some(endpoint) = endpoint else {
-        return (deepest, false, deepest_is_range_bound());
+        return fallback();
     };
     if can_end_at.get(endpoint).copied().unwrap_or(false) {
         // The dive reaches the diver's own pick. Neither cap is binding it, whatever else in the
         // cave sits out of range.
-        return (Some(endpoint), true, false);
+        return (Some(endpoint), tail(endpoint), true, false);
     }
-    // Walk the path toward the endpoint and keep the last station still in budget. Gas along a
-    // shortest path is monotone non-decreasing, so that is exactly where the gas runs out. An
-    // endpoint in another component has no path (its `pred` is unset), leaving just itself - which
-    // is unreachable - so this yields nothing and we fall through.
+    // Walk the route toward the endpoint and keep the last station still in budget and in range.
+    // What a route has spent is monotone non-decreasing along it, so that is exactly where the gas
+    // or the range runs out. An endpoint in another component has no path (its `pred` is unset),
+    // leaving just itself - which is unreachable - so this yields nothing and we fall through.
     //
     // The returned flag says whether the target is genuinely ON THE WAY to the endpoint, which is
     // the only case the UI may describe that way. It is false for both deepest-anywhere fallbacks -
@@ -1035,31 +1258,43 @@ fn route_target(
     // another component). Telling a diver "turning at X on the way there" when X sits in an
     // unrelated passage is the very failure the walk-toward-the-endpoint rule was added to kill; it
     // would just have survived in the branches that rule cannot reach.
-    let path = path_to(&walk.pred, endpoint);
-    // The node that STOPPED the walk is the one to interrogate: the dive turned where it did
-    // because that node was excluded, so whichever cap excluded IT is the cap that turned the dive.
-    // `None` means the walk ran the whole path (the endpoint was reached), and then nothing bound.
-    let stopped = path
-        .iter()
-        .position(|&n| !can_end_at.get(n).copied().unwrap_or(false));
-    let last_in_budget = match stopped {
-        Some(p) => p.checked_sub(1).map(|i| path[i]),
-        None => path.last().copied(),
+    let path = tail(endpoint);
+    // The station that STOPPED the walk is the one to interrogate: the dive turned where it did
+    // because the route could not reach it, and the range turned the dive when the gas alone would
+    // have let it end there. `None` means the walk ran the whole route (the endpoint was reached),
+    // and then nothing bound.
+    let within = |s: &Step| s.gas.is_finite() && s.gas <= budget_litres && s.scoot <= scooter_limit;
+    let stopped = path.iter().position(|s| !within(s));
+    let turn_len = stopped.unwrap_or(path.len());
+    let Some(turn) = turn_len.checked_sub(1).map(|i| path[i].node) else {
+        return fallback();
     };
-    match last_in_budget {
-        Some(n) => (
-            Some(n),
-            true,
-            stopped.is_some_and(|p| range_bound.get(path[p]).copied().unwrap_or(false)),
-        ),
-        None => (deepest, false, deepest_is_range_bound()),
-    }
+    let range_turned = stopped.is_some_and(|p| {
+        walk.gas_in
+            .get(path[p].node)
+            .is_some_and(|&g| g.is_finite() && g <= budget_litres)
+    });
+    let mut path = path;
+    path.truncate(turn_len);
+    (Some(turn), path, true, range_turned)
 }
+/// Whether station `i` may be the deepest fallback target: any station without `candidates`.
+fn is_candidate(candidates: Option<&[bool]>, i: usize) -> bool {
+    candidates.is_none_or(|c| c.get(i).copied().unwrap_or(false))
+}
+
+/// `ranged` is the walk's tail priced on the routes its scooter can fly ([`range_route`], #576
+/// NF-W11GAS-1-D1, NF-W12GAS-1-D2): when it is given, every station's destination and overlay
+/// price, and the route to the target, are those of the cheapest-gas route in range, the walk's
+/// own where there is none. The plain field passes its own; a pinned plan passes the one from its
+/// last pin, with `candidates` its stations beyond that pin ([`route_target`]).
 fn budget_view(
     walk: &WaypointWalk,
+    ranged: Option<&RangedTail>,
     endpoint: Option<usize>,
     budget_litres: f64,
     scooter_limit: f64,
+    candidates: Option<&[bool]>,
 ) -> BudgetView {
     // Reach is the INTERSECTION of two independent constraints: the gas budget and the scooter
     // rig's usable range (#317). Both masks are built here, and here only, because everything
@@ -1069,47 +1304,62 @@ fn budget_view(
     //
     // `scooter_limit` is infinite with no rig, so this collapses to the pre-#317 predicate.
     let in_range = |scoot: f64| scoot <= scooter_limit;
+    // The prices the masks read: each station's route in range where the plan has `ranged`, the
+    // walk's own (gas-cheapest) route otherwise. Gas and range are always read off ONE route.
+    let (reach_gas, reach_scoot, end_gas, end_scoot) = match ranged {
+        Some(r) => (&r.reach_gas, &r.reach_scoot, &r.gas_in, &r.scoot_in),
+        None => (
+            &walk.reach_gas,
+            &walk.reach_scoot,
+            &walk.gas_in,
+            &walk.scoot_in,
+        ),
+    };
 
     // What the OVERLAY shows: can the diver be at this station, within budget, on this dive.
-    let reachable: Vec<bool> = walk
-        .reach_gas
+    let reachable: Vec<bool> = reach_gas
         .iter()
-        .zip(&walk.reach_scoot)
+        .zip(reach_scoot)
         .map(|(&g, &s)| g.is_finite() && g <= budget_litres && in_range(s))
         .collect();
     // Whether a station can be the route's DESTINATION, which is a different (never cheaper)
     // question: ending there costs the after-chain price, not the pass-through price. Only the
     // target choice may read this, so a station the route merely swims past can never be picked as
     // a turnaround it cannot actually afford. Identical to `reachable` without way points.
-    let can_end_at: Vec<bool> = walk
-        .gas_in
+    let can_end_at: Vec<bool> = end_gas
         .iter()
-        .zip(&walk.scoot_in)
+        .zip(end_scoot)
         .map(|(&g, &s)| g.is_finite() && g <= budget_litres && in_range(s))
         .collect();
-    // Per-node witness for "the RANGE, not the gas, is why the dive cannot end here": affordable on
-    // gas, out of scooter range. Built off the same two vectors as `can_end_at`, in the same shape,
-    // so `can_end_at[i] == gas_ok && in_range` and `range_bound[i] == gas_ok && !in_range` are
-    // complementary by construction and cannot drift into disagreeing about which cap bound.
+    // Per-node witness for "the RANGE, not the gas, is why the dive cannot end here": the cheapest
+    // gas (the walk's) affords it, yet no route in range ends there within budget. Built off
+    // `can_end_at`, so the two cannot drift into disagreeing about which cap bound: without
+    // `ranged` it is exactly `gas_ok && !in_range` on the walk's route.
     //
-    // Note this reads `gas_in` / `scoot_in` - the DESTINATION prices, already settled across
-    // zero-cost merge/closure ties by the Dijkstra that produced them - and not the overlay's
-    // pass-through `reach_gas` / `reach_scoot`. It has to: it is only ever consumed by
-    // [`route_target`], which is asking where the dive can END.
+    // Note this reads `gas_in` - the DESTINATION price, already settled across zero-cost
+    // merge/closure ties by the Dijkstra that produced it - and not the overlay's pass-through
+    // `reach_gas`. It has to: it is only ever consumed by [`route_target`], which is asking where
+    // the dive can END.
     let range_bound: Vec<bool> = walk
         .gas_in
         .iter()
-        .zip(&walk.scoot_in)
-        .map(|(&g, &s)| g.is_finite() && g <= budget_litres && !in_range(s))
+        .zip(&can_end_at)
+        .map(|(&g, &ok)| g.is_finite() && g <= budget_litres && !ok)
         .collect();
 
-    // `max_reachable_gas` (reported) is the largest in-budget gas-to-reach, floored at 0.
+    // `max_reachable_gas` (reported) is the largest in-budget gas-to-reach, floored at 0. A station
+    // no route in range reaches keeps the walk's price: it is dark either way.
     let mut max_reachable_gas = 0.0_f64;
-    let gas_to_reach: Vec<Option<f64>> = walk
-        .reach_gas
+    let gas_to_reach: Vec<Option<f64>> = reach_gas
         .iter()
+        .zip(&walk.reach_gas)
         .zip(&reachable)
-        .map(|(&g, &ok)| {
+        .map(|((&ranged_g, &walk_g), &ok)| {
+            let g = if ranged_g.is_finite() {
+                ranged_g
+            } else {
+                walk_g
+            };
             if g.is_finite() {
                 if ok && g > max_reachable_gas {
                     max_reachable_gas = g;
@@ -1126,8 +1376,8 @@ fn budget_view(
     // (only a root in budget) still yields a target.
     let mut deepest: Option<usize> = None;
     let mut deepest_gas = f64::NEG_INFINITY;
-    for (i, (&g, &ok)) in walk.gas_in.iter().zip(&can_end_at).enumerate() {
-        if ok && g.is_finite() && g > deepest_gas {
+    for (i, (&g, &ok)) in end_gas.iter().zip(&can_end_at).enumerate() {
+        if ok && g.is_finite() && g > deepest_gas && is_candidate(candidates, i) {
             deepest_gas = g;
             deepest = Some(i);
         }
@@ -1136,28 +1386,41 @@ fn budget_view(
     // The range flag comes out of the target choice itself, never from a scan beside it: "the
     // scooter turned this dive" is exactly "lifting the cap would move the target", and only the
     // branch that picked the target knows which station answers that.
-    let (target, target_toward_endpoint, scooter_bound) = route_target(
+    let (target, tail, target_toward_endpoint, scooter_bound) = route_target(
         endpoint,
         walk,
+        ranged,
         &can_end_at,
         &range_bound,
-        deepest,
-        deepest_gas,
+        (deepest, deepest_gas),
+        (budget_litres, scooter_limit),
+        candidates,
     );
-    // The committed way-point chain, then the last leg's path to the target. That path starts at
+    // The committed way-point chain, then the last leg's route to the target. That route starts at
     // the final way point, which the chain already ends on, so it is skipped from the tail. With no
-    // way points the chain is empty and the route is exactly the origin→target path.
+    // way points the chain is empty and the route is exactly the origin→target route.
     let mut route = walk.chain.clone();
     let mut route_gas = walk.chain_gas.clone();
     let mut route_time = walk.chain_time.clone();
-    if let Some(t) = target {
-        let skip = usize::from(!route.is_empty());
-        for &node in path_to(&walk.pred, t).iter().skip(skip) {
-            route.push(node);
-            route_gas.push(walk.gas_in.get(node).copied().unwrap_or(0.0));
-            route_time.push(walk.time_in.get(node).copied().unwrap_or(0.0));
-        }
+    let skip = usize::from(!route.is_empty());
+    for step in tail.iter().skip(skip) {
+        route.push(step.node);
+        route_gas.push(step.gas);
+        route_time.push(step.time);
     }
+    // ⚠ The range and runtime at the turn are the tail's LAST step: what the route has spent on
+    // arriving at the target. That is right for every target this view picks, INCLUDING one that
+    // sits on the committed chain (the tail then flies back to it from the final way point), and
+    // the turn on the way to an endpoint whose route is not the target's own cheapest (#576
+    // NF-W11GAS-1-D1: the dive turns on the endpoint's route, so it has spent that route's range).
+    // The profile reports a value per route node, so it needs the per-node `chain_time` on the
+    // chain exactly as `route_gas` needs `chain_gas`.
+    let turn_scoot = tail
+        .last()
+        .map(|s| s.scoot)
+        .filter(|s| s.is_finite())
+        .unwrap_or(0.0);
+    let turn_time = tail.last().map(|s| s.time).filter(|t| t.is_finite());
     BudgetView {
         reachable,
         can_end_at,
@@ -1169,18 +1432,9 @@ fn budget_view(
         route_gas,
         route_time,
         scooter_bound,
+        turn_scoot,
+        turn_time,
     }
-}
-
-/// Running sums of `values`, i.e. `[v0, v0+v1, …]`.
-fn cumulative(values: impl Iterator<Item = f64>) -> Vec<f64> {
-    let mut acc = 0.0_f64;
-    values
-        .map(|v| {
-            acc += v;
-            acc
-        })
-        .collect()
 }
 
 /// Place each stage's drop on the route: the first station whose cumulative route gas reaches the
@@ -1190,24 +1444,54 @@ fn cumulative(values: impl Iterator<Item = f64>) -> Vec<f64> {
 /// (you carry/drop it there), so EVERY threshold yields exactly one drop and the per-stage gauges
 /// stay aligned 1:1. Returns route INDICES, not refs: a way-point route can double back over a
 /// station, and only an index says which pass the drop is on.
-fn place_stage_drops(route_gas: &[f64], thresholds: &[f64]) -> Vec<usize> {
+///
+/// A PINNED stage (`pinned[k]` set) is the exception (#576 RV8c-2-D3): when the dive turns before
+/// its pin, `beyond_gas` carries the route on from the turnaround to the last pin, and the drop is
+/// placed there - past the turnaround, the index the field reports as "not reached" - instead of
+/// being clamped onto a station the diver never chose.
+///
+/// A pinned drop is reported at the station the user pinned (#576 NF-W12GAS2-1-D1). `pinned[k]`
+/// is the pin's index on the pinned walk's chain, which is also its index here: the route starts
+/// with that chain, and `beyond_gas` carries it on from the turnaround. A merge or an aligned
+/// closure holds one physical station as several nodes joined at no cost, so the route can pass
+/// the pin's twin just before the pin, at the same gas, and the first station reaching the
+/// threshold is then the twin. When the station the threshold lands on costs what the pin costs
+/// (it is the pin, or a zero-cost twin passed on the way to it), the drop is the pin's own pass.
+fn place_stage_drops(
+    route_gas: &[f64],
+    beyond_gas: &[f64],
+    thresholds: &[f64],
+    pinned: &[Option<usize>],
+) -> Vec<usize> {
     let Some(last) = route_gas.len().checked_sub(1) else {
         return Vec::new();
     };
+    let gas_at = |i: usize| {
+        route_gas
+            .get(i)
+            .or_else(|| beyond_gas.get(i.checked_sub(route_gas.len())?))
+            .copied()
+    };
     thresholds
         .iter()
-        .map(|&t| route_gas.iter().position(|&g| g >= t).unwrap_or(last))
-        .collect()
-}
-
-/// The stations a strategy's un-overridden drops land on, for the pin-to-default no-op check.
-fn default_drop_stations(view: &BudgetView, thresholds: &[f64]) -> Vec<usize> {
-    if view.target.is_none() {
-        return Vec::new();
-    }
-    place_stage_drops(&view.route_gas, thresholds)
-        .iter()
-        .filter_map(|&j| view.route.get(j).copied())
+        .enumerate()
+        .map(|(k, &t)| {
+            let pin = pinned.get(k).copied().flatten();
+            let on_route = route_gas.iter().position(|&g| g >= t);
+            let j = match (on_route, pin) {
+                (Some(j), _) => j,
+                (None, Some(_)) if !beyond_gas.is_empty() => {
+                    let past = beyond_gas.iter().position(|&g| g >= t);
+                    route_gas.len() + past.unwrap_or(beyond_gas.len() - 1)
+                }
+                (None, _) => last,
+            };
+            // Gas never falls along the route, so a station at or before the pin that costs at
+            // least the pin's gas costs exactly that: the same point, reached for free.
+            let same_point =
+                |p: usize| p >= j && gas_at(j).zip(gas_at(p)).is_some_and(|(gj, gp)| gj >= gp);
+            pin.filter(|&p| same_point(p)).unwrap_or(j)
+        })
         .collect()
 }
 
@@ -1238,16 +1522,17 @@ fn is_swim_leg(a: &StationRef, b: &StationRef) -> bool {
 
 /// One stage's drop, as the override recompute (#246) needs it. `safe_in_litres` is the strategy's
 /// IN gas off this stage (Half-Minus half / Free usable span); `phys_cap_litres` is its FULL
-/// deliverable (breathing it to empty - the hard clamp a deeper drag can't cross); `default_bar` is
-/// the un-dragged drop-pressure gauge. The `fill/water/rated/basis` fields let a moved drop invert
-/// its litres-consumed back to a pressure on the conservative-capped basis scale.
+/// conservative-capped deliverable (breathing it to empty - the hard clamp a deeper drag can't
+/// cross); `default_bar` is the un-dragged drop-pressure gauge, `fill - usable` on the real gauge.
+/// The `water/rated/fill` fields let a moved drop invert its litres-consumed back to a pressure on
+/// that same real gauge.
 struct StageDropPlan {
     safe_in_litres: f64,
     phys_cap_litres: f64,
     default_bar: f64,
     water_volume_l: f64,
     rated_pressure_bar: f64,
-    basis: f64,
+    fill_bar: f64,
 }
 
 /// Per-drop plans for the effective strategy, in stage order, aligned 1:1 with the drops the field
@@ -1265,35 +1550,27 @@ fn stage_drop_plans(
         .iter()
         .filter(|c| matches!(c.role, CylRole::Stage))
         .collect();
-    let plan_for = |c: &Cylinder, safe_in_litres: f64, default_bar: f64| {
-        let basis = cyl_basis(c, conservative);
-        StageDropPlan {
-            safe_in_litres,
-            phys_cap_litres: deliverable_gas(
-                basis,
-                c.water_volume_l,
-                c.rated_pressure_bar,
-                conservative,
-            ),
-            default_bar,
-            water_volume_l: c.water_volume_l,
-            rated_pressure_bar: c.rated_pressure_bar,
-            basis,
-        }
+    // The same per-cylinder gauge rule as the budget and the column: the drop reads `fill - usable`
+    // and credits the gas between the real fill and it, so a drag to those litres reads it back.
+    let plan_for = |c: &Cylinder, usable_bar: f64| StageDropPlan {
+        safe_in_litres: gauge_window_litres(c, usable_bar),
+        phys_cap_litres: deliverable_gas(
+            cyl_basis(c, conservative),
+            c.water_volume_l,
+            c.rated_pressure_bar,
+            conservative,
+        ),
+        default_bar: (c.fill_bar - usable_bar).max(0.0),
+        water_volume_l: c.water_volume_l,
+        rated_pressure_bar: c.rated_pressure_bar,
+        fill_bar: c.fill_bar,
     };
     match effective {
         ReservePreset::Free => stages
             .iter()
             .filter_map(|&c| {
                 let u = free_usable_bar(c, conservative);
-                if u <= 0.0 {
-                    return None;
-                }
-                Some(plan_for(
-                    c,
-                    free_in_gas(c, conservative),
-                    (c.fill_bar - u).max(0.0),
-                ))
+                (u > 0.0).then(|| plan_for(c, u))
             })
             .collect(),
         ReservePreset::OneStage | ReservePreset::TwoStage => {
@@ -1303,14 +1580,7 @@ fn stage_drop_plans(
             }
             stages[..needed]
                 .iter()
-                .map(|&c| {
-                    let basis = cyl_basis(c, conservative);
-                    plan_for(
-                        c,
-                        stage_in_gas(c, reserve_bar, conservative),
-                        (0.5 * (basis + reserve_bar)).clamp(0.0, basis),
-                    )
-                })
+                .map(|&c| plan_for(c, half_minus_usable_bar(c, reserve_bar, conservative)))
                 .collect()
         }
         ReservePreset::AllThirds => Vec::new(),
@@ -1321,123 +1591,113 @@ fn stage_drop_plans(
 /// (litres) - a slop floor against float noise once we've already excluded the default station.
 const OVER_RESERVE_EPS_LITRES: f64 = 1e-6;
 
-/// Fold the per-drop overrides (#246) into the drops, in ONE cumulative walk. Returns
+/// Fold the pinned drops (#246) into the drops, in ONE cumulative walk over the stages. Returns
 /// `(cumulative_thresholds, drop_bars, over_reserve, budget_delta_litres)`:
-/// - `cumulative_thresholds[k]` (litres) is where drop `k` lands on the route (fed to `staged_route`).
-/// - `drop_bars[k]` is the readout pressure - the strategy default, or (when overridden) the tank
-///   pressure left after breathing the litres consumed to the pinned station, inverted from the Z
-///   curve so it matches the gas the reach actually spent.
-/// - `over_reserve[k]` is true only for a drag DEEPER than the safe point (breathing into reserve).
-/// - `budget_delta_litres` is `Σ(actual - safe)`, added to the base budget to move the reach.
+/// - `cumulative_thresholds[k]` (litres of route gas) is where drop `k` lands
+///   ([`place_stage_drops`]) - the pinned station for a pin, so the marker stays where the diver
+///   put it.
+/// - `drop_bars[k]` is the readout pressure - the strategy default, or (for a moved drop) the stage
+///   gauge after breathing the litres consumed to the pinned station, inverted from the Z curve.
+/// - `over_reserve[k]` is true only for a pin DEEPER than the safe point (breathing into reserve).
+/// - `budget_delta_litres` is `Σ(credited - safe)`, added to the base budget. Never positive.
 ///
-/// A pinned station's contribution is the gas the diver has burned by the time they reach it, minus
-/// the effective-cumulative-so-far, hard-clamped to `[0, phys_cap]` - so dragging past tank-empty
-/// snaps the drop back to the empty point, and dragging a drop shallower than the one before it
-/// contributes 0 (drops the stage full) rather than going negative. An unresolvable / off-graph /
-/// non-finite override falls through to the strategy default, as does one that is not ON the route.
+/// `pin_chain_idx[k]` is stage `k`'s pin as an index into `chain_gas`, the pinned route's
+/// cumulative gas ([`pinned::PinnedWalk`]): the route passes every pin (#576 RV8c-2-D1), so the gas
+/// a pin has cost is the route's own at that pass - never `gas_in[S]`, which with way points is
+/// measured from the last one and, for a station passed on the way out, reports the cost of coming
+/// back to it. `None` keeps the strategy default.
 ///
-/// ⚠ "Gas burned by the time they reach it" is the ROUTE's cumulative gas at the drop, never
-/// `gas_in[S]`. `gas_in` is measured from the LAST way point, so for a station the diver passes on
-/// the way OUT to that way point it reports the cost of coming back to it afterwards - which on a
-/// cave whose return leg does not retrace the outbound can be far larger than what the diver had
-/// actually burned when they swam past. Scoring an early drop against that inflated figure reads it
-/// as a deep one and GROWS the penetration budget: the unsafe direction (§6). Reading the route
-/// instead is right by construction, and it is also what makes an off-route pin fall back to the
-/// default rather than being priced from a passage the plan never enters.
+/// A pinned station's breathed gas is the route gas at the pin minus the cumulative so far,
+/// hard-clamped to `[0, phys_cap]` - so dragging past tank-empty snaps the drop back to the empty
+/// point, and dragging a drop shallower than the one before it breathes 0 (drops the stage full)
+/// rather than going negative. What the plan CREDITS for the stage is that, capped at the
+/// strategy's own safe IN gas (#576, decided "re-check pins, cap at default"): a shallower pin
+/// strands gas and shrinks the reach, but a deeper one is shown - red, at its station, reading its
+/// real gauge - without buying any reach. Moving a drop can therefore never make a plan reach
+/// further than the same plan without it, whatever moved under a persisted pin since it was set.
+/// Uncapped, a pin left on what USED to be the default station turned into a deeper drag the moment
+/// an input change moved the default shallower, and credited the overshoot.
 ///
-/// The route passed in is the BASE-budget one, which keeps the ordering acyclic: the final route
-/// depends on the budget, which depends on these very contributions. The two coincide whenever the
-/// delta is 0, i.e. whenever nothing is overridden.
+/// The next stage starts at the pin (#576 RV8c-2-D5, decided "next stage starts at pin"), also
+/// when the pinned stage ran dry before it: the dive carries that stage to its pin, and the next
+/// stage is credited only the route from there. Starting it at the empty point instead made a
+/// SMALLER stage hand more of the route to the next one - it empties sooner - and a later pinned
+/// stage was credited the difference: lowering a stage's fill raised the budget (W9-GAS sweep: 18
+/// cases, one from 1302 to 1805 L). The dry stage's marker still sits at its empty point.
 ///
-/// ⚠ Pin-to-the-default-station is a NO-OP. The default ▼ is rendered at the first route station
-/// whose route gas ≥ the stage's threshold, so that station's gas usually OVERSHOOTS the sub-station
-/// threshold; reading it as a fresh contribution would fabricate an over-reserve plan and extend the
-/// reach on a mere jiggle / release-in-place. `default_drop_nodes[k]` - stage `k`'s drop station on
-/// the UN-overridden route - recognises it exactly. (It replaces an earlier predecessor-tree
-/// heuristic, which could not stay exact once way points let a route double back over a station.)
-fn apply_stage_drop_overrides(
+/// The price is the same whether or not the dive gets to the pin (#576 RV8c-2-D3, "no stranding
+/// forgiven"): a dive that runs out of gas on the way there turns early and carries the stage, and
+/// what the pin strands stays stranded.
+///
+/// ⚠ A pin ON its default station is the default. The default ▼ is rendered at the first route
+/// station whose route gas reaches the stage's threshold, so that station's gas usually OVERSHOOTS
+/// it; reading it as a fresh pin would fabricate an over-reserve flag out of a nudge back. So a pin
+/// at exactly the station where the threshold lands on the pinned route - the station before it
+/// short of `cum + safe`, the pin at or past it - reproduces the default. Only a REAL landing
+/// counts: a pin on the station a threshold past the end of the route was clamped to is a genuine
+/// pin, priced like any other (the stage is dropped there with gas left) - forgiving it as the
+/// default handed the stranded gas back (#576 RV8c-2).
+fn price_stage_drops(
     plans: &[StageDropPlan],
-    overrides: &[Option<usize>],
-    base: &BudgetView,
-    walk: &WaypointWalk,
-    default_drop_nodes: &[usize],
-    conservative: bool,
+    pin_chain_idx: &[Option<usize>],
+    chain_gas: &[f64],
 ) -> (Vec<f64>, Vec<f64>, Vec<bool>, f64) {
-    // Gas burned on arrival at `si`, in the two cases where "along the route" is meaningful:
-    //
-    //   1. `si` IS on the route - take the route's own cumulative gas at the FIRST pass. First
-    //      because a way-point route can double back over a station, and the earliest pass is the
-    //      smallest figure, hence the smallest budget: the conservative direction.
-    //   2. `si` is past the end of the route on the SAME line, i.e. the route's target lies on the
-    //      path to it. The route here is the BASE-budget one, and a drop pinned deeper legitimately
-    //      pushes the budget out past it, so the deeper station the diver dragged to is off the base
-    //      route by construction. Its `gas_in` IS the gas along that continuation, so it is exact.
-    //
-    // Anything else - a station on a DIFFERENT branch - yields `None`, which the caller reads as
-    // "keep the strategy default". That is the only honest answer: a drop is a position along the
-    // route, so a station the plan never passes has no arrival gas at all, and pricing it from its
-    // own shortest path folds a passage the dive never enters into the penetration budget, which
-    // extends the reach: the unsafe direction (§6). Reachable without a hand-edited file, since
-    // `.plnx` persists overrides and a plan reloaded after the survey, the endpoint or the way
-    // points moved can carry a pin the new route no longer passes.
-    let arrival_gas = |si: usize| -> Option<f64> {
-        if let Some(p) = base.route.iter().position(|&n| n == si) {
-            return base.route_gas.get(p).copied().filter(|g| g.is_finite());
-        }
-        let target = base.target?;
-        if path_to(&walk.pred, si).contains(&target) {
-            return walk.gas_in.get(si).copied().filter(|g| g.is_finite());
-        }
-        None
-    };
     let mut thresholds = Vec::with_capacity(plans.len());
     let mut bars = Vec::with_capacity(plans.len());
     let mut over = Vec::with_capacity(plans.len());
     let mut eff_cum = 0.0_f64;
     let mut delta = 0.0_f64;
     for (k, p) in plans.iter().enumerate() {
-        let pinned = overrides.get(k).copied().flatten();
-        let (contribution, bar, is_over) = match pinned {
-            // Pinned to the stage's OWN default drop station: reproduce the un-dragged default so a
-            // jiggle / release-in-place can't fabricate over-reserve or extend the reach.
-            Some(si) if default_drop_nodes.get(k) == Some(&si) => {
-                (p.safe_in_litres, p.default_bar, false)
+        // The pinned pass's route gas, and the route gas one station before it.
+        let pass = pin_chain_idx.get(k).copied().flatten().and_then(|j| {
+            let at = chain_gas.get(j).copied().filter(|g| g.is_finite())?;
+            let before = j
+                .checked_sub(1)
+                .and_then(|i| chain_gas.get(i).copied())
+                .unwrap_or(f64::NEG_INFINITY);
+            Some((before, at))
+        });
+        let default_threshold = eff_cum + p.safe_in_litres;
+        // `next` is where the following stage starts: the pin for a priced pin (D5) - the same as
+        // `eff_cum + breathed` unless the stage ran dry short of it - else this drop.
+        let (breathed, bar, is_over, next) = match pass {
+            Some((before, at)) if !(before < default_threshold && default_threshold <= at) => {
+                let breathed = (at - eff_cum).clamp(0.0, p.phys_cap_litres);
+                (
+                    breathed,
+                    drop_pressure_for_contribution(p, breathed),
+                    breathed > p.safe_in_litres + OVER_RESERVE_EPS_LITRES,
+                    at.max(eff_cum),
+                )
             }
-            Some(si) => match arrival_gas(si) {
-                Some(gas) => {
-                    let contribution = (gas - eff_cum).clamp(0.0, p.phys_cap_litres);
-                    (
-                        contribution,
-                        drop_pressure_for_contribution(p, contribution, conservative),
-                        contribution > p.safe_in_litres + OVER_RESERVE_EPS_LITRES,
-                    )
-                }
-                None => (p.safe_in_litres, p.default_bar, false),
-            },
-            None => (p.safe_in_litres, p.default_bar, false),
+            _ => (p.safe_in_litres, p.default_bar, false, default_threshold),
         };
-        delta += contribution - p.safe_in_litres;
-        eff_cum += contribution;
-        thresholds.push(eff_cum);
+        // Credit no more of the stage than its default drop would: a deeper pin buys no reach.
+        delta += breathed.min(p.safe_in_litres) - p.safe_in_litres;
+        thresholds.push(eff_cum + breathed);
+        eff_cum = next;
         bars.push(bar.max(0.0));
         over.push(is_over);
     }
     (thresholds, bars, over, delta)
 }
 
-/// Invert the Z-derated deliverable curve to the tank pressure (bar) left after breathing
-/// `contribution` litres off a stage from full (its conservative-capped `basis`). `deliverable_gas`
-/// is monotone non-decreasing over `[0, basis]` for every realistic fill (the `p / Z(p)` curve only
-/// turns over above ~714 bar - ~2× any real cylinder - where a non-conservative fill could pick a
-/// wrong root; that mis-reports only this DISPLAY gauge, never the litres-exact reach). ~50 bisection
-/// halvings converge to sub-microbar, and at `contribution == safe` it inverts back to `default_bar`.
-fn drop_pressure_for_contribution(p: &StageDropPlan, contribution: f64, conservative: bool) -> f64 {
-    let target_held = (p.phys_cap_litres - contribution).max(0.0);
-    let (mut lo, mut hi) = (0.0_f64, p.basis.max(0.0));
+/// Invert the Z-derated deliverable curve to the tank pressure (bar) the stage's real gauge reads
+/// after breathing `contribution` litres off it from its real fill, on the precise curve - the scale
+/// every default drop is on (`fill - usable`). `deliverable_gas` is monotone non-decreasing over
+/// `[0, fill]` for every realistic fill (the `p / Z(p)` curve only turns over above ~714 bar, ~2×
+/// any real cylinder, where a fill could pick a wrong root; that mis-reports only this DISPLAY
+/// gauge, never the litres-exact reach). ~50 bisection halvings converge to sub-microbar, and at
+/// `contribution == safe` it inverts back to `default_bar`. Under the conservative cap an
+/// overfill's contribution clamps at the rated capacity (`phys_cap_litres`), so even its empty
+/// point reads the overfill still in the tank rather than 0.
+fn drop_pressure_for_contribution(p: &StageDropPlan, contribution: f64) -> f64 {
+    let held = |bar: f64| deliverable_gas(bar, p.water_volume_l, p.rated_pressure_bar, false);
+    let target_held = (held(p.fill_bar) - contribution).max(0.0);
+    let (mut lo, mut hi) = (0.0_f64, p.fill_bar.max(0.0));
     for _ in 0..50 {
         let mid = 0.5 * (lo + hi);
-        if deliverable_gas(mid, p.water_volume_l, p.rated_pressure_bar, conservative) < target_held
-        {
+        if held(mid) < target_held {
             lo = mid;
         } else {
             hi = mid;
@@ -1608,9 +1868,11 @@ fn required_stages(preset: ReservePreset) -> usize {
     }
 }
 
-/// Conservative-capped fill (bar) - the pressure basis every strategy computes drops/usable from.
-/// The "call-it-an-80" cap (§5.3) treats an overfill as its rated capacity; precise mode uses the
-/// real fill.
+/// Conservative-capped fill (bar) - the pressure every gauge rule takes its share of (the third /
+/// quarter / sixth of back gas, a Half-Minus stage's half above the reserve), the ceiling on a Free
+/// usable bar, and the basis of every stage's tank-empty clamp. The "call-it-an-80" cap (§5.3)
+/// treats an overfill as its rated pressure, so an overfill never earns a larger share; precise
+/// mode uses the real fill.
 fn cyl_basis(c: &Cylinder, conservative: bool) -> f64 {
     if conservative {
         c.fill_bar.min(c.rated_pressure_bar)
@@ -1622,8 +1884,9 @@ fn cyl_basis(c: &Cylinder, conservative: bool) -> f64 {
 /// The diver's Free usable allowance (bar), sanitized: a non-finite input (NaN / ±inf - serde_json
 /// can't carry those today, but a future non-JSON deserializer might, and NaN would slip a bare
 /// `u <= 0.0` skip since NaN comparisons are false) becomes 0, then clamps to `[0, basis]` (the
-/// conservative-capped fill the budget credits). One helper so every Free path - budget, turn,
-/// drops, column - treats a stray value identically, and none can propagate NaN into a gauge.
+/// conservative-capped fill, so under the cap no usable bar exceeds the rated pressure). One helper
+/// so every Free path - budget, turn, drops, column - treats a stray value identically, and none
+/// can propagate NaN into a gauge.
 fn free_usable_bar(c: &Cylinder, conservative: bool) -> f64 {
     if !c.usable_gas_bar.is_finite() {
         return 0.0;
@@ -1631,94 +1894,130 @@ fn free_usable_bar(c: &Cylinder, conservative: bool) -> f64 {
     c.usable_gas_bar.clamp(0.0, cyl_basis(c, conservative))
 }
 
-/// Free-strategy IN gas for one cylinder (litres): the Z-derated span from full down to the diver's
-/// chosen turn pressure `fill - usable_gas_bar`. The usable bar is clamped to `[0, basis]` so a
-/// stray/over-large input can never credit more than the tank holds (the unsafe direction, §6).
-/// Mirrors `stage_in_gas`'s basis-scale deliverable arithmetic.
-fn free_in_gas(c: &Cylinder, conservative: bool) -> f64 {
-    let basis = cyl_basis(c, conservative);
-    let u = free_usable_bar(c, conservative);
-    let full = deliverable_gas(basis, c.water_volume_l, c.rated_pressure_bar, conservative);
+/// Gas (litres) breathed off one cylinder by taking `usable_bar` off its REAL fill: the Z-derated
+/// span from `fill` down to `fill - usable_bar`, on the precise curve. Every strategy credits exactly
+/// this for the bar its rule spends - every rule is a share of the GAUGE (#576, "thirds of the
+/// gauge") - so the budget the map enforces, the turn and drop gauges and the usable column describe
+/// the same gas by construction.
+///
+/// The window always sits at the real fill: the conservative cap shrinks the usable bar (a share of
+/// the capped basis), it never slides the window down to rated. Z rises with pressure, so the top of
+/// a tank holds less gas per bar than the bottom: a share of the gauge never holds more than the
+/// same share of the gas, and the same bar at an overfill never holds more than at rated (`p / Z(p)`
+/// is concave up to ~1200 bar and peaks at ~714 for this fit). Below the Z == 1 knee (~96 bar) gas
+/// is linear in pressure and the two coincide.
+fn gauge_window_litres(c: &Cylinder, usable_bar: f64) -> f64 {
+    let full = deliverable_gas(c.fill_bar, c.water_volume_l, c.rated_pressure_bar, false);
     let held = deliverable_gas(
-        basis - u,
+        c.fill_bar - usable_bar,
         c.water_volume_l,
         c.rated_pressure_bar,
-        conservative,
+        false,
     );
     (full - held).max(0.0)
 }
 
-/// Free-strategy penetration budget (litres): the sum of each enabled budget-role (back-gas /
-/// stage) cylinder's user-chosen IN gas. Dil-out / bailout / deco are excluded as elsewhere.
-fn free_budget(cylinders: &[Cylinder], conservative: bool) -> f64 {
+/// Bar a back-gas fraction rule spends off one cylinder's gauge: `frac` of its conservative-capped
+/// basis, less `margin_bar` (the All-thirds safety margin, #245, raises the turn pressure by that
+/// many bar), clamped to `[0, fill]`. Thirds of a 207-bar tank turn at 207 - 69 = 138 bar.
+fn fraction_usable_bar(c: &Cylinder, frac: f64, margin_bar: f64, conservative: bool) -> f64 {
+    (frac * cyl_basis(c, conservative) - margin_bar).clamp(0.0, c.fill_bar)
+}
+
+/// Bar a counted Half-Minus stage spends on the way in: half of what its basis holds above the
+/// reserve, `(basis - reserve) / 2`, clamped to `[0, fill]`. It is dropped at
+/// `fill - (basis - reserve) / 2` - which is `(fill + reserve) / 2` for a stage at or below rated -
+/// and the other half is breathed back down to the reserve on the picked-up exit. An overfilled
+/// stage under the cap spends the same bar as a rated one, read off its real gauge: 11 L rated 207
+/// filled 230 with a 30-bar reserve is dropped at 230 - 88.5 = 141.5 bar.
+fn half_minus_usable_bar(c: &Cylinder, reserve_bar: f64, conservative: bool) -> f64 {
+    (0.5 * (cyl_basis(c, conservative) - reserve_bar)).clamp(0.0, c.fill_bar)
+}
+
+/// Bar one cylinder spends on the way IN under the effective strategy - the single source of its
+/// credit ([`gauge_window_litres`]), its turn or drop gauge (`fill - usable`) and its usable-column
+/// entry. `stage_counted` marks a stage among the first `required_stages` (Half Minus counts only
+/// those; All-thirds and Free count every stage). `0` for roles the budget does not count (dil-out
+/// / bailout / deco) and for uncounted stages.
+fn in_usable_bar(
+    c: &Cylinder,
+    effective: ReservePreset,
+    stage_counted: bool,
+    profile: &ReserveProfile,
+    conservative: bool,
+) -> f64 {
+    match (effective, c.role) {
+        (ReservePreset::Free, CylRole::BackGas | CylRole::Stage) => {
+            free_usable_bar(c, conservative)
+        }
+        // A fell-back staged rig is effectively All-thirds, so it inherits the margin too.
+        (ReservePreset::AllThirds, CylRole::BackGas | CylRole::Stage) => fraction_usable_bar(
+            c,
+            backgas_fraction(effective),
+            profile.all_thirds_safety_margin_bar,
+            conservative,
+        ),
+        (ReservePreset::OneStage | ReservePreset::TwoStage, CylRole::BackGas) => {
+            fraction_usable_bar(c, backgas_fraction(effective), 0.0, conservative)
+        }
+        (ReservePreset::OneStage | ReservePreset::TwoStage, CylRole::Stage) if stage_counted => {
+            half_minus_usable_bar(c, profile.stage_reserve_bar, conservative)
+        }
+        _ => 0.0,
+    }
+}
+
+/// [`in_usable_bar`] for every cylinder, in input order. Disabled tanks read `0` and are not
+/// counted, so "stage 1" / "the first two stages" are the first ENABLED `Stage` cylinders in rig
+/// order - v1 has no per-stage drop-order field; with ≥3 stages on `TwoStage` only the first two
+/// count (the ≥3-stage case is deferred - PRD §5.1), and ignoring a spare stage only shrinks the
+/// budget (safe).
+fn in_usable_bars(
+    cylinders: &[Cylinder],
+    effective: ReservePreset,
+    profile: &ReserveProfile,
+    conservative: bool,
+) -> Vec<f64> {
+    let needed = required_stages(effective);
+    let mut enabled_stage_i = 0usize;
     cylinders
         .iter()
-        .filter(|c| matches!(c.role, CylRole::BackGas | CylRole::Stage))
-        .map(|c| free_in_gas(c, conservative))
-        .sum()
+        .map(|c| {
+            if !c.enabled {
+                return 0.0;
+            }
+            let stage_counted = if matches!(c.role, CylRole::Stage) {
+                enabled_stage_i += 1;
+                enabled_stage_i <= needed
+            } else {
+                false
+            };
+            in_usable_bar(c, effective, stage_counted, profile, conservative)
+        })
+        .collect()
 }
 
-/// Gas (litres) the All-thirds safety margin (#245) holds back from one cylinder: the deliverable in
-/// the top `margin_bar` of the conservative-capped tank. 0 when the margin is 0.
-fn all_thirds_margin_litres(c: &Cylinder, margin_bar: f64, conservative: bool) -> f64 {
-    if margin_bar <= 0.0 {
-        return 0.0;
-    }
-    let basis = cyl_basis(c, conservative);
-    let full = deliverable_gas(basis, c.water_volume_l, c.rated_pressure_bar, conservative);
-    let held = deliverable_gas(
-        (basis - margin_bar).max(0.0),
-        c.water_volume_l,
-        c.rated_pressure_bar,
-        conservative,
-    );
-    (full - held).max(0.0)
-}
-
-/// One budget-role cylinder's All-thirds usable IN gas (litres): ⅓ of its deliverable gas, less the
-/// safety margin, clamped ≥ 0. At `margin_bar == 0` this is exactly ⅓ · deliverable (plain thirds),
-/// so the default path is unchanged.
-fn all_thirds_usable_litres(c: &Cylinder, margin_bar: f64, conservative: bool) -> f64 {
-    let deliverable = deliverable_gas(
-        c.fill_bar,
-        c.water_volume_l,
-        c.rated_pressure_bar,
-        conservative,
-    );
-    (deliverable / 3.0 - all_thirds_margin_litres(c, margin_bar, conservative)).max(0.0)
-}
-
-/// All-thirds back-gas turn gauge (bar) with the safety margin folded in: the volume-weighted start
-/// gauge less the back-gas usable IN gas expressed as a common-gauge drop. At `margin_bar == 0` it
-/// equals `backgas_turn_pressure(.., 1/3, ..)`.
-fn all_thirds_backgas_turn(
-    cylinders: &[Cylinder],
-    margin_bar: f64,
-    conservative: bool,
-) -> Option<f64> {
-    let back: Vec<&Cylinder> = cylinders
+/// Back-gas turn pressure gauge (bar): the volume-weighted mean of each enabled back-gas tank's
+/// turn pressure `fill - usable` (`usable_bars` aligned with `cylinders`) - exactly the turn for
+/// one tank and for matched doubles or sidemount. `None` when the rig carries no back gas.
+fn backgas_turn_bar(cylinders: &[Cylinder], usable_bars: &[f64]) -> Option<f64> {
+    let (water, water_x_turn) = cylinders
         .iter()
-        .filter(|c| matches!(c.role, CylRole::BackGas))
-        .collect();
-    let sum_wv: f64 = back.iter().map(|c| c.water_volume_l).sum();
-    if sum_wv <= 0.0 {
-        return None;
-    }
-    let avg_start = back
-        .iter()
-        .map(|c| c.fill_bar * c.water_volume_l)
-        .sum::<f64>()
-        / sum_wv;
-    let usable: f64 = back
-        .iter()
-        .map(|c| all_thirds_usable_litres(c, margin_bar, conservative))
-        .sum();
-    Some((avg_start - usable / sum_wv).max(0.0))
+        .zip(usable_bars)
+        .filter(|(c, _)| c.enabled && matches!(c.role, CylRole::BackGas))
+        .fold((0.0_f64, 0.0_f64), |(w, wt), (c, &u)| {
+            (
+                w + c.water_volume_l,
+                wt + c.water_volume_l * (c.fill_bar - u),
+            )
+        });
+    (water > 0.0).then(|| (water_x_turn / water).max(0.0))
 }
 
 /// The strategy actually applied: the requested preset when the rig carries enough `Stage`
-/// cylinders, else All-thirds (the fallback `penetration_budget` already takes). The gauges key off
-/// this so a stage-short staged request shows All-thirds numbers, matching the budget + map.
+/// cylinders, else All-thirds (never invents stage gas - the safe direction, §6). The budget, the
+/// gauges, the drops and the usable column all key off this, so a stage-short staged request shows
+/// All-thirds numbers everywhere at once.
 fn effective_preset(cylinders: &[Cylinder], preset: ReservePreset) -> ReservePreset {
     let stages = cylinders
         .iter()
@@ -1731,233 +2030,53 @@ fn effective_preset(cylinders: &[Cylinder], preset: ReservePreset) -> ReservePre
     }
 }
 
-/// Fraction of usable back gas spent on the way in, per strategy (PRD §5.1): thirds / quarters /
+/// Share of the back-gas gauge spent on the way in, per strategy (PRD §5.1): thirds / quarters /
 /// sixths as the stages carry more of the penetration.
 fn backgas_fraction(preset: ReservePreset) -> f64 {
     match preset {
         // Free has no single back-gas fraction (the diver sets each tank's usable directly), so
-        // its turn gauge is computed separately and never calls this; ⅓ is a harmless placeholder.
+        // `in_usable_bar` never asks for it; ⅓ is a harmless placeholder.
         ReservePreset::AllThirds | ReservePreset::Free => 1.0 / 3.0,
         ReservePreset::OneStage => 0.25,
         ReservePreset::TwoStage => 1.0 / 6.0,
     }
 }
 
-/// Back-gas turn pressure gauge (bar): the volume-weighted average back-gas start gauge minus the
-/// `frac` of usable back gas expressed as a common-gauge drop (`frac · Σdeliverable ÷ Σwater-vol`).
-/// `None` when the rig carries no back gas. Z-derated (and conservative-capped) via
-/// [`deliverable_gas`], so it tracks the reachable overlay's budget rather than the raw fill.
-fn backgas_turn_pressure(cylinders: &[Cylinder], frac: f64, conservative: bool) -> Option<f64> {
-    let back: Vec<&Cylinder> = cylinders
-        .iter()
-        .filter(|c| matches!(c.role, CylRole::BackGas))
-        .collect();
-    let sum_wv: f64 = back.iter().map(|c| c.water_volume_l).sum();
-    if sum_wv <= 0.0 {
-        return None;
-    }
-    let avg_start = back
-        .iter()
-        .map(|c| c.fill_bar * c.water_volume_l)
-        .sum::<f64>()
-        / sum_wv;
-    let usable: f64 = back
-        .iter()
-        .map(|c| {
-            deliverable_gas(
-                c.fill_bar,
-                c.water_volume_l,
-                c.rated_pressure_bar,
-                conservative,
-            )
-        })
-        .sum();
-    Some((avg_start - frac * usable / sum_wv).max(0.0))
-}
-
-/// Per-cylinder penetration allowance (bar), one entry per INPUT cylinder (original order) for the
-/// "usable gas" table column (#245). Disabled tanks and non-budget roles are `0.0`. Computed as
-/// `fill - turn/drop` so the column can never drift from the gauges/budget: a back-gas tank shows
-/// its strategy fraction of usable (`frac · deliverable ÷ water-vol`, matching `backgas_turn`), a
-/// counted stage its Half-Minus IN half (`(basis - reserve)/2`, matching its drop), an uncounted
-/// stage `0`. Under **Free** it echoes the diver's own clamped input. `enabled_stage_i` counts only
-/// enabled Stage cylinders, so "counted" tracks the same first-N-enabled-stages the budget uses.
-fn cylinder_usable_bars(
-    cylinders: &[Cylinder],
-    effective: ReservePreset,
-    reserve_bar: f64,
-    margin_bar: f64,
-    conservative: bool,
-) -> Vec<f64> {
-    let needed = required_stages(effective);
-    let mut enabled_stage_i = 0usize;
-    cylinders
-        .iter()
-        .map(|c| {
-            if !c.enabled {
-                return 0.0;
-            }
-            let deliverable_bar = deliverable_gas(
-                c.fill_bar,
-                c.water_volume_l,
-                c.rated_pressure_bar,
-                conservative,
-            ) / c.water_volume_l;
-            let basis = cyl_basis(c, conservative);
-            match effective {
-                ReservePreset::Free => match c.role {
-                    // The same sanitized `[0, basis]` clamp the budget uses, so the displayed usable
-                    // bar equals what `free_in_gas` credits (the "single source of truth" guarantee)
-                    // even on an overfilled tank under conservative, and a NaN input reads 0.
-                    CylRole::BackGas | CylRole::Stage => free_usable_bar(c, conservative),
-                    _ => 0.0,
-                },
-                // Thirds counts back gas AND stages at ⅓ (both are in `usable_oc_gas`), less the
-                // safety margin - expressed as bar so the column equals what the budget credits.
-                ReservePreset::AllThirds => match c.role {
-                    CylRole::BackGas | CylRole::Stage => {
-                        all_thirds_usable_litres(c, margin_bar, conservative) / c.water_volume_l
-                    }
-                    _ => 0.0,
-                },
-                ReservePreset::OneStage | ReservePreset::TwoStage => match c.role {
-                    CylRole::BackGas => backgas_fraction(effective) * deliverable_bar,
-                    CylRole::Stage => {
-                        let counted = enabled_stage_i < needed;
-                        enabled_stage_i += 1;
-                        if counted {
-                            (0.5 * (basis - reserve_bar)).max(0.0)
-                        } else {
-                            0.0
-                        }
-                    }
-                    _ => 0.0,
-                },
-            }
-        })
-        .collect()
-}
-
-/// Free-strategy back-gas turn gauge (bar): the volume-weighted mean of each enabled back-gas
-/// tank's chosen turn pressure `fill - usable_gas_bar`. The usable bar is clamped to `[0, basis]`
-/// (the conservative-capped fill, same ceiling the budget uses) so the gauge can't credit more than
-/// the plan does. `None` when the rig carries no back gas - matching [`backgas_turn_pressure`].
-fn free_backgas_turn(cylinders: &[Cylinder], conservative: bool) -> Option<f64> {
-    let back: Vec<&Cylinder> = cylinders
-        .iter()
-        .filter(|c| matches!(c.role, CylRole::BackGas))
-        .collect();
-    let sum_wv: f64 = back.iter().map(|c| c.water_volume_l).sum();
-    if sum_wv <= 0.0 {
-        return None;
-    }
-    let turn = back
-        .iter()
-        .map(|c| {
-            let u = free_usable_bar(c, conservative);
-            (c.fill_bar - u) * c.water_volume_l
-        })
-        .sum::<f64>()
-        / sum_wv;
-    Some(turn.max(0.0))
-}
-
-/// One-way IN penetration budget (litres), PRD §5.1 - the gas a diver may consume on the way
-/// in before turning. The strategies:
-/// - **All-thirds**: ⅓ of every back-gas + stage cylinder's deliverable gas (= ⅓ of total).
-/// - **Half Minus, 1-stage**: ¼ of back gas + stage 1's IN gas.
-/// - **Half Minus, 2-stage**: ⅙ of back gas + that IN gas for the first two stages.
+/// One-way IN penetration budget (litres), PRD §5.1 - the gas a diver may consume on the way in
+/// before turning: over the budget cylinders, the gas between each one's real fill and the turn or
+/// drop pressure its gauge rule gives ([`in_usable_bar`], [`gauge_window_litres`]).
+/// - **All-thirds**: a third of every back-gas and stage cylinder's gauge, less the safety margin.
+/// - **Half Minus, 1-stage**: a quarter of the back gas + stage 1's IN half.
+/// - **Half Minus, 2-stage**: a sixth of the back gas + the first two stages' IN halves.
+/// - **Free**: the diver's own usable bar per cylinder.
 ///
-/// Under **Half Minus** a stage is breathed from full down to its drop pressure `(fill + reserve)/2`,
-/// contributing `(fill - reserve)/2` of IN gas; the other half is breathed back down to `reserve` on
-/// the picked-up exit. With the stages carrying the penetration the diver dips less of the back gas
-/// (¼ / ⅙ instead of ⅓) without breaking thirds. If the rig lacks the required stages it falls back
-/// to the All-thirds budget (never invents stage gas - the safe direction, §6). Z-derated throughout
-/// (back-gas AND stage term) via [`deliverable_gas`]. The reserve is the editable
-/// [`ReserveProfile::stage_reserve_bar`] (default 30 bar).
-///
-/// "Stage 1"/"the first two stages" = the first `Stage`-role cylinder(s) by rig (vec) order -
-/// v1 has no per-stage drop-order field. With ≥3 stages on `TwoStage` only the first two count
-/// (the ≥3-stage case is deferred - PRD §5.1); excluding the extra only shrinks the budget (safe).
+/// Each share is of the conservative-capped basis ([`cyl_basis`]). Under **Half Minus** a stage is
+/// breathed from full down to `fill - (basis - reserve)/2` and the other half back down to the
+/// reserve on the picked-up exit; with the stages carrying the penetration the diver dips less of
+/// the back gas without breaking thirds. The reserve is the editable
+/// [`ReserveProfile::stage_reserve_bar`] (default 30 bar). A rig short of the required stages falls
+/// back to All-thirds ([`effective_preset`]).
 fn penetration_budget(
     cylinders: &[Cylinder],
     preset: ReservePreset,
     profile: &ReserveProfile,
     conservative: bool,
 ) -> f64 {
-    // All-thirds = ⅓ of each budget-role cylinder's deliverable, less the safety margin (0 by
-    // default, so this is plain thirds). The margin is All-thirds-only - a fell-back staged rig is
-    // now effectively All-thirds, so it inherits the margin too.
-    let all_thirds = || {
-        cylinders
-            .iter()
-            .filter(|c| matches!(c.role, CylRole::BackGas | CylRole::Stage))
-            .map(|c| {
-                all_thirds_usable_litres(c, profile.all_thirds_safety_margin_bar, conservative)
-            })
-            .sum::<f64>()
-    };
-
-    let stages: Vec<&Cylinder> = cylinders
+    let effective = effective_preset(cylinders, preset);
+    cylinders
         .iter()
-        .filter(|c| matches!(c.role, CylRole::Stage))
-        .collect();
-    if stages.len() < required_stages(preset) {
-        return all_thirds();
-    }
-
-    let back_gas = |frac: f64| -> f64 {
-        cylinders
-            .iter()
-            .filter(|c| matches!(c.role, CylRole::BackGas))
-            .map(|c| {
-                deliverable_gas(
-                    c.fill_bar,
-                    c.water_volume_l,
-                    c.rated_pressure_bar,
-                    conservative,
-                )
-            })
-            .sum::<f64>()
-            * frac
-    };
-    let stage_in = |c: &Cylinder| stage_in_gas(c, profile.stage_reserve_bar, conservative);
-
-    match preset {
-        ReservePreset::AllThirds => all_thirds(),
-        ReservePreset::Free => free_budget(cylinders, conservative),
-        ReservePreset::OneStage => back_gas(0.25) + stage_in(stages[0]),
-        ReservePreset::TwoStage => {
-            back_gas(1.0 / 6.0) + stages[..2].iter().map(|&c| stage_in(c)).sum::<f64>()
-        }
-    }
-}
-
-/// Gas breathed off one stage on the way IN under the **Half-Minus** strategy (litres): from
-/// `full` down to its drop pressure `(fill + reserve)/2`, i.e. `(fill - reserve)/2` of pressure.
-/// The drop keys off the SAME (conservative-capped) basis as `full`, so an overfilled stage's
-/// start and drop pressures stay on one consistent scale. The other half is breathed back down to
-/// `reserve` on the picked-up exit; only this IN half is penetration gas. Z-derated via
-/// [`deliverable_gas`].
-fn stage_in_gas(c: &Cylinder, reserve_bar: f64, conservative: bool) -> f64 {
-    let basis = if conservative {
-        c.fill_bar.min(c.rated_pressure_bar)
-    } else {
-        c.fill_bar
-    };
-    let full = deliverable_gas(basis, c.water_volume_l, c.rated_pressure_bar, conservative);
-    let drop = (0.5 * (basis + reserve_bar)).clamp(0.0, basis);
-    let held = deliverable_gas(drop, c.water_volume_l, c.rated_pressure_bar, conservative);
-    (full - held).max(0.0)
+        .zip(in_usable_bars(cylinders, effective, profile, conservative))
+        .map(|(c, u)| gauge_window_litres(c, u))
+        .sum()
 }
 
 /// Total usable **open-circuit** breathing gas (litres) across the diver's back-gas + stage
-/// cylinders. Dil-out / bailout / deco roles are excluded (CCR / deco, not OC penetration gas
-/// - §5.3/§5.5). Every cylinder is Z-derated via [`deliverable_gas`] (real-gas correction is
+/// cylinders. Dil-out / bailout / deco roles are excluded (CCR / deco, not OC penetration gas,
+/// §5.3/§5.5). Every cylinder is Z-derated via [`deliverable_gas`] (real-gas correction is
 /// always applied); `conservative` additionally caps an overfilled tank to its rated capacity
-/// (the "call-it-an-80" community convention, §5.3). Retained as a tested building block - the
-/// All-thirds budget now sums per-cylinder `all_thirds_usable_litres` (to fold in the safety margin),
-/// so this is exercised only by tests.
+/// (the "call-it-an-80" community convention, §5.3). Retained as a tested building block - every
+/// budget now sums per-cylinder gauge windows (`gauge_window_litres`), so this is exercised only by
+/// tests.
 #[cfg_attr(
     not(test),
     expect(

@@ -16,9 +16,9 @@ import { useSpeleoStore, selectSpeleoReadOnly } from '../speleoStore';
 import { useUIStore } from '../uiStore';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc');
 
 const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   is_remote: true,

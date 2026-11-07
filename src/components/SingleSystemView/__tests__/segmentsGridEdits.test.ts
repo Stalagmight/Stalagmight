@@ -95,6 +95,33 @@ describe('applySegmentEdits - speed', () => {
     expect(fast[0]?.speed_m_per_min).toBe(1000);
   });
 
+  it('skips a zero or negative speed instead of clamping it up to the engine minimum', () => {
+    // A span flown at 0.1 m/min inflates its gas use and collapses reach, so a
+    // speed <= 0 is not a request for the slowest pace - it is no pace at all, and
+    // the pre-grid field never committed one (D39d). The column's `validate`
+    // rejects it in the grid; the reducer refuses it too for any direct caller.
+    const rows = [seg({ speed_m_per_min: 30 })];
+    for (const value of [0, -0, -12, -0.05]) {
+      expect(applySegmentEdits(rows, [{ row: 0, colKey: SEG_COL.speed, value }], metric())).toBe(
+        rows
+      );
+      expect(
+        applySegmentEdits(rows, [{ row: 0, colKey: SEG_COL.speed, value }], imperial())
+      ).toBe(rows);
+    }
+  });
+
+  it('still clamps a positive under-range speed up to the engine minimum', () => {
+    // Only <= 0 is refused: a positive value below 0.1 m/min keeps the pre-grid
+    // clamp it has always had.
+    const next = applySegmentEdits(
+      [seg()],
+      [{ row: 0, colKey: SEG_COL.speed, value: 0.05 }],
+      metric()
+    );
+    expect(next[0]?.speed_m_per_min).toBe(0.1);
+  });
+
   it('clears the speed back to inherited on a null (cleared cell)', () => {
     const rows = [seg({ speed_m_per_min: 30 })];
     const next = applySegmentEdits(rows, [{ row: 0, colKey: SEG_COL.speed, value: null }], metric());
@@ -214,6 +241,21 @@ describe('applySegmentEdits - batches', () => {
       metric(RIG)
     );
     expect(next[0]).toEqual({ on_scooter: false, speed_m_per_min: 15 });
+  });
+
+  it('a refused (<= 0) speed is not batch-authored, so the untick beside it still resets', () => {
+    // The speed edit is skipped, so it supplies no pace: keeping the old scooter
+    // speed through the untick would price a swum span at a scooter's pace.
+    const rows = [seg({ on_scooter: true, speed_m_per_min: 40 })];
+    const next = applySegmentEdits(
+      rows,
+      [
+        { row: 0, colKey: SEG_COL.speed, value: -12 },
+        { row: 0, colKey: SEG_COL.scooter, value: false },
+      ],
+      metric(RIG)
+    );
+    expect(next[0]).toEqual({ on_scooter: false, speed_m_per_min: null });
   });
 
   it('an untick with no speed beside it in the batch still resets to inherited', () => {

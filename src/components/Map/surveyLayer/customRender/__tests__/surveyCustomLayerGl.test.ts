@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CustomRenderMethodInput, Map as MaplibreMap } from 'maplibre-gl';
 import { SurveyCustomLayer, type CustomRenderData } from '../surveyCustomLayer';
+import { SurveyCustomLabelLayer } from '../surveyCustomLabelLayer';
+import { SurveyMeasurePathLayer } from '../surveyMeasurePathLayer';
+import { SurveyGhostLayer } from '../surveyGhostLayer';
 import { buildLineBuffers, buildCircleBuffers, buildStationLookup, projectStationsRel } from '../tessellate';
 import { emptySurveyData, type SurveyData } from '../../../../../types/survey-data';
 import type { Rgba8 } from '../colorPack';
@@ -98,6 +101,24 @@ describe('SurveyCustomLayer resolves GL locations once at link time (#339)', () 
     expect(gl.count('vertexAttribPointer')).toBe(3 * 19);
   });
 
+  // #576 D38 review RV1-FE-5: a layer re-added after a WebGL context restore runs
+  // onAdd on the NEW context, and its first frames there must be GL-error checked
+  // again - the probe budget spent on the lost context must not carry over.
+  it('re-arms the first-frames GL error check when re-added on a restored context', () => {
+    const layer = new SurveyCustomLayer('custom-survey', makeData());
+    const lost = new FakeGl();
+    layer.onAdd(fakeMap, asGl(lost));
+    for (let i = 0; i < 8; i++) layer.render(asGl(lost), renderOptions);
+    // The budget: 5 checked frames, then getError (a pipeline stall) stops.
+    expect(lost.count('getError')).toBe(5);
+    layer.onRemove(fakeMap, asGl(lost));
+
+    const restored = new FakeGl();
+    layer.onAdd(fakeMap, asGl(restored));
+    for (let i = 0; i < 8; i++) layer.render(asGl(restored), renderOptions);
+    expect(restored.count('getError'), 'GL error checks on the restored context').toBe(5);
+  });
+
   it('frees both programs on remove, after which render draws nothing', () => {
     const gl = new FakeGl();
     const layer = new SurveyCustomLayer('custom-survey', makeData());
@@ -110,5 +131,33 @@ describe('SurveyCustomLayer resolves GL locations once at link time (#339)', () 
 
     layer.render(asGl(gl), renderOptions);
     expect(gl.count('drawElements')).toBe(2);
+  });
+});
+
+// The same re-arm for the other custom layers (#576 D38 review RV1-FE-5). Their
+// draw paths need textures / per-layer data the fake context does not model, so
+// this reads the probe budget directly: a spent budget is reset by onAdd.
+describe('every custom layer re-arms its first-frames GL error check on re-add', () => {
+  beforeEach(() => {
+    vi.stubGlobal('WebGL2RenderingContext', FakeGl);
+    vi.stubGlobal('WebGLBuffer', FakeWebGLBuffer);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ['SurveyCustomLayer', () => new SurveyCustomLayer('a', null)],
+    ['SurveyCustomLabelLayer', () => new SurveyCustomLabelLayer('b', null)],
+    ['SurveyMeasurePathLayer', () => new SurveyMeasurePathLayer('c', null)],
+    ['SurveyGhostLayer', () => new SurveyGhostLayer('d', null)],
+  ])('%s', (_name, make) => {
+    const layer = make();
+    const probe = layer as unknown as { checkedFrames: number };
+    probe.checkedFrames = 5; // spent on the context that was lost
+    layer.onAdd(fakeMap, asGl(new FakeGl()));
+    expect(layer.isDisabled()).toBe(false);
+    expect(probe.checkedFrames).toBe(0);
   });
 });

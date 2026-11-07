@@ -5,6 +5,10 @@ use crate::config::PlacementSuggestionConfig;
 
 use super::{horizontal_length_from_slope, AzimuthReference, SectionId, Shot, ShotData};
 
+mod crossing;
+
+use crossing::{placement_crossing_clearance_ok, straight_runs, CrossingIndex};
+
 /// Direction of match between import and existing shots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -227,16 +231,16 @@ pub fn suggest_all_placements(
             });
         }
 
-        // Match against other import sections (exclude self)
-        let other_imports: Vec<ExistingSection> = import_as_existing
-            .iter()
-            .filter(|e| e.id != fake_self_id)
-            .cloned()
-            .collect();
+        // Match against other import sections (exclude self), borrowed
+        let other_imports = || import_as_existing.iter().filter(|e| e.id != fake_self_id);
 
-        if !other_imports.is_empty() {
-            let import_suggestions =
-                suggest_placements(&import.shots, import_reference, &other_imports, ps_config);
+        if other_imports().next().is_some() {
+            let import_suggestions = suggest_placements_among(
+                &import.shots,
+                import_reference,
+                other_imports(),
+                ps_config,
+            );
             for s in import_suggestions {
                 // Decode the fake ID back to an import index
                 let target_idx = (s.existing_section_id - FAKE_ID_BASE) as u32;
@@ -268,11 +272,7 @@ pub fn suggest_all_placements(
     }
 
     // Sort by score descending
-    all.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    all.sort_by(|a, b| score_cmp(b.score, a.score));
 
     all
 }
@@ -433,6 +433,38 @@ impl MatchShot {
     }
 }
 
+/// [#576 NF-W9PERF-1] The order of the score sorts: `partial_cmp`, made total.
+///
+/// A NaN reading (an azimuth or length the import carries as NaN) gives a NaN
+/// score, and every sort here used `partial_cmp(..).unwrap_or(Equal)`: NaN
+/// "equal" to two scores that are not equal to each other is no order at all,
+/// and the standard sort panics when it notices ("does not correctly implement
+/// a total order"). Two numbers compare exactly as `partial_cmp` compares them
+/// (so `-0.0 == 0.0` still, and no finite order moves); a NaN is below every
+/// number and equal to another NaN, so the descending sorts put it last.
+///
+/// Not `f64::total_cmp`, which orders `-0.0` before `0.0` and so could reorder
+/// two finite candidates the old sort kept as tied. The rest of the pipeline
+/// tolerates a non-finite reading the same way - it proves nothing with it
+/// (`crossing::trace_is_finite`) rather than refusing the import.
+fn score_cmp(a: f64, b: f64) -> std::cmp::Ordering {
+    a.partial_cmp(&b)
+        .unwrap_or_else(|| b.is_nan().cmp(&a.is_nan()))
+}
+
+/// [#576 NF-W10BE-1] Whether a candidate's score clears the bar to be offered.
+///
+/// A NaN score never does. Both admission checks used to read
+/// `score < min_aggregate_score`, which is false for NaN, so a NaN-scored
+/// candidate was offered (sorted last by [`score_cmp`], serialised as JSON
+/// null) - and, kept first at a dedupe or endpoint-pair key, it would keep a
+/// later finite candidate with that key out, since `finite > NaN` is false too.
+/// Filtered here, at admission, it takes no part in the dedupe, the
+/// suppressions, the sort or the cap.
+fn admitted(score: f64, config: &SuggestionConfig) -> bool {
+    score >= config.min_aggregate_score
+}
+
 /// Compute the angular difference between two azimuths in [0, 180].
 fn angular_difference(a: f64, b: f64) -> f64 {
     let diff = (a - b).rem_euclid(360.0);
@@ -513,86 +545,6 @@ fn section_trace_points(shots: &[MatchShot]) -> Vec<TracePoint> {
         });
     }
     points
-}
-
-fn segment_intersection_params(
-    a0: TracePoint,
-    a1: TracePoint,
-    b0: TracePoint,
-    b1: TracePoint,
-) -> Option<(f64, f64)> {
-    const EPS: f64 = 1e-9;
-    const ENDPOINT_EPS: f64 = 1e-6;
-
-    let ax = a1.x - a0.x;
-    let ay = a1.y - a0.y;
-    let bx = b1.x - b0.x;
-    let by = b1.y - b0.y;
-    let denom = ax * by - ay * bx;
-    if denom.abs() < EPS {
-        return None;
-    }
-
-    let cx = b0.x - a0.x;
-    let cy = b0.y - a0.y;
-    let t = (cx * by - cy * bx) / denom;
-    let u = (cx * ay - cy * ax) / denom;
-
-    if t > ENDPOINT_EPS && t < 1.0 - ENDPOINT_EPS && u > ENDPOINT_EPS && u < 1.0 - ENDPOINT_EPS {
-        Some((t, u))
-    } else {
-        None
-    }
-}
-
-fn interpolate_depth(a: TracePoint, b: TracePoint, t: f64) -> f64 {
-    a.depth + (b.depth - a.depth) * t
-}
-
-fn placement_crossing_clearance_ok(
-    import_trace: &[TracePoint],
-    existing_trace: &[TracePoint],
-    import_station_index: usize,
-    existing_station_index: usize,
-    ignored_pairs: &[(usize, usize)],
-    config: &SuggestionConfig,
-) -> bool {
-    if import_station_index >= import_trace.len() || existing_station_index >= existing_trace.len()
-    {
-        return false;
-    }
-
-    let dx = existing_trace[existing_station_index].x - import_trace[import_station_index].x;
-    let dy = existing_trace[existing_station_index].y - import_trace[import_station_index].y;
-    let placed_import: Vec<TracePoint> = import_trace
-        .iter()
-        .map(|point| point.translated(dx, dy))
-        .collect();
-
-    for import_idx in 0..placed_import.len().saturating_sub(1) {
-        let import_a = placed_import[import_idx];
-        let import_b = placed_import[import_idx + 1];
-        for existing_idx in 0..existing_trace.len().saturating_sub(1) {
-            if ignored_pairs.contains(&(import_idx, existing_idx)) {
-                continue;
-            }
-            let existing_a = existing_trace[existing_idx];
-            let existing_b = existing_trace[existing_idx + 1];
-            let Some((import_t, existing_t)) =
-                segment_intersection_params(import_a, import_b, existing_a, existing_b)
-            else {
-                continue;
-            };
-
-            let import_depth = interpolate_depth(import_a, import_b, import_t);
-            let existing_depth = interpolate_depth(existing_a, existing_b, existing_t);
-            if (import_depth - existing_depth).abs() < config.min_crossing_depth_clearance {
-                return false;
-            }
-        }
-    }
-
-    true
 }
 
 fn ignored_crossing_pairs_for_suggestion(
@@ -755,6 +707,84 @@ fn compute_single_shot_score(
     }
 }
 
+/// [#576 A2] Test-only tally of the matcher's inner-loop work, so a test can
+/// pin how that work grows with section length without timing anything.
+#[cfg(test)]
+mod work {
+    use std::cell::Cell;
+
+    thread_local! {
+        static UNITS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(super) fn charge(units: usize) {
+        UNITS.with(|u| u.set(u.get().saturating_add(units as u64)));
+    }
+
+    /// The units charged on this thread since the last call.
+    pub(super) fn take() -> u64 {
+        UNITS.with(|u| u.replace(0))
+    }
+}
+
+#[cfg(test)]
+fn charge_work(units: usize) {
+    work::charge(units);
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn charge_work(_: usize) {}
+
+/// [#576 NF-W4U-3] Test-only log of every crossing check `best_merge_offset`
+/// makes, in call order, so the differential test can show an optimised
+/// pipeline rejects exactly the candidates its reference copy does. Off until
+/// a test starts it.
+#[cfg(test)]
+mod crossing_log {
+    use std::cell::RefCell;
+
+    use super::SectionId;
+
+    /// (existing section, import station, existing station, clear).
+    pub(super) type Entry = (SectionId, usize, usize, bool);
+
+    thread_local! {
+        static LOG: RefCell<Option<Vec<Entry>>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn start() {
+        LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
+    }
+
+    pub(super) fn record(entry: Entry) {
+        LOG.with(|log| {
+            if let Some(entries) = log.borrow_mut().as_mut() {
+                entries.push(entry);
+            }
+        });
+    }
+
+    /// The checks logged since `start`, and logging off again.
+    pub(super) fn take() -> Vec<Entry> {
+        LOG.with(|log| log.borrow_mut().take().unwrap_or_default())
+    }
+}
+
+#[cfg(test)]
+fn log_crossing_check(
+    section: SectionId,
+    import_station: usize,
+    existing_station: usize,
+    clear: bool,
+) {
+    crossing_log::record((section, import_station, existing_station, clear));
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn log_crossing_check(_: SectionId, _: usize, _: usize, _: bool) {}
+
 /// Result of trying to match a sequence of import shots against existing shots.
 struct SequenceMatch {
     score: f64,
@@ -771,18 +801,29 @@ struct DpCell {
     existing_count: usize,
 }
 
-fn oriented_existing_shots(
+/// How many existing shots a run starting at `start_idx` can walk in
+/// `direction` (`start_idx < existing_len`).
+fn oriented_len(existing_len: usize, start_idx: usize, direction: MatchDirection) -> usize {
+    match direction {
+        MatchDirection::Forward => existing_len - start_idx,
+        MatchDirection::Reverse => start_idx + 1,
+    }
+}
+
+/// The `k`-th existing shot of a run starting at `start_idx`, oriented so the
+/// run reads forward: walking backwards from `start_idx` for a reverse run,
+/// each shot reversed. Read by index rather than by copying the oriented tail,
+/// which cost `O(section)` per call - and the matcher makes four calls per
+/// start index, so the copy alone made a section's pass quadratic (#576 A2).
+fn oriented_existing_shot(
     existing_shots: &[MatchShot],
     start_idx: usize,
     direction: MatchDirection,
-) -> Vec<MatchShot> {
+    k: usize,
+) -> MatchShot {
     match direction {
-        MatchDirection::Forward => existing_shots[start_idx..].to_vec(),
-        MatchDirection::Reverse => existing_shots[..=start_idx]
-            .iter()
-            .rev()
-            .map(MatchShot::reversed)
-            .collect(),
+        MatchDirection::Forward => existing_shots[start_idx + k],
+        MatchDirection::Reverse => existing_shots[start_idx - k].reversed(),
     }
 }
 
@@ -900,6 +941,13 @@ fn suppress_equivalent_single_front_reverses(suggestions: &mut Vec<PlacementSugg
 
 fn suppress_duplicate_endpoint_pairs(suggestions: &mut Vec<PlacementSuggestion>) {
     let mut kept: Vec<PlacementSuggestion> = Vec::with_capacity(suggestions.len());
+    // Where each endpoint key sits in `kept`. A key enters `kept` once and a
+    // later suggestion with it replaces that entry in place (keeping both the
+    // key and the position), so keys in `kept` are unique and this finds the
+    // entry a front-to-back scan for the first match found - without the
+    // O(suggestions^2) scan (#576 A2).
+    let mut kept_at: std::collections::HashMap<(SectionId, usize, usize, usize, usize), usize> =
+        std::collections::HashMap::new();
 
     for suggestion in suggestions.drain(..) {
         let Some(key) = suggestion_endpoint_key(&suggestion) else {
@@ -907,14 +955,12 @@ fn suppress_duplicate_endpoint_pairs(suggestions: &mut Vec<PlacementSuggestion>)
             continue;
         };
 
-        if let Some(existing) = kept
-            .iter_mut()
-            .find(|candidate| suggestion_endpoint_key(candidate) == Some(key))
-        {
-            if suggestion.score > existing.score {
-                *existing = suggestion;
+        if let Some(&at) = kept_at.get(&key) {
+            if suggestion.score > kept[at].score {
+                kept[at] = suggestion;
             }
         } else {
+            kept_at.insert(key, kept.len());
             kept.push(suggestion);
         }
     }
@@ -973,7 +1019,7 @@ fn station_context_multiplier(
         return 0.65;
     }
 
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| score_cmp(b.0, a.0));
     let best = scored[0];
     let has_second_side = scored
         .iter()
@@ -1091,62 +1137,53 @@ fn try_match_sequence(
         };
     }
 
-    let existing_oriented = oriented_existing_shots(existing_shots, start_idx, direction);
-    let n = import_shots.len();
-    let m = existing_oriented.len();
-    let mut dp: Vec<Vec<Option<DpCell>>> = vec![vec![None; m + 1]; n + 1];
-    dp[0][0] = Some(DpCell {
+    // The run pairs import shot k with oriented existing shot k and only ever
+    // extends by one of each, so its states are the DIAGONAL prefixes
+    // (k shots, k shots), and the first shot that scores below
+    // `min_shot_score` ends every longer run. This used to be phrased as an
+    // `(n + 1) x (m + 1)` matrix filled from `dp[0][0]` - but a cell was only
+    // ever written as `dp[i + 1][j + 1]` from `dp[i][j]`, so nothing off the
+    // diagonal was ever reached, while the whole matrix was allocated and
+    // walked on every call (#576 A2). Walking the diagonal visits the same
+    // cells in the same order and accumulates the same sums in the same
+    // order, so every candidate is bit-identical; the stable sort below then
+    // orders them exactly as it ordered the matrix rows.
+    let reach = import_shots
+        .len()
+        .min(oriented_len(existing_shots.len(), start_idx, direction));
+    let mut existing_oriented: Vec<MatchShot> = Vec::with_capacity(reach);
+    let mut candidates: Vec<DpCell> = Vec::with_capacity(reach);
+    let mut cell = DpCell {
         score_sum: 0.0,
         weight_sum: 0.0,
         import_count: 0,
         existing_count: 0,
-    });
-
-    for i in 0..=n {
-        for j in 0..=m {
-            let Some(cell) = dp[i][j] else { continue };
-            if i + 1 > n || j + 1 > m {
-                continue;
-            }
-            let import_shot = &import_shots[i];
-            let existing_shot = &existing_oriented[j];
-            let score = compute_exploratory_shot_score(
-                import_shot,
-                existing_shot,
-                MatchDirection::Forward,
-                config,
-            );
-            if score < config.min_shot_score {
-                continue;
-            }
-            let weight = shot_weight(import_shot, config);
-            let next = DpCell {
-                score_sum: cell.score_sum + score * weight,
-                weight_sum: cell.weight_sum + weight,
-                import_count: cell.import_count + 1,
-                existing_count: cell.existing_count + 1,
-            };
-            let target = &mut dp[i + 1][j + 1];
-            let replace = target
-                .map(|old| cell_final_score(next, config) > cell_final_score(old, config))
-                .unwrap_or(true);
-            if replace {
-                *target = Some(next);
-            }
+    };
+    for (k, import_shot) in import_shots.iter().enumerate().take(reach) {
+        charge_work(1);
+        let existing_shot = oriented_existing_shot(existing_shots, start_idx, direction, k);
+        let score = compute_exploratory_shot_score(
+            import_shot,
+            &existing_shot,
+            MatchDirection::Forward,
+            config,
+        );
+        if score < config.min_shot_score {
+            break;
         }
-    }
-
-    let mut candidates: Vec<DpCell> = Vec::new();
-    for row in dp.iter().skip(1) {
-        for cell in row.iter().flatten() {
-            candidates.push(*cell);
-        }
+        let weight = shot_weight(import_shot, config);
+        cell = DpCell {
+            score_sum: cell.score_sum + score * weight,
+            weight_sum: cell.weight_sum + weight,
+            import_count: cell.import_count + 1,
+            existing_count: cell.existing_count + 1,
+        };
+        existing_oriented.push(existing_shot);
+        candidates.push(cell);
     }
 
     candidates.sort_by(|a, b| {
-        cell_final_score(*b, config)
-            .partial_cmp(&cell_final_score(*a, config))
-            .unwrap_or(std::cmp::Ordering::Equal)
+        score_cmp(cell_final_score(*b, config), cell_final_score(*a, config))
             .then_with(|| b.import_count.cmp(&a.import_count))
     });
 
@@ -1171,6 +1208,87 @@ fn try_match_sequence(
     }
 }
 
+/// The merge offset a suggestion is placed at, and its station-context
+/// multiplier: the highest multiplier among the offsets whose placement passes
+/// the crossing check, a tie going to the larger offset. `None` when no offset
+/// passes.
+///
+/// [#576 A2] Ranked FIRST and crossing-checked in that order, stopping at the
+/// first that passes, instead of crossing-checking every offset and folding:
+/// the crossing check is the expensive half (`O(import length)` per offset)
+/// and the multiplier is a handful of comparisons. The two agree because the
+/// multiplier only takes the fixed constants `station_context_multiplier`
+/// returns, so the fold's "within 1e-9" tie is plain equality and the fold
+/// computes the lexicographic maximum of (multiplier, offset) over the passing
+/// offsets - which is exactly the first passing entry of this ranking.
+fn best_merge_offset(
+    import_match_shots: &[MatchShot],
+    existing_match_shots: &[MatchShot],
+    import_trace: &[TracePoint],
+    existing_trace: &[TracePoint],
+    crossing: &CrossingIndex,
+    suggestion: &PlacementSuggestion,
+    config: &SuggestionConfig,
+) -> Option<(f64, usize)> {
+    let ignored_crossing_pairs = ignored_crossing_pairs_for_suggestion(
+        suggestion,
+        import_match_shots.len(),
+        existing_match_shots.len(),
+    );
+    let mut ranked: Vec<(f64, usize, usize, usize)> = merge_offset_pairs(suggestion)
+        .into_iter()
+        .filter_map(|(import_offset, existing_offset)| {
+            let (merge_import_station, merge_existing_station) = merge_station_pair_for_offsets(
+                import_match_shots.len(),
+                existing_match_shots.len(),
+                suggestion,
+                import_offset,
+                existing_offset,
+            )?;
+            let context_multiplier = station_context_multiplier(
+                import_match_shots,
+                existing_match_shots,
+                merge_import_station,
+                merge_existing_station,
+                config,
+            );
+            let context_multiplier = if suggestion.matched_shots == 1 {
+                context_multiplier.max(1.0)
+            } else {
+                context_multiplier
+            };
+            Some((
+                context_multiplier,
+                import_offset,
+                merge_import_station,
+                merge_existing_station,
+            ))
+        })
+        .collect();
+    ranked.sort_by(|a, b| score_cmp(b.0, a.0).then_with(|| b.1.cmp(&a.1)));
+    ranked
+        .into_iter()
+        .find(|&(_, _, merge_import_station, merge_existing_station)| {
+            let clear = placement_crossing_clearance_ok(
+                import_trace,
+                existing_trace,
+                crossing,
+                merge_import_station,
+                merge_existing_station,
+                &ignored_crossing_pairs,
+                config,
+            );
+            log_crossing_check(
+                suggestion.existing_section_id,
+                merge_import_station,
+                merge_existing_station,
+                clear,
+            );
+            clear
+        })
+        .map(|(context_multiplier, import_offset, _, _)| (context_multiplier, import_offset))
+}
+
 /// Existing section data needed for matching.
 #[derive(Clone)]
 pub struct ExistingSection {
@@ -1190,9 +1308,28 @@ pub fn suggest_placements(
     existing_sections: &[ExistingSection],
     ps_config: &PlacementSuggestionConfig,
 ) -> Vec<PlacementSuggestion> {
+    suggest_placements_among(
+        import_shots,
+        import_reference,
+        existing_sections.iter(),
+        ps_config,
+    )
+}
+
+/// [`suggest_placements`] over BORROWED sections, so
+/// [`suggest_all_placements`] can match one import section against all the
+/// others without cloning them (#576 A2: it used to copy every other import
+/// section once per import section, O(K^2) section copies).
+fn suggest_placements_among<'a>(
+    import_shots: &[ShotData],
+    import_reference: AzimuthReference,
+    existing_sections: impl Iterator<Item = &'a ExistingSection>,
+    ps_config: &PlacementSuggestionConfig,
+) -> Vec<PlacementSuggestion> {
     let config = &SuggestionConfig::from(ps_config);
 
-    if import_shots.is_empty() || existing_sections.is_empty() {
+    // An empty `existing_sections` falls through to an empty result.
+    if import_shots.is_empty() {
         return Vec::new();
     }
 
@@ -1209,6 +1346,7 @@ pub fn suggest_placements(
         .map(|s| MatchShot::from_shot_data(s, import_reference))
         .collect();
     let import_trace = section_trace_points(&import_match_shots);
+    let import_runs = straight_runs(&import_trace);
 
     // Build import match shots for station N (last N shots, reversed)
     let import_from_n: Vec<MatchShot> = import_shots[import_shots.len().saturating_sub(max_ref)..]
@@ -1220,6 +1358,13 @@ pub fn suggest_placements(
     let import_station_n = import_shots.len(); // station index for last station
 
     let mut suggestions: Vec<PlacementSuggestion> = Vec::new();
+    // Where each (section, existing station, import station, direction) key
+    // sits in `suggestions`: the duplicate check used to scan the whole list
+    // for every candidate. Keys are unique in the list (a duplicate is merged
+    // into the entry already there), so this finds the same entry the scan's
+    // first match did.
+    let mut suggestion_at: std::collections::HashMap<(SectionId, usize, usize, bool), usize> =
+        std::collections::HashMap::new();
 
     for existing in existing_sections {
         if existing.shots.is_empty() {
@@ -1231,7 +1376,12 @@ pub fn suggest_placements(
             .iter()
             .map(|s| MatchShot::from_shot(s, existing.azimuth_reference))
             .collect();
-        let existing_trace = section_trace_points(&existing_match_shots);
+        // [#576 NF-W4U-3] The trace and its crossing index are pure functions
+        // of the two sections, needed only once a candidate reaches the
+        // crossing check - which most section pairs never produce - so they
+        // are built on that first candidate rather than for every pair.
+        let crossing_for_pair: std::cell::OnceCell<(Vec<TracePoint>, CrossingIndex)> =
+            std::cell::OnceCell::new();
 
         // Try from both leaves of the import section
         let leaf_configs: &[(&[MatchShot], usize)] =
@@ -1254,7 +1404,7 @@ pub fn suggest_placements(
                         config,
                     );
 
-                    if result.matched_count == 0 || result.score < config.min_aggregate_score {
+                    if result.matched_count == 0 || !admitted(result.score, config) {
                         continue;
                     }
 
@@ -1282,64 +1432,27 @@ pub fn suggest_placements(
                         existing_section_name: existing.name.clone(),
                     };
 
-                    let mut best_context: Option<(f64, usize)> = None;
-                    let ignored_crossing_pairs = ignored_crossing_pairs_for_suggestion(
+                    let (existing_trace, crossing) = crossing_for_pair.get_or_init(|| {
+                        let trace = section_trace_points(&existing_match_shots);
+                        let index = CrossingIndex::build(&import_trace, &trace, &import_runs);
+                        (trace, index)
+                    });
+                    let best_context = best_merge_offset(
+                        &import_match_shots,
+                        &existing_match_shots,
+                        &import_trace,
+                        existing_trace,
+                        crossing,
                         &suggestion,
-                        import_match_shots.len(),
-                        existing_match_shots.len(),
+                        config,
                     );
-                    for (import_offset, existing_offset) in merge_offset_pairs(&suggestion) {
-                        let Some((merge_import_station, merge_existing_station)) =
-                            merge_station_pair_for_offsets(
-                                import_match_shots.len(),
-                                existing_match_shots.len(),
-                                &suggestion,
-                                import_offset,
-                                existing_offset,
-                            )
-                        else {
-                            continue;
-                        };
-                        if !placement_crossing_clearance_ok(
-                            &import_trace,
-                            &existing_trace,
-                            merge_import_station,
-                            merge_existing_station,
-                            &ignored_crossing_pairs,
-                            config,
-                        ) {
-                            continue;
-                        }
-                        let context_multiplier = station_context_multiplier(
-                            &import_match_shots,
-                            &existing_match_shots,
-                            merge_import_station,
-                            merge_existing_station,
-                            config,
-                        );
-                        let context_multiplier = if suggestion.matched_shots == 1 {
-                            context_multiplier.max(1.0)
-                        } else {
-                            context_multiplier
-                        };
-                        if best_context
-                            .map(|(best, best_offset)| {
-                                context_multiplier > best
-                                    || ((context_multiplier - best).abs() < 1e-9
-                                        && import_offset > best_offset)
-                            })
-                            .unwrap_or(true)
-                        {
-                            best_context = Some((context_multiplier, import_offset));
-                        }
-                    }
                     let Some((context_multiplier, preferred_offset)) = best_context else {
                         continue;
                     };
                     suggestion.preferred_merge_offset = preferred_offset;
                     suggestion.score *= context_multiplier;
 
-                    if suggestion.score < config.min_aggregate_score {
+                    if !admitted(suggestion.score, config) {
                         continue;
                     }
 
@@ -1351,28 +1464,21 @@ pub fn suggest_placements(
                         SuggestionConfidence::Low
                     };
 
-                    // Check for duplicates
-                    let is_dup = suggestions.iter().any(|s| {
-                        s.existing_section_id == suggestion.existing_section_id
-                            && s.existing_station_index == suggestion.existing_station_index
-                            && s.import_station_index == suggestion.import_station_index
-                            && s.direction == suggestion.direction
-                    });
-                    if is_dup {
-                        // Keep the better score
-                        if let Some(existing_suggestion) = suggestions.iter_mut().find(|s| {
-                            s.existing_section_id == suggestion.existing_section_id
-                                && s.existing_station_index == suggestion.existing_station_index
-                                && s.import_station_index == suggestion.import_station_index
-                                && s.direction == suggestion.direction
-                        }) {
-                            if suggestion.score > existing_suggestion.score {
-                                *existing_suggestion = suggestion;
-                            }
+                    // Check for duplicates, keeping the better score
+                    let key = (
+                        suggestion.existing_section_id,
+                        suggestion.existing_station_index,
+                        suggestion.import_station_index,
+                        suggestion.direction == MatchDirection::Reverse,
+                    );
+                    if let Some(&at) = suggestion_at.get(&key) {
+                        if suggestion.score > suggestions[at].score {
+                            suggestions[at] = suggestion;
                         }
                         continue;
                     }
 
+                    suggestion_at.insert(key, suggestions.len());
                     suggestions.push(suggestion);
                 }
             }
@@ -1383,11 +1489,7 @@ pub fn suggest_placements(
     suppress_duplicate_endpoint_pairs(&mut suggestions);
 
     // Sort by score descending
-    suggestions.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    suggestions.sort_by(|a, b| score_cmp(b.score, a.score));
 
     // Keep top N
     suggestions.truncate(config.max_suggestions);
@@ -1396,8 +1498,21 @@ pub fn suggest_placements(
 }
 
 #[cfg(test)]
+#[expect(clippy::print_stdout)]
+mod perf_tests;
+
+#[cfg(test)]
+#[expect(clippy::print_stdout)]
+mod differential_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "the NaN-order test prints the order it observed, so a failure shows it"
+)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::bare_shot;
 
     fn make_shot_data(
         az_in: f64,
@@ -1406,14 +1521,9 @@ mod tests {
         depth_in: f64,
         depth_out: f64,
     ) -> ShotData {
-        ShotData {
-            azimuth_in: az_in,
-            azimuth_out: az_out,
-            length,
-            depth_in,
-            depth_out,
-            ..Default::default()
-        }
+        bare_shot(length)
+            .with_azimuths(az_in, az_out)
+            .with_depths(depth_in, depth_out)
     }
 
     fn make_shot(
@@ -1568,6 +1678,223 @@ mod tests {
             !via_fallback.is_empty(),
             "a section that declares nothing must still be read through the fallback"
         );
+    }
+
+    /// A synthetic scene shaped like the differential gate's seed 0x736: short
+    /// straight sections of 5 m and 3 m legs with one NaN azimuth each, so the
+    /// matcher yields multi-shot, single-shot and NaN-scored candidates together.
+    fn nan_scene() -> (Vec<ExistingSection>, Vec<ImportSectionForSuggestion>) {
+        // Level legs, and 3 m legs that climb (`up`) or drop (`down`) 3 m.
+        let depth = 29.3;
+        let leg = |az: f64, length: f64| make_shot_data(az, az, length, depth, depth);
+        let up = |az: f64| make_shot_data(az, az, 3.0, depth + 3.0, depth);
+        let down = |az: f64| make_shot_data(az, az, 3.0, depth, depth + 3.0);
+        let existing_shots = [
+            leg(0.0, 5.0),
+            up(90.0),
+            leg(0.0, 5.0),
+            leg(f64::NAN, 5.0),
+            leg(45.0, 0.0),
+            leg(180.0, 5.0),
+            down(0.0),
+            leg(0.0, 5.0),
+            leg(180.0, 5.0),
+            up(180.0),
+        ];
+        let existing = vec![make_section(
+            1,
+            "CaveA",
+            existing_shots
+                .iter()
+                .enumerate()
+                .map(|(i, s)| Shot::new(i as u32, s.clone()))
+                .collect(),
+        )];
+        let imports: Vec<ImportSectionForSuggestion> = [
+            vec![
+                leg(180.0, 5.0),
+                leg(0.0, 5.0),
+                down(90.0),
+                leg(45.0, 5.0),
+                leg(f64::NAN, 5.0),
+                leg(180.0, 5.0),
+                leg(180.0, 5.0),
+                leg(180.0, 5.0),
+            ],
+            vec![
+                leg(0.0, 0.0),
+                leg(0.0, 5.0),
+                up(0.0),
+                leg(90.0, 5.0),
+                leg(0.0, 5.0),
+                leg(0.0, 5.0),
+            ],
+            vec![
+                leg(0.0, 5.0),
+                down(45.0),
+                leg(f64::NAN, 5.0),
+                down(45.0),
+                leg(45.0, 5.0),
+                leg(90.0, 5.0),
+                down(0.0),
+                leg(90.0, 5.0),
+                down(90.0),
+                leg(180.0, 5.0),
+            ],
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, shots)| ImportSectionForSuggestion {
+            index: index as u32,
+            name: format!("Import{index}"),
+            shots,
+            azimuth_reference: None,
+        })
+        .collect();
+        (existing, imports)
+    }
+
+    /// [#576 NF-W9PERF-1] A NaN reading made a candidate's score NaN, and the
+    /// score sorts took NaN as "equal" to every score: equal to 1.3 and to 0.6,
+    /// which are not equal to each other. That is no order, and the standard
+    /// sort panics when it sees it ("does not correctly implement a total
+    /// order"), so one bad azimuth panicked the whole suggestion pass.
+    ///
+    /// The scene is [`nan_scene`]. Its NaN-scored candidate is no longer offered
+    /// (#576 NF-W10BE-1, [`a_nan_scored_candidate_is_not_offered`]); the matcher's
+    /// own sort still sees it.
+    #[test]
+    fn a_nan_reading_neither_panics_the_score_sorts_nor_moves_the_finite_candidates() {
+        let (existing, imports) = nan_scene();
+
+        let found = suggest_all_placements(
+            &imports,
+            AzimuthReference::default(),
+            &existing,
+            &PlacementSuggestionConfig::default(),
+        );
+
+        let scores: Vec<f64> = found.iter().map(|s| s.score).collect();
+        println!("suggestion scores, in order: {scores:?}");
+        let distinct = {
+            let mut bits: Vec<u64> = scores.iter().map(|s| s.to_bits()).collect();
+            bits.dedup();
+            bits.len()
+        };
+        assert!(
+            distinct >= 2 && scores.iter().all(|s| s.is_finite()),
+            "the scene must yield distinct finite scores to test the order: {scores:?}"
+        );
+        assert!(
+            scores.windows(2).all(|w| w[0] >= w[1]),
+            "the finite candidates stay best first: {scores:?}"
+        );
+    }
+
+    /// [#576 NF-W10BE-1] A candidate whose score is NaN is not offered. A NaN
+    /// reading gives the matcher a NaN score, and `NaN < min_aggregate_score` is
+    /// false, so both admission checks let it through and it was offered (sorted
+    /// last, serialised as JSON null).
+    #[test]
+    fn a_nan_scored_candidate_is_not_offered() {
+        let (existing, imports) = nan_scene();
+        let config = PlacementSuggestionConfig::default();
+        let inner = SuggestionConfig::from(&config);
+
+        // Precondition: the matcher itself scores some candidate of this scene NaN,
+        // so what keeps it out below is the admission, not the scene.
+        let existing_shots: Vec<MatchShot> = existing[0]
+            .shots
+            .iter()
+            .map(|s| MatchShot::from_shot(s, existing[0].azimuth_reference))
+            .collect();
+        let mut nan_candidates = 0;
+        for import in &imports {
+            let shots: Vec<MatchShot> = import
+                .shots
+                .iter()
+                .map(|s| MatchShot::from_shot_data(s, AzimuthReference::default()))
+                .collect();
+            let max_ref = inner.max_reference_shots.min(shots.len());
+            let from_0 = shots[..max_ref].to_vec();
+            let from_n: Vec<MatchShot> = shots[shots.len() - max_ref..]
+                .iter()
+                .rev()
+                .map(MatchShot::reversed)
+                .collect();
+            for leaf in [&from_0, &from_n] {
+                for start in 0..existing_shots.len() {
+                    for direction in [MatchDirection::Forward, MatchDirection::Reverse] {
+                        let m = try_match_sequence(leaf, &existing_shots, start, direction, &inner);
+                        nan_candidates += usize::from(m.matched_count > 0 && m.score.is_nan());
+                    }
+                }
+            }
+        }
+
+        let all = suggest_all_placements(&imports, AzimuthReference::default(), &existing, &config);
+        let per_import: Vec<Vec<f64>> = imports
+            .iter()
+            .map(|import| {
+                suggest_placements(
+                    &import.shots,
+                    AzimuthReference::default(),
+                    &existing,
+                    &config,
+                )
+                .iter()
+                .map(|s| s.score)
+                .collect()
+            })
+            .collect();
+        let all_scores: Vec<f64> = all.iter().map(|s| s.score).collect();
+        println!(
+            "NaN-scored matcher candidates: {nan_candidates}; suggest_placements scores per \
+             import: {per_import:?}; suggest_all_placements scores: {all_scores:?}"
+        );
+        assert!(
+            nan_candidates > 0,
+            "precondition: the matcher scores a candidate of this scene NaN"
+        );
+        assert!(
+            per_import.iter().flatten().all(|s| !s.is_nan()),
+            "suggest_placements offers no NaN-scored suggestion: {per_import:?}"
+        );
+        assert!(
+            all_scores.iter().all(|s| !s.is_nan()),
+            "suggest_all_placements offers no NaN-scored suggestion: {all_scores:?}"
+        );
+        assert!(
+            all_scores.iter().any(|s| *s >= inner.min_aggregate_score),
+            "the finite suggestions are still offered: {all_scores:?}"
+        );
+    }
+
+    /// [#576 NF-W9PERF-1] The total order agrees with `partial_cmp` on every
+    /// pair of numbers - signed zeros and infinities included - so no finite
+    /// result can move; only a NaN gets a place (below every number).
+    #[test]
+    fn the_score_order_is_partial_cmp_on_numbers_and_puts_nan_lowest() {
+        use std::cmp::Ordering;
+        let numbers = [
+            f64::NEG_INFINITY,
+            -1.5,
+            -0.0,
+            0.0,
+            f64::MIN_POSITIVE,
+            0.6,
+            1.3,
+            f64::INFINITY,
+        ];
+        for a in numbers {
+            for b in numbers {
+                assert_eq!(Some(score_cmp(a, b)), a.partial_cmp(&b), "{a} vs {b}");
+            }
+            assert_eq!(score_cmp(f64::NAN, a), Ordering::Less, "NaN vs {a}");
+            assert_eq!(score_cmp(a, f64::NAN), Ordering::Greater, "{a} vs NaN");
+        }
+        assert_eq!(score_cmp(f64::NAN, f64::NAN), Ordering::Equal);
+        assert_eq!(score_cmp(-0.0, 0.0), Ordering::Equal, "unlike total_cmp");
     }
 
     // ========================================================================
@@ -2180,7 +2507,19 @@ mod tests {
         ];
 
         assert!(
-            !placement_crossing_clearance_ok(&import_trace, &existing_trace, 0, 0, &[], &config),
+            !placement_crossing_clearance_ok(
+                &import_trace,
+                &existing_trace,
+                &CrossingIndex::build(
+                    &import_trace,
+                    &existing_trace,
+                    &straight_runs(&import_trace)
+                ),
+                0,
+                0,
+                &[],
+                &config
+            ),
             "interior line crossing with 1m vertical clearance should be rejected",
         );
     }
@@ -2224,7 +2563,19 @@ mod tests {
         ];
 
         assert!(
-            placement_crossing_clearance_ok(&import_trace, &existing_trace, 0, 0, &[], &config),
+            placement_crossing_clearance_ok(
+                &import_trace,
+                &existing_trace,
+                &CrossingIndex::build(
+                    &import_trace,
+                    &existing_trace,
+                    &straight_runs(&import_trace)
+                ),
+                0,
+                0,
+                &[],
+                &config
+            ),
             "interior line crossing with 5m vertical clearance should be allowed",
         );
     }
@@ -2573,6 +2924,11 @@ mod tests {
             placement_crossing_clearance_ok(
                 &import_trace,
                 &existing_trace,
+                &CrossingIndex::build(
+                    &import_trace,
+                    &existing_trace,
+                    &straight_runs(&import_trace)
+                ),
                 1,
                 16,
                 &[(0, 15)],

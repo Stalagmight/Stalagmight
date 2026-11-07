@@ -40,10 +40,7 @@ impl AppState {
     /// property. See `Project::remeasure_closure_alignment` for why a sweep that
     /// runs on the inverse at all is still a restore rather than a re-derivation.
     pub(super) fn reconcile_geometry(&self) {
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut guard = self.project.lock();
         let Some(project) = guard.as_mut() else {
             return;
         };
@@ -162,7 +159,25 @@ impl AppState {
                 file_hashes,
                 section_hashes,
             } => self.untrack_import(file_hashes, section_hashes),
-            _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
+            // [#576 RV4-R-U3] Named, not a wildcard: a NEW Command variant must
+            // decide here, at compile time, whether it can run as a redo
+            // re-execution, an `InverseCommand` undo or a Batch sub-command - a
+            // wildcard failed it only at runtime, rolling back a whole batch.
+            // The commands that are not undoable (lifecycle, merge, Repair) and
+            // the edits that record their own snapshot pair (the comment move, the
+            // project settings, the entrance elevation - undone and redone from
+            // those snapshots, never re-executed) are not.
+            Command::CreateProject { .. }
+            | Command::OpenProject { .. }
+            | Command::SaveProject { .. }
+            | Command::CloseProject
+            | Command::MoveComment { .. }
+            | Command::MergeProjects { .. }
+            | Command::RepairIntegrity
+            | Command::UpdateProjectSettings
+            | Command::SetSurfaceElevation => {
+                CommandResult::failure("Command cannot be executed in undo context".to_string())
+            }
         }
     }
 
@@ -178,9 +193,7 @@ impl AppState {
         data: SectionData,
         identity: &SectionIdentity,
     ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
@@ -198,22 +211,12 @@ impl AppState {
             ));
         }
 
-        // Create section with original ID
+        // Create section with original ID. `push_restored_section` keeps both
+        // lookup caches in step (#576 A10): the restored shots keep the uuids
+        // the entry recorded, and a missing cache entry, while never wrong,
+        // would make every lookup into this section a linear scan.
         let section = Section::restore_with_identity(original_id, data, identity);
-        // Keep section_index_cache in step.  The matching
-        // `remove_section` cleared the cache; without this insert
-        // every subsequent `get_section` would fall back to the O(N)
-        // linear scan until something else rebuilds the cache.
-        project
-            .section_index_cache
-            .insert(section.id, project.sections.len());
-        project.sections.push(section);
-        // The restored shots keep the uuids the entry recorded, so the
-        // `(section, uuid) -> index` cache `add_section` maintains incrementally
-        // has to be refreshed for them too; a missing entry is not wrong (
-        // `resolve_key` falls back to a linear scan) but every AfterShot lookup
-        // into this section would pay for it.
-        project.reindex_section_shot_uuids(original_id);
+        project.push_restored_section(section);
         project.touch();
 
         // Update next_section_id if needed
@@ -234,9 +237,7 @@ impl AppState {
         position: usize,
         uuid: Option<String>,
     ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
@@ -258,7 +259,14 @@ impl AppState {
         // through `uuid_or_mint`, or the restored shot would come back with no
         // identity at all: unindexed, and unnameable by any `AfterShot` anchor
         // until some later save noticed.
-        let shot = Shot::with_uuid(original_shot_id, data, Some(Shot::uuid_or_mint(uuid)));
+        //
+        // The ID goes through the section's mint (A18(d), #576). It comes
+        // verbatim off a persisted entry, so it is honoured only inside the
+        // section's id window and while no shot holds it; otherwise the shot
+        // comes back under a fresh id. `ShotId::MAX` used to go in as-is and
+        // park the counter where the user's next append overflowed it.
+        let shot_id = section.take_shot_id(Some(original_shot_id));
+        let shot = Shot::with_uuid(shot_id, data, Some(Shot::uuid_or_mint(uuid)));
 
         // The one insert path that takes a payload-borne identity, so it is also
         // the one that could reintroduce a uuid the section acquired in the
@@ -287,25 +295,20 @@ impl AppState {
             );
         }
 
-        // Update next_shot_id if needed to avoid collisions. SATURATING: the id
-        // arrives verbatim from a persisted entry, so ShotId::MAX must park the
-        // counter rather than panic a debug build or wrap a release one into
-        // colliding ids (#413 finding 24's class, same as the redo append arm).
-        if original_shot_id >= section.next_shot_id {
-            section.next_shot_id = original_shot_id.saturating_add(1);
-        }
-
         if position <= section.shots.len() {
             section.shots.insert(position, shot);
         } else {
             section.shots.push(shot);
         }
+        // The insert moved every later shot of the section (#576 A10).
+        project.reindex_section_shot_uuids(section_id);
 
         project.touch();
 
         tracing::info!(
             section_id,
-            shot_id = original_shot_id,
+            shot_id,
+            recorded_shot_id = original_shot_id,
             position,
             "Shot restored"
         );

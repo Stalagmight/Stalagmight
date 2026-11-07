@@ -8,7 +8,6 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged, createNumericHandler, createToggleHandler, createSelectHandler, parseIntRadix10 } from './types';
-import type { TileProviderInfo } from '../../../types/tile';
 import { defaultConfig } from '../../../types/config';
 
 /** Fallback provider option shown when IPC call fails */
@@ -45,7 +44,7 @@ export function MapSettings({
   // Load providers from backend on mount
   const loadProviders = useCallback(async () => {
     try {
-      const providers = await invokeIpc<TileProviderInfo[]>('get_tile_providers', undefined, { purpose: 'load tile providers' });
+      const providers = await invokeIpc('get_tile_providers', undefined, { purpose: 'load tile providers' });
       if (mountedRef.current) {
         const options: ProviderOption[] = providers.map((p) => ({
           value: p.name,

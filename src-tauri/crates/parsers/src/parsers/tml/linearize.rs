@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use chrono::NaiveDate;
 
-use super::{RawShot, TmlSection, TmlShot, TmlShotType};
+use super::{survives_import, RawShot, TmlSection, TmlShot, TmlShotType};
 // Sections whose shot ids all fit the `section_id * FEATURE_ID_STRIDE + seq`
 // encode, as a COUNT (42_949). Shared with the import/merge boundary checks
 // (#555) so the cut budget below and the mint-time refusals cannot drift apart.
@@ -66,7 +66,7 @@ fn joined_name(names: &[String], extra: usize) -> String {
 }
 
 /// Why a run stopped absorbing, for the aggregated logs.
-#[derive(Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct JoinRefusals {
     uuid_backoff: usize,
     cycle_break: usize,
@@ -140,10 +140,11 @@ pub(super) fn join_contiguous_chains(
     let n = sections.len();
 
     // A seam is only a station if the import keeps the shot on both sides of
-    // it - same filter `convert_shots_to_shot_data` applies.
-    let survives_import = |shot: &TmlShot| shot.shot_type != TmlShotType::Closure && !shot.excluded;
-    let joinable_end = |s: &TmlSection| s.shots.last().is_some_and(survives_import);
-    let joinable_start = |s: &TmlSection| s.shots.first().is_some_and(survives_import);
+    // it whatever the include-excluded toggle says - the import's own filter,
+    // with the toggle off.
+    let kept = |shot: &TmlShot| survives_import(shot, false);
+    let joinable_end = |s: &TmlSection| s.shots.last().is_some_and(kept);
+    let joinable_start = |s: &TmlSection| s.shots.first().is_some_and(kept);
     let same_trip = |a: &TmlSection, b: &TmlSection| {
         a.surveyor == b.surveyor && a.date == b.date && a.color == b.color
     };
@@ -192,64 +193,8 @@ pub(super) fn join_contiguous_chains(
 
     // Resolve the runs before touching any shots, so a refusal can hand the
     // child back as a fresh root instead of stranding it at the end of the
-    // output. `group_of[i]` is the root of the run that owns chain `i`.
-    let mut group_of: Vec<Option<usize>> = vec![None; n];
-    let mut members_of: HashMap<usize, Vec<usize>> = HashMap::new();
-    let mut refusals = JoinRefusals::default();
-
-    while let Some(root) = (0..n).find(|&i| group_of[i].is_none() && parent_of[i].is_none()) {
-        let mut members = vec![root];
-        group_of[root] = Some(root);
-        let mut uuids: std::collections::HashSet<&str> = sections[root]
-            .shots
-            .iter()
-            .filter_map(|s| s.uuid.as_deref())
-            .collect();
-        let mut cursor = root;
-        while let Some(child) = child_of[cursor] {
-            // Already grouped means we walked back into this run: a cycle. Each
-            // chain has at most one parent and one child, so it cannot belong
-            // to a different run.
-            if group_of[child].is_some() {
-                refusals.cycle_break += 1;
-                child_of[cursor] = None;
-                break;
-            }
-            if sections[child]
-                .shots
-                .iter()
-                .filter_map(|s| s.uuid.as_deref())
-                .any(|u| uuids.contains(u))
-            {
-                refusals.uuid_backoff += 1;
-                child_of[cursor] = None;
-                // Hand the child back as a root so it is emitted in file order
-                // rather than stranded after everything else.
-                parent_of[child] = None;
-                break;
-            }
-            uuids.extend(
-                sections[child]
-                    .shots
-                    .iter()
-                    .filter_map(|s| s.uuid.as_deref()),
-            );
-            group_of[child] = Some(root);
-            members.push(child);
-            cursor = child;
-        }
-        members_of.insert(root, members);
-    }
-
-    // A pure cycle has no root at all, so the scan above never reached it.
-    // Emit each member unmerged rather than dropping shots on the floor.
-    for idx in 0..n {
-        if group_of[idx].is_none() {
-            refusals.cycle_stranded += 1;
-            group_of[idx] = Some(idx);
-            members_of.insert(idx, vec![idx]);
-        }
-    }
+    // output.
+    let (mut members_of, refusals) = resolve_runs(sections, child_of, parent_of);
 
     // Emit in the file order of each run's first chain.
     let mut roots: Vec<usize> = members_of.keys().copied().collect();
@@ -322,6 +267,92 @@ pub(super) fn join_contiguous_chains(
     joins
 }
 
+/// Group the chains into runs: from each root (a chain with no parent), follow
+/// `child_of` while the child neither closes a cycle nor repeats a shot UUID
+/// already in the run. Returns each run's members keyed by its root, and why
+/// runs stopped.
+///
+/// Roots are taken smallest index first, and a child refused for a repeated
+/// UUID is handed back as a root of its own, so it is emitted in file order
+/// rather than stranded at the end. The pending roots are kept in an ordered
+/// set (#576 B27(d)): the previous `(0..n).find(..)` rescan from index 0 for
+/// every run was quadratic in the number of chains, which a file controls.
+/// The set pops exactly what that scan found - the smallest chain that has no
+/// parent and is in no run yet - because a chain with no parent can only ever
+/// join a run as its root.
+fn resolve_runs(
+    sections: &[TmlSection],
+    mut child_of: Vec<Option<usize>>,
+    mut parent_of: Vec<Option<usize>>,
+) -> (HashMap<usize, Vec<usize>>, JoinRefusals) {
+    let n = sections.len();
+    // `group_of[i]` is the root of the run that owns chain `i`.
+    let mut group_of: Vec<Option<usize>> = vec![None; n];
+    let mut members_of: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut refusals = JoinRefusals::default();
+    let mut pending: std::collections::BTreeSet<usize> =
+        (0..n).filter(|&i| parent_of[i].is_none()).collect();
+
+    while let Some(root) = pending.pop_first() {
+        if group_of[root].is_some() {
+            continue;
+        }
+        let mut members = vec![root];
+        group_of[root] = Some(root);
+        let mut uuids: std::collections::HashSet<&str> = sections[root]
+            .shots
+            .iter()
+            .filter_map(|s| s.uuid.as_deref())
+            .collect();
+        let mut cursor = root;
+        while let Some(child) = child_of[cursor] {
+            // Already grouped means we walked back into this run: a cycle. Each
+            // chain has at most one parent and one child, so it cannot belong
+            // to a different run.
+            if group_of[child].is_some() {
+                refusals.cycle_break += 1;
+                child_of[cursor] = None;
+                break;
+            }
+            if sections[child]
+                .shots
+                .iter()
+                .filter_map(|s| s.uuid.as_deref())
+                .any(|u| uuids.contains(u))
+            {
+                refusals.uuid_backoff += 1;
+                child_of[cursor] = None;
+                // Hand the child back as a root so it is emitted in file order
+                // rather than stranded after everything else.
+                parent_of[child] = None;
+                pending.insert(child);
+                break;
+            }
+            uuids.extend(
+                sections[child]
+                    .shots
+                    .iter()
+                    .filter_map(|s| s.uuid.as_deref()),
+            );
+            group_of[child] = Some(root);
+            members.push(child);
+            cursor = child;
+        }
+        members_of.insert(root, members);
+    }
+
+    // A pure cycle has no root at all, so the walk above never reached it.
+    // Emit each member unmerged rather than dropping shots on the floor.
+    for (idx, group) in group_of.iter_mut().enumerate() {
+        if group.is_none() {
+            refusals.cycle_stranded += 1;
+            *group = Some(idx);
+            members_of.insert(idx, vec![idx]);
+        }
+    }
+    (members_of, refusals)
+}
+
 /// The first place an emitted run stops being a strictly linear chain, if any.
 ///
 /// Every consumer of a `TmlSection` treats it as a polyline: shot `i` runs from
@@ -365,7 +396,7 @@ fn trip_of(shot: &TmlShot) -> Trip<'_> {
 /// id -> station index), so cutting after a shot the filter may drop would place
 /// the child at the origin whenever the toggle drops it.
 fn is_station_shot(shot: &TmlShot) -> bool {
-    shot.shot_type != TmlShotType::Closure && !shot.excluded
+    survives_import(shot, false)
 }
 
 /// The shot a run takes its surveyor, date and colour from: the first one that
@@ -617,7 +648,7 @@ pub(super) fn collapsed_trip_report(
         // one place the file lost a value, not a thousand.
         let mut collapsed_run: Option<Trip<'_>> = None;
         for shot in &section.shots {
-            if shot.shot_type == TmlShotType::Closure || (!include_excluded && shot.excluded) {
+            if !survives_import(shot, include_excluded) {
                 continue;
             }
             let surveyor = shot.explorer != section.surveyor;
@@ -1206,4 +1237,167 @@ fn has_branching_within(shots: &[&RawShot], successors: &HashMap<i64, Vec<i64>>)
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parsers::tml::test_helpers::sample_tml_shot;
+
+    /// The run resolution as it was before #576 B27(d): a rescan from index 0
+    /// for every run. Kept as the oracle for [`resolve_runs`].
+    fn resolve_runs_by_rescan(
+        sections: &[TmlSection],
+        mut child_of: Vec<Option<usize>>,
+        mut parent_of: Vec<Option<usize>>,
+    ) -> (HashMap<usize, Vec<usize>>, JoinRefusals) {
+        let n = sections.len();
+        let mut group_of: Vec<Option<usize>> = vec![None; n];
+        let mut members_of: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut refusals = JoinRefusals::default();
+        while let Some(root) = (0..n).find(|&i| group_of[i].is_none() && parent_of[i].is_none()) {
+            let mut members = vec![root];
+            group_of[root] = Some(root);
+            let mut uuids: std::collections::HashSet<&str> = sections[root]
+                .shots
+                .iter()
+                .filter_map(|s| s.uuid.as_deref())
+                .collect();
+            let mut cursor = root;
+            while let Some(child) = child_of[cursor] {
+                if group_of[child].is_some() {
+                    refusals.cycle_break += 1;
+                    child_of[cursor] = None;
+                    break;
+                }
+                if sections[child]
+                    .shots
+                    .iter()
+                    .filter_map(|s| s.uuid.as_deref())
+                    .any(|u| uuids.contains(u))
+                {
+                    refusals.uuid_backoff += 1;
+                    child_of[cursor] = None;
+                    parent_of[child] = None;
+                    break;
+                }
+                uuids.extend(
+                    sections[child]
+                        .shots
+                        .iter()
+                        .filter_map(|s| s.uuid.as_deref()),
+                );
+                group_of[child] = Some(root);
+                members.push(child);
+                cursor = child;
+            }
+            members_of.insert(root, members);
+        }
+        for (idx, group) in group_of.iter_mut().enumerate() {
+            if group.is_none() {
+                refusals.cycle_stranded += 1;
+                *group = Some(idx);
+                members_of.insert(idx, vec![idx]);
+            }
+        }
+        (members_of, refusals)
+    }
+
+    /// Deterministic xorshift, so the property test needs no dependency.
+    struct Rng(u64);
+    impl Rng {
+        fn below(&mut self, bound: u64) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0 % bound
+        }
+    }
+
+    fn chain(rng: &mut Rng, uuid_pool: u64) -> TmlSection {
+        let shots = (0..=rng.below(3))
+            .map(|_| TmlShot {
+                uuid: (rng.below(3) > 0).then(|| format!("u{}", rng.below(uuid_pool))),
+                ..sample_tml_shot()
+            })
+            .collect();
+        TmlSection {
+            name: String::new(),
+            shots,
+            surveyor: None,
+            date: None,
+            color: String::new(),
+            is_branch_split: false,
+            start_ariane_id: -1,
+            end_ariane_id: -1,
+            start_depth: 0.0,
+        }
+    }
+
+    /// Random parent/child links, at most one of each per chain - cycles,
+    /// self-free loops of every length, long runs - over chains whose shot
+    /// uuids collide often enough to force back-offs that hand children back
+    /// as roots, including children with a SMALLER index than their parent.
+    fn random_links(rng: &mut Rng, n: usize) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
+        let mut child_of = vec![None; n];
+        let mut parent_of = vec![None; n];
+        for (parent, slot) in child_of.iter_mut().enumerate() {
+            if rng.below(4) == 0 {
+                continue;
+            }
+            let child = rng.below(n as u64) as usize;
+            if child != parent && parent_of[child].is_none() {
+                *slot = Some(child);
+                parent_of[child] = Some(parent);
+            }
+        }
+        (child_of, parent_of)
+    }
+
+    #[test]
+    fn resolve_runs_matches_the_rescan() {
+        let mut rng = Rng(0x00c0_ffee_1357_9bdf);
+        let mut backoffs = 0;
+        let mut cycles = 0;
+        for case in 0..400 {
+            let n = 1 + rng.below(60) as usize;
+            let pool = 2 + rng.below(40);
+            let sections: Vec<TmlSection> = (0..n).map(|_| chain(&mut rng, pool)).collect();
+            let (child_of, parent_of) = random_links(&mut rng, n);
+            let fast = resolve_runs(&sections, child_of.clone(), parent_of.clone());
+            let slow = resolve_runs_by_rescan(&sections, child_of, parent_of);
+            assert_eq!(fast, slow, "case {case}");
+            backoffs += fast.1.uuid_backoff;
+            cycles += fast.1.cycle_break + fast.1.cycle_stranded;
+        }
+        assert!(backoffs > 50 && cycles > 50, "{backoffs} {cycles}");
+    }
+
+    /// Timing probe, not a test: `cargo test -p stalagmight-parsers --lib
+    /// resolve_runs_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing probe; run by hand"]
+    #[expect(clippy::print_stderr)]
+    fn resolve_runs_timing() {
+        for n in [10_000, 20_000, 40_000] {
+            let sections: Vec<TmlSection> = (0..n)
+                .map(|_| TmlSection {
+                    shots: vec![sample_tml_shot()],
+                    ..chain(&mut Rng(1), 1)
+                })
+                .collect();
+            let start = std::time::Instant::now();
+            let (runs, _) = resolve_runs(&sections, vec![None; n], vec![None; n]);
+            let fast = start.elapsed();
+            let start = std::time::Instant::now();
+            resolve_runs_by_rescan(&sections, vec![None; n], vec![None; n]);
+            let slow = start.elapsed();
+            eprintln!(
+                "{n} chains ({} runs): ordered set {} ms, rescan from 0 {} ms",
+                runs.len(),
+                fast.as_millis(),
+                slow.as_millis()
+            );
+        }
+    }
 }

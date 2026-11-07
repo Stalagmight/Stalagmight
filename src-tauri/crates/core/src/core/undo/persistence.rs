@@ -1,43 +1,125 @@
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 
-use super::{Command, PersistStack, UndoData, UndoEntry, UndoStack};
+use super::{Command, PersistStack, StackSlot, UndoData, UndoEntry, UndoStack};
 use crate::models::{Project, SectionId, ShotId};
+use crate::persistence::undo_limits::UNDO_BYTE_BUDGET_BYTES;
+use crate::persistence::{compress_history_json, StoredHistoryRow};
 
 /// What [`UndoData::shot_target`] hands back: the section, the target's uuid if
 /// the entry records one, and the in-session id it was recorded with.
 type ShotTarget<'a> = (SectionId, Option<&'a str>, ShotId);
 
+#[cfg(test)]
+thread_local! {
+    /// How many entries [`UndoStack::stored_rows_to_persist`] has compressed on
+    /// this thread - what a test reads to tell a cached row from a fresh one.
+    pub(crate) static ENTRIES_COMPRESSED: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
 impl UndoStack {
     /// [#303] Every row a save must write for one stack, in stack order and in the
-    /// tuple shape `Database::save_undo_stack_with_timestamps` takes.
+    /// tuple shape `Database::replace_history_stacks_with_timestamps` takes per stack.
     ///
     /// EVERY save writes the whole (windowed) stack. That is forced by the save
     /// pipeline: `save_project` builds a fresh `.stalx.tmp`, renames it over the
     /// target, and only then writes the undo tables into the reopened file.
     ///
     /// `count_limit` is the persisted window: `Some(n)` keeps the last n entries,
-    /// while `None` keeps all byte-budgeted Full-mode entries.
+    /// and of those [#576 B20] only the newest that fit in
+    /// [`UNDO_BYTE_BUDGET_BYTES`] (see [`Self::persist_window`]); `None` keeps all
+    /// byte-budgeted Full-mode entries.
     #[must_use]
     pub fn rows_to_persist(
         &self,
         stack: PersistStack,
         count_limit: Option<usize>,
     ) -> Vec<(String, String, Option<String>)> {
+        self.persist_window(stack, count_limit)
+            .filter_map(|slot| Self::serialize_entry_with_timestamp(slot))
+            .collect()
+    }
+
+    /// [`Self::rows_to_persist`], compressed - the rows exactly as
+    /// `Database::replace_history_stacks_stored` writes them, byte for byte what
+    /// `replace_history_stacks_with_timestamps` would store for the JSON rows.
+    ///
+    /// [#576 B20] Each entry is serialized and gzipped ONCE: the result is kept
+    /// beside the entry ([`StackSlot`]) and every later save reuses it, so a save
+    /// compresses only the entries that are new since the last one - instead of
+    /// re-gzipping every whole-project snapshot pair in the window on every
+    /// autosave. An entry that moves between the stacks (undo / redo) or is changed
+    /// is compressed again on the next save.
+    #[must_use]
+    pub fn stored_rows_to_persist(
+        &self,
+        stack: PersistStack,
+        count_limit: Option<usize>,
+    ) -> Vec<StoredHistoryRow> {
+        self.persist_window(stack, count_limit)
+            .filter_map(|slot| {
+                let (command, undo_data) = slot
+                    .stored
+                    .get_or_init(|| {
+                        #[cfg(test)]
+                        ENTRIES_COMPRESSED.with(|n| n.set(n.get() + 1));
+                        Self::serialize_entry(&slot.entry).map(|(command, undo_data)| {
+                            (
+                                Arc::from(compress_history_json(&command)),
+                                Arc::from(compress_history_json(&undo_data)),
+                            )
+                        })
+                    })
+                    .as_ref()?;
+                Some(StoredHistoryRow {
+                    command: Arc::clone(command),
+                    undo_data: Arc::clone(undo_data),
+                    timestamp: slot.timestamp.map(|t| t.to_rfc3339()),
+                })
+            })
+            .collect()
+    }
+
+    /// The entries a save writes for one stack, oldest first.
+    ///
+    /// `Some(n)` (the count window: a local project, Disabled mode) takes the
+    /// newest n, and then [#576 B20] only the newest of those whose estimated sizes
+    /// add up to at most [`UNDO_BYTE_BUDGET_BYTES`] - the newest always kept, even
+    /// alone over it - the same budget, measure and rule a Full-mode stack is held
+    /// to in memory. Without it a save re-wrote (and re-gzipped) every whole-project
+    /// snapshot pair of the window: ~340 MB of JSON per stack on a 20,000-shot
+    /// project. `None` (Full mode) is the whole stack, already bounded by that
+    /// budget in memory.
+    fn persist_window(
+        &self,
+        stack: PersistStack,
+        count_limit: Option<usize>,
+    ) -> impl Iterator<Item = &StackSlot> {
         let entries = match stack {
             PersistStack::Undo => &self.undo_stack,
             PersistStack::Redo => &self.redo_stack,
         };
 
         let skip = match count_limit {
-            Some(limit) if entries.len() > limit => entries.len() - limit,
-            _ => 0,
+            Some(limit) => {
+                let mut kept = 0usize;
+                let mut bytes = 0usize;
+                for slot in entries.iter().rev().take(limit) {
+                    let size = Self::estimated_size(slot);
+                    if kept > 0 && bytes.saturating_add(size) > UNDO_BYTE_BUDGET_BYTES {
+                        break;
+                    }
+                    bytes = bytes.saturating_add(size);
+                    kept += 1;
+                }
+                entries.len() - kept
+            }
+            None => 0,
         };
 
-        entries
-            .iter()
-            .skip(skip)
-            .filter_map(Self::serialize_entry_with_timestamp)
-            .collect()
+        entries.iter().skip(skip)
     }
 
     /// Serialize an entry to JSON.
@@ -62,6 +144,7 @@ impl UndoStack {
         let command = Self::deserialize_command(command_json)?;
         let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
         Some(UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command,
             undo_data,
@@ -82,6 +165,7 @@ impl UndoStack {
             None => None,
         };
         Some(UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command,
             undo_data,

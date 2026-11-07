@@ -1070,8 +1070,6 @@ test.describe('E2E Test Infrastructure', () => {
     const hasMapAPI = await page.evaluate(() => {
       const map = (window as unknown as {
         __stalagmight_map__?: {
-          loaded: () => boolean;
-          isStyleLoaded?: () => boolean;
           project: (coords: [number, number]) => { x: number; y: number };
           getStyle: () => { layers: unknown[] };
           getPaintProperty: (layer: string, prop: string) => unknown;
@@ -1081,7 +1079,6 @@ test.describe('E2E Test Infrastructure', () => {
 
       return {
         hasMap: !!map,
-        isLoaded: (map?.isStyleLoaded?.() ?? false) || (map?.loaded?.() ?? false),
         hasProject: typeof map?.project === 'function',
         hasGetStyle: typeof map?.getStyle === 'function',
         hasGetPaintProperty: typeof map?.getPaintProperty === 'function',
@@ -1090,7 +1087,19 @@ test.describe('E2E Test Infrastructure', () => {
     });
 
     expect(hasMapAPI.hasMap).toBe(true);
-    expect(hasMapAPI.isLoaded).toBe(true);
+    // [#576 RV4-FE-P-1, NF-W8E3-1] "Loaded" is a transient state: right after the
+    // first loaded frame MapLibre's sources settle and loaded() / isStyleLoaded()
+    // read false again for a few frames, so a second single read flaked. Poll it.
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const map = (window as unknown as {
+            __stalagmight_map__?: { loaded?: () => boolean; isStyleLoaded?: () => boolean };
+          }).__stalagmight_map__;
+          return (map?.isStyleLoaded?.() ?? false) || (map?.loaded?.() ?? false);
+        }),
+      )
+      .toBe(true);
     expect(hasMapAPI.hasProject).toBe(true);
     expect(hasMapAPI.hasGetStyle).toBe(true);
     expect(hasMapAPI.hasGetPaintProperty).toBe(true);

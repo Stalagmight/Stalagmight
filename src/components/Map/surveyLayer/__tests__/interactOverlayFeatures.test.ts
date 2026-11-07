@@ -17,6 +17,7 @@ import { getMapThemeColors } from '../../../../utils/themeColors';
 import { GAS_DIM_ALPHA, SHOT_ALPHA_REFERENCE, SHOT_ALPHA_NORMAL } from '../customRender/shaders';
 import type { Section } from '../../../../types/ipc/Section';
 import type { Station } from '../../../../types/ipc/Station';
+import { makeStation } from '../../../../test/factories/survey';
 
 const stubProjector: Projector = {
   project: (lngLat) => ({ x: lngLat[0], y: lngLat[1] }),
@@ -52,14 +53,8 @@ function fixture() {
       shots: [shot(101, 'Normal'), shot(102, 'Reference')],
     },
   ];
-  const st = (station_index: number, x: number, y: number): Station => ({
-    station_ref: { section_id: 1, station_index },
-    coordinates: { x, y, z: 0 },
-    is_zero_datum: false,
-    gps_coordinates: null,
-    merged_with: [],
-    closures_with: [],
-  });
+  const st = (station_index: number, x: number, y: number): Station =>
+    makeStation({ station_ref: { section_id: 1, station_index }, coordinates: { x, y, z: 0 }, closures_with: [] });
   const stations: Station[] = [st(0, 0, 0), st(1, 10, 0), st(2, 20, 0)];
   return surveyDataFromLegacy(sections, stations);
 }

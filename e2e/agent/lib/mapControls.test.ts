@@ -77,6 +77,35 @@ describe('mapFeatureClick', () => {
     ).rejects.toThrow('instead of station 3:8');
   });
 
+  it("keeps the app's selection off the line a runner prints, and refuses an unknown feature type (#576 W51)", async () => {
+    const browser = pointerBrowser();
+    evalInAppMock
+      .mockResolvedValueOnce({
+        featureType: 'station',
+        sectionId: 3,
+        stationIndex: 8,
+        lngLat: [1, 2],
+        canvasPoint: { x: 20, y: 30 },
+        canvasSize: { width: 200, height: 100 },
+        point: { x: 120, y: 230 },
+        clearancePx: 0,
+        interactionSequenceBefore: 8,
+      })
+      .mockResolvedValueOnce('div[data-testid=system-card-qzCaveA]')
+      .mockResolvedValueOnce({ interactionSequence: 9, selection: { type: 'section', name: 'qzCaveA' } })
+      .mockResolvedValueOnce(undefined);
+    const err = await mapFeatureClick(browser, { featureType: 'station', sectionId: 3, stationIndex: 8 }).then(
+      () => new Error('resolved'),
+      (e: unknown) => e as Error,
+    );
+    expect(err.message.split('\n')[0]).toBe('map_feature_click selected something else instead of station 3:8');
+    expect(err.message.split('\n')[0]).not.toContain('qzCaveA');
+
+    await expect(
+      mapFeatureClick(browser, { featureType: 'qzCaveA' as 'shot', sectionId: 3, shotId: 1 }),
+    ).rejects.toThrow(new Error('map_feature_click needs a featureType of shot or station'));
+  });
+
   it('allows non-selection map tools to skip selection verification', async () => {
     const browser = pointerBrowser();
     evalInAppMock

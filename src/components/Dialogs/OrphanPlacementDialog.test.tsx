@@ -19,18 +19,17 @@ import userEvent from '@testing-library/user-event';
 // execute. Stub it - this test is about completion wiring, not the preview.
 vi.mock('./SectionPreview', () => ({ default: () => null }));
 // Telemetry is fire-and-forget; keep it from reaching Tauri IPC under jsdom.
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-}));
+vi.mock('../../utils/telemetry', async () => (await import('../../test/factories/telemetry')).telemetryWith());
 
 import OrphanPlacementDialog from './OrphanPlacementDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
-import type { CommandResult, OrphanPlacementSuggestion } from '../../types/commands';
+import type { OrphanPlacementSuggestion } from '../../types/commands';
+import { accepted, type CommandOutcome } from '../../store/commandResult';
+import type { EditOutcome } from '../../types/ipc/EditOutcome';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 
-const ok = async (): Promise<CommandResult> => ({ success: true } as CommandResult);
+const ok = async (): Promise<CommandOutcome<EditOutcome>> => accepted<EditOutcome>({ warnings: [], remote_link: null });
 
 /** A minimal, valid suggestion. `matchedShots: 0` skips the shot-rewrite branch
  *  (applyOverlapTreatment returns early), keeping the test focused on the
@@ -194,5 +193,36 @@ describe('OrphanPlacementDialog - receipt surface routing (#411/#420)', () => {
       expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: converted }),
     );
     expect(showToast).not.toHaveBeenCalled();
+  });
+});
+
+describe('OrphanPlacementDialog - the overlap picker while an Accept runs (#576 HFI2-F6)', () => {
+  it('disables the overlap-treatment picker until the Accept finishes, like the Accept button', async () => {
+    // The Accept captured the mode at click; a change made while it runs would
+    // not apply to it and would carry over to the next suggestion unannounced.
+    let release: () => void = () => {};
+    const merging = new Promise<CommandOutcome<EditOutcome>>((resolve) => {
+      release = () => resolve(accepted<EditOutcome>({ warnings: [], remote_link: null }));
+    });
+    useProjectStore.setState({ mergeStations: vi.fn(() => merging) });
+    const suggestions = [
+      makeSuggestion({ matchedShots: 2 }),
+      makeSuggestion({ orphanSectionId: 3, matchedShots: 2 }),
+    ];
+    render(<OrphanPlacementDialog suggestions={suggestions} />);
+    expect(screen.getByTestId('overlap-mode-select')).toBeEnabled();
+
+    await userEvent.click(screen.getByTestId('orphan-accept'));
+
+    await waitFor(() => expect(screen.getByTestId('orphan-accept')).toBeDisabled());
+    const whileRunning = {
+      accept: screen.getByTestId('orphan-accept').hasAttribute('disabled'),
+      picker: screen.getByTestId('overlap-mode-select').hasAttribute('disabled'),
+    };
+    expect(whileRunning).toEqual({ accept: true, picker: true });
+
+    release();
+    await waitFor(() => expect(screen.getByTestId('orphan-accept')).toBeEnabled());
+    expect(screen.getByTestId('overlap-mode-select')).toBeEnabled();
   });
 });

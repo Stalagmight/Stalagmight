@@ -335,6 +335,9 @@ When a zero datum is set with GPS coordinates, a coordinate transformation conve
 The transformation is implemented in `src-tauri/crates/models/src/geo.rs` with:
 - `geodetic_to_ecef(lat, lon, alt)` - WGS84 to ECEF
 - `gps_to_local(gps, origin)` - Main entry point returning (east, north) meters
+- `local_to_gps(east, north, origin)` - its exact inverse, the one local-to-GPS
+  algorithm (the frontend's `enuToGps` runs the same solve); see
+  [Architecture](architecture.md#coordinate-transformation-zero-datum)
 
 ### 4.4 Computed Values
 
@@ -825,7 +828,7 @@ defaults from `src-tauri/crates/core/src/config/defaults.rs` and are all rebinda
 | **Move Shot** | G | - | Pick up one shot: both endpoints plus any co-located stations | Drop what is being carried | Pan map |
 | **Move Segment** | V | Pick up the whole connected branch (sections joined by merges and aligned closures) | Same, grabbed on a shot | Drop what is being carried, else deselect | Pan map |
 | **Comment** | C | Open the comment editor on the station | Open the comment editor on the shot | Close the editor | - |
-| **Move Comment** | Shift+C | Pick up the comment; second click moves it (swap dialog if the target already has one) | Same, for shot comments | Cancel | - |
+| **Move Comment** | Shift+C | Pick up the comment; second click moves it (swap dialog if the target already has one); a second click on the same station cancels | Same, for shot comments | Cancel | - |
 
 There is no Draw or Delete tool. Shots are added from the map context menu:
 **Add Shot Before/After** at the ends of a section, or **Insert Station...** on
@@ -844,6 +847,15 @@ from the toolbar, and their P/Z shortcuts inert, unless
 `map.controls.show_navigation_tools` is on (Settings -> Map -> Controls).
 Turning that setting off while one of them is active drops the map back to
 Select.
+
+While geometry is being carried, no other edit runs on the survey. Any other
+change attempted before the drop (an undo, a table edit, a delete, a dialog's
+save) cancels the move instead and is not applied either, so it can be retried
+on the unmoved survey. The move is also cancelled when the survey changes
+underneath it, when the map turns read-only (Plan/Export, the Closures Computed
+View, a lost SpeleoDB lock), when a tool other than the three move tools is
+chosen, when placement mode starts, and when the project is closed or another one
+is opened. Switching between the move tools keeps what is being carried.
 
 The three move tools are documented in detail in [move-tools.md](move-tools.md).
 
@@ -1080,9 +1092,10 @@ apart it left the intermediate difference outside `(-180, 180]` and returned the
 an azimuth is still degrees clockwise from north and the old rendering was simply
 wrong - so, unlike the v11 to v12 pitch flip, the fix must not rewrite readings to
 preserve the old geometry. Instead the ambiguity is taken out of the file:
-schema **v14** normalises every stored reading into `[0, 360)`, and
-`DmpShot::to_shot_data` now does the same at import (Compass and TML already did),
-so no build can reach the truncation case again. Normalising is a no-op for
+schema **v14** normalises every stored reading into `[0, 360)`, and the core
+import gate (`execute_import_sections`) does the same for every importer's shots
+and for the overlap updates the DMP wizard sends for existing shots, so no build
+can reach the truncation case again. Normalising is a no-op for
 geometry - `600` and `240` are the same reading - so the same `.stalx` renders
 identically either side of the fix. Affected data is narrow and already flagged:
 both readings inside `[0, 360)` put their difference in `(-360, 360)`, so a shot
@@ -1096,10 +1109,22 @@ to its mirrored station so each relationship stays on its original physical
 station. That list is the complete set of `StationKey`-bearing collections on
 `Project` (`for_each_station_ref`), but it is *not* everything in the app that
 names a station: the gas plan's pins (origin, endpoint, way points, marked
-points, stage-drop overrides) and the UI's selection are positional
-`StationRef`s the backend cannot reach. The plan's pins are mirrored frontend-
-side so the plan stays on the physical stations the diver picked; selection and
-merge staging are cleared.
+points, stage-drop overrides), the distance-gradient origin and the UI's
+selection are positional `StationRef`s the backend cannot reach. The plan's
+pins and the distance-gradient origin are not mirrored; they hold backend
+anchors (#310, #576 D39(g)). Before every survey edit, undo or redo the
+frontend anchors each of them to the shots its station sits between
+(`plan_anchors_for_refs`), and once the edit lands it re-resolves those anchors
+in the new numbering (`plan_refs_for_anchors`), so they stay on the physical
+stations the diver picked through a reverse - and through an insert or a
+delete, which renumber just as silently. A plan pin whose anchor no longer
+resolves is kept and flagged as unresolved, which blocks saving the plan; an
+origin whose station is gone falls back to the entrance with a notice. The one
+mirror left is a fallback: when the origin's anchor cannot be taken (the call
+fails, or the backend has no anchor for it), a reverse mirrors the origin from
+`reversed_sections` as it did before the anchors, and any other edit leaves it
+where it is; the anchor and the mirror never both move it. Selection, merge
+staging, the move-comment pickup and the comment popover are cleared.
 
 Pins inside a *saved* `.plnx` need **no** rewriting, because a plan does not name a
 station by its position. It records the two shots a station sits BETWEEN, and a
@@ -1126,13 +1151,14 @@ the reverse keeps shot *ids* on positions - so the save-time carry-over would
 otherwise re-read the row's `(section_id, shot_id)` as an identity and migrate
 the ignore onto the mirrored shot.
 
-`CommandResult.reversed_sections` names the sections a command renumbered -
+`reversed_sections` (`ReverseOutcome` / `BatchOutcome`; `HistoryOutcome.reversed_steps` for undo and redo) names the sections a command renumbered -
 on the forward reverse, on a batch of them, and on an undo or redo of either
 (undoing a reverse re-reverses the numbering). A reverse keeps every station's
 world position, so there is nothing in the geometry for a consumer to diff; the
-field exists so the frontend mirrors its positional refs exactly instead of
-inferring a reverse from moved stations, an inference that cannot tell a
-reversed section from one that was reversed *and* moved in the same action. It
+field exists so the frontend acts on a renumbering exactly (the clears and the
+origin fallback above) instead of inferring a reverse from moved stations, an
+inference that cannot tell a reversed section from one that was reversed *and*
+moved in the same action. It
 is omitted from the payload entirely when nothing was renumbered.
 
 The section's `direction` (In/Out) is metadata and is deliberately **not**
@@ -1528,8 +1554,8 @@ The undo/redo stacks are exposed to the frontend via Tauri IPC commands:
 |---------|-------------|---------|
 | `get_undo_stack` | Get full undo stack with preview data | `Vec<UndoHistoryItem>` |
 | `get_redo_stack` | Get full redo stack with preview data | `Vec<UndoHistoryItem>` |
-| `undo_to` | Undo multiple steps to index N | `CommandResult` |
-| `redo_to` | Redo multiple steps to index N | `CommandResult` |
+| `undo_to` | Undo multiple steps to index N | `HistoryOutcome` (or `CommandError`) |
+| `redo_to` | Redo multiple steps to index N | `HistoryOutcome` (or `CommandError`) |
 
 **UndoHistoryItem DTO:**
 ```typescript
@@ -1553,7 +1579,7 @@ interface UndoHistoryItem {
 **Failure behavior:**
 - On single `undo()`/`redo()` failure, the popped entry is pushed back to the original stack so no entry is lost
 - On `undo_to(N)`/`redo_to(N)` failure, execution stops at the failing step; already-completed steps remain applied, and the failing entry is pushed back to its original stack
-- `undo_to`/`redo_to` return an enhanced error message on partial failure: `"Undo failed at step {current} of {total}: {reason}"` (or `"Redo failed at step..."`)
+- `undo_to`/`redo_to` fail on partial failure with the code `HISTORY_STEP_FAILED` and `history_step: { failed_step, total_steps }` (#576 C4); the display message reads `"Undo failed at step {current} of {total}: {reason}"` (or `"Redo failed at step..."`), and nothing parses it
 - A `tracing::error!` is logged whenever a popped entry fails to apply, including command description, undo data variant name, and failure reason (no full snapshot JSON)
 - Frontend shows an error toast with the failure reason (`result.error ?? 'Unknown error'`) using de-duplication keys `'undo-failed'` / `'redo-failed'`
 - Frontend always calls `refreshProjectState()` on both success and failure (via `try/finally`) to sync UI with backend state
@@ -2059,14 +2085,31 @@ function useNetworkStatus() {
 4. Cancel
 
 #### Backup Before Repair
-Always create backup before attempting repair:
-```rust
-fn backup_before_repair(path: &Path) -> Result<PathBuf> {
-    let backup = path.with_extension("stalx.backup");
-    fs::copy(path, &backup)?;
-    Ok(backup)
-}
-```
+Always create a backup before attempting repair: a numbered `<name>.stalx.backup`,
+`.backup.1`, ... that never overwrites an earlier one. Repair then rebuilds the
+indexes and rewrites the file with `VACUUM INTO` a sibling plus a rename, never a
+plain `VACUUM`, which would go through the system temp directory (a small tmpfs on
+many Linux systems).
+
+#### Restore from Backup (#576 C15)
+The Restore list offers every file the project can be restored from, each labelled
+and checked:
+- **Backup**: Repair's numbered backups and the copy kept before a file-format
+  upgrade (`<name>.stalx.pre-v<N>.backup`).
+- **Interrupted save**: a `<name>.stalx.tmp` left by a save that did not finish. It
+  can hold the newest edits, or be incomplete; the check decides.
+- **Your file before restore N**: `<name>.stalx.pre-restore.N`, the file an earlier
+  restore replaced, so a restore can be undone from the same list.
+
+Each one is checked the way a restore would install it (with the rollback journal
+beside it, if there is one): it must open, pass `PRAGMA quick_check` and hold a
+project. One that fails is listed greyed out with the reason and cannot be picked.
+
+A restore checks the candidate again on a copy staged beside the project (refused,
+with nothing touched, if it fails), keeps the current file as the next free
+`.pre-restore.N` (never overwriting an earlier one, and moving a rollback journal
+left beside it along with it, so it can never be rolled back into the restored
+file), and then renames the staged copy over the project in one step.
 
 ### 14.5 Validation Error Recovery
 
@@ -2210,7 +2253,18 @@ interrupted save never leaves a half-written project - see [saving.md](saving.md
 
 The schema is versioned (`SCHEMA_VERSION` in
 `src-tauri/crates/persistence/src/persistence/sqlite.rs`) and migrated forward when an older file is
-opened. Alongside the survey tables (project, sections, shots, station merges,
+opened, down to schema 2, the first released schema (v0.0.3): an older, pre-release
+file is refused with a message to re-import its survey. An upgrade runs in one
+transaction and first keeps one copy of the file as it was,
+`<name>.stalx.pre-v<old>.backup`, which the recovery dialog offers (see
+[saving.md](saving.md#files-saved-by-an-older-version-upgraded-on-open-one-copy-kept)).
+A file stamped with a NEWER schema - saved by a newer Stalagmight - is opened
+read-only instead: nothing is migrated or written, its undo history stays in the file
+untouched, editing is blocked behind a banner ("This project was saved by a newer
+version of Stalagmight. Update Stalagmight to edit it."), and every save and SpeleoDB push of it
+is refused, so an older build can never rewrite it at its own schema and drop what the
+newer one stored. Viewing and export work. See
+[saving.md](saving.md#files-saved-by-a-newer-version-open-read-only). Alongside the survey tables (project, sections, shots, station merges,
 zero datums, loop closures, section and station offsets) it holds per-project and
 display settings, the persisted undo and redo stacks, resolved warnings, import
 hashes, station comments, the SpeleoDB link row, and the Unwind chain position in
@@ -2266,6 +2320,7 @@ Rewrite `pytool_mnemo_lib` parser in Rust. Key structures:
 pub struct DmpFile {
     pub version: u8,  // 2-5
     pub sections: Vec<DmpSection>,
+    pub warnings: Vec<String>,  // what could not be read; empty for a clean file
 }
 
 pub struct DmpSection {
@@ -2393,6 +2448,11 @@ section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out
 }
 ```
 
+`lrud` is `[left, right, up, down]` in metres. A side nobody measured is
+`null` - `[1.2, null, null, null]` is a shot where only the left wall was
+taped - and `0.0` always means a wall measured at zero, matching the empty
+CSV cell. A shot with no LRUD at all has no `lrud` key.
+
 ---
 
 ## 18. Technical Stack
@@ -2423,8 +2483,10 @@ manager honors it; locally the `engines` range is advisory - a newer node warns
 but does not block.
 
 TypeScript runs in strict mode with `noUncheckedIndexedAccess` and
-`exactOptionalPropertyTypes` on top of it; `tsconfig.json` is the source of truth
-and `pnpm tsc --noEmit` is a CI gate.
+`exactOptionalPropertyTypes` on top of it. The options live in
+`tsconfig.base.json`, which the app (`tsconfig.json`), Playwright and agent-harness
+programs all extend; `pnpm tsc --noEmit`, `pnpm typecheck:playwright` and
+`pnpm typecheck:agent` are CI gates.
 
 ### 18.3 Project Structure
 

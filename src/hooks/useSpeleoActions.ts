@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import {
@@ -12,15 +13,34 @@ import {
 } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { openExitPrompt, type PendingExit } from '../utils/quit';
-import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
+import { humanizeSpeleoError, type SpeleoErrorContext } from '../utils/speleoError';
+import { errorCode } from '../utils/commandError';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
+import { afterQueuedEdits } from '../utils/projectTransition';
 import { TOAST_KEYS } from '../utils/toastKeys';
+import { surfaceSaveWarnings } from '../utils/saveFeedback';
 import type {
   DoneResult,
   PushResult,
+  SpeleoDoneReport,
+  SpeleoPushReport,
   StartEditingResult,
-  UpdateResult,
+  ValidationWarning,
 } from '../types/ipc.generated';
+
+/**
+ * [#576 NF-W2SAVE-1] Done and Push answer their outcome together with the warnings
+ * of the project save they ran before the upload (what that save could not keep).
+ * Those are one-shot - the save after the push does not repeat them - so they are
+ * shown here, like a normal save's. [#576 NF-W8FE-2] Only that wire shape is read,
+ * as Publish reads its own: a bare outcome is a broken contract and fails the verb
+ * loudly instead of passing for a clean one.
+ */
+function readSpeleoReport<T extends SpeleoDoneReport | SpeleoPushReport>(
+  raw: T,
+): { result: T['result']; saveWarnings: ValidationWarning[] } {
+  return { result: raw.result, saveWarnings: raw.save_warnings ?? [] };
+}
 
 /**
  * The single-writer hand-off verbs (#204), with backend-result routing. Keeps
@@ -39,13 +59,18 @@ export interface SpeleoActions {
       call - all of which already surface their own toast / routing. Callers that
       hand the shell over on success (the held-lock prompt) MUST check it:
       treating a refusal as success there dismisses the prompt and discards the
-      remaining locks. */
-  startEditing: () => Promise<boolean>;
+      remaining locks.
+      `resumeHeldLock` (#576 RV2-R-13-RESTART): the held-lock prompt's Continue
+      editing - a lock this account already holds is claimed for this session, so
+      a later Done releases it. Every other caller omits it. */
+  startEditing: (options?: { resumeHeldLock?: boolean }) => Promise<boolean>;
   /** Discard the local copy and route the optional Start Editing result returned
-      when the caller asks to keep editing. The discard error is left to the caller. */
+      when the caller asks to keep editing. The discard error is left to the caller.
+      `workspace_read_only` (#576 RV4-FE-SP4): refused before any IPC in the read-only
+      Plan or Export workspace, with the notice a refused edit gets. */
   discardChanges: (
     keepLock: boolean,
-  ) => Promise<'editing' | 'released' | 'discarded_without_lock' | 'stale'>;
+  ) => Promise<'editing' | 'released' | 'discarded_without_lock' | 'stale' | 'workspace_read_only'>;
   /** #213 (E2): enter optimistic force-edit - edit WITHOUT the write lock (offline,
       or while someone else holds it). Gated on the `allow_force_edit` opt-in (the
       backend refuses otherwise) and behind a big-red destructive confirm; the caller
@@ -78,9 +103,24 @@ export interface SpeleoActions {
     opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit },
   ) => Promise<DoneResult | null>;
   /** #198 "Take remote": DISCARD local unpushed edits and reset to the server
-      tip. Returns `true` once the tree is reloaded, `false` if the call threw.
-      The caller must gate this behind a destroy-confirmation. */
-  takeRemote: () => Promise<boolean>;
+      tip. `took` once the tree is reloaded, `failed` if the call threw or the reload
+      was superseded, `workspace_read_only` when refused before any IPC in the
+      read-only Plan or Export workspace (#576 RV4-FE-SP4; the notice is already up,
+      so the caller closes rather than offering a retry - NF-FIX4FE-1). The caller
+      must gate this behind a destroy-confirmation. */
+  takeRemote: () => Promise<'took' | 'failed' | 'workspace_read_only'>;
+}
+
+/**
+ * [#576 RV4-FE-SP4] Discard changes and Take remote replace the survey, so - like Restore
+ * revision and Unwind (RV2-R-15) - they are refused in the read-only Plan and Export
+ * workspaces, here before any IPC, with the notice a refused edit gets. True when refused.
+ */
+function refuseSurveySwapOutsideSurvey(): boolean {
+  const ui = useUIStore.getState();
+  if (ui.appMode === 'survey') return false;
+  ui.showToast(i18n.t('editGate.workspaceReadOnlyNotice'), TOAST_KEYS.EDIT_DISABLED, 'warning');
+  return true;
 }
 
 export function useSpeleoActions(): SpeleoActions {
@@ -140,9 +180,9 @@ export function useSpeleoActions(): SpeleoActions {
       inline notice inside the Speleo dialogs). One event, one surface
       (docs/notifications.md); the toast-and-banner pair predates the banner. */
   const humanizeError = useCallback(
-    (e: unknown, prefixKey: string): string => {
-      if (speleoErrorAction(e) === 'ReLogin') clearSession();
-      return humanizeSpeleoError(e, t(prefixKey));
+    (e: unknown, prefixKey: string, context?: SpeleoErrorContext): string => {
+      if (errorCode(e) === 'SPELEODB_RELOGIN') clearSession();
+      return humanizeSpeleoError(e, t(prefixKey), context);
     },
     [clearSession, t],
   );
@@ -207,13 +247,19 @@ export function useSpeleoActions(): SpeleoActions {
     [applyStartEditing, loadProject, showToast, t],
   );
 
-  const startEditing = useCallback(async (): Promise<boolean> => {
+  const startEditing = useCallback(async (options?: { resumeHeldLock?: boolean }): Promise<boolean> => {
     const issuedFor = speleoProjectSessionIssuedFor(
       useSpeleoStore.getState().remoteProjectId,
     );
     const busyToken = beginBusy();
     try {
-      const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
+      // [#576 D23-SWAP] A fast-forward swaps the tree, so the edits queued
+      // before this reach the backend first.
+      const result = await afterQueuedEdits(() =>
+        options?.resumeHeldLock
+          ? invokeIpc('speleodb_start_editing', { resumeHeldLock: true })
+          : invokeIpc('speleodb_start_editing'),
+      );
       const routed = await routeStartEditingResult(result, true, issuedFor);
       if (!routed.landed) return false;
       if (routed.treeReplaced && !(await applySpeleoTreeReplacement(issuedFor, true))) {
@@ -232,16 +278,21 @@ export function useSpeleoActions(): SpeleoActions {
   const discardChanges = useCallback(
     async (
       keepLock: boolean,
-    ): Promise<'editing' | 'released' | 'discarded_without_lock' | 'stale'> => {
+    ): Promise<'editing' | 'released' | 'discarded_without_lock' | 'stale' | 'workspace_read_only'> => {
+      if (refuseSurveySwapOutsideSurvey()) return 'workspace_read_only';
       const issuedFor = speleoProjectSessionIssuedFor(
         useSpeleoStore.getState().remoteProjectId,
       );
       const busyToken = beginBusy();
       try {
-        const result = await invokeIpc<StartEditingResult | null>('speleodb_discard_changes', {
-          keepLock,
-          acknowledged: true,
-        });
+        // [#576 D23-SWAP] Discard always swaps the tree (see below): the edits
+        // queued before this reach the backend first.
+        const result = await afterQueuedEdits(() =>
+          invokeIpc('speleodb_discard_changes', {
+            keepLock,
+            acknowledged: true,
+          }),
+        );
         const routed = result
           ? await routeStartEditingResult(result, false, issuedFor)
           : null;
@@ -271,7 +322,7 @@ export function useSpeleoActions(): SpeleoActions {
       // No result payload: the backend flips the edit gate + force-edit flag.
       // Re-seed the link so `editState → editing` and `forceEditing → true` drive
       // the read-only badge off and the big-red banner on.
-      await invokeIpc<null>('speleodb_force_edit');
+      await invokeIpc('speleodb_force_edit');
       await refreshLinkStatus();
       showToast(t('speleodb.forceEdit.toasts.active'), TOAST_KEYS.SPELEODB_FORCE_EDIT, 'warning');
       return true;
@@ -293,7 +344,8 @@ export function useSpeleoActions(): SpeleoActions {
     );
     const busyToken = beginBusy();
     try {
-      const result = await invokeIpc<UpdateResult>('speleodb_update');
+      // [#576 D23-SWAP] A fast-forward swaps the tree: queued edits land first.
+      const result = await afterQueuedEdits(() => invokeIpc('speleodb_update'));
       if (!speleoProjectSessionStillCurrent(issuedFor)) return;
       applyUpdate(result);
       switch (result.kind) {
@@ -343,11 +395,14 @@ export function useSpeleoActions(): SpeleoActions {
       // arm, which neither lands nor throws.
       clearPushFailedBanner();
       try {
-        const result = await invokeIpc<PushResult>('speleodb_push', {
-          message: message ?? null,
-          acceptOlderVersion: opts?.acceptOlderVersion ?? false,
-        });
+        const { result, saveWarnings } = readSpeleoReport(
+          await invokeIpc('speleodb_push', {
+            message: message ?? null,
+            acceptOlderVersion: opts?.acceptOlderVersion ?? false,
+          }),
+        );
         applyPush(result);
+        surfaceSaveWarnings(saveWarnings);
         const kind = asPushKind(result.kind);
         if (kind === 'pushed') {
           showToast(t('speleodb.editBar.toasts.pushed'), TOAST_KEYS.SPELEODB_PUSHED, 'success');
@@ -380,7 +435,7 @@ export function useSpeleoActions(): SpeleoActions {
       } catch (e) {
         // Banner only (durable; inline notice inside the Speleo dialogs while
         // one is open). The old extra toast was pre-#260 redundancy.
-        const humanized = humanizeError(e, 'speleodb.editBar.toasts.pushFailed');
+        const humanized = humanizeError(e, 'speleodb.editBar.toasts.pushFailed', { saves: true });
         raisePushFailedBanner({
           message: humanized,
           origin: 'push',
@@ -450,11 +505,14 @@ export function useSpeleoActions(): SpeleoActions {
       // it BEFORE the call.
       const hadUnpushedEdits = useSpeleoStore.getState().link?.hasUnpushedEdits ?? false;
       try {
-        const result = await invokeIpc<DoneResult>('speleodb_done', {
-          message: message ?? null,
-          acceptOlderVersion: opts?.acceptOlderVersion ?? false,
-        });
+        const { result, saveWarnings } = readSpeleoReport(
+          await invokeIpc('speleodb_done', {
+            message: message ?? null,
+            acceptOlderVersion: opts?.acceptOlderVersion ?? false,
+          }),
+        );
         applyDone(result);
+        surfaceSaveWarnings(saveWarnings);
         switch (asDoneKind(result.kind)) {
           case 'released':
             showToast(
@@ -463,6 +521,19 @@ export function useSpeleoActions(): SpeleoActions {
                 : t('speleodb.editBar.toasts.releasedNothingToUpload'),
               TOAST_KEYS.SPELEODB_RELEASED,
               'success',
+            );
+            noteNoAnchorIfNeeded();
+            await flushToDiskAfterPush();
+            break;
+          case 'lock_held_elsewhere':
+            // [#576 RV2-R-13] Finished here, but the lock was taken by another session
+            // of this account and is left with it - say so, rather than "released".
+            showToast(
+              hadUnpushedEdits
+                ? t('speleodb.editBar.toasts.lockHeldElsewhere')
+                : t('speleodb.editBar.toasts.lockHeldElsewhereNothingToUpload'),
+              TOAST_KEYS.SPELEODB_RELEASED,
+              'info',
             );
             noteNoAnchorIfNeeded();
             await flushToDiskAfterPush();
@@ -492,7 +563,7 @@ export function useSpeleoActions(): SpeleoActions {
         }
         return result;
       } catch (e) {
-        const humanized = humanizeError(e, 'speleodb.editBar.toasts.doneFailed');
+        const humanized = humanizeError(e, 'speleodb.editBar.toasts.doneFailed', { saves: true });
         raisePushFailedBanner({
           message: humanized,
           origin: 'done',
@@ -519,7 +590,8 @@ export function useSpeleoActions(): SpeleoActions {
     ],
   );
 
-  const takeRemote = useCallback(async (): Promise<boolean> => {
+  const takeRemote = useCallback(async (): Promise<'took' | 'failed' | 'workspace_read_only'> => {
+    if (refuseSurveySwapOutsideSurvey()) return 'workspace_read_only';
     const issuedFor = speleoProjectSessionIssuedFor(
       useSpeleoStore.getState().remoteProjectId,
     );
@@ -527,19 +599,20 @@ export function useSpeleoActions(): SpeleoActions {
     try {
       // Backend re-pulls + resets the tree to the server tip and returns the
       // reloaded path; loadProject re-seeds the link status (→ read-only).
-      const localPath = await invokeIpc<string>('speleodb_take_remote');
+      // [#576 D23-SWAP] The reset swaps the tree: queued edits land first.
+      const localPath = await afterQueuedEdits(() => invokeIpc('speleodb_take_remote'));
       // If the reload was superseded (the user opened another project mid-pull),
       // don't claim success: the backend reset already happened, but the view the
       // caller thinks it reloaded is not showing. Skip the toast + return false so
       // the divergence dialog doesn't close over a project the user left.
       const { success } = await loadProject(localPath);
-      if (!success) return false;
-      if (!(await applySpeleoTreeReplacement(issuedFor, true))) return false;
+      if (!success) return 'failed';
+      if (!(await applySpeleoTreeReplacement(issuedFor, true))) return 'failed';
       showToast(t('speleodb.editBar.toasts.tookRemote'), TOAST_KEYS.SPELEODB_TOOK_REMOTE, 'success');
-      return true;
+      return 'took';
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.takeRemoteFailed');
-      return false;
+      return 'failed';
     } finally {
       bumpPoll();
       endBusy(busyToken);

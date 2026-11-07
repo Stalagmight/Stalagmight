@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures/coverage';
-import { setupMockedPage, openNewProjectDialog, createProject, closeProjectViaMenu } from './helpers/app';
+import { setupMockedPage, openNewProjectDialog, createProject, closeProjectViaMenu, createSectionViaStore } from './helpers/app';
 import { setIpcOverrides } from './helpers/ipcOverrides';
+import { recordIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
 
 test.describe('Project CRUD Operations', () => {
   test.beforeEach(async ({ page }) => {
@@ -115,14 +116,30 @@ test.describe('Project CRUD Operations', () => {
   });
 
   test.describe('Project Save', () => {
-    test('should respond to Ctrl+S @smoke', async ({ page }) => {
+    test('should respond to Ctrl+S by saving the project @smoke', async ({ page }) => {
       await createProject(page, 'Save Test Project');
+      // A real edit, so there is something to save and the footer says so.
+      await createSectionViaStore(page, {
+        name: 'Save Canary Section',
+        shots: [{ azimuth_in: 0, azimuth_out: 0, length: 5, depth_in: 0, depth_out: 0 }],
+      });
+      const saveStatus = page.getByTestId('save-status');
+      await expect(saveStatus).toHaveText(/Unsaved changes|Auto-save in/);
+      await recordIpcCalls(page, ['save_project']);
 
-      // Press Ctrl+S
       await page.keyboard.press('Control+s');
 
-      // Should not crash - app remains functional
-      await expect(page.getByTestId('map-canvas')).toBeVisible();
+      // The save reached the backend as a MANUAL save (not an autosave), and
+      // the footer went back to Saved with the project clean.
+      const [call] = await waitForIpcCall(page, 'save_project');
+      expect(call.args.isAutosave).toBe(false);
+      await expect(saveStatus).toHaveText('Saved');
+      expect(
+        await page.evaluate(
+          () => (window as unknown as { __E2E_TEST__: { projectStore: { getState: () => { isDirty: boolean } } } })
+            .__E2E_TEST__.projectStore.getState().isDirty,
+        ),
+      ).toBe(false);
     });
   });
 });

@@ -11,11 +11,14 @@
 // Run: node scripts/check-third-party-licenses.test.mjs  (also a CI check step).
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { checkBundle, REPO_ROOT } from './check-third-party-licenses.mjs';
+import { pathToFileURL } from 'node:url';
+import { HASHED_INPUTS } from './gen-third-party-licenses.mjs';
+import { checkBundle, REPO_ROOT, MAX_BUNDLE_BYTES } from './check-third-party-licenses.mjs';
 
 let passed = 0;
 const failures = [];
@@ -33,8 +36,14 @@ const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 const GEN_V1 = 'generator-script-v1';
 const ABOUT_V1 = 'about-toml-v1';
 
+// Every fixture tree is recorded and removed at the end of the run (#576
+// E18(b): the 13 trees, one of them 33 MB, used to stay behind in TMPDIR -
+// RAM, where /tmp is a tmpfs - on every leak-scan run and every checklist run).
+const roots = [];
+
 function makeTree({ cargo = 'cargo-lock-v1', pnpm = 'pnpm-lock-v1', gen = GEN_V1, about = ABOUT_V1, bundle } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tpl-gate-'));
+  roots.push(root);
   fs.mkdirSync(path.join(root, 'src-tauri'));
   fs.mkdirSync(path.join(root, 'scripts'));
   fs.writeFileSync(path.join(root, 'src-tauri', 'Cargo.lock'), cargo);
@@ -82,10 +91,14 @@ test('bundle without a bundle-body hash fails', () => {
 });
 
 test('oversized bundle fails with the cap message, not "missing"', () => {
-  const root = makeTree({ bundle: 'x'.repeat(33 * 1024 * 1024) });
-  const problems = checkBundle(root);
+  // A small bundle against a small cap exercises the same branch as 33 MB
+  // against the real 32 MiB default, without writing 33 MB per run.
+  const root = makeTree({ bundle: 'x'.repeat(4096) });
+  const problems = checkBundle(root, { maxBytes: 1024 });
   assert.equal(problems.length, 1);
-  assert.match(problems[0], /cap/);
+  assert.match(problems[0], /4096 bytes \(> 1024 cap\)/);
+  assert.match(checkBundle(root, { maxBytes: 8192 })[0], /no lockfile-hashes comment/, 'under the cap it is read normally');
+  assert.equal(MAX_BUNDLE_BYTES, 32 * 1024 * 1024, 'the default cap is unchanged');
 });
 
 test('missing bundle fails', () => {
@@ -135,10 +148,37 @@ test('an edited generator script or about.toml fails', () => {
   assert.match(checkBundle(aboutRoot)[0], /about\.toml changed/);
 });
 
+// The checker imports HASHED_INPUTS from the generator (#576 E18(c)), so
+// importing the generator must be side-effect free: before the isMain guard it
+// ran the whole regeneration on import (cargo about + pnpm licenses, then a
+// write of THIRD-PARTY-LICENSES.md). A child process proves it: the import
+// must exit 0 without touching the bundle, even with no cargo-about installed.
+test('importing the generator neither runs it nor rewrites the bundle', () => {
+  const bundle = path.join(REPO_ROOT, 'THIRD-PARTY-LICENSES.md');
+  const before = fs.statSync(bundle);
+  const bytes = fs.readFileSync(bundle);
+  const gen = pathToFileURL(path.join(REPO_ROOT, 'scripts', 'gen-third-party-licenses.mjs')).href;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(gen)}); console.log(m.HASHED_INPUTS.length);`], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), '4');
+  assert.equal(fs.statSync(bundle).mtimeMs, before.mtimeMs);
+  assert.ok(fs.readFileSync(bundle).equals(bytes));
+});
+
+test('the checker verifies exactly the generator\'s input list', () => {
+  assert.deepEqual(HASHED_INPUTS, ['src-tauri/Cargo.lock', 'pnpm-lock.yaml', 'scripts/gen-third-party-licenses.mjs', 'src-tauri/about.toml']);
+});
+
 // The gate must pass against the real repo right now - a committed stale
 // bundle should never survive to CI to begin with.
 test('live repo bundle is current', () => {
   assert.deepEqual(checkBundle(REPO_ROOT), []);
+});
+
+for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+test('every fixture tree is removed again', () => {
+  assert.ok(roots.length > 0);
+  for (const root of roots) assert.equal(fs.existsSync(root), false, `${root} left behind`);
 });
 
 if (failures.length > 0) {

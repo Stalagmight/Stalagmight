@@ -49,10 +49,10 @@ export async function getTileFetchStats(): Promise<TileFetchStats> {
   };
 }
 
-const isAndroid = navigator.userAgent.includes('Android');
+let registered = false;
 
 /**
- * Register the tile protocol for MapLibre.
+ * Register the tile protocol for MapLibre. Idempotent, and never undone.
  *
  * On desktop, this is a no-op - tiles go directly through Tauri's native
  * protocol handler (register_asynchronous_uri_scheme_protocol).
@@ -61,8 +61,19 @@ const isAndroid = navigator.userAgent.includes('Android');
  * WebView IO thread (shouldInterceptRequest), limiting concurrency to 1 tile
  * at a time. Instead, we register a JS-side MapLibre protocol that fetches
  * tiles via Tauri IPC commands, which run concurrently on the async runtime.
+ *
+ * MapLibre's protocol table is global, shared by every map, and the handler is
+ * stateless, so it is registered once - at app start (main.tsx), and again
+ * harmlessly by the map factory - and never removed (#576 D18). It used to be
+ * registered by the survey map only and REMOVED on its unmount, so on Android the
+ * Global View's basemap never had a handler, and leaving a project pulled it out
+ * from under any other live map.
  */
 export function registerTileProtocol(): void {
+  if (registered) return;
+  registered = true;
+  // Read per call, not at import: a test can stub the user agent.
+  const isAndroid = typeof navigator !== 'undefined' && navigator.userAgent.includes('Android');
   if (!isAndroid) return;
 
   maplibregl.addProtocol('stalagmight-tiles', async (params: { url: string }) => {
@@ -78,12 +89,4 @@ export function registerTileProtocol(): void {
     });
     return { data: new Uint8Array(data) };
   });
-}
-
-/**
- * Unregister the tile protocol.
- */
-export function unregisterTileProtocol(): void {
-  if (!isAndroid) return;
-  maplibregl.removeProtocol('stalagmight-tiles');
 }

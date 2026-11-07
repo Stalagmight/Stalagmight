@@ -1,5 +1,5 @@
 use super::AppState;
-use crate::models::{ConnectivityResult, SectionId, StationRef};
+use crate::models::{ConnectivityResult, MergeBlockReason, SectionId, StationRef};
 
 impl AppState {
     /// Check merge connectivity between two stations (read-only)
@@ -8,10 +8,7 @@ impl AppState {
         station_a: StationRef,
         station_b: StationRef,
     ) -> Result<ConnectivityResult, String> {
-        let proj_guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
+        let proj_guard = self.project.lock();
         let project = proj_guard
             .as_ref()
             .ok_or_else(|| "No project open".to_string())?;
@@ -56,25 +53,23 @@ impl AppState {
             .any(|zd| merged_b.contains(&zd.station_ref.section_id));
 
         // Determine can_merge and reason with zero datum priority
-        let (can_merge, reason) = if connected {
+        let reason_code = if connected {
             // Already connected - merging would create a survey loop
-            (false, Some("Creates survey loop".to_string()))
+            Some(MergeBlockReason::CreatesSurveyLoop)
         } else if a_has_zd && b_has_zd {
             // Both sections have fixed coordinates - cannot merge
-            (
-                false,
-                Some("Both sections have fixed coordinates".to_string()),
-            )
+            Some(MergeBlockReason::BothFixedCoordinates)
         } else {
             // Not connected and zero datum check passed - merge allowed
-            (true, None)
+            None
         };
 
         Ok(ConnectivityResult {
             connected,
             preview,
-            can_merge,
-            reason,
+            can_merge: reason_code.is_none(),
+            reason: reason_code.map(|code| code.message().to_string()),
+            reason_code,
         })
     }
 
@@ -84,10 +79,7 @@ impl AppState {
         section_id: SectionId,
     ) -> Result<Vec<SectionId>, String> {
         // Serialize with command execution to avoid observing intermediate batch state
-        let _cmd_guard = self
-            .command_lock
-            .lock()
-            .map_err(|_| "Failed to acquire command lock".to_string())?;
+        let _cmd_guard = self.command_lock.lock();
         self.with_project(|project| {
             // Validate section exists
             if !project.sections.iter().any(|s| s.id == section_id) {
@@ -116,14 +108,8 @@ impl AppState {
         use crate::models::{SegmentGeometry, SegmentSectionGeometry};
 
         // Serialize with command execution to avoid observing intermediate batch state
-        let _cmd_guard = self
-            .command_lock
-            .lock()
-            .map_err(|_| "Failed to acquire command lock".to_string())?;
-        let proj_guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
+        let _cmd_guard = self.command_lock.lock();
+        let proj_guard = self.project.lock();
         let project = proj_guard
             .as_ref()
             .ok_or_else(|| "No project open".to_string())?;
@@ -206,10 +192,7 @@ impl AppState {
     /// since unaligned closures are not rigidly constrained yet.
     pub fn get_anchored_section_ids(&self) -> Result<Vec<SectionId>, String> {
         // Serialize with command execution to avoid observing intermediate batch state
-        let _cmd_guard = self
-            .command_lock
-            .lock()
-            .map_err(|_| "Failed to acquire command lock".to_string())?;
+        let _cmd_guard = self.command_lock.lock();
         self.with_project(|project| {
             // Filter to existing sections (stale merges/closures may reference deleted sections)
             let existing: std::collections::HashSet<SectionId> =

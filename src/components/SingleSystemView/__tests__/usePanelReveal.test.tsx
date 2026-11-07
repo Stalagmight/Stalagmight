@@ -1,11 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
-// uiStore → telemetry → @tauri-apps/api/core; stub the IPC so importing the store
-// in jsdom doesn't hit Tauri. `.tsx` so this runs in the jsdom tier (renderHook).
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+// `.tsx` so this runs in the jsdom tier (renderHook).
 
 import { usePanelReveal } from '../usePanelReveal';
 import { useUIStore } from '../../../store/uiStore';

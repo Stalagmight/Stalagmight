@@ -201,6 +201,7 @@ export async function deleteShotAt(page: Page, shotIndex: number): Promise<void>
     ).__E2E_TEST__;
     const state = e2e.projectStore.getState();
     const sec = state.project.sections[0];
+    if (!sec) throw new Error('no section to delete a shot from');
     const shot = sec.shots[idx];
     if (!shot) throw new Error(`no shot at index ${idx}`);
     await state.deleteShot(sec.id, shot.id);
@@ -289,11 +290,15 @@ export async function closeProjectViaMenu(page: Page): Promise<void> {
   await page.getByTestId('back-button').click();
   // A dirty project blocks the close on an unsaved-changes dialog - discard to
   // proceed so the helper works whether or not there are unsaved edits.
+  // Wait for whichever comes first (isVisible does not wait: Playwright ignores
+  // its timeout option), then discard only if the prompt is what came up.
   const discard = page.locator('button:has-text("Discard")');
-  if (await discard.isVisible({ timeout: 1000 }).catch(() => false)) {
+  const globalView = page.getByTestId('global-view');
+  await expect(discard.or(globalView)).toBeVisible({ timeout: 8000 });
+  if (await discard.isVisible()) {
     await discard.click();
   }
-  await expect(page.getByTestId('global-view')).toBeVisible({ timeout: 8000 });
+  await expect(globalView).toBeVisible({ timeout: 8000 });
 }
 
 export async function openNewProjectDialog(page: Page): Promise<void> {
@@ -318,22 +323,44 @@ export async function openDmpSelectionDialog(page: Page): Promise<void> {
   await expect(page.getByTestId('dmp-selection-dialog')).toBeVisible({ timeout: 10000 });
 }
 
+/**
+ * Wizard phases the DMP wizard stays on until the user acts. Its init phase
+ * (computing placement suggestions, importing the zero-datum section) and the
+ * import in progress are not among them: from those it moves on by itself, and
+ * when nothing could be suggested it hands the section off to map placement and
+ * unmounts.
+ */
+const SETTLED_WIZARD_PHASES = [
+  'wizard-suggestion',
+  'wizard-manual-placing',
+  'wizard-all-placed',
+  'wizard-error',
+];
+
 export async function ensureDmpNewImportDialogVisible(page: Page): Promise<void> {
-  await page.waitForFunction(() => {
-    const wizard = document.querySelector('[data-testid="dmp-new-import-dialog"]');
-    const placement = document.querySelector('[data-testid="placement-mode-indicator"]');
-    return Boolean(wizard || placement);
-  }, undefined, { timeout: 15000 });
+  // [#576 NF-W8E3-1] Wait for a state that stays: the wizard on a settled phase,
+  // or map placement. A single isVisible() read used to catch the wizard on its
+  // init phase, visible for a moment before it handed off to the map by itself,
+  // and return - leaving the caller waiting for a wizard that was gone, with the
+  // map placement nobody would Escape out of (dmp-import.spec.ts flaked so).
+  const settled = await page.waitForFunction(
+    (phases) => {
+      const shown = (selector: string) => {
+        const el = document.querySelector(selector) as (HTMLElement & { checkVisibility?: () => boolean }) | null;
+        return Boolean(el && (el.checkVisibility ? el.checkVisibility() : el.offsetParent !== null));
+      };
+      if (shown('[data-testid="placement-mode-indicator"]')) return 'placement';
+      const wizard = '[data-testid="dmp-new-import-dialog"]';
+      if (shown(wizard) && phases.some((id) => shown(`${wizard} [data-testid="${id}"]`))) return 'wizard';
+      return false;
+    },
+    SETTLED_WIZARD_PHASES,
+    { timeout: 15000 },
+  );
+  if ((await settled.jsonValue()) === 'wizard') return;
 
-  const wizard = page.getByTestId('dmp-new-import-dialog');
-  if (await wizard.isVisible()) {
-    return;
-  }
-
-  const placementIndicator = page.getByTestId('placement-mode-indicator');
-  await expect(placementIndicator).toBeVisible({ timeout: 10000 });
   await page.keyboard.press('Escape');
-  await expect(wizard).toBeVisible({ timeout: 10000 });
+  await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
 }
 
 export async function proceedToDmpImportWizard(page: Page): Promise<void> {
@@ -373,81 +400,6 @@ export async function proceedToDmpImportWizard(page: Page): Promise<void> {
 // Backward-compatible alias used by older specs.
 export async function proceedToDmpSectionConfig(page: Page): Promise<void> {
   await proceedToDmpImportWizard(page);
-}
-
-export async function placeAllSections(page: Page): Promise<void> {
-  await ensureDmpNewImportDialogVisible(page);
-
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    const wizard = page.getByTestId('dmp-new-import-dialog');
-    const confirm = page.getByTestId('confirm-button');
-    const skip = page.getByTestId('skip-button');
-    const segmentPlace = page.getByTestId('segment-place-button');
-    const segmentDiscard = page.getByTestId('segment-mode-discard');
-    const placeOnMap = page.getByTestId('segment-place-on-map-button');
-
-    if (!(await wizard.isVisible())) {
-      const placementIndicator = page.getByTestId('placement-mode-indicator');
-      if (await placementIndicator.isVisible()) {
-        await page.keyboard.press('Escape');
-        await expect(wizard).toBeVisible({ timeout: 10000 });
-      } else {
-        return;
-      }
-      continue;
-    }
-
-    if (await confirm.isVisible() && await confirm.isEnabled()) {
-      await confirm.click();
-      continue;
-    }
-
-    if (await skip.isVisible() && await skip.isEnabled()) {
-      await skip.click();
-      continue;
-    }
-
-    if (await segmentPlace.isVisible() && await segmentPlace.isEnabled()) {
-      await segmentPlace.click();
-      continue;
-    }
-
-    if (await segmentDiscard.isVisible() && await segmentPlace.isVisible()) {
-      await segmentDiscard.click();
-      if (await segmentPlace.isEnabled()) {
-        await segmentPlace.click();
-        continue;
-      }
-    }
-
-    if (await placeOnMap.isVisible() && await placeOnMap.isEnabled()) {
-      await placeOnMap.click();
-      const mapCanvas = page.getByTestId('map-canvas');
-      await expect(mapCanvas).toBeVisible({ timeout: 10000 });
-      const mapBounds = await mapCanvas.boundingBox();
-      if (mapBounds) {
-        await page.mouse.click(
-          mapBounds.x + mapBounds.width * 0.5,
-          mapBounds.y + mapBounds.height * 0.5
-        );
-      }
-      continue;
-    }
-
-    if (await page.getByTestId('wizard-all-placed').isVisible()) {
-      break;
-    }
-
-    await page.waitForTimeout(100);
-  }
-
-  const wizard = page.getByTestId('dmp-new-import-dialog');
-  if (await wizard.isVisible()) {
-    await page.getByTestId('cancel-button').click();
-    await expect(page.getByTestId('cancel-confirm-dialog')).toBeVisible({ timeout: 5000 });
-    await page.getByTestId('confirm-cancel-button').click();
-    await expect(wizard).toBeHidden({ timeout: 10000 });
-  }
 }
 
 /**

@@ -6,6 +6,16 @@ agent sessions: append, never rewrite history. Full machine-readable records
 live beside it in `runs/` (one JSONL file per run; no fixtures, no personal
 names, no verbatim tester feedback - `lint:private-leaks` covers this tree).
 
+A journey record in `runs/` carries codes, counts and code locations only, in
+the form the harness prints (#576 W39-NF1, `e2e/agent/journeys/ledger.ts`):
+each journey's name, verdict and duration, each check's label and verdict, a
+failed check's observed detail as its length, an abort reason as the verdict
+line prints it (`parseTml failed: (49 characters of the app's text withheld)`,
+further lines counted), and each sweep finding as its severity, kind and code.
+The record keeps only the fields it names, so a field added to a journey result
+later does not reach this tree. The full text is the session's `uat/run.jsonl`,
+which is not for sharing.
+
 How to add a line:
 
 - Journey suite: `pnpm agent:journeys -- --ledger` appends it for you.

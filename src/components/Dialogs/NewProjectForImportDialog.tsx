@@ -9,6 +9,7 @@ import { ensureExtension, projectSaveFilters, saveDialog, PROJECT_EXTENSION } fr
 import type { DmpFile, TmlFile, GpxFile, CompassFile, WallsFile } from '../../types/commands';
 import { setSource, trackDialogComplete, peekProjectActionSource, setProjectActionSource } from '../../utils/telemetry';
 import { computeTmlImportStats } from '../../utils/tmlImportStats';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * New Project dialog variant used during the DMP/TML import flow.
@@ -19,8 +20,15 @@ import { computeTmlImportStats } from '../../utils/tmlImportStats';
  */
 export default function NewProjectForImportDialog() {
   const { t } = useTranslation();
-  const { closeDialog, dialogData, openDialog, setImportContext } = useUIStore();
-  const { createProject } = useProjectStore();
+  const { closeDialog, dialogData, openDialog, setImportContext } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      dialogData: s.dialogData,
+      openDialog: s.openDialog,
+      setImportContext: s.setImportContext,
+    })),
+  );
+  const createProject = useProjectStore((s) => s.createProject);
 
   const dmpFile = dialogData.dmpFile as DmpFile | undefined;
   const tmlFile = dialogData.tmlFile as TmlFile | undefined;
@@ -53,8 +61,8 @@ export default function NewProjectForImportDialog() {
   const [isCreating, setIsCreating] = useState(false);
 
   const normalizedBaseName = useMemo(
-    () => (name.trim() || defaultName || 'Project').replace(/[^a-zA-Z0-9]/g, '_'),
-    [defaultName, name]
+    () => (name.trim() || defaultName || t('dialogs.newProjectForImport.fallbackFileName')).replace(/[^a-zA-Z0-9]/g, '_'),
+    [defaultName, name, t]
   );
 
   const joinPath = (base: string, child: string): string => {
@@ -117,7 +125,7 @@ export default function NewProjectForImportDialog() {
   const handleSelectSavePath = async () => {
     try {
       const selected = await saveDialog({
-        title: 'Save Project',
+        title: t('dialogs.newProjectForImport.saveDialogTitle'),
         filters: projectSaveFilters(),
         defaultPath: savePath.trim() || resolvedDefaultSavePath || `${normalizedBaseName}.stalx`,
       });

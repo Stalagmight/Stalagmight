@@ -30,9 +30,10 @@ function filterMockErrors(errors: string[]): string[] {
     // errors in the app - this assertion exists for the getLayer crash class.
     // Scoped by the captured location URL (appended in beforeEach): a failed
     // SAME-ORIGIN load (a 404'd app chunk or asset) still fails the spec.
-    // No external fetch is known: the maplibre CSS is bundled since #606, and
-    // the dev agent bridge's /__agent/token probe is gated off under VITE_E2E
-    // since #417.
+    // The app makes no external fetch any more (the maplibre CSS is bundled
+    // since #576 C12 / #606, pinned by offline-map-assets.spec.ts); the former
+    // offender, the dev agent bridge's /__agent/token probe, is gated off
+    // under VITE_E2E since #417.
     if (error.startsWith('Failed to load resource') && !error.includes('[http://localhost')) {
       return false;
     }
@@ -192,18 +193,41 @@ test.describe('Back Button Navigation', () => {
     // Wait for project to be fully loaded
     await expect(page.locator('canvas').first()).toBeVisible();
 
-    // Open the menu and rapidly click "Close Project" (now a menu item).
+    // Open the menu and click "Close Project" (now a menu item) three times in a
+    // row. A Playwright click per activation cannot do that: the first one closes
+    // the menu, and the item is gone before the next can land (#576 NF-W10FE-1).
+    // So the three clicks are dispatched in one task in the page, before React
+    // re-renders the closed menu: each reaches the item's handler, and three
+    // handleCloseProject calls overlap - the store's isClosing guard is what keeps
+    // that to ONE close_project (#576 RV10b-5).
     await openMenu(page);
-    const backButton = page.locator('[data-testid="back-button"]');
+    const clicks = await page.evaluate(() => {
+      const w = window as unknown as {
+        __closeProjectCalls__: number;
+        __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+      };
+      w.__closeProjectCalls__ = 0;
+      const invoke = w.__TAURI_INTERNALS__.invoke;
+      w.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+        if (cmd === 'close_project') w.__closeProjectCalls__ += 1;
+        return invoke(cmd, args);
+      };
+      const item = document.querySelector<HTMLButtonElement>('[data-testid="back-button"]');
+      let landed = 0;
+      item?.addEventListener('click', () => { landed += 1; });
+      item?.click();
+      item?.click();
+      item?.click();
+      return { landed, stillInMenu: item?.isConnected === true };
+    });
+    expect(clicks).toEqual({ landed: 3, stillInMenu: true });
 
-    // The first click navigates (and closes the menu); the menu item then
-    // disappears, so the extra force-clicks should be ignored gracefully.
-    await backButton.click();
-    await backButton.click({ force: true, timeout: 1000 }).catch(() => {});
-    await backButton.click({ force: true, timeout: 1000 }).catch(() => {});
-
-    // Should still end up at Global View with no errors
+    // Should still end up at Global View, closed once, with no errors
     await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="back-button"]')).toHaveCount(0);
+    expect(
+      await page.evaluate(() => (window as unknown as { __closeProjectCalls__: number }).__closeProjectCalls__),
+    ).toBe(1);
   });
 
   test('should handle Back button immediately after opening project', async ({ page }) => {
@@ -238,8 +262,12 @@ test.describe('Back Button Navigation', () => {
       }
     });
 
-    // Wait for grid to render
-    await page.waitForTimeout(500);
+    // The grid overlay is actually on the map before the project is closed
+    // (GridOverlay adds the 'grid-lines' layer once showGrid is set).
+    await page.waitForFunction(() => {
+      const map = (window as { __stalagmight_map__?: { getLayer?: (id: string) => unknown } }).__stalagmight_map__;
+      return Boolean(map?.getLayer?.('grid-lines'));
+    });
 
     // Close the project via the hamburger menu
     await clickBack(page);

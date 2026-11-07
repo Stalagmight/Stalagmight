@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { shouldSuppressMapError, renderFatalMessage } from '../mapErrors';
+import i18n from '../../../../i18n';
 
 describe('shouldSuppressMapError (boundary filter)', () => {
   const PREFIX = 'survey-data';
@@ -56,5 +57,18 @@ describe('renderFatalMessage', () => {
     expect(renderFatalMessage('program-link-failed')).toBe(
       'Survey rendering unavailable (WebGL2/GPU)',
     );
+  });
+
+  // [#576 RV4-FE-MF-4] Toast copy goes through i18n (docs/notifications.md): the
+  // render-fatal toasts and the lost-context toast read these keys.
+  it('reads every message from the locale', () => {
+    const keys = { labels: 'label-font-unavailable', measurePath: 'measure-path: gl-error-0x502', survey: 'webgl-context-lost' };
+    const original = Object.fromEntries(Object.keys(keys).map((k) => [k, i18n.t(`map.renderFatal.${k}`)]));
+    try {
+      for (const k of Object.keys(keys)) i18n.addResource('en', 'translation', `map.renderFatal.${k}`, `TEST ${k}`);
+      for (const [k, reason] of Object.entries(keys)) expect(renderFatalMessage(reason)).toBe(`TEST ${k}`);
+    } finally {
+      for (const [k, text] of Object.entries(original)) i18n.addResource('en', 'translation', `map.renderFatal.${k}`, text);
+    }
   });
 });

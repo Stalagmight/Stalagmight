@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
+import { doneFinished, isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
@@ -98,7 +98,7 @@ export default function SpeleoQuitDialog() {
     try {
       const result = await saveProject();
       if (!result?.success) {
-        surfaceSaveFailure(result?.error ?? null, openDialog);
+        surfaceSaveFailure(result, openDialog, useProjectStore.getState());
         return false;
       }
       return true;
@@ -126,7 +126,7 @@ export default function SpeleoQuitDialog() {
     // intent to the confirmation, which finishes the quit once the push actually releases
     // and puts this prompt back on Cancel.
     const resolved = await done(null, { pendingExit: { kind: 'quit' } });
-    if (resolved?.kind === 'released') {
+    if (doneFinished(resolved?.kind)) {
       closeDialog();
       performQuit();
     }
@@ -150,7 +150,7 @@ export default function SpeleoQuitDialog() {
     if (!(await maybeSaveLocally())) return;
     setReleasing(true);
     try {
-      await invokeIpc<null>('speleodb_release_current_lock');
+      await invokeIpc('speleodb_release_current_lock');
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
       setReleasing(false);

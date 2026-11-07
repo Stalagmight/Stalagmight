@@ -1,5 +1,7 @@
 /**
- * Decoder for the `load_project_full_binary` IPC response.
+ * Decoder for the `load_project_full_binary` IPC response, and for
+ * `get_project_state_binary`, the state refresh after an edit, which answers
+ * with the same envelope (#576 A9-D2).
  *
  * The Rust side serializes `LoadProjectFullResult` with a layout that
  * keeps small/sparse metadata in an msgpack envelope and packs the bulk
@@ -15,6 +17,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { decode as msgpackDecode } from '@msgpack/msgpack';
+import { errorCode } from './commandError';
 import type { LoadProjectFullResult } from '../types/ipc/LoadProjectFullResult';
 import type { Project } from '../types/ipc/Project';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
@@ -43,6 +46,7 @@ import {
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../types/survey-data';
 import { recordPerfTiming } from './memoryProbe';
+import { invokeIpc } from './ipc';
 
 /**
  * Extended result type that carries both the legacy LoadProjectFullResult
@@ -58,6 +62,52 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
    *  JSON `LoadProjectFullResult` omits them). Lets the store seed `frozenShots`
    *  on a binary load instead of inheriting the previous project's set (#57). */
   frozen_shots: FrozenShotRef[];
+  /** [#576 B6-D1] The file's schema version when a NEWER Stalagmight saved it,
+   *  else null. The backend opened such a project read-only (every edit and save
+   *  refused); the store gates the UI on this so the two settle together, like
+   *  `isRemote`. On the JSON result too since #576 P-NEWER (open question 1), so
+   *  this restates the generated field. */
+  newerSchemaVersion: number | null;
+  /** [#576 B35(b) review] The file's SpeleoDB link row could not be read. The
+   *  project opened as a local one, but every save over this file is refused (the
+   *  rebuilt file would lose the row), so the UI says so on open. */
+  speleoLinkUnreadable: boolean;
+  /** [#576 B15] The stored per-project settings the backend could not read on
+   *  this load (`validation`, `surface_elevation`, `default_azimuth_reference`).
+   *  The project opened with defaults in their place and every save is refused
+   *  while they are unread. Binary envelope only, like `newerSchemaVersion`. */
+  unreadableProjectSettings: string[];
+  /** [#576 B35(h)] What this load reset or dropped because it could not use it,
+   *  per kind, or null when nothing. Binary envelope only. */
+  loadRepairs: LoadRepairs | null;
+}
+
+/** [#576 B35(h)] Per-kind counts of the stored values a load reset or dropped
+ *  (`LoadRepairs` in `persistence/sqlite/read.rs`). */
+export interface LoadRepairs {
+  /** Shots with a non-finite measurement, reset to finite defaults. */
+  shots: number;
+  /** Section moves (offsets) with a non-finite component, reset to 0. */
+  sectionOffsets: number;
+  /** Station moves (offsets) with a non-finite component, reset to 0. */
+  stationOffsets: number;
+  /** GPS tie points (zero datums) with a non-finite coordinate, dropped. */
+  gpsPoints: number;
+}
+
+/** The envelope's `load_repairs` as the store's `LoadRepairs`, or null when the
+ *  load reset nothing (or the backend predates the field). */
+export function loadRepairsFromEnvelope(
+  raw: BinaryEnvelope['load_repairs'],
+): LoadRepairs | null {
+  if (!raw) return null;
+  const repairs: LoadRepairs = {
+    shots: Number(raw.shots ?? 0),
+    sectionOffsets: Number(raw.section_offsets ?? 0),
+    stationOffsets: Number(raw.station_offsets ?? 0),
+    gpsPoints: Number(raw.gps_points ?? 0),
+  };
+  return Object.values(repairs).some((n) => n > 0) ? repairs : null;
 }
 
 /**
@@ -92,10 +142,28 @@ const STATION_UINT_FIELDS = 2;
  *  Exported for the load-path laziness regression test's fixture builder. */
 export interface BinaryEnvelope {
   version: number;
-  loading_id: bigint | number;
+  loading_id: number;
   /** Is this a SpeleoDB project? Same value the backend set its edit gate
    *  from, so the frontend's read-only gate settles with the load (#270). */
   is_remote: boolean;
+  /** [#576 B6-D1] Schema version of a file a newer build saved, else null. A
+   *  top-level map key: absent from an envelope that predates it. */
+  newer_schema_version?: number | null;
+  /** [#576 B35(b) review] The link row could not be read; absent from an
+   *  envelope that predates it. */
+  speleo_link_unreadable?: boolean;
+  /** [#576 B15] Stored project settings the load could not read. A top-level map
+   *  key: absent from an envelope that predates it. */
+  unreadable_project_settings?: string[];
+  /** [#576 B35(h)] What the load reset or dropped, per kind. A top-level map key:
+   *  absent from an envelope that predates it. Counts are u64 on the wire, so a
+   *  msgpack decoder may hand them over as bigint. */
+  load_repairs?: {
+    shots?: number | bigint;
+    section_offsets?: number | bigint;
+    station_offsets?: number | bigint;
+    gps_points?: number | bigint;
+  };
   project_header: ProjectHeaderBinary;
   shot_count: number;
   shots_floats: Uint8Array;
@@ -123,7 +191,7 @@ interface ProjectHeaderBinary {
   modified_at: string;
   file_path: string | null;
   next_section_id: number;
-  next_closure_id: bigint | number;
+  next_closure_id: number;
   sections: SectionHeaderBinary[];
   station_merges: StationMerge[];
   zero_datums: ZeroDatum[];
@@ -167,7 +235,7 @@ interface SectionHeaderBinary {
  * code that must not reach the console as an error.
  */
 function isAlreadyOpen(e: unknown): boolean {
-  return typeof e === 'object' && e !== null && (e as { code?: unknown }).code === 'ALREADY_OPEN';
+  return errorCode(e) === 'ALREADY_OPEN';
 }
 
 /**
@@ -191,12 +259,90 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
     throw e;
   }
   const tInvokeDone = performance.now();
-  recordPerfTiming('binary IPC roundtrip', tInvokeDone - tInvoke);
+  recordPerfTiming(LOAD_TIMINGS.roundtrip, tInvokeDone - tInvoke);
 
+  const result = decodeBinaryAnswer('load_project_full_binary', raw, LOAD_TIMINGS);
+  // The load answers with a project or rejects; it never answers with no bytes.
+  if (result === null) throw new Error('load_project_full_binary returned no data');
+  return result;
+}
+
+/** What a state refresh takes from the envelope: the open project's state, and
+ *  none of the load-only fields (`loadingId`, the read-only verdicts, warnings,
+ *  display settings) - those describe a load, and the refresh leaves what the load
+ *  set. */
+export type ProjectStateBinary = Pick<
+  LoadProjectFullResultWithSoa,
+  'project' | 'stations' | 'surveyData' | 'stats' | 'frozen_shots'
+>;
+
+/**
+ * [#576 A9-D2] The state refresh after an edit: `get_project_state_binary`, the
+ * load's envelope for the open project, decoded exactly as a load is - so the
+ * sections come back with lazy `shots` getters and `surveyData` comes straight
+ * from the typed arrays. The JSON `get_project_state` it replaces is ~50 MB at
+ * 75,000 shots to build, `JSON.parse` and walk again into `surveyData`.
+ *
+ * Resolves null when no project is open (the backend answers with no bytes);
+ * rejects when the IPC does, or on an answer this build cannot decode.
+ *
+ * Through `invokeIpc`, as the JSON refresh was: it hands the transport's answer
+ * back untouched (an ArrayBuffer here), and keeps the refresh in the command
+ * telemetry and the in-flight IPC tracking. The load calls `invoke` directly
+ * only because it counts its own telemetry once the load has committed.
+ */
+export async function fetchProjectStateBinary(): Promise<ProjectStateBinary | null> {
+  const tInvoke = performance.now();
+  const raw = await invokeIpc('get_project_state_binary', undefined, {
+    purpose: 'refresh project state in UI',
+  });
+  recordPerfTiming(REFRESH_TIMINGS.roundtrip, performance.now() - tInvoke);
+
+  const result = decodeBinaryAnswer('get_project_state_binary', raw, REFRESH_TIMINGS);
+  if (result === null) return null;
+  const { project, stations, surveyData, stats, frozen_shots } = result;
+  return { project, stations, surveyData, stats, frozen_shots };
+}
+
+/** The perf-panel rows one binary IPC records under. The load and the refresh
+ *  keep separate rows: the panel keeps only the latest entry per label, so a
+ *  refresh after every edit would otherwise overwrite what the load measured. */
+interface DecodeTimingLabels {
+  roundtrip: string;
+  decode: string;
+  materialize: string;
+  payloadSize: string;
+}
+
+const LOAD_TIMINGS: DecodeTimingLabels = {
+  roundtrip: 'binary IPC roundtrip',
+  decode: 'msgpack decode',
+  materialize: 'binary->JS materialize',
+  payloadSize: 'binary payload size (KB)',
+};
+
+const REFRESH_TIMINGS: DecodeTimingLabels = {
+  roundtrip: 'refresh binary IPC roundtrip',
+  decode: 'refresh msgpack decode',
+  materialize: 'refresh binary->JS materialize',
+  payloadSize: 'refresh binary payload size (KB)',
+};
+
+/**
+ * The decode the load and the refresh share: the raw IPC answer to bytes, the
+ * msgpack envelope, the wire-version fence, then `buildResult`. Null when the
+ * answer holds no bytes, which is how `get_project_state_binary` says that no
+ * project is open. `command` names the IPC in the errors.
+ */
+function decodeBinaryAnswer(
+  command: string,
+  raw: unknown,
+  timings: DecodeTimingLabels,
+): LoadProjectFullResultWithSoa | null {
   // Tauri 2 on Linux delivers Raw responses as ArrayBuffer through the
   // URI scheme protocol fast path. Older configurations or platforms might
   // hand back Uint8Array or a JSON-array fallback - handle all three so
-  // the load works even if the IPC path changes shape.
+  // the decode works even if the IPC path changes shape.
   let bytes: Uint8Array;
   if (raw instanceof Uint8Array) {
     bytes = raw;
@@ -204,29 +350,30 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
     bytes = new Uint8Array(raw);
   } else if (Array.isArray(raw)) {
     // Slow fallback - Tauri's eval-based callback path. Should not happen
-    // for `load_project_full_binary` on Linux/Windows but keep the
-    // conversion correct in case the platform changes.
+    // on Linux/Windows but keep the conversion correct in case the platform
+    // changes.
     bytes = new Uint8Array(raw as number[]);
   } else {
-    throw new Error(`load_project_full_binary returned unexpected type: ${typeof raw}`);
+    throw new Error(`${command} returned unexpected type: ${typeof raw}`);
   }
+  if (bytes.byteLength === 0) return null;
 
   const tDecodeStart = performance.now();
   const envelope = msgpackDecode(bytes) as BinaryEnvelope;
   const tDecodeDone = performance.now();
-  recordPerfTiming('msgpack decode', tDecodeDone - tDecodeStart);
+  recordPerfTiming(timings.decode, tDecodeDone - tDecodeStart);
 
   if (envelope.version !== EXPECTED_VERSION) {
     throw new Error(
-      `load_project_full_binary version mismatch: expected ${EXPECTED_VERSION}, got ${envelope.version}. ` +
+      `${command} version mismatch: expected ${EXPECTED_VERSION}, got ${envelope.version}. ` +
       `Rebuild backend or frontend so the binary wire format matches.`
     );
   }
 
   const tBuildStart = performance.now();
-  const result = buildResult(envelope, bytes.byteLength);
+  const result = buildResult(envelope, bytes.byteLength, timings.payloadSize);
   const tBuildDone = performance.now();
-  recordPerfTiming('binary->JS materialize', tBuildDone - tBuildStart);
+  recordPerfTiming(timings.materialize, tBuildDone - tBuildStart);
 
   return result;
 }
@@ -236,9 +383,14 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
  * result shape. Exported for the load-path laziness regression test, which
  * drives this exact function so it exercises the real lazy-getter installation
  * rather than a hand-rolled stand-in. Production callers go through
- * `loadProjectFullBinary`.
+ * `loadProjectFullBinary` and `fetchProjectStateBinary`; `payloadSizeLabel` is
+ * the perf row the wire size goes to (the load's by default).
  */
-export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullResultWithSoa {
+export function buildResult(
+  env: BinaryEnvelope,
+  totalBytes: number,
+  payloadSizeLabel: string = LOAD_TIMINGS.payloadSize,
+): LoadProjectFullResultWithSoa {
   // Build typed-array views over the bulk byte buffers. These views don't
   // copy; they just point into the underlying ArrayBuffers.
   const shotsF32 = bytesToFloat32(env.shots_floats);
@@ -370,7 +522,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     section_offsets,
     imported_file_hashes: env.project_header.imported_file_hashes,
     imported_section_hashes: env.project_header.imported_section_hashes,
-    next_closure_id: BigInt(env.project_header.next_closure_id as unknown as number | bigint),
+    next_closure_id: env.project_header.next_closure_id,
     validation: env.project_header.validation,
     surface_elevation: env.project_header.surface_elevation,
     // Spread rather than assigned: the generated `Project` declares this
@@ -430,10 +582,10 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   const stations = lazyStationArray(surveyData);
 
   // For visibility in the perf panel, also record the wire size.
-  recordPerfTiming('binary payload size (KB)', totalBytes / 1024);
+  recordPerfTiming(payloadSizeLabel, totalBytes / 1024);
 
   return {
-    loadingId: typeof env.loading_id === 'bigint' ? env.loading_id : BigInt(env.loading_id),
+    loadingId: env.loading_id,
     project,
     stations,
     stats: env.stats,
@@ -447,6 +599,11 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     // #270: the SpeleoDB read-only gate is resolved from this, synchronously,
     // before the project view renders - never from the async link-status poll.
     isRemote: env.is_remote,
+    // [#576 B6-D1] Same synchronous settling for the newer-version read-only gate.
+    newerSchemaVersion: env.newer_schema_version ?? null,
+    speleoLinkUnreadable: env.speleo_link_unreadable === true,
+    unreadableProjectSettings: env.unreadable_project_settings ?? [],
+    loadRepairs: loadRepairsFromEnvelope(env.load_repairs),
     surveyData,
   };
 }

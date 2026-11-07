@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
+import { IPC_EVENTS, listenIpc } from '../utils/ipcEvents';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { debugLog } from '../utils/debugLog';
@@ -45,6 +46,13 @@ export function useBeforeUnload(
   // Kept in a ref (not a dep) so a re-rendered guard identity never tears down
   // and re-registers the close listener.
   const guardRef = useRef(guard);
+  // `message` and `onConfirm` likewise. As deps they re-ran the listener effect on
+  // every change - App flips the message whenever an import starts or ends - and the
+  // re-run removed the old listener at once but had the new one only after
+  // `listen()`'s IPC round trip. The backend always prevents the close and then
+  // emits, so a close request in that window reached no listener and was lost.
+  const messageRef = useRef(message);
+  const onConfirmRef = useRef(onConfirm);
   // Tier 1's answer for the quit attempt currently in flight.
   //
   // A tier-2 dialog aborts the close and re-issues it (via `performQuit`) once the
@@ -66,13 +74,24 @@ export function useBeforeUnload(
   }, [guard]);
 
   useEffect(() => {
-    // Always clean up any existing listener first
-    if (unlistenRef.current) {
-      unlistenRef.current();
-      unlistenRef.current = null;
-    }
+    messageRef.current = message;
+  }, [message]);
 
+  useEffect(() => {
+    onConfirmRef.current = onConfirm;
+  }, [onConfirm]);
+
+  useEffect(() => {
     let isMounted = true;
+
+    // The real unlisten is async (it awaits an IPC round trip) and nothing awaits
+    // it, so a failed release is reported here rather than escaping as an
+    // unhandled rejection (as in useNetworkStatus).
+    const release = (unlisten: UnlistenFn) => {
+      void new Promise<void>((resolve) => resolve(unlisten())).catch((e: unknown) => {
+        console.warn('[useBeforeUnload] close listener release failed:', e);
+      });
+    };
 
     // Close the window immediately without confirmation. Returns false when the
     // destroy REJECTED and the window is therefore still here - the caller has to
@@ -96,7 +115,7 @@ export function useBeforeUnload(
     const setupTauriListener = async () => {
       try {
         debugLog('[useBeforeUnload] Setting up close listener');
-        const unlisten = await listen('tauri://close-requested', async () => {
+        const unlisten = await listenIpc(IPC_EVENTS.TAURI_CLOSE_REQUESTED, async () => {
           debugLog('[useBeforeUnload] Close requested, shouldBlock:', shouldBlockRef.current, 'isClosing:', isClosing.current);
 
           // If we're already closing, don't do anything
@@ -129,7 +148,7 @@ export function useBeforeUnload(
             isShowingDialog.current = true;
             let proceed = false;
             try {
-              proceed = await confirm(message, {
+              proceed = await confirm(messageRef.current, {
                 title: 'Close Application',
                 kind: 'warning',
                 okLabel: 'Discard and Close',
@@ -161,9 +180,10 @@ export function useBeforeUnload(
           // for a close that tier 2 then aborted. Keyed on `shouldBlock` rather than
           // on "we prompted this pass", so it still runs on the pre-confirmed pass
           // that skips an already-answered prompt.
-          if (shouldBlockRef.current && onConfirm) {
+          const cleanup = onConfirmRef.current;
+          if (shouldBlockRef.current && cleanup) {
             try {
-              await onConfirm();
+              await cleanup();
             } catch (e) {
               console.error('Cleanup callback failed:', e);
             }
@@ -190,7 +210,7 @@ export function useBeforeUnload(
           // The window IS gone. Drop the listener so nothing can re-enter this flow
           // during teardown.
           if (unlistenRef.current) {
-            unlistenRef.current();
+            release(unlistenRef.current);
             unlistenRef.current = null;
           }
         });
@@ -199,7 +219,7 @@ export function useBeforeUnload(
           unlistenRef.current = unlisten;
         } else {
           // Component unmounted before listener was set up
-          unlisten();
+          release(unlisten);
         }
       } catch (e) {
         // Tauri API not available (dev mode without Tauri)
@@ -213,8 +233,8 @@ export function useBeforeUnload(
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (isClosing.current || !shouldBlockRef.current) return;
       e.preventDefault();
-      e.returnValue = message;
-      return message;
+      e.returnValue = messageRef.current;
+      return messageRef.current;
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -223,9 +243,11 @@ export function useBeforeUnload(
       isMounted = false;
       window.removeEventListener('beforeunload', handleBeforeUnload);
       if (unlistenRef.current) {
-        unlistenRef.current();
+        release(unlistenRef.current);
         unlistenRef.current = null;
       }
     };
-  }, [message, onConfirm]); // Note: shouldBlock not in deps, we use ref for immediate access
+    // Registered once for the hook's lifetime: everything the listener reads that can
+    // change is in a ref (see `messageRef`).
+  }, []);
 }

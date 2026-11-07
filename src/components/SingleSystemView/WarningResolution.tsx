@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
+import { refuseMutationDuringCarry } from '../../store/moveCarry';
 import { useUIStore } from '../../store/uiStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { Button } from '../common/Button';
@@ -484,7 +485,7 @@ export function WarningResolution({
     // stepping). Deliberately NOT keyed on `options`/`shot` object identity: a
     // background project refresh rebuilds those references and would otherwise
     // wipe the user's in-progress manual edit and reset their selection.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-seed only when the resolved warning changes (see above)
   }, [warning.sectionId, warning.shotId, warning.code]);
 
   // Strict parse of a manual field (NaN when empty/non-numeric/garbage). Used
@@ -570,7 +571,6 @@ export function WarningResolution({
       stations: [ghostEnd],
       color: PREVIEW_COLOR,
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, manual, shot, options, activeStations, negativeLrud, warning.sectionId, warning.shotIndex]);
 
   // Push the preview to the map; clear it when leaving the resolution view.
@@ -594,7 +594,7 @@ export function WarningResolution({
       return exceedsSlopeLength(num('length'), shot.depth_in, shot.depth_out);
     }
     return false;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- num() reads `manual`, which is listed
   }, [selected, manual, shot, options]);
 
   /**
@@ -611,12 +611,13 @@ export function WarningResolution({
     if (opt.ignore) {
       // The backend can refuse (e.g. the shot no longer exists, or the code is
       // an error): only count it resolved if it actually persisted (#57 #1).
+      // With a move carry in flight it is refused (GHOST-2), and that refusal is its
+      // own notice. Any failure is explained by `resolveWarning` itself - a
+      // read-only refusal as the read-only notice (#576 NF-W2RO-2) - so nothing more
+      // is toasted here.
+      if (refuseMutationDuringCarry()) return 'failed';
       const ok = await resolveWarning(warning.sectionId, warning.shotId, warning.code);
-      if (!ok) {
-        showToast(t('detailPanel.warnings.resolveFailed'), TOAST_KEYS.WARNING_RESOLVE, 'error');
-        return 'failed';
-      }
-      return 'resolved';
+      return ok ? 'resolved' : 'failed';
     }
 
     if (opt.navigate) {

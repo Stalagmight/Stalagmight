@@ -34,6 +34,16 @@ import {
   writeWallsWpj,
 } from './surveyFileWritersText';
 
+/**
+ * `items[index]`, throwing exactly where reading a property of a missing entry
+ * would have thrown anyway, so noUncheckedIndexedAccess needs no fallback.
+ */
+function at<T>(items: readonly T[], index: number): T {
+  const item = items[index];
+  if (item === undefined) throw new Error(`no entry ${index} (of ${items.length})`);
+  return item;
+}
+
 // ---------------------------------------------------------------------------
 // Mirror: Compass .DAT framing
 // ---------------------------------------------------------------------------
@@ -47,10 +57,11 @@ import {
  * therefore the framing, and a trailing separator leaves an empty tail the
  * parser would just fail to start a survey on.
  */
-function splitCompassSurveys(text: string): string[] {
+function splitCompassSurveys(text: string): [string, ...string[]] {
   const blocks = text.split('\x0c');
   if (blocks.length > 1 && blocks[blocks.length - 1] === '') blocks.pop();
-  return blocks;
+  // Never empty: split() yields at least one block and pop() needs two.
+  return blocks as [string, ...string[]];
 }
 
 /**
@@ -116,9 +127,9 @@ function lexMak(text: string): MakDirective[] {
   const directives: MakDirective[] = [];
   let index = 0;
   while (index < text.length) {
-    while (index < text.length && (/\s/.test(text[index]) || text[index] === '\x1a')) index += 1;
+    while (index < text.length && (/\s/.test(text[index]!) || text[index] === '\x1a')) index += 1;
     if (index >= text.length) break;
-    const char = text[index];
+    const char = text[index]!; // index < text.length: the break above
     if (!MAK_DISPATCH_CHARS.includes(char)) throw new Error(`Unexpected character '${char}'`);
     let depth = 0;
     let end = -1;
@@ -200,7 +211,7 @@ function extractSpans(body: string): { tokens: string[]; lrud: string | null } {
   };
   let i = 0;
   while (i < chars.length) {
-    const c = chars[i];
+    const c = chars[i]!;
     if (/\s/.test(c)) {
       flush();
     } else if (c === '#') {
@@ -236,7 +247,7 @@ function parseWallsVector(
   const body = at === -1 ? line : line.slice(0, at);
   const { tokens, lrud } = extractSpans(body);
   if (tokens.length < 2) return null; // skipped silently (`walls/srv.rs:246-248`)
-  return { from: tokens[0], to: tokens[1], columns: tokens.slice(2), lrud };
+  return { from: tokens[0]!, to: tokens[1]!, columns: tokens.slice(2), lrud };
 }
 
 /** `is_anonymous` (`walls/units.rs:441-443`): exactly `-` or `--`, never `---`. */
@@ -307,8 +318,9 @@ function scanXmlElements(xml: string): ScannedElement[] {
   const pattern = /<(\/?)([A-Za-z_][\w.:-]*)((?:"[^"]*"|[^<>"])*?)(\/?)>/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(xml)) !== null) {
+    // All four groups are non-optional, so each is a string on every match.
     if (match[1] === '/') continue;
-    out.push({ tag: match[2].split(':').pop() ?? '', attrs: match[3], selfClosing: match[4] === '/' });
+    out.push({ tag: match[2]!.split(':').pop() ?? '', attrs: match[3]!, selfClosing: match[4] === '/' });
   }
   return out;
 }
@@ -481,13 +493,13 @@ describe('writeCompassDat framing', () => {
       // Every keyword is a `nom::tag` applied to the line slice, so it must sit
       // at column 0 and match case exactly (`survey/parser/mod.rs:29, 37, 55`).
       expect(lines[0]).toBe(index === 1 ? 'OTHER CAVE' : 'SYNTH CAVE');
-      expect(lines[1].startsWith('SURVEY NAME: ')).toBe(true);
-      expect(lines[2].startsWith('SURVEY DATE:')).toBe(true);
+      expect(at(lines, 1).startsWith('SURVEY NAME: ')).toBe(true);
+      expect(at(lines, 2).startsWith('SURVEY DATE:')).toBe(true);
       expect(lines[3]).toBe('SURVEY TEAM:');
       // `multispace1` after the tag is greedy across newlines, so a BLANK team
       // line would swallow the parameter line and kill the survey.
-      expect(lines[4].trim()).not.toBe('');
-      expect(lines[5].startsWith('DECLINATION:')).toBe(true);
+      expect(at(lines, 4).trim()).not.toBe('');
+      expect(at(lines, 5).startsWith('DECLINATION:')).toBe(true);
     }
     expect(blocks.map((block) => compassLines(block)[1])).toEqual([
       'SURVEY NAME: A',
@@ -530,7 +542,7 @@ describe('writeCompassDat framing', () => {
       const rows = compassDataRows(splitCompassSurveys(text)[0]);
       const expected = compassHasBacksights(format) ? 11 : 9;
       expect(rows.map((row) => row.length)).toEqual([expected, expected]);
-      expect(rows[0].slice(2)).toHaveLength(expected - 2);
+      expect(rows[0]!.slice(2)).toHaveLength(expected - 2); // two rows: asserted above
     }
   });
 
@@ -567,7 +579,7 @@ describe('writeCompassDat framing', () => {
     );
     const rows = compassDataRows(splitCompassSurveys(text)[0]);
     expect(rows.map((row) => row.length)).toEqual([11, 11]);
-    expect(rows[0].slice(9)).toEqual(['0.00', '0.00']);
+    expect(rows[0]!.slice(9)).toEqual(['0.00', '0.00']); // two rows: asserted above
     // And a non-backsight format never emits them, even when the shot carries them.
     const noBacksight = writeCompassDat(
       compassDat({ surveys: [compassSurvey({ format: FORMAT_13_NO_BACKSIGHT })] }),
@@ -858,7 +870,7 @@ describe('writeWallsSrv framing', () => {
       expect(vector?.columns).toHaveLength(3);
       expect(vector?.lrud).toBe('1,2,3,4');
     }
-    expect(lines[0].endsWith(' ;note')).toBe(true);
+    expect(at(lines, 0).endsWith(' ;note')).toBe(true);
     expect(lines[2]).toContain(' *1,2,3,4*');
 
     // The counter-case the rule exists for: a closer glued to more text is a
@@ -967,9 +979,10 @@ describe('writeWallsWpj framing', () => {
     expect(parsed.fields.slice(0, 12).every((value) => Number.isFinite(value))).toBe(true);
     expect(parsed.datum).toBe('NAD83');
     // Zone integral in 1..=60 and flags integral in 0..=65535 (`wpj.rs:441-449`).
+    // fields.length >= 12 is asserted above.
     expect(Number.isInteger(parsed.fields[2])).toBe(true);
-    expect(Math.abs(parsed.fields[2])).toBeGreaterThanOrEqual(1);
-    expect(Math.abs(parsed.fields[2])).toBeLessThanOrEqual(60);
+    expect(Math.abs(parsed.fields[2]!)).toBeGreaterThanOrEqual(1);
+    expect(Math.abs(parsed.fields[2]!)).toBeLessThanOrEqual(60);
     expect(parsed.fields[5]).toBeGreaterThanOrEqual(0);
     expect(parsed.fields[5]).toBeLessThanOrEqual(65535);
   });
@@ -1009,12 +1022,12 @@ describe('writeGpxXml framing', () => {
       writeGpxXml(gpx({ waypoints: [{ lat: 'nan' }, { lon: '1e999' }, { lat: 91, lon: -181 }], tracks: [], routes: [] })),
     );
     const waypoints = elements.filter((element) => element.tag === 'wpt');
-    expect(hasAttribute(waypoints[0].attrs, 'lat')).toBe(true);
-    expect(hasAttribute(waypoints[0].attrs, 'lon')).toBe(false);
-    expect(hasAttribute(waypoints[1].attrs, 'lat')).toBe(false);
-    expect(waypoints[0].attrs).toContain('lat="nan"');
-    expect(waypoints[1].attrs).toContain('lon="1e999"');
-    expect(waypoints[2].attrs).toContain('lat="91" lon="-181"');
+    expect(hasAttribute(at(waypoints, 0).attrs, 'lat')).toBe(true);
+    expect(hasAttribute(at(waypoints, 0).attrs, 'lon')).toBe(false);
+    expect(hasAttribute(at(waypoints, 1).attrs, 'lat')).toBe(false);
+    expect(at(waypoints, 0).attrs).toContain('lat="nan"');
+    expect(at(waypoints, 1).attrs).toContain('lon="1e999"');
+    expect(at(waypoints, 2).attrs).toContain('lat="91" lon="-181"');
   });
 
   it('escapes text content so a payload arrives as data, not as markup', () => {
@@ -1066,7 +1079,7 @@ describe('writeGpxXml framing', () => {
     const prefixed = writeGpxXml(gpx({ rootTag: 'g:gpx', rootAttrs: 'xmlns:g="http://www.topografix.com/GPX/1/1"' }));
     expect(prefixed).toContain('<g:gpx xmlns:g=');
     expect(prefixed).toContain('</g:gpx>');
-    expect(scanXmlElements(prefixed)[0].tag).toBe('gpx');
+    expect(at(scanXmlElements(prefixed), 0).tag).toBe('gpx');
     // No attributes at all is legal: neither `xmlns` nor `version` is read.
     expect(writeGpxXml(gpx({ rootAttrs: '' }))).toContain('<gpx>');
     expect(writeGpxXml(gpx({ omitClosingRoot: true }))).not.toContain('</gpx>');

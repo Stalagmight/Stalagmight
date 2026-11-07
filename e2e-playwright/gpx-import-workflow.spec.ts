@@ -17,7 +17,7 @@ test.describe('GPX Import Workflow', () => {
     await setupMockedPage(page);
   });
 
-  test('imports GPX from home screen through create-project and placement flow', async ({ page }) => {
+  test('imports GPX from home screen through create-project and placement flow @smoke', async ({ page }) => {
     await setImportPath(page, '/mock/reef-traverse.gpx');
 
     await page.keyboard.press('Control+i');

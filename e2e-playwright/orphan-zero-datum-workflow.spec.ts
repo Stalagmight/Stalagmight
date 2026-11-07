@@ -4,6 +4,7 @@ import {
   createProject,
   createSectionViaStore,
   openDmpSelectionDialog,
+  proceedToDmpSectionConfig,
 } from './helpers/app';
 
 async function openOrphanDialog(page: Page): Promise<void> {
@@ -96,6 +97,58 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     });
 
     expect(mergeCalls.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * #576 NF-AN4-N4: after a DMP import, the orphan-placement lookup failing was
+   * swallowed ("non-fatal"), so the step that offers to attach unanchored
+   * sections was skipped without a word. The import still completes - it has
+   * landed - but the user is told the suggestions could not be computed, and why.
+   */
+  test('says so when the orphan lookup after a DMP import fails', async ({ page }) => {
+    await createProject(page, 'Orphan Lookup Failure');
+    await createSectionViaStore(page, {
+      name: 'Anchor Section',
+      shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: -1, depth_out: -2 }],
+    });
+    await page.evaluate(() => {
+      const w = window as unknown as Record<string, unknown>;
+      (w.__MOCK_SET_IMPORT_PLACEMENT_SUGGESTIONS__ as (s: unknown[]) => void)([
+        {
+          existingStationIndex: 0,
+          importStationIndex: 0,
+          score: 0.95,
+          matchedShots: 0,
+          direction: 'forward',
+          isPartial: false,
+          confidence: 'high',
+          existingSectionName: 'Anchor Section',
+          importSectionIndex: 0,
+          importSectionName: 'Main Passage',
+          targetType: 'existing',
+          existingSectionId: 1,
+          targetImportIndex: null,
+        },
+      ]);
+      w.__MOCK_IPC_OVERRIDES__ = {
+        ...((w.__MOCK_IPC_OVERRIDES__ as Record<string, unknown> | undefined) ?? {}),
+        suggest_orphan_placements: { __throw: 'orphan matcher unavailable (test)' },
+      };
+    });
+
+    await openDmpSelectionDialog(page);
+    const selection = page.getByTestId('dmp-selection-dialog');
+    await expect(selection.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await selection.getByTestId('select-none-button').click();
+    await selection.getByTestId('section-checkbox-0').click();
+    await proceedToDmpSectionConfig(page);
+    await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
+    await page.getByTestId('confirm-button').click();
+
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeHidden({ timeout: 15000 });
+    const notice = page.locator('[data-toast-key="dmp-orphan-lookup-failed"]');
+    await expect(notice).toBeVisible({ timeout: 10000 });
+    await expect(notice).toContainText('orphan matcher unavailable (test)');
   });
 
   test('walks through zero datum selection into new import wizard', async ({ page }) => {

@@ -97,6 +97,75 @@ use std::path::Path;
 /// file written by a newer schema instead of misreading it.
 pub const SCHEMA_VERSION: i32 = 18;
 
+/// [#576 B1-D1] The oldest schema this build opens: the one the first public
+/// release (v0.0.3) shipped. A file whose `PRAGMA user_version` - or, when it
+/// carries no stamp, whose project row - is below this is a pre-release test file
+/// (no schema-1 build ever wrote the stamp) and is refused with
+/// [`PreReleaseFile`] rather than migrated: see docs/saving.md "Schema
+/// version and pre-release files".
+const OLDEST_SUPPORTED_SCHEMA_VERSION: i32 = 2;
+
+/// [#576 B1-D1] The error an open returns for a file older than
+/// [`OLDEST_SUPPORTED_SCHEMA_VERSION`], so the load path can give it its own
+/// error code (`PRE_RELEASE_FILE`) instead of a generic database failure. [#576 C4]
+/// A type the load path downcasts to, not a prefix on the message: its `Display`
+/// is the sentence the user is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreReleaseFile {
+    /// The file format the file carries.
+    pub version: i32,
+}
+
+impl std::fmt::Display for PreReleaseFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "This project was saved by a pre-release version of Stalagmight (file format {}) \
+             and cannot be opened by this version. Create a new project and import it again \
+             from the original survey files (for example the .dmp, .tml, .mak or .wpj it came \
+             from).",
+            self.version
+        )
+    }
+}
+
+impl std::error::Error for PreReleaseFile {}
+
+/// [#576 RV4-R-M3-OPEN] The error [`Database::open_existing_refusing_upgrade`]
+/// returns for a file the open would have upgraded in place: the caller said the
+/// file sits where nothing may be written, so the upgrade (and the pre-upgrade copy
+/// it writes beside the file) is refused and the file is left as it was. [#576 C4]
+/// A type the load path downcasts to (its code `UPGRADE_REFUSED`), not a prefix on
+/// the message: its `Display` is the caller's user-facing refusal, as given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradeRefused {
+    /// The user-facing message the caller handed the open.
+    pub refusal: String,
+}
+
+impl std::fmt::Display for UpgradeRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.refusal)
+    }
+}
+
+impl std::error::Error for UpgradeRefused {}
+
+/// [#576 RV4-R-M3-OPEN] What to tell the user when an open would write a file that
+/// sits where nothing may be written - one message for each reason it would write.
+/// [`Database::open_existing_refusing_upgrade`] refuses with the one that fits the
+/// file (an [`UpgradeRefused`] carrying it) and writes nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradeRefusal {
+    /// A file an older build saved: the open would run the migration chain in
+    /// place and keep a `.pre-v<N>.backup` copy beside the file first.
+    pub older_format: String,
+    /// [#576 RV6b-R3] A file with no file-format stamp whose project row claims
+    /// this build's version or a newer one: it is not an older file, and the open
+    /// would only complete its tables in place - no backup copy, no stamp.
+    pub unstamped: String,
+}
+
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///
 /// v7 changed the `ShotUpdates` JSON wire format: nullable fields now use a
@@ -245,20 +314,23 @@ const MAX_DECOMPRESSED_BLOB_BYTES: u64 = 256 * 1024 * 1024;
 /// compressed rows sqlite already read are resident on top of it, and `read_to_end` grows
 /// its `Vec` by doubling, so a single blob transiently costs ~1.5-2x what it reserved.
 ///
-/// 1 GiB, derived from what a save can legitimately produce - and note WHICH knob bounds
-/// that, because there are two and they are easy to swap. What a count-window
-/// (non-SpeleoDB) project WRITES is bounded by `undo_persist_limit`, default **20**
-/// (`config/defaults.rs`, read in `project_io.rs::rows_to_persist`). `undo_history_limit`
-/// (100) is the in-memory/read window and never reaches disk. So the honest worst case
-/// is 20 `ProjectSnapshotPair` entries on a 20,000-shot survey at ~17 MB each = ~340 MB
-/// per stack, ~680 MB for the pair - comfortably under this ceiling, which is the point.
+/// [#576 NF-W4U-2] Derived from what a save can write since #576 B20 bounded the writer
+/// in bytes: of its newest entries a save keeps only those whose estimated sizes fit in
+/// [`crate::persistence::undo_limits::UNDO_BYTE_BUDGET_BYTES`] per stack, the newest always kept even alone over it
+/// (`UndoStack::persist_window`; Full mode is held to the same budget in memory). So one
+/// stack is either a window of at most that many bytes or one larger newest entry, whose
+/// biggest blob the per-blob ceiling already bounds - at most
+/// `UNDO_BYTE_BUDGET_BYTES + MAX_DECOMPRESSED_BLOB_BYTES` per stack with room for the
+/// small command blobs and the estimate's slack, and twice that for the pair: 576 MiB.
 ///
-/// The write side carries no BYTE bound of its own for such a project, only that count,
-/// so a user who raises `undo_persist_limit` far past its default can still author more
-/// history than this will read back. That is the residual: bounding the writer in bytes,
-/// so this ceiling can be tightened without ever refusing real work, is the follow-up.
-/// The exposure meanwhile drops from ~50 GiB to ~1 GiB.
-const MAX_HISTORY_LOAD_BYTES: u64 = 1024 * 1024 * 1024;
+/// It was 1 GiB, sized for the old writer, which kept the newest `undo_persist_limit`
+/// (default 20) entries whatever their size: 20 `ProjectSnapshotPair`s on a 20,000-shot
+/// survey at ~17 MB each, ~680 MB for the pair. A file an older build wrote with that
+/// much history now opens without it, behind the discarded-history banner, the way one
+/// over 1 GiB always did; the next save writes the capped window.
+const MAX_HISTORY_LOAD_BYTES: u64 = 2
+    * (MAX_DECOMPRESSED_BLOB_BYTES
+        + crate::persistence::undo_limits::UNDO_BYTE_BUDGET_BYTES as u64);
 
 /// [#473] The bytes ONE PROJECT OPEN has left to inflate into, shared by both history
 /// stacks, every row of each, and every decompression thread.
@@ -312,9 +384,10 @@ impl InflationBudget {
 
     /// Take `bytes` out of the budget, or fail without taking anything.
     ///
-    /// `fetch_update` rather than a load followed by a store: two threads reserving
-    /// concurrently off the same observed remainder would each believe they fit, and
-    /// the budget would be overspent by exactly the amount it is meant to bound.
+    /// `try_update` (formerly `fetch_update`, deprecated in Rust 1.99) rather than a
+    /// load followed by a store: two threads reserving concurrently off the same
+    /// observed remainder would each believe they fit, and the budget would be
+    /// overspent by exactly the amount it is meant to bound.
     ///
     /// The message deliberately shares NO distinctive phrase with the pre-scan's: a test
     /// that asserts on "load budget" cannot tell which of the two refused it, and one
@@ -323,7 +396,7 @@ impl InflationBudget {
     fn reserve(&self, bytes: u64) -> Result<()> {
         use std::sync::atomic::Ordering;
         self.remaining
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(bytes)
             })
             .map_err(|left| {
@@ -559,6 +632,11 @@ mod undo;
 mod warnings;
 mod write;
 
+pub use open::{has_stalx_extension, with_stalx_extension};
+pub use read::{LoadRepairs, ProjectLoadReport};
+pub use undo::{compress_history_json, StoredHistoryRow};
+pub use write::SAVE_PROJECT_TABLES;
+
 /// How many `resolved_warnings` rows a carry-over will examine (#517). Exported
 /// so a caller's test can size a fixture against the real ceiling instead of
 /// hard-coding a copy of it.
@@ -576,14 +654,52 @@ pub struct RawTableData {
     pub total_rows: u32,
 }
 
-/// Information about a backup file.
+/// A file the recovery dialog's Restore list offers (#576 C15): what it is, and
+/// whether it can be restored.
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
     pub path: String,
+    #[ts(type = "number")]
     pub size_bytes: u64,
     pub modified_at: String,
+    /// What the file is, which the dialog turns into its label.
+    pub kind: BackupKind,
+    /// For [`BackupKind::PreRestore`]: which restore replaced it (1 = the
+    /// first), or `None` for the unnumbered copy older builds kept.
+    pub restore_number: Option<u32>,
+    /// It opens, has no schema object every open refuses (#608), passes
+    /// SQLite's quick integrity check and holds a project -
+    /// checked the way a restore would install it (with its rollback journal, if
+    /// one is beside it), without changing it. The dialog greys out the rest.
+    pub usable: bool,
+    /// Why it cannot be restored, when `usable` is false.
+    pub problem: Option<String>,
+}
+
+/// What a [`BackupInfo`] is (#576 C15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../bindings/")]
+#[serde(rename_all = "snake_case")]
+pub enum BackupKind {
+    /// A copy this app made on purpose: Repair's numbered `.backup`, `.backup.N`,
+    /// or the copy kept before a file-format upgrade (`.pre-v<N>.backup`).
+    Backup,
+    /// A `.tmp` left by a save that did not finish. It may hold the newest edits
+    /// (the write can finish before the rename) or be incomplete; the check says.
+    InterruptedSave,
+    /// The project file as it was before a restore replaced it
+    /// (`.pre-restore.N`).
+    PreRestore,
+}
+
+/// What [`Database::restore_from_backup`] did (#576 C15).
+#[derive(Debug, Clone)]
+pub struct RestoreOutcome {
+    /// Where the file the restore replaced was kept, or `None` when there was
+    /// no file to keep.
+    pub safety_copy: Option<std::path::PathBuf>,
 }
 
 /// Result of attempting to repair a corrupt database.
@@ -610,6 +726,21 @@ pub struct SalvagedData {
     pub sections_json: Option<String>,
     /// Full project as JSON (if loadable despite corruption)
     pub full_project_json: Option<String>,
+    /// Errors encountered while reading individual tables
+    pub errors: Vec<String>,
+}
+
+/// What the salvage export wrote (#576 W30-5): the counts and warnings of the
+/// one salvage read whose JSON went into the file. The recovery dialog reports
+/// these, not those of an earlier read: a damaged file can read differently
+/// twice.
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../bindings/")]
+#[serde(rename_all = "camelCase")]
+pub struct SalvageWriteResult {
+    pub section_count: usize,
+    pub shot_count: usize,
+    pub merge_count: usize,
     /// Errors encountered while reading individual tables
     pub errors: Vec<String>,
 }
@@ -648,13 +779,157 @@ mod diagnostic_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod recovery_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod load_repairs_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod busy_timeout_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod busy_timeout_coverage_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod open_to_read_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod save_order_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod section_created_at_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod merged_with_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::expect_used,
     clippy::print_stdout,
-    // The permission-bit tests (#485) say on stderr when the OS declined to make
-    // the fixture read-only - root ignores mode bits, and CI's check job runs as
-    // root - so a pass there is not read as a pass of the guard.
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod migration_chain_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
     clippy::print_stderr,
     clippy::float_cmp,
     clippy::panic
 )]
 mod tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod upgrade_safety_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod resolved_rekey_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod open_order_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod schema_guard_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod sidecar_free_open_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod history_ceiling_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod station_rows_tests;

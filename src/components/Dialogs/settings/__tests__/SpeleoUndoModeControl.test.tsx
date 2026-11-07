@@ -7,15 +7,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
-}));
+vi.mock('../../../../utils/ipc');
+stubGetErrorMessage(errorMessageOrString);
 
 import { SpeleoUndoModeControl } from '../SpeleoUndoModeControl';
 import { useSpeleoStore } from '../../../../store/speleoStore';
 import type { UndoMode } from '../../../../types/ipc.generated';
+import { invokeIpcMock, stubGetErrorMessage, errorMessageOrString } from '../../../../test/factories/ipc';
 
 /** A remote link in the given edit state, carrying the given undo policy. */
 const seed = (opts: {

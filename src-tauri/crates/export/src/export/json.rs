@@ -3,6 +3,7 @@ use chrono::Utc;
 use serde::Serialize;
 use std::path::Path;
 
+use super::atomic::write_atomic_bytes;
 use crate::models::{Project, ShotKind};
 
 /// Export project data to JSON format
@@ -11,7 +12,7 @@ pub fn export_json(project: &Project, path: &Path) -> Result<()> {
 
     let json = serde_json::to_string_pretty(&export_data).context("Failed to serialize JSON")?;
 
-    std::fs::write(path, json).context("Failed to write JSON file")?;
+    write_atomic_bytes(path, json.as_bytes()).context("Failed to write JSON file")?;
 
     tracing::info!(path = ?path, "Exported JSON");
     Ok(())
@@ -49,8 +50,11 @@ pub struct JsonShot {
     pub azimuth_out: f64,
     pub depth_in: f64,
     pub depth_out: f64,
+    /// Left, right, up, down. `null` for a side nobody measured (#576
+    /// B27(b)) - a `0.0` here is a measured pinch; the whole key is omitted
+    /// when no side was measured.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub lrud: Option<[f64; 4]>,
+    pub lrud: Option<[Option<f64>; 4]>,
     pub kind: ShotKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
@@ -83,19 +87,9 @@ impl JsonExport {
                             azimuth_out: shot.azimuth_out,
                             depth_in: shot.depth_in,
                             depth_out: shot.depth_out,
-                            lrud: if shot.left.is_some()
-                                || shot.right.is_some()
-                                || shot.up.is_some()
-                                || shot.down.is_some()
-                            {
-                                Some([
-                                    shot.left.unwrap_or(0.0),
-                                    shot.right.unwrap_or(0.0),
-                                    shot.up.unwrap_or(0.0),
-                                    shot.down.unwrap_or(0.0),
-                                ])
-                            } else {
-                                None
+                            lrud: {
+                                let sides = [shot.left, shot.right, shot.up, shot.down];
+                                sides.iter().any(Option::is_some).then_some(sides)
                             },
                             kind: shot.kind,
                             comment: shot.comment.clone(),
@@ -146,6 +140,49 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["project"]["name"], "Test");
         assert_eq!(parsed["sections"][0]["name"], "Main");
+    }
+
+    /// #576 B27(b): an unmeasured passage dimension is `null` in the JSON
+    /// export, not a measured `0.0` - the CSV export already leaves that cell
+    /// empty. The `lrud` key and its left/right/up/down order stay; a shot with
+    /// no LRUD at all still omits the key.
+    #[test]
+    fn an_unmeasured_lrud_side_is_null_not_zero() {
+        let lrud_of =
+            |left: Option<f64>, right: Option<f64>, up: Option<f64>, down: Option<f64>| {
+                let mut project = Project::new("Lrud".to_string(), None);
+                project.add_section(SectionData {
+                    name: Some("Main".to_string()),
+                    color: "#4ecdc4".to_string(),
+                    shots: vec![ShotData {
+                        length: 2.0,
+                        left,
+                        right,
+                        up,
+                        down,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                });
+                let value = serde_json::to_value(JsonExport::from_project(&project)).unwrap();
+                value["sections"][0]["shots"][0].get("lrud").cloned()
+            };
+
+        assert_eq!(
+            lrud_of(Some(1.0), None, None, None),
+            Some(serde_json::json!([1.0, null, null, null])),
+            "only the left wall was taped"
+        );
+        assert_eq!(
+            lrud_of(Some(0.0), None, Some(2.5), None),
+            Some(serde_json::json!([0.0, null, 2.5, null])),
+            "a measured zero stays a zero"
+        );
+        assert_eq!(
+            lrud_of(Some(1.2), Some(0.8), Some(2.1), Some(1.5)),
+            Some(serde_json::json!([1.2, 0.8, 2.1, 1.5]))
+        );
+        assert_eq!(lrud_of(None, None, None, None), None, "no LRUD, no key");
     }
 
     #[test]

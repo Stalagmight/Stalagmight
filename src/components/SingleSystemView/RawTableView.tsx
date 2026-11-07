@@ -48,7 +48,7 @@ export default function RawTableView({ tableName, height }: RawTableViewProps) {
 
   const fetchPage = useCallback((table: string, pageToLoad: number) => {
     const requestId = ++requestIdRef.current;
-    invokeIpc<RawTableData>(
+    invokeIpc(
       'get_raw_table',
       { table, limit: RAW_TABLE_PAGE_SIZE, offset: pageToLoad * RAW_TABLE_PAGE_SIZE },
       { purpose: 'browse a raw sqlite table', fields: { table, page: pageToLoad } }

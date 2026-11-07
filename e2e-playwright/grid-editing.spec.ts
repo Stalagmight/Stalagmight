@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for core SpreadsheetGrid editing in the shots view.
@@ -51,9 +52,9 @@ interface ShotSnapshot {
 
 async function getShots(page: Page): Promise<ShotSnapshot[]> {
   return page.evaluate(() => {
-    const e2e = (window as any).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
     const shots = e2e?.projectStore.getState().project?.sections?.[0]?.shots ?? [];
-    return shots.map((s: any) => ({
+    return shots.map((s) => ({
       id: s.id,
       length: s.length,
       depth_in: s.depth_in,
@@ -67,7 +68,7 @@ async function getShots(page: Page): Promise<ShotSnapshot[]> {
 type BatchCommand = { type: string; section_id: number; shot_id: number; updates: Record<string, unknown> };
 
 async function getBatchCalls(page: Page): Promise<BatchCommand[][]> {
-  return page.evaluate(() => ((window as any).__MOCK_EXECUTE_BATCH_CALLS__ ?? []) as BatchCommand[][]);
+  return page.evaluate(() => ((window as E2EWindow).__MOCK_EXECUTE_BATCH_CALLS__ ?? []) as BatchCommand[][]);
 }
 
 /** Open the DataTable via keyboard shortcut. */

@@ -182,7 +182,8 @@ release should carry.
 
 1. Reads current version from `package.json`
 2. Computes new version (major/minor/patch or explicit X.Y.Z)
-3. Verifies no uncommitted changes (except CHANGELOG.md)
+3. Verifies the working tree is clean via `git status --porcelain` - untracked files
+   count, CHANGELOG.md is the one exemption, and a failing git stops the script
 4. Verifies `## [Unreleased]` section is non-empty
 5. Updates version in all 4 files that carry it (see [Version locations](#version-locations)):
    - `package.json`
@@ -416,8 +417,11 @@ The About dialog reads the version dynamically via `__APP_VERSION__` (injected b
 
 ## Troubleshooting
 
-### "uncommitted changes" error
-Stash or commit changes first. The script allows uncommitted `CHANGELOG.md` but nothing else.
+### "the working tree has changes other than CHANGELOG.md" error
+Commit the listed files, or `git stash -u` (plain `git stash` leaves untracked `??`
+files behind, and those block too). The script allows an uncommitted `CHANGELOG.md`
+but nothing else. "git status failed" means git itself could not read the tree - fix
+that first; the script will not guess that the tree is clean.
 
 ### "[Unreleased] section is empty" error
 Write release notes into the `## [Unreleased]` section of `CHANGELOG.md` before running with `--no-edit`.

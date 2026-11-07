@@ -6,10 +6,10 @@
  * raw EINVAL - it says nothing about what failed, offers nothing to do, and does
  * not even hint that the server was unreachable. The humanized line must instead
  * name the configured endpoint (self-hosted users need to know WHICH server) and
- * say what to check, while the raw cause stays on the DTO for the log.
+ * say what to check, while the raw cause stays on the CommandError for the log.
  *
  * The transport case is recognised STRUCTURALLY, from the backend's typed
- * `transport` discriminant - never by matching English substrings of the Rust
+ * `transport` payload - never by matching English substrings of the Rust
  * message (which is locale-dependent: it comes from the platform's strerror).
  *
  * `.tsx` so this runs in the jsdom tier - the i18n singleton it uses is
@@ -19,21 +19,23 @@ import { describe, it, expect, beforeEach } from 'vitest';
 
 import { dumpCandidateKind, humanizeSpeleoError, unpushedLocalEdits } from './speleoError';
 import { useSpeleoStore } from '../store/speleoStore';
-import type { SpeleoErrorDto } from '../types/ipc.generated';
+import type { CommandError } from '../types/ipc.generated';
 
 const ENDPOINT = 'https://cave.example.internal:8443/';
 
-/** The DTO shape `speleodb_*` commands reject with. */
-const dto = (over: Partial<SpeleoErrorDto> = {}): SpeleoErrorDto => ({
+/** The CommandError `speleodb_*` commands reject with (#576 C4): a transport failure by default. */
+const dto = (over: Partial<CommandError> = {}): CommandError => ({
+  code: 'SPELEODB_RETRY',
   message: 'Network error talking to SpeleoDB: Invalid argument',
-  action: 'Retry',
-  status: null,
   transport: 'Unknown',
-  unpushed_local: null,
-  dump_candidate_kind: null,
-  dump_candidates: null,
   ...over,
 });
+
+/** The same rejection with no transport cause: the backend omits `transport` for every other error. */
+const nonTransport = (over: Partial<CommandError>): CommandError => {
+  const { transport: _transport, ...rest } = dto(over);
+  return rest;
+};
 
 beforeEach(() => {
   useSpeleoStore.setState({
@@ -88,10 +90,10 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
   });
 
   it('leaves non-transport errors framed by their operation prefix', () => {
-    // `transport` is null for every non-transport error, which is what makes it a
-    // sound discriminant: a retryable 5xx is `Retry` too, but carries a status.
+    // `transport` is absent on every non-transport error, which is what makes it a
+    // sound discriminant: a retryable 5xx is `SPELEODB_RETRY` too, but carries a status.
     const line = humanizeSpeleoError(
-      dto({ message: 'Bad login.', action: 'Fatal', status: 400, transport: null }),
+      nonTransport({ message: 'Bad login.', code: 'SPELEODB_FATAL', status: 400 }),
       'Login to SpeleoDB failed',
     );
     expect(line).toBe('Login to SpeleoDB failed: Bad login');
@@ -99,7 +101,7 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
 
   it('does not treat a retryable 5xx as a transport failure', () => {
     const line = humanizeSpeleoError(
-      dto({ message: 'Server error', action: 'Retry', status: 503, transport: null }),
+      nonTransport({ message: 'Server error', code: 'SPELEODB_RETRY', status: 503 }),
       'Could not push changes',
     );
     expect(line).toBe('Could not push changes: Server error');
@@ -116,10 +118,8 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
 describe('unpushedLocalEdits payload guards (#270)', () => {
   const refusal = (unpushed_local: unknown) =>
     ({
+      code: 'SPELEODB_UNPUSHED_LOCAL_EDITS',
       message: 'local edits never pushed',
-      action: 'UnpushedLocalEdits',
-      status: null,
-      transport: null,
       unpushed_local,
     }) as unknown;
 
@@ -156,7 +156,7 @@ describe('unpushedLocalEdits payload guards (#270)', () => {
 
   it('rejects an error that is not this refusal at all', () => {
     expect(
-      unpushedLocalEdits({ message: 'boom', action: 'Fatal', status: 500 }),
+      unpushedLocalEdits({ code: 'SPELEODB_FATAL', message: 'boom', status: 500 }),
     ).toBeNull();
     expect(unpushedLocalEdits(new Error('plain'))).toBeNull();
     expect(unpushedLocalEdits('a string rejection')).toBeNull();
@@ -169,18 +169,20 @@ describe('unpushedLocalEdits payload guards (#270)', () => {
 });
 
 /**
- * [#258] The picker's verb comes from the DTO, not from the candidates' file
+ * [#258] The picker's verb comes from the CommandError, not from the candidates' file
  * extensions. Extracting a `.stalx` and adopting an `ariane.tml` are different
  * operations, so reading this wrong shows the wrong dialog - and hard-coding it
  * left the Adopt copy with no production caller at all.
  */
 describe('dumpCandidateKind (#258)', () => {
   const ambiguous = (kind: unknown) =>
-    dto({
-      action: 'Ambiguous',
-      dump_candidates: [{ entry_path: 'a', size_bytes: 1, modified: null }],
-      dump_candidate_kind: kind as SpeleoErrorDto['dump_candidate_kind'],
-    });
+    ({
+      ...nonTransport({
+        code: 'SPELEODB_AMBIGUOUS',
+        dump_candidates: [{ entry_path: 'a', size_bytes: 1, modified: null }],
+      }),
+      dump_candidate_kind: kind,
+    }) as unknown;
 
   it('reads the kind the classifier decided', () => {
     expect(dumpCandidateKind(ambiguous('ariane'))).toBe('ariane');
@@ -200,8 +202,8 @@ describe('dumpCandidateKind (#258)', () => {
   it('never infers the kind from the candidates themselves', () => {
     // A set of `.tml` paths with no kind stays `stalx`: the extension is not the
     // discriminant, precisely so the two copies of that rule cannot disagree.
-    const tmlish = dto({
-      action: 'Ambiguous',
+    const tmlish = nonTransport({
+      code: 'SPELEODB_AMBIGUOUS',
       dump_candidates: [
         { entry_path: 'one/ariane.tml', size_bytes: 1, modified: null },
       ],

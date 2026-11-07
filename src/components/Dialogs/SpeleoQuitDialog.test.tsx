@@ -18,11 +18,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'the server said no',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('the server said no'));
 
 const performQuitMock = vi.hoisted(() => vi.fn());
 // `holdsWriteLock` is the real predicate, not a stub: this dialog adapts its whole
@@ -38,21 +35,15 @@ import SpeleoUnwoundPushDialog from './SpeleoUnwoundPushDialog';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
+import { makeSpeleoLink } from '../../test/factories/speleo';
 
-const LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'editing',
-  lockHolder: null,
-  lockedByOther: false,
-  hasUnpushedEdits: true,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+/** [#576 NF-W8FE-2] Done and Push answer the wire envelope, never a bare outcome. */
+function report<R>(result: R): { result: R; save_warnings: [] } {
+  return { result, save_warnings: [] };
+}
+
+const LINK: SpeleoLinkState = makeSpeleoLink({ editState: 'editing', hasUnpushedEdits: true });
 
 /** Every IPC the release paths could reach. */
 const RELEASE_COMMANDS = [
@@ -87,7 +78,7 @@ beforeEach(() => {
 
 describe('SpeleoQuitDialog - push, release & quit', () => {
   it('runs the existing done verb and quits once the lock is released', async () => {
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     render(<SpeleoQuitDialog />);
 
     await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
@@ -113,7 +104,7 @@ describe('SpeleoQuitDialog - push, release & quit', () => {
   });
 
   it('does NOT quit when the push lands unconfirmed or diverges', async () => {
-    invokeIpcMock.mockResolvedValue({ kind: 'divergence_needed' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'divergence_needed' }));
     render(<SpeleoQuitDialog />);
 
     await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
@@ -212,7 +203,7 @@ describe('SpeleoQuitDialog - the disk-dirty half composes', () => {
 
   it('saves before pushing when disk-dirty', async () => {
     useProjectStore.setState({ isDirty: true });
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     render(<SpeleoQuitDialog />);
 
     await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
@@ -322,7 +313,7 @@ describe('SpeleoQuitDialog - not dismissable mid-verb', () => {
     expect(useUIStore.getState().activeDialog).toBe('speleodb-quit');
 
     // Let the verb finish so the test leaves nothing pending.
-    releaseDone({ kind: 'released' });
+    releaseDone(report({ kind: 'released' }));
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
   });
 });
@@ -371,7 +362,7 @@ describe('SpeleoQuitDialog - Cancel puts back the dialog it displaced', () => {
 
   it('does NOT restore it on the way out - the window is going away', async () => {
     displaced();
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     render(<SpeleoQuitDialog />);
 
     await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
@@ -465,7 +456,7 @@ describe('SpeleoQuitDialog - the unwound-push confirmation carries the quit', ()
   };
 
   it('quits once the push actually releases the lock', async () => {
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     await reachConfirmation();
     // The confirmation is up INSTEAD of the quit prompt, and nothing was uploaded yet.
     expect(calledCommands()).not.toContain('speleodb_done');
@@ -520,7 +511,9 @@ describe('SpeleoQuitDialog - the unwound-push confirmation carries the quit', ()
     await userEvent.click(screen.getByTestId('speleodb-unwound-push-discard'));
 
     await waitFor(() => expect(useUIStore.getState().activeDialog).toBe('speleodb-quit'));
-    expect(calledCommands()).toEqual(['speleodb_discard_changes']);
+    // [#576 NF-W2F-1] The tree swap re-reads the open file's newer-version and
+    // unreadable-link flags; that is the reconciliation, not part of the quit.
+    expect(calledCommands()).toEqual(['speleodb_discard_changes', 'speleodb_open_file_flags']);
     expect(performQuitMock).not.toHaveBeenCalled();
   });
 });

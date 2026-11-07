@@ -30,17 +30,41 @@
 //!
 //! `AppState::delete_project` is the third abandon caller and the only one that
 //! cannot use a single verb: it destroys the `.stalx` the link row lives in, so it
-//! has to snapshot with [`AppState::speleodb_abandon_lock_release_params`] while the
+//! has to snapshot with [`AppState::speleodb_delete_lock_release_params`] while the
 //! database handle is still alive and release with
 //! [`AppState::speleodb_release_captured_lock`] once its teardown - and the `project`
 //! mutex - are out of the way. Destroying the file is the plainest abandon there is,
-//! which is why it takes the un-vetoed snapshot.
+//! which is why its snapshot skips the un-pushed-edits veto. It KEEPS the claim
+//! check (#576 RV5-F4-4): the delete is about the local file, and a session that
+//! only inherited the lock (a second window or computer on the same account) must
+//! not free the mutex the other session is editing under (decision RV2-R-13).
 
 use std::time::Duration;
 
 use super::AppState;
 use crate::speleodb::client;
 use crate::speleodb::SpeleoDbError;
+
+/// [#576 NF-A8R-GAPS] Proof the delete cleared its own claim under the `project`
+/// guard that decided the file's identity. Made only by
+/// [`AppState::speleodb_forget_lock_acquired_under`] (the field is private to this
+/// module), and the delete's deferred release
+/// ([`AppState::speleodb_release_captured_lock`]) takes it: a delete that cleared
+/// through the plain [`AppState::speleodb_forget_lock_acquired_for`] instead - which
+/// stays, for the clears that run outside any slot - has nothing to hand that
+/// release, and does not compile. Carries the claim it removed, for the
+/// trash-failure path that puts it back.
+#[must_use = "the delete's deferred release takes this proof, and a failed trash puts its claim back"]
+pub(super) struct ClaimClearedUnderSlot {
+    claim: Option<super::speleodb_session::LockClaim>,
+}
+
+impl ClaimClearedUnderSlot {
+    /// The claim the clear removed, for the path that has to restore it.
+    pub(super) fn into_claim(self) -> Option<super::speleodb_session::LockClaim> {
+        self.claim
+    }
+}
 
 /// What one lock release needs: the server to talk to, the credential, the
 /// http-policy allowance, and which project's mutex to drop.
@@ -76,11 +100,30 @@ enum ReleaseIntent {
     /// `speleodb_take_remote`): the user has said outright they are walking away
     /// from the local work, so there is no future push for the veto to protect.
     Abandon,
+    /// [#576 RV5-F4-4] Deleting the OPEN project's local file
+    /// (`AppState::delete_project`). An abandon of the local work, so no
+    /// un-pushed-edits veto; but only of THIS session's lock: an inherited one
+    /// stays with the account, like on a silent release.
+    DeleteLocal,
+}
+
+impl ReleaseIntent {
+    /// Whether this release hands back only a lock this app session acquired
+    /// (decision RV2-R-13). The deliberate abandons do not ask: unlink and take
+    /// remote are disclosed exceptions (the link row, or the local edits, are
+    /// being given up on purpose).
+    fn needs_session_claim(self) -> bool {
+        match self {
+            Self::Silent | Self::DeleteLocal => true,
+            Self::Abandon => false,
+        }
+    }
 }
 
 impl AppState {
     /// Snapshot of what a best-effort lock release needs, or `None` when no held
-    /// remote edit session is active - or when releasing would strand local work.
+    /// remote edit session is active - or when releasing would strand local work,
+    /// or when this app session did not take the lock (#576 RV4-R-S2).
     /// Cheap + non-blocking (reads the open link + config, no network), so a caller
     /// that must not block on the OLD project's server - the app-exit path, a
     /// project switch - can hand the actual HTTP release to a bounded / detached
@@ -93,6 +136,14 @@ impl AppState {
     /// abandon (see [`AppState::speleodb_release_held_lock_abandoning`]).
     pub(super) fn speleodb_abandon_lock_release_params(&self) -> Option<LockReleaseParams> {
         self.speleodb_lock_release_params(ReleaseIntent::Abandon)
+    }
+
+    /// The snapshot for deleting the open project's file (#576 RV5-F4-4): no
+    /// un-pushed-edits veto (the file those edits live in is being destroyed), but
+    /// the RV2-R-13 claim check of the silent releases - a lock this session did
+    /// not take is not this session's to free.
+    pub(super) fn speleodb_delete_lock_release_params(&self) -> Option<LockReleaseParams> {
+        self.speleodb_lock_release_params(ReleaseIntent::DeleteLocal)
     }
 
     /// Shared body of the two snapshots above. `intent` is what separates a silent
@@ -117,9 +168,10 @@ impl AppState {
             return None;
         }
         // A `.ok()?` here used to collapse REAL failures into the ordinary "nothing
-        // to release" no-op with no trace at all: `speleodb_open_link` returns
-        // `Io("database lock poisoned")` as readily as `NoRemoteProject`. A poisoned
-        // mutex at close / switch / quit then stranded the server lock permanently
+        // to release" no-op with no trace at all: `speleodb_open_link` returns an
+        // `Io(..)` for a link row it cannot read as readily as `NoRemoteProject` (and,
+        // before #576 A11 made every lock recover, for a poisoned database mutex). A
+        // failure at close / switch / quit then stranded the server lock permanently
         // and silently - the exact outcome this module exists to prevent, and
         // indistinguishable in the log from a local project holding no lock. The
         // un-pushed-edits veto below has always logged; so must this.
@@ -137,6 +189,25 @@ impl AppState {
                 return None;
             }
         };
+        // [#576 RV4-R-S2] Release only a lock THIS app session acquired (decision
+        // RV2-R-13). The gate alone cannot say: a second window or computer on the
+        // same account opens it through the status poll's inherited-lock reopen
+        // without taking the lock, and a clean close, switch or quit there used to
+        // free the lock the other session is editing under. An inherited lock is
+        // handed back only by a deliberate verb (Release in the held-lock prompt,
+        // the Admin tab, Done after a Continue-editing claim) or by an abandon. Deleting
+        // the open project's file is not one of those (#576 RV5-F4-4): it is about the
+        // local copy, so it asks the same question.
+        if intent.needs_session_claim() && !self.speleodb_lock_acquired_here(&link.project_id) {
+            tracing::info!(
+                project_id = %link.project_id,
+                ?intent,
+                purpose = "release only a lock this app session acquired (#576 RV2-R-13)",
+                "speleodb: skipping the lock release; this session did not take the lock, \
+                 so it stays with the account"
+            );
+            return None;
+        }
         // Data-safety asymmetry, deliberate: never SILENTLY release a lock whose
         // project still has un-pushed local edits. The two failure modes are not
         // symmetric. Keeping the lock held is recoverable - the user reopens the
@@ -162,10 +233,9 @@ impl AppState {
             self.speleodb_keep_lock_deliberately(&link.project_id);
             return None;
         }
-        // Same reasoning as the link read above: `speleodb_active_token` returns
-        // `Io("SpeleoDB session lock poisoned")` alongside the ordinary
-        // `NotAuthenticated`, and a silently-dropped poisoned mutex here strands the
-        // lock just as thoroughly.
+        // Same reasoning as the link read above: anything `speleodb_active_token`
+        // answers besides the ordinary `NotAuthenticated` is a real failure, and
+        // dropping it silently here strands the lock just as thoroughly.
         let (endpoint, token) = match self.speleodb_active_token() {
             Ok(pair) => pair,
             Err(SpeleoDbError::NotAuthenticated) => return None,
@@ -334,8 +404,26 @@ impl AppState {
     /// is "has any session in this process claimed this mutex?" - which means a
     /// stale claim is exactly the shape that stands a later detached close or
     /// delete release down, leaving a mutex held that nothing will now free.
+    /// [`Self::speleodb_forget_lock_acquired_for`] for `AppState::delete_project`,
+    /// which must clear its own claim while the `project` guard that decided the
+    /// file's identity is still held: after the guard drops, a successor Start Editing
+    /// on the same remote project can mint a claim of its own, and a later clear
+    /// cannot tell ours from it (F8). `_slot` is that guard's slot - so the clear
+    /// cannot be written outside the guard's block - and the proof it returns is what
+    /// the delete's deferred release takes ([`ClaimClearedUnderSlot`]).
+    pub(super) fn speleodb_forget_lock_acquired_under(
+        &self,
+        _slot: &super::project_slot::ProjectSlot,
+        project_id: &str,
+    ) -> ClaimClearedUnderSlot {
+        ClaimClearedUnderSlot {
+            claim: self.speleodb_forget_lock_acquired_inner(project_id, None),
+        }
+    }
+
     pub(super) fn speleodb_forget_lock_acquired_as(
         &self,
+        _lock_ops: &super::speleodb_session::LockOpsHeld<'_>,
         project_id: &str,
         endpoint: &str,
         email: &str,
@@ -355,9 +443,7 @@ impl AppState {
         project_id: &str,
         as_account: Option<(&str, &str)>,
     ) -> Option<super::speleodb_session::LockClaim> {
-        let Ok(mut session) = self.speleodb_session_lock() else {
-            return None;
-        };
+        let mut session = self.speleodb.lock();
         // The named account's claim on that project, and only that one. The id is
         // what closes this function's race (see above); the account is what keeps
         // the clear from reaching a claim some OTHER account is still owed a
@@ -402,23 +488,27 @@ impl AppState {
     ///   mutex, because an HTTP round trip inside that critical section would stall
     ///   every other state-layer operation for its duration. So the two halves are
     ///   necessarily separate calls there, with
-    ///   [`AppState::speleodb_abandon_lock_release_params`] as the first one.
+    ///   [`AppState::speleodb_delete_lock_release_params`] as the first one.
     /// - It has to surface a failure to the user, not just the log. Every other
     ///   caller leaves a lock whose `.stalx` (and link row) survive, so the release
     ///   is retryable from the project itself; a delete destroys exactly that, and
     ///   the user's only remaining route to the stranded mutex is the held-lock
     ///   prompt - which they will not look for unless they are told.
     ///
-    /// The ABANDON snapshot is the one to pair this with: a delete forfeits any
+    /// The DELETE snapshot is the one to pair this with: a delete forfeits any
     /// un-pushed edits by definition, so the veto that protects them on
     /// close / quit / switch has nothing left to protect and would only strand the
-    /// server lock.
+    /// server lock; it still releases only a lock this session acquired.
     ///
     /// The same deferral is why the acquisition-record clear below is CONDITIONAL,
     /// unlike the one every other release verb makes - see
     /// [`AppState::speleodb_forget_lock_acquired_for`].
+    ///
+    /// [#576 NF-A8R-GAPS] `_cleared` is that clear's proof, so the release cannot be
+    /// reached by a delete that cleared any other way.
     pub(super) fn speleodb_release_captured_lock(
         &self,
+        _cleared: &ClaimClearedUnderSlot,
         params: &LockReleaseParams,
     ) -> Result<(), SpeleoDbError> {
         // The capturing session's own claim was already cleared - by
@@ -482,10 +572,7 @@ impl AppState {
         // nothing for the poll to resurrect, and the release shuts it under the
         // same guard that then decides (`speleodb_stand_down_and_release`).
         let (p, claim, entry_gen) = {
-            let _proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _proj_guard = self.project.lock();
             let p = self.speleodb_held_lock_release_params()?;
             let claim = self.speleodb_forget_lock_acquired_for(&p.project_id);
             (p, claim, self.speleodb_session_generation())
@@ -555,29 +642,32 @@ impl AppState {
     clippy::panic,
     reason = "unit test fixtures fail loudly on setup errors; the panic POISONS a mutex on purpose"
 )]
+#[expect(
+    clippy::print_stdout,
+    reason = "the driven A8 tests print the values they observed, so a failure shows them"
+)]
 mod tests {
     use super::AppState;
 
     #[test]
     fn a_poisoned_database_lock_declines_the_release_without_panicking() {
         // A poisoned mutex is not "there is nothing to release". Both reads in
-        // `speleodb_lock_release_params` used to be `.ok()?`, which folded
-        // `Io("database lock poisoned")` and `Io("SpeleoDB session lock poisoned")` into
-        // the ordinary no-op with no trace at all - so a poisoned mutex at close /
-        // switch / quit stranded the server lock permanently and silently, which is the
-        // exact outcome this module exists to prevent. The failures are now matched and
-        // logged (the veto three lines down always was).
+        // `speleodb_lock_release_params` used to be `.ok()?`, which folded a failed
+        // read into the ordinary no-op with no trace at all - so a poisoned mutex at
+        // close / switch / quit stranded the server lock permanently and silently,
+        // which is the exact outcome this module exists to prevent. The failures are
+        // now matched and logged (the veto three lines down always was), and since
+        // #576 A11 the poisoned mutex itself is recovered rather than failed.
         //
-        // Behaviourally the answer is still `None` - keeping the lock held is the
-        // recoverable direction - so what is pinned here is that the poisoned path is
-        // reached and handled rather than panicking, and the log side is pinned by
-        // `both_release_param_reads_log_their_real_failures`.
+        // With no project open the answer is `None` either way, so what is pinned here
+        // is that the poisoned path is reached and handled rather than panicking, and
+        // the log side is pinned by `both_release_param_reads_log_their_real_failures`.
         let state = AppState::new().expect("state");
         state.set_edit_enabled(true);
         let db = &state.database;
         let _ = std::thread::scope(|s| {
             s.spawn(|| {
-                let _guard = db.lock().expect("lock to poison");
+                let _guard = db.lock();
                 panic!("poison the database mutex on purpose");
             })
             .join()
@@ -597,34 +687,72 @@ mod tests {
         );
     }
 
+    /// Whether a failure was LOGGED is not observable from the return value (both arms
+    /// are `None`), and silence is the whole defect: an operator looking at why a project
+    /// stayed locked forever had nothing to go on. A link row that cannot be read is a
+    /// real failure and must warn; a project with no link at all, or a signed-out
+    /// session, is the ordinary no-op and stays quiet.
+    ///
+    /// [#576 A8] Was a source scan counting the body's `warn!`s; the reads now fail
+    /// for real under a captured subscriber. (The token read's own warn arm is not
+    /// reachable today: `SpeleoDbSession::active_token` answers only
+    /// `NotAuthenticated`, the ordinary no-op.)
     #[test]
-    fn both_release_param_reads_log_their_real_failures() {
-        // Whether a failure was LOGGED is not observable from the return value (both
-        // arms are `None`), and silence is the whole defect: an operator looking at why
-        // a project stayed locked forever had nothing to go on. Guard it at the source -
-        // neither read may be a bare `.ok()?` again, and each must have a `warn!`.
-        let src = include_str!("speleodb_lock_release.rs");
-        let start = src
-            .find("fn speleodb_lock_release_params")
-            .expect("the shared body is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-        // Matched on the CALLS, not on a bare `.ok()?` needle - the body's own comment
-        // quotes that spelling while explaining why it is gone.
-        for call in [
-            "self.speleodb_open_link().ok()",
-            "self.speleodb_active_token().ok()",
-        ] {
-            assert!(
-                !body.contains(call),
-                "`{call}` collapses a real failure into the ordinary no-op; match the \
-                 error and warn instead"
-            );
-        }
-        assert_eq!(
-            body.matches("tracing::warn!").count(),
-            2,
-            "both the link read and the token read must warn on an unexpected failure"
+    fn an_unreadable_link_is_logged_and_an_ordinary_no_op_is_not() {
+        use crate::core::state::speleodb::{logged_events, remote_readonly_fixture};
+        let (temp, broken) = remote_readonly_fixture();
+        rusqlite::Connection::open(temp.path().join("remote.stalx"))
+            .expect("open the fixture's file")
+            .execute_batch("ALTER TABLE speleo_link RENAME COLUMN project_name TO project_title;")
+            .expect("break the link row");
+        broken.set_edit_enabled(true);
+        let mut unreadable = Some(LockReleaseProbe::NotRun);
+        let unreadable_logs = logged_events(|| {
+            unreadable = Some(LockReleaseProbe::of(
+                broken.speleodb_held_lock_release_params(),
+            ));
+        });
+
+        let (_signed_out_dir, signed_out) = remote_readonly_fixture();
+        signed_out.set_edit_enabled(true);
+        let mut ordinary = Some(LockReleaseProbe::NotRun);
+        let ordinary_logs = logged_events(|| {
+            ordinary = Some(LockReleaseProbe::of(
+                signed_out.speleodb_abandon_lock_release_params(),
+            ));
+        });
+        println!(
+            "unreadable link -> {unreadable:?}, logged {unreadable_logs:?}; signed out -> \
+             {ordinary:?}, logged {ordinary_logs:?}"
         );
+        assert_eq!(unreadable, Some(LockReleaseProbe::NoRelease));
+        assert!(
+            unreadable_logs.iter().any(|line| line.contains("WARN")
+                && line.contains("could not read the open project's link")),
+            "a link the release cannot read is a real failure, and it must say so"
+        );
+        assert_eq!(ordinary, Some(LockReleaseProbe::NoRelease));
+        assert!(
+            !ordinary_logs.iter().any(|line| line.contains("WARN")),
+            "signed out is the ordinary no-op, not a failure to report"
+        );
+    }
+
+    /// What a release-params read answered, for the assertions above.
+    #[derive(Debug, PartialEq, Eq)]
+    enum LockReleaseProbe {
+        NotRun,
+        NoRelease,
+        Release,
+    }
+
+    impl LockReleaseProbe {
+        fn of(params: Option<super::LockReleaseParams>) -> Self {
+            if params.is_some() {
+                Self::Release
+            } else {
+                Self::NoRelease
+            }
+        }
     }
 }

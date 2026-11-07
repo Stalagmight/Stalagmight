@@ -517,7 +517,7 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
     variant: 'SegmentMoveInfo',
     guaranteed: true,
     purpose: 'SegmentMoveInfo { affected_sections, previous_offsets } - section ids, which DO persist',
-    build(ctx, digest, memo) {
+    build(ctx, _digest, memo) {
       // Runs before the merge and before the zero datum, both of which would
       // refuse it: `Cannot move a segment whose rigid group holds a zero datum`
       // (core/state/command_move.rs) applies to the whole rigid group, so once
@@ -662,7 +662,7 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
       'null. Forward: Some(None) must serialize as an explicit null in the persisted command, so ' +
       'the redo re-clears after a reload. Undo: the capture is Some(Some(old)) and must put all ' +
       'three back. Issue #413 finding 5 broke both halves',
-    build(ctx, digest, memo) {
+    build(ctx, _digest, memo) {
       const sectionId = target(memo);
       if (sectionId === null) return null;
       // Explicit nulls, deliberately. `createSection` gave the target a
@@ -684,7 +684,7 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
       'PreviousValues { section_id, shot_id: None } over EVERY updatable field, on a section ' +
       'whose name/surveyor/date the step before it set to null - so the capture is Some(None) ' +
       'and the undo has to restore a previously-null value, which is finding 5 exactly',
-    build(ctx, digest, memo) {
+    build(ctx, _digest, memo) {
       const sectionId = target(memo);
       if (sectionId === null) return null;
       // All six fields, including the three nullable ones. They were EXCLUDED

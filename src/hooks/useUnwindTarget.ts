@@ -122,10 +122,10 @@ export function useUnwindTarget(
     if (!isRemote) return null;
     try {
       if (direction === 'forward') {
-        const raw = await invokeIpc<SpeleoRewindTarget | null>('speleodb_rewind_target');
+        const raw = await invokeIpc('speleodb_rewind_target');
         return raw ? { direction: 'forward', ...raw } : null;
       }
-      const raw = await invokeIpc<SpeleoUnwindTarget | null>('speleodb_unwind_target');
+      const raw = await invokeIpc('speleodb_unwind_target');
       return raw ? { direction: 'back', ...raw } : null;
     } catch {
       // Offline / logged out / no permission: nothing to offer, and nothing to say.

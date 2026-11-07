@@ -144,8 +144,8 @@ test.describe('Grid touch context menu', () => {
       'the lift ending a press that opened a menu is preventDefault-ed'
     ).toBe(true);
 
-    // Settle first: the compat mousedown this suppresses would arrive within a
-    // frame or two of the lift, and the grid closes its menu on any of them.
+    // settle: the compat mousedown this suppresses would arrive within a frame
+    // or two of the lift, and the grid closes its menu on any of them.
     await page.waitForTimeout(200);
     await expect(menu).toBeVisible();
     await expect(page.getByTestId('grid-cell-1-length')).toHaveAttribute(
@@ -184,8 +184,11 @@ test.describe('Grid touch context menu', () => {
     // Comfortably past the 500 ms hold (`LONG_PRESS_MS` in
     // src/utils/longPressTouch.ts - not imported, so this tier's typecheck
     // stays clear of src/), so a press that survived the movement would fire.
+    // settle: holding past the timer is the input under test, not a wait for it.
     await page.waitForTimeout(700);
     await touch(cdp, 'touchEnd');
+    // settle: proves no menu opens after the lift; its absence holds on the first
+    // read either way.
     await page.waitForTimeout(200);
 
     await expect(page.getByTestId('grid-context-menu')).toHaveCount(0);

@@ -1,108 +1,70 @@
 /**
- * Memory-probe instrumentation helpers.
+ * Memory-probe instrumentation helpers, read by the Memory Stats panel
+ * (`components/MemoryProbe`).
  *
- * Two roles:
+ * 1. The custom WebGL renderer's buffer sizes: each controller publishes the
+ *    bytes of the vertex arrays it built last (`recordRendererBuild`) - the
+ *    arrays it uploads to the GPU. They replaced per-source GeoJSON feature
+ *    counts, which nothing had written since the custom renderer replaced the
+ *    MapLibre sources (#576 D19-D2).
  *
- * 1. Track per-source feature counts whenever map layers push GeoJSON
- *    FeatureCollections to MapLibre. We can't read back from MapLibre's
- *    worker memory, so we publish the counts ourselves at the call site.
+ * 2. Rough retained-byte estimates for the categories the WebProcess
+ *    accumulates over a session. The point is to surface *which bucket grew*,
+ *    not produce a byte-accurate accountant.
  *
- * 2. Estimate retained bytes for the categories the WebProcess accumulates
- *    over a session. The estimates are deliberately rough heuristics - the
- *    point is to surface *which bucket grew*, not produce a byte-accurate
- *    accountant.
+ * 3. Recent perf timings, and the freeze detector that feeds them while the
+ *    panel is visible (`startLongTaskObserver`).
  *
- * Everything in this module is no-ops in terms of behavior; it only writes
- * to a singleton state read by the MemoryProbe panel. Calls are cheap enough
- * to leave in release (single object-property write per setData call).
+ * Recording is a couple of property writes per build, cheap enough to leave in
+ * release; nothing here changes app behaviour.
  */
 import type { SurveyGeometry } from '../types/ipc/SurveyGeometry';
 
-export type FeatureSourceKind =
-  | 'survey-shots'
-  | 'survey-shot-gradients'
-  | 'survey-stations'
-  | 'survey-shot-labels'
-  | 'survey-station-labels'
-  | 'survey-section-labels'
-  | 'survey-loop-closures'
-  | 'survey-ghost-shots'
-  | 'survey-ghost-stations'
-  | 'survey-ghost-merge'
-  | 'global-survey';
+/** The custom renderer's buffer sets: the survey map's geometry (shot lines and
+ *  station discs) and its labels, and the Global View's geometry. */
+export type RendererBufferKind = 'survey-geometry' | 'survey-labels' | 'global-geometry';
 
-export interface FeatureCountSnapshot {
-  /** Number of features published to MapLibre per source. */
-  perSource: Record<FeatureSourceKind, number>;
-  /** Total cumulative setData calls per source - surfaces churn rate. */
-  setDataCalls: Record<FeatureSourceKind, number>;
+export interface RendererBufferStat {
+  /** Bytes of the arrays the last build produced; 0 once its controller let them go. */
+  bytes: number;
+  /** Builds since the app started - surfaces rebuild churn. */
+  builds: number;
 }
 
-const EMPTY_COUNTS = (): FeatureCountSnapshot => ({
-  perSource: {
-    'survey-shots': 0,
-    'survey-shot-gradients': 0,
-    'survey-stations': 0,
-    'survey-shot-labels': 0,
-    'survey-station-labels': 0,
-    'survey-section-labels': 0,
-    'survey-loop-closures': 0,
-    'survey-ghost-shots': 0,
-    'survey-ghost-stations': 0,
-    'survey-ghost-merge': 0,
-    'global-survey': 0,
-  },
-  setDataCalls: {
-    'survey-shots': 0,
-    'survey-shot-gradients': 0,
-    'survey-stations': 0,
-    'survey-shot-labels': 0,
-    'survey-station-labels': 0,
-    'survey-section-labels': 0,
-    'survey-loop-closures': 0,
-    'survey-ghost-shots': 0,
-    'survey-ghost-stations': 0,
-    'survey-ghost-merge': 0,
-    'global-survey': 0,
-  },
-});
+export const RENDERER_BUFFER_KINDS: readonly RendererBufferKind[] = [
+  'survey-geometry',
+  'survey-labels',
+  'global-geometry',
+];
 
-const counts: FeatureCountSnapshot = EMPTY_COUNTS();
+const rendererBuffers: Record<RendererBufferKind, RendererBufferStat> = {
+  'survey-geometry': { bytes: 0, builds: 0 },
+  'survey-labels': { bytes: 0, builds: 0 },
+  'global-geometry': { bytes: 0, builds: 0 },
+};
 
-/**
- * Record that `count` features were just pushed to a MapLibre source.
- * Call this every time a layer calls `setData`. Overwrites previous count
- * (we want the current live size, not cumulative).
- */
-export function recordFeatureCount(source: FeatureSourceKind, count: number): void {
-  counts.perSource[source] = count;
-  counts.setDataCalls[source] = (counts.setDataCalls[source] ?? 0) + 1;
+/** A controller built `bytes` of vertex data for `kind` (replaces the last build's size). */
+export function recordRendererBuild(kind: RendererBufferKind, bytes: number): void {
+  const stat = rendererBuffers[kind];
+  stat.bytes = bytes;
+  stat.builds += 1;
 }
 
-export function getFeatureCounts(): FeatureCountSnapshot {
-  // Shallow clone so consumers can't mutate.
-  return {
-    perSource: { ...counts.perSource },
-    setDataCalls: { ...counts.setDataCalls },
-  };
+/** The controller for `kind` released its buffers (unmount or teardown). */
+export function clearRendererBuffers(kind: RendererBufferKind): void {
+  rendererBuffers[kind].bytes = 0;
 }
 
-export function resetFeatureCounts(): void {
-  Object.assign(counts, EMPTY_COUNTS());
+/** A copy of every buffer set's stat, so consumers cannot mutate the record. */
+export function getRendererBuffers(): Record<RendererBufferKind, RendererBufferStat> {
+  const out = {} as Record<RendererBufferKind, RendererBufferStat>;
+  for (const kind of RENDERER_BUFFER_KINDS) out[kind] = { ...rendererBuffers[kind] };
+  return out;
 }
 
-/**
- * Zero only the per-source feature counts for a given prefix, leaving the
- * cumulative setData call counter intact. Used by SurveyLayer/GlobalSurveyLayer
- * `destroy()` so the panel reflects "no map is alive anymore" rather than
- * showing stale counts from the most recent setData call.
- */
-export function clearFeatureCountsForPrefix(prefix: string): void {
-  for (const key of Object.keys(counts.perSource) as FeatureSourceKind[]) {
-    if (key.startsWith(prefix)) {
-      counts.perSource[key] = 0;
-    }
-  }
+/** The last builds' bytes summed over every buffer set. */
+export function totalRendererBufferBytes(): number {
+  return RENDERER_BUFFER_KINDS.reduce((sum, kind) => sum + rendererBuffers[kind].bytes, 0);
 }
 
 /**
@@ -121,70 +83,82 @@ export function getPerfTimings(): Record<string, { ms: number; ts: number }> {
 }
 
 /**
- * Long-task observer: any task >50ms that blocks the main thread shows up
- * here. The back-button "frozen then snap" symptom should produce one
- * dominant long task spanning React commit + paint + GC; this surfaces it.
+ * Freeze detector for the Memory Stats panel. Two sources run while it is on: a
+ * `longtask` PerformanceObserver (any task over 50 ms that blocks the main
+ * thread) where the engine supports that entry type - WebKitGTK does not - and a
+ * requestAnimationFrame frame-gap detector everywhere (an inter-frame interval
+ * over 200 ms is a freeze). The back-button "frozen then snap" symptom shows up
+ * as one dominant entry.
  *
- * Registered once per module load; observer survives HMR.
- *
- * WebKitGTK does NOT implement `longtask` entryType, so we fall back to a
- * rAF-chain frame-gap detector (any inter-frame interval >50ms is a freeze).
+ * Runs ONLY while the panel is visible (#576 D19): the panel starts it from its
+ * visibility effect and calls the returned disposer when hidden. The frame-gap
+ * chain re-arms on every frame, so left running it is a 60 Hz wakeup that keeps
+ * the WebView from ever going idle - for a list nobody reads in a normal session.
+ * The disposer cancels the pending frame and disconnects the observer.
  */
-let longTaskObserver: PerformanceObserver | null = null;
-let frameGapDetectorRunning = false;
 let longTaskCounter = 0;
-export function startLongTaskObserver(): void {
-  if (typeof PerformanceObserver !== 'undefined' && !longTaskObserver) {
+export function startLongTaskObserver(): () => void {
+  let observer: PerformanceObserver | null = null;
+  if (typeof PerformanceObserver !== 'undefined') {
     try {
       const supported = (
         // Some WebKits don't expose supportedEntryTypes; treat as unknown.
         (PerformanceObserver as unknown as { supportedEntryTypes?: readonly string[] }).supportedEntryTypes ?? []
       ).includes('longtask');
       if (supported) {
-        longTaskObserver = new PerformanceObserver((list) => {
+        observer = new PerformanceObserver((list) => {
           for (const entry of list.getEntries()) {
             if (entry.duration < 50) continue;
             longTaskCounter += 1;
             recordPerfTiming(`longtask #${longTaskCounter}`, entry.duration);
           }
         });
-        longTaskObserver.observe({ entryTypes: ['longtask'] });
+        observer.observe({ entryTypes: ['longtask'] });
       }
     } catch {
-      // Fall through to the frame-gap detector below.
+      // The frame-gap detector below still runs.
+      observer = null;
     }
   }
 
   // Frame-gap detector: only records the *worst* freeze seen in each
   // ~1 s window so the panel doesn't fill with `freeze #N` entries from
-  // every minor stall. Threshold raised to 200 ms - short stalls are
-  // noise; we only care about user-perceptible ones.
-  if (!frameGapDetectorRunning) {
-    frameGapDetectorRunning = true;
-    let last = performance.now();
-    let worstInWindow = 0;
-    let windowStart = last;
-    const FREEZE_THRESHOLD_MS = 200;
-    const WINDOW_MS = 1000;
-    const tick = () => {
-      const now = performance.now();
-      const gap = now - last;
-      if (gap > FREEZE_THRESHOLD_MS && gap > worstInWindow) {
-        worstInWindow = gap;
+  // every minor stall. Threshold 200 ms - short stalls are noise; we only
+  // care about user-perceptible ones.
+  let stopped = false;
+  let frame: number | null = null;
+  let last = performance.now();
+  let worstInWindow = 0;
+  let windowStart = last;
+  const FREEZE_THRESHOLD_MS = 200;
+  const WINDOW_MS = 1000;
+  const tick = () => {
+    if (stopped) return;
+    const now = performance.now();
+    const gap = now - last;
+    if (gap > FREEZE_THRESHOLD_MS && gap > worstInWindow) {
+      worstInWindow = gap;
+    }
+    if (now - windowStart >= WINDOW_MS) {
+      if (worstInWindow > 0) {
+        longTaskCounter += 1;
+        recordPerfTiming(`freeze #${longTaskCounter}`, worstInWindow);
       }
-      if (now - windowStart >= WINDOW_MS) {
-        if (worstInWindow > 0) {
-          longTaskCounter += 1;
-          recordPerfTiming(`freeze #${longTaskCounter}`, worstInWindow);
-        }
-        windowStart = now;
-        worstInWindow = 0;
-      }
-      last = now;
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  }
+      windowStart = now;
+      worstInWindow = 0;
+    }
+    last = now;
+    frame = requestAnimationFrame(tick);
+  };
+  frame = requestAnimationFrame(tick);
+
+  return () => {
+    stopped = true;
+    if (frame !== null) cancelAnimationFrame(frame);
+    frame = null;
+    observer?.disconnect();
+    observer = null;
+  };
 }
 
 /**
@@ -199,43 +173,4 @@ export function estimateGeometryBytes(geometry: SurveyGeometry): number {
   // Header + origin array + shots-array header
   const header = 48 + 48 + 32;
   return header + geometry.shots.length * 225;
-}
-
-/**
- * Estimate retained bytes for a single GeoJSON Feature with the rough
- * property shape we use (LineString + ~9 props, or Point + ~7 props).
- * Calibrated empirically against heap snapshots; re-measure if the property
- * shape changes.
- */
-export function estimateFeatureBytes(kind: FeatureSourceKind): number {
-  switch (kind) {
-    case 'survey-shots':
-    case 'survey-shot-gradients':
-    case 'survey-loop-closures':
-    case 'survey-ghost-shots':
-      // LineString feature (~2-vertex) + ~9 properties
-      return 350;
-    case 'survey-stations':
-    case 'survey-station-labels':
-    case 'survey-shot-labels':
-    case 'survey-ghost-stations':
-    case 'survey-ghost-merge':
-    case 'survey-section-labels':
-      // Point feature + ~7 properties (label string included)
-      return 320;
-    case 'global-survey':
-      // Mixed - assume average of line + point shapes
-      return 320;
-  }
-}
-
-/** Sum estimated bytes across all tracked sources. */
-export function estimateMaplibreFeatureBytes(): number {
-  let total = 0;
-  for (const key of Object.keys(counts.perSource) as FeatureSourceKind[]) {
-    total += counts.perSource[key] * estimateFeatureBytes(key);
-  }
-  // MapLibre clones into the worker - double on the main thread side
-  // accounting (we observe both copies in the WebProcess).
-  return total * 2;
 }

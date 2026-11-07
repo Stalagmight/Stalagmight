@@ -10,6 +10,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react';
+import { useLatest } from '../../../hooks/useLatest';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTouchContextMenu } from '../../../hooks/useTouchContextMenu';
 import './SpreadsheetGrid.css';
@@ -18,6 +19,8 @@ import {
   type GridSelection,
   type CellCoord,
   type CellEdit,
+  type GridSelectRequest,
+  type BulkEditReport,
   ROW_HEIGHT,
 } from './types';
 import { parseLocaleNumber, parseTSV, serializeRangeToTSV } from './gridClipboard';
@@ -32,8 +35,9 @@ import { DEFAULT_GRID_LABELS, type GridLabels } from './gridLabels';
 import { GridContextMenu } from './GridContextMenu';
 import { GridHeaderRow } from './GridHeaderRow';
 import { activateCellIn, directTypedValue } from './gridActivate';
-import { measureColumnWidth, fillExtent } from './gridAutoFit';
+import { measureColumnWidth, fillExtent, AUTOFIT_CHROME_PX } from './gridAutoFit';
 import { planClear } from './gridClear';
+import { f32FractionDigits } from '../../../utils/f32Text';
 import {
   arrowTarget,
   clamp,
@@ -141,18 +145,22 @@ export interface SpreadsheetGridProps<Row> {
    *  selection the user still has rows for, and clear it BEFORE they answer a
    *  confirm about those very rows. */
   onDeleteRows?: (fromRow: number, toRow: number) => boolean | void;
-  /** Called after a paste that couldn't be applied in full: `written` cells were
+  /** Called after a paste that couldn't be applied in full (`written` cells were
    *  committed, `clipped` fell past the grid's last row/column, `skipped` landed
-   *  on read-only/unparseable cells. Let the host surface a notice. */
-  onPasteReport?: (info: { written: number; clipped: number; skipped: number }) => void;
+   *  on read-only/unparseable cells), and after a fill whose target column refused
+   *  some values (#576 FILL-1; see {@link BulkEditReport}). Let the host surface a
+   *  notice. */
+  onPasteReport?: (info: BulkEditReport) => void;
   /** Fired with the row index under the pointer (null on leave) - for host-level
    *  hover effects (e.g. highlighting the corresponding map feature). */
   onRowHover?: (rowIndex: number | null) => void;
-  /** External row selection: when this CHANGES to an in-range row index, the
-   *  grid moves its selection/active cell to that row (keeping the active
-   *  column). Internal navigation never writes back through this prop, so it
+  /** External row selection: the grid moves its selection/active cell to the
+   *  request's row (keeping the active column) ONCE per `nonce` - so asking
+   *  again for a row the user has since moved off works, and a later shift of
+   *  `row` does not pull the cursor back. An out-of-range row waits until it is
+   *  in range. Internal navigation never writes back through this prop, so it
    *  can't loop with {@link onActiveCellChange}. */
-  selectedRow?: number | null;
+  selectRequest?: GridSelectRequest | null;
   /** Row index to tint with `sg-row-hover` (e.g. hovering the matching map
    *  feature). Purely visual; never affects selection. */
   hoveredRow?: number | null;
@@ -207,12 +215,13 @@ interface EditState {
 const PRINTABLE = /^.$/u;
 
 /** Full-precision, group-free, locale-decimal string for editing/converting -
- *  must round-trip through parseLocaleNumber. */
+ *  must round-trip through parseLocaleNumber. [#576 NF-W7F-1] A reading held as
+ *  an f32 gets the fewest digits that are still that f32 (1.2, not 1.200000047684). */
 const formatEditValue = (value: unknown, locale: string): string => {
   if (typeof value === 'number') {
     // Non-finite (e.g. a draft row's unset field) edits as empty, never "NaN".
     return Number.isFinite(value)
-      ? new Intl.NumberFormat(locale, { useGrouping: false, maximumFractionDigits: 12 }).format(value)
+      ? new Intl.NumberFormat(locale, { useGrouping: false, maximumFractionDigits: f32FractionDigits(value) ?? 12 }).format(value)
       : '';
   }
   return String(value ?? '');
@@ -236,7 +245,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     onDeleteRows,
     onPasteReport,
     onRowHover,
-    selectedRow,
+    selectRequest,
     hoveredRow,
     rowClassName,
     cellClassName,
@@ -414,8 +423,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const rect = useMemo(() => selectionRect(selection, colIndexOf), [selection, colIndexOf]);
 
   // Host name-box feed: selection dims + active cell, on mount and every change.
-  const onSelectionChangeRef = useRef(onSelectionChange);
-  onSelectionChangeRef.current = onSelectionChange;
+  const onSelectionChangeRef = useLatest(onSelectionChange);
   useEffect(() => {
     onSelectionChangeRef.current?.({
       rows: rect.r1 - rect.r0 + 1,
@@ -423,7 +431,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       activeRow: selection.active.row,
       activeColKey: selection.active.colKey,
     });
-  }, [rect, selection.active.row, selection.active.colKey]);
+  }, [rect, selection.active.row, selection.active.colKey, onSelectionChangeRef]);
   const focusColIdx = colIndexOf(selection.focus.colKey);
   const activeColIdx = colIndexOf(selection.active.colKey);
   const multiCell = !rectIsSingleCell(rect);
@@ -967,7 +975,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       // Surface what the paste couldn't fully apply (out-of-bounds vs read-only/
       // unparseable), so the host can show a notice rather than silently dropping.
       if (clipped > 0 || written < targets.length) {
-        onPasteReport?.({ written, clipped, skipped: targets.length - written });
+        onPasteReport?.({ source: 'paste', written, clipped, skipped: targets.length - written });
       }
     },
     [rect, rowCount, colCount, colAt, cellEditable, coerce, transferValue, parseForColumn, cutRect, applyEdits, onPasteReport, markMissing, missKey, onClearMissing, pasteGrowsRows],
@@ -995,10 +1003,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // so each Ctrl+V also arms a one-shot fallback: if no paste event arrives
   // shortly after the keystroke, read the clipboard - and failing that, paste
   // the internal copy stash.
-  const pasteTextRef = useRef(pasteText);
-  pasteTextRef.current = pasteText;
-  const editingRef = useRef<EditState | null>(editing);
-  editingRef.current = editing;
+  const pasteTextRef = useLatest(pasteText);
+  const editingRef = useLatest<EditState | null>(editing);
   const lastPasteEventAt = useRef(0); // set by the container's onPaste handler
   const suppressNativePasteUntil = useRef(0); // fallback ran → swallow a late event
   const pasteFallbackTimer = useRef<number | undefined>(undefined);
@@ -1029,7 +1035,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         }
       })();
     }, 150);
-  }, []);
+  }, [editingRef, pasteTextRef]);
 
   // Copy-fill the selection block across `preview`'s extension: tile the RAW
   // source values (modular repeat, fill order away from the source). NO series
@@ -1037,6 +1043,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const commitFill = useCallback(
     (preview: Rect) => {
       const edits: CellEdit[] = [];
+      let refused = 0; // editable targets whose column refused the value (FILL-1)
       const srcH = rect.r1 - rect.r0 + 1;
       const srcW = rect.c1 - rect.c0 + 1;
       const pushEdit = (srcRow: number, srcCol: GridColumn<Row>, dstRow: number, dstCol: GridColumn<Row>) => {
@@ -1045,6 +1052,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         if (data === undefined) return;
         const value = transferValue(srcCol.getValue(data, srcRow), srcCol.key, dstCol, dstRow);
         if (value !== undefined) edits.push({ row: dstRow, colKey: dstCol.key, value });
+        else refused += 1;
       };
       const vertical = preview.r1 > rect.r1 || preview.r0 < rect.r0;
       if (vertical) {
@@ -1072,6 +1080,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         }
       }
       applyEdits(edits);
+      if (refused > 0) onPasteReport?.({ source: 'fill', written: edits.length, clipped: 0, skipped: refused });
       const a = colKeys[preview.c0];
       const f = colKeys[preview.c1];
       if (a !== undefined && f !== undefined) {
@@ -1082,12 +1091,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         });
       }
     },
-    [rect, colAt, cellEditable, transferValue, rows, applyEdits, colKeys],
+    [rect, colAt, cellEditable, transferValue, rows, applyEdits, colKeys, onPasteReport],
   );
 
   const doFill = useCallback(
     (down: boolean) => {
       const edits: CellEdit[] = [];
+      let refused = 0; // as in commitFill: refused by the column, not read-only
       for (const f of fillTargets(rect, down)) {
         const col = colAt(f.colIdx);
         const srcCol = colAt(f.srcColIdx);
@@ -1095,10 +1105,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         if (!col || !srcCol || data === undefined || !cellEditable(f.row, col)) continue;
         const value = transferValue(srcCol.getValue(data, f.srcRow), srcCol.key, col, f.row);
         if (value !== undefined) edits.push({ row: f.row, colKey: col.key, value });
+        else refused += 1;
       }
       applyEdits(edits);
+      if (refused > 0) onPasteReport?.({ source: 'fill', written: edits.length, clipped: 0, skipped: refused });
     },
-    [rect, colAt, rows, cellEditable, transferValue, applyEdits],
+    [rect, colAt, rows, cellEditable, transferValue, applyEdits, onPasteReport],
   );
 
   const doClear = useCallback(() => {
@@ -1379,8 +1391,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [rect],
   );
 
-  const onRowHoverRef = useRef(onRowHover);
-  onRowHoverRef.current = onRowHover;
+  const onRowHoverRef = useLatest(onRowHover);
   const hoverRowRef = useRef<number | null>(null);
   const onCellMouseEnter = useCallback(
     (rowIdx: number, colIdx: number) => {
@@ -1405,7 +1416,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (key === undefined) return;
       setSelection((prev) => ({ anchor: prev.anchor, focus: { row: rowIdx, colKey: key }, active: prev.active }));
     },
-    [colKeys, rect],
+    [colKeys, rect, onRowHoverRef],
   );
 
   const startResize = useCallback((e: ReactMouseEvent, key: string, startW: number) => {
@@ -1534,7 +1545,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       }
       if (rowDrag.current?.mode === 'select') selectRowRange(rowDrag.current.anchorRow, rowIdx);
     },
-    [selectRowRange],
+    [selectRowRange, onRowHoverRef],
   );
 
   // Apply a row move via the host callback, then keep the moved block selected.
@@ -1569,7 +1580,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     if (max > 0) {
       commitWidths({
         ...widthsRef.current,
-        [key]: clamp(max + 18, MIN_COL_WIDTH, AUTOFIT_MAX_COL_WIDTH),
+        [key]: clamp(max + AUTOFIT_CHROME_PX, MIN_COL_WIDTH, AUTOFIT_MAX_COL_WIDTH),
       });
     }
   }, [commitWidths, testIdPrefix]);
@@ -1723,10 +1734,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     autoScrollRAF.current = requestAnimationFrame(autoScrollTick);
   }, [extendToRow, rowCount]);
 
-  const onMoveRef = useRef<(e: MouseEvent) => void>(() => {});
-  const onUpRef = useRef<() => void>(() => {});
-  const cancelDragRef = useRef<() => void>(() => {});
-  onMoveRef.current = (e) => {
+  // The window listeners below bind once and call these three through refs.
+  // useLatest publishes each render's handlers when that render commits
+  // (#576 D17), so onMove may name onUpRef/cancelDragRef before they are declared:
+  // it only runs from a listener, after all three exist.
+  const onMoveRef = useLatest((e: MouseEvent) => {
     // A mouseup we missed (released outside the window) leaves a flag latched; a
     // later buttonless move must abort the drag rather than keep extending.
     const anyDrag =
@@ -1815,7 +1827,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         if (nearEdge && autoScrollRAF.current === 0) autoScrollRAF.current = requestAnimationFrame(autoScrollTick);
       }
     }
-  };
+  });
   // Reset all drag flags + transient drag state WITHOUT committing anything.
   const resetDrag = () => {
     colDrag.current = null;
@@ -1841,11 +1853,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // flag: the in-progress value is already in the live map, and every commit
   // spreads that whole map, so a later resize of an unrelated column would
   // otherwise persist this one too.
-  cancelDragRef.current = () => {
+  const cancelDragRef = useLatest(() => {
     if (resizing.current) revertWidths();
     resetDrag();
-  };
-  onUpRef.current = () => {
+  });
+  const onUpRef = useLatest(() => {
     if (colDrag.current?.mode === 'move' && colMoveDrop) {
       reorderColumns(colDrag.current.fromC0, colDrag.current.fromC1, colMoveDrop.index);
     }
@@ -1859,7 +1871,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     // matches the map the host already has, so a bare click is not a save.
     if (resizing.current) commitWidths(widthsRef.current);
     resetDrag();
-  };
+  });
   useEffect(() => {
     const mv = (e: MouseEvent) => onMoveRef.current(e);
     const up = () => onUpRef.current();
@@ -1872,7 +1884,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       window.removeEventListener('mouseup', up);
       window.removeEventListener('blur', cancel);
     };
-  }, []);
+  }, [cancelDragRef, onMoveRef, onUpRef]);
 
   const onCellContextMenu = useCallback(
     (rowIdx: number, c: number, e: ReactMouseEvent) => {
@@ -1939,29 +1951,30 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [colKeys, orderedKeys, onColumnOrderChange, rowCount],
   );
 
-  // External row selection: react only when the prop CHANGES (prev ref), so the
-  // grid's own navigation isn't fought; deliberately does NOT fire
-  // onActiveCellChange, which would loop the selection back to the host.
-  const prevSelectedRow = useRef<number | null | undefined>(undefined);
+  // External row selection: act once per request nonce (D21, #576), so the
+  // grid's own navigation isn't fought and a repeated request is not lost;
+  // deliberately does NOT fire onActiveCellChange, which would loop the
+  // selection back to the host.
+  const handledSelectNonce = useRef<number | null>(null);
   useEffect(() => {
-    const prev = prevSelectedRow.current;
-    prevSelectedRow.current = selectedRow;
-    if (selectedRow == null || selectedRow === prev) return;
-    if (selectedRow < 0 || selectedRow >= rowCount) return;
+    if (!selectRequest || selectRequest.nonce === handledSelectNonce.current) return;
+    const { row } = selectRequest;
+    if (row < 0 || row >= rowCount) return;
+    handledSelectNonce.current = selectRequest.nonce;
     setSelection((prevSel) => {
-      if (prevSel.active.row === selectedRow) return prevSel;
+      if (prevSel.active.row === row) return prevSel;
       const colKey = colKeys.includes(prevSel.active.colKey) ? prevSel.active.colKey : colKeys[0];
       if (colKey === undefined) return prevSel;
       rowSelectIntent.current = false;
-      const cell = { row: selectedRow, colKey };
+      const cell = { row, colKey };
       return { anchor: cell, focus: cell, active: cell };
     });
-    virtualizer.scrollToIndex(selectedRow, { align: 'auto' });
+    virtualizer.scrollToIndex(row, { align: 'auto' });
     // Follow horizontally too, on the column the updater above lands on (the
     // active column, or the first one when it no longer exists).
     const activeKey = colKeys.includes(selection.active.colKey) ? selection.active.colKey : colKeys[0];
     if (activeKey !== undefined) scrollColIntoView(colIndexOf(activeKey));
-  }, [selectedRow, rowCount, colKeys, virtualizer, selection.active.colKey, colIndexOf, scrollColIntoView]);
+  }, [selectRequest, rowCount, colKeys, virtualizer, selection.active.colKey, colIndexOf, scrollColIntoView]);
 
   // --- Render ---------------------------------------------------------------
   const virtualRows = virtualizer.getVirtualItems();

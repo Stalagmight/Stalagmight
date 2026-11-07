@@ -7,9 +7,7 @@ use crate::models::{
 
 impl AppState {
     pub(super) fn create_section(&self, data: SectionData) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());

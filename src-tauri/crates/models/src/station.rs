@@ -47,7 +47,14 @@ impl std::fmt::Display for StationRef {
 /// at the geometry/IPC boundary.
 // Internal identity types - NOT crossing IPC (the wire ref stays positional
 // `StationRef`), so no `TS` derive; serde is for in-memory project (de)serialization.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+//
+// [#576 NF-W12BE-3] The derived order is load-bearing: the variants sort in
+// declaration order, so the canonical anchors (`SectionStart`, `AfterShot` by
+// shot UUID) come before the transitional `Index`. When two stored keys name one
+// station, the offset of the one that sorts first is the one read (see
+// `Project::resolved_station_offsets`); the station's comments are joined, as the
+// save joins them (#576 W30-6, `Project::compute_station_coordinates_with_progress`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum StationAnchor {
     SectionStart,
     AfterShot(String),
@@ -67,7 +74,10 @@ pub enum StationAnchor {
 /// an unrelated shot never has to rewrite them and a reference can never silently
 /// point at the wrong in-range station. The solver/IPC use the transient
 /// positional [`StationRef`], obtained via `Project::resolve_key`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+///
+/// Ordered by section, then anchor ([`StationAnchor`]'s order): the order that
+/// picks one key when two name one station.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StationKey {
     pub section_id: SectionId,
     pub anchor: StationAnchor,
@@ -791,6 +801,7 @@ pub struct LoopClosure {
 #[ts(rename = "LoopClosure", export_to = "bindings/LoopClosure.ts")]
 pub struct LoopClosureWire {
     #[serde(default)]
+    #[ts(type = "number")]
     pub id: u64,
     pub station_a: StationRef,
     pub station_b: StationRef,
@@ -809,6 +820,7 @@ pub struct LoopClosureWire {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ClosureRef {
     /// References LoopClosure.id
+    #[ts(type = "number")]
     pub closure_id: u64,
     /// Target station in the closure
     pub station_ref: StationRef,
@@ -828,6 +840,36 @@ pub struct ClosurePreview {
     pub vertical_misclosure: f64,
 }
 
+/// [#576 NF-W7E-1] Why a merge of a station pair is refused: what the frontend
+/// routes on. [`ConnectivityResult::reason`] carries the same refusal as display
+/// text, which nothing parses.
+///
+/// No TS export of its own: [`ConnectivityResult::reason_code`] spells the union
+/// of its wire names out, and the core crate's `the_ts_union_names_every_code`
+/// pins that union to [`Self::ALL`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MergeBlockReason {
+    /// The stations are already connected, so a merge would close a survey loop.
+    CreatesSurveyLoop,
+    /// Both stations' merge groups are fixed by a zero datum, so a merge would
+    /// have to move one of them.
+    BothFixedCoordinates,
+}
+
+impl MergeBlockReason {
+    /// Every code, for the wire-name tests.
+    pub const ALL: [Self; 2] = [Self::CreatesSurveyLoop, Self::BothFixedCoordinates];
+
+    /// The display text [`ConnectivityResult::reason`] carries for this refusal.
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::CreatesSurveyLoop => "Creates survey loop",
+            Self::BothFixedCoordinates => "Both sections have fixed coordinates",
+        }
+    }
+}
+
 /// Result of a connectivity check between two stations
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ConnectivityResult {
@@ -836,7 +878,13 @@ pub struct ConnectivityResult {
     /// Whether merge is allowed for the given station pair
     #[serde(default)]
     pub can_merge: bool,
-    /// Explanation when merge is not allowed
+    /// Explanation when merge is not allowed. Display-only: route on
+    /// [`Self::reason_code`].
     #[serde(default)]
     pub reason: Option<String>,
+    /// [#576 NF-W7E-1] Why merge is not allowed, as a code: set exactly when
+    /// `can_merge` is false, together with `reason`.
+    #[serde(default)]
+    #[ts(type = "\"CREATES_SURVEY_LOOP\" | \"BOTH_FIXED_COORDINATES\" | null")]
+    pub reason_code: Option<MergeBlockReason>,
 }

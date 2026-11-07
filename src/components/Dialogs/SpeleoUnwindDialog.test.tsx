@@ -12,16 +12,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(errorMessageOrString);
 
 import SpeleoUnwindDialog from './SpeleoUnwindDialog';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, errorMessageOrString } from '../../test/factories/ipc';
 
 const HEXSHA = 'abcdef0123456789';
 

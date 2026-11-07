@@ -21,6 +21,8 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
+import { shareableErrorText } from './lib/shareableFailure';
+
 const STUB_SESSION_ID = 'http-probe-session';
 
 // webdriver snapshots the proxy env into a plain object at MODULE INIT
@@ -99,7 +101,9 @@ async function main(): Promise<void> {
 
 main().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);
-  console.error(`  FAILED: ${msg}`);
+  // The shareable crash form (#576 W51), as every runner's `fatal:` line: the
+  // headline as it is unless it ends in another program's text, the rest counted.
+  console.error(`  FAILED: ${shareableErrorText(err)}`);
   if (msg.includes('UND_ERR_INVALID_ARG')) {
     console.error(
       '  That is the error the old Node-22-only rule cited. Check HTTP_PROXY /\n' +

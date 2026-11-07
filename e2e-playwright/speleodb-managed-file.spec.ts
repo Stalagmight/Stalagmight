@@ -1,5 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupMockedPage, createProject, openAppMenu } from './helpers/app';
+import { getIpcCalls, recordIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
 
 /**
  * Canonical SpeleoDB storage, frontend half:
@@ -61,8 +62,9 @@ test.describe('SpeleoDB managed-file prompt', () => {
     await expect(page.getByTestId('global-view')).toBeVisible();
   });
 
-  test('remove link strips the file and opens it as a local project', async ({ page }) => {
+  test('remove link strips the file and opens it as a local project @smoke', async ({ page }) => {
     await openManagedFileDialog(page);
+    await recordIpcCalls(page, ['speleodb_remove_link_at', 'load_project_full_binary']);
     await page.getByTestId('speleodb-managed-file-remove-link').click();
 
     // The strip succeeded (mock returns null) and the SAME path was re-opened
@@ -71,6 +73,28 @@ test.describe('SpeleoDB managed-file prompt', () => {
       timeout: 5000,
     });
     await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
+
+    // The link was stripped from THAT file, for THAT managed project (the
+    // backend refuses a strip whose `expected` does not match the row)...
+    const [strip] = await waitForIpcCall(page, 'speleodb_remove_link_at');
+    expect(strip.args.path).toBe(MANAGED.path);
+    expect((strip.args.expected as { projectId?: string }).projectId).toBe(MANAGED.projectId);
+    // ...and only then was the same path loaded, now as the open project.
+    const loads = await waitForIpcCall(page, 'load_project_full_binary');
+    expect(loads.map((c) => c.args.path)).toEqual([MANAGED.path]);
+    // [#576 RV4-FE-FEB-8] "Only then": the recorder keeps call order, so a load
+    // issued before the strip finished being sent fails here.
+    expect((await getIpcCalls(page)).map((c) => c.cmd)).toEqual([
+      'speleodb_remove_link_at',
+      'load_project_full_binary',
+    ]);
+    const opened = await page.evaluate(
+      () =>
+        (window as unknown as {
+          __E2E_TEST__: { projectStore: { getState: () => { project: { file_path: string | null } | null } } };
+        }).__E2E_TEST__.projectStore.getState().project?.file_path ?? null,
+    );
+    expect(opened).toBe(MANAGED.path);
   });
 
   test('a failed strip keeps the prompt open with the reason', async ({ page }) => {

@@ -21,6 +21,7 @@ import { getMapThemeColors } from '../../../../utils/themeColors';
 import { getDepthColor } from '../../../../utils/colors';
 import type { Section } from '../../../../types/ipc/Section';
 import type { Station } from '../../../../types/ipc/Station';
+import { makeStation } from '../../../../test/factories/survey';
 
 const theme = getMapThemeColors();
 const depthRange = { min: -10, max: 0 };
@@ -60,14 +61,13 @@ function fixture(): { sections: Section[]; stations: Station[] } {
   const st = (
     section_id: number, station_index: number, x: number, y: number, z: number,
     is_zero_datum = false,
-  ): Station => ({
-    station_ref: { section_id, station_index },
-    coordinates: { x, y, z },
-    is_zero_datum,
-    gps_coordinates: null,
-    merged_with: [],
-    closures_with: [],
-  });
+  ): Station =>
+    makeStation({
+      station_ref: { section_id, station_index },
+      coordinates: { x, y, z },
+      is_zero_datum,
+      closures_with: [],
+    });
   const stations: Station[] = [
     st(1, 0, 0, 0, 0, true), // zero datum
     st(1, 1, 8, 0, -4),

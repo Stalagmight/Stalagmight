@@ -205,10 +205,14 @@ describe('applyReverseAftermath', () => {
     useUIStore.setState({ distanceGradientOrigin: null });
   });
 
-  it('mirrors the distance-gradient origin', () => {
+  it('leaves the distance-gradient origin alone - it is anchor-resolved, not mirrored (#576 D39(g))', () => {
+    // Like the plan pins below: the seam re-resolves it from its anchor
+    // (`remapDistanceOrigin`) before this runs, so a mirror here would move it twice.
     useUIStore.setState({ distanceGradientOrigin: ref(REVERSED, 2) });
+    useUIStore.getState().setSelection({ type: 'station', stationRef: ref(REVERSED, 3) });
     applyReverseAftermath(counts);
-    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(REVERSED, 5));
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(REVERSED, 2));
+    expect(useUIStore.getState().selection).toBeNull();
   });
 
   it('leaves the GAS PLAN pins alone - they are anchor-resolved, not mirrored (#310)', () => {

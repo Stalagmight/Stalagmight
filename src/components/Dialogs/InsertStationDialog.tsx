@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -7,6 +8,7 @@ import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useShallow } from 'zustand/react/shallow';
 
 /** Clamp a 0..1 fraction; `projectParamOnSegment` already clamps, this is belt
  *  and braces against a NaN or an out-of-range value reaching the arithmetic. */
@@ -28,8 +30,11 @@ function formatPercent(pct: number): string {
 }
 
 export default function InsertStationDialog() {
-  const { closeDialog, dialogData, setSelection } = useUIStore();
-  const { splitShotAtDistance } = useProjectStore();
+  const { t } = useTranslation();
+  const { closeDialog, dialogData, setSelection } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData, setSelection: s.setSelection })),
+  );
+  const splitShotAtDistance = useProjectStore((s) => s.splitShotAtDistance);
 
   const sectionId = dialogData.sectionId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
@@ -113,7 +118,7 @@ export default function InsertStationDialog() {
     // read-only mode must refuse here rather than mutate. Re-checked now, not at
     // open time, because the mode can flip while the dialog is up.
     if (isEditingBlockedNow()) {
-      setError('Editing is disabled in the current view.');
+      setError(t('dialogs.insertStation.editingDisabled'));
       return;
     }
 
@@ -141,10 +146,10 @@ export default function InsertStationDialog() {
         trackDialogComplete('insert-station');
         closeDialog();
       } else {
-        setError(result.error ?? 'Failed to insert station');
+        setError(result.error ?? t('dialogs.insertStation.insertFailed'));
       }
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to insert station'));
+      setError(getErrorMessage(e, t('dialogs.insertStation.insertFailed')));
     } finally {
       setIsLoading(false);
     }
@@ -154,7 +159,7 @@ export default function InsertStationDialog() {
 
   return (
     <DialogWrapper
-      title={sectionName ? `Insert Station in ${sectionName}` : 'Insert Station'}
+      title={sectionName ? t('dialogs.insertStation.titleIn', { sectionName }) : t('dialogs.insertStation.title')}
       onClose={handleClose}
       size="md"
       isDirty={isDirty}
@@ -163,7 +168,7 @@ export default function InsertStationDialog() {
     >
       <div className="space-y-4">
         <p className="text-text-secondary">
-          Splits the shot into two, adding a station at the given distance from its start.
+          {t('dialogs.insertStation.intro')}
         </p>
 
         {error && (
@@ -175,7 +180,7 @@ export default function InsertStationDialog() {
         <div className="flex gap-3">
           <div className="flex-1">
             <label className="block text-sm text-text-secondary mb-1" htmlFor="insert-station-distance">
-              Distance from start (meters)
+              {t('dialogs.insertStation.distanceMeters')}
             </label>
             <input
               id="insert-station-distance"
@@ -193,7 +198,7 @@ export default function InsertStationDialog() {
           </div>
           <div className="flex-1">
             <label className="block text-sm text-text-secondary mb-1" htmlFor="insert-station-percent">
-              Distance from start (%)
+              {t('dialogs.insertStation.distancePercent')}
             </label>
             <input
               id="insert-station-percent"
@@ -213,13 +218,13 @@ export default function InsertStationDialog() {
 
         <p className="text-sm text-text-secondary" data-testid="insert-station-preview">
           {remaining !== null
-            ? `Shot A: ${parsedDistance.toFixed(2)} m / Shot B: ${remaining.toFixed(2)} m`
-            : `Total shot length: ${shotLength.toFixed(2)} m (both sides must be at least ${MIN_SPLIT_CHILD_LENGTH_M.toFixed(2)} m)`}
+            ? t('dialogs.insertStation.preview', { a: parsedDistance.toFixed(2), b: remaining.toFixed(2) })
+            : t('dialogs.insertStation.previewTotal', { total: shotLength.toFixed(2), min: MIN_SPLIT_CHILD_LENGTH_M.toFixed(2) })}
         </p>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={handleClose} disabled={isLoading} data-testid="insert-station-cancel">
-            Cancel
+            {t('common.actions.cancel')}
           </Button>
           <Button
             variant="primary"
@@ -227,7 +232,7 @@ export default function InsertStationDialog() {
             disabled={isLoading || !isValid}
             data-testid="insert-station-confirm"
           >
-            {isLoading ? 'Inserting...' : 'Insert Station'}
+            {isLoading ? t('dialogs.insertStation.inserting') : t('dialogs.insertStation.confirm')}
           </Button>
         </div>
       </div>

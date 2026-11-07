@@ -1,5 +1,7 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import type { MockReply } from './mocks/ipc/types';
+import type { CommandError } from '../src/types/ipc/CommandError';
 
 /**
  * E2E tests for Undo/Redo History Dropdown feature.
@@ -152,7 +154,7 @@ async function extendMocksWithUndoRedo(page: Page, config: Partial<MockUndoRedoC
             reindex(cfg.undoStack);
             reindex(cfg.redoStack);
           }
-          return { success: true, warnings: [], error: null };
+          return { reversed_steps: [], warnings: [], remote_link: null } satisfies MockReply<'undo'>;
         }
         case 'redo': {
           const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
@@ -163,7 +165,7 @@ async function extendMocksWithUndoRedo(page: Page, config: Partial<MockUndoRedoC
             reindex(cfg.undoStack);
             reindex(cfg.redoStack);
           }
-          return { success: true, warnings: [], error: null };
+          return { reversed_steps: [], warnings: [], remote_link: null } satisfies MockReply<'redo'>;
         }
         case 'undo_to': {
           const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
@@ -178,7 +180,7 @@ async function extendMocksWithUndoRedo(page: Page, config: Partial<MockUndoRedoC
             reindex(cfg.undoStack);
             reindex(cfg.redoStack);
           }
-          return { success: true, warnings: [], error: null };
+          return { reversed_steps: [], warnings: [], remote_link: null } satisfies MockReply<'undo_to'>;
         }
         case 'redo_to': {
           const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
@@ -193,7 +195,7 @@ async function extendMocksWithUndoRedo(page: Page, config: Partial<MockUndoRedoC
             reindex(cfg.undoStack);
             reindex(cfg.redoStack);
           }
-          return { success: true, warnings: [], error: null };
+          return { reversed_steps: [], warnings: [], remote_link: null } satisfies MockReply<'redo_to'>;
         }
         default:
           return originalInvoke(cmd, args);
@@ -701,7 +703,7 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Hover should not open dropdown on disabled button
       await undoButton.hover({ force: true });
-      // Give a (buggy) dropdown time to open before asserting it didn't.
+      // settle: give a (buggy) dropdown time to open before asserting it didn't.
       await page.waitForTimeout(400);
 
       // Dropdown should not appear
@@ -822,6 +824,8 @@ test.describe('Undo/Redo Dropdown - Empty State', () => {
 
     // Hover to try opening dropdown
     await undoButton.hover();
+    // settle: past the hover-open delay, so a dropdown that wrongly opens for an
+    // empty stack has had its chance before the assertion below.
     await page.waitForTimeout(400);
 
     // Dropdown should not appear with empty stack
@@ -1047,7 +1051,7 @@ test.describe('Undo/Redo Dropdown - Close on Empty Stack', () => {
           undoActionCalled = true;
           const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
           calls.push({ cmd: cmd, index: (args?.index as number) ?? 0 });
-          return { success: true, warnings: [], error: null };
+          return { reversed_steps: [], warnings: [], remote_link: null } satisfies MockReply<'undo_to'> & MockReply<'undo'>;
         }
         if (cmd === 'get_undo_stack' && undoActionCalled) {
           return []; // Empty stack after undo
@@ -1090,7 +1094,7 @@ test.describe('Undo/Redo Dropdown - Error Handling', () => {
 
       (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke = async (cmd: string, args?: Record<string, unknown>) => {
         if (cmd === 'undo_to' || cmd === 'undo') {
-          return { success: false, warnings: [], error: 'Stack corrupted: cannot undo' };
+          return Promise.reject({ code: 'FAILED', message: 'Stack corrupted: cannot undo' } satisfies CommandError);
         }
         return originalInvoke(cmd, args);
       };

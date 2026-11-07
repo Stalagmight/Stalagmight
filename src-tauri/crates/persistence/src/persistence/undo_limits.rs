@@ -31,10 +31,28 @@
 /// depth (100 entries -> ~32,000), at the price of shallower history for repeated
 /// whole-survey operations on very large projects.
 ///
+/// [#576 B20] The count window (a local project, Disabled mode) is capped by this same
+/// budget when it is SAVED: the newest `undo_persist_limit` entries, and of those only
+/// the newest that fit in this many bytes per stack (the newest always kept). Ordinary
+/// edits are unaffected; on a 20,000-shot project about two whole-project steps survive
+/// a reopen instead of twenty, and the save gzips at most this much per stack.
+///
 /// Measured against `UndoStack::estimated_size`, NOT against a real serialization:
 /// the point is to bound growth, and serializing the whole stack to measure it would
 /// cost exactly what the budget exists to avoid.
 pub const UNDO_BYTE_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+
+/// [#576 B20] In-memory ceiling for a count-window stack (a local project, Disabled
+/// mode): on top of `undo_history_limit` entries, at most this many bytes of estimated
+/// serialized size per stack, oldest evicted first, the newest always kept.
+///
+/// The count alone priced whole-project steps at nothing: `Delete shot`, `Delete
+/// section`, `Reverse section`, merges and every import record two whole-project JSON
+/// snapshots (~15 MB on a 20,000-shot project, ~69 MB at 75,000 shots), so 100 of them
+/// held several GB. At this ceiling ~16 such steps stay undoable in the session on a
+/// 20,000-shot project and 3-4 at 75,000 shots; ordinary edits (~1 KB) are unaffected.
+/// A Full-mode stack has its own, tighter bound ([`UNDO_BYTE_BUDGET_BYTES`]).
+pub const COUNT_WINDOW_MEMORY_BYTES: usize = 256 * 1024 * 1024;
 
 /// Command JSON plus enum/field scaffolding for any entry.
 ///
@@ -77,7 +95,9 @@ pub const ENTRY_OVERHEAD_BYTES: usize = 512;
 /// `.min(MAX_PERSISTED_HISTORY_ROWS)`, and `undo_history_limit` is an unclamped `usize`
 /// in `config.toml` - the settings UI validates it to 10..1000, but a hand-edited
 /// config is not validated at all. Such a project is NOT byte-bounded, so the rows past
-/// the ceiling are ones its restore would have kept: that load is genuinely lossy. It is
+/// the ceiling are ones its restore would have kept (its in-memory bound,
+/// [`COUNT_WINDOW_MEMORY_BYTES`], admits 8x this many minimum-size entries): that load
+/// is genuinely lossy. It is
 /// accepted rather than fixed because the ceiling is 65536 entries (32 MiB / 512 B),
 /// sixty-five times the deepest window the settings UI will accept, so only a config
 /// edited by hand past 65536 reaches it - and the alternative is letting that same edit

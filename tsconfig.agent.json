@@ -1,19 +1,15 @@
 {
+  // The agent-harness program (e2e/agent + e2e/lib). Shared options and
+  // strictness: tsconfig.base.json.
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "strict": true,
-    "strictNullChecks": true,
-    "noImplicitAny": true,
-    "skipLibCheck": true,
-    "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    "incremental": true,
+    "tsBuildInfoFile": "./node_modules/.cache/tsc/tsconfig.agent.tsbuildinfo"
   },
   "include": ["e2e/agent/**/*", "e2e/lib/**/*"],
   "comment:exclude": "Generated replay specs use the retired runner's ambient globals (browser/$) and have no typecheck home until the #466 replay runner lands.",

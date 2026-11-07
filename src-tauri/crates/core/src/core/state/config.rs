@@ -1,6 +1,6 @@
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 
-use crate::config::{Config, ConfigSaveReport, TokenFallback};
+use crate::config::{Config, ConfigPatch, ConfigSaveReport, TokenFallback};
 
 use super::AppState;
 
@@ -46,10 +46,7 @@ impl AppState {
     /// posts it straight to [`Self::update_config`], so handing out defaults would
     /// turn one unrelated panic into a wholesale reset of the user's settings.
     pub fn get_config(&self) -> Config {
-        self.config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        self.config.lock().clone()
     }
 
     /// Update config from a whole-`Config` payload.
@@ -60,11 +57,29 @@ impl AppState {
     /// were nevertheless written. See the eviction branch below for why that is
     /// reported instead of refused.
     pub fn update_config(&self, config: Config) -> Result<ConfigSaveReport> {
-        let _guard = self
-            .config_write_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.update_config_locked(config)
+        let before = SessionSettings::of(&self.get_config());
+        let report = {
+            let _guard = self.config_write_lock.lock();
+            self.update_config_locked(config)?
+        };
+        self.sync_config_side_effects_if_changed(&before);
+        Ok(report)
+    }
+
+    /// [#576 D27-32(c)] Apply ONLY `patches` - the settings a save changed - onto
+    /// the live config, under the config write lock, then normalize and save it
+    /// (`update_config_locked`, the credential backstop included).
+    ///
+    /// The Settings dialog posted the whole `Config` from the snapshot it took when
+    /// it opened, so every value the backend recorded in between - the panel layout
+    /// and widths, the recent projects, the table views - was silently reverted by
+    /// a save that never touched them. A patch carries only the user's own changes,
+    /// so those survive by construction.
+    ///
+    /// Refused whole, with nothing written, when a path names no setting or a value
+    /// has the wrong shape for its setting.
+    pub fn patch_config(&self, patches: &[ConfigPatch]) -> Result<ConfigSaveReport> {
+        self.modify_config(|config| apply_config_patches(config, patches))
     }
 
     /// Read-modify-write the config under ONE lock, for the partial-update
@@ -85,13 +100,102 @@ impl AppState {
     where
         F: FnOnce(&mut Config) -> Result<()>,
     {
-        let _guard = self
-            .config_write_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut config = self.get_config();
-        mutate(&mut config)?;
-        self.update_config_locked(config)
+        let (report, before) = {
+            let _guard = self.config_write_lock.lock();
+            let mut config = self.get_config();
+            let before = SessionSettings::of(&config);
+            mutate(&mut config)?;
+            (self.update_config_locked(config)?, before)
+        };
+        self.sync_config_side_effects_if_changed(&before);
+        Ok(report)
+    }
+
+    /// [#576 A18(c)/(g)/(h)] Bring the running session in line with the config in
+    /// force: the undo history limit (and the depth bound it feeds) and the live
+    /// tile cache. The ONE place a config change reaches them, for a Settings save,
+    /// a partial save and Reload Config alike - each used to apply its own subset,
+    /// so the undo limit and the cache size and retention changed only at the next
+    /// launch, and a reload never touched the cache at all.
+    ///
+    /// Reads the LIVE config, so it is idempotent and order-free: two saves racing
+    /// each other both leave the session matching whichever config won.
+    ///
+    /// Takes `undo_stack`, then `database` and `undo_stack` (`sync_undo_depth_limit`),
+    /// then `tile_cache` - call it with none of those, and not `config_write_lock`,
+    /// held.
+    pub(super) fn sync_config_side_effects(&self) {
+        let config = self.get_config();
+        {
+            let mut undo = self.undo_stack.lock();
+            if undo.history_limit() != config.general.undo_history_limit {
+                // [#303] `set_history_limit` re-arms only the COUNT bound; a Full-mode
+                // SpeleoDB project stays on the byte budget, so a settings save cannot
+                // silently truncate the history its next push is meant to carry.
+                undo.set_history_limit(config.general.undo_history_limit);
+            }
+        }
+        // ...and the BOUND itself, which `set_history_limit` deliberately will not
+        // touch: the global `speleodb.undo_mode` can change in the same save.
+        self.sync_undo_depth_limit();
+        self.sync_tile_cache(&config);
+    }
+
+    /// [`Self::sync_config_side_effects`], but only when a setting it applies
+    /// differs from `before` - the partial writes (panel widths, table views) run
+    /// often and change none of them.
+    fn sync_config_side_effects_if_changed(&self, before: &SessionSettings) {
+        if SessionSettings::of(&self.get_config()) != *before {
+            self.sync_config_side_effects();
+        }
+    }
+
+    /// The live tile cache, made to match `config.cache` (#576 A18(g)/(h)):
+    /// dropped when caching is off; opened when it is on and there is none - which
+    /// also retries a cache whose open failed at startup; and otherwise
+    /// reconfigured in place, so a smaller size cap or a shorter retention is in
+    /// force at once (`TileCache::reconfigure` evicts to it). The provider's own
+    /// `Cache-Control` still bounds every tile, as before.
+    fn sync_tile_cache(&self, config: &Config) {
+        let mut guard = self.tile_cache.lock();
+        if !config.cache.tile_cache_enabled {
+            if guard.take().is_some() {
+                // Existing cache data remains on disk.
+                tracing::info!(purpose = "disable offline tiles", "Tile cache disabled");
+            }
+            return;
+        }
+        match guard.as_mut() {
+            Some(cache) => match cache.reconfigure(
+                config.cache.tile_cache_max_mb,
+                config.cache.tile_ttl_days,
+                &config.cache.provider_ttl_days(),
+            ) {
+                Ok(true) => tracing::info!(
+                    max_mb = config.cache.tile_cache_max_mb,
+                    ttl_days = config.cache.tile_ttl_days,
+                    purpose = "apply the tile cache settings",
+                    "Tile cache settings applied"
+                ),
+                Ok(false) => {}
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    purpose = "apply the tile cache settings",
+                    "Tile cache settings applied, but trimming the cache to them failed"
+                ),
+            },
+            None => match Self::init_tile_cache(config) {
+                Ok(cache) => {
+                    tracing::info!(purpose = "enable offline tiles", "Tile cache enabled");
+                    *guard = Some(cache);
+                }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    purpose = "enable offline tiles",
+                    "Failed to initialize tile cache"
+                ),
+            },
+        }
     }
 
     /// The body of [`Self::update_config`], with `config_write_lock` already held.
@@ -132,14 +236,11 @@ impl AppState {
         // for that last reason: skipping restores nothing, so the form's serde
         // defaults land on top of the backend-owned fields and sign the user out
         // with no way to explain it. That is the unsafe direction, and it is the
-        // same call the save pipeline makes with the project lock
-        // (`project_io::close_project_if_open_at`) - these are plain values with no
+        // same call the cache replace makes with the project lock
+        // (`project_io::close_project_if_open_at_held`) - these are plain values with no
         // half-written invariant to protect.
-        let (previously_disabled, old_cache_enabled) = {
-            let existing = self
-                .config
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previously_disabled = {
+            let existing = self.config.lock();
             config.webkit_memory = existing.webkit_memory.clone();
             config.speleodb.email.clone_from(&existing.speleodb.email);
             config.speleodb.token_fallback = existing.speleodb.token_fallback;
@@ -158,10 +259,7 @@ impl AppState {
                 .speleodb
                 .keychain_token_account
                 .clone_from(&existing.speleodb.keychain_token_account);
-            (
-                existing.speleodb.keychain_disabled,
-                existing.cache.tile_cache_enabled,
-            )
+            existing.speleodb.keychain_disabled
         };
         // Repair the payload the same way the load path repairs a file. Without
         // this, the write path was the ONE door into `config.toml` with no
@@ -252,14 +350,9 @@ impl AppState {
             // the user's settings over it helps nobody.
             report.persistent_residue = persistent_residue;
         } else {
-            let mut session = self
-                .speleodb
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut session = self.speleodb.lock();
             session.token_store.set_keychain_disabled(keychain_disabled);
         }
-        let new_cache_enabled = config.cache.tile_cache_enabled;
-
         if let Err(e) = config.save() {
             tracing::error!(
                 reason = %e,
@@ -269,40 +362,15 @@ impl AppState {
             return Err(e);
         }
 
-        // Sync tile cache if cache setting changed
-        if old_cache_enabled != new_cache_enabled {
-            if let Ok(mut cache_guard) = self.tile_cache.lock() {
-                if new_cache_enabled {
-                    // Enable cache - create new cache
-                    match Self::init_tile_cache(&config) {
-                        Ok(cache) => {
-                            tracing::info!(purpose = "enable offline tiles", "Tile cache enabled");
-                            *cache_guard = Some(cache);
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                purpose = "enable offline tiles",
-                                "Failed to initialize tile cache"
-                            );
-                        }
-                    }
-                } else {
-                    // Disable cache - set to None (existing cache data remains on disk)
-                    tracing::info!(purpose = "disable offline tiles", "Tile cache disabled");
-                    *cache_guard = None;
-                }
-            }
-        }
+        // The session-side effects (undo limit, tile cache) are applied by the
+        // callers once `config_write_lock` is released - see
+        // `sync_config_side_effects` (#576 A18).
 
         // Recovered rather than skipped for the third time in this function: the
         // settings are already on disk by now, so dropping the in-memory update
         // would leave the running app disagreeing with its own config file until
         // the next launch.
-        *self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+        *self.config.lock() = config;
         Ok(report)
     }
 
@@ -365,10 +433,7 @@ impl AppState {
         // inverting it here would be the deadlock.
         self.speleodb_ensure_rehydrated();
 
-        let mut session = self
-            .speleodb
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut session = self.speleodb.lock();
         let (Some(endpoint), Some(email)) = (session.endpoint.clone(), session.email.clone())
         else {
             session.token_store.set_keychain_disabled(true);
@@ -467,40 +532,99 @@ impl AppState {
 
     /// Reload config from disk without saving
     /// Returns the newly loaded config
-    /// Also syncs config-derived state (recent_projects, undo_stack limit)
+    /// Also syncs config-derived state (recent_projects, and through
+    /// `sync_config_side_effects` the undo limit and the tile cache, #576 A18(h))
     pub fn reload_config(&self) -> Result<Config> {
         let new_config = Config::load()?;
 
-        // Update the config
-        if let Ok(mut cfg) = self.config.lock() {
-            *cfg = new_config.clone();
+        // Under the config write lock, like every other write of the live config, so
+        // a partial save racing the reload cannot land between the two.
+        {
+            let _guard = self.config_write_lock.lock();
+            {
+                let mut cfg = self.config.lock();
+                *cfg = new_config.clone();
+            }
         }
 
         // Sync recent_projects from config
-        if let Ok(mut recent) = self.recent_projects.lock() {
-            recent.clone_from(&new_config.general.recent_projects);
-        }
+        self.recent_projects
+            .lock()
+            .clone_from(&new_config.general.recent_projects);
 
-        // Sync undo_stack history limit from config.
-        //
-        // [#303] `set_history_limit` records the new count but only re-arms the COUNT
-        // bound; a Full-mode SpeleoDB project stays on the byte budget, so a settings
-        // save cannot silently truncate the history its next push is meant to carry.
-        // The recorded count still takes effect the moment the project goes back onto a
-        // count window (closed, or switched to Disabled).
-        if let Ok(mut undo) = self.undo_stack.lock() {
-            undo.set_history_limit(new_config.general.undo_history_limit);
-        }
-        // ...and the BOUND itself, which `set_history_limit` deliberately will not touch.
-        // The global `speleodb.undo_mode` can change in the same save. An already-open
-        // linked project has an explicit value and therefore stays unchanged; local/no
-        // project state remains on the count window. `sync_undo_depth_limit`'s own doc
-        // lists config reload as a site it must be called from, so keep the re-arm here.
-        // Sequenced after the block above so no lock is held across it.
-        self.sync_undo_depth_limit();
+        // Always, not only on a change: a reload is also how a cache whose open
+        // failed at startup gets another try. No lock is held across it.
+        self.sync_config_side_effects();
 
         Ok(new_config)
     }
+}
+
+/// The settings [`AppState::sync_config_side_effects`] applies to the running
+/// session, to tell whether a save changed any of them.
+#[derive(PartialEq)]
+struct SessionSettings {
+    undo_history_limit: usize,
+    undo_mode: crate::models::UndoMode,
+    cache: crate::config::CacheConfig,
+}
+
+impl SessionSettings {
+    fn of(config: &Config) -> Self {
+        Self {
+            undo_history_limit: config.general.undo_history_limit,
+            undo_mode: config.speleodb.undo_mode,
+            cache: config.cache.clone(),
+        }
+    }
+}
+
+/// Apply `patches` to `config` (#576 D27-32(c)): each `path` names a setting by its
+/// field names from the top, and its `value` replaces that setting. Refused whole
+/// - `config` untouched - when a path names no setting or a value does not fit it.
+fn apply_config_patches(config: &mut Config, patches: &[ConfigPatch]) -> Result<()> {
+    let mut tree = serde_json::to_value(&*config)?;
+    for patch in patches {
+        let Some((key, parents)) = patch.path.split_last() else {
+            bail!("A settings change names no setting");
+        };
+        // A missing (or empty optional) table on the way is created, so a new map
+        // entry can arrive as its settings one by one; a name the config does not
+        // have is caught by the check below, after the round trip drops it.
+        let mut node = &mut tree;
+        for segment in parents {
+            let object = node
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("Unknown setting '{}'", patch.path.join(".")))?;
+            node = object
+                .entry(segment.clone())
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            if node.is_null() {
+                *node = serde_json::Value::Object(serde_json::Map::new());
+            }
+        }
+        let object = node
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("Unknown setting '{}'", patch.path.join(".")))?;
+        object.insert(key.clone(), patch.value.clone());
+    }
+    let patched: Config = serde_json::from_value(tree)
+        .map_err(|e| anyhow!("A changed setting has a value that does not fit it: {e}"))?;
+    // A name the config does not have is dropped by the read above rather than
+    // refused, so check that every patched setting is still there. (A `null` that
+    // clears an optional setting may be dropped too - that is the clearing.)
+    let check = serde_json::to_value(&patched)?;
+    for patch in patches {
+        let found = patch
+            .path
+            .iter()
+            .try_fold(&check, |node, segment| node.get(segment));
+        if found.is_none() && !patch.value.is_null() {
+            bail!("Unknown setting '{}'", patch.path.join("."));
+        }
+    }
+    *config = patched;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -598,7 +722,7 @@ mod tests {
         plaintext: Option<Box<dyn SecretStore>>,
     ) -> AppState {
         let state = AppState::new().expect("state");
-        let mut session = state.speleodb.lock().expect("session");
+        let mut session = state.speleodb.lock();
         session.endpoint = Some(EP.to_owned());
         session.email = Some(EMAIL.to_owned());
         session.token_store = TokenStore::from_stores(keychain, plaintext);
@@ -632,7 +756,7 @@ mod tests {
             let dir = tempfile::tempdir().expect("tempdir");
             let state = signed_in_over(observable_keychain(dir.path()));
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 // An earlier working login: the key is durably in the keychain.
                 assert_eq!(
                     session.token_store.store(EP, EMAIL, "tok", false),
@@ -661,7 +785,7 @@ mod tests {
                 None,
                 "turning the keyring off must take the key OUT of it, not just look away"
             );
-            let session = state.speleodb.lock().expect("session");
+            let session = state.speleodb.lock();
             assert!(
                 !session.token_store.keychain_backed(),
                 "and the credential line must stop claiming a keychain we just emptied"
@@ -684,7 +808,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(DeleteRefusingStore(InMemoryStore::new())));
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 assert_eq!(
                     session.token_store.store(EP, EMAIL, "tok", false),
                     TokenTier::Keychain
@@ -745,7 +869,7 @@ mod tests {
             let probe = PlaintextStore::new(dir.path().to_path_buf());
             probe.store(&account_key(EP, EMAIL), "tok").unwrap();
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 // A working login this run, so the key is in hand to be re-landed.
                 assert_eq!(
                     session.token_store.store(EP, EMAIL, "tok", false),
@@ -799,7 +923,7 @@ mod tests {
             let probe = PlaintextStore::new(dir.path().to_path_buf());
             probe.store(&account_key(EP, EMAIL), "tok").unwrap();
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 assert_eq!(
                     session.token_store.store(EP, EMAIL, "tok", false),
                     TokenTier::Keychain
@@ -864,7 +988,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(DeleteRefusingStore(InMemoryStore::new())));
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 assert_eq!(
                     session.token_store.store(EP, EMAIL, "tok", false),
                     TokenTier::Keychain
@@ -936,7 +1060,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(FailingSecretStore));
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 // A login this session that the keychain refused: THAT is what
                 // records `Unavailable`, and it is half the evidence separating a
                 // keychain-less box from a keyring that has merely gone quiet.
@@ -990,7 +1114,7 @@ mod tests {
                 // What the previous launch's successful keychain store persisted,
                 // stamped with the account it is about.
                 state.speleodb_persist_keychain_belief(Some(account_key(EP, EMAIL)));
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 // Which `SpeleoDbSession::rehydrate` mirrors into the live store
                 // before wiring the load that the locked keyring then refuses.
                 session.token_store.note_keychain_has_token(true);
@@ -1031,7 +1155,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(FailingSecretStore));
             {
-                let mut config = state.config.lock().expect("config");
+                let mut config = state.config.lock();
                 // What that earlier session-only answer persisted, and what
                 // `SpeleoDbSession::rehydrate` reads back on the next launch.
                 config.speleodb.keychain_declined = true;
@@ -1042,7 +1166,7 @@ mod tests {
                      read or write actually succeeded, and none can here"
                 );
                 drop(config);
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 // The live store as that rehydrate leaves it: the decline applied, and
                 // NO keychain access behind it - no login this run to record one.
                 session.token_store.set_keychain_declined(true);
@@ -1082,7 +1206,7 @@ mod tests {
             {
                 // `endpoint` stays seeded so nothing reaches a real keyring; the
                 // email is what makes the account key, and there isn't one.
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 session.email = None;
                 drop(session);
             }
@@ -1119,7 +1243,7 @@ mod tests {
                 .update_config(settings_save(&state, true))
                 .expect("settings saved");
 
-            let mut session = state.speleodb.lock().expect("session");
+            let mut session = state.speleodb.lock();
             assert_eq!(
                 session.token_store.keychain_state(),
                 // `Disabled`, not `Declined`: the switch is a standing policy the
@@ -1145,7 +1269,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(InMemoryStore::new()));
             {
-                let mut config = state.config.lock().expect("config");
+                let mut config = state.config.lock();
                 config.speleodb.token_fallback = TokenFallback::Plaintext;
                 config.speleodb.keychain_declined = true;
                 config.speleodb.keychain_has_token = true;
@@ -1216,7 +1340,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(FailingSecretStore));
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 assert_eq!(
                     session.token_store.store(EP, EMAIL, "tok", false),
                     TokenTier::Memory
@@ -1231,7 +1355,7 @@ mod tests {
             posted.general.undo_history_limit = 42;
             state.update_config(posted).expect("settings saved");
 
-            let session = state.speleodb.lock().expect("session");
+            let session = state.speleodb.lock();
             assert_eq!(
                 session.token_store.keychain_state(),
                 KeychainState::Unavailable,

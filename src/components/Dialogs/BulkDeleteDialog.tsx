@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
@@ -9,6 +11,7 @@ import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import type { DeleteShotRangeImpact } from '../../types/commands';
 import type { StationRef } from '../../types/project';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * Confirm + impact dialog for deleting a contiguous range of shots (#95).
@@ -20,8 +23,18 @@ import { setSource, trackDialogComplete } from '../../utils/telemetry';
  * (Whole-section selections route to the section-delete confirm instead.)
  */
 export default function BulkDeleteDialog() {
-  const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
-  const { deleteShotRangeSplit, deleteShotRangeShift } = useProjectStore();
+  const { t } = useTranslation();
+  const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      dialogData: s.dialogData,
+      clearSelection: s.clearSelection,
+      setSelection: s.setSelection,
+    })),
+  );
+  const { deleteShotRangeSplit, deleteShotRangeShift } = useProjectStore(
+    useShallow((s) => ({ deleteShotRangeSplit: s.deleteShotRangeSplit, deleteShotRangeShift: s.deleteShotRangeShift })),
+  );
 
   const sectionId = dialogData.sectionId as number | undefined;
   const startShotId = dialogData.startShotId as number | undefined;
@@ -75,7 +88,7 @@ export default function BulkDeleteDialog() {
 
   useEffect(() => {
     if (sectionId !== undefined && startShotId !== undefined && endShotId !== undefined) {
-      invokeIpc<DeleteShotRangeImpact>(
+      invokeIpc(
         'preview_delete_shot_range',
         { sectionId, startShotId, endShotId },
         { purpose: 'preview shot range deletion' }
@@ -86,7 +99,8 @@ export default function BulkDeleteDialog() {
         })
         .catch((e) => {
           setImpact(null);
-          setImpactError(getErrorMessage(e, 'Failed to load deletion impact'));
+          // i18n.t, not the hook's t: this IPC effect must not re-fetch on a language change.
+          setImpactError(getErrorMessage(e, i18n.t('dialogs.bulkDelete.errors.loadImpactFailed')));
         });
     } else {
       setImpact(null);
@@ -99,8 +113,13 @@ export default function BulkDeleteDialog() {
     startStationIndex !== undefined &&
     endStationIndex !== undefined &&
     sectionId !== undefined
-      ? `Delete ${shotCount} shots (stations ${formatStationId(sectionId, startStationIndex)}-${formatStationId(sectionId, endStationIndex)} in ${sectionName ?? `Section ${sectionId}`}).`
-      : `Delete ${shotCount ?? 0} shots.`;
+      ? t('dialogs.bulkDelete.summaryRange', {
+          count: shotCount,
+          from: formatStationId(sectionId, startStationIndex),
+          to: formatStationId(sectionId, endStationIndex),
+          section: sectionName ?? t('dialogs.bulkDelete.sectionFallback', { id: sectionId }),
+        })
+      : t('dialogs.bulkDelete.summary', { count: shotCount ?? 0 });
 
   const finish = (split: boolean) => {
     // Split keeps the original section as "A" - re-select it; otherwise clear.
@@ -123,16 +142,16 @@ export default function BulkDeleteDialog() {
         sectionId,
         startShotId,
         endShotId,
-        splitNameA.trim() || 'Section A',
-        splitNameB.trim() || 'Section B'
+        splitNameA.trim() || t('dialogs.bulkDelete.defaultSplitNameA'),
+        splitNameB.trim() || t('dialogs.bulkDelete.defaultSplitNameB')
       );
       if (result.success) {
         finish(true);
       } else {
-        setError(result.error ?? 'Failed to split section');
+        setError(result.error ?? t('dialogs.bulkDelete.errors.splitSection'));
       }
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to split section'));
+      setError(getErrorMessage(e, t('dialogs.bulkDelete.errors.splitSection')));
     } finally {
       setIsLoading(false);
     }
@@ -148,10 +167,10 @@ export default function BulkDeleteDialog() {
       if (result.success) {
         finish(false);
       } else {
-        setError(result.error ?? 'Failed to delete shots');
+        setError(result.error ?? t('dialogs.bulkDelete.errors.deleteShots'));
       }
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to delete shots'));
+      setError(getErrorMessage(e, t('dialogs.bulkDelete.errors.deleteShots')));
     } finally {
       setIsLoading(false);
     }
@@ -159,7 +178,7 @@ export default function BulkDeleteDialog() {
 
   return (
     <DialogWrapper
-      title="Delete Shots"
+      title={t('dialogs.bulkDelete.title')}
       onClose={isLoading ? () => {} : closeDialog}
       size="md"
       data-testid="bulk-delete-dialog"
@@ -168,9 +187,7 @@ export default function BulkDeleteDialog() {
         <p className="text-text-secondary">{summary}</p>
         {isInterior && (
           <p className="text-text-secondary text-sm">
-            These shots are in the middle of the section. Split keeps both ends in place; closing
-            the gap shifts the downstream survey. The relationship changes below cover closing the
-            gap - the split keeps the stations at each end and their connections.
+            {t('dialogs.bulkDelete.interiorIntro')}
           </p>
         )}
 
@@ -189,7 +206,7 @@ export default function BulkDeleteDialog() {
           <div className="space-y-3">
             <div>
               <label className="block text-sm text-text-secondary mb-1">
-                Section A name (before the range)
+                {t('dialogs.bulkDelete.splitNameA')}
               </label>
               <input
                 type="text"
@@ -201,7 +218,7 @@ export default function BulkDeleteDialog() {
             </div>
             <div>
               <label className="block text-sm text-text-secondary mb-1">
-                Section B name (after the range)
+                {t('dialogs.bulkDelete.splitNameB')}
               </label>
               <input
                 type="text"
@@ -218,27 +235,27 @@ export default function BulkDeleteDialog() {
           splitComments.length > 0 ||
           gapComments.length > 0) && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-            <p className="font-medium">Deleting these shots will remove anchored data.</p>
+            <p className="font-medium">{t('dialogs.bulkDelete.anchoredHeading')}</p>
             {isInterior && removedDatums.length > 0 && (
-              <p>Zero datums (anchor the survey&apos;s real-world position) on {removedDatums.map(fmt).join(', ')}.</p>
+              <p>{t('dialogs.bulkDelete.zeroDatums', { stations: removedDatums.map(fmt).join(', ') })}</p>
             )}
             {splitComments.length > 0 && (
-              <p>Station comments on {splitComments.map(fmt).join(', ')}.</p>
+              <p>{t('dialogs.bulkDelete.stationComments', { stations: splitComments.map(fmt).join(', ') })}</p>
             )}
             {gapComments.length > 0 && (
               <p>
                 {isInterior
-                  ? `Closing the gap also removes comments on ${gapComments.map(fmt).join(', ')} (splitting keeps them).`
-                  : `Station comments on ${gapComments.map(fmt).join(', ')}.`}
+                  ? t('dialogs.bulkDelete.gapCommentsInterior', { stations: gapComments.map(fmt).join(', ') })
+                  : t('dialogs.bulkDelete.stationComments', { stations: gapComments.map(fmt).join(', ') })}
               </p>
             )}
-            <p>You can undo to restore them.</p>
+            <p>{t('dialogs.bulkDelete.undoHint')}</p>
           </div>
         )}
 
         {shiftBlocked && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-            <p className="font-medium">Closing the gap isn&apos;t available for this range.</p>
+            <p className="font-medium">{t('dialogs.bulkDelete.shiftUnavailable')}</p>
             {shiftBlockedReasons.length > 0 && (
               <ul className="list-disc list-inside">
                 {shiftBlockedReasons.map((reason: string, index: number) => (
@@ -247,13 +264,11 @@ export default function BulkDeleteDialog() {
               </ul>
             )}
             {!isInterior && removedDatums.length > 0 && (
-              <p className="mt-1">Blocking zero datum on {removedDatums.map(fmt).join(', ')}.</p>
+              <p className="mt-1">{t('dialogs.bulkDelete.blockingDatum', { stations: removedDatums.map(fmt).join(', ') })}</p>
             )}
             {!isInterior && (
               <p className="mt-1">
-                This range can only be removed by closing the gap, so it can&apos;t be deleted here.
-                Remove the blocking zero datum or loop closure first, delete the shots one at a
-                time, or delete the whole section.
+                {t('dialogs.bulkDelete.edgeBlocked')}
               </p>
             )}
           </div>
@@ -261,12 +276,12 @@ export default function BulkDeleteDialog() {
 
         <DeleteShotImpactDetails
           impact={impact}
-          title="Deleting these shots will update station relationships:"
+          title={t('dialogs.bulkDelete.impactTitle')}
         />
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog} disabled={isLoading} data-testid="bulk-delete-cancel">
-            Cancel
+            {t('common.actions.cancel')}
           </Button>
           {isInterior && (
             <Button
@@ -274,7 +289,7 @@ export default function BulkDeleteDialog() {
               disabled={isLoading || !previewReady}
               data-testid="bulk-delete-split"
             >
-              {isLoading ? 'Working…' : 'Split into Two Sections'}
+              {isLoading ? t('dialogs.bulkDelete.working') : t('dialogs.bulkDelete.split')}
             </Button>
           )}
           <Button
@@ -284,7 +299,7 @@ export default function BulkDeleteDialog() {
             data-primary-action=""
             data-testid="bulk-delete-shift"
           >
-            {isLoading ? 'Deleting…' : isInterior ? 'Close Gap & Delete' : 'Delete Shots'}
+            {isLoading ? t('dialogs.bulkDelete.deleting') : isInterior ? t('dialogs.bulkDelete.closeGapDelete') : t('dialogs.bulkDelete.deleteShots')}
           </Button>
         </div>
       </div>

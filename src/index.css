@@ -43,7 +43,6 @@
   --cc-map-ctrl-border: #0f3460;
   --cc-map-ctrl-hover: #1a1a2e;
   --cc-map-ctrl-active: #0f3460;
-  --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(15, 52, 96, 0.3);
   --cc-map-scale-bg: transparent;
   --cc-map-scale-border: #1f6bc5;
@@ -148,7 +147,6 @@
   --cc-map-ctrl-border: #d4c5a9;
   --cc-map-ctrl-hover: #ede6db;
   --cc-map-ctrl-active: #d4c5a9;
-  --cc-map-ctrl-icon-filter: none;
   --cc-map-ctrl-shadow: rgba(0, 0, 0, 0.15);
   --cc-map-scale-bg: transparent;
   --cc-map-scale-border: #a38651;
@@ -262,7 +260,6 @@
   --cc-map-ctrl-border: #2a2826;
   --cc-map-ctrl-hover: #0e0d0c;
   --cc-map-ctrl-active: #2a2826;
-  --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(42, 40, 38, 0.3);
   --cc-map-scale-bg: transparent;
   --cc-map-scale-border: #66625d;
@@ -365,7 +362,6 @@
   --cc-map-ctrl-border: #44475a;
   --cc-map-ctrl-hover: #282a36;
   --cc-map-ctrl-active: #44475a;
-  --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(68, 71, 90, 0.3);
   --cc-map-scale-bg: transparent;
   --cc-map-scale-border: #717694;
@@ -467,7 +463,6 @@
   --cc-map-ctrl-border: #3e4451;
   --cc-map-ctrl-hover: #282c34;
   --cc-map-ctrl-active: #3e4451;
-  --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(62, 68, 81, 0.3);
   --cc-map-scale-bg: transparent;
   --cc-map-scale-border: #6e7990;
@@ -572,7 +567,6 @@
   --cc-map-ctrl-border: #d3cbb7;
   --cc-map-ctrl-hover: #fdf6e3;
   --cc-map-ctrl-active: #d3cbb7;
-  --cc-map-ctrl-icon-filter: none;
   --cc-map-ctrl-shadow: rgba(0, 0, 0, 0.15);
   --cc-map-scale-bg: transparent;
   --cc-map-scale-border: #d3cbb7;
@@ -649,7 +643,6 @@
   --cc-map-ctrl-border: #ccd0da;
   --cc-map-ctrl-hover: #eff1f5;
   --cc-map-ctrl-active: #ccd0da;
-  --cc-map-ctrl-icon-filter: none;
   --cc-map-ctrl-shadow: rgba(0, 0, 0, 0.15);
   --cc-map-scale-bg: transparent;
   --cc-map-scale-border: #ccd0da;
@@ -726,7 +719,6 @@
   --cc-map-ctrl-border: #4c566a;
   --cc-map-ctrl-hover: #2e3440;
   --cc-map-ctrl-active: #4c566a;
-  --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(76, 86, 106, 0.3);
   --cc-map-scale-bg: transparent;
   --cc-map-scale-border: #74829c;
@@ -829,7 +821,6 @@
   --cc-map-ctrl-border: #313244;
   --cc-map-ctrl-hover: #1e1e2e;
   --cc-map-ctrl-active: #313244;
-  --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(49, 50, 68, 0.3);
   --cc-map-scale-bg: transparent;
   --cc-map-scale-border: #686b91;
@@ -932,7 +923,6 @@
   --cc-map-ctrl-border: #555555;
   --cc-map-ctrl-hover: #e8e8e8;
   --cc-map-ctrl-active: #cccccc;
-  --cc-map-ctrl-icon-filter: none;
   --cc-map-ctrl-shadow: #aaaaaa;
   --cc-map-scale-bg: transparent;
   --cc-map-scale-border: #555555;
@@ -1358,8 +1348,18 @@ tr[data-selected="true"]:hover {
   border-top: 1px solid var(--cc-map-ctrl-border) !important;
 }
 
-.maplibregl-ctrl-icon {
-  filter: var(--cc-map-ctrl-icon-filter) !important;
+/* The zoom buttons' icons on a dark theme (every theme whose block sets
+   `color-scheme: dark`; src/test/__tests__/noCssFilter.test.ts holds the list to it).
+   MapLibre ships them filled #333; these themes drew them white with
+   `filter: brightness(0) invert(1)`. The same glyphs filled white paint the same pixels
+   without a filter, which on WebKitGTK made a GPU promise image on every repaint, the
+   deadlock source of #605 (#576 NF-W12DMP-1). Light themes keep MapLibre's own icons. */
+:is(:root:not([data-theme]), [data-theme="dark"], [data-theme="cave"], [data-theme="dracula"], [data-theme="one_dark"], [data-theme="nord"], [data-theme="catppuccin_mocha"]) .maplibregl-ctrl-zoom-in .maplibregl-ctrl-icon {
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='29' height='29' fill='%23fff' viewBox='0 0 29 29'%3E%3Cpath d='M14.5 8.5c-.75 0-1.5.75-1.5 1.5v3h-3c-.75 0-1.5.75-1.5 1.5S9.25 16 10 16h3v3c0 .75.75 1.5 1.5 1.5S16 19.75 16 19v-3h3c.75 0 1.5-.75 1.5-1.5S19.75 13 19 13h-3v-3c0-.75-.75-1.5-1.5-1.5'/%3E%3C/svg%3E") !important;
+}
+
+:is(:root:not([data-theme]), [data-theme="dark"], [data-theme="cave"], [data-theme="dracula"], [data-theme="one_dark"], [data-theme="nord"], [data-theme="catppuccin_mocha"]) .maplibregl-ctrl-zoom-out .maplibregl-ctrl-icon {
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='29' height='29' fill='%23fff' viewBox='0 0 29 29'%3E%3Cpath d='M10 13c-.75 0-1.5.75-1.5 1.5S9.25 16 10 16h9c.75 0 1.5-.75 1.5-1.5S19.75 13 19 13z'/%3E%3C/svg%3E") !important;
 }
 
 .maplibregl-ctrl-scale {

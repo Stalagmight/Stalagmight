@@ -11,6 +11,7 @@ import {
   waitForNoDialogs,
   openSettingsFromMenu,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for focus management: focus traps, return-focus, initial focus,
@@ -157,10 +158,10 @@ test.describe('Focus Management', () => {
       await expect(trigger).toBeFocused();
 
       const sectionId = await page.evaluate(
-        () => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].id,
+        () => (window as E2EWindow).__E2E_TEST__.projectStore.getState().project!.sections[0]!.id,
       );
       await page.evaluate((id) => {
-        (window as any).__E2E_TEST__.uiStore
+        (window as E2EWindow).__E2E_TEST__.uiStore
           .getState()
           .openDialog('confirm-delete', { type: 'section', sectionId: id });
       }, sectionId);

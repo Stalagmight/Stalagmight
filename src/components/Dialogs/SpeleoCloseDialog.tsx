@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
+import { doneFinished, isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { getErrorMessage } from '../../utils/ipc';
 import { handBackProject, holdsWriteLock, type PendingExit } from '../../utils/quit';
+import { readPendingImport } from '../../utils/pendingImport';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
@@ -45,6 +46,9 @@ export default function SpeleoCloseDialog() {
   const pendingOpenPath =
     typeof dialogData.pendingOpenPath === 'string' ? dialogData.pendingOpenPath : null;
   const pendingNewProject = dialogData.pendingNewProject === true;
+  // [#576 HFI-4-D2] "Import as new project" after the file parsed: the parsed file,
+  // opened in the new-project dialog once the project is handed back.
+  const pendingImport = readPendingImport(dialogData.pendingImport);
 
   const sdbDirty = link?.hasUnpushedEdits ?? false;
   // [#303] Dirty ONLY because a chain step walked the copy back - the user edited nothing.
@@ -78,7 +82,7 @@ export default function SpeleoCloseDialog() {
         // saveProject) instead of silently keeping this dialog open with no
         // feedback - matches every other save path (fix S4). The abort below still
         // keeps the project open so unsaved work is never dropped.
-        surfaceSaveFailure(result?.error ?? null, openDialog);
+        surfaceSaveFailure(result, openDialog, useProjectStore.getState());
         return false;
       }
       return true;
@@ -100,7 +104,7 @@ export default function SpeleoCloseDialog() {
    * can finish by itself (#303). The hand-back and the replay live in `handBackProject`
    * so both finishers order them identically.
    */
-  const closeIntent: PendingExit = { kind: 'close', pendingOpenPath, pendingNewProject };
+  const closeIntent: PendingExit = { kind: 'close', pendingOpenPath, pendingNewProject, pendingImport };
   const closeThen = (opts?: { releaseLock?: boolean }) => handBackProject(closeIntent, opts);
 
   const pushReleaseThenClose = async () => {
@@ -114,7 +118,7 @@ export default function SpeleoCloseDialog() {
     // Project it may be standing in for) would be lost with this prompt, so the intent
     // goes with it and the confirmation completes it.
     const resolved = await done(null, { pendingExit: closeIntent });
-    if (resolved?.kind === 'released') {
+    if (doneFinished(resolved?.kind)) {
       closeDialog();
       await closeThen();
     }
@@ -153,11 +157,16 @@ export default function SpeleoCloseDialog() {
 
         {/* Say what happens AFTER the close when the user did not ask for one. Every
             verb below is honest as written - the project really is closed - but the
-            title and buttons all say "close", and someone who pressed Ctrl+O or New
-            Project needs to be told their request survived the prompt. */}
-        {(pendingOpenPath || pendingNewProject) && (
+            title and buttons all say "close", and someone who pressed Ctrl+O, New
+            Project or Import as new project needs to be told their request survived
+            the prompt. */}
+        {(pendingOpenPath || pendingNewProject || pendingImport) && (
           <p className="text-xs text-text-secondary" data-testid="speleodb-close-pending-note">
-            {pendingOpenPath ? t('speleodb.close.thenOpen') : t('speleodb.close.thenNew')}
+            {pendingOpenPath
+              ? t('speleodb.close.thenOpen')
+              : pendingNewProject
+                ? t('speleodb.close.thenNew')
+                : t('speleodb.close.thenImport')}
           </p>
         )}
 

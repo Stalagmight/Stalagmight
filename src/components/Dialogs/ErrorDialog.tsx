@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function ErrorDialog() {
-  const { closeDialog, dialogData } = useUIStore();
+  const { t } = useTranslation();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
 
   const handleClose = useCallback(() => {
     trackDialogComplete('error');
@@ -16,7 +21,7 @@ export default function ErrorDialog() {
   const rawMessage = dialogData.message;
   const message = typeof rawMessage === 'string' ? rawMessage : rawMessage ? String(rawMessage) : undefined;
   const rawTitle = dialogData.title;
-  const title = (typeof rawTitle === 'string' ? rawTitle : rawTitle ? String(rawTitle) : undefined) ?? 'Error';
+  const title = (typeof rawTitle === 'string' ? rawTitle : rawTitle ? String(rawTitle) : undefined) ?? t('dialogs.error.title');
   const rawStack = dialogData.stackTrace;
   const stackTrace = typeof rawStack === 'string' ? rawStack : rawStack ? String(rawStack) : undefined;
   // Callers surfacing an actionable, non-bug condition (e.g. an import's
@@ -39,8 +44,8 @@ export default function ErrorDialog() {
   /** Copy error message and stack trace to clipboard */
   const handleCopyError = useCallback(async () => {
     const errorText = stackTrace
-      ? `${message ?? 'An error occurred.'}\n\n${stackTrace}`
-      : (message ?? 'An error occurred.');
+      ? `${message ?? t('dialogs.error.fallbackMessage')}\n\n${stackTrace}`
+      : (message ?? t('dialogs.error.fallbackMessage'));
 
     // Clear any pending timeout
     if (feedbackTimeoutRef.current) {
@@ -57,12 +62,12 @@ export default function ErrorDialog() {
       setCopyFeedback('failed');
     }
     feedbackTimeoutRef.current = setTimeout(() => setCopyFeedback('idle'), 2000);
-  }, [message, stackTrace]);
+  }, [message, stackTrace, t]);
 
   return (
     <DialogWrapper title={title} onClose={handleClose} size="md" data-testid="error-dialog">
       <div className="space-y-4">
-        <p className="text-text-secondary whitespace-pre-wrap">{message ?? 'An error occurred.'}</p>
+        <p className="text-text-secondary whitespace-pre-wrap">{message ?? t('dialogs.error.fallbackMessage')}</p>
 
         {stackTrace && (
           <pre
@@ -76,8 +81,8 @@ export default function ErrorDialog() {
         {!hideReportHint && (
           <p className="text-xs text-text-tertiary">
             {stackTrace
-              ? 'If this error persists, please report it as a bug and include the error message and stack trace above.'
-              : 'If this error persists, please report it as a bug and include this error message.'}
+              ? t('dialogs.error.reportHintWithStack')
+              : t('dialogs.error.reportHint')}
           </p>
         )}
 
@@ -88,9 +93,9 @@ export default function ErrorDialog() {
             className="px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary transition-colors"
             data-testid="error-dialog-copy-btn"
           >
-            {copyFeedback === 'copied' ? 'Copied!' : copyFeedback === 'failed' ? 'Failed' : 'Copy to clipboard'}
+            {copyFeedback === 'copied' ? t('dialogs.error.copied') : copyFeedback === 'failed' ? t('dialogs.error.copyFailed') : t('dialogs.error.copy')}
           </button>
-          <Button onClick={handleClose} data-testid="error-dialog-close">OK</Button>
+          <Button onClick={handleClose} data-testid="error-dialog-close">{t('dialogs.error.ok')}</Button>
         </div>
       </div>
     </DialogWrapper>

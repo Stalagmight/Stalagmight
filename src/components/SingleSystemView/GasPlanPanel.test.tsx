@@ -249,6 +249,59 @@ describe('GasPlanPanel scooter (DPV) readout (#317)', () => {
  * (The DPV rig used to be probed here too. It now has its own in-panel editor and its own store
  * setter, `setDpvRig` - see `gasPlanStore.test.ts` - so it is no longer part of this sync.)
  */
+describe('GasPlanPanel stage drop the dive does not reach (#576 RV8c-2-D3)', () => {
+  // `makeReachField`'s route is one leg (stations 0..1). The engine reports a pinned drop the gas
+  // runs out before at its pin, past the turnaround - here route index 3.
+  const pin = { section_id: 1, station_index: 3 };
+  const dropField = (routeIndex: number) =>
+    makeReachField({
+      stage_drop_refs: [pin],
+      stage_drop_bars: [137],
+      stage_drop_over_reserve: [false],
+      stage_drop_distances_m: [300],
+      stage_drop_route_indices: [routeIndex],
+    });
+
+  it('reads "not reached" in place of a pressure, and says the stage is carried', () => {
+    useGasPlanStore.setState({ reachField: dropField(3), stageDropOverrides: [pin] });
+    render(<GasPlanPanel />);
+    const row = screen.getByTestId('gas-readout-stage1-drop');
+    expect(row.getAttribute('data-reached')).toBe('false');
+    expect(row).toHaveTextContent('not reached');
+    expect(row).not.toHaveTextContent('137');
+    expect(screen.getByTestId('gas-readout-drop-not-reached')).toHaveTextContent(
+      'the stage is carried the whole dive',
+    );
+    expect(screen.queryByTestId('gas-readout-over-reserve-warning')).toBeNull();
+    // The diver can still put the drop back on the strategy point.
+    expect(screen.getByTestId('gas-readout-stage1-reset')).toBeInTheDocument();
+  });
+
+  it('never reads a drop the dive does not reach as over-reserve, as the map marker does not (#576 RV9b-9)', () => {
+    // The engine never sends both (gas.rs clears the flag past the route); the readout applies
+    // the marker's rule anyway, so the two surfaces share one.
+    useGasPlanStore.setState({
+      reachField: { ...dropField(3), stage_drop_over_reserve: [true] },
+      stageDropOverrides: [pin],
+    });
+    render(<GasPlanPanel />);
+    const row = screen.getByTestId('gas-readout-stage1-drop');
+    expect(row.getAttribute('data-reached')).toBe('false');
+    expect(row.getAttribute('data-over-reserve')).toBe('false');
+    expect(screen.queryByTestId('gas-readout-over-reserve-warning')).toBeNull();
+  });
+
+  it('keeps the drop pressure for a drop on the route, the turnaround included', () => {
+    useGasPlanStore.setState({ reachField: dropField(1), stageDropOverrides: [pin] });
+    render(<GasPlanPanel />);
+    const row = screen.getByTestId('gas-readout-stage1-drop');
+    expect(row.getAttribute('data-reached')).toBe('true');
+    expect(row).toHaveTextContent('137');
+    expect(row).not.toHaveTextContent('not reached');
+    expect(screen.queryByTestId('gas-readout-drop-not-reached')).toBeNull();
+  });
+});
+
 describe('GasPlanPanel Settings-only gas sync (#317)', () => {
   it('picks up a jump-multiplier edit made in Settings while the panel stays mounted', () => {
     // `hydrated: true` from beforeEach is the whole point: this is the state the bug lived in.

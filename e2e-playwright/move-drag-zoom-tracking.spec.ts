@@ -310,7 +310,7 @@ async function expectCommitLandsAtCursor(
       const calls = w.__MOCK_MOVE_CALLS__ ?? [];
       return {
         count: calls.length,
-        offset: calls.length ? calls[calls.length - 1].args.offset : undefined,
+        offset: calls.length ? calls[calls.length - 1]!.args.offset : undefined,
         expX: endM.x - startM.x,
         expY: endM.y - startM.y,
       };

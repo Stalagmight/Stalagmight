@@ -202,7 +202,7 @@ test.describe('Map touch gestures', () => {
       'the touchend ending a fired long-press is preventDefault-ed'
     ).toBe(true);
 
-    // Settle, then one read: this proves the lift changed NOTHING, and a poll
+    // settle: then one read - this proves the lift changed NOTHING, and a poll
     // would accept the pre-update value.
     await page.waitForTimeout(200);
     expect(await getSelection(page)).toEqual(selectionWithMenu);

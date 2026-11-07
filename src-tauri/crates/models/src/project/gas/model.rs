@@ -271,10 +271,12 @@ pub struct RouteProfilePoint {
 ///
 /// `backgas_turn_bar` and `stage_drop_bars` are the **readout gauges**, computed here (the single
 /// source of truth) so the UI never re-derives the budget math and drifts from the reachable
-/// overlay: the back-gas turn pressure under the effective strategy's fraction, and each counted
-/// stage's Half-Minus drop pressure. Both honour the conservative cap + normalized reserve +
-/// stage-count fallback. `backgas_turn_bar` is `None` when the rig has no back gas;
-/// `stage_drop_bars` is empty for All-thirds / a fell-back staged strategy.
+/// overlay: the back-gas turn pressure under the effective strategy's share of the gauge, and each
+/// counted stage's drop pressure. Every rule is a gauge rule (#576), and the budget credits exactly
+/// the gas between each cylinder's real fill and its turn or drop pressure, so gauge and map agree.
+/// Both honour the conservative cap + normalized reserve + stage-count fallback.
+/// `backgas_turn_bar` is `None` when the rig has no back gas; `stage_drop_bars` is empty for
+/// All-thirds / a fell-back staged strategy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct GasReachField {
     pub station_refs: Vec<StationRef>,
@@ -284,8 +286,14 @@ pub struct GasReachField {
     pub max_reachable_gas: f64,
     pub budget_litres: f64,
     /// Ordered legs origin→target (for the route highlight); empty when nothing is reachable.
+    /// With a pinned stage drop the route passes the pin (#576 RV8c-2-D1): the way points, then
+    /// every pin, in drop order, then on to the endpoint - doubling back where a pin is off its
+    /// passage - or, with no endpoint, to the deepest station beyond the last pin.
     pub route: Vec<RouteLeg>,
-    /// Station where each stage's IN gas is exhausted, in stage order (staged strategies only).
+    /// Station where each stage's IN gas is exhausted, in stage order (staged strategies only), or
+    /// the station the diver pinned it to. A pinned drop the dive runs out of gas (or scooter
+    /// range) before is still named here, at its pin past the turnaround - see
+    /// `stage_drop_route_indices` for how to tell it is not reached.
     pub stage_drop_refs: Vec<StationRef>,
     /// The final turn - the route target station; `None` when nothing is reachable.
     pub final_turn_ref: Option<StationRef>,
@@ -308,19 +316,23 @@ pub struct GasReachField {
     /// `stage_drop_bars`. `true` only when the diver dragged that drop DEEPER than its
     /// strategy-computed (gas-safe) point, so the stage is breathed past its reserve to reach the
     /// pinned station - the UI flags it red. Every entry is `false` for the un-dragged default
-    /// (and for All-thirds, which has no drops). The over-reserve reach it produces is honest but
-    /// unsafe; the flag is the warning, not a block (the diver asked for it).
+    /// (and for All-thirds, which has no drops). The flag is a warning, not a block (the diver
+    /// asked for it): the plan credits the stage no more than its default drop would, so an
+    /// over-reserve drop never extends the reach (#576). `false` for a drop the dive does not
+    /// reach: the stage is carried the whole dive, never breathed to the pin.
     pub stage_drop_over_reserve: Vec<bool>,
     /// Swum distance (metres) from the origin to each stage-drop station, aligned with
     /// `stage_drop_refs` / `stage_drop_bars`, for the Plan readout (#245). Same swum-distance basis
-    /// as `route_line_length_m`. Empty when there are no stage drops.
+    /// as `route_line_length_m`. Empty when there are no stage drops. For a drop the dive does not
+    /// reach, the distance along the planned route to its pin.
     pub stage_drop_distances_m: Vec<f64>,
     /// Per-cylinder penetration allowance (bar) the engine used, aligned 1:1 with the INPUT
     /// cylinder order (disabled tanks and non-budget roles are `0.0`) so the table can show a
     /// "usable gas" value per row (#245). Under the reserve presets these are engine-COMPUTED
-    /// (`fill - turn/drop`): a back-gas tank shows its strategy fraction of usable, a counted
-    /// stage its Half-Minus IN half; under **Free** they echo the diver's clamped input. The
-    /// single source of truth for the column, so it can never drift from the budget/gauges.
+    /// (`fill - turn/drop`): a back-gas tank shows its strategy share of the gauge, a counted
+    /// stage its Half-Minus IN half; under **Free** they echo the diver's clamped input. The budget
+    /// credits exactly the gas between each row's fill and `fill - usable`, so the column can never
+    /// drift from the budget/gauges.
     pub cylinder_usable_bars: Vec<f64>,
     /// Swum line length of the planned route (metres): the one-way penetration distance, summed as
     /// 3-D slope segments over the route's real shot legs (zero-distance merge/closure ties
@@ -361,6 +373,11 @@ pub struct GasReachField {
     /// `stage_drop_distances_m`, in `route_profile`'s outbound `route_index` space.
     /// `stage_drop_refs` alone cannot place a drop on a route that doubles back over a station - the
     /// ref names the station, not the pass - so the index is what a profile marker must be drawn at.
+    ///
+    /// An index PAST the route's last station (`> route.len()`, the number of legs) is a pinned
+    /// drop the dive does not reach (#576 RV8c-2-D3): the gas or the scooter range turns the dive
+    /// on the way there, the stage is carried the whole dive, and the index counts along the
+    /// planned route on toward the pin. Every default drop sits on the route.
     pub stage_drop_route_indices: Vec<u32>,
     /// Route index of each way point, aligned 1:1 with the `waypoints` input, in the same index space
     /// as `stage_drop_route_indices`. `None` from the first way point that stalls, matching

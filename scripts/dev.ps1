@@ -17,6 +17,4 @@ Start-Sleep -Seconds 1
 # Start the dev server
 $ErrorActionPreference = 'Stop'
 $env:VITE_IPC_TRACE = 'true'
-# Strip SQLite modules a hostile .stalx could reach (#608, docs/toolchain.md).
-$env:LIBSQLITE3_FLAGS = '-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION'
 pnpm tauri dev

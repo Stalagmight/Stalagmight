@@ -1,40 +1,56 @@
 use std::collections::HashMap;
 
-use tauri::State;
+use tauri::{AppHandle, Manager, Runtime};
 
+use crate::commands::pool;
+use crate::core::CommandError;
 use crate::telemetry::TelemetryCollector;
 
 /// Receive a batch of event counts from the frontend.
 #[tauri::command]
-pub fn track_events(
-    state: State<'_, TelemetryCollector>,
+pub async fn track_events<R: Runtime>(
+    app: AppHandle<R>,
     events: HashMap<String, u64>,
     project_seq: u32,
-) -> Result<(), String> {
-    state.track_batch(&events, project_seq);
-    Ok(())
+) -> Result<(), CommandError> {
+    pool::run_stateless(move || {
+        app.state::<TelemetryCollector>()
+            .track_batch(&events, project_seq);
+        Ok(())
+    })
+    .await
 }
 
-/// Flush current telemetry buffer to the backend.
+/// Hand the pending telemetry to the offline buffer - the app-close path.
+///
+/// No network: sending here made quitting wait on the server, one request per
+/// open project bucket (#576 B17). The next launch's background drain sends
+/// what this writes.
 #[tauri::command]
-pub fn flush_telemetry(state: State<'_, TelemetryCollector>) -> Result<(), String> {
-    state.flush();
-    Ok(())
+pub async fn flush_telemetry<R: Runtime>(app: AppHandle<R>) -> Result<(), CommandError> {
+    pool::run_stateless(move || {
+        app.state::<TelemetryCollector>().buffer_pending();
+        Ok(())
+    })
+    .await
 }
 
 /// Returns true when the telemetry feature is compiled in.
 /// The frontend uses this to detect feature availability.
 #[tauri::command]
-pub fn is_telemetry_available() -> bool {
-    true
+pub async fn is_telemetry_available() -> Result<bool, CommandError> {
+    pool::run_stateless(|| Ok(cfg!(feature = "telemetry"))).await
 }
 
 /// Update the telemetry enabled state (called when user toggles in settings).
 #[tauri::command]
-pub fn set_telemetry_enabled(
-    state: State<'_, TelemetryCollector>,
+pub async fn set_telemetry_enabled<R: Runtime>(
+    app: AppHandle<R>,
     enabled: bool,
-) -> Result<(), String> {
-    state.set_enabled(enabled);
-    Ok(())
+) -> Result<(), CommandError> {
+    pool::run_stateless(move || {
+        app.state::<TelemetryCollector>().set_enabled(enabled);
+        Ok(())
+    })
+    .await
 }

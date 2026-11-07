@@ -70,11 +70,10 @@ export function isMutatingTool(tool: ToolType): boolean {
  * writer that guesses wrong re-opens the class of bug where one cursor writer
  * silently clobbers another's.
  *
- * This is the tool's resting cursor only. Two things legitimately outrank it,
- * and both live with the code that knows about them, not here:
- * - a hovered feature's `pointer`, and Move Station/Shot's arrow fallback
- *   (`SurveyLayer.refreshHoverCursor`);
- * - the Ctrl-held pan `grab` (`MapCanvas`, which owns the Ctrl state).
+ * This is the tool's resting cursor only. A hovered feature's `pointer`, Move
+ * Station/Shot's arrow fallback, the Ctrl-held pan `grab`, a running modifier
+ * pan and placement mode all outrank it; `components/Map/mapCursor.ts` weighs
+ * them and is the only writer of the canvas cursor (#576 D3).
  *
  * The switch is exhaustive over `ToolType`: adding a tool without giving it a
  * cursor is a compile error, not a silently blank canvas.

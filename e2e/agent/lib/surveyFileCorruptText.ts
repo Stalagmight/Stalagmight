@@ -428,7 +428,8 @@ const MAK_CORRUPTIONS: readonly Corruption<CompassProjectSpec>[] = [
     id: 'backslash-path',
     applies: (project) => project.mak.files.length > 0,
     apply: (_rng, project) =>
-      withFirstMakFile(project, { path: `sub\\${project.mak.files[0].path}` }),
+      // `applies` gates this on files.length > 0.
+      withFirstMakFile(project, { path: `sub\\${project.mak.files[0]!.path}` }),
   },
   {
     // `Project::read` is `fs::read_to_string` - STRICT UTF-8 - and `parse_mak`

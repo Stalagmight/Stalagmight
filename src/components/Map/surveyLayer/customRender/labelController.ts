@@ -46,10 +46,12 @@
  * ready (then `triggerRepaint`); every later sync is synchronous.
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
+import { hasLiveStyle } from '../../mapUtils';
 import type { GpsOrigin, DecimalPrecision } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../utils/themeColors';
 import { debugLog } from '../../../../utils/debugLog';
+import { clearRendererBuffers, recordRendererBuild } from '../../../../utils/memoryProbe';
 import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
 import { commentColorForKey } from '../displayColor';
 import { lngLatToMercator } from '../mercatorCoords';
@@ -217,7 +219,7 @@ export interface SurveyLabelControllerOptions {
 
 export class SurveyLabelController {
   private readonly map: MaplibreMap;
-  private readonly layerId: string;
+  readonly layerId: string;
   private layer: SurveyCustomLabelLayer | null = null;
   private active = false;
   /** The glyph atlas - created once the font resolves (or injected in tests). */
@@ -570,6 +572,7 @@ export class SurveyLabelController {
       (i) => this.labelFlagByte(descriptors[i]!),
       (i) => reveal[i]!,
     );
+    recordRendererBuild('survey-labels', buffers.byteLength);
     debugLog('[customRender] label build', {
       ms: +(performance.now() - t0).toFixed(1),
       descMs: +(tShape0 - tDesc0).toFixed(1),
@@ -982,12 +985,19 @@ export class SurveyLabelController {
     this.map.triggerRepaint();
   }
 
-  /** Re-add the layer after MapLibre rebuilt the style without it (context
-   *  restore / worker restart, see styleRestore.ts). Labels stay on top. */
-  reattach(): void {
+  /**
+   * Re-add the live label layer after MapLibre rebuilt the style without it (a
+   * WebGL context restore or a worker restart; see
+   * surveyLayer/glContextRecovery.ts). Its onAdd re-uploads the glyph buffers
+   * and atlas from the layer's data (reAddCustomLayer first frees what a worker
+   * restart left behind). Without a `beforeId` it goes on top, as on enable. A
+   * re-add that cannot draw is fatal, as on enable. No-op when nothing was
+   * drawing.
+   */
+  reattach(beforeId?: string): void {
     const layer = this.layer;
-    if (!this.active || !layer) return;
-    if (!reAddCustomLayer(this.map, layer)) {
+    if (!this.active || !layer || this.destroyed || this.fatal) return;
+    if (!reAddCustomLayer(this.map, layer, beforeId)) {
       this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
       return;
     }
@@ -1032,6 +1042,9 @@ export class SurveyLabelController {
     );
     this.scheduleRestore(() => {
       this.selfDisableScheduled = false;
+      // Released in between (the map unmounted): nothing left to tear down, and
+      // no one to tell.
+      if (this.destroyed) return;
       if (this.active) this.tearDownFatal(reason);
     });
   }
@@ -1045,7 +1058,10 @@ export class SurveyLabelController {
    */
   private tearDownFatal(reason: string): void {
     this.fatal = true;
-    removeCustomLayer(this.map, this.layer);
+    // The style is gone when the map was removed or lost its WebGL context before
+    // this deferred teardown ran: MapLibre took the layer with it (its onRemove
+    // ran), so there is nothing left to remove (#576 NF-MAP-3).
+    if (hasLiveStyle(this.map)) removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.active = false; // set directly: onActiveChange must NOT fire (no republish).
     this.map.triggerRepaint();
@@ -1072,7 +1088,7 @@ export class SurveyLabelController {
 
   /**
    * Lightweight release WITHOUT touching the map (no removeLayer, no stock
-   * republish). Called on MapCanvas unmount via SurveyLayer.releaseVtRegistry(),
+   * republish). Called on MapCanvas unmount via SurveyLayer.release(),
    * which deliberately skips the full {@link destroy} for unmount speed. Without
    * this the window sync hook would pin this controller (and its cached
    * SurveyData + glyph atlas + GL buffers) alive until the next SurveyLayer
@@ -1090,6 +1106,7 @@ export class SurveyLabelController {
     this.pendingParams = null;
     this.lastData = null;
     this.atlas = null;
+    clearRendererBuffers('survey-labels');
   }
 
   destroy(): void {

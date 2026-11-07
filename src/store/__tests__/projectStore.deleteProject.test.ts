@@ -1,12 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 const PATH = '/projects/cave-alpha.stalx';
 
@@ -14,11 +11,10 @@ describe('projectStore.deleteProject', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default: the delete succeeds and closed nothing - the shape of the common
-    // global-view delete of a project that is not the open one. `session_closed`
-    // is absent from the wire whenever the backend closed nothing, so the default
-    // deliberately omits the key rather than sending `false`.
+    // global-view delete of a project that is not the open one. The outcome always
+    // carries `session_closed` (#576 A12, `DeleteProjectOutcome`): false here.
     invokeIpcMock.mockImplementation(async (command: string) => {
-      if (command === 'delete_project') return { success: true };
+      if (command === 'delete_project') return { session_closed: false, warnings: [] };
       if (command === 'list_recent_projects') return [];
       if (command === 'get_config') return { general: { recent_projects: [] } };
       return undefined;
@@ -40,11 +36,13 @@ describe('projectStore.deleteProject', () => {
     // when a project IS open. `get_project_state` clones the project and recomputes
     // coordinates/stats/penetration, which is far too much work for one bit.
     expect(invokeIpcMock).not.toHaveBeenCalledWith('get_project_state', undefined, expect.any(Object));
+    // ...nor its binary form, which is what the state refresh calls (#576 A9-D2).
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('get_project_state_binary', undefined, expect.any(Object));
   });
 
   it('does not refresh recents when the delete fails', async () => {
     invokeIpcMock.mockImplementation(async (command: string) => {
-      if (command === 'delete_project') return { success: false, error: 'boom' };
+      if (command === 'delete_project') throw { code: 'FAILED', message: 'boom' };
       return undefined;
     });
 
@@ -62,7 +60,7 @@ describe('projectStore.deleteProject', () => {
     // the UI rendering a project whose file is gone - and the next autosave tick
     // failed with "No project open".
     invokeIpcMock.mockImplementation(async (command: string) => {
-      if (command === 'delete_project') return { success: true, session_closed: true };
+      if (command === 'delete_project') return { session_closed: true, warnings: [] };
       if (command === 'list_recent_projects') return [];
       if (command === 'get_config') return { general: { recent_projects: [] } };
       return undefined;
@@ -96,7 +94,7 @@ describe('projectStore.deleteProject', () => {
     // next save or edit failed with "No project open".
     invokeIpcMock.mockImplementation(async (command: string) => {
       if (command === 'delete_project') {
-        return { success: false, error: 'Access is denied', session_closed: true };
+        throw { code: 'FAILED', message: 'Access is denied', session_closed: true };
       }
       return undefined;
     });
@@ -128,7 +126,7 @@ describe('projectStore.deleteProject', () => {
     // these two are different files, and a frontend that believed that kept
     // rendering a project the backend no longer had.
     invokeIpcMock.mockImplementation(async (command: string) => {
-      if (command === 'delete_project') return { success: true, session_closed: true };
+      if (command === 'delete_project') return { session_closed: true, warnings: [] };
       if (command === 'list_recent_projects') return [];
       if (command === 'get_config') return { general: { recent_projects: [] } };
       return undefined;
@@ -151,8 +149,8 @@ describe('projectStore.deleteProject', () => {
   it('leaves the open project alone when the backend did not close it', async () => {
     // Deleting a recent that is not the open project must not close the one the
     // user is working in - that would throw away its undo history for nothing. The
-    // backend omitting `session_closed` is what proves the delete hit some other
-    // file, so this is the case the frontend must NOT act on.
+    // backend answering `session_closed: false` is what proves the delete hit some
+    // other file, so this is the case the frontend must NOT act on.
     const project = { file_path: '/projects/other.stalx' } as never;
     useProjectStore.setState({ project, databaseOpen: true } as never);
 

@@ -7,6 +7,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
+import { holdAutosave, withAutosaveHeld } from './autosaveHold';
+import { openPendingImport, readPendingImport, type PendingImport } from './pendingImport';
 
 /**
  * Set by {@link performQuit} for exactly one `tauri://close-requested` round
@@ -83,8 +85,16 @@ function requestWindowClose(onRejected?: () => void): void {
  */
 export function performQuit(): void {
   quitConfirmedUntil = Date.now() + QUIT_CONFIRMATION_TTL_MS;
+  // [#576 D34] The quit is confirmed - which may mean "discard" - so autosave must
+  // not write the project while the window goes away. Held for the same window the
+  // confirmation is valid for, and dropped at once if the close is refused, so a
+  // quit that does not happen leaves autosave running.
+  const release = holdAutosave();
+  const expiry = setTimeout(release, QUIT_CONFIRMATION_TTL_MS);
   requestWindowClose(() => {
     quitConfirmedUntil = 0;
+    clearTimeout(expiry);
+    release();
   });
 }
 
@@ -169,6 +179,8 @@ export type PendingExit =
       pendingOpenPath?: string | null;
       /** A New Project request the close prompt displaced (#270). */
       pendingNewProject?: boolean;
+      /** A parsed "Import as new project" file the close prompt displaced (#576 HFI-4-D2). */
+      pendingImport?: PendingImport | null;
     };
 
 /**
@@ -184,10 +196,12 @@ export function readPendingExit(data: Record<string, unknown>): PendingExit | nu
   const { kind, pendingOpenPath, pendingNewProject } = raw as Record<string, unknown>;
   if (kind === 'quit') return { kind: 'quit' };
   if (kind !== 'close') return null;
+  const pendingImport = readPendingImport((raw as Record<string, unknown>).pendingImport);
   return {
     kind: 'close',
     pendingOpenPath: typeof pendingOpenPath === 'string' ? pendingOpenPath : null,
     pendingNewProject: pendingNewProject === true,
+    ...(pendingImport ? { pendingImport } : {}),
   };
 }
 
@@ -204,17 +218,22 @@ export function readPendingExit(data: Record<string, unknown>): PendingExit | nu
  * growing a second copy of the ordering argument above.
  */
 export async function handBackProject(
-  exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean },
+  exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean; pendingImport?: PendingImport | null },
   opts?: { releaseLock?: boolean },
 ): Promise<void> {
   const { closeProject, loadProject } = useProjectStore.getState();
-  const result = await closeProject(opts);
+  // [#576 D34] The project is being handed back, possibly with local edits the user
+  // chose not to save: autosave must not write them while the close runs. A close
+  // that fails leaves the project open, and the release re-arms autosave.
+  const result = await withAutosaveHeld(() => closeProject(opts));
   if (!result.success) return;
   // loadProject switches the view and surfaces its own failures.
   if (exit.pendingOpenPath) await loadProject(exit.pendingOpenPath);
   // `createProject` seeds the shell from here; the close above already left us on the
   // global view (App falls back to it whenever no project is open).
   else if (exit.pendingNewProject) useUIStore.getState().openDialog('new-project');
+  // [#576 HFI-4-D2] The parsed file of an "Import as new project" this close stood in for.
+  else if (exit.pendingImport) openPendingImport(exit.pendingImport);
 }
 
 /**

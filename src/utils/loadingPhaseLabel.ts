@@ -5,9 +5,10 @@ import type { TFunction } from 'i18next';
  * human-readable label.
  *
  * Shared by the two surfaces that render loading progress: the GlobalView
- * overlay (project open/create) and the TML import dialog (#411 C3) - by import
- * time the view is 'single', so the overlay is not mounted and the dialog has to
- * render the import_* phases itself.
+ * overlay (project open/create) and the survey-file import dialogs'
+ * `ImportProgress` (TML since #411 C3; Compass, Walls and GPX since #576
+ * NF-W3P-1) - by import time the view is 'single', so the overlay is not mounted
+ * and the dialog has to render the import_* phases itself.
  */
 export function formatPhaseLabel(
   t: TFunction,

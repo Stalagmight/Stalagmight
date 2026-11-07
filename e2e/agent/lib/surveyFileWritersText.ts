@@ -91,8 +91,8 @@ export interface CompassShotSpec {
   down: number | string;
   right: number | string;
   /** Emitted only when the survey's format declares backsights. */
-  backBearing?: number | string;
-  backInclination?: number | string;
+  backBearing?: number | string | undefined;
+  backInclination?: number | string | undefined;
   /** Rendered as `#|<flags>#`. `X` excludes the shot. */
   flags?: string;
   comment?: string;
@@ -314,9 +314,9 @@ export interface CompassMakSpec {
     elevation: number | string;
     zone: number | string;
     convergence: number | string;
-  } | null;
+  } | null | undefined;
   /** Must be one of COMPASS_DATUMS to parse. */
-  datum?: string | null;
+  datum?: string | null | undefined;
   utmZone?: number | string | null;
   fileConvergence?: { value: number | string; enabled: boolean } | null;
   flags?: string | null;
@@ -477,7 +477,7 @@ export interface WallsSrvSpec {
   /** `;`-prefixed lines emitted first; one may carry `Team: ...`. */
   header?: readonly string[];
   /** `#Date <value>`; null omits it. */
-  date?: string | null;
+  date?: string | null | undefined;
   /** The ARGUMENT text of `#Units ...`; null omits the directive. */
   units?: string | null;
   /** Extra whole directive lines emitted after `#Units` (`#Segment /a`, `#Frobnicate x`). */
@@ -648,8 +648,8 @@ export function writeWallsWpj(spec: WallsWpjSpec): string {
 
 export interface GpxPointSpec {
   /** Verbatim attribute text, so a spec can carry `91`, `nan`, `abc`, or omit one. */
-  lat?: number | string;
-  lon?: number | string;
+  lat?: number | string | undefined;
+  lon?: number | string | undefined;
   name?: string;
   ele?: number | string;
   time?: string;
@@ -683,7 +683,7 @@ export interface GpxSpec {
   rootTag?: string;
   /** Verbatim attribute text on the root element. Defaults to a GPX 1.1 xmlns. */
   rootAttrs?: string;
-  metadataName?: string | null;
+  metadataName?: string | null | undefined;
   waypoints?: readonly GpxPointSpec[];
   tracks?: readonly GpxTrackSpec[];
   routes?: readonly GpxRouteSpec[];

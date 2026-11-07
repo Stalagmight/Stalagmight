@@ -134,8 +134,15 @@ export function existingDistanceKey(from: StationRef, to: StationRef): string {
   return `${from.section_id}:${from.station_index}->${to.section_id}:${to.station_index}`;
 }
 
-export function distanceMapFromField(origin: StationRef, field: DistanceField): Map<string, number> {
+/**
+ * The distances from `origin` that `get_station_distances_from` answered, keyed for
+ * the rerank. The command answers null when no project is open (#576 NF-W5I-2): there
+ * are no existing stations to measure from, so that is an empty set, not a field to
+ * read.
+ */
+export function distanceMapFromField(origin: StationRef, field: DistanceField | null): Map<string, number> {
   const map = new Map<string, number>();
+  if (!field) return map;
   field.station_refs.forEach((ref, idx) => {
     const distance = field.distances[idx];
     if (distance != null && Number.isFinite(distance)) {

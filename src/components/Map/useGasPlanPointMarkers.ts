@@ -7,6 +7,11 @@ import { useUIStore } from '../../store/uiStore';
 import type { GpsOrigin } from '../../types/config';
 import type { Station, StationRef } from '../../types/project';
 import { metersToMapCoords } from '../../utils/coordinates';
+import { markerHalo } from './gasMarkerShadow';
+
+/** The zero-datum star and the marked-point bookmark, in the markers' 24-unit viewBox. */
+const STAR_PATH = 'M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z';
+const BOOKMARK_PATH = 'M6 2h12v20l-6-5-6 5z';
 
 /**
  * The Plan workspace's *point* markers: the zero-datum stars, the ordered way points, and the
@@ -152,11 +157,12 @@ export function useGasPlanPointMarkers({
       el.setAttribute('tabindex', '0');
       el.setAttribute('aria-label', t('gasPanel.origin.datumAria'));
       el.title = t('gasPanel.origin.datumTooltip');
-      el.style.cssText =
-        'cursor:pointer;line-height:0;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));';
+      // The halo is drawn, not filtered (#605): see gasMarkerShadow.ts.
+      el.style.cssText = 'cursor:pointer;line-height:0;';
       el.innerHTML =
-        '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">' +
-        '<path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" ' +
+        '<svg width="22" height="22" viewBox="0 0 24 24" overflow="visible" aria-hidden="true">' +
+        markerHalo(STAR_PATH, 22, 1.5) +
+        `<path d="${STAR_PATH}" ` +
         'fill="#000000" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
       const ref = st.station_ref;
       onActivate(el, () => setOrigin(ref));
@@ -249,11 +255,11 @@ export function useGasPlanPointMarkers({
           : t('gasPanel.map.markedAria', { n: i + 1 }),
       );
       el.title = label || t('gasPanel.map.markedTooltip');
-      el.style.cssText =
-        'cursor:pointer;line-height:0;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));';
+      el.style.cssText = 'cursor:pointer;line-height:0;';
       el.innerHTML =
-        '<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">' +
-        '<path d="M6 2h12v20l-6-5-6 5z" fill="#d81b60" stroke="#ffffff" stroke-width="1.5" ' +
+        '<svg width="18" height="18" viewBox="0 0 24 24" overflow="visible" aria-hidden="true">' +
+        markerHalo(BOOKMARK_PATH, 18, 1.5) +
+        `<path d="${BOOKMARK_PATH}" fill="#d81b60" stroke="#ffffff" stroke-width="1.5" ` +
         'stroke-linejoin="round"/></svg>';
       onActivate(
         el,

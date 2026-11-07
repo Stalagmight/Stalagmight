@@ -8,7 +8,6 @@ process.env.WDIO_LOG_LEVEL = process.env.WDIO_LOG_LEVEL ?? 'silent';
 
 const methods = ['log', 'info', 'warn', 'debug'] as const;
 for (const method of methods) {
-  // eslint-disable-next-line no-console
   console[method] = (...args: unknown[]) => {
     process.stderr.write(`${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`);
   };

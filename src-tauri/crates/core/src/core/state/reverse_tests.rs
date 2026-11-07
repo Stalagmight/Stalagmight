@@ -13,6 +13,7 @@ use crate::models::{
     Coordinates, DivePlanSnapshot, GpsCoordinates, ImportPlacement, ImportSectionConfig,
     MarkedPoint, Project, SectionId, SectionUpdates, ShotData, StationRef,
 };
+use crate::test_fixtures::{state_with_project, straight_shot};
 
 /// One expected [`ReversedSection`] entry, so the assertions below read as
 /// "section X, mirrored against N shots" rather than a struct literal each time.
@@ -20,17 +21,6 @@ fn reversed_entry(section_id: SectionId, shot_count: u32) -> ReversedSection {
     ReversedSection {
         section_id,
         shot_count,
-    }
-}
-
-fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in,
-        depth_out,
-        ..Default::default()
     }
 }
 
@@ -54,31 +44,22 @@ fn assert_coords_close(a: Coordinates, b: Coordinates) {
 /// from every other shot's.
 ///
 /// Every field here is one a reverse must either move, mirror or negate, and all
-/// of them default to `None` - so a fixture built on `shot()` alone makes any
+/// of them default to `None` - so a fixture built on `straight_shot()` alone makes any
 /// assertion about them vacuously true (that is exactly how the import path's
 /// "left/right is never swapped" claim went unguarded). Neither LRUD nor pitch
 /// feeds the coordinate walk (`horizontal_length` is derived from `length` and
 /// the depth delta), so populating them cannot perturb the geometry assertions.
 fn shot_with_lrud(azimuth: f64, length: f64, depth_in: f64, depth_out: f64, n: f64) -> ShotData {
-    ShotData {
-        left: Some(n),
-        right: Some(n + 0.5),
-        up: Some(n + 1.0),
-        down: Some(n + 1.5),
-        pitch_in: Some(n + 2.0),
-        pitch_out: Some(-(n + 3.0)),
-        ..shot(azimuth, length, depth_in, depth_out)
-    }
+    straight_shot(azimuth, length)
+        .with_depths(depth_in, depth_out)
+        .with_lrud(Some(n), Some(n + 0.5), Some(n + 1.0), Some(n + 1.5))
+        .with_pitches(Some(n + 2.0), Some(-(n + 3.0)))
 }
 
 /// A project with one three-shot section that turns a corner and changes depth,
 /// so a botched reverse shows up as a moved station rather than a coincidence.
 fn state_with_section() -> (AppState, SectionId) {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Reverse".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Reverse");
     let created = state.execute(Command::CreateSection {
         name: Some("Main line".to_string()),
         surveyor: None,
@@ -322,11 +303,7 @@ fn reverse_works_on_a_datum_anchored_section_and_keeps_the_datum_in_place() {
 /// indices are given in the FILE's order and mirrored backend-side.
 #[test]
 fn import_reverse_applies_before_placement_and_comments_resolve() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Import");
 
     // Three shots; a comment on station 0 of the FINAL (reversed) section.
     let result = state.execute_import_sections(
@@ -395,17 +372,13 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
 #[test]
 fn import_reverse_lands_the_section_in_the_same_place() {
     let shots = vec![
-        shot(0.0, 10.0, 0.0, 2.0),
-        shot(90.0, 5.0, 2.0, 2.0),
-        shot(210.0, 7.5, 2.0, 1.0),
+        straight_shot(0.0, 10.0).with_depths(0.0, 2.0),
+        straight_shot(90.0, 5.0).with_depths(2.0, 2.0),
+        straight_shot(210.0, 7.5).with_depths(2.0, 1.0),
     ];
 
     let import = |reverse: bool, placement: ImportPlacement| {
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: "Import".to_string(),
-            location: None,
-        });
+        let state = state_with_project("Import");
         let result = state.execute_import_sections(
             vec![ImportSectionConfig {
                 section_index: 0,
@@ -469,9 +442,9 @@ fn import_reverse_lands_the_section_in_the_same_place() {
 /// up as a moved station rather than a coincidence.
 fn import_shots() -> Vec<ShotData> {
     vec![
-        shot(0.0, 10.0, 0.0, 2.0),
-        shot(90.0, 5.0, 2.0, 2.0),
-        shot(210.0, 7.5, 2.0, 1.0),
+        straight_shot(0.0, 10.0).with_depths(0.0, 2.0),
+        straight_shot(90.0, 5.0).with_depths(2.0, 2.0),
+        straight_shot(210.0, 7.5).with_depths(2.0, 1.0),
     ]
 }
 
@@ -483,11 +456,7 @@ fn import_shots() -> Vec<ShotData> {
 /// id: `FromExisting`/`ManualSnap` need a real station to attach to, and it fixes
 /// the world frame for both runs.
 fn import_one(reverse: bool, placement: fn(SectionId) -> ImportPlacement) -> Vec<Coordinates> {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Import");
     let anchor = state
         .execute(Command::CreateSection {
             name: Some("Anchor".to_string()),
@@ -495,7 +464,10 @@ fn import_one(reverse: bool, placement: fn(SectionId) -> ImportPlacement) -> Vec
             date: None,
             color: "#ff6b6b".to_string(),
             direction: None,
-            shots: vec![shot(0.0, 6.0, 0.0, 1.0), shot(90.0, 6.0, 1.0, 2.0)],
+            shots: vec![
+                straight_shot(0.0, 6.0).with_depths(0.0, 1.0),
+                straight_shot(90.0, 6.0).with_depths(1.0, 2.0),
+            ],
         })
         .section_id
         .unwrap();
@@ -625,11 +597,7 @@ fn import_two(
     import_station: u32,
     target_station_index: u32,
 ) -> (Vec<Coordinates>, Vec<Coordinates>) {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Import");
 
     let config =
         |section_index: u32, name: &str, shots: Vec<ShotData>, placement| ImportSectionConfig {
@@ -654,7 +622,10 @@ fn import_two(
                 "Branch",
                 // Its far end sits at the trunk's station-1 depth, so the
                 // connection below is clean in all three axes.
-                vec![shot(45.0, 8.0, 4.0, 3.0), shot(135.0, 4.0, 3.0, 2.0)],
+                vec![
+                    straight_shot(45.0, 8.0).with_depths(4.0, 3.0),
+                    straight_shot(135.0, 4.0).with_depths(3.0, 2.0),
+                ],
                 ImportPlacement::FromImporting {
                     import_station,
                     target_section_index: 0,
@@ -747,7 +718,10 @@ fn batched_multi_section_reverse_is_atomic_and_undoes_in_one_step() {
         date: None,
         color: "#ff6b6b".to_string(),
         direction: None,
-        shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(315.0, 6.0, 1.0, 3.0)],
+        shots: vec![
+            straight_shot(45.0, 8.0).with_depths(0.0, 1.0),
+            straight_shot(315.0, 6.0).with_depths(1.0, 3.0),
+        ],
     });
     let second_id = second.section_id.unwrap();
 
@@ -829,11 +803,7 @@ fn batched_multi_section_reverse_is_atomic_and_undoes_in_one_step() {
 /// it survives close/reopen). The entry must simply not be pushed.
 #[test]
 fn reversing_a_shotless_section_leaves_the_undo_stack_usable() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Waypoints".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Waypoints");
 
     // An ordinary, undoable edit first - this is what must stay reachable.
     let created = state.execute(Command::CreateSection {
@@ -842,7 +812,7 @@ fn reversing_a_shotless_section_leaves_the_undo_stack_usable() {
         date: None,
         color: "#4ecdc4".to_string(),
         direction: None,
-        shots: vec![shot(0.0, 10.0, 0.0, 2.0)],
+        shots: vec![straight_shot(0.0, 10.0).with_depths(0.0, 2.0)],
     });
     assert!(created.success);
 
@@ -885,11 +855,7 @@ fn reversing_a_shotless_section_leaves_the_undo_stack_usable() {
 /// fails `key_for_ref` and drops it.
 #[test]
 fn import_reverse_drops_an_out_of_range_station_comment() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Import");
 
     let result = state.execute_import_sections(
         vec![ImportSectionConfig {
@@ -900,7 +866,10 @@ fn import_reverse_drops_an_out_of_range_station_comment() {
             color: "#4ecdc4".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(0.0, 10.0, 0.0, 2.0), shot(90.0, 5.0, 2.0, 2.0)],
+            shots: vec![
+                straight_shot(0.0, 10.0).with_depths(0.0, 2.0),
+                straight_shot(90.0, 5.0).with_depths(2.0, 2.0),
+            ],
             placement: ImportPlacement::Origin,
             // Two shots means stations 0..2; station 7 does not exist.
             station_comments: vec![(7, "nowhere".to_string()), (1, "the bend".to_string())],
@@ -953,19 +922,23 @@ fn reverse_re_emits_warnings_computed_from_the_reversed_geometry() {
 
     // Validation only WARNS on an out-of-range azimuth, so a project can carry
     // one; `reverse_shots` rem_euclid's both readings, so it cannot survive.
-    let mut out_of_range = shot(0.0, 10.0, 0.0, 0.0);
+    let mut out_of_range = straight_shot(0.0, 10.0).with_depths(0.0, 0.0);
     out_of_range.azimuth_in = 400.0;
     out_of_range.azimuth_out = 400.0;
     // A level shot recording an 80-degree descent: the implied inclination is 0,
     // so the two disagree by 80 - well past the 15-degree default threshold.
-    let mut mismatch = shot(90.0, 10.0, 1.0, 1.0);
+    let mut mismatch = straight_shot(90.0, 10.0).with_depths(1.0, 1.0);
     mismatch.pitch_in = Some(80.0);
     mismatch.pitch_out = Some(80.0);
 
     let section_id = project
         .add_section(crate::models::SectionData {
             name: Some("Main".to_string()),
-            shots: vec![out_of_range, shot(45.0, 8.0, 0.0, 1.0), mismatch],
+            shots: vec![
+                out_of_range,
+                straight_shot(45.0, 8.0).with_depths(0.0, 1.0),
+                mismatch,
+            ],
             ..Default::default()
         })
         .id;
@@ -1019,7 +992,10 @@ fn reversing_a_merge_anchored_section_moves_nothing_through_the_full_execute() {
             color: "#ff6b6b".to_string(),
             direction: None,
             // Starts at the main line's station-1 depth so the merge is clean.
-            shots: vec![shot(45.0, 8.0, 2.0, 2.0), shot(135.0, 4.0, 2.0, 3.0)],
+            shots: vec![
+                straight_shot(45.0, 8.0).with_depths(2.0, 2.0),
+                straight_shot(135.0, 4.0).with_depths(2.0, 3.0),
+            ],
         })
         .section_id
         .unwrap();
@@ -1147,7 +1123,7 @@ fn reverse_keeps_a_position_keyed_ignore_on_its_own_shot() {
 
     // Shot ids and UUIDs as they stand before the reverse.
     let (ids, uuids): (Vec<u32>, Vec<String>) = {
-        let guard = state.project.lock().unwrap();
+        let guard = state.project.lock();
         let section = guard.as_ref().unwrap().get_section(section_id).unwrap();
         (
             section.shots.iter().map(|s| s.id).collect(),
@@ -1208,7 +1184,10 @@ fn reverse_reports_every_renumbered_section_through_batch_undo_and_redo() {
             date: None,
             color: "#ff6b6b".to_string(),
             direction: None,
-            shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(135.0, 4.0, 1.0, 1.0)],
+            shots: vec![
+                straight_shot(45.0, 8.0).with_depths(0.0, 1.0),
+                straight_shot(135.0, 4.0).with_depths(1.0, 1.0),
+            ],
         })
         .section_id
         .unwrap();
@@ -1408,7 +1387,10 @@ fn batch_a_b_a_reports_only_b() {
             date: None,
             color: "#ff6b6b".to_string(),
             direction: None,
-            shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(135.0, 4.0, 1.0, 1.0)],
+            shots: vec![
+                straight_shot(45.0, 8.0).with_depths(0.0, 1.0),
+                straight_shot(135.0, 4.0).with_depths(1.0, 1.0),
+            ],
         })
         .section_id
         .unwrap();
@@ -1476,7 +1458,7 @@ fn a_null_uuid_warning_row_survives_a_double_reverse_in_one_batch() {
     );
 
     let first_shot_id = {
-        let guard = state.project.lock().unwrap();
+        let guard = state.project.lock();
         guard
             .as_ref()
             .unwrap()
@@ -1530,7 +1512,7 @@ fn undo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
     // A poisoned entry UNDERNEATH the reverse: `undo_inner` cannot parse its
     // `values_json`, so step 2 of the range fails after step 1 already ran.
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         stack.push_with_data(
             Command::UpdateSectionMetadata {
                 section_id,
@@ -1607,7 +1589,7 @@ fn reversing_a_shotless_section_leaves_redo_and_the_dirty_bit_alone() {
             .success
     );
     assert!(state.undo().success);
-    let redo_before = state.undo_stack.lock().unwrap().redo_len();
+    let redo_before = state.undo_stack.lock().redo_len();
     assert_eq!(redo_before, 1, "fixture: there is a redo branch to protect");
 
     // The no-op, by both routes that skip the dialog's filter.
@@ -1631,7 +1613,7 @@ fn reversing_a_shotless_section_leaves_redo_and_the_dirty_bit_alone() {
     );
 
     assert_eq!(
-        state.undo_stack.lock().unwrap().redo_len(),
+        state.undo_stack.lock().redo_len(),
         redo_before,
         "a provable no-op must not consume the redo branch"
     );
@@ -1667,7 +1649,7 @@ fn the_gauge_survives_a_save_and_reload() {
     );
 
     let in_memory = {
-        let guard = state.project.lock().unwrap();
+        let guard = state.project.lock();
         let project = guard.as_ref().unwrap();
         let section = project.get_section(section_id).unwrap();
         (
@@ -1683,7 +1665,7 @@ fn the_gauge_survives_a_save_and_reload() {
     let reopened = AppState::new().unwrap();
     assert!(reopened.execute(Command::OpenProject { path }).success);
     let after = {
-        let guard = reopened.project.lock().unwrap();
+        let guard = reopened.project.lock();
         let project = guard.as_ref().unwrap();
         let section = project.get_section(section_id).unwrap();
         (
@@ -1708,11 +1690,7 @@ fn the_gauge_survives_a_save_and_reload() {
 /// terminal plan anchor sits on, and about which end the least-squares gauge pins.
 #[test]
 fn importing_with_the_reverse_toggle_records_the_orientation() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import reverse".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Import reverse");
 
     let result = state.execute_import_sections(
         vec![ImportSectionConfig {
@@ -1723,7 +1701,10 @@ fn importing_with_the_reverse_toggle_records_the_orientation() {
             color: "#4ecdc4".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(0.0, 10.0, 0.0, 2.0), shot(90.0, 5.0, 2.0, 2.0)],
+            shots: vec![
+                straight_shot(0.0, 10.0).with_depths(0.0, 2.0),
+                straight_shot(90.0, 5.0).with_depths(2.0, 2.0),
+            ],
             placement: ImportPlacement::Origin,
             station_comments: Vec::new(),
             reverse: true,
@@ -1779,10 +1760,11 @@ fn redo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
     // stack hands back the most recently undone entry first, so the reverse is on top and the
     // metadata edit is underneath.
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         let first = stack.pop_redo().unwrap();
         let second = stack.pop_redo().unwrap();
         stack.push_redo(crate::core::UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: second.command,
             // Redo REPLAYS forward state rather than restoring previous values, so a poisoned
@@ -1805,4 +1787,198 @@ fn redo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
         "step 1 re-applied the reverse and is not rolled back, so the failure must still \
          report it - otherwise the frontend mirrors nothing while the backend has renumbered"
     );
+}
+
+// ---------------------------------------------------------------------------
+// [#576 RVF-d-3] An unsaved shot's ignore stays on it across a reverse.
+// ---------------------------------------------------------------------------
+
+const RVFD3_CODE: &str = "MISSING_LRUD";
+
+/// What follows the reverse in [`rvfd3_case`].
+#[derive(Clone, Copy, Debug)]
+enum Rvfd3Back {
+    Nothing,
+    ReverseAgain,
+    Undo,
+}
+
+/// `(id, uuid)` of each shot of the section, in order.
+fn rvfd3_shots(state: &AppState, section_id: SectionId) -> Vec<(u32, String)> {
+    let guard = state.project.lock();
+    guard
+        .as_ref()
+        .and_then(|p| p.get_section(section_id))
+        .map(|s| {
+            s.shots
+                .iter()
+                .map(|sh| (sh.id, sh.uuid.clone().unwrap_or_default()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn rvfd3_id_of(state: &AppState, section_id: SectionId, uuid: &str) -> u32 {
+    rvfd3_shots(state, section_id)
+        .into_iter()
+        .find(|(_, u)| u == uuid)
+        .map(|(id, _)| id)
+        .unwrap()
+}
+
+/// Ignore `code` on the shot `uuid` names, keyed the way the resolve command keys
+/// it: by the uuid once it is on disk, by position before.
+fn rvfd3_ignore(state: &AppState, section_id: SectionId, uuid: &str) {
+    let persisted = state.shot_uuid_is_persisted(section_id, uuid);
+    state
+        .save_resolved_warning_gated(&crate::persistence::ResolvedWarning {
+            section_id,
+            shot_id: rvfd3_id_of(state, section_id, uuid),
+            warning_code: RVFD3_CODE.to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: persisted.then(|| uuid.to_string()),
+        })
+        .unwrap();
+}
+
+fn rvfd3_delete(state: &AppState, section_id: SectionId, uuid: &str) {
+    let shot_id = rvfd3_id_of(state, section_id, uuid);
+    let result = state.execute(Command::DeleteShot {
+        section_id,
+        shot_id,
+    });
+    assert!(result.success, "{:?}", result.error);
+}
+
+fn rvfd3_save(state: &AppState) {
+    let result = state.execute(Command::SaveProject { path: None });
+    assert!(result.success, "{:?}", result.error);
+}
+
+/// The shots each ignore applies to, by name. In session a uuid-keyed row
+/// names its shot by uuid (a row of a deleted shot names none) and a
+/// position-keyed row names the shot that holds its id.
+fn rvfd3_ignored(
+    state: &AppState,
+    section_id: SectionId,
+    names: &HashMap<String, &str>,
+) -> Vec<String> {
+    let shots = rvfd3_shots(state, section_id);
+    let mut on: Vec<String> = state
+        .load_resolved_warnings()
+        .unwrap()
+        .into_iter()
+        .filter_map(|r| {
+            let uuid = match r.shot_uuid {
+                Some(uuid) => shots.iter().find(|(_, u)| *u == uuid)?.1.clone(),
+                None => shots.iter().find(|(id, _)| *id == r.shot_id)?.1.clone(),
+            };
+            let name = names.get(&uuid).copied().unwrap_or("?");
+            Some(format!("{name}:{}", r.warning_code))
+        })
+        .collect();
+    on.sort();
+    on
+}
+
+/// Section `[X, A, B]` saved. With `drift`: delete X and save, so the open
+/// session keeps ids the file no longer has (the save re-keys every ignore to
+/// its shot's saved position: B's lands on A's id). Ignore B (on disk, so by
+/// uuid) and save; delete B, append N and ignore N (not on disk, so by
+/// position); reverse, then `back`. N's ignore must stay on N in session and
+/// after a save and reopen. Returns whether it did, and what was seen.
+fn rvfd3_case(drift: bool, back: Rvfd3Back) -> (bool, String) {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("cave.stalx");
+    let (state, section_id) = state_with_section();
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone()),
+            })
+            .success
+    );
+    let start = rvfd3_shots(&state, section_id);
+    let (x, a, b) = (start[0].1.clone(), start[1].1.clone(), start[2].1.clone());
+    let mut names: HashMap<String, &str> =
+        HashMap::from([(x.clone(), "X"), (a, "A"), (b.clone(), "B")]);
+    if drift {
+        rvfd3_delete(&state, section_id, &x);
+        rvfd3_save(&state);
+    }
+    rvfd3_ignore(&state, section_id, &b);
+    rvfd3_save(&state);
+    rvfd3_delete(&state, section_id, &b);
+    let created = state.execute(Command::CreateShot {
+        section_id,
+        shot: straight_shot(45.0, 4.0),
+        after_shot_id: None,
+        before_shot_id: None,
+    });
+    assert!(created.success, "{:?}", created.error);
+    let n = rvfd3_shots(&state, section_id).last().unwrap().1.clone();
+    names.insert(n.clone(), "N");
+    rvfd3_ignore(&state, section_id, &n);
+    let before = rvfd3_ignored(&state, section_id, &names);
+
+    assert!(
+        state
+            .execute(Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            })
+            .success
+    );
+    match back {
+        Rvfd3Back::Nothing => {}
+        Rvfd3Back::ReverseAgain => assert!(
+            state
+                .execute(Command::ReverseSection {
+                    section_id,
+                    swap_left_right: false,
+                })
+                .success
+        ),
+        Rvfd3Back::Undo => assert!(state.undo().success),
+    }
+    let in_session = rvfd3_ignored(&state, section_id, &names);
+    rvfd3_save(&state);
+    let reopened = AppState::new().unwrap();
+    assert!(reopened.execute(Command::OpenProject { path }).success);
+    let after_reopen = rvfd3_ignored(&reopened, section_id, &names);
+    let rows_on_disk = reopened.load_resolved_warnings().unwrap().len();
+    let want = vec![format!("N:{RVFD3_CODE}")];
+    (
+        in_session == want && after_reopen == want && rows_on_disk == 1,
+        format!(
+            "drift={drift} back={back:?}: before the reverse {before:?}, in session \
+             {in_session:?}, after a save and reopen {after_reopen:?} ({rows_on_disk} row)"
+        ),
+    )
+}
+
+/// [#576 RVF-d-3] The ignore of a shot not saved yet is keyed by its position,
+/// and a reverse moves ids with positions, not with shots. Before, the row stayed
+/// at the old id: after the reverse it named the mirrored shot, so that shot's
+/// warning was hidden, N's came back, and the next save pinned the row to the
+/// mirrored shot for good (`after reopen {A:MISSING_LRUD} want {N:MISSING_LRUD}`).
+/// With `drift`, the deleted B's ignore sits on the very slot N's row must land
+/// on, with the same code - the shape the review found blocking the re-key.
+/// Every combination of drift and what follows the reverse must keep N's ignore
+/// on N.
+#[test]
+fn an_unsaved_shots_ignore_stays_on_it_across_a_reverse() {
+    let _config = crate::test_helpers::isolated_config();
+    let mut failures = Vec::new();
+    for drift in [false, true] {
+        for back in [Rvfd3Back::Nothing, Rvfd3Back::ReverseAgain, Rvfd3Back::Undo] {
+            let (held, seen) = rvfd3_case(drift, back);
+            println!("{seen}");
+            if !held {
+                failures.push(seen);
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }

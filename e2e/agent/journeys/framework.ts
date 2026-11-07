@@ -19,6 +19,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { shareableFailureText } from '../lib/shareableFailure';
 import type { ScenarioContext, ScenarioTarget } from '../scenarios/framework';
 import { makeContext } from '../scenarios/framework';
 
@@ -26,7 +27,7 @@ export interface JourneyCheck {
   label: string;
   ok: boolean;
   /** Shown on failure: what was expected vs observed. */
-  detail?: string;
+  detail?: string | undefined;
 }
 
 export interface JourneyContext extends ScenarioContext {
@@ -67,7 +68,9 @@ export function makeJourneyContext(
     checks,
     expect(label, ok, detail) {
       checks.push(ok ? { label, ok } : { label, ok, detail });
-      base.log(`${ok ? 'ok' : 'FAIL'}: ${label}${!ok && detail ? ` - ${detail}` : ''}`);
+      // The detail is what was observed - the app's data or its error - so it
+      // ends a `failed:` line, which the runner prints withheld (#576 W33-NF1).
+      base.log(`${ok ? 'ok' : 'FAIL'}: ${label}${!ok && detail ? ` - failed: ${detail}` : ''}`);
       return ok;
     },
     async checkpoint(name) {
@@ -81,7 +84,7 @@ export function makeJourneyContext(
         await target.exclusive(() => target.browser.saveScreenshot(file));
         base.log(`checkpoint ${name} -> ${file}`);
       } catch (err) {
-        base.log(`checkpoint ${name} FAILED (non-gating): ${err instanceof Error ? err.message : String(err)}`);
+        base.log(`checkpoint ${name} (non-gating) failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
   };
@@ -114,4 +117,42 @@ export async function runJourney(
     checks: ctx.checks,
     ...(aborted !== undefined ? { aborted } : {}),
   };
+}
+
+/** Where a journey's abort reason is kept whole: the run record, not for sharing. */
+const ABORT_WITHHELD = "the full reason is in the session's uat/run.jsonl";
+
+/**
+ * A journey's abort reason as what a run shares carries it (#576 W33-NF1,
+ * W39-NF1): the headline form (`<what> failed: <the app's error>` and `ipc
+ * <command>: ...` keep the prefix and the length of the app's text), then one
+ * count line for each run of further lines. The verdict line prints it, and the
+ * committed UAT record keeps it.
+ */
+export function shareableAbortReason(aborted: string): string {
+  return shareableFailureText(aborted, [], ABORT_WITHHELD);
+}
+
+/**
+ * The PASS/FAIL line `agent:journeys` prints for one journey (#576 W33-NF1):
+ * the check counts, the abort reason in the shareable headline form (`<what>
+ * failed: <the app's error>` and `ipc <command>: ...` keep the prefix and the
+ * length of the app's text; further lines of the reason are counted on the
+ * lines after), then `sweep`: the runner's ` sweep=<counts>` part, the
+ * sweep's breaches as `findingsSummary` counts them, or '' when none.
+ */
+export function journeyVerdictLine(
+  verdict: 'pass' | 'fail',
+  result: JourneyResult,
+  sweep = '',
+): string {
+  const passed = result.checks.filter((c) => c.ok).length;
+  const [reason = '', ...withheld] =
+    result.aborted !== undefined ? shareableAbortReason(result.aborted).split('\n') : [];
+  return (
+    `${verdict.toUpperCase()}: ${result.journey} (${result.durationMs}ms, ${passed}/${result.checks.length} checks)` +
+    `${result.aborted ? ` aborted: ${reason}` : ''}` +
+    `${sweep}\n` +
+    withheld.map((line) => `${line}\n`).join('')
+  );
 }

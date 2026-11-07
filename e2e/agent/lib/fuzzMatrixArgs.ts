@@ -20,12 +20,22 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { fixtureSourcePath } from './fixtures';
+import { foldLocalPaths } from './shareableFailure';
 
 /** A bad flag. The runner prints `.message`, then the usage line, then exits 2. */
 export class MatrixArgError extends Error {}
 
 function bad(message: string): never {
   throw new MatrixArgError(message);
+}
+
+/**
+ * A value the user typed that is not what the flag takes, as the refusal prints
+ * it: its length (#576 W51). The refusal goes to stderr, which people paste, and
+ * a stray argument can be a path or a name.
+ */
+function typed(raw: string): string {
+  return `a value of ${raw.length} character(s)`;
 }
 
 /** Size of session.ts's Xvfb display pool - one display per worker, so 5 is the ceiling. */
@@ -121,13 +131,14 @@ export function parseSeeds(raw: string): number[] {
   const parts = raw.split(',').map((entry) => entry.trim()).filter(Boolean);
   if (!parts.length) bad('--seeds needs at least one value');
   return parts.map((entry) => {
-    if (!/^-?\d+$/.test(entry)) bad(`--seeds: "${entry}" is not an integer`);
+    if (!/^-?\d+$/.test(entry)) bad(`--seeds: ${typed(entry)} is not an integer`);
     return Number(entry);
   });
 }
 
 function positiveInt(flag: string, raw: string): number {
-  if (!/^\d+$/.test(raw) || Number(raw) < 1) bad(`--${flag} needs a positive integer, got "${raw}"`);
+  if (!/^\d+$/.test(raw)) bad(`--${flag} needs a positive integer, got ${typed(raw)}`);
+  if (Number(raw) < 1) bad(`--${flag} needs a positive integer, got ${Number(raw)}`);
   return Number(raw);
 }
 
@@ -142,7 +153,7 @@ function booleanFlag(flag: string, raw: string): boolean {
   const value = raw.trim().toLowerCase();
   if (['1', 'true', 'yes', 'on'].includes(value)) return true;
   if (['0', 'false', 'no', 'off'].includes(value)) return false;
-  bad(`--${flag} takes 1/0, true/false, yes/no or on/off, got "${raw}"`);
+  bad(`--${flag} takes 1/0, true/false, yes/no or on/off, got ${typed(raw)}`);
 }
 
 /**
@@ -152,10 +163,10 @@ function booleanFlag(flag: string, raw: string): boolean {
  */
 export function parseAxis(raw: string): AxisValue[] {
   const eq = raw.indexOf('=');
-  if (eq <= 0) bad(`--axis needs KEY=v1,v2,..., got "${raw}"`);
+  if (eq <= 0) bad(`--axis needs KEY=v1,v2,..., got ${typed(raw)}`);
   const key = raw.slice(0, eq);
   if (!AXIS_KEY_RE.test(key)) {
-    bad(`--axis key "${key}" is not a STALAGMIGHT_* variable; the cells run cargo and launch the app`);
+    bad(`--axis key ${typed(key)} is not a STALAGMIGHT_* variable; the cells run cargo and launch the app`);
   }
   if (RESERVED_AXIS_KEYS.includes(key)) {
     bad(
@@ -174,11 +185,11 @@ export function parseArgs(argv: string[]): Options {
   const raw: Record<string, string> = {};
   const notes: string[] = [];
   for (let i = 0; i < argv.length; i++) {
-    const token = argv[i];
-    if (!token.startsWith('--')) bad(`unexpected argument "${token}"`);
+    const token = argv[i]!;
+    if (!token.startsWith('--')) bad(`unexpected argument, ${typed(token)}`);
     const eq = token.indexOf('=');
     const flag = eq >= 0 ? token.slice(2, eq) : token.slice(2);
-    if (!known.has(flag)) bad(`unknown flag --${flag}`);
+    if (!known.has(flag)) bad(`unknown flag, ${typed(flag)} after --`);
     // `--release` is a boolean switch; every other flag takes a value.
     if (flag === 'release' && eq < 0) {
       raw[flag] = '1';
@@ -203,14 +214,14 @@ export function parseArgs(argv: string[]): Options {
   let fixtures: string[];
   if (raw.fixtures === undefined) {
     fixtures = fs.readdirSync(fixtureDir).filter((name) => name.endsWith('.stalx')).sort();
-    if (!fixtures.length) bad(`no *.stalx fixtures found in ${fixtureDir}`);
+    if (!fixtures.length) bad(`no *.stalx fixtures found in ${foldLocalPaths(fixtureDir)}`);
   } else {
     fixtures = raw.fixtures.split(',').map((entry) => entry.trim()).filter(Boolean);
     if (!fixtures.length) bad('--fixtures needs at least one basename');
     for (const fixture of fixtures) {
-      if (fixture !== path.basename(fixture)) bad(`--fixtures takes basenames, got "${fixture}"`);
-      if (!fixture.endsWith('.stalx')) bad(`--fixtures: "${fixture}" is not a .stalx`);
-      if (!fs.existsSync(fixtureSourcePath(fixture))) bad(`no such fixture: ${fixtureSourcePath(fixture)}`);
+      if (fixture !== path.basename(fixture)) bad(`--fixtures takes basenames, got ${typed(fixture)}`);
+      if (!fixture.endsWith('.stalx')) bad(`--fixtures: ${typed(fixture)} is not a .stalx`);
+      if (!fs.existsSync(fixtureSourcePath(fixture))) bad(`no such fixture in e2e/fixtures/: ${typed(fixture)}`);
     }
   }
 
@@ -221,7 +232,7 @@ export function parseArgs(argv: string[]): Options {
   // importing `./scenarios` in the PARENT would be wrong.
   const scenario = raw.scenario === undefined ? DEFAULT_SCENARIO : raw.scenario;
   if (!/^[a-z][a-z0-9-]{1,63}$/.test(scenario)) {
-    bad(`--scenario "${scenario}" is not a scenario name (lower-case, digits and dashes)`);
+    bad(`--scenario ${typed(scenario)} is not a scenario name (lower-case, digits and dashes)`);
   }
   const axis: (AxisValue | null)[] = raw.axis === undefined ? [null] : parseAxis(raw.axis);
   return { scenario, fixtures, seeds, axis, iterations, workers, release, notes };

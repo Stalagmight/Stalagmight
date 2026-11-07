@@ -1,4 +1,5 @@
 import type { OpenDialogOptions, SaveDialogOptions } from '@tauri-apps/plugin-dialog';
+import { isWindowsPath, lastSeparatorIndex } from './path';
 
 export type TestFileDialogAnswer = string | string[] | null;
 export interface TestFileDialogQueueEntry {
@@ -46,6 +47,48 @@ export function takeTestFileDialogAnswer(kind: 'open' | 'save', triggerTestId?: 
 export const PROJECT_EXTENSION = 'stalx';
 export const DMP_EXTENSION = 'dmp';
 
+/**
+ * Every file type Stalagmight reads or writes (no leading dot, lowercase): the
+ * project, its dive-plan sidecar, the importable survey formats and the export
+ * formats. `ensureExtension` treats a trailing `.xyz` naming one of these as a
+ * format extension and REPLACES it; any other trailing `.xyz` is part of the
+ * name. Mirrored by `KNOWN_FILE_EXTENSIONS` in the persistence crate's
+ * `with_stalx_extension` (#576 D35).
+ */
+export const KNOWN_FILE_EXTENSIONS: readonly string[] = [
+  PROJECT_EXTENSION,
+  'plnx',
+  'gpx',
+  'tml',
+  'tmlu',
+  'mak',
+  'dat',
+  'wpj',
+  'srv',
+  DMP_EXTENSION,
+  'csv',
+  'json',
+  'png',
+  'svg',
+  'pdf',
+  'xml',
+];
+
+/**
+ * `path` with the `extension` the chosen format is written as.
+ *
+ * Returned as given when it already ends in that extension (any letter case).
+ * Otherwise a trailing extension that names a KNOWN file type (`map.svg` for a
+ * PNG export) is replaced, and anything else is appended to rather than cut off
+ * (#576 D35-D1): survey names carry dotted numbers, and `CaveA 1.5` used to be
+ * written as `CaveA 1.csv`. The extension is the text after the last dot of the
+ * FILE NAME, never a directory's, and a leading dot (`.hidden`) is not one,
+ * matching Rust's `Path::extension`. A bare trailing dot is dropped.
+ *
+ * The result can name a different file than the one the OS save dialog showed
+ * its overwrite prompt for; `resolveSavePath` (utils/overwriteGuard) is the
+ * caller-side check for that.
+ */
 export function ensureExtension(path: string, extension: string): string {
   const normalizedExt = extension.startsWith('.') ? extension.slice(1) : extension;
   const lowerPath = path.toLowerCase();
@@ -55,10 +98,15 @@ export function ensureExtension(path: string, extension: string): string {
     return path;
   }
 
-  const lastSeparator = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  // `\` separates only in a Windows-shaped path (utils/path.ts isWindowsPath).
+  const lastSeparator = lastSeparatorIndex(path);
   const lastDot = path.lastIndexOf('.');
-  if (lastDot > lastSeparator) {
-    return `${path.slice(0, lastDot + 1)}${normalizedExt}`;
+  // `> lastSeparator + 1`: a dot that starts the file name is not an extension.
+  if (lastDot > lastSeparator + 1) {
+    const current = path.slice(lastDot + 1).toLowerCase();
+    if (current === '' || KNOWN_FILE_EXTENSIONS.includes(current)) {
+      return `${path.slice(0, lastDot + 1)}${normalizedExt}`;
+    }
   }
 
   return `${path}.${normalizedExt}`;
@@ -280,8 +328,9 @@ function resolveAndroidPath(uri: string): string {
   return uri;
 }
 
+/** POSIX `/...`, or Windows-shaped: `C:\...`, network `\\srv\share\...` or verbatim `\\?\C:\...`. */
 function isAbsolutePath(p: string): boolean {
-  return p.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(p);
+  return p.startsWith('/') || isWindowsPath(p);
 }
 
 interface AndroidDir { label: string; path: string }

@@ -63,8 +63,11 @@ test.describe('Settings Dialog - Keyboard Shortcuts to Open', () => {
     // Ensure Settings is not open
     await expect(page.locator('[data-testid="settings-dialog"]')).not.toBeVisible();
 
-    // Wait for keyboard shortcut handler to be ready
-    await page.waitForTimeout(200);
+    // No wait is needed here: the shortcut handler is registered by
+    // SingleSystemView's mount effect (useKeyboardShortcuts), and beforeEach's
+    // createProject returned only once single-system-view was visible and the
+    // map ready. Asserted as a precondition, not as a wait.
+    await expect(page.getByTestId('single-system-view')).toBeVisible();
 
     // Send the Ctrl+, shortcut using keyboard.down/up for more reliable behavior
     await page.keyboard.down('Control');
@@ -115,9 +118,6 @@ test.describe('Settings Dialog - Sidebar Navigation', () => {
   test('clicking sidebar category switches content panel @smoke', async ({ page }) => {
     // Open settings directly from GlobalView without creating a project
     await openSettingsFromMenu(page);
-
-    // Wait for dialog to fully render
-    await page.waitForTimeout(100);
 
     // Initially should show General (first category)
     await expect(page.locator('[data-testid="settings-tab-general"]')).toHaveAttribute('aria-selected', 'true');
@@ -790,8 +790,9 @@ test.describe('Settings Dialog - All panels have testids', () => {
   test('each category panel has correct data-testid', async ({ page }) => {
     await openSettingsDialog(page);
 
-    // Wait for dialog to fully render
-    await page.waitForTimeout(100);
+    // The sidebar is rendered before it is read: getSidebarCategories is a
+    // point-in-time DOM query, and an empty list would make the loop below vacuous.
+    await expect(page.locator('[data-testid^="settings-tab-"]').first()).toBeVisible();
 
     const categories = filterTestableCategories(await getSidebarCategories(page));
 

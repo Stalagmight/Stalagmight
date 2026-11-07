@@ -85,8 +85,11 @@ export default defineConfig({
   retries,
 
   // Derived + validated above (PW_WORKERS: bare int -> number, "50%" kept as-is;
-  // CI defaults to "100%" / all cores). See #120, #132.
-  workers,
+  // CI defaults to "100%" / all cores). See #120, #132. Omitted rather than
+  // `undefined` when unset (exactOptionalPropertyTypes): Playwright reads an
+  // absent and an undefined `workers` the same way, falling through to its own
+  // default.
+  ...(workers === undefined ? {} : { workers }),
 
   // Test reporter: 'list' for live progress, 'github' for CI annotations
   // Override with PW_REPORTER env var (e.g. PW_REPORTER=html)

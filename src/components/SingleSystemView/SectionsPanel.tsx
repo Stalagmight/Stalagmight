@@ -1,5 +1,6 @@
 import { useRef, useEffect, useMemo, useState, memo, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useVirtualizerUnmountGuard } from '../common/useVirtualizerUnmountGuard';
 import { useTranslation } from 'react-i18next';
 import { type Section, type SectionId } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
@@ -19,6 +20,7 @@ import { ExternalLinkIcon, PlusIcon } from '../common/icons';
 import { setSource } from '../../utils/telemetry';
 import { useLongPress } from '../../hooks';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
+import { useGrayscalePaint } from '../../hooks/useGrayscalePaint';
 
 interface SectionsPanelProps {
   sections: Section[];
@@ -199,6 +201,9 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     estimateSize: () => SECTION_ROW_ESTIMATED_HEIGHT,
     overscan: 8,
   });
+  // Rows are measured, so a reveal still pending when the panel unmounts (a
+  // selection, then Plan mode) would throw from its frame (#576 NF-W8E3-1).
+  useVirtualizerUnmountGuard(rowVirtualizer);
 
   // Reveal a row by index, then move keyboard focus to it. When the target is
   // already mounted (adjacent step within the overscan window) it focuses
@@ -722,6 +727,7 @@ const SectionRow = memo(function SectionRow({
   optionRefs,
 }: SectionRowProps) {
   const { t } = useTranslation();
+  const paint = useGrayscalePaint();
   const stats = useMemo(
     () => calculateSectionStats(section, meta, surveyData),
     [section, meta, surveyData],
@@ -778,7 +784,7 @@ const SectionRow = memo(function SectionRow({
       >
         <span
           className="w-3 h-3 rounded-full flex-shrink-0"
-          style={{ backgroundColor: section.color }}
+          style={{ backgroundColor: paint(section.color) }}
         />
         <span className="flex-1 truncate">
           {section.name ?? t('sections.defaultName', { id: section.id })}

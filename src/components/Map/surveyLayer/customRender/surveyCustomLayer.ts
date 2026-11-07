@@ -5,9 +5,10 @@
  * publication machinery. An edit becomes a buffer re-upload + `triggerRepaint`.
  *
  * GL discipline (per the CustomLayerInterface contract):
- *  - onAdd(map, gl): compile programs, create + upload buffers. Called again by
- *    `styleRestore.ts` after a context restore / worker restart, so it fully
- *    rebuilds.
+ *  - onAdd(map, gl): compile programs, create + upload buffers. Runs again when
+ *    the controller re-adds this layer after MapLibre rebuilt the style without
+ *    it (a WebGL context restore or a worker restart; MapLibre itself never
+ *    re-adds custom layers - see glContextRecovery.ts), so it fully rebuilds.
  *  - render(gl, opts): binds its OWN program / buffers / attributes / uniforms
  *    every frame, assumes nothing about incoming GL state, and sets the
  *    premultiplied-alpha blend MapLibre expects (ONE, ONE_MINUS_SRC_ALPHA).
@@ -31,6 +32,7 @@ import {
   type ProgramBundle,
   linkProgramBundle,
   deleteProgramBundle,
+  layerGlError,
   bindVec2,
   bindFloat,
   bindColor,
@@ -247,6 +249,9 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     this.gl = gl;
     this.disabled = false;
     this.disabledReason = null;
+    // A re-add after a WebGL context restore runs here on the NEW context: re-arm
+    // the first-frames GL error check, whose budget the lost context spent (#576 D38).
+    this.checkedFrames = 0;
     // linkProgramBundle() already logs getShaderInfoLog / getProgramInfoLog ungated.
     this.lineBundle = linkProgramBundle(
       gl, LINE_VERTEX_SRC, LINE_FRAGMENT_SRC, LINE_UNIFORMS, LINE_ATTRIBS, '[customRender]',
@@ -484,7 +489,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
    */
   private checkFrameError(gl: WebGL2RenderingContext, data: CustomRenderData): void {
     if (this.checkedFrames >= MAX_CHECKED_FRAMES) return;
-    const err = gl.getError();
+    const err = layerGlError(gl);
     if (err !== gl.NO_ERROR) {
       const code = `0x${err.toString(16)}`;
       const reason = `gl-error-${code}`;

@@ -94,6 +94,8 @@ The ROOT is a user choice, taken in the dialog and sent as `root_placement: Opti
 - **Place at the origin** - what a file with no georeference used to get in silence.
 - **Enter coordinates** - typed latitude/longitude, validated through `GpsCoordinates::new` in the converter, so a NaN or an out-of-range value fails the import rather than landing in a project.
 
+**The file's GPS lands on the station it was measured at** (#576 D39(j), NF-AN4-4). Ariane writes the anchor on the START, and the parser copies it onto the shots leaving it, so it rides on a section's raw first shot - including when that shot is EXCLUDED. With "include excluded shots" off, that shot is not built and the section's station 0 is the start of its first imported shot, so `gps_placement` carries the datum forward along the dropped leading shots (their horizontal legs, walked with the section's own north reference; CLOSURE rows skipped, as the import never draws them) instead of pinning the file's coordinates on the wrong station. The same rule applies to the root and to a detached section placed by its own GPS, and to the dialog's "use the position in the file": the converter recognises those coordinates (the root's raw first-shot values, returned verbatim) and treats them as the file's anchor, while typed coordinates always mean station 0. The import preview reads the raw first shot the same way, so a section placed by such a GPS is not badged "placed at the origin".
+
 The typed datum deliberately carries `depth_reference: 0` ("not recorded"), the same value the file-derived anchor uses: Ariane states a surface position, not a datum depth. The zero-datum config dialog's own depth/elevation field (#524) is the eventual home for that number if this step ever needs to collect it - it is not a second convention, just a field this step does not ask for yet. Both magnitudes are bounded by `MAX_DEPTH_REFERENCE_M` (11 000 m, mirrored in `src/utils/gpsBounds.ts`).
 
 Deliberately NOT the DMP wizard's manual-placement engine: this dialog only ever opens on a brand-new, empty project (Ariane is a new-project-only format in `openOrImport.ts`), so there is no existing station to attach to and nothing on the map to drag against. A fuller step would need the dialog to be reachable with a project open, which is a separate change to the import router.
@@ -106,6 +108,8 @@ When excluded shots are filtered:
 - Sections that lose all shots are dropped entirely
 - Branch names like "Main Line (branch 1)" are simplified back to "Main Line" when only one branch survives
 - Sections are topologically sorted so parent sections are always created before dependents
+
+**A dropped lead moves the first imported shot's start depth** (#576 NF-TML-2). When a section's leading shots are dropped, its first imported shot starts where the last of them ends, so a "same as previous" `DepthIn` on that shot resolves to the last dropped shot's depth instead of `start_depth` (the depth the file records for the station the section leaves from). CLOSURE rows are no leg and are skipped; an explicit `DepthIn` is used as written. For a section placed by its own GPS, that is the station `gps_placement` carries the datum to. For a non-root section attached to its parent at its raw start (`FromImporting`: station 0 merged onto the parent's station), only the depth follows the dropped lead: station 0's plan position stays merged on the parent's station, and the merged point's depth, the average of the shot depths around it, now takes the dropped lead's end depth where it used to take `start_depth`.
 
 ## Shot Types
 
@@ -268,6 +272,12 @@ When the file specifies imperial units, lengths, LRUD values, depths, section st
 
 An absent or recognised `<unit>` (empty, `m`, `metric`, `ft`, `imperial`) is handled silently. Anything else falls back to metric AND raises an import warning naming the unrecognised string, so a silent mis-scaling is visible on the receipt.
 
+### A "same as previous" marker scaled from feet (#576 HFI-1)
+
+The `DepthIn` value `-1.0` is the format's "this shot starts where the previous one ended" marker, not a depth, and the feet-to-metre conversion above leaves it alone. A file converted to metres by a tool that did NOT leave it alone carries -1 ft written in metres instead: -0.3048, which Ariane (two decimals, trailing zero trimmed) writes as `-0.3`. Read literally, every such shot started 0.3 m above the datum, and the validator flagged the impossible geometry without naming the cause.
+
+In a metric file, the spellings of -0.3048 at 1-4 decimals, rounded or truncated (`-0.3`, `-0.304`, `-0.305`, `-0.3048`, each matched to a micrometre), are read as the marker when MORE THAN HALF of the file's shots carry one - the marker is on nearly every shot of an Ariane file, a real start depth shared by half a survey is not, and a flat stretch that did sit there reads back the same depth either way. Below that a `-0.3` is a measurement (a station 0.3 m above the datum), and in a feet file `-0.3` is always -0.3 ft. The reading is `restore_scaled_depth_in_marker` (`parsers/tml/mod.rs`) with the spellings in `schema::DEPTH_IN_SAME_AS_PREVIOUS_SCALED`. When it applies, the import receipt carries one warning line naming the spelling and the shot count (#576 HFI-1-D2): "Read the depth marker written as -0.3 (a scaled -1) as same as previous on N shots." (`TmlFile::scaled_depth_in_marker`).
+
 ### Entrance elevation's zero-is-absent convention
 
 Ariane encodes "no entrance elevation recorded" as `firstStartAbsoluteElevation = 0.0` rather than an absent field, so import treats an exact `0.0` as "not recorded" and anything else, however small, as a real value. This is format-forced, not a Stalagmight choice: a genuine entrance at exactly 0.0 m above mean sea level is not representable and will read back as unset. The convention lives in `crate::models::ariane_elevation_or_absent`, called by import and SpeleoDB pull-adoption; export mirrors it independently (it writes `0.0` back out for an unset `Project::surface_elevation` via its own `unwrap_or(0.0)`, rather than calling the helper), so the round trip is consistent.
@@ -337,7 +347,7 @@ Parsed but dropped:
 
 - **The Inclination zero/null collision.** `Inclination`/`INC` has the same
   format-forced ambiguity as LRUD (above): Ariane has no null, so
-  `pitch_to_inclination` (`export/tml.rs:153-158`) writes both `None` (never
+  `pitch_to_inclination` (`parsers/tml/schema.rs`) writes both `None` (never
   sighted) and `Some(0.0)` (genuinely level) as the same wire `0.0`. Unlike
   LRUD, though, a plain "0.0 means absent" read would fabricate data:
   `Validator::validate_shot`'s inclination/depth cross-check treats an absent
@@ -396,10 +406,19 @@ Parsed but dropped:
   them.
 - **Dates parse strictly as `%Y-%m-%d`.** Any other spelling reads as no date at
   all, with nothing said (#427 records this; it is not yet fixed).
+- **`2000-01-01` reads back as no date.** A dateless section is exported as
+  `2000-01-01` followed by the XML comment `<!--stalagmight:no-survey-date-->`
+  (see [Ariane export](ariane-export.md)). The importer reads every
+  `2000-01-01` as no date, with or without the comment, so the placeholder
+  neither shows a fabricated date nor sets the declination epoch (#576 B2).
+  The comment alone is not enough: Ariane drops it when it re-saves a file,
+  exports from before it existed never had it, and the SpeleoDB sidecar never
+  writes it. The cost: a survey genuinely dated 1 January 2000 also imports
+  undated.
 
 Structural:
 
 - **The mainline fragments at branch points.** Which branch continues the section is decided by file order, not by which branch is the mainline, so a long trunk can arrive split into "(branch N)" sections ([#412](https://github.com/Stalagmight/Stalagmight/issues/412)).
 - Ariane's shape/cross-section geometry (`Shape`/`SH` elements) is not imported.
-- The `Inclination` field is parsed and normalised to Stalagmight's positive-down pitch on import (`parsers::tml::inclination_to_pitch`), but station coordinates stay depth-based, so pitch never feeds the geometry - see [docs/inclination.md](inclination.md), which is canonical for the sign convention.
+- The `Inclination` field is parsed and normalised to Stalagmight's positive-down pitch on import (`parsers::tml::schema::inclination_to_pitch`), but station coordinates stay depth-based, so pitch never feeds the geometry - see [docs/inclination.md](inclination.md), which is canonical for the sign convention.
 - Only the first GPS coordinate found in the file is used as the project origin.

@@ -144,7 +144,8 @@ export default {
       `SELECT COUNT(DISTINCT received_at) as cnt FROM events
        WHERE ip_hash = ?1 AND received_at > datetime('now', '-1 minute')`
     ).bind(ipHash).all();
-    if (rateRows.length > 0 && (rateRows[0].cnt as number) >= RATE_LIMIT_MAX_FLUSHES_PER_MIN) {
+    const rate = rateRows[0];
+    if (rate !== undefined && (rate.cnt as number) >= RATE_LIMIT_MAX_FLUSHES_PER_MIN) {
       return new Response('Too many requests', { status: 429 });
     }
 

@@ -6,7 +6,10 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { setWorkerUrl } from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
-// Before App so every app stylesheet cascades over MapLibre's own rules.
+// MapLibre's own stylesheet (control, marker and canvas positioning), bundled at
+// the version actually installed so the map lays out offline (#576 C12, #606).
+// Before App so every app stylesheet cascades over MapLibre's own rules, which
+// some of them override at equal specificity.
 import 'maplibre-gl/dist/maplibre-gl.css';
 import App from './App';
 import './i18n';
@@ -24,6 +27,8 @@ import { useNetworkStore } from './store/networkStore';
 import { shotMaterialization } from './types/survey-data';
 import { getPerfTimings } from './utils/memoryProbe';
 import { routeOpenedFile } from './utils/openOrImport';
+import { startWorkspaceModeSync } from './store/workspaceModeSync';
+import { registerTileProtocol } from './utils/tileProtocol';
 import type { TestFileDialogQueueEntry } from './utils/fileDialogs';
 
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
@@ -55,12 +60,17 @@ installGlobalErrorCapture();
 // interaction (set before render so there's no initial ring flash).
 initInputModalityTracking();
 
+// [#576 C5] Tell the backend which workspace mode we are in, now and on every
+// change: Plan and Export are read-only, and the backend refuses survey edits
+// there as the backstop to the UI's own gating (docs/app-modes.md).
+startWorkspaceModeSync();
+
 setWorkerUrl(maplibreWorkerUrl);
 
 // The frame-gap freeze detector is no longer started automatically - it
 // was producing a stream of `freeze #N` entries in the memory probe for
 // every minor stall, drowning out the signal. Open the probe panel
-// (Display ▸ Dev stats) - it starts the detector on demand from its own effect.
+// (Debug ▸ Memory Stats) - it runs the detector only while it is visible.
 
 // Expose stores for E2E testing
 declare global {
@@ -75,7 +85,7 @@ declare global {
       networkStore?: typeof useNetworkStore;
       // Loading progress E2E hooks
       getLoadingId?: () => number;
-      getBackendLoadingId?: () => bigint;
+      getBackendLoadingId?: () => number;
       simulateLoadingProgress?: (payload: Partial<LoadingState>) => void;
       simulateLoadingError?: (message: string, details?: string) => void;
       resetLoading?: () => void;
@@ -160,6 +170,10 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
     resetLoading: () => useProjectStore.getState().resetLoading(),
   };
 }
+
+// The Android tile handler, once for every map and never removed (#576 D18;
+// a no-op on desktop). See utils/tileProtocol.ts.
+registerTileProtocol();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

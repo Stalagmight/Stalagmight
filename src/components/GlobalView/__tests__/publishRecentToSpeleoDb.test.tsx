@@ -19,17 +19,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import { canPublishRecent, publishRecentToSpeleoDb } from '../publishRecentToSpeleoDb';
 import PublishToSpeleoDbDialog from '../../Dialogs/PublishToSpeleoDbDialog';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import type { ProjectMetadata } from '../../../types/project';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../../test/factories/ipc';
 
 const localProject = (over: Partial<ProjectMetadata> = {}): ProjectMetadata => ({
   name: 'Local Cave',

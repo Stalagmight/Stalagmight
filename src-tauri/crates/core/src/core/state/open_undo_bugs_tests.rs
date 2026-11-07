@@ -47,30 +47,8 @@ use crate::models::{
 // what keeps these tests off other files; what it buys is ONE dir for the whole
 // test, whose path the test can name and hand to a worker thread
 // (`ConfigHandoff`). It is held for the whole test because the saves are.
+use crate::test_fixtures::{state_with_project, straight_shot};
 use crate::test_helpers::isolated_config;
-
-/// A shot with distinct, easily-recognised geometry.
-fn shot(azimuth: f64, length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in: 0.0,
-        depth_out: 0.0,
-        ..Default::default()
-    }
-}
-
-/// An `AppState` with an empty project open, ready for commands.
-fn state_with_project() -> AppState {
-    let state = AppState::new().unwrap();
-    let result = state.execute(Command::CreateProject {
-        name: "OpenUndoBugs".to_string(),
-        location: None,
-    });
-    assert!(result.success, "CreateProject failed: {:?}", result.error);
-    state
-}
 
 /// Create a section with `shots` and return its id.
 fn create_section(state: &AppState, name: &str, shots: Vec<ShotData>) -> SectionId {
@@ -135,8 +113,12 @@ fn shot_ids(state: &AppState, section_id: SectionId) -> Vec<ShotId> {
 #[test]
 fn redo_of_create_section_preserves_shot_uuids() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let section_id = create_section(&state, "Main", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let section_id = create_section(
+        &state,
+        "Main",
+        vec![straight_shot(0.0, 5.0), straight_shot(90.0, 4.0)],
+    );
 
     let before = shot_uuids(&state, section_id);
     assert!(
@@ -172,8 +154,12 @@ fn redo_of_create_section_preserves_shot_uuids() {
 fn redo_of_create_section_preserves_gauge_anchors() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
-    let state = state_with_project();
-    let section_id = create_section(&state, "Gauged", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let section_id = create_section(
+        &state,
+        "Gauged",
+        vec![straight_shot(0.0, 5.0), straight_shot(90.0, 4.0)],
+    );
 
     // The save is what mints the gauge pair.
     let saved = state.save_project(Some(temp.path().join("gauge.stalx")));
@@ -256,8 +242,8 @@ fn section_updates_round_trip_preserves_clear_to_null() {
 #[test]
 fn undo_restores_a_previously_null_surveyor() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let section_id = create_section(&state, "NoSurveyor", vec![shot(0.0, 5.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let section_id = create_section(&state, "NoSurveyor", vec![straight_shot(0.0, 5.0)]);
 
     let surveyor_before = {
         let project = state.get_project_state().expect("no project");
@@ -327,15 +313,15 @@ fn undo_after_reload_deletes_the_shot_it_created() {
     let original_uuid;
     let inserted_uuid;
     {
-        let state = state_with_project();
-        let section_id = create_section(&state, "Diverged", vec![shot(0.0, 5.0)]);
+        let state = state_with_project("OpenUndoBugs");
+        let section_id = create_section(&state, "Diverged", vec![straight_shot(0.0, 5.0)]);
         let first_shot = shot_ids(&state, section_id)[0];
 
         // Insert BEFORE the existing shot: the new shot takes position 0 while
         // its id comes from the allocator, so ids no longer match positions.
         let created = state.execute(Command::CreateShot {
             section_id,
-            shot: shot(180.0, 7.0),
+            shot: straight_shot(180.0, 7.0),
             after_shot_id: None,
             before_shot_id: Some(first_shot),
         });
@@ -389,7 +375,7 @@ fn undo_after_reload_deletes_the_shot_it_created() {
 fn section_offset(state: &AppState, section_id: SectionId) -> Option<(f64, f64)> {
     state
         .get_project_state()?
-        .section_offsets
+        .section_offsets()
         .get(&section_id)
         .copied()
 }
@@ -417,15 +403,19 @@ fn section_offset(state: &AppState, section_id: SectionId) -> Option<(f64, f64)>
 #[test]
 fn undo_of_a_shot_insert_leaves_no_orphan_offset_entry() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let section_id = create_section(&state, "Inserted", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let section_id = create_section(
+        &state,
+        "Inserted",
+        vec![straight_shot(0.0, 5.0), straight_shot(90.0, 4.0)],
+    );
     let first_shot = shot_ids(&state, section_id)[0];
 
     let before = section_offset(&state, section_id);
 
     let created = state.execute(Command::CreateShot {
         section_id,
-        shot: shot(180.0, 3.0),
+        shot: straight_shot(180.0, 3.0),
         after_shot_id: None,
         before_shot_id: Some(first_shot),
     });
@@ -462,14 +452,14 @@ fn undo_of_a_shot_insert_leaves_no_orphan_offset_entry() {
 #[test]
 fn undo_of_the_first_shot_in_an_empty_section_does_not_move_it() {
     let _config = isolated_config();
-    let state = state_with_project();
+    let state = state_with_project("OpenUndoBugs");
     let section_id = create_section(&state, "Empty", vec![]);
 
     let before = section_offset(&state, section_id).unwrap_or((0.0, 0.0));
 
     let created = state.execute(Command::CreateShot {
         section_id,
-        shot: shot(90.0, 10.0),
+        shot: straight_shot(90.0, 10.0),
         after_shot_id: None,
         before_shot_id: None,
     });
@@ -492,12 +482,12 @@ fn undo_of_the_first_shot_in_an_empty_section_does_not_move_it() {
 #[test]
 fn the_empty_section_displacement_does_not_ratchet() {
     let _config = isolated_config();
-    let state = state_with_project();
+    let state = state_with_project("OpenUndoBugs");
     let section_id = create_section(&state, "Ratchet", vec![]);
 
     let created = state.execute(Command::CreateShot {
         section_id,
-        shot: shot(90.0, 10.0),
+        shot: straight_shot(90.0, 10.0),
         after_shot_id: None,
         before_shot_id: None,
     });
@@ -526,8 +516,12 @@ fn closure_ids(state: &AppState) -> Vec<u64> {
 /// Two sections joined by a merge, with a zero datum anchoring the first, so a
 /// loop closure between them is legal. Returns `(section_a, section_b)`.
 fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
-    let a = create_section(state, "A", vec![shot(0.0, 5.0), shot(0.0, 5.0)]);
-    let b = create_section(state, "B", vec![shot(90.0, 5.0)]);
+    let a = create_section(
+        state,
+        "A",
+        vec![straight_shot(0.0, 5.0), straight_shot(0.0, 5.0)],
+    );
+    let b = create_section(state, "B", vec![straight_shot(90.0, 5.0)]);
     let datum = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
@@ -557,7 +551,7 @@ fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 #[test]
 fn undo_of_remove_loop_closure_restores_the_original_order() {
     let _config = isolated_config();
-    let state = state_with_project();
+    let state = state_with_project("OpenUndoBugs");
     let (a, b) = two_merged_sections(&state);
 
     let first = state.execute(Command::CreateLoopClosure {
@@ -628,7 +622,7 @@ fn undo_of_remove_loop_closure_restores_the_original_order() {
 #[test]
 fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
     let _config = isolated_config();
-    let state = state_with_project();
+    let state = state_with_project("OpenUndoBugs");
     let (a, b) = two_merged_sections(&state);
 
     // Close the loop. It has to be a CLOSURE, not a second merge: A and B are
@@ -654,7 +648,7 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
     let first_shot_of_a = shot_ids(&state, a)[0];
     let created = state.execute(Command::CreateShot {
         section_id: a,
-        shot: shot(45.0, 3.0),
+        shot: straight_shot(45.0, 3.0),
         after_shot_id: Some(first_shot_of_a),
         before_shot_id: None,
     });
@@ -701,7 +695,7 @@ fn the_delete_guards_still_refuse_a_user_delete() {
         ),
         (ClosureStrategy::Batch, "Use split instead."),
     ] {
-        let state = state_with_project();
+        let state = state_with_project("OpenUndoBugs");
         let (a, b) = two_merged_sections(&state);
 
         // The insert comes FIRST here, before the loop is closed. It lengthens
@@ -711,7 +705,7 @@ fn the_delete_guards_still_refuse_a_user_delete() {
         let first_shot_of_a = shot_ids(&state, a)[0];
         let created = state.execute(Command::CreateShot {
             section_id: a,
-            shot: shot(45.0, 3.0),
+            shot: straight_shot(45.0, 3.0),
             after_shot_id: Some(first_shot_of_a),
             before_shot_id: None,
         });
@@ -871,12 +865,12 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
     let save_path: PathBuf = temp.path().join("orphan-closure.stalx");
 
     let before = {
-        let state = state_with_project();
+        let state = state_with_project("OpenUndoBugs");
         // A - bridge - B, plus a closure straight from A to B: a genuine loop
         // with two independent paths.
-        let a = create_section(&state, "A", vec![shot(0.0, 5.0)]);
-        let bridge = create_section(&state, "Bridge", vec![shot(90.0, 5.0)]);
-        let b = create_section(&state, "B", vec![shot(180.0, 5.0)]);
+        let a = create_section(&state, "A", vec![straight_shot(0.0, 5.0)]);
+        let bridge = create_section(&state, "Bridge", vec![straight_shot(90.0, 5.0)]);
+        let b = create_section(&state, "B", vec![straight_shot(180.0, 5.0)]);
         let datum = state.execute(Command::SetZeroDatum {
             station_ref: StationRef::new(a, 0),
             coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
@@ -983,8 +977,12 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
 fn undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
-    let state = state_with_project();
-    let section_id = create_section(&state, "Gauged", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let section_id = create_section(
+        &state,
+        "Gauged",
+        vec![straight_shot(0.0, 5.0), straight_shot(90.0, 4.0)],
+    );
 
     let gauge_of = |s: &AppState| -> (Option<String>, Option<String>) {
         let project = s.get_project_state().expect("no project");
@@ -1079,12 +1077,16 @@ fn diverged_section(state: &AppState) -> SectionId {
     let section_id = create_section(
         state,
         "Diverged",
-        vec![shot(0.0, 5.0), shot(90.0, 6.0), shot(180.0, 7.0)],
+        vec![
+            straight_shot(0.0, 5.0),
+            straight_shot(90.0, 6.0),
+            straight_shot(180.0, 7.0),
+        ],
     );
     let first = shot_ids(state, section_id)[0];
     let created = state.execute(Command::CreateShot {
         section_id,
-        shot: shot(270.0, 8.0),
+        shot: straight_shot(270.0, 8.0),
         after_shot_id: None,
         before_shot_id: Some(first),
     });
@@ -1126,7 +1128,7 @@ fn undo_of_set_shot_kind_after_reload_hits_the_shot_it_changed() {
     let marked_uuid;
     let section_id;
     {
-        let state = state_with_project();
+        let state = state_with_project("OpenUndoBugs");
         section_id = diverged_section(&state);
 
         // Mark the shot at POSITION 0, whose id is the highest the allocator
@@ -1200,7 +1202,7 @@ fn undo_of_update_shot_after_reload_restores_the_shot_it_changed() {
     let original_length;
     let section_id;
     {
-        let state = state_with_project();
+        let state = state_with_project("OpenUndoBugs");
         section_id = diverged_section(&state);
 
         let target = shot_ids(&state, section_id)[0];
@@ -1281,11 +1283,15 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
 
     let section_id;
     {
-        let state = state_with_project();
+        let state = state_with_project("OpenUndoBugs");
         section_id = create_section(
             &state,
             "Wedged",
-            vec![shot(0.0, 5.0), shot(90.0, 6.0), shot(180.0, 7.0)],
+            vec![
+                straight_shot(0.0, 5.0),
+                straight_shot(90.0, 6.0),
+                straight_shot(180.0, 7.0),
+            ],
         );
 
         // The delete is what makes the allocator run ahead of the shot count.
@@ -1299,7 +1305,7 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
         let first = shot_ids(&state, section_id)[0];
         let created = state.execute(Command::CreateShot {
             section_id,
-            shot: shot(270.0, 8.0),
+            shot: straight_shot(270.0, 8.0),
             after_shot_id: None,
             before_shot_id: Some(first),
         });
@@ -1398,8 +1404,8 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
 #[test]
 fn unwinding_the_history_leaves_no_displaced_section_behind() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let keeper = create_section(&state, "Keeper", vec![shot(0.0, 5.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let keeper = create_section(&state, "Keeper", vec![straight_shot(0.0, 5.0)]);
     let empty = create_section(&state, "Empty", vec![]);
 
     let before = section_offset(&state, empty);
@@ -1423,7 +1429,7 @@ fn unwinding_the_history_leaves_no_displaced_section_behind() {
     // Depth 2: the first shot appended into the empty section.
     let created = state.execute(Command::CreateShot {
         section_id: empty,
-        shot: shot(90.0, 10.0),
+        shot: straight_shot(90.0, 10.0),
         after_shot_id: None,
         before_shot_id: None,
     });
@@ -1470,7 +1476,7 @@ fn redo_after_reload_does_not_duplicate_a_shot_uuid() {
 
     let section_id;
     {
-        let state = state_with_project();
+        let state = state_with_project("OpenUndoBugs");
         section_id = diverged_section(&state);
         let saved = state.save_project(Some(save_path.clone()));
         assert!(saved.success, "save failed: {:?}", saved.error);
@@ -1522,11 +1528,11 @@ fn redo_after_reload_does_not_duplicate_a_shot_uuid() {
 #[test]
 fn undo_of_remove_zero_datum_restores_the_original_order() {
     let _config = isolated_config();
-    let state = state_with_project();
+    let state = state_with_project("OpenUndoBugs");
     // Two INDEPENDENT components, so both may carry a datum: a second datum in
     // one component is refused.
-    let first = create_section(&state, "First", vec![shot(0.0, 5.0)]);
-    let second = create_section(&state, "Second", vec![shot(90.0, 5.0)]);
+    let first = create_section(&state, "First", vec![straight_shot(0.0, 5.0)]);
+    let second = create_section(&state, "Second", vec![straight_shot(90.0, 5.0)]);
     for (section_id, latitude) in [(first, 10.0), (second, 11.0)] {
         let datum = state.execute(Command::SetZeroDatum {
             station_ref: StationRef::new(section_id, 0),
@@ -1619,8 +1625,12 @@ fn raw_station_gap(state: &AppState, a: (SectionId, u32), b: (SectionId, u32)) -
 /// oversight: `realign_after_shot_edit` looks for a datum in the edited
 /// section's merge group and returns early when there is none.
 fn two_unanchored_merged_sections(state: &AppState) -> (SectionId, SectionId) {
-    let a = create_section(state, "A", vec![shot(0.0, 5.0), shot(0.0, 5.0)]);
-    let b = create_section(state, "B", vec![shot(90.0, 5.0)]);
+    let a = create_section(
+        state,
+        "A",
+        vec![straight_shot(0.0, 5.0), straight_shot(0.0, 5.0)],
+    );
+    let b = create_section(state, "B", vec![straight_shot(90.0, 5.0)]);
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 1),
         station_b: StationRef::new(b, 0),
@@ -1674,7 +1684,7 @@ fn two_unanchored_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 #[test]
 fn a_shot_edit_keeps_an_unanchored_merge_aligned() {
     let _config = isolated_config();
-    let state = state_with_project();
+    let state = state_with_project("OpenUndoBugs");
     let (a, b) = two_unanchored_merged_sections(&state);
 
     // 2 cm of extra length on the shot BEFORE the merged station, so the station
@@ -1722,9 +1732,9 @@ fn a_shot_edit_keeps_an_unanchored_merge_aligned() {
 #[test]
 fn a_shot_edit_does_not_arm_an_alignment_assert_for_a_later_command() {
     let _config = isolated_config();
-    let state = state_with_project();
+    let state = state_with_project("OpenUndoBugs");
     let (a, _b) = two_unanchored_merged_sections(&state);
-    let elsewhere = create_section(&state, "Elsewhere", vec![shot(45.0, 5.0)]);
+    let elsewhere = create_section(&state, "Elsewhere", vec![straight_shot(45.0, 5.0)]);
 
     let first_shot = shot_ids(&state, a)[0];
     let updated = state.execute(Command::UpdateShot {
@@ -1742,7 +1752,7 @@ fn a_shot_edit_does_not_arm_an_alignment_assert_for_a_later_command() {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         state.execute(Command::CreateShot {
             section_id: elsewhere,
-            shot: shot(10.0, 3.0),
+            shot: straight_shot(10.0, 3.0),
             after_shot_id: Some(anchor),
             before_shot_id: None,
         })
@@ -1837,13 +1847,21 @@ fn adjusted_bits(state: &AppState) -> Vec<(String, [u64; 3])> {
 #[test]
 fn the_adjusted_solve_is_a_function_of_the_project() {
     let _config = isolated_config();
-    let state = state_with_project();
+    let state = state_with_project("OpenUndoBugs");
     let a = create_section(
         &state,
         "A",
-        vec![shot(0.0, 5.0), shot(0.0, 5.0), shot(10.0, 4.0)],
+        vec![
+            straight_shot(0.0, 5.0),
+            straight_shot(0.0, 5.0),
+            straight_shot(10.0, 4.0),
+        ],
     );
-    let b = create_section(&state, "B", vec![shot(90.0, 5.0), shot(95.0, 6.0)]);
+    let b = create_section(
+        &state,
+        "B",
+        vec![straight_shot(90.0, 5.0), straight_shot(95.0, 6.0)],
+    );
     let datum = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
@@ -1937,7 +1955,7 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
 fn section_offsets(state: &AppState) -> Vec<(SectionId, (f64, f64))> {
     let project = state.get_project_state().expect("no project open");
     let mut out: Vec<(SectionId, (f64, f64))> = project
-        .section_offsets
+        .section_offsets()
         .iter()
         .map(|(id, offset)| (*id, (offset.0, offset.1)))
         .collect();
@@ -1952,13 +1970,13 @@ fn merged_chain_for_range_delete(state: &AppState) -> (SectionId, SectionId) {
         state,
         "A",
         vec![
-            shot(0.0, 5.0),
-            shot(30.0, 6.0),
-            shot(60.0, 7.0),
-            shot(90.0, 8.0),
+            straight_shot(0.0, 5.0),
+            straight_shot(30.0, 6.0),
+            straight_shot(60.0, 7.0),
+            straight_shot(90.0, 8.0),
         ],
     );
-    let b = create_section(state, "B", vec![shot(120.0, 5.0)]);
+    let b = create_section(state, "B", vec![straight_shot(120.0, 5.0)]);
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 4),
         station_b: StationRef::new(b, 0),
@@ -2026,7 +2044,7 @@ struct Routes {
 }
 
 fn both_routes_over(lo: usize, hi: usize) -> Routes {
-    let ranged = state_with_project();
+    let ranged = state_with_project("OpenUndoBugs");
     let (ranged_a, ranged_b) = merged_chain_for_range_delete(&ranged);
     let ids = shot_ids(&ranged, ranged_a);
     let result = ranged.execute_delete_shot_range_shift(ranged_a, ids[lo], ids[hi]);
@@ -2036,7 +2054,7 @@ fn both_routes_over(lo: usize, hi: usize) -> Routes {
         result.error
     );
 
-    let singles = state_with_project();
+    let singles = state_with_project("OpenUndoBugs");
     let (singles_a, singles_b) = merged_chain_for_range_delete(&singles);
     assert_eq!(
         (ranged_a, ranged_b),
@@ -2089,7 +2107,7 @@ fn both_routes_over(lo: usize, hi: usize) -> Routes {
 fn a_doomed_anchor_range_shift_keeps_the_partner_in_place() {
     let _config = isolated_config();
     // --- Half 1: the doomed-anchor suffix range -------------------------------
-    let reference = state_with_project();
+    let reference = state_with_project("OpenUndoBugs");
     let (_, reference_b) = merged_chain_for_range_delete(&reference);
     let b_before = positions_of(&reference, reference_b);
     let offsets_before = section_offsets(&reference);
@@ -2211,8 +2229,8 @@ fn a_doomed_anchor_range_shift_keeps_the_partner_in_place() {
 #[test]
 fn describing_a_command_with_an_out_of_range_shot_id_does_not_overflow() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let section_id = create_section(&state, "A", vec![shot(0.0, 5.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let section_id = create_section(&state, "A", vec![straight_shot(0.0, 5.0)]);
 
     // No section holds this shot. The command must be REFUSED, not fatal.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2321,9 +2339,17 @@ fn raw_station_xy(state: &AppState, station: StationRef) -> (f64, f64) {
 #[test]
 fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let origin = create_section(
+        &state,
+        "Origin",
+        vec![straight_shot(10.0, 3.0), straight_shot(20.0, 4.0)],
+    );
+    let anchored = create_section(
+        &state,
+        "Anchored",
+        vec![straight_shot(70.0, 7.0), straight_shot(100.0, 8.0)],
+    );
 
     // The FIRST datum is the project's local origin.
     let first = state.execute(Command::SetZeroDatum {
@@ -2429,9 +2455,17 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
 #[test]
 fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let origin = create_section(
+        &state,
+        "Origin",
+        vec![straight_shot(10.0, 3.0), straight_shot(20.0, 4.0)],
+    );
+    let anchored = create_section(
+        &state,
+        "Anchored",
+        vec![straight_shot(70.0, 7.0), straight_shot(100.0, 8.0)],
+    );
 
     assert!(
         state
@@ -2516,9 +2550,17 @@ fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
 #[test]
 fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let origin = create_section(
+        &state,
+        "Origin",
+        vec![straight_shot(10.0, 3.0), straight_shot(20.0, 4.0)],
+    );
+    let anchored = create_section(
+        &state,
+        "Anchored",
+        vec![straight_shot(70.0, 7.0), straight_shot(100.0, 8.0)],
+    );
 
     assert!(
         state
@@ -2612,7 +2654,7 @@ fn all_section_offsets(state: &AppState) -> std::collections::HashMap<SectionId,
     state
         .get_project_state()
         .expect("no project open")
-        .section_offsets
+        .section_offsets()
         .clone()
 }
 
@@ -2647,12 +2689,20 @@ fn frame_gps(state: &AppState) -> (f64, f64) {
 #[test]
 fn promoting_a_zero_datum_keeps_every_station_where_it_is_in_the_world() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let origin = create_section(
+        &state,
+        "Origin",
+        vec![straight_shot(10.0, 3.0), straight_shot(20.0, 4.0)],
+    );
+    let anchored = create_section(
+        &state,
+        "Anchored",
+        vec![straight_shot(70.0, 7.0), straight_shot(100.0, 8.0)],
+    );
     // Free-floating: no datum, no merge, no closure. `all_station_xy` sweeps it
     // like every other section, which is what puts it under the oracle below.
-    let _floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+    let _floater = create_section(&state, "Floater", vec![straight_shot(300.0, 12.0)]);
 
     let first_gps = GpsCoordinates::new(20.4, -87.3, 0.0).unwrap();
     // About 400 m away: far enough that a missed translation is unmissable, close
@@ -2734,10 +2784,18 @@ fn promoting_a_zero_datum_keeps_every_station_where_it_is_in_the_world() {
 #[test]
 fn undoing_the_primary_datum_removal_restores_every_section_offset() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
-    let _floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let origin = create_section(
+        &state,
+        "Origin",
+        vec![straight_shot(10.0, 3.0), straight_shot(20.0, 4.0)],
+    );
+    let anchored = create_section(
+        &state,
+        "Anchored",
+        vec![straight_shot(70.0, 7.0), straight_shot(100.0, 8.0)],
+    );
+    let _floater = create_section(&state, "Floater", vec![straight_shot(300.0, 12.0)]);
 
     for (station, gps) in [
         (
@@ -2803,10 +2861,14 @@ fn undoing_the_primary_datum_removal_restores_every_section_offset() {
 #[test]
 fn the_zero_datum_undo_capture_covers_every_section() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let anchored = create_section(&state, "Anchored", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let _one = create_section(&state, "One", vec![shot(70.0, 7.0)]);
-    let _two = create_section(&state, "Two", vec![shot(300.0, 12.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let anchored = create_section(
+        &state,
+        "Anchored",
+        vec![straight_shot(10.0, 3.0), straight_shot(20.0, 4.0)],
+    );
+    let _one = create_section(&state, "One", vec![straight_shot(70.0, 7.0)]);
+    let _two = create_section(&state, "Two", vec![straight_shot(300.0, 12.0)]);
 
     assert!(
         state
@@ -2824,7 +2886,7 @@ fn the_zero_datum_undo_capture_covers_every_section() {
         .sections
         .len();
 
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     let recorded = stack.peek_undo_data();
     assert_eq!(
         recorded.map(crate::core::UndoData::variant_name),
@@ -2868,13 +2930,21 @@ fn the_zero_datum_undo_capture_covers_every_section() {
 #[test]
 fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let anchored = create_section(&state, "Anchored", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let partner = create_section(&state, "Partner", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let anchored = create_section(
+        &state,
+        "Anchored",
+        vec![straight_shot(10.0, 3.0), straight_shot(20.0, 4.0)],
+    );
+    let partner = create_section(
+        &state,
+        "Partner",
+        vec![straight_shot(70.0, 7.0), straight_shot(100.0, 8.0)],
+    );
     // Outside the datum's merge group and outside every other connection: the
     // section whose movement separates "the group was placed on the origin" from
     // "the survey was re-framed onto it".
-    let floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+    let floater = create_section(&state, "Floater", vec![straight_shot(300.0, 12.0)]);
 
     // A merge so the add has a group wider than one section to move.
     assert!(
@@ -2973,9 +3043,17 @@ fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
 #[test]
 fn deleting_the_primary_datums_section_renormalises_the_frame() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let origin = create_section(
+        &state,
+        "Origin",
+        vec![straight_shot(10.0, 3.0), straight_shot(20.0, 4.0)],
+    );
+    let anchored = create_section(
+        &state,
+        "Anchored",
+        vec![straight_shot(70.0, 7.0), straight_shot(100.0, 8.0)],
+    );
 
     for (station, gps) in [
         (
@@ -3029,9 +3107,13 @@ fn deleting_the_primary_datums_section_renormalises_the_frame() {
 #[test]
 fn the_delete_last_shot_path_renormalises_the_frame() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let origin = create_section(&state, "Origin", vec![straight_shot(10.0, 3.0)]);
+    let anchored = create_section(
+        &state,
+        "Anchored",
+        vec![straight_shot(70.0, 7.0), straight_shot(100.0, 8.0)],
+    );
 
     for (station, gps) in [
         (
@@ -3095,10 +3177,18 @@ fn the_renormalised_frame_survives_save_and_reopen() {
     let save_path: PathBuf = temp.path().join("renormalised-frame.stalx");
 
     let (before_offsets, before_promoted) = {
-        let state = state_with_project();
-        let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-        let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
-        let _floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+        let state = state_with_project("OpenUndoBugs");
+        let origin = create_section(
+            &state,
+            "Origin",
+            vec![straight_shot(10.0, 3.0), straight_shot(20.0, 4.0)],
+        );
+        let anchored = create_section(
+            &state,
+            "Anchored",
+            vec![straight_shot(70.0, 7.0), straight_shot(100.0, 8.0)],
+        );
+        let _floater = create_section(&state, "Floater", vec![straight_shot(300.0, 12.0)]);
 
         for (station, gps) in [
             (
@@ -3232,7 +3322,7 @@ fn snapped_loop(state: &AppState, anchored: bool) -> (SectionId, SectionId) {
 #[test]
 fn a_move_closure_over_a_real_gap_is_not_born_aligned() {
     let _config = isolated_config();
-    let state = state_with_project();
+    let state = state_with_project("OpenUndoBugs");
     let (a, b) = two_merged_sections(&state);
 
     let closed = state.execute(Command::CreateLoopClosure {
@@ -3284,7 +3374,7 @@ fn a_move_closure_over_a_real_gap_is_not_born_aligned() {
 #[test]
 fn the_snap_to_merge_batch_still_creates_an_aligned_closure() {
     let _config = isolated_config();
-    let state = state_with_project();
+    let state = state_with_project("OpenUndoBugs");
     let (a, b) = two_merged_sections(&state);
     let (from, to) = station_raw_xy(&state, (b, 1), (a, 0));
 
@@ -3346,7 +3436,7 @@ fn the_snap_to_merge_batch_still_creates_an_aligned_closure() {
 fn tearing_an_aligned_closure_demotes_it_and_the_undo_restores_the_claim() {
     let _config = isolated_config();
     for narrow_capture in [false, true] {
-        let state = state_with_project();
+        let state = state_with_project("OpenUndoBugs");
         let (a, b) = snapped_loop(&state, !narrow_capture);
         let closed_geometry = all_station_xy(&state);
         assert_eq!(
@@ -3418,7 +3508,7 @@ fn tearing_an_aligned_closure_demotes_it_and_the_undo_restores_the_claim() {
 #[test]
 fn drifting_back_into_coincidence_re_promotes_the_closure() {
     let _config = isolated_config();
-    let state = state_with_project();
+    let state = state_with_project("OpenUndoBugs");
     let (a, b) = snapped_loop(&state, true);
 
     for (offset, expected) in [(100.0, false), (-100.0, true)] {
@@ -3454,9 +3544,9 @@ fn drifting_back_into_coincidence_re_promotes_the_closure() {
 #[test]
 fn a_coincident_closure_between_two_anchored_groups_is_never_aligned() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let a = create_section(&state, "A", vec![shot(0.0, 5.0)]);
-    let c = create_section(&state, "C", vec![shot(90.0, 5.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let a = create_section(&state, "A", vec![straight_shot(0.0, 5.0)]);
+    let c = create_section(&state, "C", vec![straight_shot(90.0, 5.0)]);
     // The SAME GPS on both: `set_zero_datum` puts the first datum's station at
     // the local origin and every later one at `gps_to_local(gps, first.gps)`, so
     // identical coordinates place both stations on exactly one point.
@@ -3522,7 +3612,7 @@ fn a_demoted_alignment_claim_survives_save_and_reopen() {
     let save_path: PathBuf = temp.path().join("demoted-claim.stalx");
 
     let (a, b) = {
-        let state = state_with_project();
+        let state = state_with_project("OpenUndoBugs");
         let (a, b) = snapped_loop(&state, true);
         let torn = state.execute(Command::MoveStation {
             station_ref: StationRef::new(b, 1),
@@ -3613,16 +3703,16 @@ fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
     let inserted_length;
     let neighbour_length;
     {
-        let state = state_with_project();
-        edited_section = create_section(&state, "Edited", vec![shot(0.0, 5.0)]);
-        other_section = create_section(&state, "Other", vec![shot(90.0, 6.0)]);
+        let state = state_with_project("OpenUndoBugs");
+        edited_section = create_section(&state, "Edited", vec![straight_shot(0.0, 5.0)]);
+        other_section = create_section(&state, "Other", vec![straight_shot(90.0, 6.0)]);
 
         // Move 1: insert BEFORE the existing shot, so position 0 holds the
         // HIGHEST id the allocator handed out.
         let existing = shot_ids(&state, edited_section)[0];
         let created = state.execute(Command::CreateShot {
             section_id: edited_section,
-            shot: shot(180.0, 7.0),
+            shot: straight_shot(180.0, 7.0),
             after_shot_id: None,
             before_shot_id: Some(existing),
         });
@@ -3738,14 +3828,14 @@ fn redo_after_reload_clears_the_section_field_it_cleared() {
 
     let section_id;
     {
-        let state = state_with_project();
+        let state = state_with_project("OpenUndoBugs");
         let created = state.execute(Command::CreateSection {
             name: Some("Sump".to_string()),
             surveyor: Some("Ferreira".to_string()),
             date: None,
             color: "#3388FF".to_string(),
             direction: None,
-            shots: vec![shot(0.0, 5.0)],
+            shots: vec![straight_shot(0.0, 5.0)],
         });
         assert!(created.success, "CreateSection failed: {:?}", created.error);
         section_id = created.section_id.expect("CreateSection returned no id");
@@ -3824,14 +3914,14 @@ fn the_history_preview_still_reports_a_cleared_field() {
 
     let before;
     {
-        let state = state_with_project();
+        let state = state_with_project("OpenUndoBugs");
         let created = state.execute(Command::CreateSection {
             name: Some("Sump".to_string()),
             surveyor: Some("Ferreira".to_string()),
             date: None,
             color: "#3388FF".to_string(),
             direction: None,
-            shots: vec![shot(0.0, 5.0)],
+            shots: vec![straight_shot(0.0, 5.0)],
         });
         assert!(created.success, "CreateSection failed: {:?}", created.error);
         let section_id = created.section_id.expect("CreateSection returned no id");
@@ -3940,8 +4030,8 @@ fn a_reloaded_entry_displays_the_length_it_was_given() {
     let length = f64::from_bits(0x402b_2147_ae14_7ae2);
     let before;
     {
-        let state = state_with_project();
-        let section_id = create_section(&state, "Traverse", vec![shot(0.0, 5.0)]);
+        let state = state_with_project("OpenUndoBugs");
+        let section_id = create_section(&state, "Traverse", vec![straight_shot(0.0, 5.0)]);
         let shot_id = shot_ids(&state, section_id)[0];
         let updated = state.execute(Command::UpdateShot {
             section_id,
@@ -4140,7 +4230,7 @@ fn removing_a_zero_datum_leaves_nothing_for_the_next_load_to_reclassify() {
 /// so the scoping's own red/green guard is at the model level, where the state
 /// can be built directly:
 /// `removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one` and
-/// its `remove_appended_first_shot` sibling in models/project/tests.rs.
+/// its `remove_appended_first_shot` sibling in models/project/tests/orphan_closure_tests.rs.
 ///
 /// The undo of `CreateShot` picks its inverse by shape, so both are pinned: this
 /// one is the append into an EMPTY section (`remove_appended_first_shot`).
@@ -4153,7 +4243,7 @@ fn undo_of_an_appended_first_shot_restores_the_recorded_closure_state() {
 
     let created = state.execute(Command::CreateShot {
         section_id: empty,
-        shot: shot(180.0, 4.0),
+        shot: straight_shot(180.0, 4.0),
         after_shot_id: None,
         before_shot_id: None,
     });
@@ -4175,13 +4265,13 @@ fn undo_of_an_appended_first_shot_restores_the_recorded_closure_state() {
 fn undo_of_an_appended_shot_restores_the_recorded_closure_state() {
     let _config = isolated_config();
     let state = converged_orphan_state();
-    let elsewhere = create_section(&state, "Elsewhere", vec![shot(270.0, 6.0)]);
+    let elsewhere = create_section(&state, "Elsewhere", vec![straight_shot(270.0, 6.0)]);
     let first = shot_ids(&state, elsewhere)[0];
     let recorded = closure_and_merge_counts(&state);
 
     let created = state.execute(Command::CreateShot {
         section_id: elsewhere,
-        shot: shot(180.0, 4.0),
+        shot: straight_shot(180.0, 4.0),
         after_shot_id: Some(first),
         before_shot_id: None,
     });
@@ -4256,7 +4346,7 @@ fn a_legacy_remove_zero_datum_entry_still_restores_the_datum_at_its_index() {
 
     // Swap the live pair for the shape a persisted stack still carries.
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         stack.clear();
         stack.push_with_data(
             Command::RemoveZeroDatum {
@@ -4292,9 +4382,9 @@ fn a_legacy_remove_zero_datum_entry_still_restores_the_datum_at_its_index() {
 /// rigid merge component. Returns the state and both section ids - the tests
 /// take an anchor off one or the other.
 fn detached_anchored_closure() -> (AppState, SectionId, SectionId) {
-    let state = state_with_project();
-    let a = create_section(&state, "A", vec![shot(0.0, 5.0)]);
-    let b = create_section(&state, "B", vec![shot(90.0, 5.0)]);
+    let state = state_with_project("OpenUndoBugs");
+    let a = create_section(&state, "A", vec![straight_shot(0.0, 5.0)]);
+    let b = create_section(&state, "B", vec![straight_shot(90.0, 5.0)]);
 
     for (section, latitude) in [(a, 10.0), (b, 11.0)] {
         let datum = state.execute(Command::SetZeroDatum {
@@ -4365,11 +4455,7 @@ fn datum_stations(state: &AppState) -> Vec<StationRef> {
 /// fix, per the module rule it guards the mechanism from day one.
 #[test]
 fn restoring_a_section_with_an_over_bound_id_is_refused() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Overbound Restore".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Overbound Restore");
 
     let hostile = crate::models::MAX_SECTION_ID + 1;
     let result = state.restore_section(
@@ -4405,12 +4491,15 @@ fn a_snapshot_restore_with_an_over_bound_section_id_is_refused() {
     hostile.sections[0].id = crate::models::MAX_SECTION_ID + 1;
     let json = serde_json::to_string(&hostile).unwrap();
 
-    let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
+    let mut slot = super::project_slot::ProjectSlot::new(Some(crate::models::Project::new(
+        "Live".to_string(),
+        None,
+    )));
     assert!(
         !AppState::restore_snapshot_into(&mut slot, &json),
         "an over-bound snapshot must be refused"
     );
-    let live = slot.unwrap();
+    let live = slot.into_project().unwrap();
     assert_eq!(live.name, "Live", "the live project must be untouched");
     assert!(
         live.sections.is_empty(),
@@ -4434,13 +4523,16 @@ fn a_snapshot_restore_with_a_hostile_shot_counter_is_refused() {
     hostile.sections[0].next_shot_id = u32::MAX;
     let json = serde_json::to_string(&hostile).unwrap();
 
-    let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
+    let mut slot = super::project_slot::ProjectSlot::new(Some(crate::models::Project::new(
+        "Live".to_string(),
+        None,
+    )));
     assert!(
         !AppState::restore_snapshot_into(&mut slot, &json),
         "a hostile shot counter must be refused"
     );
     assert!(
-        slot.unwrap().sections.is_empty(),
+        slot.into_project().unwrap().sections.is_empty(),
         "nothing may be installed"
     );
 
@@ -4456,10 +4548,13 @@ fn a_snapshot_restore_with_a_hostile_shot_counter_is_refused() {
         ..Default::default()
     });
     let json = serde_json::to_string(&legit).unwrap();
-    let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
+    let mut slot = super::project_slot::ProjectSlot::new(Some(crate::models::Project::new(
+        "Live".to_string(),
+        None,
+    )));
     assert!(
         AppState::restore_snapshot_into(&mut slot, &json),
         "a legitimate snapshot must still restore"
     );
-    assert_eq!(slot.unwrap().sections.len(), 1);
+    assert_eq!(slot.into_project().unwrap().sections.len(), 1);
 }

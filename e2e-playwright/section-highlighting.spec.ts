@@ -490,7 +490,8 @@ test.describe('Section Highlighting', () => {
       const selectedInk = await pollInk(page, probes, bg, (ink) => ink > baseInk);
       expect(selectedInk).toBeGreaterThan(baseInk);
 
-      // Verify selection persists across a short wait (not transient)
+      // settle: the selection must persist (not be a transient flash), so it is
+      // re-read after a fixed interval rather than polled.
       await page.waitForTimeout(200);
       const persistedSelection = await getSelectionState(page);
       expect(persistedSelection?.sectionId).toBe(firstSectionId);

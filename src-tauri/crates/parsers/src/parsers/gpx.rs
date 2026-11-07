@@ -26,7 +26,7 @@ const GPX_AZIMUTH_REFERENCE: AzimuthReference = AzimuthReference {
     correction: 0.0,
     source: CorrectionSource::FileDeclared,
 };
-use crate::parsers::encoding::read_utf8;
+use crate::parsers::encoding::{read_utf8, FileFamily};
 
 // ============================================================================
 // IPC-visible types
@@ -128,14 +128,52 @@ fn local_name(e: &quick_xml::events::BytesStart<'_>) -> Vec<u8> {
     strip_ns(qname.as_ref()).to_vec()
 }
 
+/// The XML reader every GPX loop reads through once `<gpx>` has opened, so the
+/// document's end is judged in one place (#576 B14). quick-xml reports a
+/// document that simply stops as a clean end of file, so a GPX cut off by a
+/// dying GPS or a partial download read as a shorter, complete track, and a
+/// number cut in half (352.4 cut to 35) became a real reading. Any end of
+/// file while an element is still open fails the parse instead, as the
+/// Ariane reader does (`tml::parse_xml_content`).
+struct GpxReader<'a> {
+    inner: Reader<&'a [u8]>,
+    /// Elements opened and not yet closed, `<gpx>` included.
+    open: u32,
+}
+
+impl GpxReader<'_> {
+    /// The next event, or an error for malformed XML or a document that
+    /// ends with elements still open.
+    fn next_event<'b>(&mut self, buf: &'b mut Vec<u8>) -> Result<Event<'b>> {
+        match self.inner.read_event_into(buf) {
+            Ok(event @ Event::Start(_)) => {
+                self.open += 1;
+                Ok(event)
+            }
+            Ok(event @ Event::End(_)) => {
+                self.open = self.open.saturating_sub(1);
+                Ok(event)
+            }
+            Ok(Event::Eof) if self.open > 0 => bail!(
+                "The GPX ends at byte {} with {} element(s) still open - the file appears \
+                 truncated or damaged. Export the track from the device or app again.",
+                self.inner.buffer_position(),
+                self.open
+            ),
+            Ok(event) => Ok(event),
+            Err(e) => bail!("XML parse error: {e}"),
+        }
+    }
+}
+
 /// Parse a GPX file from the given path.
 pub fn parse_gpx(path: &Path) -> Result<GpxFile> {
-    parse_gpx_str(&read_utf8(path)?)
+    parse_gpx_str(&read_utf8(path, FileFamily::Xml)?)
 }
 
 /// Parse GPX from a string (for testing).
 pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
-    let mut reader = Reader::from_str(xml);
+    let mut xml_reader = Reader::from_str(xml);
 
     let mut gpx = GpxFile {
         name: None,
@@ -148,7 +186,7 @@ pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
 
     // Find the <gpx> root element
     loop {
-        match reader.read_event_into(&mut buf) {
+        match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 let tag = local_name(e);
                 if tag == b"gpx" {
@@ -163,12 +201,18 @@ pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
     }
 
     buf.clear();
+    // From here on every event goes through the reader that counts what is
+    // open, starting with <gpx> itself (#576 B14).
+    let mut reader = GpxReader {
+        inner: xml_reader,
+        open: 1,
+    };
 
     // Parse children of <gpx>
     let mut depth = 1u32;
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 let tag = local_name(e);
                 // Extract lat/lon now while `e` is still alive
                 let lat_lon = if tag == b"wpt" || tag == b"trkpt" || tag == b"rtept" {
@@ -201,7 +245,7 @@ pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
                     _ => {}
                 }
             }
-            Ok(Event::Empty(ref e)) => {
+            Event::Empty(ref e) => {
                 let tag = local_name(e);
                 if tag == b"wpt" {
                     let (lat, lon) = parse_lat_lon(e)?;
@@ -215,14 +259,13 @@ pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
                     });
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -272,20 +315,19 @@ fn parse_lat_lon(e: &quick_xml::events::BytesStart<'_>) -> Result<(f64, f64)> {
 }
 
 /// Read the text content of the current element (between start and end tags).
-fn read_text(reader: &mut Reader<&[u8]>) -> Result<String> {
+fn read_text(reader: &mut GpxReader<'_>) -> Result<String> {
     let mut buf = Vec::new();
     let mut text = String::new();
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Text(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Text(ref e) => {
                 text.push_str(&e.unescape().context("Invalid text content")?);
             }
-            Ok(Event::End(_)) | Ok(Event::Eof) => break,
-            Ok(Event::Start(_)) => {
+            Event::End(_) | Event::Eof => break,
+            Event::Start(_) => {
                 // Nested element - skip it entirely
                 skip_element(reader)?;
             }
-            Err(e) => bail!("XML parse error: {e}"),
             _ => {}
         }
         buf.clear();
@@ -294,20 +336,19 @@ fn read_text(reader: &mut Reader<&[u8]>) -> Result<String> {
 }
 
 /// Skip past the current element and all its children (after Start has been consumed).
-fn skip_element(reader: &mut Reader<&[u8]>) -> Result<()> {
+fn skip_element(reader: &mut GpxReader<'_>) -> Result<()> {
     let mut buf = Vec::new();
     let mut depth = 1u32;
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(_)) => depth += 1,
-            Ok(Event::End(_)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     return Ok(());
                 }
             }
-            Ok(Event::Eof) => return Ok(()),
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => return Ok(()),
             _ => {}
         }
         buf.clear();
@@ -315,14 +356,14 @@ fn skip_element(reader: &mut Reader<&[u8]>) -> Result<()> {
 }
 
 /// Parse <metadata> and extract the <name> child if present.
-fn parse_metadata_name(reader: &mut Reader<&[u8]>) -> Result<Option<String>> {
+fn parse_metadata_name(reader: &mut GpxReader<'_>) -> Result<Option<String>> {
     let mut buf = Vec::new();
     let mut name = None;
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 if tag == b"name" && depth == 2 {
@@ -333,14 +374,13 @@ fn parse_metadata_name(reader: &mut Reader<&[u8]>) -> Result<Option<String>> {
                     }
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -353,7 +393,7 @@ fn parse_metadata_name(reader: &mut Reader<&[u8]>) -> Result<Option<String>> {
 fn parse_waypoint_children(
     latitude: f64,
     longitude: f64,
-    reader: &mut Reader<&[u8]>,
+    reader: &mut GpxReader<'_>,
 ) -> Result<GpxWaypoint> {
     let mut wpt = GpxWaypoint {
         name: None,
@@ -368,8 +408,8 @@ fn parse_waypoint_children(
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 if depth == 2 {
@@ -411,14 +451,13 @@ fn parse_waypoint_children(
                     }
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -428,7 +467,7 @@ fn parse_waypoint_children(
 }
 
 /// Parse a <trk> element.
-fn parse_track(reader: &mut Reader<&[u8]>) -> Result<GpxTrack> {
+fn parse_track(reader: &mut GpxReader<'_>) -> Result<GpxTrack> {
     let mut trk = GpxTrack {
         name: None,
         comment: None,
@@ -439,8 +478,8 @@ fn parse_track(reader: &mut Reader<&[u8]>) -> Result<GpxTrack> {
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 match tag.as_slice() {
@@ -472,14 +511,13 @@ fn parse_track(reader: &mut Reader<&[u8]>) -> Result<GpxTrack> {
                     _ => {}
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -489,14 +527,14 @@ fn parse_track(reader: &mut Reader<&[u8]>) -> Result<GpxTrack> {
 }
 
 /// Parse a <trkseg> element.
-fn parse_track_segment(reader: &mut Reader<&[u8]>) -> Result<GpxTrackSegment> {
+fn parse_track_segment(reader: &mut GpxReader<'_>) -> Result<GpxTrackSegment> {
     let mut seg = GpxTrackSegment { points: Vec::new() };
     let mut buf = Vec::new();
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 if tag == b"trkpt" {
@@ -505,7 +543,7 @@ fn parse_track_segment(reader: &mut Reader<&[u8]>) -> Result<GpxTrackSegment> {
                     depth -= 1;
                 }
             }
-            Ok(Event::Empty(ref e)) => {
+            Event::Empty(ref e) => {
                 let tag = local_name(e);
                 if tag == b"trkpt" {
                     let (lat, lon) = parse_lat_lon(e)?;
@@ -517,14 +555,13 @@ fn parse_track_segment(reader: &mut Reader<&[u8]>) -> Result<GpxTrackSegment> {
                     });
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -537,7 +574,7 @@ fn parse_track_segment(reader: &mut Reader<&[u8]>) -> Result<GpxTrackSegment> {
 fn parse_point_children(
     latitude: f64,
     longitude: f64,
-    reader: &mut Reader<&[u8]>,
+    reader: &mut GpxReader<'_>,
 ) -> Result<GpxTrackPoint> {
     let mut pt = GpxTrackPoint {
         latitude,
@@ -550,8 +587,8 @@ fn parse_point_children(
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 if depth == 2 {
@@ -572,14 +609,13 @@ fn parse_point_children(
                     }
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -589,7 +625,7 @@ fn parse_point_children(
 }
 
 /// Parse a <rte> element.
-fn parse_route(reader: &mut Reader<&[u8]>) -> Result<GpxRoute> {
+fn parse_route(reader: &mut GpxReader<'_>) -> Result<GpxRoute> {
     let mut rte = GpxRoute {
         name: None,
         comment: None,
@@ -600,8 +636,8 @@ fn parse_route(reader: &mut Reader<&[u8]>) -> Result<GpxRoute> {
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 match tag.as_slice() {
@@ -635,7 +671,7 @@ fn parse_route(reader: &mut Reader<&[u8]>) -> Result<GpxRoute> {
                     _ => {}
                 }
             }
-            Ok(Event::Empty(ref e)) => {
+            Event::Empty(ref e) => {
                 let tag = local_name(e);
                 if tag == b"rtept" {
                     let (lat, lon) = parse_lat_lon(e)?;
@@ -648,14 +684,13 @@ fn parse_route(reader: &mut Reader<&[u8]>) -> Result<GpxRoute> {
                     });
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -668,7 +703,7 @@ fn parse_route(reader: &mut Reader<&[u8]>) -> Result<GpxRoute> {
 fn parse_route_point_children(
     latitude: f64,
     longitude: f64,
-    reader: &mut Reader<&[u8]>,
+    reader: &mut GpxReader<'_>,
 ) -> Result<GpxRoutePoint> {
     let mut pt = GpxRoutePoint {
         name: None,
@@ -682,8 +717,8 @@ fn parse_route_point_children(
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 if depth == 2 {
@@ -711,14 +746,13 @@ fn parse_route_point_children(
                     }
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -737,24 +771,91 @@ const GPX_COLORS: &[&str] = &[
     "#8e44ad", "#27ae60",
 ];
 
-/// Convert GPS point pairs into virtual `ShotData`.
+/// Every point's elevation with the gaps filled (#576 B34), and how many
+/// points had none.
+///
+/// A missing elevation is interpolated along the track between the nearest
+/// points before and after it that have one, by horizontal distance; a gap
+/// at the start or end of the track takes the nearest known value. It used
+/// to take the FIRST point's elevation, or 0 m when the first point had
+/// none, which invented a vertical leg as tall as the track's altitude.
+/// Points that coincide horizontally share the span by position instead. A
+/// track with no elevation at all stays flat at 0 m and counts nothing: no
+/// value was invented for it.
+fn filled_elevations(points: &[(f64, f64, Option<f64>)]) -> (Vec<f64>, usize) {
+    let known: Vec<(usize, f64)> = points
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (_, _, ele))| ele.map(|e| (i, e)))
+        .collect();
+    if known.is_empty() {
+        return (vec![0.0; points.len()], 0);
+    }
+    // Horizontal distance from the first point, the interpolation axis.
+    let mut along = Vec::with_capacity(points.len());
+    let mut total = 0.0;
+    for (i, &(lat, lon, _)) in points.iter().enumerate() {
+        if let Some(&(prev_lat, prev_lon, _)) = i.checked_sub(1).and_then(|j| points.get(j)) {
+            total += haversine_distance(prev_lat, prev_lon, lat, lon);
+        }
+        along.push(total);
+    }
+    let mut filled = 0;
+    // `known[next]` is the first known point at or after the current one.
+    let mut next = 0;
+    let elevations = points
+        .iter()
+        .enumerate()
+        .map(|(i, &(_, _, ele))| {
+            if let Some(e) = ele {
+                return e;
+            }
+            filled += 1;
+            while known.get(next).is_some_and(|&(k, _)| k < i) {
+                next += 1;
+            }
+            let before = next.checked_sub(1).and_then(|k| known.get(k));
+            match (before, known.get(next)) {
+                (Some(&(b, eb)), Some(&(a, ea))) => {
+                    let span = along[a] - along[b];
+                    let t = if span > 0.0 {
+                        (along[i] - along[b]) / span
+                    } else {
+                        (i - b) as f64 / (a - b) as f64
+                    };
+                    eb + (ea - eb) * t
+                }
+                (Some(&(_, e)), None) | (None, Some(&(_, e))) => e,
+                // `known` is not empty, so one side always exists.
+                (None, None) => 0.0,
+            }
+        })
+        .collect();
+    (elevations, filled)
+}
+
+/// Convert GPS point pairs into virtual `ShotData`, and say how many points
+/// had their elevation filled in ([`filled_elevations`]).
 ///
 /// Elevation is converted to relative depth (first point = depth 0).
 /// Shot length is slope distance incorporating elevation change.
 ///
 /// When `depth_inverted` is false (default): lower elevation = deeper (surface GPS tracks).
 /// When `depth_inverted` is true: higher elevation = deeper (elevation stores positive depth).
-fn shots_from_points(points: &[(f64, f64, Option<f64>)], depth_inverted: bool) -> Vec<ShotData> {
+fn shots_from_points(
+    points: &[(f64, f64, Option<f64>)],
+    depth_inverted: bool,
+) -> (Vec<ShotData>, usize) {
     if points.len() < 2 {
-        return Vec::new();
+        return (Vec::new(), 0);
     }
 
-    // Compute depths relative to first point's elevation.
-    let ref_elev = points[0].2.unwrap_or(0.0);
-    let depths: Vec<f64> = points
+    // Depths relative to the first point's (filled) elevation.
+    let (elevations, filled) = filled_elevations(points);
+    let ref_elev = elevations[0];
+    let depths: Vec<f64> = elevations
         .iter()
-        .map(|(_lat, _lon, ele)| {
-            let e = ele.unwrap_or(ref_elev);
+        .map(|&e| {
             if depth_inverted {
                 e - ref_elev
             } else {
@@ -763,7 +864,7 @@ fn shots_from_points(points: &[(f64, f64, Option<f64>)], depth_inverted: bool) -
         })
         .collect();
 
-    points
+    let shots = points
         .windows(2)
         .enumerate()
         .map(|(i, pair)| {
@@ -789,7 +890,8 @@ fn shots_from_points(points: &[(f64, f64, Option<f64>)], depth_inverted: bool) -
                 ..Default::default()
             }
         })
-        .collect()
+        .collect();
+    (shots, filled)
 }
 
 /// Convert waypoints into zero-datum import configs.
@@ -843,7 +945,8 @@ pub fn waypoints_to_import_configs(
     Ok(configs)
 }
 
-/// Convert a track segment into an import config.
+/// Convert a track segment into an import config, with the number of points
+/// whose elevation was filled in.
 fn track_segment_to_config(
     seg: &GpxTrackSegment,
     section_index: u32,
@@ -851,14 +954,15 @@ fn track_segment_to_config(
     color: &str,
     placement: ImportPlacement,
     depth_inverted: bool,
-) -> ImportSectionConfig {
+) -> (ImportSectionConfig, usize) {
     let points: Vec<(f64, f64, Option<f64>)> = seg
         .points
         .iter()
         .map(|p| (p.latitude, p.longitude, p.elevation))
         .collect();
+    let (shots, filled) = shots_from_points(&points, depth_inverted);
 
-    ImportSectionConfig {
+    let config = ImportSectionConfig {
         reverse: false,
         section_index,
         name,
@@ -867,28 +971,31 @@ fn track_segment_to_config(
         color: color.to_string(),
         direction: None,
         quality: 1.0,
-        shots: shots_from_points(&points, depth_inverted),
+        shots,
         placement,
         station_comments: Vec::new(),
         azimuth_reference: Some(GPX_AZIMUTH_REFERENCE),
-    }
+    };
+    (config, filled)
 }
 
-/// Convert a route into an import config.
+/// Convert a route into an import config, with the number of points whose
+/// elevation was filled in.
 fn route_to_config(
     rte: &GpxRoute,
     section_index: u32,
     color: &str,
     placement: ImportPlacement,
     depth_inverted: bool,
-) -> ImportSectionConfig {
+) -> (ImportSectionConfig, usize) {
     let points: Vec<(f64, f64, Option<f64>)> = rte
         .points
         .iter()
         .map(|p| (p.latitude, p.longitude, p.elevation))
         .collect();
+    let (shots, filled) = shots_from_points(&points, depth_inverted);
 
-    ImportSectionConfig {
+    let config = ImportSectionConfig {
         reverse: false,
         section_index,
         name: rte.name.clone(),
@@ -897,11 +1004,12 @@ fn route_to_config(
         color: color.to_string(),
         direction: None,
         quality: 1.0,
-        shots: shots_from_points(&points, depth_inverted),
+        shots,
         placement,
         station_comments: Vec::new(),
         azimuth_reference: Some(GPX_AZIMUTH_REFERENCE),
-    }
+    };
+    (config, filled)
 }
 
 /// Convert a GPX file into import configs.
@@ -911,6 +1019,10 @@ fn route_to_config(
 ///
 /// If `placements` is empty, track/route sections default to zero-datum
 /// placement at their first station.
+///
+/// Returns the configs and the converter's warnings for the import receipt:
+/// one line counting the track/route points whose missing elevation was
+/// filled in (#576 B34), when there are any.
 pub fn convert_gpx_to_import_configs(
     gpx: &GpxFile,
     import_waypoints: bool,
@@ -918,9 +1030,10 @@ pub fn convert_gpx_to_import_configs(
     import_routes: bool,
     placements: &[GpxSectionPlacement],
     depth_inverted: bool,
-) -> Result<Vec<ImportSectionConfig>> {
+) -> Result<(Vec<ImportSectionConfig>, Vec<String>)> {
     let mut configs = Vec::new();
     let mut section_index = 0u32;
+    let mut filled_points = 0usize;
 
     // Waypoints → zero-datum sections
     if import_waypoints {
@@ -952,14 +1065,16 @@ pub fn convert_gpx_to_import_configs(
                         }
                     })?;
 
-                configs.push(track_segment_to_config(
+                let (config, filled) = track_segment_to_config(
                     seg,
                     section_index,
                     sec_name,
                     &color,
                     placement,
                     depth_inverted,
-                ));
+                );
+                configs.push(config);
+                filled_points += filled;
                 section_index += 1;
             }
         }
@@ -986,18 +1101,27 @@ pub fn convert_gpx_to_import_configs(
                     rte.name.clone()
                 })?;
 
-            configs.push(route_to_config(
-                rte,
-                section_index,
-                &color,
-                placement,
-                depth_inverted,
-            ));
+            let (config, filled) =
+                route_to_config(rte, section_index, &color, placement, depth_inverted);
+            configs.push(config);
+            filled_points += filled;
             section_index += 1;
         }
     }
 
-    Ok(configs)
+    let warnings = match filled_points {
+        0 => Vec::new(),
+        1 => vec![
+            "1 GPS point had no elevation; it was filled in from the nearest points along \
+             the track that have one."
+                .to_string(),
+        ],
+        n => vec![format!(
+            "{n} GPS points had no elevation; they were filled in from the nearest points \
+             along the track that have one."
+        )],
+    };
+    Ok((configs, warnings))
 }
 
 /// Resolve placement for a track/route section.
@@ -1038,7 +1162,7 @@ fn resolve_placement(
 // ============================================================================
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
 mod tests {
     use super::*;
 
@@ -1198,7 +1322,9 @@ mod tests {
     #[test]
     fn track_to_configs() {
         let gpx = parse_gpx_str(SIMPLE_GPX).unwrap();
-        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
+        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false)
+            .unwrap()
+            .0;
 
         assert_eq!(configs.len(), 1);
         let c = &configs[0];
@@ -1212,7 +1338,9 @@ mod tests {
     #[test]
     fn route_to_configs() {
         let gpx = parse_gpx_str(SIMPLE_GPX).unwrap();
-        let configs = convert_gpx_to_import_configs(&gpx, false, false, true, &[], false).unwrap();
+        let configs = convert_gpx_to_import_configs(&gpx, false, false, true, &[], false)
+            .unwrap()
+            .0;
 
         assert_eq!(configs.len(), 1);
         let c = &configs[0];
@@ -1223,7 +1351,9 @@ mod tests {
     #[test]
     fn all_types_combined() {
         let gpx = parse_gpx_str(SIMPLE_GPX).unwrap();
-        let configs = convert_gpx_to_import_configs(&gpx, true, true, true, &[], false).unwrap();
+        let configs = convert_gpx_to_import_configs(&gpx, true, true, true, &[], false)
+            .unwrap()
+            .0;
 
         // 2 waypoints + 1 track segment + 1 route = 4 sections
         assert_eq!(configs.len(), 4);
@@ -1244,7 +1374,9 @@ mod tests {
 </gpx>"#;
 
         let gpx = parse_gpx_str(xml).unwrap();
-        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
+        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false)
+            .unwrap()
+            .0;
 
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].shots.len(), 1);
@@ -1279,7 +1411,9 @@ mod tests {
 </gpx>"#;
 
         let gpx = parse_gpx_str(xml).unwrap();
-        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
+        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false)
+            .unwrap()
+            .0;
 
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].shots.len(), 2);
@@ -1328,7 +1462,9 @@ mod tests {
 </gpx>"#;
 
         let gpx = parse_gpx_str(xml).unwrap();
-        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
+        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false)
+            .unwrap()
+            .0;
 
         let shot = &configs[0].shots[0];
         // Depth: 100 - 50 = 50m drop
@@ -1363,7 +1499,9 @@ mod tests {
         let gpx = parse_gpx_str(xml).unwrap();
 
         // Normal: ele goes up -> depth decreases (negative)
-        let normal = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
+        let normal = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false)
+            .unwrap()
+            .0;
         let s0 = &normal[0].shots[0];
         assert!((s0.depth_in - 0.0).abs() < 1e-9);
         assert!(
@@ -1372,7 +1510,9 @@ mod tests {
         );
 
         // Inverted: ele goes up -> depth increases (positive)
-        let inverted = convert_gpx_to_import_configs(&gpx, false, true, false, &[], true).unwrap();
+        let inverted = convert_gpx_to_import_configs(&gpx, false, true, false, &[], true)
+            .unwrap()
+            .0;
         let s0 = &inverted[0].shots[0];
         assert!((s0.depth_in - 0.0).abs() < 1e-9);
         assert!(
@@ -1396,7 +1536,9 @@ mod tests {
 </gpx>"#;
 
         let gpx = parse_gpx_str(xml).unwrap();
-        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
+        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false)
+            .unwrap()
+            .0;
 
         let shot = &configs[0].shots[0];
         assert!((shot.depth_in).abs() < 1e-9, "No elevation -> depth 0");
@@ -1425,7 +1567,9 @@ mod tests {
         let gpx = parse_gpx_str(xml).unwrap();
         assert_eq!(gpx.tracks[0].segments.len(), 2);
 
-        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
+        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false)
+            .unwrap()
+            .0;
         assert_eq!(configs.len(), 2);
         assert_eq!(configs[0].name.as_deref(), Some("Multi Seg seg 1"));
         assert_eq!(configs[1].name.as_deref(), Some("Multi Seg seg 2"));
@@ -1443,7 +1587,9 @@ mod tests {
 </gpx>"#;
 
         let gpx = parse_gpx_str(xml).unwrap();
-        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
+        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false)
+            .unwrap()
+            .0;
         assert!(configs.is_empty());
     }
 
@@ -1457,8 +1603,9 @@ mod tests {
             color: "#ff0000".to_string(),
         }];
 
-        let configs =
-            convert_gpx_to_import_configs(&gpx, false, true, false, &placements, false).unwrap();
+        let configs = convert_gpx_to_import_configs(&gpx, false, true, false, &placements, false)
+            .unwrap()
+            .0;
 
         assert_eq!(configs[0].name.as_deref(), Some("Custom Name"));
         assert_eq!(configs[0].color, "#ff0000");
@@ -1505,5 +1652,237 @@ mod tests {
             err.contains("UTF-16"),
             "the error must name the encoding, got {err:?}"
         );
+    }
+
+    /// #576 B27(g): a path that is not a regular file - here a FIFO named like
+    /// a `.gpx` - blocked the import forever, and imports run on the app's
+    /// main thread. It is refused at once, by the capped reader every
+    /// importer shares.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_like_a_gpx_is_refused_at_once() {
+        use crate::parsers::encoding::fifo_test_support::{make_fifo, within_five_seconds};
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.gpx");
+        make_fifo(&fifo);
+        let path = fifo.clone();
+        let outcome = within_five_seconds(&fifo, move || {
+            parse_gpx(&path)
+                .map(|g| g.tracks.len())
+                .map_err(|e| e.to_string())
+        });
+        println!("parse_gpx(pipe.gpx): {outcome:?}");
+        let err = outcome
+            .expect("the read must not block on a FIFO")
+            .expect_err("a FIFO is not a GPX file");
+        assert!(err.contains("not a regular file"), "{err}");
+    }
+
+    /// A four-point track whose elevations are none, 350, 349 and 352.4.
+    const TRUNCATION_GPX: &str = r#"<?xml version="1.0"?>
+<gpx version="1.1">
+  <trk><name>Cut</name><trkseg>
+    <trkpt lat="0.0" lon="0.0"></trkpt>
+    <trkpt lat="0.0" lon="0.0005"><ele>350</ele></trkpt>
+    <trkpt lat="0.0" lon="0.0010"><ele>349</ele></trkpt>
+    <trkpt lat="0.0" lon="0.0015"><ele>352.4</ele></trkpt>
+  </trkseg></trk>
+</gpx>"#;
+
+    /// `TRUNCATION_GPX` cut right after the first occurrence of `marker`.
+    fn truncated_after(marker: &str) -> &'static str {
+        let end = TRUNCATION_GPX.find(marker).unwrap() + marker.len();
+        &TRUNCATION_GPX[..end]
+    }
+
+    /// The elevations a parse produced, or its error.
+    fn parse_outcome(xml: &str) -> std::result::Result<Vec<Option<f64>>, String> {
+        parse_gpx_str(xml)
+            .map(|g| {
+                g.tracks
+                    .iter()
+                    .flat_map(|t| &t.segments)
+                    .flat_map(|s| &s.points)
+                    .map(|p| p.elevation)
+                    .collect()
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    /// #576 B14 (decision: refuse, like Ariane): quick-xml reports a document
+    /// that simply stops as a clean end of file, so a GPX cut off by a dying
+    /// GPS or a partial download imported as a shorter track - and a number
+    /// cut in half became a real reading (352.4 m imported as 35 m, a 300 m
+    /// drop). Any end of file with elements still open now fails the parse,
+    /// naming where it ends and how much is open.
+    #[test]
+    fn a_truncated_gpx_is_refused() {
+        let cuts = [
+            ("inside an <ele> number", "lon=\"0.0015\"><ele>35", Some(5)),
+            ("between two points", "<ele>349</ele></trkpt>", Some(3)),
+            ("after the track", "</trk>", Some(1)),
+            // quick-xml's own syntax error, never a parse.
+            ("inside a tag", "<trkpt lat=\"0.0\" lo", None),
+        ];
+        let outcomes: Vec<_> = cuts
+            .iter()
+            .map(|&(label, marker, open)| {
+                let xml = truncated_after(marker);
+                let outcome = parse_outcome(xml);
+                println!("cut {label} (byte {}): {outcome:?}", xml.len());
+                (label, xml.len(), open, outcome)
+            })
+            .collect();
+        for (label, len, open, outcome) in outcomes {
+            let err = outcome.expect_err("a truncated GPX must not parse");
+            if let Some(open) = open {
+                assert!(
+                    err.contains(&format!(
+                        "ends at byte {len} with {open} element(s) still open"
+                    )),
+                    "{label}: {err}"
+                );
+            }
+        }
+    }
+
+    /// The whole document still parses, and so does one whose last point is
+    /// self-closed - an empty element opens nothing.
+    #[test]
+    fn a_complete_gpx_still_parses_after_the_truncation_check() {
+        assert_eq!(
+            parse_outcome(TRUNCATION_GPX).unwrap(),
+            vec![None, Some(350.0), Some(349.0), Some(352.4)]
+        );
+        let self_closed = r#"<gpx><trk><trkseg>
+            <trkpt lat="0.0" lon="0.0"><ele>1</ele></trkpt>
+            <trkpt lat="0.0" lon="0.0005"/>
+        </trkseg></trk></gpx>"#;
+        assert_eq!(parse_outcome(self_closed).unwrap(), vec![Some(1.0), None]);
+    }
+
+    /// The track configs `xml` converts to, tracks only.
+    fn track_configs(xml: &str) -> Vec<ImportSectionConfig> {
+        let gpx = parse_gpx_str(xml).unwrap();
+        convert_gpx_to_import_configs(&gpx, false, true, false, &[], false)
+            .unwrap()
+            .0
+    }
+
+    /// A one-segment track along the equator: each `(lon, ele)` is a point.
+    fn equator_track(points: &[(f64, Option<f64>)]) -> String {
+        let pts: String = points
+            .iter()
+            .map(|(lon, ele)| match ele {
+                Some(e) => format!(r#"<trkpt lat="0.0" lon="{lon}"><ele>{e}</ele></trkpt>"#),
+                None => format!(r#"<trkpt lat="0.0" lon="{lon}"/>"#),
+            })
+            .collect();
+        format!("<gpx><trk><trkseg>{pts}</trkseg></trk></gpx>")
+    }
+
+    /// Each station's depth along the first track, rounded to the millimetre.
+    fn station_depths(config: &ImportSectionConfig) -> Vec<f64> {
+        let round = |d: f64| (d * 1000.0).round() / 1000.0;
+        let mut depths: Vec<f64> = config.shots.iter().map(|s| round(s.depth_in)).collect();
+        depths.extend(config.shots.last().map(|s| round(s.depth_out)));
+        depths
+    }
+
+    /// #576 B34 (decision: interpolate, warn): a missing elevation became the
+    /// FIRST point's elevation, or 0 m when the first point had none - so a
+    /// track starting without one climbed 350 m on its first leg, and that
+    /// leg's slope length was 350 m. A gap is now interpolated along the
+    /// track between the nearest points that have an elevation, by
+    /// horizontal distance; a leading or trailing gap takes the nearest known
+    /// value; depth 0 is the first point's filled elevation.
+    #[test]
+    fn a_missing_gpx_elevation_is_interpolated_along_the_track() {
+        for (label, depths, expected) in [
+            (
+                "leading gap",
+                vec![(0.0, None), (0.0005, Some(350.0)), (0.0010, Some(349.0))],
+                vec![0.0, 0.0, 1.0],
+            ),
+            (
+                "inner gap, even spacing",
+                vec![(0.0, Some(100.0)), (0.0005, None), (0.0010, Some(98.0))],
+                vec![0.0, 1.0, 2.0],
+            ),
+            (
+                "inner gap, a quarter of the way",
+                vec![(0.0, Some(100.0)), (0.0005, None), (0.0020, Some(98.0))],
+                vec![0.0, 0.5, 2.0],
+            ),
+            (
+                "trailing gap",
+                vec![(0.0, Some(100.0)), (0.0005, Some(98.0)), (0.0010, None)],
+                vec![0.0, 2.0, 2.0],
+            ),
+            (
+                "no elevation at all",
+                vec![(0.0, None), (0.0005, None)],
+                vec![0.0, 0.0],
+            ),
+        ]
+        .map(|(label, points, expected)| {
+            let configs = track_configs(&equator_track(&points));
+            let depths = station_depths(&configs[0]);
+            let first_length = configs[0].shots[0].length;
+            println!("{label}: depths {depths:?}, first leg {first_length:.2} m");
+            (label, depths, expected)
+        }) {
+            assert_eq!(depths, expected, "{label}");
+        }
+        // The leading-gap leg is level now: its length is the horizontal
+        // distance, not the 350 m climb.
+        let configs = track_configs(&equator_track(&[(0.0, None), (0.0005, Some(350.0))]));
+        let horizontal = haversine_distance(0.0, 0.0, 0.0, 0.0005);
+        assert!(
+            (configs[0].shots[0].length - horizontal).abs() < 1e-9,
+            "{} vs {horizontal}",
+            configs[0].shots[0].length
+        );
+    }
+
+    /// The receipt says how many points were filled in - one line for the
+    /// whole file, tracks and routes together - and says nothing when every
+    /// point had an elevation or a track had none to fill from.
+    #[test]
+    fn the_receipt_counts_the_filled_gpx_points() {
+        let warnings_of = |xml: &str| {
+            let gpx = parse_gpx_str(xml).unwrap();
+            convert_gpx_to_import_configs(&gpx, false, true, true, &[], false)
+                .unwrap()
+                .1
+        };
+        let two_tracks = format!(
+            "<gpx><trk><trkseg>{a}</trkseg></trk><trk><trkseg>{b}</trkseg></trk>\
+             <rte><rtept lat=\"0\" lon=\"0\"/><rtept lat=\"0\" lon=\"0.001\"><ele>5</ele></rtept></rte></gpx>",
+            a = r#"<trkpt lat="0" lon="0"/><trkpt lat="0" lon="0.001"><ele>1</ele></trkpt>"#,
+            b = r#"<trkpt lat="0" lon="0"><ele>2</ele></trkpt><trkpt lat="0" lon="0.001"/>"#,
+        );
+        let warnings = warnings_of(&two_tracks);
+        println!("two tracks and a route, one gap each: {warnings:?}");
+        assert_eq!(
+            warnings,
+            vec![
+                "3 GPS points had no elevation; they were filled in from the nearest points \
+                 along the track that have one."
+                    .to_string()
+            ]
+        );
+        let one = warnings_of(&equator_track(&[(0.0, Some(1.0)), (0.0005, None)]));
+        assert_eq!(one.len(), 1);
+        assert!(
+            one[0].starts_with("1 GPS point had no elevation; it was"),
+            "{one:?}"
+        );
+        for clean in [
+            equator_track(&[(0.0, Some(1.0)), (0.0005, Some(2.0))]),
+            equator_track(&[(0.0, None), (0.0005, None)]),
+        ] {
+            assert!(warnings_of(&clean).is_empty(), "{clean}");
+        }
     }
 }

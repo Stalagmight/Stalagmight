@@ -16,16 +16,13 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => String(e),
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(stringOfError);
 
 import { useProjectStore } from '../projectStore';
 import type { ImportSectionConfig } from '../../types/commands';
 import type { ExistingShotUpdate } from '../../types/ipc/ExistingShotUpdate';
+import { invokeIpcMock, stubGetErrorMessage, stringOfError } from '../../test/factories/ipc';
 
 const SECTIONS = [] as ImportSectionConfig[];
 
@@ -82,7 +79,12 @@ describe('projectStore.importSections argument forwarding', () => {
         'file-hash',
         ['section-hash'],
         'AllReferences',
-        { sourceLabel: 'mNemo DMP', sourceFileName: 'dive.dmp', sectionsFound: 4 },
+        {
+          sourceLabel: 'mNemo DMP',
+          sourceFileName: 'dive.dmp',
+          sectionsFound: 4,
+          sourceWarnings: ['Section "BBB" (#2 in the file) has no end-of-section marker'],
+        },
         UPDATES,
       );
 
@@ -95,6 +97,8 @@ describe('projectStore.importSections argument forwarding', () => {
       sourceLabel: 'mNemo DMP',
       sourceFileName: 'dive.dmp',
       sectionsFound: 4,
+      // #576 B13: the DMP file's parse warnings, led onto the receipt.
+      sourceWarnings: ['Section "BBB" (#2 in the file) has no end-of-section marker'],
     });
   });
 

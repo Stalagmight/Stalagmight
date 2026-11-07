@@ -107,11 +107,32 @@ export interface GridSelection {
   active: CellCoord;
 }
 
+/** A host's request to move the grid's cursor to `row`. The grid honours each
+ *  `nonce` once (see `SpreadsheetGridProps.selectRequest`). */
+export interface GridSelectRequest {
+  row: number;
+  nonce: number;
+}
+
 /** A single resolved edit emitted to the host. `value` is already coerced. */
 export interface CellEdit {
   row: number;
   colKey: string;
   value: unknown;
+}
+
+/**
+ * What a bulk edit could not fully apply, for the host's notice (`onPasteReport`).
+ * `written` cells were committed and `skipped` were not; `clipped` fell past the
+ * grid's last row or column (paste only). A paste counts read-only targets as
+ * skipped too; a fill counts only values its target column REFUSED (parser or
+ * `validate`) - a locked cell it passes over is not news (#576 FILL-1).
+ */
+export interface BulkEditReport {
+  source: 'paste' | 'fill';
+  written: number;
+  clipped: number;
+  skipped: number;
 }
 
 export const DEFAULT_COL_WIDTH = 120;

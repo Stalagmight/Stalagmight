@@ -23,11 +23,6 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Build the bundled SQLite without FTS3/4/5, RTREE, DBSTAT and extension
-# loading, so a hostile .stalx cannot reach them (#608, docs/toolchain.md).
-env:
-  LIBSQLITE3_FLAGS: "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION"
-
 jobs:
   # The runner picker lives in its own reusable workflow so `check` and `smoke`
   # share ONE copy of the decision - see .github/workflows/pick-runner.yml for
@@ -91,8 +86,10 @@ jobs:
       # Self-hosted: that's useless on an ephemeral (--rm) runner - it uses the
       # persistent sccache Docker volume instead (RUSTC_WRAPPER=sccache is set
       # in the container env). 100% warm hit-rate measured in #134.
+      # !cancelled(): a cargo fmt failure above must not skip the restore, or every
+      # Rust step below (which all run !cancelled()) compiles cold (#576 RV4-FE-FEB-5).
       - name: Rust cache (hosted only)
-        if: runner.environment == 'github-hosted'
+        if: ${{ !cancelled() && runner.environment == 'github-hosted' }}
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           # vendor/compass_data is [workspace]-excluded, so it builds into its own
@@ -101,56 +98,6 @@ jobs:
             src-tauri
             src-tauri/vendor/compass_data
 
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm tsc --noEmit
-      # UI selector contract: every interactive production control has a stable
-      # test ID, and IDs rendered in repeated map rows are item-specific.
-      - name: UI test ID contract
-        run: |
-          pnpm lint:test-ids:test
-          pnpm lint:test-ids
-      # Agent-harness typecheck (tsconfig.agent.json covers e2e/agent + e2e/lib).
-      # The harness runs via tsx, which transpiles WITHOUT type-checking, and it
-      # is exercised on-demand only - this seconds-cheap step is its one
-      # automated gate against silent rot.
-      - run: pnpm typecheck:agent
-      # Release tooling (#352). This suite existed but ran nowhere automatically,
-      # which is exactly how Cargo.lock drifted three releases behind while
-      # everything looked fine - the check was written and then never enforced.
-      # 13s, and it needs only git/awk/sed/python3 (no node, no network): it drives
-      # the real release.sh in throwaway clones.
-      - name: Release tooling
-        run: ./scripts/test-release.sh
-      # File-size ratchet (#157): keep non-test src-tauri/src/*.rs files from
-      # re-bloating past their committed baseline. Pure-Node, no deps; sub-second.
-      # The fixture test pins the prod-LOC strip heuristic (the under-count class).
-      - name: Rust file-size ratchet
-        run: |
-          pnpm lint:rust-file-size:test
-          pnpm lint:rust-file-size
-      # TS file-size ratchet (#275): same policy, ported to src/**/*.{ts,tsx}.
-      # Pure-Node, no deps; sub-second. The fixture test pins the comment/string/
-      # template strip heuristic.
-      - name: TS file-size ratchet
-        run: |
-          pnpm lint:ts-file-size:test
-          pnpm lint:ts-file-size
-      # Canonical read-only gating tripwire (#275): blocks a new raw
-      # `geometryMode === 'closureAdjusted'` mutation gate (wrong whenever
-      # appMode !== 'survey') or a new isMapReadOnly call site missing the
-      # speleoReadOnly (locked remote SpeleoDB project) composition.
-      - name: Read-only gating tripwire
-        run: |
-          pnpm lint:readonly-gates:test
-          pnpm lint:readonly-gates
-      # vitest unit + component tests (issue #107). `vitest` auto-detects CI
-      # (CI=true) and runs once instead of watching.
-      - run: pnpm test
       # Zero sccache counters so the post-step reports THIS run's hit-rate, not
       # lifetime totals. Self-hosted only - no sccache on hosted. `|| true`: an
       # observability step must never be able to fail the merge gate. (Likely
@@ -161,51 +108,23 @@ jobs:
       - name: sccache zero-stats (self-hosted only)
         if: runner.environment == 'self-hosted'
         run: sccache --zero-stats || true
-      - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
-        env:
-          XDG_CONFIG_HOME: ${{ runner.temp }}/config
-          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
-      # `src-tauri/bindings/` is a COMMITTED generated tree that nothing consumes
-      # and, until this step, nothing gated. `pnpm gen:ipc-types` does NOT write it
-      # (the generator hardcodes `../src/types/ipc`); ts-rs does, because every
-      # `#[ts(export)]` derive emits an `export_bindings_*` test - so the tree is a
-      # side effect of the `cargo test` step directly above, and this is the only
-      # place in CI where drift is observable. Nothing else would catch a stale
-      # entry: no tsconfig `include` covers it and no module imports from it, which
-      # is exactly why it is easy to hand-edit (or forget) when a type is renamed
-      # or removed. Keep this step immediately after `cargo test`.
-      - name: ts-rs bindings tree matches the checkout
-        run: |
-          # Untracked matters as much as modified: a NEW `#[ts(export)]` type
-          # writes a file `git diff` cannot see, so check for both.
-          untracked=$(git ls-files --others --exclude-standard src-tauri/bindings)
-          if [ -n "$untracked" ]; then
-            echo "Generated but never committed:"
-            printf '%s\n' "$untracked"
-          fi
-          if ! git diff --exit-code src-tauri/bindings || [ -n "$untracked" ]; then
-            echo "::error title=Stale ts-rs bindings::src-tauri/bindings does not match what the Rust tests just generated"
-            echo "Run the Rust tests locally and commit the result; never hand-edit that tree."
-            exit 1
-          fi
-      # The flags above only take effect if libsqlite3-sys reads them; this pins
-      # the compiled-in options. Ignored in a plain local `cargo test` (#608).
-      - name: Bundled SQLite compile options
-        run: cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib -- --ignored --exact persistence::sqlite::tests::bundled_sqlite_omits_virtual_table_modules_and_extension_loading
-      # Vendored compass_data is [workspace]-excluded, so `cargo test --workspace`
-      # compiles it (as a path dep) but never runs its tests (#494). Test it
-      # directly. No telemetry feature or TELEMETRY_ENDPOINT - the crate defines
-      # neither. fmt/clippy stay off for it deliberately (docs/linting.md).
-      # --locked: the crate has its own committed Cargo.lock (the root lock does
-      # not cover a workspace-excluded package), so assert it instead of letting
-      # a semver-compatible crates.io release change what CI tests.
-      - name: Vendored compass_data tests
-        run: cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml
+      # Lints first, tests still run (#576 E18(h)). Clippy and the release-profile
+      # check are check-mode builds (metadata, no codegen) and share no artifacts
+      # with the full `cargo test` build, so running them before it costs nothing
+      # extra and reports a deny-level lint or a release-only type error in
+      # minutes instead of after the whole test run. Clippy and every step after
+      # it carry `if: !cancelled()`, so a lint failure - cargo fmt's included
+      # (#576 RV4-FE-FEB-5) - still gets Clippy's own findings, the release
+      # check, tsc, the pnpm gates, vitest and the Rust tests in the same run
+      # (the job still fails). The steps that need node_modules also require
+      # the pnpm install to have succeeded, so a failed install reports once
+      # instead of as a dozen "command not found" failures.
       # Clippy deny-level lint gate (issue #147). The crate has a strict
       # [lints.clippy] policy (deny unwrap/expect/panic/print/dbg/...) authored in
       # 17dc4feb; this enforces it so it can't silently rot again. Pedantic lints
       # stay warn-level (advisory) - only the deny-level policy fails the build.
       - name: Clippy (deny-level lint gate)
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets
         env:
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
@@ -221,9 +140,191 @@ jobs:
       # type resolution only (no codegen, LTO or linking), Linux host only,
       # telemetry feature on - the no-secret fork build path is not covered.
       - name: Release-profile compile check
+        if: ${{ !cancelled() }}
         run: cargo check --release --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        if: ${{ !cancelled() }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: ${{ !cancelled() }}
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - id: pnpm-install
+        if: ${{ !cancelled() }}
+        run: pnpm install --frozen-lockfile
+      - run: pnpm tsc --noEmit
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+      # UI selector contract: every interactive production control has a stable
+      # test ID, and IDs rendered in repeated map rows are item-specific.
+      - name: UI test ID contract
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+        run: |
+          pnpm lint:test-ids:test
+          pnpm lint:test-ids
+      # ESLint (#576 D1/D17; config eslint.config.js, policy docs/linting.md)
+      # over src/, e2e-playwright/ and e2e/: the React hook rules, typescript-eslint
+      # recommended and the repo's no-render-ref-write; errors fail, and the
+      # warning-level rules are ratcheted per file in eslint-baseline.json (a
+      # count may only shrink). The fixture test pins the ratchet and each rule.
+      - name: ESLint (hook rules, ratcheted warnings)
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+        run: |
+          pnpm lint:eslint:test
+          pnpm lint:eslint
+      # Value-import cycles under src/ (#576 D27-32(b)), zero tolerance: two
+      # modules importing each other's values evaluate in an order set by
+      # whoever imported first, so one top-level cross read is a start-up
+      # ReferenceError. `import type` edges do not count. Seconds; the fixture
+      # test pins the edge kinds.
+      - name: Value-import cycles
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+        run: |
+          pnpm lint:import-cycles:test
+          pnpm lint:import-cycles
+      # Hard-coded UI text in the dialog layer (#576 D20), zero tolerance: every
+      # user-visible string in src/components/Dialogs/** and the common
+      # primitives those import comes from en.json via t(); the few literals
+      # that are not language sit in scripts/i18n-literals-allowlist.json with a
+      # reason. Seconds; the fixture test pins each text shape and the scope.
+      - name: Dialog i18n literals
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+        run: |
+          pnpm lint:i18n-literals:test
+          pnpm lint:i18n-literals
+      # The shared vitest utils/ipc mock (#576 E15-NF2), zero tolerance: no
+      # vi.mock of src/utils/ipc with a factory (the copied vi.hoisted + factory
+      # idiom) outside the script's allowlist, each row with its reason; tests
+      # use vi.mock('<rel>/utils/ipc') + src/test/factories/ipc.ts. Seconds; the
+      # fixture test pins the specifier and factory shapes.
+      - name: vitest shared IPC mock
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+        run: |
+          pnpm lint:vitest-ipc-mock:test
+          pnpm lint:vitest-ipc-mock
+      # Agent-harness typecheck (tsconfig.agent.json covers e2e/agent + e2e/lib).
+      # The harness runs via tsx, which transpiles WITHOUT type-checking, and it
+      # is exercised on-demand only - this seconds-cheap step is its one
+      # automated gate against silent rot.
+      - run: pnpm typecheck:agent
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+      # Release tooling (#352). This suite existed but ran nowhere automatically,
+      # which is exactly how Cargo.lock drifted three releases behind while
+      # everything looked fine - the check was written and then never enforced.
+      # 13s, and it needs only git/awk/sed/python3 (no node, no network): it drives
+      # the real release.sh in throwaway clones.
+      - name: Release tooling
+        if: ${{ !cancelled() }}
+        run: ./scripts/test-release.sh
+      # File-size ratchet (#157): keep first-party .rs files from re-bloating
+      # past their committed baseline - production files at 1500/2000 prod LOC,
+      # whole test files at their own 3000/5000 (#576 E8). Pure-Node, no deps;
+      # sub-second. The fixture test pins the prod-LOC strip heuristic (the
+      # under-count class) and the test-module classification.
+      - name: Rust file-size ratchet
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+        run: |
+          pnpm lint:rust-file-size:test
+          pnpm lint:rust-file-size
+      # TS file-size ratchet (#275): same policy, ported to src/**/*.{ts,tsx}
+      # plus e2e-playwright/ and e2e/ (#576 E8; the smoke job runs it too,
+      # since this job path-ignores e2e-playwright/**). Pure-Node, no deps;
+      # sub-second. The fixture test pins the comment/string/template strip
+      # heuristic and the scope.
+      - name: TS file-size ratchet
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+        run: |
+          pnpm lint:ts-file-size:test
+          pnpm lint:ts-file-size
+      # Canonical read-only gating tripwire (#275): blocks a new raw
+      # `geometryMode === 'closureAdjusted'` mutation gate (wrong whenever
+      # appMode !== 'survey') or a new isMapReadOnly call site missing the
+      # speleoReadOnly (locked remote SpeleoDB project) composition.
+      - name: Read-only gating tripwire
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+        run: |
+          pnpm lint:readonly-gates:test
+          pnpm lint:readonly-gates
+      # vitest unit + component tests (issue #107). `vitest` auto-detects CI
+      # (CI=true) and runs once instead of watching.
+      - run: pnpm test
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+      # The Rust tests run as an unprivileged user (#576 NF-ROOT-PERM): root
+      # ignores mode bits, and the permission tests assert that the bits bite,
+      # so on the self-hosted runner (a root container) they would fail. The
+      # wrapper points Cargo's target runner at `setpriv` for THIS command only;
+      # compilation stays with the job's user, so sccache and target/ are
+      # untouched. On hosted (already unprivileged) it just runs the command.
+      # Never hand the runner to later steps (GITHUB_ENV): `cargo run` honours
+      # it too, and `pnpm gen:ipc-types` below must write src/types/ipc as the
+      # job's user (#576 RV5-PI-1).
+      - name: Rust tests (unprivileged test user on root runners)
+        if: ${{ !cancelled() }}
+        run: ./scripts/ci-cargo-test-unprivileged.sh cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/config
+          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      # `src-tauri/bindings/` is a COMMITTED generated tree that nothing consumes
+      # and, until this step, nothing gated. `pnpm gen:ipc-types` does NOT write it
+      # (the generator hardcodes `../src/types/ipc`); ts-rs does, because every
+      # `#[ts(export)]` derive emits an `export_bindings_*` test - so the tree is a
+      # side effect of the `cargo test` step directly above, and this is the only
+      # place in CI where drift is observable. Nothing else would catch a stale
+      # entry: no tsconfig `include` covers it and no module imports from it, which
+      # is exactly why it is easy to hand-edit (or forget) when a type is renamed
+      # or removed. Keep this step immediately after `cargo test`.
+      - name: ts-rs bindings tree matches the checkout
+        if: ${{ !cancelled() }}
+        run: |
+          # Untracked matters as much as modified: a NEW `#[ts(export)]` type
+          # writes a file `git diff` cannot see, so check for both.
+          untracked=$(git ls-files --others --exclude-standard src-tauri/bindings)
+          if [ -n "$untracked" ]; then
+            echo "Generated but never committed:"
+            printf '%s\n' "$untracked"
+          fi
+          if ! git diff --exit-code src-tauri/bindings || [ -n "$untracked" ]; then
+            echo "::error title=Stale ts-rs bindings::src-tauri/bindings does not match what the Rust tests just generated"
+            echo "Run the Rust tests locally and commit the result; never hand-edit that tree."
+            exit 1
+          fi
+      # `src/types/ipc/` and `src/types/ipc.generated.ts` are the generated tree the
+      # frontend, the Playwright mock and tsc actually compile against (#576 C1).
+      # Unlike `src-tauri/bindings/` above, no test writes it: types such as
+      # `Project`, `CommandResult` and `Config` carry no `#[ts(export)]` and reach
+      # it only through `pnpm gen:ipc-types`, so a Rust change that skipped the
+      # generator left tsc and the mock agreeing with a stale declaration until a
+      # packaged build failed at runtime. Regenerate, then fail on any difference.
+      - name: Regenerate the IPC types
+        id: gen-ipc-types
+        if: ${{ !cancelled() }}
+        run: pnpm gen:ipc-types
+      - name: Generated IPC types match the checkout
+        if: ${{ !cancelled() && steps.gen-ipc-types.outcome == 'success' }}
+        run: |
+          # Untracked matters as much as modified: a type newly added to the
+          # generator's export list writes a file `git diff` cannot see.
+          untracked=$(git ls-files --others --exclude-standard src/types/ipc src/types/ipc.generated.ts)
+          if [ -n "$untracked" ]; then
+            echo "Generated but never committed:"
+            printf '%s\n' "$untracked"
+          fi
+          if ! git diff --exit-code src/types/ipc src/types/ipc.generated.ts || [ -n "$untracked" ]; then
+            echo "::error title=Stale generated IPC types::src/types/ipc does not match what pnpm gen:ipc-types just generated"
+            echo "Run pnpm gen:ipc-types locally and commit the result; never hand-edit that tree."
+            exit 1
+          fi
+      # Vendored compass_data is [workspace]-excluded, so `cargo test --workspace`
+      # compiles it (as a path dep) but never runs its tests (#494). Test it
+      # directly. No telemetry feature or TELEMETRY_ENDPOINT - the crate defines
+      # neither. fmt/clippy stay off for it deliberately (docs/linting.md).
+      # --locked: the crate has its own committed Cargo.lock (the root lock does
+      # not cover a workspace-excluded package), so assert it instead of letting
+      # a semver-compatible crates.io release change what CI tests.
+      - name: Vendored compass_data tests
+        if: ${{ !cancelled() }}
+        run: cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml
       # stalx-reader and the two internal crates it depends on are published to
       # crates.io (#593). Keep them publishable between releases: a path
       # dependency without a version, a new unpublished internal dependency or
@@ -232,6 +333,7 @@ jobs:
       # already-published version cannot turn this red. --no-verify skips the
       # rebuild from the packaged sources (minutes); the release runs it in full.
       - name: crates.io packaging check (stalx-reader)
+        if: ${{ !cancelled() }}
         run: |
           crates="stalagmight-models stalagmight-persistence stalx-reader"
           cargo package --no-verify --manifest-path src-tauri/Cargo.toml $(printf -- '-p %s ' $crates)

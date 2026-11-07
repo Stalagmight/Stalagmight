@@ -20,14 +20,62 @@ import type { Browser } from 'webdriverio';
 import { invokeInApp, evalInApp } from './page';
 import { readStore } from './stores';
 import { isErrorLine, isWarnLine } from './logs';
+import { redactCorpusText, redactCorpusValue } from './fixtureCorpus';
+import { shareableFinding } from '../../../scripts/lib/shareable-finding.mjs';
 
 export type Severity = 'fatal' | 'error' | 'warning';
 
 export interface Finding {
   severity: Severity;
   kind: string;
+  /**
+   * Where the finding came from, as the APP'S CODE names it - for a `log-warn` /
+   * `log-error`, the log target (`logLineCode`). Never text from the data, so a
+   * summary line can carry it where it cannot carry `message` (#576 HFI2-F2).
+   */
+  code?: string;
   message: string;
   detail?: unknown;
+}
+
+/**
+ * The code-defined source of a ring log line: its tracing target
+ * (`WARN stalagmight_parsers::tml: Section ...` -> `stalagmight_parsers::tml`),
+ * else the frontend crash tag the line carries. Nothing after the target is
+ * read: that is the message, and a message quotes the data it is about - a
+ * section, a project, a station (#576 HFI2-F2).
+ */
+export function logLineCode(line: string): string {
+  const target = /^(?:ERROR|WARN)\s+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*):\s/.exec(line);
+  if (target?.[1]) return target[1];
+  if (line.includes('[unhandled-error]')) return 'unhandled-error';
+  if (line.includes('[unhandled-rejection]')) return 'unhandled-rejection';
+  if (line.includes('PANIC:')) return 'panic';
+  return 'unattributed';
+}
+
+/**
+ * A sweep's findings as a run's summary line prints them: a count per
+ * severity, kind and code, and nothing else (#576 HFI2-F2).
+ *
+ * The PASS/FAIL line used to carry the findings as JSON, message and detail
+ * included, and a `log-warn` message IS the app's log line - `Section "<name>"
+ * has no shots after filtering`, a project's name in a datum warning. The
+ * corpus fold hides corpus FILE names only, so every name inside a file reached
+ * a run log, and run logs are what a campaign publishes. The full text stays in
+ * the session directory (`actions.jsonl`, `findings/`), which
+ * docs/agent-harness.md says not to attach, and in the app's own log files.
+ * Every key is built from harness-defined `kind` and the code-defined `code`,
+ * and is still reduced to identifier characters.
+ */
+export function findingsSummary(findings: readonly Finding[]): string {
+  const label = (text: string): string => text.replace(/[^\w:.-]/g, '?').slice(0, 120);
+  const counts = new Map<string, number>();
+  for (const f of findings) {
+    const key = `${f.severity}:${label(f.kind)}${f.code === undefined ? '' : `@${label(f.code)}`}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return JSON.stringify(Object.fromEntries([...counts].sort(([a], [b]) => a.localeCompare(b))));
 }
 
 export interface OracleTarget {
@@ -134,6 +182,15 @@ function isAllowedWarn(line: string): boolean {
   return WARN_ALLOWLIST.some((s) => line.includes(s));
 }
 
+/**
+ * `text` through the corpus fold, THEN cut to `limit` (#576 RV17-2). Cut first,
+ * a corpus name straddling the limit was no longer whole, no fold matched it,
+ * and its beginning stayed in the finding.
+ */
+function cutAfterFold(text: string, limit: number): string {
+  return redactCorpusText(text).slice(0, limit);
+}
+
 interface LogsSince {
   entries: { seq: number; ts_ms: number; line: string }[];
   latest_seq: number;
@@ -168,11 +225,14 @@ export async function cheapSweep(target: OracleTarget, state: OracleState): Prom
   // 2 + 3. One exclusive block: DOM error-boundary probe, then new ring lines.
   try {
     const probe = await target.exclusive(async () => {
+      // The page sends the whole text: Node folds it, THEN cuts it (`cutAfterFold`).
+      // A cut in the page could split a corpus name the fold then cannot match
+      // (#576 RV19b-P3).
       const dom = await evalInApp<{ errorBoundary: boolean; text?: string }>(
         target.browser,
         `
         const el = document.querySelector('[data-testid="error-boundary-fallback"]');
-        return { errorBoundary: !!el, text: el ? (el.textContent || '').slice(0, 300) : undefined };
+        return { errorBoundary: !!el, text: el ? el.textContent || '' : undefined };
       `,
       );
       const logs = await invokeInApp<LogsSince>(target.browser, 'get_recent_logs_since', {
@@ -186,7 +246,7 @@ export async function cheapSweep(target: OracleTarget, state: OracleState): Prom
         severity: 'error',
         kind: 'error-boundary',
         message: 'React error boundary is showing its fallback UI',
-        detail: probe.dom.text,
+        detail: probe.dom.text === undefined ? undefined : cutAfterFold(probe.dom.text, 300),
       });
     }
     if (probe.logs.dropped) {
@@ -198,9 +258,9 @@ export async function cheapSweep(target: OracleTarget, state: OracleState): Prom
     }
     for (const e of probe.logs.entries) {
       if (isErrorLine(e.line)) {
-        findings.push({ severity: 'error', kind: 'log-error', message: e.line.slice(0, 400) });
+        findings.push({ severity: 'error', kind: 'log-error', code: logLineCode(e.line), message: cutAfterFold(e.line, 400) });
       } else if (isWarnLine(e.line) && !isAllowedWarn(e.line)) {
-        findings.push({ severity: 'warning', kind: 'log-warn', message: e.line.slice(0, 400) });
+        findings.push({ severity: 'warning', kind: 'log-warn', code: logLineCode(e.line), message: cutAfterFold(e.line, 400) });
       }
     }
     state.logCursor = Math.max(state.logCursor, probe.logs.latest_seq);
@@ -354,16 +414,29 @@ const SEVERITY_RANK: Record<Severity, number> = { warning: 1, error: 2, fatal: 3
 export async function runSweep(
   target: OracleTarget,
   state: OracleState,
-  opts: { full?: boolean; recorder?: RecorderLike } = {},
+  opts: { full?: boolean; recorder?: RecorderLike | undefined } = {},
 ): Promise<SweepResult> {
-  const findings = opts.full ? await fullSweep(target, state) : await cheapSweep(target, state);
+  // Redacted at the SOURCE (#576 RV12-F1): a `log-error` finding's message is the
+  // backend's log line, and an import that failed logs the corpus copy it was
+  // handed. Everything below - the dedupe key, the action log event,
+  // finding.json, the caller's printout - only ever sees the publishable text.
+  const swept = opts.full ? await fullSweep(target, state) : await cheapSweep(target, state);
+  const findings = swept.map(publishableFinding);
   const newFindings: Finding[] = [];
   for (const f of findings) {
     const key = `${f.kind}:${f.message}`;
     if (state.reported.has(key)) continue;
     state.reported.add(key);
     newFindings.push(f);
-    opts.recorder?.event('finding', { severity: f.severity, kind: f.kind, message: f.message });
+    // The whole finding, detail included, goes to the action log - the private
+    // record (#576 W21-NF2); finding.json carries the shareable projection.
+    opts.recorder?.event('finding', {
+      severity: f.severity,
+      kind: f.kind,
+      code: f.code,
+      message: f.message,
+      ...(f.detail === undefined ? {} : { detail: f.detail }),
+    });
     if (opts.recorder && (f.severity === 'fatal' || f.severity === 'error')) {
       await captureFinding(target, opts.recorder, ++state.findingCount, f).catch(() => undefined);
     }
@@ -375,6 +448,36 @@ export async function runSweep(
   return { findings, newFindings, worst };
 }
 
+/**
+ * `finding` with every corpus name the process has copied replaced by its tag
+ * (`fixtureCorpus.redactCorpusText`), in the message and in the detail. The
+ * detail is folded string by string (`redactCorpusValue`, #576 RV15-1): over its
+ * JSON text, a name JSON escapes (a quote, a backslash) was never found - a
+ * crash marker's detail is the parsed marker, and report.md prints it.
+ */
+export function publishableFinding(finding: Finding): Finding {
+  const out: Finding = { ...finding, message: redactCorpusText(finding.message) };
+  if (finding.detail !== undefined) out.detail = redactCorpusValue(finding.detail);
+  return out;
+}
+
+/**
+ * A crash marker's text as it may be copied into a finding (#576 NF-W17-2,
+ * RV15-1). A marker is serde_json output, so it is parsed and folded value by
+ * value: folding its text never finds a name JSON escapes. A marker that does not
+ * parse was cut off mid-write, and is withheld whole, its length kept
+ * (#576 RV16-2): the cut can fall inside a name, which no fold then matches, so
+ * the copy kept the name's beginning; and a torn marker has no field worth
+ * reading anyway.
+ */
+export function publishableCrashMarker(text: string): string {
+  try {
+    return JSON.stringify(redactCorpusValue(JSON.parse(text) as unknown), null, 2);
+  } catch {
+    return `(withheld: the crash marker is not JSON - cut off mid-write? - so a corpus name in it could not be folded; ${text.length} characters)\n`;
+  }
+}
+
 async function captureFinding(
   target: OracleTarget,
   recorder: RecorderLike,
@@ -383,7 +486,9 @@ async function captureFinding(
 ): Promise<void> {
   const dir = path.join(recorder.findingsDir, String(index).padStart(3, '0'));
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'finding.json'), JSON.stringify(finding, null, 2));
+  // Codes, counts and code locations only (#576 W21-NF2): finding.json is what
+  // gets attached; the full finding is the `finding` event in actions.jsonl.
+  fs.writeFileSync(path.join(dir, 'finding.json'), JSON.stringify(shareableFinding(finding), null, 2));
   // Screenshot (best-effort).
   try {
     const b64 = await target.exclusive(() => target.browser.takeScreenshot());
@@ -391,10 +496,12 @@ async function captureFinding(
   } catch {
     // Webview may be dead; the finding is still recorded.
   }
-  // Copy any crash markers.
+  // Copy any crash markers, through the corpus fold (#576 NF-W17-2): a marker
+  // carries the panic message, which can quote a corpus copy path.
   for (const marker of target.findCrashMarkers()) {
     try {
-      fs.copyFileSync(marker, path.join(dir, path.basename(marker)));
+      const text = fs.readFileSync(marker, 'utf8');
+      fs.writeFileSync(path.join(dir, path.basename(marker)), publishableCrashMarker(text));
     } catch {
       // Best-effort.
     }

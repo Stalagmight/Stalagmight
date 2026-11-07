@@ -1,7 +1,7 @@
 // Drag-preview MapLibre layers (#mem drag fixes).
 //
 // The unified drag-preview source (`survey-drag-preview`) is drawn by a fixed
-// stack of geometry layers, split out of SurveyLayer.tsx to keep that file off
+// stack of geometry layers, split out of SurveyLayer.ts to keep that file off
 // its size ceiling and to hold the (verbose) layer specs in one testable place.
 //
 // Geometry layers (shots / closures / stations) render the captured MOVING

@@ -25,6 +25,15 @@ is capped at 100 payload files; beyond that the oldest are dropped, so a very
 long offline stretch loses its oldest usage counts rather than growing the
 directory without bound.
 
+**Neither startup nor quit waits on the network** (#576 B17). On app close,
+`flush_telemetry` writes the pending counts to that buffer instead of posting
+them, so quitting costs milliseconds whatever the server is doing. The buffer is
+drained on the telemetry thread - first thing when it starts, then on the
+60-second ticks after a failure - and each pass stops after 20 seconds in total
+(each request is given only the time that is left), leaving the rest for the
+next pass. A slow endpoint that still answers therefore never holds anything up;
+an unreachable one stops a pass at its first failure.
+
 **Feature-gated**: All Rust telemetry is behind `#[cfg(feature = "telemetry")]`.
 When disabled, all methods are zero-cost no-ops eliminated by the compiler.
 The frontend self-gates by calling `is_telemetry_available` at startup.
@@ -68,10 +77,12 @@ sub-2 KB per flush, and D1 storage is unchanged (it always stored string names).
 ### Event vocabulary
 
 `src-tauri/crates/telemetry/src/telemetry/registry.rs` keeps `EVENT_NAMES` / `SOURCE_NAMES` as the
-canonical list of event names the app emits. It is **not** a wire ID map - it
-exists only to back the coverage tests (every command / tool / dialog has a
-tracked event; typo detection). Order is irrelevant, and there is no worker-side
-copy to keep in sync.
+canonical list of event names the app emits - except `command.*`, whose
+vocabulary is the IPC command manifest generated from `generate_handler!`
+(`src/types/ipc/IpcCommands.ts`, #576 C3). It is **not** a wire ID map - it
+exists only to back the coverage tests (every tool / dialog has a tracked event;
+typo detection). Order is irrelevant, and there is no worker-side copy to keep in
+sync.
 
 **`project_seq`** - auto-incrementing project context counter. `0` means global
 view (no project open) or Rust-originated events. Each time the user opens a
@@ -87,6 +98,9 @@ No file paths, project names, survey data, coordinates, or user identity.
 
 Every IPC call (except telemetry's own) is tracked via `trackCommand`. When
 a source hint is set (e.g., `keyboard`, `toolbar`), it's appended after `:`.
+The names are the registered commands: `invokeIpc` only accepts a name from the
+generated command manifest, so there is no hand-kept list of them in the
+registry.
 
 ```
 command.undo:keyboard       - undo triggered by keyboard shortcut
@@ -178,7 +192,8 @@ dwell.global-view              - seconds on the Welcome/project-list screen
 | `cancelPlacementMode()` / `confirmPlacement()` | `tool.{activeTool}` |
 
 **Flush on close**: `flushTelemetry()` calls `flushDwell()` to capture the
-final state's accumulated time before sending.
+final state's accumulated time before handing the counts to the backend, which
+buffers them for the next launch to send.
 
 **Same-key no-op**: Calling `setDwellState` with the same key is a no-op -
 prevents timer resets from redundant calls.
@@ -186,7 +201,8 @@ prevents timer resets from redundant calls.
 ### SpeleoDB traffic - `speleodb-api.<kind>.*` (#210, F1)
 
 Every SpeleoDB HTTP call is instrumented at the Rust client's single choke
-points (`client::with_retry` and `client::send_json_request`) so we can size the
+point (`client::with_retry`, which every call reaches through `client::send` and
+its endpoint-table row, #576 B5) so we can size the
 server load Stalagmight causes and spot a runaway poll/retry loop *before* it
 reaches the server. Recorded **per HTTP attempt** (a retried idempotent 5xx
 really re-hits the server, so a retry storm shows up as inflated counts +
@@ -290,7 +306,7 @@ walks the registry and fails until all three names for it are in `EVENT_NAMES`.
 | `src/store/uiStore.ts` | Wires tracking into `closeDialog`, `openDialog`, `setSelection`, `addToSelection`, panel toggles, display settings |
 | `src-tauri/crates/telemetry/src/telemetry/mod.rs` | Rust collector, HTTP send, disk buffer, periodic flush |
 | `src-tauri/crates/telemetry/src/telemetry/registry.rs` | Canonical event/source name vocabulary (backs the coverage tests) |
-| `src-tauri/src/commands/telemetry_coverage_tests.rs` | The `registry_covers_all_*` coverage suite (app crate - it parses `lib.rs`'s `generate_handler![]` and the frontend sources) |
+| `src-tauri/src/commands/telemetry_coverage_tests.rs` | The `registry_covers_all_*` coverage suite (app crate - it parses the frontend sources) |
 | `src-tauri/crates/speleodb/src/speleodb/metrics.rs` | Per-endpoint SpeleoDB traffic instrumentation (`speleodb-api.*`, #210) |
 | `src-tauri/src/commands/telemetry.rs` | IPC commands: `track_events`, `flush_telemetry`, etc. |
 | `src/store/displaySelectors.ts` | `DISPLAY_DEFAULTS` - single source of truth for default values |
@@ -367,12 +383,14 @@ canonical list of event names the app emits. Because the wire format sends names
 verbatim (self-describing JSON), this is **not** an ID map - order is irrelevant,
 entries can be added/renamed/removed freely, and there is no worker-side copy to
 keep in sync. The vocabulary exists only to power the coverage tests below, which
-guarantee every command / tool / dialog actually emits telemetry and catch typos
-before they reach the database.
+guarantee every tool / dialog actually emits telemetry and catch typos before
+they reach the database. `command.*` is the exception: those names are the
+generated IPC command manifest's, checked at compile time by `invokeIpc`, and
+`command_events_are_not_hand_listed` keeps a hand copy from creeping back.
 
 ### Adding a new event name
 
-1. Add the bare event name (e.g. `command.my_command`) to `EVENT_NAMES` in
+1. Add the bare event name (e.g. `action.tool.my_tool`) to `EVENT_NAMES` in
    `registry.rs` - anywhere; order does not matter - and bump the `event_count`
    test.
 2. Run the registry + coverage tests. They span three workspace crates - the
@@ -380,21 +398,21 @@ before they reach the database.
    the SpeleoDB traffic-event test in `stalagmight-speleodb`
    (`speleodb/metrics.rs`), and the `registry_covers_all_*` suite in the app
    crate (`src-tauri/src/commands/telemetry_coverage_tests.rs`, next to the
-   `generate_handler![]` it parses) - so use the workspace form:
+   frontend sources it parses) - so use the workspace form:
 
    ```bash
    TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
      --workspace --features telemetry -- telemetry metrics
    ```
 
-The coverage tests flag a new command / tool / dialog that is missing its event
-name (or an event name with no corresponding feature).
+The coverage tests flag a new tool / dialog that is missing its event name (or an
+event name with no corresponding feature).
 
 ### Coverage tests
 
 | Test | What it checks |
 |------|----------------|
-| `registry_covers_all_commands` | Every `generate_handler![]` command has a `command.*` entry (and vice versa) |
+| `command_events_are_not_hand_listed` | `EVENT_NAMES` lists no `command.*` (their vocabulary is the generated IPC command manifest) |
 | `no_duplicate_event_names` | No duplicate strings in `EVENT_NAMES` |
 | `event_count` / `source_count` | Array lengths match expected totals |
 | `active_dwell_mirrors_dwell` | Every `dwell.<state>` has a matching `active-dwell.<state>` |
@@ -444,13 +462,13 @@ corresponding type union that is parsed by Rust exhaustiveness tests.
 
 ### New IPC command
 
-Automatic - `invokeIpc` calls `trackCommand` for all non-telemetry commands.
-If the command is undoable, add it to `UNDOABLE_COMMANDS` in `telemetry.ts`.
-
-You must also add a `command.<name>` entry to `EVENT_NAMES` in `registry.rs`,
-plus an `undo-after.<name>` entry if you added it to `UNDOABLE_COMMANDS`. The
-`registry_covers_all_commands` and `registry_covers_all_undoable_commands` tests
-will fail if you forget either.
+Automatic - `invokeIpc` calls `trackCommand` for all non-telemetry commands, and
+the command's name is in the generated IPC command manifest once
+`pnpm gen:ipc-types` has run (docs/ipc-typegen.md); nothing to add to the
+registry. If the command is undoable, add it to `UNDOABLE_COMMANDS` in
+`telemetry.ts` (typed against the manifest, so a misspelled name does not
+compile) and an `undo-after.<name>` entry to `EVENT_NAMES`;
+`registry_covers_all_undoable_commands` fails if you forget the second.
 
 ### New tool
 
@@ -549,6 +567,15 @@ cd telemetry-worker
 pnpm install --ignore-workspace
 CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... npx wrangler deploy
 ```
+
+`wrangler deploy` bundles with esbuild, which strips types without checking
+them, so type-check first: `pnpm --ignore-workspace run typecheck` (the flag
+again, or pnpm re-checks the root install before running the script). CI runs
+the same check on every change under `telemetry-worker/`
+(`.github/workflows/telemetry-worker.yml`). The worker keeps
+`@cloudflare/workers-types` and `typescript` as its own devDependencies, in its
+own `pnpm-lock.yaml`; neither ships in the app, so `THIRD-PARTY-LICENSES.md`,
+which covers the root lockfiles only, is unaffected.
 
 ### Schema changes
 

@@ -1,4 +1,5 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, type RefObject } from 'react';
+import { useLatest } from './useLatest';
 
 interface UseDismissableLayerOptions {
   /** Whether the layer is currently open (listeners attach only while open). */
@@ -52,16 +53,11 @@ export function useDismissableLayer({
   anchorScope,
   survivesUnrelatedScroll = false,
 }: UseDismissableLayerOptions): void {
-  const onDismissRef = useRef(onDismiss);
-  onDismissRef.current = onDismiss;
-  const containsRef = useRef(contains);
-  containsRef.current = contains;
-  const scrollSafeRef = useRef(scrollSafe ?? contains);
-  scrollSafeRef.current = scrollSafe ?? contains;
-  const anchorScopeRef = useRef(anchorScope);
-  anchorScopeRef.current = anchorScope;
-  const survivesRef = useRef(survivesUnrelatedScroll);
-  survivesRef.current = survivesUnrelatedScroll;
+  const onDismissRef = useLatest(onDismiss);
+  const containsRef = useLatest(contains);
+  const scrollSafeRef = useLatest(scrollSafe ?? contains);
+  const anchorScopeRef = useLatest(anchorScope);
+  const survivesRef = useLatest(survivesUnrelatedScroll);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -141,5 +137,5 @@ export function useDismissableLayer({
       window.removeEventListener('scroll', onScroll, { capture: true });
       window.removeEventListener('resize', onResize);
     };
-  }, [open]);
+  }, [open, anchorScopeRef, containsRef, onDismissRef, scrollSafeRef, survivesRef]);
 }

@@ -9,34 +9,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import SpeleoForceEditDialog from './SpeleoForceEditDialog';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
+import { makeSpeleoLink } from '../../test/factories/speleo';
 
 let refreshLinkStatusMock: ReturnType<typeof vi.fn>;
 let closeDialogMock: ReturnType<typeof vi.fn>;
 let showToastMock: ReturnType<typeof vi.fn>;
 
-const LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'read-only',
-  lockHolder: null,
-  lockedByOther: false,
-  hasUnpushedEdits: false,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: true,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+const LINK: SpeleoLinkState = makeSpeleoLink({ forceEditAllowed: true });
 
 const seedLink = (o: Partial<SpeleoLinkState> = {}) =>
   useSpeleoStore.setState({ link: { ...LINK, ...o } });

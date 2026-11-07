@@ -3,7 +3,7 @@
 //! The engine proper ([`super`]) owns the graph walk; everything here is arithmetic over the
 //! plan's own inputs, which is what keeps it testable without building a project.
 
-use crate::config::DpvRig;
+use crate::config::{DpvRig, DpvUnit};
 
 use super::model::PlanSegment;
 
@@ -41,33 +41,36 @@ pub const MIN_SEGMENT_SPEED_M_PER_MIN: f64 = 0.1;
 /// roughly ten times the fastest DPV, so it cannot exclude a real plan either.
 pub const MAX_SEGMENT_SPEED_M_PER_MIN: f64 = 1000.0;
 
-/// The cruise speed the range cap is built from: the slower of the two units.
-///
-/// [`DpvRig::usable_range_m`] picks the weaker unit by LINE COVERED (`burn x speed`), which need not
-/// be the slower one - so this is deliberately the more conservative of the two questions. It is
-/// only ever used to inflate the range a below-cruise span spends, and the slowest cruise gives the
-/// largest inflation, so picking it can never over-state how far the rig will carry the diver (§6).
-fn slower_cruise_m_per_min(rig: &DpvRig) -> f64 {
-    rig.primary.speed_m_per_min.min(rig.backup.speed_m_per_min)
-}
-
 /// Metres of scooter RANGE one metre of line costs on a scootered span ridden at `speed_m_per_min`.
 ///
-/// The cap is a distance (`burn x cruising speed`, less the reserve), but what actually runs out is
-/// battery MINUTES, and the two only convert 1:1 at the unit's cruise speed. A span ridden at a
-/// quarter of cruise takes four times the minutes the cap's own arithmetic assumed for those metres,
-/// so charging a flat metre per metre EXTENDS reach the slower the diver rides - the unsafe
-/// direction (§6), and reachable-overlay ground the battery cannot actually deliver.
+/// The cap ([`DpvRig::usable_range_m`]) is a distance - the weaker unit's `burn x cruise`, less the
+/// reserve - but what actually runs out is each unit's battery MINUTES, by its own clock. Unit `u`
+/// ridden at `speed` spends `1 / min(speed, cruise_u)` of its burn minutes per metre of line: at
+/// or above its cruise it is charged at cruise (a span cannot stretch the battery by going FASTER -
+/// drag rises with speed, so the unit's burn figure would not hold there either), below it every
+/// metre takes longer. Charging a flat metre per metre would EXTEND reach the slower the diver
+/// rides - the unsafe direction (§6), reachable-overlay ground the battery cannot deliver.
 ///
-/// So a below-cruise span spends the allowance time-equivalently: `slower_cruise / speed` metres of
-/// range per metre of line. At or above cruise the factor floors at exactly `1.0`, which keeps the
-/// plain line model - a span cannot stretch the battery by going FASTER (drag rises with speed, so
-/// the unit's burn figure would not hold there either) - and that floor is what leaves every
-/// at-cruise plan, the cap itself, the Settings preview and their pinned formula tests untouched.
+/// A metre therefore costs each unit `1 / (burn_u x min(speed, cruise_u))` of its battery, and the
+/// span charges the cap the LARGER of the two, scaled to the cap's metres:
+/// `max_u weaker_range / (burn_u x min(speed, cruise_u))`. The reserve scales the cap and each
+/// unit's usable minutes alike, so it cancels. The dive is in range only while BOTH units are, and
+/// charging whichever unit a metre drains harder never admits more line than either covers by its
+/// own clock - exactly the tighter unit's line on any plan whose scootered spans share their
+/// binding unit (every one-span plan), and on the conservative side otherwise (#576). Using one
+/// cruise for both units over-stated reach whenever the weaker unit was the faster one: a 45 x 45
+/// primary with a 30 x 90 backup ridden at 30 m/min admitted 1822.5 m against the primary's 1215.
 ///
-/// A non-finite ratio yields `1.0`: `f64::max` returns the non-NaN operand.
-fn range_per_metre(speed_m_per_min: f64, slower_cruise_m_per_min: f64) -> f64 {
-    (slower_cruise_m_per_min / speed_m_per_min).max(1.0)
+/// On a matched rig ridden at or above cruise the weaker unit's term is `range / range` - the same
+/// product both ways round, so exactly `1.0` - which leaves every such plan, the cap itself, the
+/// Settings preview and their pinned formula tests untouched. The weaker unit's term is never below
+/// `1.0`, so the floor only absorbs rounding, and a non-finite term yields `1.0`: `f64::max`
+/// returns the non-NaN operand.
+fn range_per_metre(speed_m_per_min: f64, rig: &DpvRig) -> f64 {
+    let weaker_range = rig.primary.range_m().min(rig.backup.range_m());
+    let unit_term =
+        |u: &DpvUnit| weaker_range / (u.burn_minutes * speed_m_per_min.min(u.speed_m_per_min));
+    unit_term(&rig.primary).max(unit_term(&rig.backup)).max(1.0)
 }
 
 /// Normalise the diver's segment list to exactly one entry per route span, with a concrete speed.
@@ -100,7 +103,6 @@ pub(super) fn resolve_segments(
     default_speed: f64,
     dpv: Option<&DpvRig>,
 ) -> Vec<ResolvedSegment> {
-    let cruise = dpv.map_or(f64::INFINITY, slower_cruise_m_per_min);
     (0..=waypoint_count)
         .map(|k| {
             let seg = segments.get(k);
@@ -108,17 +110,14 @@ pub(super) fn resolve_segments(
                 .and_then(|s| s.speed_m_per_min)
                 .filter(|s| (MIN_SEGMENT_SPEED_M_PER_MIN..=MAX_SEGMENT_SPEED_M_PER_MIN).contains(s))
                 .unwrap_or(default_speed);
-            let on_scooter = dpv.is_some() && seg.is_some_and(|s| s.on_scooter);
+            let on_scooter = seg.is_some_and(|s| s.on_scooter);
+            // A scootered span needs a rig to spend; without one the flag is dropped and the span
+            // is charged nothing.
+            let rig = dpv.filter(|_| on_scooter);
             ResolvedSegment {
                 speed_m_per_min,
-                on_scooter,
-                // `cruise` is only ever infinite when there is no rig, which is exactly when
-                // `on_scooter` is false - so the rider can never be infinite.
-                range_per_metre: if on_scooter {
-                    range_per_metre(speed_m_per_min, cruise)
-                } else {
-                    0.0
-                },
+                on_scooter: rig.is_some(),
+                range_per_metre: rig.map_or(0.0, |rig| range_per_metre(speed_m_per_min, rig)),
             }
         })
         .collect()
@@ -173,7 +172,7 @@ mod tests {
         }
     }
 
-    /// A rig whose two units share one cruise speed, so `slower_cruise_m_per_min` is unambiguous.
+    /// A rig whose two units share one cruise speed and burn, so neither unit's clock binds first.
     fn rig(cruise: f64) -> DpvRig {
         DpvRig {
             primary: unit(cruise, 60.0),
@@ -276,8 +275,7 @@ mod tests {
         let out = resolve_segments(&[seg(55.0, true)], 0, 10.0, None);
         assert_eq!(out[0].speed_m_per_min, 55.0);
         assert!(!out[0].on_scooter);
-        // And nothing is charged against a range that does not exist - never the INFINITY that a
-        // rig-less "slower cruise" would otherwise divide into the rider.
+        // And nothing is charged against a range that does not exist.
         assert_eq!(out[0].range_per_metre, 0.0);
     }
 
@@ -305,19 +303,106 @@ mod tests {
     }
 
     #[test]
-    fn the_range_factor_is_measured_against_the_slower_unit() {
-        // `usable_range_m` picks the weaker unit by LINE COVERED, which is not always the slower
-        // one: here the 45 m/min primary covers 2700 m and the 20 m/min backup only 1200, but if the
-        // burns were reversed the primary would be weaker while the backup stayed slower. The factor
-        // takes the slower cruise either way, because that is the larger factor and so the
-        // conservative answer.
-        let mixed = DpvRig {
+    fn each_unit_is_charged_its_own_clock_and_the_harder_drained_one_binds() {
+        // #576 A15. The cap is the weaker unit's LINE (`burn x cruise`, less the reserve), but each
+        // unit's battery runs by its own clock. Primary 45 m/min x 45 min (2025 m, the weaker),
+        // backup 30 m/min x 90 min, 10% reserve: the cap is 1822.5 m. Ridden at 30 m/min the
+        // primary is spent after 45 x 0.9 x 30 = 1215 m, so a metre of line must cost 1822.5 / 1215
+        // = 1.5 m of the cap. The slower unit's cruise (30 / 30 = 1.0) let the plan reach 1822.5 m.
+        let faster_is_weaker = DpvRig {
+            primary: unit(45.0, 45.0),
+            backup: unit(30.0, 90.0),
+            range_reserve_fraction: 0.1,
+        };
+        let factor = |rig: &DpvRig, speed: f64| {
+            resolve_segments(&[seg(speed, true)], 0, 10.0, Some(rig))[0].range_per_metre
+        };
+        assert_eq!(factor(&faster_is_weaker, 30.0), 1.5, "2025 / (45 x 30)");
+        assert_eq!(factor(&faster_is_weaker, 40.0), 1.125, "2025 / (45 x 40)");
+        assert_eq!(
+            factor(&faster_is_weaker, 45.0),
+            1.0,
+            "at the weaker unit's cruise"
+        );
+        assert_eq!(
+            factor(&faster_is_weaker, 60.0),
+            1.0,
+            "above cruise it floors"
+        );
+        // The binding unit need not be the weaker one: primary 30 x 60 (1800 m, the weaker), backup
+        // 60 x 40. At 20 m/min the backup's 40 minutes cover 800 m against the primary's 1200, so
+        // the BACKUP's factor binds: 1800 / (40 x 20) = 2.25 (cap 1620 m -> 720 m of line).
+        let backup_binds = DpvRig {
+            primary: unit(30.0, 60.0),
+            backup: unit(60.0, 40.0),
+            range_reserve_fraction: 0.1,
+        };
+        assert_eq!(factor(&backup_binds, 20.0), 2.25);
+        // Equal burns: both clocks run out together (60 min x 10 m/min = 600 m of line), so the
+        // factor is the cap's 1200 m over 600 m.
+        let equal_burns = DpvRig {
             primary: unit(45.0, 60.0),
             backup: unit(20.0, 60.0),
             range_reserve_fraction: 0.0,
         };
-        let out = resolve_segments(&[seg(10.0, true)], 0, 10.0, Some(&mixed));
-        assert_eq!(out[0].range_per_metre, 2.0, "20 / 10, not 45 / 10");
+        assert_eq!(factor(&equal_burns, 10.0), 2.0);
+    }
+
+    #[test]
+    fn the_range_cap_never_admits_more_line_than_either_units_clock() {
+        // The safety property behind the factor, over a sweep of rigs, reserves and span speeds: on
+        // a one-span plan the line the cap admits (`usable_range_m / range_per_metre`) is within
+        // what EACH unit covers by its own clock (`burn x (1 - reserve) x min(speed, cruise)`), and
+        // equal to the tighter of the two. It also never charges less than the slower-cruise rule
+        // it replaced, so no plan gained reach from the change.
+        let mut violations = Vec::new();
+        for (p, b) in [
+            (unit(45.0, 45.0), unit(30.0, 90.0)),
+            (unit(30.0, 60.0), unit(60.0, 40.0)),
+            (unit(45.0, 60.0), unit(20.0, 60.0)),
+            (unit(55.0, 90.0), unit(50.0, 60.0)),
+            (unit(45.0, 60.0), unit(45.0, 60.0)),
+            (unit(55.0, 60.0), unit(55.0, 45.0)),
+            (unit(10.0, 100.0), unit(40.0, 20.0)),
+            (unit(80.0, 20.0), unit(25.0, 200.0)),
+        ] {
+            for reserve in [0.0, 0.1, 0.25, 0.9] {
+                let rig = DpvRig {
+                    primary: p.clone(),
+                    backup: b.clone(),
+                    range_reserve_fraction: reserve,
+                };
+                for speed in [
+                    1.0, 5.0, 10.0, 20.0, 30.0, 40.0, 45.0, 50.0, 55.0, 60.0, 90.0,
+                ] {
+                    let f = resolve_segments(&[seg(speed, true)], 0, 10.0, Some(&rig))[0]
+                        .range_per_metre;
+                    let line = rig.usable_range_m() / f;
+                    let clock = |u: &DpvUnit| {
+                        u.burn_minutes * (1.0 - reserve) * speed.min(u.speed_m_per_min)
+                    };
+                    let tightest = clock(&rig.primary).min(clock(&rig.backup));
+                    let case = format!("{p:?}/{b:?} reserve {reserve} speed {speed}");
+                    if line > tightest * (1.0 + 1e-12) {
+                        violations
+                            .push(format!("{case}: admits {line} m, clock allows {tightest}"));
+                    }
+                    if (line - tightest).abs() > 1e-9 * tightest.max(1.0) {
+                        violations.push(format!("{case}: admits {line} m, not the {tightest} m"));
+                    }
+                    let slower_cruise = rig.primary.speed_m_per_min.min(rig.backup.speed_m_per_min);
+                    if f < (slower_cruise / speed).max(1.0) {
+                        violations.push(format!("{case}: factor {f} below the old rule"));
+                    }
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "{} violations, first:\n{}",
+            violations.len(),
+            violations[..violations.len().min(4)].join("\n")
+        );
     }
 
     #[test]

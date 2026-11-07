@@ -14,24 +14,13 @@
  */
 import { describe, it, expect, vi, beforeAll } from 'vitest';
 
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: 33 + index * 33,
-        size: 33,
-      })),
-    getTotalSize: () => count * 33,
-    scrollToIndex: () => {},
-  }),
-}));
+vi.mock('@tanstack/react-virtual', () => import('../../../test/factories/virtualizer'));
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ShotTableEditor } from '../ShotTableEditor';
 import type { EditableShot } from '../editableShot';
 import { useProjectStore } from '../../../store/projectStore';
+import { NoopResizeObserver } from '../../../test/factories/dom';
 
 const shot = (over: Partial<EditableShot> = {}): EditableShot => ({
   id: 1,
@@ -56,11 +45,7 @@ const shot = (over: Partial<EditableShot> = {}): EditableShot => ({
 beforeAll(() => {
   // jsdom has no ResizeObserver; the editor measures its grid box with one.
   if (typeof ResizeObserver === 'undefined') {
-    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    };
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = NoopResizeObserver;
   }
 });
 

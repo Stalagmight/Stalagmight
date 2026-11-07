@@ -5,6 +5,7 @@
  * open/closeDialog (synchronous) rather than clicking, which is more reliable.
  */
 import type { Scenario } from './framework';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 
 // Dialogs that render standalone (no project/data required, no side effects).
 const DIALOGS = ['keyboard-shortcuts', 'settings', 'new-project'];
@@ -36,10 +37,12 @@ export const dialogCycling: Scenario = {
       );
       ctx.metric('cycles');
       if (cycle.opened !== dialog) {
-        throw new Error(`openDialog(${dialog}) left activeDialog=${cycle.opened}`);
+        // A store value (`activeDialog: string | null`), so it prints as a test id
+        // does: the words of the app's source, other text as its length (#576 W51).
+        throw new Error(`openDialog(${dialog}) left activeDialog=${shareableTestId(cycle.opened)}`);
       }
       if (cycle.residue !== null) {
-        throw new Error(`dialog ${dialog} left activeDialog=${cycle.residue} after close`);
+        throw new Error(`dialog ${dialog} left activeDialog=${shareableTestId(cycle.residue)} after close`);
       }
     }
 

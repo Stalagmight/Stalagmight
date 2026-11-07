@@ -26,6 +26,7 @@ import {
   type ProgramBundle,
   linkProgramBundle,
   deleteProgramBundle,
+  layerGlError,
   bindVec2,
   bindFloat,
   bindColor,
@@ -175,6 +176,9 @@ export class SurveyGhostLayer implements CustomLayerInterface {
     this.gl = gl;
     this.disabled = false;
     this.disabledReason = null;
+    // A re-add after a WebGL context restore runs here on the NEW context: re-arm
+    // the first-frames GL error check, whose budget the lost context spent (#576 D38).
+    this.checkedFrames = 0;
     // linkProgramBundle() already logs getShaderInfoLog / getProgramInfoLog ungated.
     this.lineBundle = linkProgramBundle(
       gl, GHOST_LINE_VERTEX_SRC, GHOST_LINE_FRAGMENT_SRC, GHOST_LINE_UNIFORMS, GHOST_LINE_ATTRIBS, '[dragGhost]',
@@ -243,7 +247,7 @@ export class SurveyGhostLayer implements CustomLayerInterface {
 
   private checkFrameError(gl: WebGL2RenderingContext): void {
     if (this.checkedFrames >= MAX_CHECKED_FRAMES) return;
-    const err = gl.getError();
+    const err = layerGlError(gl);
     if (err !== gl.NO_ERROR) {
       const reason = `gl-error-0x${err.toString(16)}`;
       this.disabled = true;

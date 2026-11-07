@@ -146,6 +146,10 @@ export function useLongPress(
       const x = e.clientX;
       const y = e.clientY;
 
+      // A second finger restarts the hold. Overwriting `timerRef` alone would
+      // orphan the first finger's timer where no lift or cancel can reach it,
+      // and it would fire after both fingers are gone.
+      if (timerRef.current !== null) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
         timerRef.current = null;
         // Only an explicit false counts as "nothing opened": there is then no
@@ -196,8 +200,14 @@ export function useLongPress(
 
   // An armed window outlives the element that armed it - the menu a press opens
   // can unmount the row underneath it. Nothing left listening on `document`
-  // once this consumer is gone.
-  useEffect(() => () => disarmCompatEvents?.(), []);
+  // once this consumer is gone, and no pending press left to fire for it.
+  useEffect(
+    () => () => {
+      clear();
+      disarmCompatEvents?.();
+    },
+    [clear],
+  );
 
   return { onPointerDown, onPointerMove, onPointerUp, onPointerCancel };
 }

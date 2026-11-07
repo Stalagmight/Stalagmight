@@ -74,6 +74,9 @@ export default function SpeleoRevertDialog() {
   // Set when the revert cannot proceed without replacing un-pushed local work -
   // either refused up front (before any lock was taken) or by the backend mid-flight.
   const [needsDiscard, setNeedsDiscard] = useState(false);
+  // [#576 W55 NF-W53-1] That refusal was over a copy that could not be read
+  // (`state_unknown`), not one read dirty: same route, honest wording.
+  const [copyUnreadable, setCopyUnreadable] = useState(false);
   const [discardArmed, setDiscardArmed] = useState(false);
   // True when the failure left us holding a lock we did not have before, so the
   // dialog can say so instead of leaving the user to discover it from the toolbar.
@@ -195,6 +198,7 @@ export default function SpeleoRevertDialog() {
         return;
       case 'needs_discard':
         setNeedsDiscard(true);
+        setCopyUnreadable(outcome.stateUnknown);
         setLockHeld(outcome.lockHeld);
         setBusy(false);
         return;
@@ -218,6 +222,12 @@ export default function SpeleoRevertDialog() {
         return;
       case 'lock_failed':
         setError(t('speleodb.revert.errors.lockFailed'));
+        setBusy(false);
+        return;
+      case 'workspace_read_only':
+        // Refused before anything was taken (#576 RV4-FE-SP4): Plan and Export are
+        // read-only, and the remedy is the workspace switch, not a retry here.
+        setError(t('editGate.workspaceReadOnlyNotice'));
         setBusy(false);
         return;
       case 'restore_failed':
@@ -377,12 +387,16 @@ export default function SpeleoRevertDialog() {
             role="alert"
             data-testid="speleodb-revert-discard-warning"
           >
-            {t('speleodb.revert.unpushedWarning')}
+            {copyUnreadable
+              ? t('speleodb.revert.unreadableWarning')
+              : t('speleodb.revert.unpushedWarning')}
           </p>
         )}
         {needsDiscard && lockHeld && (
           <p className="text-warning" data-testid="speleodb-revert-lock-held">
-            {t('speleodb.revert.errors.lockStillHeld')}
+            {copyUnreadable
+              ? t('speleodb.revert.errors.lockStillHeldUnreadable')
+              : t('speleodb.revert.errors.lockStillHeld')}
           </p>
         )}
         {/* A revert is three server round trips, so name the one in flight - a single

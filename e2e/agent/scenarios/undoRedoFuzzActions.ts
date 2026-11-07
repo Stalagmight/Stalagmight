@@ -1063,9 +1063,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const ids = [...state.c].sort((a, b) => a - b);
       if (ids.length === 0) return null;
       const id = ctx.pick(ids);
-      // The store action's declared type is bigint, but it does `Number(closureId)`
-      // before the invoke, so a plain number (the only thing WebDriver can carry)
-      // is exactly what the IPC boundary sees anyway.
+      // A plain number: the store action's declared type (#576 C6), the only
+      // thing WebDriver can carry, and what the IPC boundary sees.
       return { action: 'removeLoopClosure', args: [id], label: `removeLoopClosure(${id})` };
     },
   },

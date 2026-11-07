@@ -12,9 +12,10 @@
     />
 
     <title>Stalagmight</title>
-    <!-- The <style> block below needs no 'unsafe-inline' in
-         src-tauri/tauri.conf.json's CSP (#357 item 12), but the mechanism is a
-         NONCE, not a hash:
+    <!-- No remote stylesheet: the MapLibre CSS is bundled from node_modules
+         (src/main.tsx), so the CSP's style-src is 'self' alone and the app
+         styles itself offline (#576 C12). The <style> block below
+         needs no 'unsafe-inline', but the mechanism is a NONCE, not a hash:
          tauri-codegen stamps nonce="__TAURI_STYLE_NONCE__" onto every <style>
          at build time (map_core_assets -> inject_nonce_token), and at serve time
          set_csp -> replace_csp_nonce swaps in a random value and appends the

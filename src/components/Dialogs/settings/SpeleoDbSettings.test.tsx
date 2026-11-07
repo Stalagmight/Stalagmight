@@ -15,8 +15,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc');
 
 // Real copy, so the four states are asserted as the user reads them.
 import '../../../i18n';
@@ -24,6 +23,7 @@ import { SpeleoDbSettings } from './SpeleoDbSettings';
 import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
 import { useSpeleoStore, type SpeleoSession } from '../../../store/speleoStore';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 let onChange: ReturnType<typeof vi.fn>;
 

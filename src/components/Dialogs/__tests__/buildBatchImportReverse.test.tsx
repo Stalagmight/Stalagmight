@@ -23,48 +23,20 @@ vi.mock('../SectionPreview', async (importOriginal) => ({
 vi.mock('maplibre-gl', () => ({ default: {} }));
 
 import { buildBatchImport, type DirectPlacement } from '../DmpNewImportDialog';
-import type { DmpFile, DmpSection, DmpShot, ImportPlacement } from '../../../types/commands';
+import type { DmpFile, DmpSection, ImportPlacement } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
 import type { SectionEditState } from '../../../utils/batchImportHelpers';
 import type { VirtualConnection } from '../../../utils/segmentContext';
 import type { EditableShot } from '../../common/ShotTableEditor';
+import { makeDmpFile, makeDmpSection, makeDmpShots } from '../../../test/factories/dmp';
 
 const TARGET_SHOTS = 8;
 /** The station the user picked off the LIVE project. */
 const PICKED_STATION = 5;
 const LIVE_SECTION_ID = 42;
 
-function dmpShot(): DmpShot {
-  return {
-    shot_type: 'Standard',
-    heading_in: 10,
-    heading_out: 10,
-    length: 5,
-    depth_in: 0,
-    depth_out: 0,
-    pitch_in: 0,
-    pitch_out: 0,
-    left: 0,
-    right: 0,
-    up: 0,
-    down: 0,
-    temperature: 0,
-    hour: 0,
-    minute: 0,
-    second: 0,
-    marker_index: 0,
-  };
-}
-
 function dmpSection(name: string, shotCount: number): DmpSection {
-  return {
-    version: 1,
-    name,
-    direction: 'in',
-    date: '2026-01-01',
-    shots: Array.from({ length: shotCount }, dmpShot),
-    content_hash: `hash-${name}`,
-  };
+  return makeDmpSection({ name, shots: makeDmpShots(shotCount), content_hash: `hash-${name}` });
 }
 
 /** `id` is the shot's 0-based index in the file - `adjustStationForDeletedShots` compares station indices against it. */
@@ -107,10 +79,7 @@ function edits(name: string, shotCount: number, reverse: boolean): SectionEditSt
  * reach the direct placement.
  */
 function build(directPlacements: DirectPlacement[] | undefined) {
-  const dmpFile: DmpFile = {
-    version: 1,
-    sections: [dmpSection('Segment', 3), dmpSection('TargetB', TARGET_SHOTS)],
-  };
+  const dmpFile: DmpFile = makeDmpFile({ sections: [dmpSection('Segment', 3), dmpSection('TargetB', TARGET_SHOTS)] });
   const selectionConfig: DmpSelectionConfig = {
     selectedIndices: new Set([0, 1]),
     defaultSurveyor: 'S',

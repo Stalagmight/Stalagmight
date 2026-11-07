@@ -13,17 +13,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import SpeleoManagedFileDialog from '../SpeleoManagedFileDialog';
 import { useProjectStore } from '../../../store/projectStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import type { SpeleoSession } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../../test/factories/ipc';
 
 const MANAGED = {
   path: '/home/diver/expedition/copy.stalx',
@@ -272,7 +270,7 @@ describe('SpeleoManagedFileDialog', () => {
   it('keeps the prompt open with the reason when the strip fails', async () => {
     invokeIpcMock.mockImplementation((cmd: string) =>
       cmd === 'speleodb_remove_link_at'
-        ? Promise.reject({ message: 'file is locked', action: 'None', status: null })
+        ? Promise.reject({ message: 'file is locked', code: 'FAILED', status: null })
         : Promise.resolve(undefined),
     );
     render(<SpeleoManagedFileDialog />);
@@ -307,7 +305,7 @@ describe('SpeleoManagedFileDialog', () => {
     expect(screen.getByTestId('speleodb-managed-file-dialog')).toBeInTheDocument();
 
     // ...so the failure still has somewhere to land.
-    rejectStrip({ message: 'file is locked', action: 'None', status: null });
+    rejectStrip({ message: 'file is locked', code: 'FAILED', status: null });
     await waitFor(() =>
       expect(screen.getByTestId('speleodb-managed-file-error')).toBeInTheDocument(),
     );

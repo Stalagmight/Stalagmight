@@ -17,20 +17,17 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
-
 const trackActionMock = vi.hoisted(() => vi.fn());
 const trackDialogCompleteMock = vi.hoisted(() => vi.fn());
 const checkDialogCancelMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackAction: trackActionMock,
-  trackDialogComplete: trackDialogCompleteMock,
-  checkDialogCancel: checkDialogCancelMock,
-}));
+vi.mock('../../utils/telemetry', async () =>
+  (await import('../../test/factories/telemetry')).telemetryWith({
+    trackAction: trackActionMock,
+    trackDialogComplete: trackDialogCompleteMock,
+    checkDialogCancel: checkDialogCancelMock,
+  }),
+);
 
 import { useUIStore } from '../uiStore';
 

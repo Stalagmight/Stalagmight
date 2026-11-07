@@ -8,10 +8,12 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { ProjectMetadata } from '../../types/project';
 import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../utils/fileDialogs';
+import { siblingPath } from '../../utils/path';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { trackDialogComplete, setProjectActionSource } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * MergeProjectsDialog allows users to merge multiple projects into a single new project.
@@ -19,8 +21,12 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
  */
 export default function MergeProjectsDialog() {
   const { t } = useTranslation();
-  const { closeDialog, dialogData, showToast } = useUIStore();
-  const { mergeProjects, loadProject } = useProjectStore();
+  const { closeDialog, dialogData, showToast } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData, showToast: s.showToast })),
+  );
+  const { mergeProjects, loadProject } = useProjectStore(
+    useShallow((s) => ({ mergeProjects: s.mergeProjects, loadProject: s.loadProject })),
+  );
   const precision = useDecimalPrecision();
 
   const selectedProjects = dialogData.selectedProjects as ProjectMetadata[] | undefined;
@@ -28,9 +34,9 @@ export default function MergeProjectsDialog() {
   const [outputName, setOutputName] = useState(() => {
     // Generate a default name from the first project
     if (selectedProjects && selectedProjects.length > 0 && selectedProjects[0]) {
-      return `${selectedProjects[0].name}_merged`;
+      return t('dialogs.mergeProjects.defaultNameFrom', { name: selectedProjects[0].name });
     }
-    return 'merged_project';
+    return t('dialogs.mergeProjects.defaultName');
   });
   const [archiveOriginals, setArchiveOriginals] = useState(false);
   const [openAfterMerge, setOpenAfterMerge] = useState(true);
@@ -54,9 +60,9 @@ export default function MergeProjectsDialog() {
   // Format length for display
   const formatLength = (meters: number): string => {
     if (meters >= 1000) {
-      return `${formatFixed(meters / 1000, undefined, precision.length)} km`;
+      return t('dialogs.mergeProjects.lengthKm', { length: formatFixed(meters / 1000, undefined, precision.length) });
     }
-    return `${formatFixed(meters, undefined, precision.length)} m`;
+    return t('dialogs.mergeProjects.lengthM', { length: formatFixed(meters, undefined, precision.length) });
   };
 
   const handleClose = useCallback(() => {
@@ -66,7 +72,7 @@ export default function MergeProjectsDialog() {
   const handleMerge = useCallback(async () => {
     if (!selectedProjects || selectedProjects.length < 2) return;
     if (!outputName.trim()) {
-      setError('Please enter a name for the merged project');
+      setError(t('dialogs.mergeProjects.errors.nameRequired'));
       return;
     }
 
@@ -77,18 +83,17 @@ export default function MergeProjectsDialog() {
       // Get output directory from the first project's location
       const firstProject = selectedProjects[0];
       if (!firstProject) {
-        setError('No projects selected');
+        setError(t('dialogs.mergeProjects.errors.noneSelected'));
         setIsLoading(false);
         return;
       }
-      const firstProjectPath = firstProject.file_path;
-      const defaultDir = firstProjectPath.substring(0, firstProjectPath.lastIndexOf('/'));
       const defaultFileName = `${outputName.trim()}.stalx`;
 
-      // Show save dialog to let user choose output location
+      // Show save dialog to let user choose output location: next to the first
+      // project, with its separator ('\' counts only in a Windows-shaped path).
       const outputPath = await saveDialog({
-        title: 'Save Merged Project',
-        defaultPath: `${defaultDir}/${defaultFileName}`,
+        title: t('dialogs.mergeProjects.saveDialogTitle'),
+        defaultPath: siblingPath(firstProject.file_path, defaultFileName),
         filters: projectSaveFilters(),
       });
 
@@ -127,14 +132,14 @@ export default function MergeProjectsDialog() {
           await loadProject(finalPath);
         }
       } else {
-        setError(result.error ?? 'Failed to merge projects');
+        setError(result.error ?? t('dialogs.mergeProjects.errors.failed'));
       }
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to merge projects'));
+      setError(getErrorMessage(e, t('dialogs.mergeProjects.errors.failed')));
     } finally {
       setIsLoading(false);
     }
-  }, [selectedProjects, outputName, archiveOriginals, openAfterMerge, mergeProjects, closeDialog, loadProject]);
+  }, [selectedProjects, outputName, archiveOriginals, openAfterMerge, mergeProjects, closeDialog, loadProject, t]);
 
   if (!selectedProjects || selectedProjects.length < 2) {
     return null;
@@ -142,7 +147,7 @@ export default function MergeProjectsDialog() {
 
   return (
     <DialogWrapper
-      title="Merge Projects"
+      title={t('dialogs.mergeProjects.title')}
       onClose={handleClose}
       size="lg"
       data-testid="merge-projects-dialog"
@@ -157,7 +162,7 @@ export default function MergeProjectsDialog() {
         {/* Projects to merge */}
         <div>
           <h3 className="text-sm font-medium text-text-secondary mb-2">
-            Projects to merge ({selectedProjects.length})
+            {t('dialogs.mergeProjects.projectsHeading', { count: selectedProjects.length })}
           </h3>
           <div className="space-y-2 max-h-48 overflow-auto border border-border rounded p-2">
             {selectedProjects.map((project) => (
@@ -168,7 +173,10 @@ export default function MergeProjectsDialog() {
                 <div className="truncate flex-1">
                   <span className="font-medium">{project.name}</span>
                   <span className="text-text-secondary text-xs ml-2">
-                    ({project.section_count} sections, {formatLength(project.total_length)})
+                    {t('dialogs.mergeProjects.projectStats', {
+                      count: project.section_count,
+                      length: formatLength(project.total_length),
+                    })}
                   </span>
                 </div>
               </div>
@@ -179,11 +187,11 @@ export default function MergeProjectsDialog() {
         {/* Totals */}
         <div className="p-3 bg-background rounded">
           <div className="flex justify-between text-sm">
-            <span className="text-text-secondary">Total sections:</span>
+            <span className="text-text-secondary">{t('dialogs.mergeProjects.totalSections')}</span>
             <span className="font-medium">{totals.sections}</span>
           </div>
           <div className="flex justify-between text-sm">
-            <span className="text-text-secondary">Total length:</span>
+            <span className="text-text-secondary">{t('dialogs.mergeProjects.totalLength')}</span>
             <span className="font-medium">{formatLength(totals.length)}</span>
           </div>
         </div>
@@ -191,7 +199,7 @@ export default function MergeProjectsDialog() {
         {/* Output name */}
         <div>
           <label htmlFor="merge-output-name" className="block text-sm font-medium mb-1">
-            Merged project name
+            {t('dialogs.mergeProjects.nameLabel')}
           </label>
           <input
             id="merge-output-name"
@@ -199,7 +207,7 @@ export default function MergeProjectsDialog() {
             value={outputName}
             onChange={(e) => setOutputName(e.target.value)}
             className="w-full px-3 py-2 bg-background border border-border rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
-            placeholder="Enter project name"
+            placeholder={t('dialogs.mergeProjects.namePlaceholder')}
             data-testid="merge-output-name-input"
           />
         </div>
@@ -215,7 +223,7 @@ export default function MergeProjectsDialog() {
               data-testid="merge-archive-checkbox"
             />
             <span className="text-sm">
-              Archive original project files (rename to .stalx.archived)
+              {t('dialogs.mergeProjects.archiveOriginals')}
             </span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
@@ -226,22 +234,21 @@ export default function MergeProjectsDialog() {
               className="rounded border-border"
               data-testid="merge-open-checkbox"
             />
-            <span className="text-sm">Open merged project after creation</span>
+            <span className="text-sm">{t('dialogs.mergeProjects.openAfterMerge')}</span>
           </label>
         </div>
 
         {/* Info about merge behavior */}
         <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
           <p className="text-text-secondary">
-            Merging will combine all sections from the selected projects into a new project file.
-            Section IDs will be renumbered to avoid conflicts. Zero datums will be preserved.
+            {t('dialogs.mergeProjects.info')}
           </p>
         </div>
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={handleClose} disabled={isLoading} data-testid="merge-projects-cancel">
-            Cancel
+            {t('common.actions.cancel')}
           </Button>
           <Button
             variant="primary"
@@ -249,7 +256,7 @@ export default function MergeProjectsDialog() {
             disabled={isLoading || !outputName.trim()}
             data-testid="merge-projects-confirm-button"
           >
-            {isLoading ? 'Merging...' : 'Merge Projects'}
+            {isLoading ? t('dialogs.mergeProjects.merging') : t('dialogs.mergeProjects.merge')}
           </Button>
         </div>
       </div>

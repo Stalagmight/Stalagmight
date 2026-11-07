@@ -1,11 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useUIStore } from '../uiStore';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 /**
  * Entering Plan/Export force-opens the right Dock (detail panel). #241: exiting

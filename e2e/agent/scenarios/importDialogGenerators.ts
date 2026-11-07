@@ -56,7 +56,8 @@ import {
   type SurveyFormatFamily,
 } from '../lib/surveyFileSpecs';
 import { corruptSpec } from '../lib/surveyFileCorrupt';
-import { corpusFileId, discoverCorpus, type CorpusEntry } from '../lib/fixtureCorpus';
+import { corpusFileId, type CorpusEntry } from '../lib/fixtureCorpus';
+import { corpusEntryRel } from '../lib/fuzzTrace';
 import { OVERLAP_MODES, VIRTUAL_SHOT_MODES, type ScreenId } from './importDialogModel';
 
 // ---------------------------------------------------------------------------
@@ -82,7 +83,12 @@ export type FileSource =
    * TWO rels, because the unit of materialization is a DIRECTORY: a Compass
    * `.mak` names sibling `.dat` files and a Walls `.wpj` names a tree of
    * `.srv`, so `materializeCorpusEntry` copies the entry's whole folder into
-   * `dirRel` and the file to open is `rel` inside it.
+   * `dirRel` and the file to open is the entry inside it. `rel` names that file
+   * as `fuzzTrace.corpusEntryRel(dirRel)` - the directory plus a token, NOT the
+   * copy's basename, because `rel` is what the `route` / `fileDialog` step
+   * records and the copy keeps its real name (#576 HFI-13). The shell opens the
+   * path `materializeCorpusEntry` returns, and a replay resolves the token
+   * against the copy its `corpusFile` step made.
    *
    * `corpusRel` is resolved against whatever `STALAGMIGHT_FUZZ_CORPUS_DIR` is
    * set to at the time, and never leaves this process: `id` is the publishable
@@ -451,15 +457,13 @@ export function drawFileSource(env: GenEnv): FileSource {
     const corpus = env.corpus[format] as readonly CorpusEntry[];
     const entry = pickFrom(rng, corpus) as CorpusEntry;
     const dirRel = `${env.filesRel}/corpus-${env.fileSeq}`;
-    // `relPath` is POSIX by construction (`discoverCorpus` joins on '/').
-    const base = entry.relPath.slice(entry.relPath.lastIndexOf('/') + 1);
     return {
       origin: 'corpus',
       corpusRel: entry.relPath,
       id: entry.id,
       hash: entry.pathHash,
       dirRel,
-      rel: `${dirRel}/${base}`,
+      rel: corpusEntryRel(dirRel),
     };
   }
 
@@ -1249,9 +1253,6 @@ const WIZARD_SUGGEST: Generator[] = [
   {
     name: 'wiz:back',
     weight: 3,
-    // `wiz-no-suggest` is deliberately NOT here - the bridge's settle predicate
-    // now waits through that frame, because it is a sub-paint transition into
-    // `wiz-manual` and not a screen. See `busy()` in importDialogBridge.ts.
     screens: ['wiz-suggest', 'wiz-manual'],
     build: (env) => (actionable(env.digest, 'back-button') ? click('back-button', 'wizard back') : null),
   },

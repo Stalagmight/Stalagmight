@@ -2,15 +2,16 @@ use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::Path;
 
+use super::atomic::write_atomic_bytes;
 use crate::models::Project;
 
 /// Export project data to CSV format
 pub fn export_csv(project: &Project, path: &Path) -> Result<()> {
-    let mut file = std::fs::File::create(path).context("Failed to create CSV file")?;
+    let mut out = Vec::new();
 
     // Write header
     writeln!(
-        file,
+        out,
         "section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment"
     )?;
 
@@ -20,7 +21,7 @@ pub fn export_csv(project: &Project, path: &Path) -> Result<()> {
 
         for shot in &section.shots {
             writeln!(
-                file,
+                out,
                 "{},{},{},{:.2},{:.1},{:.1},{:.2},{:.2},{},{},{},{},{},{}",
                 section.id,
                 escape_csv(section_name),
@@ -39,6 +40,8 @@ pub fn export_csv(project: &Project, path: &Path) -> Result<()> {
             )?;
         }
     }
+
+    write_atomic_bytes(path, &out).context("Failed to write CSV file")?;
 
     tracing::info!(path = ?path, "Exported CSV");
     Ok(())

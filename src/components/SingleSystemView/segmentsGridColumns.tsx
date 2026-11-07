@@ -117,9 +117,13 @@ export function buildSegmentColumns(ctx: SegmentColumnContext): GridColumn<PlanS
         seg.speed_m_per_min == null ? null : speedToDisplay(seg.speed_m_per_min, units),
       format: (value) => (typeof value === 'number' ? formatFixed(value, undefined, 1) : ''),
       editable: true,
-      // No `validate`: the reducer CLAMPS out-of-range speeds, preserving the
-      // pre-grid contract. Rejecting them instead would leave the editor open on
-      // a value the engine would have quietly accepted at the boundary.
+      // Rejects only a speed <= 0, as the pre-grid field did (D39d): it is no
+      // pace at all, and the clamp would fly the span at 0.1 m/min. A positive
+      // speed outside the engine range is NOT rejected - the reducer CLAMPS it,
+      // preserving the pre-grid contract. A cleared cell (`null`) is the
+      // return-to-inherited gesture, never an error.
+      validate: (value) =>
+        typeof value === 'number' && value <= 0 ? t('gasPanel.segments.nonPositiveSpeed') : null,
       render: (seg, index): ReactNode => {
         if (seg.speed_m_per_min != null) {
           // The Reset button is gone; clearing the cell is the only way back to

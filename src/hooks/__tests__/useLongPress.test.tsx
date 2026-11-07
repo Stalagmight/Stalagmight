@@ -311,4 +311,77 @@ describe('useLongPress', () => {
     expect(onLongPress).toHaveBeenCalledTimes(2);
     expect(onDocumentMouseDown).not.toHaveBeenCalled();
   });
+
+  /** A callback that records how many ms after `t0` each long press fired. */
+  function timedCallback(t0: number): { fired: number[]; onLongPress: () => void } {
+    const fired: number[] = [];
+    return { fired, onLongPress: () => void fired.push(Date.now() - t0) };
+  }
+
+  it.each(['pointerUp', 'pointerCancel'] as const)(
+    'a second finger does not orphan the first finger\'s pending press (%s ends both)',
+    (end) => {
+      // Two fingers on one row at 0 and 30 ms, both gone at 120 ms: nothing is
+      // still held, so nothing may open. The second pointerdown must not leave
+      // the first one's timer running where no lift can reach it.
+      const { fired, onLongPress } = timedCallback(Date.now());
+      render(<Harness onLongPress={onLongPress} />);
+      const child = screen.getByTestId('child');
+
+      fireEvent.pointerDown(child, { pointerType: 'touch', pointerId: 1, clientX: 10, clientY: 10 });
+      act(() => {
+        vi.advanceTimersByTime(30);
+      });
+      fireEvent.pointerDown(child, { pointerType: 'touch', pointerId: 2, clientX: 40, clientY: 10 });
+      act(() => {
+        vi.advanceTimersByTime(90);
+      });
+      fireEvent[end](child, { pointerType: 'touch', pointerId: 1, clientX: 10, clientY: 10 });
+      fireEvent[end](child, { pointerType: 'touch', pointerId: 2, clientX: 40, clientY: 10 });
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(fired, 'ms at which a long press fired after both fingers lifted at 120 ms').toEqual(
+        [],
+      );
+    },
+  );
+
+  it('a second finger restarts the hold rather than stacking a second one', () => {
+    // Both fingers stay down: one press, timed from the latest pointerdown.
+    const { fired, onLongPress } = timedCallback(Date.now());
+    render(<Harness onLongPress={onLongPress} />);
+    const child = screen.getByTestId('child');
+
+    fireEvent.pointerDown(child, { pointerType: 'touch', pointerId: 1, clientX: 10, clientY: 10 });
+    act(() => {
+      vi.advanceTimersByTime(30);
+    });
+    fireEvent.pointerDown(child, { pointerType: 'touch', pointerId: 2, clientX: 40, clientY: 10 });
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(fired, 'ms at which each long press fired').toEqual([530]);
+  });
+
+  it('drops a pending press when the consumer unmounts', () => {
+    // A virtualised row can be recycled mid-hold; its callback must not fire
+    // for a row that is no longer there.
+    const { fired, onLongPress } = timedCallback(Date.now());
+    const { unmount } = render(<Harness onLongPress={onLongPress} />);
+    const child = screen.getByTestId('child');
+
+    fireEvent.pointerDown(child, { pointerType: 'touch', clientX: 10, clientY: 10 });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    act(() => unmount());
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(fired, 'ms at which a long press fired for the unmounted consumer').toEqual([]);
+  });
 });

@@ -12,29 +12,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: vi.fn(),
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import { useProjectMenuItems } from '../useProjectMenuItems';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
+import { stubGetErrorMessage, fallbackOr } from '../../../test/factories/ipc';
+import { makeSpeleoLink } from '../../../test/factories/speleo';
 
-const READ_ONLY_LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'read-only',
-  lockHolder: 'someone-else',
-  lockedByOther: true,
-  hasUnpushedEdits: false,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+const READ_ONLY_LINK: SpeleoLinkState = makeSpeleoLink({ lockHolder: 'someone-else', lockedByOther: true });
 
 function importItem(): { disabled?: boolean; onClick?: unknown } | undefined {
   const { result } = renderHook(() =>

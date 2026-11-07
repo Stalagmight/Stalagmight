@@ -1,9 +1,8 @@
 // Command and IPC payload types generated from Rust.
 
-import type { ShotData, StationRef, Coordinates, GpsCoordinates, ClosureStrategy, ShotUpdates, SectionId, ShotId } from './project';
+import type { Command, ValidationWarning } from './ipc.generated';
 
 export type {
-  CommandResult,
   IntegrityRepairResult,
   IntegrityCheckResult,
   ValidationWarning,
@@ -64,26 +63,46 @@ export type {
   SegmentSectionGeometry,
 } from './ipc.generated';
 
-// Batch command types for execute_batch IPC.
-// These match the Rust Command enum variants.
-export type BatchCommand =
-  | { type: 'create_section'; name?: string; surveyor?: string; date?: string; color: string; direction?: 'in' | 'out'; shots: ShotData[] }
-  // Withdrawing an abandoned import removes N sections in one user action, so it
-  // is batched: one undo entry, all-or-nothing (#394). `untrack_import` rides the
-  // same batch - the import-dedup hashes describe the sections being removed, so
-  // one undo has to bring both back.
-  | { type: 'delete_section'; section_id: SectionId }
-  | { type: 'untrack_import'; file_hashes: string[]; section_hashes: string[] }
-  | { type: 'create_loop_closure'; station_a: StationRef; station_b: StationRef; closure_strategy: ClosureStrategy }
-  | { type: 'merge_stations'; station_a: StationRef; station_b: StationRef }
-  | { type: 'move_section'; section_id: number; offset: Coordinates }
-  | { type: 'move_segment'; section_id: number; offset: Coordinates }
-  | { type: 'move_station'; station_ref: StationRef; offset: Coordinates }
-  | { type: 'set_zero_datum'; station_ref: StationRef; coordinates: GpsCoordinates }
-  // Reversing a multi-selection is one user action, so it goes through a batch:
-  // all-or-nothing rollback and a single undo entry (#24).
-  | { type: 'reverse_section'; section_id: SectionId; swap_left_right: boolean }
-  // Per-shot field edit - lets the data-table grid commit a multi-cell edit
-  // (paste/fill) as one undo unit. Nested payload uses snake_case (it bypasses
-  // Tauri's top-level camelCase conversion). ShotUpdates fields are all optional.
-  | { type: 'update_shot'; section_id: SectionId; shot_id: ShotId; updates: ShotUpdates };
+/**
+ * The outcome of an action the frontend reports itself, with no per-command backend
+ * outcome behind it: the settings writes (`projectConfigActions.ts`) and project
+ * creation (`emptyCommandResult`). It used to be the backend's one result type for
+ * every command; since #576 A12 each command answers with its own outcome and the
+ * store mutations with `CommandOutcome<T>` (`src/store/commandResult.ts`).
+ */
+export interface CommandResult {
+  success: boolean;
+  warnings: ValidationWarning[];
+  error: string | null;
+  section_ids: number[];
+}
+
+// Batch command types for execute_batch IPC: the generated `Command` (#576 C3),
+// narrowed to the variants the frontend batches. Field names and types come from
+// the Rust enum, so a nested key spelled in camelCase (the top-level Tauri
+// convention, which a nested payload does NOT get) fails to compile.
+export type BatchCommand = Extract<
+  Command,
+  {
+    type:
+      | 'create_section'
+      // Withdrawing an abandoned import removes N sections in one user action, so it
+      // is batched: one undo entry, all-or-nothing (#394). `untrack_import` rides the
+      // same batch - the import-dedup hashes describe the sections being removed, so
+      // one undo has to bring both back.
+      | 'delete_section'
+      | 'untrack_import'
+      | 'create_loop_closure'
+      | 'merge_stations'
+      | 'move_section'
+      | 'move_segment'
+      | 'move_station'
+      | 'set_zero_datum'
+      // Reversing a multi-selection is one user action, so it goes through a batch:
+      // all-or-nothing rollback and a single undo entry (#24).
+      | 'reverse_section'
+      // Per-shot field edit - lets the data-table grid commit a multi-cell edit
+      // (paste/fill) as one undo unit. ShotUpdates fields are all optional.
+      | 'update_shot';
+  }
+>;

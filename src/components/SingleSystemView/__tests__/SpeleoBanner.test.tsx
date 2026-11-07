@@ -9,30 +9,27 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import { SpeleoBanner } from '../SpeleoBanner';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../../test/factories/ipc';
+import { makeSpeleoLink } from '../../../test/factories/speleo';
 
-const LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
+/** [#576 NF-W8FE-2] Done and Push answer the wire envelope, never a bare outcome. */
+function report<R>(result: R): { result: R; save_warnings: [] } {
+  return { result, save_warnings: [] };
+}
+
+const LINK: SpeleoLinkState = makeSpeleoLink({
   editState: 'editing',
-  lockHolder: null,
-  lockedByOther: false,
   hasUnpushedEdits: true,
-  unwound: false,
   forceEditing: true,
   forceEditAllowed: true,
-  undoMode: 'full',
   remoteState: 'unknown',
-  noAccess: false,
-  serverError: null,
-};
+});
 
 const seedLink = (o: Partial<SpeleoLinkState> = {}) =>
   useSpeleoStore.setState({ link: { ...LINK, ...o }, banner: null });
@@ -103,7 +100,7 @@ describe('SpeleoBanner push failure (#260)', () => {
 
   it('Retry re-issues the push verb with the original commit message', async () => {
     seedFailure('push', 'my message');
-    invokeIpcMock.mockResolvedValue({ kind: 'pushed' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'pushed' }));
     render(<SpeleoBanner />);
 
     await userEvent.click(screen.getByTestId('speleo-banner-retry-push'));
@@ -120,7 +117,7 @@ describe('SpeleoBanner push failure (#260)', () => {
 
   it('Retry re-issues the unlock verb when the failure came from Done', async () => {
     seedFailure('done', 'wrap up');
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     render(<SpeleoBanner />);
 
     await userEvent.click(screen.getByTestId('speleo-banner-retry-push'));
@@ -305,5 +302,38 @@ describe('SpeleoBanner retry needs an open edit gate (#270)', () => {
     await userEvent.click(screen.getByTestId('speleo-banner-start-editing-to-retry'));
 
     await waitFor(() => expect(useSpeleoStore.getState().banner).toBeNull());
+  });
+});
+
+/**
+ * #576 B35(e) - the backend switched editing off because SpeleoDB says the write lock
+ * this session was editing under is gone or someone else's. Say so, and who holds it.
+ */
+describe('SpeleoBanner lock lost (#576 B35(e))', () => {
+  it('names the account that holds the lock now, with nothing to start', () => {
+    seedLink({ forceEditing: false, editState: 'read-only' });
+    useSpeleoStore.setState({ banner: { kind: 'lock_lost', holder: 'colleague@example.com' } });
+    render(<SpeleoBanner />);
+    const banner = screen.getByTestId('speleo-banner');
+    expect(banner).toHaveAttribute('data-kind', 'lock_lost');
+    expect(banner.textContent).toContain('colleague@example.com');
+    expect(banner.textContent).toContain('editing has been switched off');
+    expect(screen.queryByTestId('speleo-banner-lock-lost-start-editing')).not.toBeInTheDocument();
+    expect(screen.getByTestId('speleo-banner-dismiss')).toBeInTheDocument();
+  });
+
+  it('offers Start editing when nobody holds the lock any more', async () => {
+    seedLink({ forceEditing: false, editState: 'read-only' });
+    useSpeleoStore.setState({ banner: { kind: 'lock_lost', holder: null } });
+    render(<SpeleoBanner />);
+    expect(screen.getByTestId('speleo-banner').textContent).toContain(
+      'You no longer hold the SpeleoDB write lock',
+    );
+
+    await userEvent.click(screen.getByTestId('speleo-banner-lock-lost-start-editing'));
+
+    await waitFor(() =>
+      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
+    );
   });
 });

@@ -1,4 +1,5 @@
 import type * as maplibregl from 'maplibre-gl';
+import { isStyleRestoring } from './surveyLayer/customRender/styleRestore';
 
 /**
  * Check if map instance has a live style (not destroyed).
@@ -7,15 +8,36 @@ import type * as maplibregl from 'maplibre-gl';
  * and any calls to getLayer/getSource/etc will throw.
  */
 export function hasLiveStyle(map: maplibregl.Map | null): boolean {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return !!(map && (map as any).style);
+  return !!(map && (map as unknown as { style?: unknown }).style);
+}
+
+/**
+ * Whether a write to the stock style (`addSource`, `addLayer`, `setFilter`,
+ * `setLayoutProperty`, `setPaintProperty`, ...) can land now: the style is alive,
+ * it has loaded, and no rebuild is under way.
+ *
+ * {@link hasLiveStyle} alone is not enough. A WebGL context restore and a worker
+ * restart put a NEW style in place that loads one frame later (#606, see
+ * surveyLayer/customRender/styleRestore.ts). Until its `style.load` that style
+ * is empty - `getLayer` and `getSource` find nothing, so add-if-missing code
+ * tries to add - and MapLibre refuses every write with "Style is not done
+ * loading." (#576 RV18-MAP-1). A write skipped here is not lost: the restore
+ * replays the stock style state once that style has loaded (SurveyLayer's
+ * replay - the closure exclusion of a carry picked up in either window included,
+ * RV19b-M1 - and `useStyleEpoch` for the React effects).
+ */
+export function canWriteStyle(map: maplibregl.Map | null): boolean {
+  if (!map || !hasLiveStyle(map)) return false;
+  // MapLibre's own `Style._checkLoaded` flag; a stand-in without it counts as loaded.
+  if ((map as unknown as { style: { _loaded?: boolean } }).style._loaded === false) return false;
+  return !isStyleRestoring(map);
 }
 
 /**
  * Anchor candidates, bottom-most first, for an overlay that must draw beneath
  * the survey: pass the first one `getLayer` resolves as `beforeId`.
  *
- * `initializeLayers` adds the ghost shot hitbox first, so it is the bottom of
+ * `addAuxiliaryLayers` adds the ghost shot hitbox first, so it is the bottom of
  * the survey stack; the rest are live fallbacks, not decoration, since an
  * unresolved anchor means MapLibre appends the overlay ON TOP of everything.
  * `survey-custom-render` (the WebGL geometry) is last because anchoring there

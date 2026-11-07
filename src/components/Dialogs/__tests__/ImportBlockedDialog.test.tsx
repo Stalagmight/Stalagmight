@@ -36,9 +36,7 @@ const h = vi.hoisted(() => {
 });
 const { closeDialog, setAppMode, setGeometryMode, routeOpenedFile, trackDialogComplete } = h.env;
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).translationStub());
 
 vi.mock('../../../store/uiStore', () => ({
   useUIStore: h.useUIStore,
@@ -48,18 +46,15 @@ vi.mock('../../../utils/openOrImport', () => ({
   routeOpenedFile: (...args: unknown[]) => routeOpenedFile(...args),
 }));
 
-vi.mock('../../../utils/telemetry', () => ({
-  trackDialogComplete: (...args: unknown[]) => trackDialogComplete(...args),
-}));
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryStubs({
+    trackDialogComplete: (...args: unknown[]) => trackDialogComplete(...args),
+  }),
+);
 
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ title, children, 'data-testid': testId }: { title: string; children: React.ReactNode; 'data-testid'?: string }) => (
-    <div data-testid={testId}>
-      <h2>{title}</h2>
-      {children}
-    </div>
-  ),
-}));
+vi.mock('../DialogWrapper', async () =>
+  (await import('../../../test/factories/components')).dialogWrapperStub({ title: 'h2', testId: true }),
+);
 
 import ImportBlockedDialog from '../ImportBlockedDialog';
 

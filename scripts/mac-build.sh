@@ -46,8 +46,10 @@ fi
 [[ -f "$PROJECT_DIR/package.json" ]] || die "Not a valid project directory: $PROJECT_DIR"
 
 # Ask cargo where it actually writes rather than assuming src-tauri/target.
-# A per-clone .cargo/config.toml can redirect target-dir (this repo's clones put
-# it on an external disk), and cargo resolves that config from the working
+# CARGO_TARGET_DIR, $CARGO_HOME/config.toml or a .cargo/config.toml above the
+# clone can redirect target-dir (this repo's machines put it on an external
+# disk; per-machine settings stay out of the committed .cargo/config.toml, see
+# docs/toolchain.md), and cargo resolves config files from the working
 # directory, which is why this runs from inside PROJECT_DIR. Getting it wrong is
 # silent: the signing and reporting steps below just find nothing.
 CARGO_TARGET="$(cd "$PROJECT_DIR/src-tauri" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
@@ -60,8 +62,6 @@ fi
 # ── Environment ──────────────────────────────────────────────────────────────
 # Treat this as a CI build (suppresses -dev version suffix in telemetry)
 export CI=true
-# Strip SQLite modules a hostile .stalx could reach (#608, docs/toolchain.md).
-export LIBSQLITE3_FLAGS="-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION"
 
 # Load .env if present (contains TELEMETRY_ENDPOINT and other secrets)
 if [[ -f "$PROJECT_DIR/.env" ]]; then
@@ -154,10 +154,12 @@ ulimit -n 4096 2>/dev/null || ulimit -n 1024 2>/dev/null || true
 info "Running Rust tests (ulimit -n $(ulimit -n))"
 # Mirrors the CI command: --workspace is required (without it only the app
 # package runs and the member crates under src-tauri/crates are skipped), and
-# --features telemetry gates the registry-coverage tests. The dummy endpoint
-# just satisfies build.rs under that feature; a real one from .env wins.
-if TELEMETRY_ENDPOINT="${TELEMETRY_ENDPOINT:-http://localhost/dummy}" \
-  cargo test --manifest-path "$PROJECT_DIR/src-tauri/Cargo.toml" --workspace --features telemetry; then
+# --features telemetry compiles the telemetry collector and its tests. The dummy endpoint
+# just satisfies build.rs under that feature; a real one from .env wins. Run
+# from inside PROJECT_DIR: cargo reads the bundled-SQLite build flags from its
+# .cargo/config.toml, found from the working directory (docs/toolchain.md).
+if (cd "$PROJECT_DIR" && TELEMETRY_ENDPOINT="${TELEMETRY_ENDPOINT:-http://localhost/dummy}" \
+  cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry); then
   ok "Rust tests passed"
 else
   warn "Some Rust tests failed (continuing with build)"

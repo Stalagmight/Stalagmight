@@ -23,18 +23,10 @@ import type {
 } from '../sessionTypes';
 import { gitHeadFor } from './build';
 import { isPidAlive, reapPidsFromFile } from './procs';
-import { Recorder, ARTIFACTS_ROOT } from './recorder';
+import { Recorder, ARTIFACTS_ROOT, OWNER_FILE, allocateSessionDir } from './recorder';
 
 /** This harness tree, derived from the module's own URL (see recorder.ts). */
 const harnessRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-
-function timestampId(): string {
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  const rand = Math.floor((now.getTime() % 100000)).toString(36).padStart(4, '0').slice(-4);
-  return `${stamp}-${rand}`;
-}
 
 /**
  * Short HEAD of THIS harness tree, for the session record.
@@ -211,16 +203,14 @@ export abstract class SessionCore implements AgentSession {
     profileRoot: string;
     profileEnv: Record<string, string>;
   } {
-    this.sessionId = timestampId();
-    this.recorderInstance = new Recorder(this.sessionId);
-    // Ownership marker: reapPreviousSessions in ANOTHER harness process skips
+    // A directory of our own, created exclusively and already carrying the
+    // ownership marker: reapPreviousSessions in ANOTHER harness process skips
     // session dirs whose owning process is still alive, so starting a second
-    // agent session can never SIGKILL a live sibling's app/driver mid-run.
-    try {
-      fs.writeFileSync(path.join(this.recorderInstance.dir, 'owner'), String(process.pid));
-    } catch {
-      // Best-effort.
-    }
+    // agent session can never SIGKILL a live sibling's app/driver mid-run - and
+    // two processes starting in the same millisecond can no longer be handed
+    // the same directory (#576 HFI-14, see `sessionIdFor`).
+    this.sessionId = allocateSessionDir().id;
+    this.recorderInstance = new Recorder(this.sessionId);
     if (freshProfile && this.profileRoot) {
       try {
         fs.rmSync(this.profileRoot, { recursive: true, force: true });
@@ -270,7 +260,7 @@ export abstract class SessionCore implements AgentSession {
       // pid means an earlier session of this process (we only start from
       // idle/crashed), whose orphans are safe to reap.
       try {
-        const owner = Number.parseInt(fs.readFileSync(path.join(dir, 'owner'), 'utf8').trim(), 10);
+        const owner = Number.parseInt(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8').trim(), 10);
         if (Number.isInteger(owner) && owner > 0 && owner !== process.pid && isPidAlive(owner)) {
           continue;
         }

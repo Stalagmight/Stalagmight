@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Map as MaplibreMap } from 'maplibre-gl';
+import { dropStyle } from './styleGone';
+import { makeFakeMap } from '../../../../../test/factories/fakeMap';
 import {
   emptySurveyData,
   STATION_FLAG_IS_ZERO_DATUM,
@@ -110,39 +111,8 @@ vi.mock('../surveyCustomLayer', () => ({ SurveyCustomLayer: h.FakeLayer }));
 
 const STOCK = ['survey-shots', 'survey-shot-gradients', 'survey-stations'] as const;
 const CUSTOM_ID = 'survey-custom-render';
-
-interface FakeMap {
-  map: MaplibreMap;
-  visibility: Record<string, string>;
-  removed: string[];
-}
-
-function makeFakeMap(): FakeMap {
-  const existing = new Set<string>([...STOCK]);
-  const visibility: Record<string, string> = {
-    'survey-shots': 'visible',
-    'survey-shot-gradients': 'visible',
-    'survey-stations': 'visible',
-  };
-  const removed: string[] = [];
-  const map = {
-    getStyle: () => ({}),
-    getLayer: (id: string) => (existing.has(id) ? { id } : undefined),
-    addLayer: (layer: { id: string; onAdd?: (m: unknown, gl: unknown) => void }) => {
-      existing.add(layer.id);
-      layer.onAdd?.(map, {});
-    },
-    removeLayer: (id: string) => {
-      existing.delete(id);
-      removed.push(id);
-    },
-    setLayoutProperty: (id: string, prop: string, v: string) => {
-      if (prop === 'visibility') visibility[id] = v;
-    },
-    triggerRepaint: () => {},
-  } as unknown as MaplibreMap;
-  return { map, visibility, removed };
-}
+/** The fake map's stock layers, all on the map and 'visible'. */
+const STOCK_VISIBLE = Object.fromEntries(STOCK.map((id) => [id, 'visible']));
 
 /** Two-section fixture identical in shape to the tessellation suite's. */
 function makeFixture(): SurveyData {
@@ -204,7 +174,7 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('enables the custom layer on a clean init (sole renderer, no stock to hide)', () => {
-    const { map, removed } = makeFakeMap();
+    const { map, removed } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
@@ -216,7 +186,7 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
     h.layerState.disabledAfterAdd = true;
     h.layerState.disabledReason = 'webgl2-unavailable';
     const fatals: string[] = [];
-    const { map, visibility, removed } = makeFakeMap();
+    const { map, visibility, removed } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map, undefined, { onFatal: (r) => fatals.push(r) });
     c.sync(makeParams());
     // Error state: dead layer removed, onFatal fired with the reason. There is no
@@ -239,7 +209,7 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
     // the deferred assignment; also lets us count how often it was scheduled.
     const holder: { fn: (() => void) | null; scheduled: number } = { fn: null, scheduled: 0 };
     const fatals: string[] = [];
-    const { map, removed } = makeFakeMap();
+    const { map, removed } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map, undefined, {
       onFatal: (r) => fatals.push(r),
       scheduleRestore: (fn) => {
@@ -280,7 +250,7 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
     // project switch stranded the custom layer on the previous project's
     // geometry (store 502 shots, custom stuck at 420). The hook must call the
     // injected resync (which reads current store geometry) and NOT replay.
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const resync = vi.fn();
     const c = new SurveyCustomController(map, undefined, { resync });
     c.sync(makeParams()); // populates lastParams with this snapshot
@@ -291,7 +261,7 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
   });
 
   it('sync hook falls back to the cached snapshot when no resync is wired', () => {
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     const params = makeParams();
     c.sync(params);
@@ -303,7 +273,7 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
 
   it('applies stored visibility toggles to the layer, including on first enable', () => {
     vi.spyOn(console, 'info').mockImplementation(() => {});
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     // Toggles set BEFORE the first sync must be applied to the fresh layer so an
     // enable never silently shows geometry the user hid.
@@ -324,7 +294,7 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
 
   it('is unconditional: stays active across re-syncs (no gate)', () => {
     vi.spyOn(console, 'info').mockImplementation(() => {});
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
@@ -336,13 +306,50 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
 
   it('destroy() removes the custom layer (no stock to restore)', () => {
     vi.spyOn(console, 'info').mockImplementation(() => {});
-    const { map, removed } = makeFakeMap();
+    const { map, removed } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
     c.destroy();
     expect(c.isActive()).toBe(false);
     expect(removed).toContain(CUSTOM_ID);
+  });
+
+  // #576 D38: MapLibre drops custom layers on a WebGL context loss and never
+  // re-adds them; the controller re-adds the SAME layer object, so its onAdd
+  // re-uploads from the data it still holds.
+  it('reattach() re-adds the same live layer object before the given layer', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
+    const c = new SurveyCustomController(map);
+    c.sync(makeParams());
+    const live = h.layerState.last;
+    map.removeLayer(CUSTOM_ID); // what the context loss did
+    const addLayer = vi.spyOn(map, 'addLayer');
+    c.reattach('survey-interact-shots');
+    expect(addLayer).toHaveBeenCalledOnce();
+    expect(addLayer.mock.calls[0]![0]).toBe(live);
+    expect(addLayer.mock.calls[0]![1]).toBe('survey-interact-shots');
+    expect(c.isActive()).toBe(true);
+  });
+
+  it('reattach() that cannot draw on the new context is fatal; inactive is a no-op', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const onFatal = vi.fn();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
+    const idle = new SurveyCustomController(map, CUSTOM_ID, {});
+    const addLayer = vi.spyOn(map, 'addLayer');
+    idle.reattach(undefined);
+    expect(addLayer).not.toHaveBeenCalled();
+
+    const c = new SurveyCustomController(map, CUSTOM_ID, { onFatal });
+    c.sync(makeParams());
+    map.removeLayer(CUSTOM_ID);
+    h.layerState.disabledAfterAdd = true;
+    h.layerState.disabledReason = 'program-link-failed';
+    c.reattach(undefined);
+    expect(onFatal).toHaveBeenCalledWith('program-link-failed');
+    expect(c.isActive()).toBe(false);
   });
 });
 
@@ -365,7 +372,7 @@ describe('SurveyCustomController dispose (unmount-lite hook + cache release)', (
 
   it('dispose() removes the window sync hook and a later sync() is inert', () => {
     const win = (globalThis as unknown as { window: Record<string, unknown> }).window;
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     c.sync(makeParams());
     const layer = h.layerState.last!;
@@ -393,7 +400,7 @@ describe('SurveyCustomController onActiveChange (stock-suppression signal)', () 
 
   it('fires true once when the custom layer starts drawing; a re-sync does not re-fire', () => {
     const calls: boolean[] = [];
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map, undefined, { onActiveChange: (a) => calls.push(a) });
     c.sync(makeParams());
     expect(calls).toEqual([true]);
@@ -406,7 +413,7 @@ describe('SurveyCustomController onActiveChange (stock-suppression signal)', () 
     h.layerState.disabledAfterAdd = true;
     h.layerState.disabledReason = 'webgl2-unavailable';
     const calls: boolean[] = [];
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map, undefined, { onActiveChange: (a) => calls.push(a) });
     c.sync(makeParams());
     // active never became true, so no suppression signal fires.
@@ -420,7 +427,7 @@ describe('SurveyCustomController onActiveChange (stock-suppression signal)', () 
     const holder: { fn: (() => void) | null } = { fn: null };
     const calls: boolean[] = [];
     const fatals: string[] = [];
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map, undefined, {
       onActiveChange: (a) => calls.push(a),
       onFatal: (r) => fatals.push(r),
@@ -437,7 +444,7 @@ describe('SurveyCustomController onActiveChange (stock-suppression signal)', () 
 
   it('fires false on destroy() when active (non-fatal teardown republishes stock)', () => {
     const calls: boolean[] = [];
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map, undefined, { onActiveChange: (a) => calls.push(a) });
     c.sync(makeParams());
     c.destroy();
@@ -452,7 +459,7 @@ describe('SurveyCustomController onActiveChange (stock-suppression signal)', () 
     const holder: { fn: (() => void) | null } = { fn: null };
     const calls: boolean[] = [];
     const fatals: string[] = [];
-    const { map, removed } = makeFakeMap();
+    const { map, removed } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map, undefined, {
       onActiveChange: (a) => calls.push(a),
       onFatal: (r) => fatals.push(r),
@@ -493,7 +500,7 @@ describe('SurveyCustomController color-only fast path', () => {
   };
 
   it('a pure color-global change re-uploads colors, no rebuild or layer re-create', () => {
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     const { surveyData, base, ctx } = scenario();
     c.sync({ ...base, surveyData, colorCtx: ctx({}) });
@@ -508,7 +515,7 @@ describe('SurveyCustomController color-only fast path', () => {
   });
 
   it('a geometry edit with stable colors still takes the incremental path', () => {
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     const { surveyData, base, ctx } = scenario();
     const color = ctx({});
@@ -524,7 +531,7 @@ describe('SurveyCustomController color-only fast path', () => {
   });
 
   it('a combined geometry + color change falls back to a full rebuild', () => {
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     const { surveyData, base, ctx } = scenario();
     c.sync({ ...base, surveyData, colorCtx: ctx({}) });
@@ -550,7 +557,7 @@ describe('SurveyCustomController highlight width/radius resolution (C2)', () => 
   const dataOf = (): CustomRenderData => h.layerState.last!.data as CustomRenderData;
 
   it('falls back to the baked stock ratios when no config sizes are passed', () => {
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     c.sync(makeParams()); // shotWidthPx 2, stationRadiusPx 3, no hover/selection px
     const d = dataOf();
@@ -561,7 +568,7 @@ describe('SurveyCustomController highlight width/radius resolution (C2)', () => 
   });
 
   it('derives the ratios from configured absolute px (independent of base)', () => {
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     c.sync({
       ...makeParams(),
@@ -623,7 +630,7 @@ describe('SurveyCustomController plan-idle tint dim buffer (#395 revision)', () 
   const noSets = new Set<number>();
 
   it('dims an anchored section fully (1) and everything else at GAS_DIM_LEVEL when idle', () => {
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     c.sync(makeParams());
     // Fixture: section 1 owns stations 0-2 (rows 0-2), section 2 owns station 0
@@ -637,11 +644,87 @@ describe('SurveyCustomController plan-idle tint dim buffer (#395 revision)', () 
   });
 
   it('dims nothing when planIdleDim is false and no other dim source is set', () => {
-    const { map } = makeFakeMap();
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
     const c = new SurveyCustomController(map);
     c.sync(makeParams());
     c.setDimming(buildCustomDimState(noSets, noSets, noSets, false, null, false));
     const dim = dataOf().circle.dim;
     for (let i = 0; i < dim.length; i++) expect(dim[i]).toBe(0);
+  });
+});
+
+describe('SurveyCustomController publishes its buffer bytes to the memory probe (#576 D19-D2)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** The probe's survey-geometry entry, or undefined on a probe without one. */
+  async function surveyGeometryStat(): Promise<{ bytes: number; builds: number } | undefined> {
+    const probe = (await import('../../../../../utils/memoryProbe')) as Record<string, unknown>;
+    const get = probe.getRendererBuffers as
+      | (() => Record<string, { bytes: number; builds: number }>)
+      | undefined;
+    return get?.()['survey-geometry'];
+  }
+
+  it('records the bytes of every build and clears them on dispose', async () => {
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
+    const c = new SurveyCustomController(map);
+    const before = (await surveyGeometryStat())?.builds ?? 0;
+    c.sync(makeParams());
+    const data = h.layerState.last!.data as CustomRenderData;
+    const stat = await surveyGeometryStat();
+    expect(stat, 'survey geometry entry in the probe').toBeDefined();
+    expect(stat!.bytes).toBe(data.line.byteLength + data.circle.byteLength);
+    expect(stat!.bytes).toBeGreaterThan(0);
+    expect(stat!.builds).toBe(before + 1);
+
+    c.dispose();
+    expect((await surveyGeometryStat())?.bytes).toBe(0);
+  });
+});
+
+describe('SurveyCustomController deferred fatal teardown without a style (#576 NF-MAP-3)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a context loss before the deferred teardown: no throw, still latches fatal', () => {
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const fatals: string[] = [];
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
+    const c = new SurveyCustomController(map, undefined, {
+      onFatal: (r) => fatals.push(r),
+      scheduleRestore: (fn) => { holder.fn = fn; },
+    });
+    c.sync(makeParams());
+    h.layerState.last?.onSelfDisable?.('gl-error-0x502');
+    dropStyle(map);
+    expect(() => holder.fn?.()).not.toThrow();
+    expect(fatals).toEqual(['gl-error-0x502']);
+    expect(c.isActive()).toBe(false);
+  });
+
+  it('released and removed before the deferred teardown: no throw, no fatal for a map that is gone', () => {
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const fatals: string[] = [];
+    const { map } = makeFakeMap({ visibility: STOCK_VISIBLE });
+    const c = new SurveyCustomController(map, undefined, {
+      onFatal: (r) => fatals.push(r),
+      scheduleRestore: (fn) => { holder.fn = fn; },
+    });
+    c.sync(makeParams());
+    h.layerState.last?.onSelfDisable?.('gl-error-0x502');
+    c.dispose();
+    dropStyle(map);
+    expect(() => holder.fn?.()).not.toThrow();
+    expect(fatals).toEqual([]);
   });
 });

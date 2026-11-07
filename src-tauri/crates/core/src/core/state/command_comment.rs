@@ -1,8 +1,63 @@
 use super::AppState;
 use crate::core::{Command, CommandResult, CommentHolder};
-use crate::models::{Project, StationRef};
+use crate::models::project::join_station_comment;
+use crate::models::{Project, StationKey, StationRef};
 
 impl AppState {
+    /// [#576 W30-NF1] Station `sr`'s comment: the comments of every stored key
+    /// that names it, joined in the save's order (`Project::one_row_per_station`
+    /// with `join_station_comment`, as the station payload shows it). A legacy
+    /// positional `Index` key can name a station beside its canonical key, so
+    /// reading the canonical key alone missed a comment the station shows.
+    pub(super) fn station_comment(project: &Project, sr: StationRef) -> Option<String> {
+        let entries: Vec<(&StationKey, StationRef, String)> = project
+            .station_comments
+            .iter()
+            .filter(|(key, _)| key.section_id == sr.section_id && project.key_is_ref(key, sr))
+            .map(|(key, text)| (key, sr, text.clone()))
+            .collect();
+        project
+            .one_row_per_station(entries, join_station_comment)
+            .pop()
+            .map(|(_, text)| text)
+    }
+
+    /// Every stored comment key that names one of `stations`: the canonical key
+    /// and any legacy positional `Index` key (#576 W30-NF1). A delete takes them
+    /// BEFORE it removes the stations - a key no longer resolves to a station
+    /// that is gone - and drops them once it has succeeded (#576 RV19a-19).
+    pub(super) fn comment_keys_naming(
+        project: &Project,
+        stations: &[StationRef],
+    ) -> Vec<StationKey> {
+        project
+            .station_comments
+            .keys()
+            .filter(|key| {
+                project
+                    .resolve_key(key)
+                    .is_some_and(|sr| stations.contains(&sr))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// [#576 W30-NF1] Make `comment` station `sr`'s whole comment: every stored
+    /// key that names the station is removed, then a non-empty comment is stored
+    /// under its canonical key. Touching the canonical key alone left a comment
+    /// under a legacy key in place - a clear did nothing, and a new comment was
+    /// joined to the old one instead of replacing it.
+    fn replace_station_comment(project: &mut Project, sr: StationRef, comment: Option<String>) {
+        for key in &Self::comment_keys_naming(project, &[sr]) {
+            project.station_comments.remove(key);
+        }
+        if let Some(text) = comment.filter(|text| !text.is_empty()) {
+            if let Some(key) = project.key_for_ref(sr) {
+                project.station_comments.insert(key, text);
+            }
+        }
+    }
+
     pub(super) fn set_station_comment(
         &self,
         station_ref: StationRef,
@@ -29,18 +84,7 @@ impl AppState {
                 ));
             }
 
-            match comment {
-                Some(text) if !text.is_empty() => {
-                    if let Some(key) = project.key_for_ref(station_ref) {
-                        project.station_comments.insert(key, text);
-                    }
-                }
-                _ => {
-                    if let Some(key) = project.key_for_ref(station_ref) {
-                        project.station_comments.remove(&key);
-                    }
-                }
-            }
+            Self::replace_station_comment(project, station_ref, comment);
 
             project.touch();
             tracing::info!(
@@ -80,9 +124,7 @@ impl AppState {
 
         // Step 2: Read source and target comments, then mutate
         {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
+            let mut proj_guard = self.project.lock();
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
@@ -115,17 +157,17 @@ impl AppState {
             project.touch();
         }
 
-        // Step 3: Take AFTER snapshot
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
-        // Step 4: Push single undo entry
-        self.push_snapshot_undo(cmd, before_snapshot, after_snapshot);
-        // Dirty-bit flip (#191, D-B16): moving a comment mutated a remote project.
-        // Set-only; no-op for local-only.
-        self.mark_remote_forward_edit();
+        // Steps 3-4: [#576 A4] Through the shared forward epilogue - a comment is
+        // metadata, so no derived-state step - which takes the AFTER snapshot,
+        // pushes the single undo entry and flips the dirty bit, in that order.
+        if let Err(failure) = self.record_snapshot_edit(
+            None,
+            super::command_epilogue::EpilogueSteps::NONE,
+            cmd,
+            before_snapshot,
+        ) {
+            return failure;
+        }
 
         tracing::info!(
             swap = swap,
@@ -133,6 +175,31 @@ impl AppState {
             "Move comment completed"
         );
         CommandResult::success()
+    }
+
+    /// Whether this is a `MoveComment` whose source and target are the SAME holder, and that
+    /// holder exists and carries a comment - i.e. provably a no-op (A16, #576).
+    ///
+    /// Moving a comment onto the holder it is already on changes nothing, and neither does
+    /// swapping it with itself. Run through `execute_move_comment`, the move wrote the text onto
+    /// the target and then cleared the source - the same holder - deleting the comment, and the
+    /// swap pushed an undo entry (dropping the redo branch) and stamped the remote dirty bit.
+    /// The map's swap dialog does not compare the two holders, so the backend is the guard.
+    ///
+    /// A missing holder or one without a comment is NOT a no-op: it falls through so the
+    /// command fails exactly as before.
+    pub(super) fn is_provable_move_comment_noop(&self, cmd: &Command) -> bool {
+        let Command::MoveComment { source, target, .. } = cmd else {
+            return false;
+        };
+        if source != target {
+            return false;
+        }
+        let guard = self.project.lock();
+        let Some(project) = guard.as_ref() else {
+            return false;
+        };
+        matches!(Self::get_holder_comment(project, source), Ok(Some(_)))
     }
 
     /// Read the comment from a CommentHolder (station or shot)
@@ -153,9 +220,7 @@ impl AppState {
                         station_ref.station_index
                     ));
                 }
-                Ok(project
-                    .key_for_ref(*station_ref)
-                    .and_then(|key| project.station_comments.get(&key).cloned()))
+                Ok(Self::station_comment(project, *station_ref))
             }
             CommentHolder::Shot {
                 section_id,
@@ -180,18 +245,7 @@ impl AppState {
     ) -> Result<(), String> {
         match holder {
             CommentHolder::Station { station_ref } => {
-                match comment {
-                    Some(text) if !text.is_empty() => {
-                        if let Some(key) = project.key_for_ref(*station_ref) {
-                            project.station_comments.insert(key, text);
-                        }
-                    }
-                    _ => {
-                        if let Some(key) = project.key_for_ref(*station_ref) {
-                            project.station_comments.remove(&key);
-                        }
-                    }
-                }
+                Self::replace_station_comment(project, *station_ref, comment);
                 Ok(())
             }
             CommentHolder::Shot {

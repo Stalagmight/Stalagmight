@@ -1,11 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type * as maplibregl from 'maplibre-gl';
+import { makeFakeMap } from '../../../../test/factories/fakeMap';
 import {
   overlayTouchesRemovedSections,
   overlayPaintDigest,
   InteractOverlayHideController,
   INTERACT_HIDE_FALLBACK_MS,
-  type InteractHideMap,
 } from '../interactOverlayHide';
 
 describe('overlayTouchesRemovedSections', () => {
@@ -40,41 +39,6 @@ describe('overlayTouchesRemovedSections', () => {
   });
 });
 
-/** In-memory MapLibre stand-in: tracks per-layer visibility and sourcedata listeners. */
-function makeFakeMap(layers: Record<string, string | undefined>): {
-  map: InteractHideMap;
-  vis: Record<string, string | undefined>;
-  emit: (e: Partial<maplibregl.MapSourceDataEvent>) => void;
-  listenerCount: () => number;
-  removeLayer: (id: string) => void;
-} {
-  const vis: Record<string, string | undefined> = { ...layers };
-  const present = new Set(Object.keys(layers));
-  const listeners = new Set<(e: maplibregl.MapSourceDataEvent) => void>();
-  const map = {
-    getLayer: (id: string) => (present.has(id) ? ({ id } as unknown as maplibregl.StyleLayer) : undefined),
-    getLayoutProperty: (id: string, _name: string) => vis[id],
-    setLayoutProperty: (id: string, _name: string, value: unknown) => {
-      vis[id] = value as string;
-    },
-    on: (type: string, cb: (e: maplibregl.MapSourceDataEvent) => void) => {
-      if (type === 'sourcedata') listeners.add(cb);
-    },
-    off: (type: string, cb: (e: maplibregl.MapSourceDataEvent) => void) => {
-      if (type === 'sourcedata') listeners.delete(cb);
-    },
-  } as unknown as InteractHideMap;
-  return {
-    map,
-    vis,
-    emit: (e) => {
-      for (const cb of [...listeners]) cb(e as maplibregl.MapSourceDataEvent);
-    },
-    listenerCount: () => listeners.size,
-    removeLayer: (id: string) => present.delete(id),
-  };
-}
-
 const SOURCE = 'survey-interact';
 const LAYERS = ['survey-interact-shots', 'survey-interact-stations', 'survey-stations-highlight'];
 
@@ -84,108 +48,167 @@ describe('InteractOverlayHideController', () => {
 
   it('hides every overlay layer and restores on the source-loaded event', () => {
     const f = makeFakeMap({
-      'survey-interact-shots': 'visible',
-      'survey-interact-stations': 'visible',
-      'survey-stations-highlight': undefined, // default-visible
+      omit: ['style'],
+      visibility: {
+        'survey-interact-shots': 'visible',
+        'survey-interact-stations': 'visible',
+        'survey-stations-highlight': undefined, // default-visible
+      },
     });
     const c = new InteractOverlayHideController(f.map, SOURCE, LAYERS);
 
     c.hideUntilRetile();
-    expect(f.vis['survey-interact-shots']).toBe('none');
-    expect(f.vis['survey-interact-stations']).toBe('none');
-    expect(f.vis['survey-stations-highlight']).toBe('none');
-    expect(f.listenerCount()).toBe(1);
+    expect(f.visibility['survey-interact-shots']).toBe('none');
+    expect(f.visibility['survey-interact-stations']).toBe('none');
+    expect(f.visibility['survey-stations-highlight']).toBe('none');
+    expect(f.listenerCount('sourcedata')).toBe(1);
 
     // Loading progress (isSourceLoaded false) must NOT restore.
-    f.emit({ sourceId: SOURCE, isSourceLoaded: false });
-    expect(f.vis['survey-interact-shots']).toBe('none');
+    f.emit('sourcedata', { sourceId: SOURCE, isSourceLoaded: false });
+    expect(f.visibility['survey-interact-shots']).toBe('none');
 
     // The re-tile completes: restore captured visibility and drop the listener.
-    f.emit({ sourceId: SOURCE, isSourceLoaded: true });
-    expect(f.vis['survey-interact-shots']).toBe('visible');
-    expect(f.vis['survey-interact-stations']).toBe('visible');
+    f.emit('sourcedata', { sourceId: SOURCE, isSourceLoaded: true });
+    expect(f.visibility['survey-interact-shots']).toBe('visible');
+    expect(f.visibility['survey-interact-stations']).toBe('visible');
     // The default-visible layer is restored to its captured (undefined) value.
-    expect(f.vis['survey-stations-highlight']).toBe('visible');
-    expect(f.listenerCount()).toBe(0);
+    expect(f.visibility['survey-stations-highlight']).toBe('visible');
+    expect(f.listenerCount('sourcedata')).toBe(0);
   });
 
   it('ignores loaded events from other sources', () => {
-    const f = makeFakeMap({ 'survey-interact-shots': 'visible' });
+    const f = makeFakeMap({ omit: ['style'], visibility: { 'survey-interact-shots': 'visible' } });
     const c = new InteractOverlayHideController(f.map, SOURCE, ['survey-interact-shots']);
     c.hideUntilRetile();
-    f.emit({ sourceId: 'some-other-source', isSourceLoaded: true });
-    expect(f.vis['survey-interact-shots']).toBe('none');
-    f.emit({ sourceId: SOURCE, isSourceLoaded: true });
-    expect(f.vis['survey-interact-shots']).toBe('visible');
+    f.emit('sourcedata', { sourceId: 'some-other-source', isSourceLoaded: true });
+    expect(f.visibility['survey-interact-shots']).toBe('none');
+    f.emit('sourcedata', { sourceId: SOURCE, isSourceLoaded: true });
+    expect(f.visibility['survey-interact-shots']).toBe('visible');
   });
 
   it('preserves a user-hidden layer (restores to none, never forced visible)', () => {
     const f = makeFakeMap({
-      'survey-interact-shots': 'visible',
-      'survey-interact-stations': 'none', // user hid stations
+      omit: ['style'],
+      visibility: {
+        'survey-interact-shots': 'visible',
+        'survey-interact-stations': 'none', // user hid stations
+      },
     });
     const c = new InteractOverlayHideController(f.map, SOURCE, [
       'survey-interact-shots',
       'survey-interact-stations',
     ]);
     c.hideUntilRetile();
-    expect(f.vis['survey-interact-stations']).toBe('none');
-    f.emit({ sourceId: SOURCE, isSourceLoaded: true });
-    expect(f.vis['survey-interact-shots']).toBe('visible');
+    expect(f.visibility['survey-interact-stations']).toBe('none');
+    f.emit('sourcedata', { sourceId: SOURCE, isSourceLoaded: true });
+    expect(f.visibility['survey-interact-shots']).toBe('visible');
     // Was hidden before -> stays hidden after restore.
-    expect(f.vis['survey-interact-stations']).toBe('none');
+    expect(f.visibility['survey-interact-stations']).toBe('none');
+  });
+
+  // #576 W38-NF-1: the Stations / Shots toggles write these layers too.
+  it('restores a visibility set during the hide, not the one it captured', () => {
+    const f = makeFakeMap({
+      omit: ['style'],
+      visibility: { 'survey-interact-shots': 'visible', 'survey-interact-stations': 'none' },
+    });
+    const c = new InteractOverlayHideController(f.map, SOURCE, [
+      'survey-interact-shots',
+      'survey-interact-stations',
+    ]);
+    c.hideUntilRetile();
+    c.setLayerVisibility('survey-interact-shots', 'none');
+    c.setLayerVisibility('survey-interact-stations', 'visible');
+    // #576 W38-NF-2: the hide still holds both until the re-tile.
+    expect(f.visibility['survey-interact-stations']).toBe('none');
+    f.emit('sourcedata', { sourceId: SOURCE, isSourceLoaded: true });
+    expect(f.visibility['survey-interact-shots']).toBe('none');
+    expect(f.visibility['survey-interact-stations']).toBe('visible');
+    // With no hide pending it is a plain write.
+    c.setLayerVisibility('survey-interact-shots', 'visible');
+    expect(f.visibility['survey-interact-shots']).toBe('visible');
   });
 
   it('skips layers that do not exist', () => {
-    const f = makeFakeMap({ 'survey-interact-shots': 'visible' });
+    const f = makeFakeMap({ omit: ['style'], visibility: { 'survey-interact-shots': 'visible' } });
     const c = new InteractOverlayHideController(f.map, SOURCE, [
       'survey-interact-shots',
       'survey-interact-stations', // absent
     ]);
     c.hideUntilRetile();
-    expect(f.vis['survey-interact-shots']).toBe('none');
-    expect(f.vis['survey-interact-stations']).toBeUndefined();
-    f.emit({ sourceId: SOURCE, isSourceLoaded: true });
-    expect(f.vis['survey-interact-shots']).toBe('visible');
+    expect(f.visibility['survey-interact-shots']).toBe('none');
+    expect(f.visibility['survey-interact-stations']).toBeUndefined();
+    f.emit('sourcedata', { sourceId: SOURCE, isSourceLoaded: true });
+    expect(f.visibility['survey-interact-shots']).toBe('visible');
   });
 
   it('restores via the fallback timer if the loaded event never arrives', () => {
-    const f = makeFakeMap({ 'survey-interact-shots': 'visible' });
+    const f = makeFakeMap({ omit: ['style'], visibility: { 'survey-interact-shots': 'visible' } });
     const c = new InteractOverlayHideController(f.map, SOURCE, ['survey-interact-shots']);
     c.hideUntilRetile();
-    expect(f.vis['survey-interact-shots']).toBe('none');
+    expect(f.visibility['survey-interact-shots']).toBe('none');
     vi.advanceTimersByTime(INTERACT_HIDE_FALLBACK_MS);
-    expect(f.vis['survey-interact-shots']).toBe('visible');
-    expect(f.listenerCount()).toBe(0);
+    expect(f.visibility['survey-interact-shots']).toBe('visible');
+    expect(f.listenerCount('sourcedata')).toBe(0);
   });
 
   it('coalesces a second hide while active without clobbering the captured visibility', () => {
-    const f = makeFakeMap({ 'survey-interact-shots': 'visible' });
+    const f = makeFakeMap({ omit: ['style'], visibility: { 'survey-interact-shots': 'visible' } });
     const c = new InteractOverlayHideController(f.map, SOURCE, ['survey-interact-shots']);
     c.hideUntilRetile();
     // A second removal flush lands while still hidden - must not capture 'none' as
     // the baseline (which would strand the layer hidden after restore).
     c.hideUntilRetile();
-    expect(f.listenerCount()).toBe(1);
-    f.emit({ sourceId: SOURCE, isSourceLoaded: true });
-    expect(f.vis['survey-interact-shots']).toBe('visible');
+    expect(f.listenerCount('sourcedata')).toBe(1);
+    f.emit('sourcedata', { sourceId: SOURCE, isSourceLoaded: true });
+    expect(f.visibility['survey-interact-shots']).toBe('visible');
   });
 
   it('dispose restores hidden layers and drops the listener', () => {
-    const f = makeFakeMap({ 'survey-interact-shots': 'visible' });
+    const f = makeFakeMap({ omit: ['style'], visibility: { 'survey-interact-shots': 'visible' } });
     const c = new InteractOverlayHideController(f.map, SOURCE, ['survey-interact-shots']);
     c.hideUntilRetile();
     c.dispose();
-    expect(f.vis['survey-interact-shots']).toBe('visible');
-    expect(f.listenerCount()).toBe(0);
+    expect(f.visibility['survey-interact-shots']).toBe('visible');
+    expect(f.listenerCount('sourcedata')).toBe(0);
   });
 
   it('is a no-op to restore when never hidden', () => {
-    const f = makeFakeMap({ 'survey-interact-shots': 'visible' });
+    const f = makeFakeMap({ omit: ['style'], visibility: { 'survey-interact-shots': 'visible' } });
     const c = new InteractOverlayHideController(f.map, SOURCE, ['survey-interact-shots']);
     c.restore();
-    expect(f.vis['survey-interact-shots']).toBe('visible');
-    expect(f.listenerCount()).toBe(0);
+    expect(f.visibility['survey-interact-shots']).toBe('visible');
+    expect(f.listenerCount('sourcedata')).toBe(0);
+  });
+
+  // #576 D16: the map is going away (lightweight unmount) - forget the restore
+  // without touching the map, and leave nothing behind to fire later.
+  it('drop forgets the pending restore without touching the map', () => {
+    const f = makeFakeMap({ omit: ['style'], visibility: { 'survey-interact-shots': 'visible' } });
+    const c = new InteractOverlayHideController(f.map, SOURCE, ['survey-interact-shots']);
+    c.hideUntilRetile();
+    const setLayout = vi.spyOn(f.map, 'setLayoutProperty');
+    c.drop();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(f.listenerCount('sourcedata')).toBe(0);
+    vi.advanceTimersByTime(INTERACT_HIDE_FALLBACK_MS + 1);
+    expect(setLayout).not.toHaveBeenCalled();
+  });
+
+  // Backstop: a restore that lands once the map has no style (removed, or a lost
+  // WebGL context) must not read it - MapLibre's getLayer throws there.
+  it('a restore with no live style does not touch the map', () => {
+    const f = makeFakeMap({ omit: ['style'], visibility: { 'survey-interact-shots': 'visible' } });
+    let live = true;
+    const c = new InteractOverlayHideController(f.map, SOURCE, ['survey-interact-shots'], () => live);
+    c.hideUntilRetile();
+    live = false;
+    const getLayer = vi.spyOn(f.map, 'getLayer').mockImplementation(() => {
+      throw new TypeError("Cannot read properties of undefined (reading 'getLayer')");
+    });
+    expect(() => vi.advanceTimersByTime(INTERACT_HIDE_FALLBACK_MS)).not.toThrow();
+    expect(getLayer).not.toHaveBeenCalled();
+    expect(f.listenerCount('sourcedata')).toBe(0);
   });
 });
 

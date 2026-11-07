@@ -33,4 +33,7 @@ ureq = { workspace = true }
 flate2 = { workspace = true }
 
 [dev-dependencies]
+# The shared test helpers (`stalagmight_models::test_support`): opt-in
+# prerequisites fail the test naming what is missing (#576 E13).
+stalagmight-models = { path = "../models", features = ["test-support"] }
 tempfile = { workspace = true }

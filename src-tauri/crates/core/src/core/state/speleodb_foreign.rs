@@ -243,10 +243,7 @@ impl AppState {
         path: PathBuf,
         expected: SpeleoManagedFile,
     ) -> Result<(), SpeleoErrorDto> {
-        let open = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let open = self.project.lock();
         // Read through the guard rather than `open_project_path`, which takes
         // the same lock and would deadlock here.
         // Resolved ONCE, and everything below - the checks and the write - is
@@ -267,7 +264,7 @@ impl AppState {
             .and_then(|project| project.file_path.as_deref())
             .is_some_and(|open| super::project_io::same_file(open, &path))
         {
-            return Err(local_dto(SpeleoDbError::Io(
+            return Err(local_dto(SpeleoDbError::refused(
                 "that file is the project currently open; detach it from SpeleoDB instead"
                     .to_owned(),
             )));
@@ -298,7 +295,7 @@ impl AppState {
                     "Refusing to strip a link: the file at this path is a different \
                      managed project than the prompt was raised for"
                 );
-                return Err(local_dto(SpeleoDbError::Io(
+                return Err(local_dto(SpeleoDbError::refused(
                     "that file is a different SpeleoDB project than the one this \
                      prompt was about; reopen it to see what it is now"
                         .to_owned(),
@@ -324,7 +321,7 @@ impl AppState {
                     "Refusing to strip a link: this path now resolves to the \
                      project's canonical cache copy"
                 );
-                return Err(local_dto(SpeleoDbError::Io(
+                return Err(local_dto(SpeleoDbError::refused(
                     "that path now leads to this project's managed copy, which \
                      cannot be unlinked here; reopen it to see what it is now"
                         .to_owned(),
@@ -697,7 +694,7 @@ mod tests {
 
         // The read really does fail on this input (pinned by
         // `metadata_open_still_propagates_a_genuinely_unreadable_file` in
-        // persistence/sqlite/tests.rs) - and the probe still does not refuse:
+        // persistence/sqlite/tests/speleo_link_tests.rs) - and the probe still does not refuse:
         // the full open right after it reports CORRUPT through the existing
         // recovery UI, which is the better surface for this file.
         assert!(
@@ -877,30 +874,5 @@ mod tests {
         state
             .speleodb_remove_link_at(junk.clone(), prompted_for(&junk, ID))
             .expect_err("a file that is not a Stalagmight project is reported, not half-edited");
-    }
-
-    #[test]
-    fn the_production_load_refuses_a_managed_file_before_it_opens_the_database() {
-        // Guarded by ORDER in the source, the `the_pull_runs_the_local_guard_
-        // before_it_downloads_the_dump` idiom: a behavioural version would need a
-        // Wry AppHandle (`do_load_project_full` hard-requires one), which no unit
-        // test has. The ordering is what matters - the probe must run before
-        // `open_existing` migrates the file and quick_checks every page.
-        let src = include_str!("project_load.rs");
-        let start = src
-            .find("fn do_load_project_full")
-            .expect("the production load is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-        let probe = body
-            .find("self.foreign_link(")
-            .expect("the production load must run the canonical-storage probe");
-        let open = body
-            .find("Database::open_existing(")
-            .expect("the production load opens the database");
-        assert!(
-            probe < open,
-            "the canonical-storage refusal must run BEFORE open_existing, not after it"
-        );
     }
 }

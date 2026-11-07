@@ -1,11 +1,29 @@
 {
+  // A standalone pnpm project (its own install, a path-filtered workflow), so it
+  // does not extend the root tsconfig.base.json; the strictness flags below are
+  // copied from it and must move with it (#576 NF-W9E11-1). See docs/linting.md
+  // "TypeScript: one shared base".
   "compilerOptions": {
     "target": "ES2022",
     "module": "ES2022",
+    "lib": ["ES2022"],
     "moduleResolution": "bundler",
-    "strict": true,
     "noEmit": true,
-    "types": ["@cloudflare/workers-types"]
+    "types": ["@cloudflare/workers-types"],
+
+    "strict": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "strictNullChecks": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true
   },
   "include": ["src"]
 }

@@ -54,7 +54,7 @@ function mulberry32(seed: number): Rng {
 function countSections(bytes: readonly number[], version: number): number {
   const patterns = [endOfSectionBytes(version, 'normal')];
   if (version === 5) patterns.push(endOfSectionBytes(version, 'buggy'));
-  const length = patterns[0].length;
+  const length = patterns[0]!.length; // built with one entry just above
   if (length === 0 || bytes.length < length) return 0;
   let found = 0;
   for (let index = 0; index + length <= bytes.length; index++) {
@@ -374,11 +374,13 @@ describe('randomTmlSpec (valid)', () => {
       const ids = spec.shots.map((shot) => Number(shot.id));
       expect(new Set(ids).size).toBe(ids.length);
       expect(ids.every((id) => id >= 0)).toBe(true);
-      expect(spec.shots[0].type).toBe('START');
-      expect(Number(spec.shots[0].fromId)).toBe(-1);
+      const first = spec.shots[0];
+      if (first === undefined) throw new Error(`seed ${seed}: the TML spec has no shots`);
+      expect(first.type).toBe('START');
+      expect(Number(first.fromId)).toBe(-1);
       for (let index = 1; index < spec.shots.length; index++) {
-        expect(Number(spec.shots[index].fromId)).toBeLessThan(index);
-        expect(Number(spec.shots[index].fromId)).toBeGreaterThanOrEqual(0);
+        expect(Number(spec.shots[index]!.fromId)).toBeLessThan(index);
+        expect(Number(spec.shots[index]!.fromId)).toBeGreaterThanOrEqual(0);
       }
     }
   });
@@ -521,6 +523,11 @@ describe('materializeSurveyFile', () => {
         const hostile = { ...spec, name } as GeneratedFileSpec;
         expect(() => materializeSurveyFile(dir, hostile)).toThrow(/plain basename/);
       }
+      // A spec a forged trace carries does not reach the message (#576 W51).
+      const forged = { ...spec, name: 'qzCaveA/x.dmp' } as GeneratedFileSpec;
+      expect(() => materializeSurveyFile(dir, forged)).toThrow(
+        new Error('generated file name must be a plain basename, got one of 13 character(s)'),
+      );
       expect(fs.readdirSync(dir)).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

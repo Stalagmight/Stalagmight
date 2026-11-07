@@ -68,6 +68,11 @@ trash = "5.2.6"
 # invisible here, exactly as they are to the root crate.
 stalagmight-models = { path = "../models", features = ["test-support"] }
 stalagmight-parsers = { path = "../parsers", features = ["test-support"] }
+# The per-stack undo/redo writers that seed history fixtures
+# (`save_undo_stack*`, `save_redo_stack_with_timestamps`) are test-only: they
+# are not transactional, so production writes history through
+# `replace_history_stacks_with_timestamps` alone.
+stalagmight-persistence = { path = "../persistence", features = ["test-support"] }
 stalagmight-speleodb = { path = "../speleodb", features = ["test-support"] }
 tempfile = { workspace = true }
 libc = "0.2"

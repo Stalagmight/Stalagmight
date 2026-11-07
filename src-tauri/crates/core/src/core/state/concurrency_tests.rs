@@ -90,6 +90,7 @@ use crate::models::{SectionId, ShotData, ShotId, ShotUpdates, StationRef};
 // what keeps these tests off other files; what it buys is ONE dir for the whole
 // test, whose path the test can name and hand to a worker thread
 // (`ConfigHandoff`). It is held for the whole test because the saves are.
+use crate::core::events::NullEventSink;
 use crate::test_helpers::isolated_config;
 
 // ===========================================================================
@@ -118,6 +119,11 @@ const OPERATIONS: &[&str] = &[
     "integrity_check",
     "save_project",
     "get_project_state",
+    "open_project",
+    "close_project + reopen",
+    "load_project_full",
+    "create_project_full",
+    "delete_project (open copy) + reopen",
     "finished",
 ];
 
@@ -261,6 +267,69 @@ fn known_panic(_text: &str) -> Option<&'static str> {
 // The workers
 // ===========================================================================
 
+/// Save the starting project to `<temp>/home.stalx` (every lifecycle operation
+/// below ends with a project open again, most of them by reopening this file) and
+/// give `state` a sink for the progress-reporting load and create.
+fn prepare_lifecycle(state: &AppState, temp: &std::path::Path) -> std::path::PathBuf {
+    state.set_event_sink(Arc::new(NullEventSink));
+    let home = temp.join("home.stalx");
+    let saved = state.save_project(Some(home.clone()));
+    assert!(saved.success, "the home file saves: {:?}", saved.error);
+    home
+}
+
+/// [#576 A1] The project-slot commits, raced against everything else: each takes
+/// `command_lock` around its commit, so a deadlock or a torn commit would show up
+/// here. Every arm leaves a project open, so the post-run walk has one to walk.
+fn lifecycle_operation(
+    state: &AppState,
+    rng: &mut Rng,
+    thread: usize,
+    step: usize,
+    temp: &std::path::Path,
+    home: &std::path::Path,
+) -> usize {
+    let operation = 16 + rng.below(5);
+    match operation {
+        16 => {
+            let _ = state.open_project(home.to_path_buf());
+        }
+        17 => {
+            let _ = state.close_project();
+            let _ = state.open_project(home.to_path_buf());
+        }
+        18 => {
+            // Refused as ALREADY_OPEN when another worker just reopened it - fine.
+            let _ = state.do_load_project_full(home.to_path_buf());
+        }
+        19 => {
+            let path = temp.join(format!("created-{thread}-{step}.stalx"));
+            let deferred = rng.chance(50);
+            if state
+                .do_create_project_full(
+                    format!("t{thread}-{step}"),
+                    None,
+                    None,
+                    Some(path),
+                    deferred,
+                )
+                .is_err()
+            {
+                let _ = state.open_project(home.to_path_buf());
+            }
+        }
+        _ => {
+            let doomed = temp.join(format!("doomed-{thread}-{step}.stalx"));
+            if std::fs::copy(home, &doomed).is_ok() {
+                let _ = state.open_project(doomed.clone());
+                let _ = state.delete_project(doomed);
+            }
+            let _ = state.open_project(home.to_path_buf());
+        }
+    }
+    operation
+}
+
 /// One worker's action stream. Seeded, so the INPUTS replay even though the
 /// schedule does not.
 fn worker(
@@ -270,12 +339,23 @@ fn worker(
     seed: u32,
     operations: usize,
     temp: &std::path::Path,
+    home: &std::path::Path,
     stop: &AtomicBool,
 ) {
     let mut rng = Rng::new(seed);
     for step in 0..operations {
         if stop.load(Ordering::Relaxed) {
             break;
+        }
+        // [#576 A1] Now and then a project-slot commit instead of an edit: loads,
+        // creates, closes and deletes take `command_lock` too, so they race every
+        // command for it.
+        if rng.chance(4) {
+            progress.enter(thread, 16);
+            let operation = lifecycle_operation(state, &mut rng, thread, step, temp, home);
+            progress.enter(thread, operation);
+            progress.leave(thread);
+            continue;
         }
         // A project that has gone away under this worker is a reason to SKIP,
         // not to die: `read_targets` ends in an `expect` (it is written for the
@@ -502,6 +582,7 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
     let Ok(temp) = TempDir::new() else {
         return outcome;
     };
+    let home = prepare_lifecycle(&state, temp.path());
 
     let state = Arc::new(state);
     let progress = Arc::new(Progress::new(threads));
@@ -521,6 +602,7 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
             let progress = Arc::clone(&progress);
             let stop = Arc::clone(&stop);
             let temp_path = temp_path.clone();
+            let home = home.clone();
             let config = config.clone();
             let shared_config_file = shared_config_file.clone();
             // Per-thread seeds are derived from the run seed so a whole run
@@ -544,6 +626,7 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
                     thread_seed,
                     operations,
                     &temp_path,
+                    &home,
                     &stop,
                 );
             })
@@ -657,12 +740,12 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
             outcome.died
         ));
     }
-    if state.project.lock().is_err() {
+    if state.project.is_poisoned() {
         outcome
             .problems
             .push("the PROJECT mutex is poisoned after the run".to_string());
     }
-    if state.undo_stack.lock().is_err() {
+    if state.undo_stack.is_poisoned() {
         outcome
             .problems
             .push("the UNDO STACK mutex is poisoned after the run".to_string());
@@ -797,6 +880,7 @@ fn check_sequential_replay(seed: u32, thread: usize, operations: usize) -> Vec<S
     let Ok(temp) = TempDir::new() else {
         return Vec::new();
     };
+    let home = prepare_lifecycle(&state, temp.path());
     let progress = Progress::new(1);
     let stop = AtomicBool::new(false);
     let thread_seed = seed
@@ -809,6 +893,7 @@ fn check_sequential_replay(seed: u32, thread: usize, operations: usize) -> Vec<S
         thread_seed,
         operations,
         temp.path(),
+        &home,
         &stop,
     );
     // Same guard, same reason: a replayed stream can trip a known assert on the

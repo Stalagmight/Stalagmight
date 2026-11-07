@@ -12,35 +12,20 @@ import { render, screen, fireEvent } from '@testing-library/react';
 
 // The grid is virtualized and jsdom gives the virtualizer no layout to measure, so without
 // this mock it renders zero rows - the same shim CylindersTable.test.tsx uses.
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: 33 + index * 33,
-        size: 33,
-      })),
-    getTotalSize: () => count * 33,
-    scrollToIndex: () => {},
-  }),
-}));
+vi.mock('@tanstack/react-virtual', () => import('../../test/factories/virtualizer'));
 
 import { PlanTablesPanel } from './PlanTablesPanel';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
 import type { Config } from '../../types/config';
+import { NoopResizeObserver } from '../../test/factories/dom';
 
 beforeAll(() => {
   // jsdom has no ResizeObserver; the grid measures its scroller with one, and so does
   // `usePlanGridFillHeight` (which falls back to the content-sized height without it).
   if (typeof ResizeObserver === 'undefined') {
-    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    };
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = NoopResizeObserver;
   }
   Element.prototype.scrollIntoView = vi.fn();
 });

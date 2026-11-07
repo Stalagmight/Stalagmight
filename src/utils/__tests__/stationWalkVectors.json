@@ -1,0 +1,168 @@
+{
+  "about": "Shared parity table for the station walk (#576 D15). Each vector is one section walked from (0, 0): the Rust test in src-tauri/crates/models/src/project/station_walk_parity_tests.rs builds it as a real Project and runs compute_station_coordinates, and src/utils/__tests__/stationWalk.test.ts runs walkStations over the same rows. Both assert the same stations [x, y, z] in metres. A null azimuth_out is a reading that was never taken: the Rust model cannot hold one, so its row carries the lone leg on both legs, which is what the walker must reproduce. reference is the section's own north reference, project_default the project's; null means none recorded.",
+  "tolerance": 1e-9,
+  "vectors": [
+    {
+      "name": "steep shot: 10 m of tape dropping 6 m walks 8 m",
+      "reference": null,
+      "project_default": null,
+      "shots": [
+        { "azimuth_in": 90, "azimuth_out": 90, "length": 10, "depth_in": 0, "depth_out": 6 }
+      ],
+      "stations": [
+        [0.0, 0.0, 0.0],
+        [8.0, 4.898587196589413e-16, 6.0]
+      ]
+    },
+    {
+      "name": "350/10 pair averages to north across the wrap",
+      "reference": null,
+      "project_default": null,
+      "shots": [
+        { "azimuth_in": 350, "azimuth_out": 10, "length": 10, "depth_in": 2, "depth_out": 2 }
+      ],
+      "stations": [
+        [0.0, 0.0, 2.0],
+        [0.0, 10.0, 2.0]
+      ]
+    },
+    {
+      "name": "antipodal 100/280 pair resolves to azimuth_in - 90",
+      "reference": null,
+      "project_default": null,
+      "shots": [
+        { "azimuth_in": 100, "azimuth_out": 280, "length": 10, "depth_in": 0, "depth_out": 0 }
+      ],
+      "stations": [
+        [0.0, 0.0, 0.0],
+        [1.7364817766693033, 9.84807753012208, 0.0]
+      ]
+    },
+    {
+      "name": "out-of-range 400/-200 pair averages like the backend",
+      "reference": null,
+      "project_default": null,
+      "shots": [
+        { "azimuth_in": 400, "azimuth_out": -200, "length": 10, "depth_in": 0, "depth_out": 0 }
+      ],
+      "stations": [
+        [0.0, 0.0, 0.0],
+        [9.84807753012208, -1.736481776669303, 0.0]
+      ]
+    },
+    {
+      "name": "missing back azimuth walks the lone leg",
+      "reference": null,
+      "project_default": null,
+      "shots": [
+        { "azimuth_in": 45, "azimuth_out": null, "length": 10, "depth_in": 1, "depth_out": 1 }
+      ],
+      "stations": [
+        [0.0, 0.0, 1.0],
+        [7.071067811865475, 7.0710678118654755, 1.0]
+      ]
+    },
+    {
+      "name": "magnetic reference with +5 deg declination turns the bearing east",
+      "reference": { "north": "magnetic", "correction": 5, "source": "manual" },
+      "project_default": null,
+      "shots": [
+        { "azimuth_in": 0, "azimuth_out": 0, "length": 10, "depth_in": 0, "depth_out": 0 }
+      ],
+      "stations": [
+        [0.0, 0.0, 0.0],
+        [0.8715574274765816, 9.961946980917455, 0.0]
+      ]
+    },
+    {
+      "name": "grid reference adds its correction the same way",
+      "reference": { "north": "grid", "correction": -2.5, "source": "manual" },
+      "project_default": null,
+      "shots": [
+        { "azimuth_in": 90, "azimuth_out": 90, "length": 10, "depth_in": 0, "depth_out": 0 }
+      ],
+      "stations": [
+        [0.0, 0.0, 0.0],
+        [9.990482215818577, 0.43619387365336004, 0.0]
+      ]
+    },
+    {
+      "name": "true-north reference never rotates, whatever correction it carries",
+      "reference": { "north": "true", "correction": 5, "source": "file_declared" },
+      "project_default": null,
+      "shots": [
+        { "azimuth_in": 0, "azimuth_out": 0, "length": 10, "depth_in": 0, "depth_out": 0 }
+      ],
+      "stations": [
+        [0.0, 0.0, 0.0],
+        [0.0, 10.0, 0.0]
+      ]
+    },
+    {
+      "name": "a section with no reference inherits the project default",
+      "reference": null,
+      "project_default": { "north": "magnetic", "correction": 5, "source": "manual" },
+      "shots": [
+        { "azimuth_in": 0, "azimuth_out": 0, "length": 10, "depth_in": 0, "depth_out": 0 }
+      ],
+      "stations": [
+        [0.0, 0.0, 0.0],
+        [0.8715574274765816, 9.961946980917455, 0.0]
+      ]
+    },
+    {
+      "name": "the section reference wins over the project default",
+      "reference": { "north": "magnetic", "correction": -3, "source": "file_declared" },
+      "project_default": { "north": "magnetic", "correction": 5, "source": "manual" },
+      "shots": [
+        { "azimuth_in": 0, "azimuth_out": 0, "length": 10, "depth_in": 0, "depth_out": 0 }
+      ],
+      "stations": [
+        [0.0, 0.0, 0.0],
+        [-0.5233595624294437, 9.986295347545738, 0.0]
+      ]
+    },
+    {
+      "name": "a drop longer than the tape walks nowhere",
+      "reference": null,
+      "project_default": null,
+      "shots": [
+        { "azimuth_in": 30, "azimuth_out": 30, "length": 2, "depth_in": 0, "depth_out": 5 }
+      ],
+      "stations": [
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 5.0]
+      ]
+    },
+    {
+      "name": "an absurd tape stays finite",
+      "reference": null,
+      "project_default": null,
+      "shots": [
+        { "azimuth_in": 0, "azimuth_out": 0, "length": 1e155, "depth_in": 0, "depth_out": 5e154 }
+      ],
+      "stations": [
+        [0.0, 0.0, 0.0],
+        [0.0, 8.660254037844386e154, 5e154]
+      ]
+    },
+    {
+      "name": "multi-shot chain: steep legs, a wrapped pair, a depth step and a declination",
+      "reference": { "north": "magnetic", "correction": -3.25, "source": { "igrf_auto": { "epoch_year": 2026 } } },
+      "project_default": null,
+      "shots": [
+        { "azimuth_in": 30, "azimuth_out": 30, "length": 5, "depth_in": 0, "depth_out": 3 },
+        { "azimuth_in": 350, "azimuth_out": 12, "length": 8, "depth_in": 3, "depth_out": 3.5 },
+        { "azimuth_in": 180, "azimuth_out": 180, "length": 6, "depth_in": 4, "depth_out": 2 },
+        { "azimuth_in": 270, "azimuth_out": 265, "length": 12.5, "depth_in": 2, "depth_out": 2 }
+      ],
+      "stations": [
+        [0.0, 0.0, 0.0],
+        [1.8003937641497398, 3.571915773644548, 3.0],
+        [1.4869292729285681, 11.550119833001732, 3.75],
+        [1.8076321091720298, 5.902363668751597, 2.0],
+        [-10.629474368964367, 4.650012898600641, 2.0]
+      ]
+    }
+  ]
+}

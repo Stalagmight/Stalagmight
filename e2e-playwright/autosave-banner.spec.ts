@@ -1,6 +1,7 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage, createProject, createSectionViaStore } from './helpers/app';
 import { setIpcOverrides, clearIpcOverrideKeys } from './helpers/ipcOverrides';
+import type { CommandError } from '../src/types/ipc/CommandError';
 
 /**
  * E2E for the autosave-failure banner (docs/notifications.md: a failing
@@ -52,7 +53,7 @@ test.describe('Autosave-failure banner', () => {
 
   test('a failing autosave raises the banner; a manual save is not required to see it', async ({ page }) => {
     await setIpcOverrides(page, {
-      save_project: { success: false, error: 'Disk full: no space left on device' },
+      save_project: { __reject: { code: 'FAILED', message: 'Disk full: no space left on device' } satisfies CommandError },
     });
     await makeDirty(page);
     await runAutosave(page);
@@ -67,7 +68,7 @@ test.describe('Autosave-failure banner', () => {
 
   test('Dismiss hides the banner until the next failing autosave', async ({ page }) => {
     await setIpcOverrides(page, {
-      save_project: { success: false, error: 'Disk full: no space left on device' },
+      save_project: { __reject: { code: 'FAILED', message: 'Disk full: no space left on device' } satisfies CommandError },
     });
     await makeDirty(page);
     await runAutosave(page);
@@ -82,7 +83,7 @@ test.describe('Autosave-failure banner', () => {
 
   test('Save now retries; a successful save clears the banner', async ({ page }) => {
     await setIpcOverrides(page, {
-      save_project: { success: false, error: 'Disk full: no space left on device' },
+      save_project: { __reject: { code: 'FAILED', message: 'Disk full: no space left on device' } satisfies CommandError },
     });
     await makeDirty(page);
     await runAutosave(page);
@@ -96,7 +97,7 @@ test.describe('Autosave-failure banner', () => {
 
   test('the raw FS_PERMISSION_DENIED marker never renders; the friendly line does', async ({ page }) => {
     await setIpcOverrides(page, {
-      save_project: { success: false, error: 'FS_PERMISSION_DENIED: operation not permitted' },
+      save_project: { __reject: { code: 'FS_PERMISSION_DENIED', message: 'operation not permitted' } satisfies CommandError },
     });
     await makeDirty(page);
     await runAutosave(page);
@@ -111,7 +112,7 @@ test.describe('Autosave-failure banner', () => {
 
   test('a failing autosave on a clean project does not raise the banner (#429)', async ({ page }) => {
     await setIpcOverrides(page, {
-      save_project: { success: false, error: 'Disk full: no space left on device' },
+      save_project: { __reject: { code: 'FAILED', message: 'Disk full: no space left on device' } satisfies CommandError },
     });
     // Project is still clean here: no edit was made after createProject.
     await runAutosave(page);

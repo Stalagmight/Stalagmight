@@ -28,6 +28,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { useTranslation } from 'react-i18next';
 import { useResizeHandle } from '../SingleSystemView/useResizeHandle';
 import { useUIStore } from '../../store/uiStore';
@@ -149,8 +150,7 @@ export function WizardMapPanel({
     },
     [savePanelSizes],
   );
-  const persistRef = useRef(persist);
-  persistRef.current = persist;
+  const persistRef = useLatest(persist);
 
   const schedulePersist = useCallback((size: number) => {
     pendingWidthRef.current = size;
@@ -159,7 +159,7 @@ export function WizardMapPanel({
       const pending = pendingWidthRef.current;
       if (pending !== null) persistRef.current(pending);
     }, KEY_PERSIST_DELAY_MS);
-  }, []);
+  }, [persistRef]);
 
   // Flush a pending write on unmount, for the same reason useResizeHandle
   // persists an interrupted drag: closing the wizard inside the debounce window
@@ -169,7 +169,7 @@ export function WizardMapPanel({
   useEffect(() => () => {
     const pending = pendingWidthRef.current;
     if (pending !== null) persistRef.current(pending);
-  }, []);
+  }, [persistRef]);
 
   const resize = useResizeHandle({
     direction: 'horizontal',

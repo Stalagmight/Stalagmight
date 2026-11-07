@@ -29,6 +29,7 @@ import {
   type ProgramBundle,
   linkProgramBundle,
   deleteProgramBundle,
+  layerGlError,
   bindVec2,
   bindFloat,
   bindColor,
@@ -169,6 +170,9 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
     this.gl = gl;
     this.disabled = false;
     this.disabledReason = null;
+    // A re-add after a WebGL context restore runs here on the NEW context: re-arm
+    // the first-frames GL error check, whose budget the lost context spent (#576 D38).
+    this.checkedFrames = 0;
     // linkProgramBundle() already logs getShaderInfoLog / getProgramInfoLog ungated.
     this.bundle = linkProgramBundle(
       gl, LABEL_VERTEX_SRC, LABEL_FRAGMENT_SRC, LABEL_UNIFORMS, LABEL_ATTRIBS, '[customRender] label',
@@ -180,10 +184,13 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
       return;
     }
     // Reset the glyph texture handle so uploadAtlas does a fresh texImage2D on
-    // every add, including the re-add after a style rebuild (styleRestore.ts).
-    // A handle from an earlier add may belong to a dead context; without the
-    // reset, uploadAtlas' `!this.tex` + `sizeChanged` guards would skip the
-    // upload and the labels would silently fail to re-appear.
+    // every add, including the controller's re-add after MapLibre rebuilt the
+    // style without this layer (a GL context restore or a worker restart;
+    // glContextRecovery.ts). A handle from an earlier add may belong to a dead
+    // context (uploadBuffers already rebuilds the glyph buffers unconditionally
+    // via freeGpu -- this is the texture's matching reset). Without it,
+    // uploadAtlas' `!this.tex` + `sizeChanged` guards would skip the upload and
+    // the custom labels would silently fail to re-appear.
     this.tex = null;
     this.texWidth = 0;
     this.texHeight = 0;
@@ -350,7 +357,7 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
 
   private checkFrameError(gl: WebGL2RenderingContext, data: LabelRenderData): void {
     if (this.checkedFrames >= MAX_CHECKED_FRAMES) return;
-    const err = gl.getError();
+    const err = layerGlError(gl);
     if (err !== gl.NO_ERROR) {
       const code = `0x${err.toString(16)}`;
       const reason = `gl-error-${code}`;

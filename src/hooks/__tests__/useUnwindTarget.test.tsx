@@ -18,25 +18,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'mock error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('mock error'));
 
 import { useUnwindTarget, type ChainTarget } from '../useUnwindTarget';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import type { SpeleoUnwindTarget } from '../../types/ipc.generated';
-
-/** A reply the test lands by hand, so ordering is stated rather than timed. */
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
+import { deferred } from '../../test/factories/async';
 
 const OLDER: SpeleoUnwindTarget = { hexsha: 'aaa111', is_current: false, discards_unpushed: false };
 const NEWER: SpeleoUnwindTarget = { hexsha: 'bbb222', is_current: true, discards_unpushed: true };

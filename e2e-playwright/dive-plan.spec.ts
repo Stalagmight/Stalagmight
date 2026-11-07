@@ -169,11 +169,11 @@ test.describe('Dive-plan persistence (#244)', () => {
 
     const plans = await savedPlans(page);
     expect(plans).toHaveLength(1);
-    expect(plans[0].name).toBe('Deep push');
+    expect(plans[0]!.name).toBe('Deep push');
     // The just-saved plan is now the loaded one (baseline = current inputs → not dirty).
-    expect(await loadedPlanId(page)).toBe(plans[0].id);
+    expect(await loadedPlanId(page)).toBe(plans[0]!.id);
     await expect(page.locator('[data-testid="dive-plan-dirty"]')).toHaveCount(0);
-    await expect(page.locator('[data-testid="dive-plan-select"]')).toHaveText(plans[0].name);
+    await expect(page.locator('[data-testid="dive-plan-select"]')).toHaveText(plans[0]!.name);
   });
 
   test('loading another plan applies its snapshot to the inputs @smoke', async ({ page }) => {
@@ -280,6 +280,46 @@ test.describe('Dive-plan persistence (#244)', () => {
       { speed_m_per_min: 22, on_scooter: true },
       { speed_m_per_min: 8, on_scooter: false },
     ]);
+  });
+
+  test('a loaded plan drops span speeds the engine would not fly, with one notice (#576 NF-UI-2)', async ({
+    page,
+  }) => {
+    await giveProjectAPath(page);
+    await enterPlan(page);
+    // What only a hand-edited .plnx can carry: span speeds of 0 and 5000 m/min. The engine flies
+    // [0.1, 1000] and uses the plan speed for anything else, so the grid must not show them.
+    await page.evaluate(() => {
+      const gas = (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState();
+      gas.addWaypoint({ section_id: 1, station_index: 2 });
+      gas.setSegments([
+        { speed_m_per_min: 0, on_scooter: false },
+        { speed_m_per_min: 5000, on_scooter: false },
+      ]);
+    });
+    await saveAs(page, 'Hand-edited');
+    await page.evaluate(() => {
+      (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState().setSegments([
+        { speed_m_per_min: 10, on_scooter: false },
+        { speed_m_per_min: 12, on_scooter: false },
+      ]);
+    });
+    await saveAs(page, 'Other');
+    await expect(page.locator('[data-testid="dive-plan-speeds-dropped-warning"]')).toHaveCount(0);
+
+    const handEdited = (await savedPlans(page)).find((p) => p.name === 'Hand-edited');
+    await selectDropdownOption(page, 'dive-plan-select', String(handEdited!.id));
+    await expect.poll(() => loadedPlanId(page), { timeout: 3000 }).toBe(handEdited!.id);
+
+    const segments = await page.evaluate(
+      () => (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState().segments,
+    );
+    expect(segments.map((seg) => seg.speed_m_per_min)).toEqual([null, null]);
+    await expect(page.locator('[data-testid="dive-plan-speeds-dropped-warning"]')).toHaveText(
+      /2 span speeds in this plan were outside the range/,
+    );
+    // Dropping them is the load's normalisation, not an edit: the plan loads clean.
+    await expect(page.locator('[data-testid="dive-plan-dirty"]')).toHaveCount(0);
   });
 
   test('editing after load shows the unsaved badge; Save clears it @smoke', async ({ page }) => {
@@ -394,8 +434,21 @@ test.describe('Dive-plan persistence (#244)', () => {
     });
     await expect(page.locator('[data-testid="dive-plan-save"]')).toBeEnabled();
 
+    // [#576 E3] That the anchor of a station whose neighbours are both deleted no longer
+    // places is the backend's answer (core dive_plan
+    // `a_pin_whose_both_neighbouring_shots_are_deleted_no_longer_places`); the mock answers
+    // what this spec says it does. Asserted here: the frontend flags the pin and blocks Save.
+    await page.evaluate(() => {
+      (window as unknown as { __MOCK_SET_ANCHOR_RESOLUTION__: (r: Record<string, null>) => void })
+        .__MOCK_SET_ANCHOR_RESOLUTION__({ '1:3': null });
+    });
+
+    // The survey is edited in Survey: Plan is read-only, and the backend refuses a survey
+    // edit there (#576 C5). The plan and its pins survive the round trip (#244).
+    await page.locator('[data-testid="mode-survey"]').click();
     await deleteShotAt(page, 2);
     await deleteShotAt(page, 2); // shot[3] is now at index 2 after the first delete.
+    await enterPlan(page);
 
     // The #310 fix landed in this same branch: losing both neighbours of a pinned way point
     // marks that pin unresolved (`gasPlanStore.ts`'s `unresolved.waypoints`, per the doc comment

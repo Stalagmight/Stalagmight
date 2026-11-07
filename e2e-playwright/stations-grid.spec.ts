@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for the data table's stations view (SpreadsheetGrid migration).
@@ -39,19 +40,19 @@ const sectionSeeds: SectionSeed[] = [
 
 async function getSectionId(page: Page): Promise<number> {
   return page.evaluate(() => {
-    const e2e = (window as any).__E2E_TEST__;
-    return e2e.projectStore.getState().project.sections[0].id as number;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
+    return e2e.projectStore.getState().project!.sections[0]!.id as number;
   });
 }
 
 async function getStationComment(page: Page, sectionId: number, stationIndex: number): Promise<string | null> {
   return page.evaluate(
     ({ sectionId, stationIndex }) => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       const station = e2e.projectStore
         .getState()
         .stations.find(
-          (s: any) =>
+          (s) =>
             s.station_ref.section_id === sectionId && s.station_ref.station_index === stationIndex
         );
       return (station?.comment as string | undefined) ?? null;
@@ -63,7 +64,7 @@ async function getStationComment(page: Page, sectionId: number, stationIndex: nu
 async function setZeroDatum(page: Page, sectionId: number, stationIndex: number): Promise<void> {
   await page.evaluate(
     async ({ sectionId, stationIndex }) => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       await e2e.projectStore.getState().setZeroDatum(
         { section_id: sectionId, station_index: stationIndex },
         { latitude: 24.55, longitude: -81.78, depth_reference: 0 },

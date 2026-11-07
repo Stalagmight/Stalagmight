@@ -26,6 +26,7 @@
  * moment as its text is unreliably announced.
  */
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -92,6 +93,16 @@ const INTERACTIVE_OPACITY_MIN = 0.1;
 /** Full lifetime of a toast of a given kind, dwell plus fade. */
 function lifetimeOf(kind: ToastKind): number {
   return dwellOf(kind) + FADE_MS;
+}
+
+/** A toast's dwell: its kind's, or forever for a persistent one (it leaves only
+ *  when dismissed - see `ToastOptions.persistent`). */
+function itemDwell(item: ToastItem): number {
+  return item.persistent ? Infinity : dwellOf(item.kind);
+}
+
+function itemLifetime(item: ToastItem): number {
+  return item.persistent ? Infinity : lifetimeOf(item.kind);
 }
 
 function dwellOf(kind: ToastKind): number {
@@ -352,8 +363,7 @@ export function ToastStack() {
     setPaused(hoverPausedRef.current || focusPausedRef.current);
   }, []);
 
-  const reducedMotionRef = useRef(reducedMotion);
-  reducedMotionRef.current = reducedMotion;
+  const reducedMotionRef = useLatest(reducedMotion);
 
   const clocks = useRef(new Map<number, Clock>());
   /** The stack container, so the tick can re-check whether it is really hovered. */
@@ -554,8 +564,8 @@ export function ToastStack() {
         // Past the dwell the opacity ramp - and the exit rise it drives - moves on
         // every tick, so those ticks, and only those, need a frame. Under reduced
         // motion there is no ramp: full opacity until the toast is simply removed.
-        if (!reducedMotionRef.current && clock.elapsed > dwellOf(item.kind)) dirty = true;
-        if (clock.elapsed >= lifetimeOf(item.kind)) store.removeToast(item.id);
+        if (!reducedMotionRef.current && clock.elapsed > itemDwell(item)) dirty = true;
+        if (clock.elapsed >= itemLifetime(item)) store.removeToast(item.id);
       }
 
       // Backstop for the entrance flip below: a toast must never be stranded at
@@ -570,7 +580,7 @@ export function ToastStack() {
       if (dirty) bump();
     }, TICK_MS);
     return () => window.clearInterval(handle);
-  }, [hasToasts, endFocus]);
+  }, [hasToasts, endFocus, reducedMotionRef]);
 
 
   // The entrance. A toast renders its first frame below its slot at opacity 0,
@@ -766,6 +776,7 @@ export function ToastStack() {
               reducedMotion={reducedMotion}
               measureRef={attach}
               dismissLabel={t('common.toast.dismiss', { message: item.message })}
+              actionLabel={item.action ? t('common.toast.action', { action: item.action.label, message: item.message }) : ''}
               onDismiss={() => dismissToast(item.id)}
             />
           ))}
@@ -787,6 +798,8 @@ interface ToastProps {
   reducedMotion: boolean;
   measureRef: (el: HTMLDivElement | null) => void;
   dismissLabel: string;
+  /** Accessible name of the action button (unused without an action). */
+  actionLabel: string;
   onDismiss: () => void;
 }
 
@@ -799,6 +812,7 @@ function Toast({
   reducedMotion,
   measureRef,
   dismissLabel,
+  actionLabel,
   onDismiss,
 }: ToastProps) {
   const style = KIND_STYLES[item.kind];
@@ -818,7 +832,7 @@ function Toast({
     opacity = 0;
     fade = item.leaving ? 1 : 0;
   } else if (!paused && !reducedMotion) {
-    const overdue = elapsed - dwellOf(item.kind);
+    const overdue = elapsed - itemDwell(item);
     if (overdue > 0) {
       fade = Math.min(1, overdue / FADE_MS);
       opacity = 1 - fade;
@@ -870,6 +884,25 @@ function Toast({
         <span className="text-text-primary text-sm leading-5" aria-hidden="true">
           {item.message}
         </span>
+        {/* The toast's one action (only the lost-WebGL-context toast has one,
+            #576 D38-LOST). Hit-testable on the same terms as the dismiss button
+            below; it runs the action, then dismisses the toast. */}
+        {item.action && (
+          <button
+            type="button"
+            aria-label={actionLabel}
+            data-testid={item.action.testId}
+            onClick={() => {
+              item.action?.onAction();
+              onDismiss();
+            }}
+            className={`${
+              interactive ? 'pointer-events-auto' : 'pointer-events-none'
+            } shrink-0 mt-0.5 rounded px-2 py-0.5 text-sm font-medium text-accent hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+          >
+            {item.action.label}
+          </button>
+        )}
         {/* The one part of the stack that opts back INTO pointer events, and only
             while it is visible: the container is click-through so a toast never
             eats a click meant for the map or a panel, this button is the only

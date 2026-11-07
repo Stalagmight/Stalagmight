@@ -84,7 +84,7 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 |----------------|-------------|-------|
 | `section.name` | `Section` / `SC` | Falls back to `"Section {id}"` if unnamed |
 | `section.surveyor` | `Explorer` / `EX` | `"unknown"` if unset. Written VERBATIM, so a compound value the import built from Ariane's two-role field (`"nh / ds"` - see [Ariane import](ariane-import.md#per-section)) goes back out in the plain compound form real files use, and re-imports unchanged. A file that arrived in the entity-escaped `<Explorer>…</Explorer><Surveyor>…</Surveyor>` encoding is normalised to that plain form, not restored to the escaped one. |
-| `section.date` | `Date` / `DT` | `"2000-01-01"` if unset |
+| `section.date` | `Date` / `DT` | `"2000-01-01"` if unset, followed by the XML comment `<!--stalagmight:no-survey-date-->` so a person reading the file can tell it is a placeholder (#576 B2). Our importer reads every `2000-01-01` back as "no date", with or without the comment, so a survey genuinely dated 1 January 2000 also re-imports undated. The placeholder stays because SpeleoDB rejects a missing or empty date; the marker is a comment because no TML element is one Ariane ignores, and a comment is not document content to any XML reader. Without it, a dateless section re-imported dated 1 January 2000 and a magnetic, georeferenced file took its IGRF declination epoch from that year, rotating the survey. A file re-saved by Ariane loses the comment, and the SpeleoDB sidecar never writes it; both still re-import undated, because the importer goes by the date, not the comment. |
 | `section.color` (`#RRGGBB`) | `Color` / `CL` | Converted to Ariane format `0xRRGGBBff` |
 
 ### Shot-level fields
@@ -93,8 +93,7 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 |----------------|-------------|-------|
 | Sequential integer | `ID` | Assigned starting from 0, incrementing across all sections |
 | Previous shot ID | `FromID` / `FRID` | Chains shots linearly within a section; START has -1 |
-| `shot.azimuth_in` | `Azimut` / `AZ` | Front-sight azimuth |
-| `shot.azimuth_out` | - | Not exported. Ariane does not encode backsight azimuth. |
+| `shot.azimuth_in`, `shot.azimuth_out` | `Azimut` / `AZ` | Their circular mean - the bearing the app draws (`models::average_azimuth_of`). The two are two FORWARD readings of the same line, not a foresight/backsight pair (see SPEC), and Ariane carries one azimuth per shot, so a pair that disagrees goes out as its mean and re-imports with both readings equal to it: the drawn geometry is unchanged. Before #576 NF-AN5-1 the export wrote `azimuth_in` alone, so a DMP shot read at 10/20 and drawn at 15 went out at 10. |
 | `shot.length` | `Length` / `LG` | |
 | `shot.depth_out` | `Depth` / `DP` | Absolute station depth |
 | `shot.depth_in` | `DepthIn` / `DPI` | -1.0 sentinel when equal to previous `depth_out` |
@@ -194,7 +193,7 @@ invariant on the exporter alone:
 
 Parent-child relationships are derived from `station_merges`. When section B's entry station merges with a station in section A, section B's first shot has its `FromID` set to the Ariane ID of the corresponding station in section A.
 
-When a root section is split at a non-zero zero datum, the generated pre-zero segment is exported in reverse direction. Its azimuth is always synthesized as `azimuth_in + 180°` (normalized), not from `azimuth_out`.
+When a root section is split at a non-zero zero datum, the generated pre-zero segment is exported in reverse direction. Its azimuth is always synthesized as the reciprocal (+180°, normalized) of the shot's drawn bearing - the same circular mean the forward legs carry. `azimuth_out` is never read as a backsight.
 
 ### Loop closures
 
@@ -322,8 +321,9 @@ one is broken it either fails the whole file or silently skips the map - the
 upload still returns 200, so nothing surfaces to the user.
 
 `export_tml` and `export_tml_for_speleodb` therefore build the same document
-under different profiles. The **user** profile is what it has always been, down
-to the byte. The **sidecar** profile additionally:
+under different profiles. The **user** profile's bytes change only deliberately
+(`tml_golden_tests.rs` pins the whole document). The **sidecar** profile
+additionally:
 
 | Concession | Why |
 |------------|-----|
@@ -345,6 +345,8 @@ dropped or capped.
 | Component | File | Role |
 |-----------|------|------|
 | Export logic | `src-tauri/crates/export/src/export/tml.rs` | XML generation, ZIP packaging, topology resolution, the two profiles |
+| Shared schema | `src-tauri/crates/parsers/src/parsers/tml/schema.rs` | The one statement of every element name (both spellings), the shot-type strings, the `DepthIn` sentinel and the inclination and colour conversions; the importer reads with the same table |
+| Byte pins | `src-tauri/crates/export/src/export/tml_golden_tests.rs` | Whole-document goldens of the user and sidecar exports; a change to the written bytes updates them in the same commit |
 | Export command | `src-tauri/src/commands/export.rs` | `export_tml` IPC handler |
 | SpeleoDB sidecar | `src-tauri/crates/core/src/core/state/speleodb_push.rs` | `speleodb_render_tml` renders the co-push sidecar via `export_tml_for_speleodb` |
 | Store method | `src/store/projectStore.ts` | `exportTml()` frontend binding |
@@ -352,6 +354,15 @@ dropped or capped.
 
 ## Limitations
 
+- Characters XML 1.0 cannot carry at all - C0 control characters other than tab,
+  line feed and carriage return, and U+FFFE / U+FFFF - are written as U+FFFD
+  (the replacement character) in every text element, in both profiles. They
+  reach a project through imported files and pasted text, and a single one
+  written raw made Ariane and SpeleoDB reject the whole document. The user
+  export returns the `xml-chars-replaced` note, so the export toast says the
+  file's text differs from the project's; the sidecar logs it. Line breaks,
+  the U+200B shot-comment marker and C1 characters are legal XML and pass
+  through unchanged.
 - Shape/cross-section geometry (`Shape`/`SH` elements) is not exported (not stored in the internal model)
 - GPS coordinates are not written per-shot: latitude and longitude are `0.0`
   everywhere except the START shots, which repeat the primary datum's anchor

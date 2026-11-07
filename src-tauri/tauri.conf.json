@@ -24,8 +24,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost stalagmight-tiles: http://stalagmight-tiles.localhost https://fonts.openmaptiles.org; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'",
-      "devCsp": "default-src 'self' http://localhost:1420; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' http://localhost:1420; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420 stalagmight-tiles: http://stalagmight-tiles.localhost https://fonts.openmaptiles.org; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
+      "csp": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost stalagmight-tiles: http://stalagmight-tiles.localhost; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self' http://localhost:1420; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' http://localhost:1420; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420 stalagmight-tiles: http://stalagmight-tiles.localhost; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {

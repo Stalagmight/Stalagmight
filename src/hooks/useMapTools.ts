@@ -9,7 +9,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { useActiveStations } from './useActiveStations';
 import { getErrorMessage, invokeIpc } from '../utils/ipc';
-import type { SectionId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
+import type { SectionId, ShotId, StationRef, Coordinates, RulerEndpoint } from '../types/project';
 import type { GpsOrigin } from '../types/config';
 import { distance, mapCoordsToMeters } from '../utils/coordinates';
 import { reachableStationKeySet, nearestOriginShotEndpoint } from '../utils/gasReach';
@@ -17,6 +17,7 @@ import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
 import { TOAST_KEYS } from '../utils/toastKeys';
+import { refusedMergeOffersClosure } from '../utils/mergeConnectivity';
 
 /**
  * #395: what a plain Plan-mode select-click does to the gas plan pins.
@@ -201,7 +202,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   // Gas origin-pick on map click belongs to the Plan workspace mode (former showGasPlan).
   const showGasPlan = appMode === 'plan';
 
-  const { stations, project, checkMergeConnectivity } = useProjectStore();
+  const { stations, project, checkMergeConnectivity } = useProjectStore(
+    useShallow((s) => ({ stations: s.stations, project: s.project, checkMergeConnectivity: s.checkMergeConnectivity })),
+  );
   // Coordinate lookups for read-only inspection (the measure tool) follow the
   // active geometry so distances match what's drawn; editing/comment paths below
   // keep using the measured `stations`.
@@ -313,7 +316,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       const requestProjectKey = projectIdentityKey(useProjectStore.getState().project);
       setMeasureAlongLinePending(true);
       try {
-        const result = await invokeIpc<AlongLineResult | null>(
+        const result = await invokeIpc(
           'get_along_line_distance',
           { a, b },
           { purpose: 'ruler along-line distance' }
@@ -339,7 +342,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       } catch (e) {
         if (requestId === measureRequestIdRef.current) {
           console.warn('Along-line distance query failed:', getErrorMessage(e, 'unknown error'));
-          setMeasureAlongLine({ alongLine: null, pathShots: [], pathStations: [] });
+          // Flagged, so the readout says the path could not be computed instead
+          // of claiming there is none (#576 C7-MSG).
+          setMeasureAlongLine({ alongLine: null, pathShots: [], pathStations: [], failed: true });
         }
       }
     },
@@ -403,7 +408,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             stationA,
             stationB,
           });
-        } else if (result.connected || result.reason === 'Both sections have fixed coordinates') {
+        } else if (refusedMergeOffersClosure(result)) {
           // Connected (or both sections fixed) - redirect to closure dialog
           setSource('map');
           openDialog('closure', {
@@ -428,7 +433,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
       }
     },
-    [checkMergeConnectivity, clearMergeStations, openDialog, setMergeStationB, showToast]
+    [checkMergeConnectivity, clearMergeStations, openDialog, setMergeStationB, showToast, t]
   );
 
   // Handle station click based on active tool
@@ -563,6 +568,14 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             }
             setSelection({ type: 'station', stationRef: ref });
             setMoveCommentSource({ type: 'station', stationRef: ref, comment: mcStation.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
+          } else if (
+            moveCommentSource.type === 'station' &&
+            moveCommentSource.stationRef?.section_id === ref.section_id &&
+            moveCommentSource.stationRef?.station_index === ref.station_index
+          ) {
+            // Second click on the picked-up station: cancel, exactly like an
+            // empty-map click (handleEmptyClick) - no swap dialog, no IPC.
+            clearMoveCommentSource();
           } else {
             // Second click: target - use atomic move_comment IPC
             const targetComment = mcStation?.comment ?? '';
@@ -747,6 +760,14 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             }
             setSelection({ type: 'shot', sectionId, shotId });
             setMoveCommentSource({ type: 'shot', sectionId, shotId, comment: mcShot.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
+          } else if (
+            moveCommentSource.type === 'shot' &&
+            moveCommentSource.sectionId === sectionId &&
+            moveCommentSource.shotId === shotId
+          ) {
+            // Second click on the picked-up shot: cancel, exactly like an
+            // empty-map click (handleEmptyClick) - no swap dialog, no IPC.
+            clearMoveCommentSource();
           } else {
             // Second click: target - use atomic move_comment IPC
             const targetComment = mcShot?.comment ?? '';

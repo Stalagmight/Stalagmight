@@ -3,6 +3,7 @@ import type { Section } from '../../types/ipc/Section';
 import type { Station } from '../../types/ipc/Station';
 import { surveyDataFromLegacy, lazyStationArray } from '../../types/survey-data';
 import { computeImmovableStationKeys } from '../immovableStations';
+import { makeStation } from '../../test/factories/survey';
 
 /**
  * Regression coverage for the SoA immovable-station BFS (#customRender, Codex
@@ -17,7 +18,7 @@ import { computeImmovableStationKeys } from '../immovableStations';
 // a materialized Station[] - the behavioral oracle the SoA path must reproduce.
 function immovableViaStationArray(
   stations: readonly Station[],
-  alignedClosureIds: ReadonlySet<bigint>,
+  alignedClosureIds: ReadonlySet<number>,
 ): Set<string> {
   const stationByKey = new Map(
     stations.map((s) => [`${s.station_ref.section_id}:${s.station_ref.station_index}`, s]),
@@ -50,15 +51,13 @@ const st = (
   section_id: number,
   station_index: number,
   opts: Partial<Station> = {},
-): Station => ({
-  station_ref: { section_id, station_index },
-  coordinates: { x: station_index, y: section_id, z: 0 },
-  is_zero_datum: false,
-  gps_coordinates: null,
-  merged_with: [],
-  closures_with: [],
-  ...opts,
-});
+): Station =>
+  makeStation({
+    station_ref: { section_id, station_index },
+    coordinates: { x: station_index, y: section_id, z: 0 },
+    closures_with: [],
+    ...opts,
+  });
 
 /** One section per station so `next_shot_id`/shots don't matter; the BFS only
  *  reads station topology. Each station needs a section shell to exist in SoA. */
@@ -88,22 +87,22 @@ describe('computeImmovableStationKeys', () => {
       st(1, 0, {
         merged_with: [{ section_id: 0, station_index: 0 }],
         closures_with: [
-          { closure_id: 1n, station_ref: { section_id: 2, station_index: 0 }, via_station: null, is_transitive: false },
+          { closure_id: 1, station_ref: { section_id: 2, station_index: 0 }, via_station: null, is_transitive: false },
         ],
       }),
       st(2, 0, {
         closures_with: [
-          { closure_id: 1n, station_ref: { section_id: 1, station_index: 0 }, via_station: null, is_transitive: false },
+          { closure_id: 1, station_ref: { section_id: 1, station_index: 0 }, via_station: null, is_transitive: false },
         ],
       }),
       st(3, 0, {
         closures_with: [
-          { closure_id: 2n, station_ref: { section_id: 0, station_index: 0 }, via_station: null, is_transitive: false },
+          { closure_id: 2, station_ref: { section_id: 0, station_index: 0 }, via_station: null, is_transitive: false },
         ],
       }),
     ];
     const { data } = fixture(stations);
-    const aligned = new Set([1n]);
+    const aligned = new Set([1]);
 
     const got = computeImmovableStationKeys(data, aligned);
     expect([...got].sort()).toEqual(['0:0', '1:0', '2:0']);
@@ -113,9 +112,9 @@ describe('computeImmovableStationKeys', () => {
 
   it('returns an empty set when there is no zero-datum', () => {
     const { data } = fixture([st(0, 0), st(0, 1, { merged_with: [{ section_id: 0, station_index: 0 }] })]);
-    const got = computeImmovableStationKeys(data, new Set<bigint>());
+    const got = computeImmovableStationKeys(data, new Set<number>());
     expect(got.size).toBe(0);
-    expect(got).toEqual(immovableViaStationArray(lazyStationArray(data), new Set<bigint>()));
+    expect(got).toEqual(immovableViaStationArray(lazyStationArray(data), new Set<number>()));
   });
 
   it('handles a merge cycle without looping and matches the oracle', () => {
@@ -124,8 +123,8 @@ describe('computeImmovableStationKeys', () => {
       st(0, 1, { merged_with: [{ section_id: 0, station_index: 0 }] }), // cycle back
     ];
     const { data } = fixture(stations);
-    const got = computeImmovableStationKeys(data, new Set<bigint>());
+    const got = computeImmovableStationKeys(data, new Set<number>());
     expect([...got].sort()).toEqual(['0:0', '0:1']);
-    expect(got).toEqual(immovableViaStationArray(lazyStationArray(data), new Set<bigint>()));
+    expect(got).toEqual(immovableViaStationArray(lazyStationArray(data), new Set<number>()));
   });
 });

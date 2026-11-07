@@ -48,6 +48,8 @@ async function getMapZoom(page: Page): Promise<number | null> {
  */
 async function assertZoomRemainsStable(page: Page, expectedZoom: number): Promise<void> {
   for (const interval of [100, 100, 100, 100]) {
+    // settle: samples the zoom over 400 ms to prove it does NOT drift; a poll
+    // would stop at the first matching read.
     await page.waitForTimeout(interval);
     expect(await getMapZoom(page)).toBe(expectedZoom);
   }

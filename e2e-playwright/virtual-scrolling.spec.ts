@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for the DataTable with large datasets.
@@ -61,7 +62,7 @@ test.describe('Virtual Scrolling in DataTable', () => {
 
   test('DataTable virtualizes rows while preserving full section data', async ({ page }) => {
     const totalShots = await page.evaluate(() => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return 0;
       return e2e.projectStore.getState().project?.sections?.[0]?.shots?.length ?? 0;
     });
@@ -75,7 +76,7 @@ test.describe('Virtual Scrolling in DataTable', () => {
 
   test('first row exposes unique semantic shot and cell selectors', async ({ page }) => {
     const ids = await page.evaluate(() => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return null;
       const section = e2e.projectStore.getState().project?.sections?.[0];
       return section ? { sectionId: section.id, shotId: section.shots[0]?.id ?? null } : null;
@@ -98,7 +99,7 @@ test.describe('Virtual Scrolling in DataTable', () => {
 
   test('last row exists in the DOM', async ({ page }) => {
     const lastShotId = await page.evaluate(() => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return null;
       const state = e2e.projectStore.getState();
       const section = state.project?.sections?.[0];
@@ -108,7 +109,7 @@ test.describe('Virtual Scrolling in DataTable', () => {
     expect(lastShotId).not.toBeNull();
 
     await page.evaluate((shotId) => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return;
       const section = e2e.projectStore.getState().project?.sections?.[0];
       if (!section || shotId == null) return;
@@ -123,22 +124,22 @@ test.describe('Virtual Scrolling in DataTable', () => {
 
   test('selection via store updates row highlight', async ({ page }) => {
     const ids = await page.evaluate(() => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return null;
       const state = e2e.projectStore.getState();
       const section = state.project?.sections?.[0];
       return {
         sectionId: section?.id ?? 0,
-        shotIds: (section?.shots ?? []).map((s: any) => s.id),
+        shotIds: (section?.shots ?? []).map((s) => s.id),
       };
     });
     if (!ids) throw new Error('No project IDs');
 
     // Select a shot near the end (index 100) via store
-    const targetShotId = ids.shotIds[100];
+    const targetShotId = ids.shotIds[100]!; // in range: beforeEach seeds SHOT_COUNT (120) shots
     await page.evaluate(
       ({ sectionId, shotId }) => {
-        const e2e = (window as any).__E2E_TEST__;
+        const e2e = (window as E2EWindow).__E2E_TEST__;
         if (!e2e) return;
         e2e.uiStore.getState().setSelection({ type: 'shot', sectionId, shotId });
       },

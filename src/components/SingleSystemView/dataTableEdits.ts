@@ -39,11 +39,11 @@ export function buildShotUpdates(
       if (!Number.isFinite(newMean)) continue;
       // Both legs unset (a row added but not yet measured): there is no mean to
       // rotate away from, so the typed value IS both legs. Without this the
-      // delta is NaN, `normalizeAngle` folds a non-finite angle to 0, and the
-      // shot silently records due north - a bearing nobody measured, which then
-      // passes the range validation and saves. The pitch branch below has always
-      // had this case; azimuth did not, and only got here when the shared shot
-      // editor stopped using its own averaging rule.
+      // delta is NaN, and while `normalizeAngle` still folded a non-finite angle
+      // to 0 the shot silently recorded due north - a bearing nobody measured,
+      // which then passed the range validation and saved. The pitch branch
+      // below has always had this case; azimuth did not, and only got here when
+      // the shared shot editor stopped using its own averaging rule.
       const inFinite = Number.isFinite(shot.azimuth_in);
       const outFinite = Number.isFinite(shot.azimuth_out);
       if (!inFinite && !outFinite) {
@@ -53,7 +53,7 @@ export function buildShotUpdates(
       }
       if (!inFinite || !outFinite) {
         // ONE leg measured, which is a valid shot. The mean of a number and a
-        // NaN is NaN, and normalizeAngle folds that to 0 - so averaging here
+        // NaN is NaN (which normalizeAngle used to fold to 0) - so averaging here
         // used to replace a real bearing with due north. The single reading IS
         // the current mean, so offset from it and give the missing leg the same
         // value; nothing is invented that the user did not type.

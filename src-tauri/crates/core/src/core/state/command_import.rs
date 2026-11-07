@@ -1,8 +1,12 @@
+use super::command_epilogue::EpilogueSteps;
+use super::project_slot::ProjectSlot;
+use super::session_commit::CommandsHeld;
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
     AzimuthReference, ClosureStrategy, Coordinates, Project, SectionData, SectionId, ShotData,
     ShotKind, StationRef, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
+    MAX_SHOTS_PER_SECTION,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -25,7 +29,7 @@ pub enum VirtualShotMode {
     /// Every virtual shot in this file is a non-swimmable survey tie.
     AllReferences,
 }
-use std::sync::Mutex;
+use crate::models::poison_policy::RecoveringMutex;
 
 /// Tally closure-creation results from a `create_loop_closures_batch` call,
 /// counting successes (and failures) directly from `results` rather than
@@ -86,16 +90,16 @@ fn tally_closure_results(
 /// actually allowed to run (the cascade itself early-exits when the flag
 /// is still `true`).  After `disarm`, `Drop` is a no-op.
 struct CascadeDeferGuard<'a> {
-    project: &'a Mutex<Option<Project>>,
+    project: &'a RecoveringMutex<ProjectSlot>,
     armed: bool,
 }
 
 impl<'a> CascadeDeferGuard<'a> {
     /// Set `cascade_deferred = true` on the project (if present) and
     /// return a guard.  If the lock is already poisoned the flag is set
-    /// anyway via `into_inner` - the import is about to run regardless,
-    /// and we still want the Drop reset to fire.
-    fn arm(project: &'a Mutex<Option<Project>>) -> Self {
+    /// anyway (the lock recovers it, #576 A11) - the import is about to run
+    /// regardless, and we still want the Drop reset to fire.
+    fn arm(project: &'a RecoveringMutex<ProjectSlot>) -> Self {
         Self::set_flag(project, true);
         Self {
             project,
@@ -110,11 +114,8 @@ impl<'a> CascadeDeferGuard<'a> {
         self.armed = false;
     }
 
-    fn set_flag(project: &Mutex<Option<Project>>, value: bool) {
-        let mut guard = match project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+    fn set_flag(project: &RecoveringMutex<ProjectSlot>, value: bool) {
+        let mut guard = project.lock();
         if let Some(p) = guard.as_mut() {
             p.cascade_deferred = value;
         }
@@ -149,13 +150,11 @@ impl AppState {
         _closure_strategy: ClosureStrategy,
     ) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): a TML create+merge mutates the
         // project, so it is gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Import section and merge") {
-            return f;
+            return CommandResult::refused(f);
         }
         tracing::info!(
             purpose = "keep undo atomic for import merge",
@@ -167,6 +166,9 @@ impl AppState {
             Ok(s) => s,
             Err(result) => return result,
         };
+        // [#576 A4] The frame-defining datum before the import, for the shared
+        // epilogue's frame check.
+        let frame_before = self.frame_datum_key();
 
         // Step 1: Create the section (using internal method)
         let section_data = SectionData {
@@ -207,13 +209,10 @@ impl AppState {
             return merge_result;
         }
 
-        // Step 4: Capture the after snapshot and push undo entry with before+after.
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
-        // Create a Batch command that represents both operations for the description
+        // Step 4: [#576 A4] The shared forward epilogue - frame check and reconcile,
+        // as `execute()` runs for a CreateSection and a MergeStations (this path ran
+        // neither); no orphan scan, since it only ADDS connectivity - then the after
+        // snapshot and one undo entry with before+after, described as a Batch.
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::CreateSection {
@@ -231,10 +230,11 @@ impl AppState {
             ],
         };
 
-        self.push_snapshot_undo(batch_cmd, snapshot, after_snapshot);
-        // Dirty-bit flip (#191, D-B16): a create+merge import mutated a remote
-        // project. Set-only; no-op for local-only.
-        self.mark_remote_forward_edit();
+        if let Err(failure) =
+            self.record_snapshot_edit(frame_before, EpilogueSteps::GEOMETRY, batch_cmd, snapshot)
+        {
+            return failure;
+        }
 
         // Combine warnings from both operations
         let mut all_warnings = create_result.warnings;
@@ -305,6 +305,34 @@ impl AppState {
         )
     }
 
+    /// [`Self::execute_tml_import_sections`] inside a `command_lock` span the caller
+    /// already holds [#576 NF-W4C-3]: the same gate, validation, import, epilogue and
+    /// receipt, minus the lock (taking it again would self-deadlock). The Ariane
+    /// adoption imports through it, so its create, import, save, reopen and link stamp
+    /// are one span no command can land inside.
+    pub(super) fn execute_tml_import_sections_held(
+        &self,
+        commands: &CommandsHeld<'_>,
+        sections: Vec<crate::models::ImportSectionConfig>,
+        closures: Vec<crate::models::ImportClosure>,
+        file_hash: Option<String>,
+        section_hashes: Vec<String>,
+        existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
+        mode: VirtualShotMode,
+        surface_elevation: Option<f64>,
+    ) -> CommandResult {
+        self.execute_import_sections_locked(
+            commands,
+            sections,
+            closures,
+            file_hash,
+            section_hashes,
+            existing_shot_updates,
+            mode,
+            surface_elevation,
+        )
+    }
+
     fn execute_import_sections_inner(
         &self,
         sections: Vec<crate::models::ImportSectionConfig>,
@@ -315,18 +343,40 @@ impl AppState {
         mode: VirtualShotMode,
         surface_elevation: Option<f64>,
     ) -> CommandResult {
+        // Serialize command execution to prevent concurrent interleaving
+        let commands = self.hold_commands();
+        self.execute_import_sections_locked(
+            &commands,
+            sections,
+            closures,
+            file_hash,
+            section_hashes,
+            existing_shot_updates,
+            mode,
+            surface_elevation,
+        )
+    }
+
+    /// The import itself, inside the `command_lock` span `_commands` proves.
+    fn execute_import_sections_locked(
+        &self,
+        _commands: &CommandsHeld<'_>,
+        mut sections: Vec<crate::models::ImportSectionConfig>,
+        closures: Vec<crate::models::ImportClosure>,
+        file_hash: Option<String>,
+        section_hashes: Vec<String>,
+        mut existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
+        mode: VirtualShotMode,
+        surface_elevation: Option<f64>,
+    ) -> CommandResult {
         use crate::models::{ImportPlacement, StationRef};
         use std::collections::{HashMap, HashSet};
 
-        // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
         // Read-only edit gate (#191, D-B6): a TML import mutates the project, so
         // it is gated on a read-only remote project. (Empty-import early return
         // below is a no-op, but gating first keeps the chokepoint uniform.)
         if let Err(f) = self.guard_mutation("Import sections") {
-            return f;
+            return CommandResult::refused(f);
         }
 
         if sections.is_empty() {
@@ -348,6 +398,29 @@ impl AppState {
                 .with_import_receipt(crate::core::command::ImportReceipt::empty());
         }
 
+        // Azimuths are stored in `[0, 360)` (SPEC "Azimuths are stored in
+        // `[0, 360)`"), and this is the one gate every importer passes, so the
+        // wrap happens HERE (#576 B24). The DMP wizard builds its `ShotData` in
+        // TypeScript and sends the device's headings verbatim, and a DMP heading
+        // is a raw `i16 * 0.1` that a damaged dump can push to 400 or -30; the
+        // overlap updates it sends for EXISTING shots carry the same readings.
+        // Geometry is unchanged (400 and 40 are one bearing); what the wrap
+        // prevents is the truncated-`%` antipode a pair more than 540 degrees
+        // apart used to hit. A non-finite reading has no canonical form and is
+        // left for the finiteness guards below.
+        for shot in sections
+            .iter_mut()
+            .flat_map(|config| config.shots.iter_mut())
+        {
+            shot.azimuth_in = crate::models::normalize_azimuth(shot.azimuth_in);
+            shot.azimuth_out = crate::models::normalize_azimuth(shot.azimuth_out);
+        }
+        for update in &mut existing_shot_updates {
+            let updates = &mut update.updates;
+            updates.azimuth_in = updates.azimuth_in.map(crate::models::normalize_azimuth);
+            updates.azimuth_out = updates.azimuth_out.map(crate::models::normalize_azimuth);
+        }
+
         // Reject non-finite geometry in overlap-interpolation updates before
         // any mutation: these arrive from the DMP import wizard's overlap
         // resolution, i.e. from parsed file content, and must hold the same
@@ -361,6 +434,29 @@ impl AppState {
             }
         }
 
+        // Per-section shot budget (#576 NF-AN2-8), the other half of the id
+        // window the section-id budget below guards: a section's shot ids are
+        // `section_id * FEATURE_ID_STRIDE + position`, so it holds at most
+        // `MAX_SHOTS_PER_SECTION`. `create_section` refuses a longer one too,
+        // but only once the loop reaches it - after every section before it
+        // was built and validated, and then rolled back - so the batch is
+        // checked whole, up front, like the section-id budget.
+        if let Some(config) = sections
+            .iter()
+            .find(|config| config.shots.len() > MAX_SHOTS_PER_SECTION)
+        {
+            let name = config.name.as_deref().map_or_else(
+                || "unnamed".to_string(),
+                |n| crate::models::sanitize_display_text(n, 64),
+            );
+            return CommandResult::failure(format!(
+                "Import refused: section \"{name}\" has {} shots, more than the \
+                 {MAX_SHOTS_PER_SECTION} shots one section can hold (shot ids encode as \
+                 section_id * {FEATURE_ID_STRIDE} + position). Nothing was imported.",
+                config.shots.len()
+            ));
+        }
+
         // Section-id budget (#555), checked for the WHOLE batch before any
         // mutation. Every importer (Ariane, Compass, Walls, GPX, the DMP
         // wizard) funnels through here, and the loop below mints one section
@@ -371,9 +467,9 @@ impl AppState {
         // the work, and the file's own declared section count is knowable up
         // front, so a file that cannot fit is refused whole - the same
         // batch-atomic rule the non-finite checks above apply.
-        let ids_already_spent = match self.project.lock() {
-            Ok(guard) => guard.as_ref().map(|p| p.next_section_id),
-            Err(poisoned) => poisoned.into_inner().as_ref().map(|p| p.next_section_id),
+        let ids_already_spent = {
+            let guard = self.project.lock();
+            guard.as_ref().map(|p| p.next_section_id)
         };
         if let Some(spent) = ids_already_spent {
             let spent_count = spent as usize;
@@ -401,6 +497,10 @@ impl AppState {
             Ok(s) => s,
             Err(result) => return result,
         };
+        // [#576 A4] The frame-defining datum before the import, for the shared
+        // epilogue's frame check. (An import's datum placement renormalises inline
+        // in `Project::set_zero_datum`, so the check is a measured no-op today.)
+        let frame_before = self.frame_datum_key();
 
         // Apply shot updates to existing sections FIRST (overlap interpolation).
         // This must happen before placing new sections so that FromExisting placements
@@ -414,10 +514,7 @@ impl AppState {
                 purpose = "overlap interpolation",
                 "Applying existing shot updates before placement",
             );
-            let mut proj_guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let mut proj_guard = self.project.lock();
             if let Some(project) = proj_guard.as_mut() {
                 // Collect unique affected section IDs
                 let affected_section_ids: HashSet<SectionId> =
@@ -723,7 +820,8 @@ impl AppState {
         // stays O(1) instead of degrading into an O(N) linear scan inside
         // `merge_stations`. (The merge adjacency needs no priming: it builds
         // itself on first use and stays warm across the import's pushes.)
-        if let Ok(mut proj_guard) = self.project.lock() {
+        {
+            let mut proj_guard = self.project.lock();
             if let Some(project) = proj_guard.as_mut() {
                 project.rebuild_section_index();
                 // Make `resolve_key`'s AfterShot lookup O(1) for the hot
@@ -774,8 +872,14 @@ impl AppState {
             // and every geometry path below would apply it. Same rule the
             // `.stalx` read path imposes on the stored columns (#438).
             let declared_reference = config.azimuth_reference.map(AzimuthReference::sanitised);
+            // Read under the lock rather than through `get_project_state`, which
+            // CLONES the whole project - once per section that declares no
+            // reference, so an import of N such sections copied the project N
+            // times (#576 NF-AN6-5). Same lock, same poisoned-lock fallback.
             let azimuth_reference = declared_reference.unwrap_or_else(|| {
-                self.get_project_state()
+                self.project
+                    .lock()
+                    .as_ref()
                     .and_then(|p| p.default_azimuth_reference)
                     .unwrap_or_default()
             });
@@ -820,7 +924,8 @@ impl AppState {
             // geometrically identical projects ("import then reverse" vs "import with the
             // toggle") disagree about that, and about which end the least-squares gauge pins.
             if config.reverse || declared_reference.is_some() {
-                if let Ok(mut guard) = self.project.lock() {
+                {
+                    let mut guard = self.project.lock();
                     if let Some(section) =
                         guard.as_mut().and_then(|p| p.get_section_mut(section_id))
                     {
@@ -851,10 +956,7 @@ impl AppState {
                 // Finiteness first - `NaN != 0.0` is true, and `section_offsets`
                 // has no other finite guard (see `Project::reverse_section`).
                 if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
-                    let mut proj_guard = match self.project.lock() {
-                        Ok(g) => g,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
+                    let mut proj_guard = self.project.lock();
                     if let Some(project) = proj_guard.as_mut() {
                         project.adjust_section_offset(section_id, dx, dy);
                     }
@@ -863,10 +965,7 @@ impl AppState {
 
             // Apply station comments (promoted from shot comments during TML import)
             if !config.station_comments.is_empty() {
-                let mut proj_guard = match self.project.lock() {
-                    Ok(g) => g,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
+                let mut proj_guard = self.project.lock();
                 if let Some(project) = proj_guard.as_mut() {
                     let shot_count = config.shots.len() as u32;
                     for (station_index, comment) in &config.station_comments {
@@ -1106,7 +1205,8 @@ impl AppState {
         // the guard so its Drop becomes a no-op for the success path.
         cascade_guard.disarm();
         let cascade_start = std::time::Instant::now();
-        if let Ok(mut proj_guard) = self.project.lock() {
+        {
+            let mut proj_guard = self.project.lock();
             if let Some(project) = proj_guard.as_mut() {
                 project.cascade_connection_offsets(&all_section_ids);
             }
@@ -1158,10 +1258,7 @@ impl AppState {
         }
         if !closure_pairs.is_empty() {
             let results = {
-                let mut proj_guard = match self.project.lock() {
-                    Ok(g) => g,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
+                let mut proj_guard = self.project.lock();
                 match proj_guard.as_mut() {
                     Some(project) => project.create_loop_closures_batch(&closure_pairs),
                     None => Vec::new(),
@@ -1210,10 +1307,7 @@ impl AppState {
         {
             let imported: HashSet<SectionId> = all_section_ids.iter().copied().collect();
             let scope = crate::models::ClassifyScope::Sections(&imported);
-            let mut proj_guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let mut proj_guard = self.project.lock();
             if let Some(project) = proj_guard.as_mut() {
                 let changed = match mode {
                     VirtualShotMode::Auto => project.classify_virtual_shots(&scope),
@@ -1235,75 +1329,75 @@ impl AppState {
             }
         }
 
-        // Block corruption at the source: reconcile derived
-        // offsets, and reject the whole import if it produced critical
-        // corruption (dangling refs / non-finite geometry) rather than committing
-        // and later persisting it. This custom path bypasses execute()'s guard, so
-        // it must run the same epilogue itself (#integrity Root 4 / catalog #19).
-        // An import only ADDS sections/merges/closures (its closures are loops over
-        // the spanning-tree merges, never sole bridges), so it can't strand a
-        // section behind a closure - which is why the epilogue runs no
-        // sole-bridge conversion at all.
-        if self.finalize_structural_edit(pre_had_critical) {
-            self.rollback_project(&before_snapshot);
-            tracing::error!(
-                purpose = "block corruption at the source",
-                "TML import would corrupt survey structure; rolled back, nothing imported"
-            );
-            return CommandResult::failure(
-                "Blocked: the imported data would corrupt the survey structure \
-                 (dangling references or invalid geometry). Nothing was imported."
-                    .to_string(),
-            );
-        }
-
-        // Merge an Ariane import's project-level entrance elevation (#431)
-        // before the after-snapshot, so it undoes/redoes atomically with the
-        // rest of the import - the same reason `mode`'s virtual-shot pass
-        // runs here rather than after (see the doc comment above). No-clobber:
-        // an existing different value wins, and the mismatch becomes a receipt
-        // warning naming both numbers.
-        let surface_elevation_warning = surface_elevation.and_then(|incoming| {
-            let mut proj_guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            let project = proj_guard.as_mut()?;
-            match project.surface_elevation {
-                None => {
-                    project.surface_elevation = Some(incoming);
-                    None
-                }
-                // 0.005 m matches the message's own `{:.2}` precision - a
-                // smaller difference (e.g. the same elevation re-imported
-                // metric then imperial: 100.0 m vs 328.084 ft -> 100.00003 m)
-                // must not fire a "differs" warning that prints the same
-                // rounded number on both sides.
-                Some(existing) if (existing - incoming).abs() > 0.005 => Some(format!(
-                    "Imported file's entrance elevation ({incoming:.2} m) differs from \
-                     the project's existing value ({existing:.2} m); kept {existing:.2} m"
-                )),
-                Some(_) => None,
+        // [#576 A4] The shared forward epilogue: the frame check and the reconcile of
+        // derived offsets, then - inside `record` - the corruption check, the
+        // entrance-elevation merge, the after-snapshot and one undo entry covering
+        // all sections + hash, then the dirty flip. An import only ADDS
+        // sections/merges/closures (its closures are loops over the spanning-tree
+        // merges, never sole bridges), so it can't strand a section behind a
+        // closure - which is why it runs no sole-bridge conversion at all.
+        let mut surface_elevation_warning = None;
+        let recorded = self.forward_epilogue(frame_before, EpilogueSteps::GEOMETRY, || {
+            // Block corruption at the source: reject the whole import if it produced
+            // critical corruption (dangling refs / non-finite geometry) rather than
+            // committing and later persisting it. This custom path bypasses
+            // execute()'s guard, so it runs the same check itself (#integrity Root 4
+            // / catalog #19).
+            if !pre_had_critical && self.project_has_critical() {
+                self.rollback_project(&before_snapshot);
+                tracing::error!(
+                    purpose = "block corruption at the source",
+                    "TML import would corrupt survey structure; rolled back, nothing imported"
+                );
+                return Err(CommandResult::failure(
+                    "Blocked: the imported data would corrupt the survey structure \
+                     (dangling references or invalid geometry). Nothing was imported."
+                        .to_string(),
+                ));
             }
+
+            // Merge an Ariane import's project-level entrance elevation (#431)
+            // before the after-snapshot, so it undoes/redoes atomically with the
+            // rest of the import - the same reason `mode`'s virtual-shot pass
+            // runs here rather than after (see the doc comment above). No-clobber:
+            // an existing different value wins, and the mismatch becomes a receipt
+            // warning naming both numbers.
+            surface_elevation_warning = surface_elevation.and_then(|incoming| {
+                let mut proj_guard = self.project.lock();
+                let project = proj_guard.as_mut()?;
+                match project.surface_elevation {
+                    None => {
+                        project.surface_elevation = Some(incoming);
+                        None
+                    }
+                    // 0.005 m matches the message's own `{:.2}` precision - a
+                    // smaller difference (e.g. the same elevation re-imported
+                    // metric then imperial: 100.0 m vs 328.084 ft -> 100.00003 m)
+                    // must not fire a "differs" warning that prints the same
+                    // rounded number on both sides.
+                    Some(existing) if (existing - incoming).abs() > 0.005 => Some(format!(
+                        "Imported file's entrance elevation ({incoming:.2} m) differs from \
+                         the project's existing value ({existing:.2} m); kept {existing:.2} m"
+                    )),
+                    Some(_) => None,
+                }
+            });
+
+            // Capture after-snapshot for redo support
+            let after_snapshot = self.capture_after_snapshot_or_rollback(&before_snapshot)?;
+            // Push a single undo entry covering all sections + hash
+            self.push_snapshot_undo(
+                Command::Batch {
+                    commands: batch_commands,
+                },
+                before_snapshot,
+                after_snapshot,
+            );
+            Ok(true)
         });
-
-        // Capture after-snapshot for redo support
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
-        // Push a single undo entry covering all sections + hash
-        self.push_snapshot_undo(
-            Command::Batch {
-                commands: batch_commands,
-            },
-            before_snapshot,
-            after_snapshot,
-        );
-        // Dirty-bit flip (#191, D-B16): a sections import mutated a remote
-        // project. Set-only; no-op for local-only.
-        self.mark_remote_forward_edit();
+        if let Err(failure) = recorded {
+            return failure;
+        }
 
         let shot_count: u32 = sections.iter().map(|s| s.shots.len() as u32).sum();
         let closures_requested = closures.len() as u32;
@@ -1348,6 +1442,7 @@ impl AppState {
             warnings: receipt_warnings,
             info: Vec::new(),
             zero_datum_created,
+            hidden_warnings: 0,
         };
         receipt.cap_warnings();
 

@@ -21,7 +21,7 @@ Entries are **moved** between stacks, never recreated. The same `UndoData` serve
 
 ### UndoStack
 
-Two `VecDeque<UndoEntry>` stacks (undo + redo) behind a `Mutex`, with a configurable `history_limit` (default 100, FIFO-trimmed on push). A separate `command_lock: Mutex<()>` on `AppState` serializes all execute/undo/redo calls to prevent interleaving.
+Two stacks of entries (undo + redo; each slot also caches its compressed persisted rows) behind a `Mutex`, with a configurable `history_limit` (default 100, FIFO-trimmed on push) - and, for that count window, at most `COUNT_WINDOW_MEMORY_BYTES` (256 MiB) of estimated size per stack, oldest evicted first and the newest always kept (#576 B20: 100 whole-project snapshot pairs held several GB on a large survey). A separate `command_lock: Mutex<()>` on `AppState` serializes all execute/undo/redo calls to prevent interleaving.
 
 ## Two-Phase Undo Data Capture
 
@@ -140,8 +140,9 @@ still loads and falls back to the previous behaviour - no schema bump.
 
 `save_project` mutates the live project with **no undo entry of its own** - it
 mints missing shot uuids, re-mints within-section duplicates, captures the
-least-squares gauge pair, drops orphan `section_offsets` and sanitizes non-finite
-values (`apply_save_heals`, `core/state/project_io.rs`). A `ProjectSnapshotPair`
+least-squares gauge pair, stamps a never-saved section's creation time, drops
+orphan `section_offsets` and sanitizes non-finite values (`apply_save_heals`,
+`core/state/project_io.rs`). A `ProjectSnapshotPair`
 captured BEFORE that save holds the pre-heal project in both halves, so restoring
 one used to revert the heal as a side effect of an unrelated undo - which made
 the project at a given undo depth depend on the ROUTE taken to reach it.
@@ -149,7 +150,7 @@ the project at a given undo depth depend on the ROUTE taken to reach it.
 `restore_snapshot_into` - the single place a restored project enters the live
 slot - therefore ends in `reapply_heals_after_restore`, which re-applies the
 heals that are pure fill-in (missing uuids, and a carry-forward of the gauge
-anchors the live project already holds). The heals that DROP or REWRITE state
+anchors and section creation times the live project already holds). The heals that DROP or REWRITE state
 (the duplicate-uuid re-mint, the orphan-offset retain, the non-finite sanitize)
 are deliberately not re-applied: an undo has to be an exact inverse, and undoing
 a Repair has to restore the very state that Repair healed. The per-heal argument
@@ -246,7 +247,7 @@ worldwide. 1e-6 m clears that by two decades and stays four decades below
 `Project::MERGE_ALIGNMENT_INVARIANT_M`, which is the ordering the whole chain
 rests on. The full table is on `Project::OFFSET_DUST_M`;
 `the_dust_gate_clears_the_residue_at_the_georeference_ceiling` and
-`the_dust_gate_is_decades_clear_of_both_ends` (models/project/tests.rs) re-run the
+`the_dust_gate_is_decades_clear_of_both_ends` (models/project/tests/merge_and_offset_tests.rs) re-run the
 measurement and pin the clearances. The gate stays a **pure function of the value
 written** - never scale-aware, which would let two routes disagree by design - and
 a residue that ever approaches it means re-measuring the constant, not widening an
@@ -310,9 +311,13 @@ placement loop, redo's re-execute) would otherwise place a second datum against 
 origin the first one does not sit on. It is idempotent (the delta is MEASURED), so
 the gate below is a no-op on top of it.
 
-Otherwise the renormalisation runs only in the FORWARD epilogue (`execute()`,
-`execute_batch`, `repair_open_project_integrity`, and the four delete/split entry
-points that bypass `execute()`), never in `reconcile_geometry` - which
+Otherwise the renormalisation runs only in the FORWARD epilogue,
+`AppState::forward_epilogue` (`core/state/command_epilogue.rs`), which every forward
+entry point runs - `execute()`, the batch, the four delete/split paths, Insert
+station, both imports, the project settings, the comment move (#576 A4; pinned by
+`forward_epilogue_tests.rs`) - and inline in `repair_open_project_integrity`, which
+settles its own derived state in an order the shared steps cannot express. Never in
+`reconcile_geometry` - which
 `undo()`/`redo()` share - and never in the loader. Every command that can reach it
 records either a `ProjectSnapshotPair` or this widened map, so no inverse
 re-derives a frame; and `resolve_offsets`' cascade never re-derives a seed's
@@ -414,7 +419,7 @@ These are never pushed to the undo stack: `OpenProject`, `SaveProject`, `ClosePr
 
 ## Shot ID Display Positions
 
-Shot IDs are internal and opaque. After database reload they follow the formula `section_id * 100_000 + sequence_order` (0-indexed). Before first save they're plain sequential integers (0, 1, 2...).
+Shot IDs are internal and opaque. After database reload they follow the formula `section_id * 100_000 + sequence_order` (0-indexed). Before first save they come from the section's counter, which `Section::new` (`models/section.rs`) starts at `section_id * 100_000` and which counts up as shots are created, so only section 0's are plain 0, 1, 2.
 
 The `shot_display_position(shot_id, section_id)` helper in `models/shot.rs` converts these to 1-indexed display positions for both formats. All user-facing text (command descriptions, preview data) uses this helper so "Update shot 13:5" means section 13, 5th shot - not the raw internal ID.
 
@@ -440,7 +445,7 @@ load, and the reason there are three is that the first two multiply rather than 
 |---|---|---|
 | Row count | `MAX_PERSISTED_HISTORY_ROWS` (65536) | how many rows one load reads |
 | Per blob | `MAX_DECOMPRESSED_BLOB_BYTES` (256 MiB) | how far ONE blob may inflate - gzip or legacy |
-| Per open | `MAX_HISTORY_LOAD_BYTES` (1 GiB) | the total across BOTH stacks of one open |
+| Per open | `MAX_HISTORY_LOAD_BYTES` (576 MiB) | the total across BOTH stacks of one open |
 
 The third is not redundant. With only the first two, the default 100-row count window
 allows 100 x 2 x 256 MiB = 50 GiB, and Full mode's row ceiling makes it 32 TiB nominal.
@@ -481,18 +486,25 @@ Mechanically, and in the order the checks actually fire:
    and it is what carries the spend from the first stack into the second. Do not describe
    it as the thing that stops the attack.
 
-1 GiB is derived from what a save can legitimately produce - and note WHICH knob bounds
+The old 1 GiB was derived from what a save could legitimately produce - and note WHICH knob bounds
 that, because there are two and swapping them changes the answer by 5x. What a
 count-window (non-SpeleoDB) project WRITES is bounded by `undo_persist_limit`, **default
 20** (read in `project_io.rs::rows_to_persist`). `undo_history_limit` (100) is the
-in-memory/read window and never reaches disk. So the honest worst case is 20
+in-memory/read window and never reaches disk. Before #576 B20 the honest worst case was 20
 `ProjectSnapshotPair` entries on a 20,000-shot survey at ~17 MB each = ~340 MB per stack,
 ~680 MB for the pair - under the ceiling, which is the point.
 
-The residual: that is a COUNT bound, not a byte one, so a user who raises
-`undo_persist_limit` far past its default can author more history than this will read
-back. Bounding the writer in bytes, so the read ceiling can tighten without ever refusing
-real work, is the outstanding follow-up.
+Since #576 B20 the writer is bounded in bytes as well: of those newest
+`undo_persist_limit` entries, a save keeps only the newest whose estimated sizes fit in
+`UNDO_BYTE_BUDGET_BYTES` (32 MiB) per stack - the newest always kept, even alone over it
+(`UndoStack::persist_window`). So a count-window save now writes at most ~32 MiB of JSON
+per stack, or one larger newest entry - whose biggest blob the per-blob ceiling bounds.
+The per-open ceiling is derived from that (#576 NF-W4U-2): `2 x (MAX_DECOMPRESSED_BLOB_BYTES
++ UNDO_BYTE_BUDGET_BYTES)` = 576 MiB, down from 1 GiB, room for one stack's window or one
+maximal newest entry (plus the small command blobs) on each side. A file an older build
+wrote with more history than that (the ~680 MB pair above) opens without it, behind the
+discarded-history banner, as one over 1 GiB always did; its next save writes the capped
+window.
 
 The number bounds RESERVATIONS, not process RSS. Two terms sit on top of it, and the
 second is not small: `read_to_end` doubles its buffer, so one blob transiently costs
@@ -560,8 +572,8 @@ found by the entry-content oracle in `fuzz_undo_tests.rs`, which compares the
 ### Every save is a full rewrite (#303)
 
 `UndoStack::rows_to_persist` serializes every entry in the persisted window and
-`Database::save_undo_stack_with_timestamps` writes the lot, `DELETE`-all then `INSERT`
-with `sequence` renumbered 0..n. There is no incremental path and there cannot be one:
+`Database::replace_history_stacks_with_timestamps` writes the lot for both stacks in one
+transaction, `DELETE`-all then `INSERT` with `sequence` renumbered 0..n. There is no incremental path and there cannot be one:
 `save_project` builds a fresh `.stalx.tmp` and renames it over the target, so every save
 writes into a file that has no undo tables at all. Anything a save skips is gone.
 
@@ -574,10 +586,19 @@ database helper against a database that persisted between calls, which is exactl
 assumption the save path breaks. The whole apparatus (`PersistPlan`, `StackSync`, the
 stable ids) has been removed rather than left standing as scaffolding.
 
-The cost is real and is what `UNDO_BYTE_BUDGET_BYTES` bounds: a save re-gzips the whole
-persisted stack, which is fine for a 20-entry window and would be seconds of compression
-for an unbounded byte-budgeted one, since a delete-heavy session's whole-project snapshots
-are megabytes each.
+The cost is real and is what `UNDO_BYTE_BUDGET_BYTES` bounds - for BOTH kinds of window
+since #576 B20. A 20-entry window was not "fine": a delete-heavy session's whole-project
+snapshots are megabytes each, and a synthetic 20,000-shot project with 20 whole-project
+steps took 8.7 s per save, every autosave included (release build); capped, 1.0 s.
+
+A save does not re-COMPRESS the window, though (#576 B20-D2). Each stack position keeps
+its entry's gzipped rows once a save has computed them (`UndoStack::stored_rows_to_persist`,
+written by `Database::replace_history_stacks_stored`, the same bytes the JSON path stores),
+so a save compresses only the entries that are new since the last one: on that project an
+idle autosave went from 0.78 s to 0.21 s and a save after one more step from 0.92 s to
+0.67 s (release build, same machine, back to back). The cache cannot describe a different entry: it moves with the
+entry, an entry popped for undo or redo leaves it behind (entries are only ever changed off
+the stack), and any mutable access to a stacked entry drops it.
 
 ## Hybrid mode for SpeleoDB projects (#303)
 
@@ -588,8 +609,8 @@ stack holds at push time is what every commit stores forever. Two policies, reso
 
 | | `Full` (default) | `Disabled` | Local project |
 |---|---|---|---|
-| In-memory depth | byte budget | `undo_history_limit` | `undo_history_limit` |
-| Persisted depth | byte budget | `undo_persist_limit` | `undo_persist_limit` |
+| In-memory depth | byte budget | `undo_history_limit`, at most 256 MiB | `undo_history_limit`, at most 256 MiB |
+| Persisted depth | byte budget | `undo_persist_limit`, at most the byte budget | `undo_persist_limit`, at most the byte budget |
 | Rides in the push | yes (undo only) | no | n/a |
 
 **Both stacks get the budget, so a Full-mode save can write up to 2x
@@ -615,7 +636,9 @@ deepens snapshot-heavy history and slows every save in proportion. For scale: th
 window persisted 20 entries with NO size cap, which on a 20,000-shot project is ~336 MB of
 JSON per save - so this is much cheaper in the worst case and vastly deeper in the common
 one, at the price of shallower history for repeated whole-survey operations on very large
-projects.
+projects. (The count window of a local or Disabled-mode project is now capped by the same
+budget when it is saved - #576 B20 - so it has the same trade: on a 20,000-shot project
+about two whole-project steps survive a reopen instead of twenty.)
 
 **Redo is never uploaded**, in any mode. A redo branch replays FORWARD onto a state the
 server has now committed past, so it is the stale-replay hazard with none of the undo
@@ -625,7 +648,7 @@ side's value.
 
 | Event | Effect | Why |
 |---|---|---|
-| Confirmed push | entries with `timestamp <= push_start` dropped; redo cleared | they are in the commit now, so keeping them would duplicate them in the next one. Bounded by push-start because an edit recorded after the snapshot keeps its dirty bit, so its history has to survive with it |
+| Confirmed push | entries with `timestamp <= push_start` dropped; redo cleared | they are in the commit now, so keeping them would duplicate them in the next one. Bounded by push-start because an edit recorded after the snapshot keeps its dirty bit, so its history has to survive with it. A redo keeps the entry's original timestamp, so an entry a redo put back while the upload ran (newer than anything the snapshot held) is kept too: it carries a transient `replayed_at`, and the cut (`drop_pushed_entries`) keeps entries replayed after the cutoff unless the snapshot carried them (#576 A18(b)) |
 | Any server `.stalx` becoming the local cache file | undo/redo tables emptied in the downloaded FILE | `InheritedUndo::Drop` at the `replace_cache_stalx*` chokepoint - pull, fast-forward and revision swap all funnel there |
 | Lock acquired over a copy that equals git (`UpToDate` + clean) | in-memory stacks cleared | the history describes already-committed operations. The clean check is what lets lock, edit, unlock-without-pushing, re-lock keep the user's own history |
 | Force-edit | in-memory stacks cleared | no lock and no reconcile, so the equals-git fence cannot be evaluated; that session already carries the unmergeable warning |
@@ -745,7 +768,24 @@ from the rule, and those operations still live in the commits they came from.
 
 ## Lock Ordering
 
-`command_lock` is always outermost. Below it, the mutation paths avoid holding two
+`command_lock` is always outermost. It serializes every command, undo and redo, and
+(#576 A1) every PROJECT-SLOT COMMIT too: both loads, both creates, close, the
+delete's check-and-teardown and the SpeleoDB cache close all write the slot through
+`commit_open_session` (`core/state/session_commit.rs`), which demands a
+`CommandsHeld` proof, so a commit can never land between a command's mutation and
+its undo push and leave the old project's entry on the new project's stack. A load
+takes it only after its file read, and `execute` dispatches Open/Close/Create
+BEFORE taking it (they take it themselves). Done's local halves - the pre-push
+flush, render and snapshot, and the link and history writes after the upload
+concluded - hold it as well, never across a network call (#576 B35(d)), and so does
+every other write of the open file's SpeleoDB link outside `execute` (#576 NF-W4C-1/2):
+Publish's relocation save and link stamp (one span), the Ariane adoption's create,
+import, save, promote, reopen and link stamp (one span, #576 NF-W4C-3), Start
+Editing's commit, the metadata PATCH's name fold, Publish's BASE recovery and
+unlink's link delete. An
+autosave copies the link at its start and renames a fresh file over the live one, so a
+link write that took only `database` could land in the replaced file. Below it,
+the mutation paths avoid holding two
 of `undo_stack` / `project` / `database` at once at all - `undo()`/`redo()` pop the
 entry and drop the `undo_stack` guard before touching the project, and
 `get_undo_stack()`/`get_redo_stack()` release the project lock before acquiring
@@ -759,12 +799,26 @@ DB and persists both stacks) and the close teardown
 to close and then close under one `project` acquisition - splitting them let a
 concurrent load install a different project between the check and the teardown.
 
+Reads take it too, briefly (#576 C2). Commands run concurrently on the blocking
+pool, and a command settles the project (reconcile, undo push) after its mutation
+under the same `command_lock` span, so an IPC read that took only `project` could
+see an edit without its undo entry. `AppState::settled_snapshot()` takes
+`command_lock` for the O(1) snapshot of the copy-on-write project and releases it
+before the read does any work; `AppState::settled_read` runs a short query under it.
+Neither is reentrant: never call them while holding `command_lock`, i.e. from inside
+`execute`, undo/redo, an import, a load or a save. The guarantees are pinned in
+`core/state/command_ordering_tests.rs`: concurrent edits land once each with one
+undo entry each, a settled read waits for the command it would otherwise have caught
+in the middle, a handed-out snapshot never changes, and `cancel_loading` never waits
+on `command_lock`.
+
 One lock sits OUTSIDE even that: `speleodb_lock_ops`
 (`core/state/speleodb_session.rs`), which serializes every SpeleoDB **lock
 operation** against every other and is deliberately held across network calls.
 Start Editing takes it before its first read (generation, link, token, holder)
 and holds it through the commit; so do the reclaim-checked releases, the status
-poll's inherited-lock gate reopen, and logout - each of which can invalidate a
+poll's inherited-lock gate reopen and its lost-lock close, Refresh's fast-forward
+(from before it reads the gate through the restore), and logout - each of which can invalidate a
 fact another one of them is mid-way through acting on. Nothing holding `project` / `database` / `undo_stack` may
 block on it - its users decide under `project`, drop that guard, and only then
 take it. The SpeleoDB session generation (`speleodb_session_generation`) is
@@ -788,7 +842,21 @@ likewise only ever bumped while holding `project`; see the module doc in
   `remove_created_shot` - read the live offsets at the moment they run); skipping
   it altogether was #413's finding 7, where a jump kept the drift
   `reconcile_geometry`'s `realign_merges` heals and left sections metres from
-  where Ctrl+Z the same number of times leaves them
+  where Ctrl+Z the same number of times leaves them. A FAILED step gets the same
+  epilogue (#576 A18(a)): once a jump - or a single `undo()`/`redo()` - is past its
+  index / empty-stack check, the failure arm reconciles geometry and marks the
+  remote copy un-pushed too, because the steps before it landed and the failing
+  arm itself may have mutated before reporting. Only a failure AT the check (an
+  invalid index, nothing to undo) leaves the dirty bit alone. Such a failure
+  carries the code `HISTORY_STEP_FAILED` with `history_step` (step N of M, a
+  single step reporting 1 of 1) and the `reversed_sections` that landed (#576 C4);
+  the frontend marks the project dirty on that code, and takes the SpeleoDB bits
+  from the answer's `remote_link` (#576 D22) instead of mirroring them. A single
+  undo or redo whose body crashed (`INTERNAL_ERROR`) is treated as having changed
+  the project too - the step may have half-run - and also marks it dirty (#576 C4);
+  a crashed jump (`undo_to` / `redo_to`) reports no failed step and keeps the
+  jump's rule. A crashed mutation still carries the link bits as the crash left
+  them (#576 RV7a-2): a single undo stamps the link before its geometry reconcile.
 - **Click button while open**: performs single undo/redo, refreshes the list, stays open
 - **Keyboard**: Arrow keys navigate, Enter selects, Escape closes
 - Actions are queued and processed sequentially (`actionQueueRef`)

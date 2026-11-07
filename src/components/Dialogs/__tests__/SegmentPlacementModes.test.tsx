@@ -9,10 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { SegmentPlacementModes, type SegmentPlacementModesProps } from '../SegmentPlacementModes';
 
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys());
 
 const baseProps = (overrides: Partial<SegmentPlacementModesProps> = {}): SegmentPlacementModesProps => ({
   segmentSkippedSuggestion: null,

@@ -185,7 +185,8 @@ test.describe('DMP Interrupted Session', () => {
     // Manual placing can auto-start map placement and close the dialog immediately.
     // If that happens, Esc re-opens the wizard with cancel controls.
     const manualPlacing = page.getByTestId('wizard-manual-placing');
-    await page.waitForTimeout(300);
+    const placementIndicator = page.getByTestId('placement-mode-indicator');
+    await expect(manualPlacing.or(placementIndicator).filter({ visible: true }).first()).toBeVisible({ timeout: 15000 });
     if (!(await manualPlacing.isVisible())) {
       await page.keyboard.press('Escape');
     }

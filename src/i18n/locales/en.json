@@ -4,7 +4,8 @@
       "wizardMapResize": "Resize map panel"
     },
     "toast": {
-      "dismiss": "Dismiss notification: {{message}}"
+      "dismiss": "Dismiss notification: {{message}}",
+      "action": "{{action}}: {{message}}"
     },
     "actions": {
       "add": "Add",
@@ -74,6 +75,7 @@
     "categoryHeader": "{{category}} Settings",
     "resetToDefaults": "Reset to Defaults",
     "sidebar": {
+      "hasErrors": "Has validation errors",
       "ariaLabel": "Settings categories",
       "general": "General",
       "appearance": "Appearance",
@@ -773,6 +775,13 @@
         }
       },
       "placementSuggestion": {
+        "groups": {
+          "weights": "Scoring Weights",
+          "sigma": "Scoring Sensitivity (Sigma)",
+          "thresholds": "Score Thresholds",
+          "cutoffs": "Hard Cutoffs",
+          "limits": "Limits"
+        },
         "azimuthWeight": {
           "label": "Azimuth weight",
           "help": "Weight for azimuth score component (0\u20131)",
@@ -898,6 +907,7 @@
         "error": "Failed to reload config: {{error}}"
       },
       "validation": {
+        "placementSigma": "Placement suggestion sigma values must be positive",
         "logSize": "Log directory size must be between 1 and 10000 MB",
         "sectionsPanel": "Sections panel width must be between {{min}} and {{max}}",
         "detailPanel": "Detail panel width must be between {{min}} and {{max}}",
@@ -1173,6 +1183,451 @@
     }
   },
   "dialogs": {
+    "sectionPreview": {
+      "empty": "Select a section to preview"
+    },
+    "gpxPlacement": {
+      "title": "GPX Import - Placement",
+      "description": "Configure zero datum placement for each track/route section. The selected station will be geo-referenced using its GPS coordinates.",
+      "table": {
+        "section": "Section",
+        "type": "Type",
+        "points": "Points",
+        "zeroDatumStation": "Zero Datum Station"
+      },
+      "types": {
+        "track": "track",
+        "route": "route"
+      },
+      "trackSegmentName": "{{name}} - Seg {{segment}}",
+      "trackFallbackName": "Track {{index}}",
+      "trackSegmentFallbackName": "Track {{index}} Seg {{segment}}",
+      "routeFallbackName": "Route {{index}}",
+      "stationOption": "Station {{index}}",
+      "stationOptionFirst": "Station {{index}} (first)",
+      "stationOptionLast": "Station {{index}} (last)",
+      "zeroDatumStationLabel": "Zero datum station for {{name}}",
+      "empty": "No track or route sections to configure.",
+      "importing": "Importing..."
+    },
+    "newProject": {
+      "title": "New Project",
+      "errors": {
+        "nameRequired": "Project name is required",
+        "createFailed": "Failed to create project",
+        "unknown": "An error occurred"
+      },
+      "saveDialogTitle": "Save Project",
+      "nameLabel": "Project Name *",
+      "namePlaceholder": "e.g., Lechuguilla Cave",
+      "locationLabel": "Location (optional)",
+      "locationPlaceholder": "e.g., Carlsbad Caverns National Park, NM",
+      "saveImmediately": "Save project file immediately",
+      "alsoPublish": "Also create on SpeleoDB after creating",
+      "creating": "Creating...",
+      "create": "Create Project"
+    },
+    "deleteProject": {
+      "titleRemote": "Delete local copy?",
+      "title": "Delete Project?",
+      "thisProject": "this project",
+      "errors": {
+        "deleteFailed": "Failed to delete project."
+      },
+      "questionRemote": "Delete the local copy of <name>{{name}}</name>?",
+      "question": "Permanently delete <name>{{name}}</name>?",
+      "localFile": "This removes the local file <path>{{path}}</path> from disk.",
+      "remoteNote": "The project stays on SpeleoDB and can be downloaded again, but any local changes not yet pushed to SpeleoDB will be lost.",
+      "cannotUndo": "It cannot be undone.",
+      "deleting": "Deleting...",
+      "confirmRemote": "Delete local copy",
+      "confirm": "Delete Project"
+    },
+    "splitSection": {
+      "defaultNameA": "Section-A",
+      "defaultNameB": "Section-B",
+      "title": "Delete Shot & Split Section",
+      "errors": {
+        "splitSection": "Failed to split section"
+      },
+      "intro": "Deleting this shot will split the section into two. Name the resulting sections:",
+      "nameA": "Section A name (first half)",
+      "nameB": "Section B name (second half)",
+      "splitting": "Splitting...",
+      "confirm": "Delete & Split"
+    },
+    "deleteShotImpact": {
+      "defaultTitle": "This deletion will update station relationships:",
+      "removedMerges": "Removed merges",
+      "removedClosures": "Removed closures",
+      "replacementMerges": "Replacement merges",
+      "replacementClosures": "Replacement closures",
+      "closuresToMerges": "Closures becoming merges",
+      "mergeRewireSkipped": "Some merge connectivity could not be preserved (only same-section candidates).",
+      "closureRewireSkipped": "Some closures could not be replaced (no valid replacement or duplicate)."
+    },
+    "deleteShotChoice": {
+      "title": "Delete Shot",
+      "errors": {
+        "loadImpactsFailed": "Failed to load shot impacts",
+        "deleteShot": "Failed to delete shot"
+      },
+      "intro": "This shot is in the middle of the section. Choose whether to split the section or shift geometry.",
+      "shiftUnavailable": "Shift Geometry is not available for this shot.",
+      "impactTitle": "If you choose Shift Geometry, these relationships will update:",
+      "split": "Split Section",
+      "deleting": "Deleting...",
+      "shift": "Shift Geometry"
+    },
+    "bulkDelete": {
+      "title": "Delete Shots",
+      "summaryRange": "Delete {{count}} shots (stations {{from}}-{{to}} in {{section}}).",
+      "summary": "Delete {{count}} shots.",
+      "sectionFallback": "Section {{id}}",
+      "defaultSplitNameA": "Section A",
+      "defaultSplitNameB": "Section B",
+      "errors": {
+        "loadImpactFailed": "Failed to load deletion impact",
+        "splitSection": "Failed to split section",
+        "deleteShots": "Failed to delete shots"
+      },
+      "interiorIntro": "These shots are in the middle of the section. Split keeps both ends in place; closing the gap shifts the downstream survey. The relationship changes below cover closing the gap - the split keeps the stations at each end and their connections.",
+      "splitNameA": "Section A name (before the range)",
+      "splitNameB": "Section B name (after the range)",
+      "anchoredHeading": "Deleting these shots will remove anchored data.",
+      "zeroDatums": "Zero datums (anchor the survey's real-world position) on {{stations}}.",
+      "stationComments": "Station comments on {{stations}}.",
+      "gapCommentsInterior": "Closing the gap also removes comments on {{stations}} (splitting keeps them).",
+      "undoHint": "You can undo to restore them.",
+      "shiftUnavailable": "Closing the gap isn't available for this range.",
+      "blockingDatum": "Blocking zero datum on {{stations}}.",
+      "edgeBlocked": "This range can only be removed by closing the gap, so it can't be deleted here. Remove the blocking zero datum or loop closure first, delete the shots one at a time, or delete the whole section.",
+      "impactTitle": "Deleting these shots will update station relationships:",
+      "working": "Working…",
+      "split": "Split into Two Sections",
+      "deleting": "Deleting…",
+      "closeGapDelete": "Close Gap & Delete",
+      "deleteShots": "Delete Shots"
+    },
+    "corruptionRecovery": {
+      "title": "File Corruption Detected",
+      "defaultError": "Database integrity check failed.",
+      "backupKind": {
+        "interruptedSave": "Interrupted save",
+        "preRestoreNumbered": "Your file before restore {{number}}",
+        "preRestore": "Your file before an earlier restore",
+        "backup": "Backup"
+      },
+      "results": {
+        "repairSucceeded": "Repair Succeeded",
+        "repairIncomplete": "Repair Incomplete",
+        "repairFailed": "Repair Failed",
+        "noBackups": "No Backups Found",
+        "noBackupsMessage": "No backup files were found alongside this project.",
+        "error": "Error",
+        "restoreSucceeded": "Restore Succeeded",
+        "restoreFailed": "Restore Failed",
+        "dataExported": "Data Exported",
+        "salvageFailed": "Salvage Failed"
+      },
+      "salvage": {
+        "saveTitle": "Save Salvaged Data",
+        "sections": "{{count}} section(s)",
+        "shots": "{{count}} shot(s)",
+        "merges": "{{count}} merge(s)",
+        "noData": "no recoverable data",
+        "savedTo": "Saved to {{path}}\n\nRecovered: {{summary}}",
+        "warnings": "Warnings:\n{{list}}"
+      },
+      "busy": {
+        "repairing": "Attempting repair...",
+        "listingBackups": "Scanning for backups...",
+        "restoring": "Restoring from backup...",
+        "salvaging": "Exporting salvageable data...",
+        "working": "Working..."
+      },
+      "choose": {
+        "intro": "Choose a recovery option below. A backup of the corrupt file will be created before any repair attempt.",
+        "repair": "Attempt Repair",
+        "repairHint": "Creates a backup, then runs REINDEX + VACUUM to fix common corruption issues.",
+        "restore": "Restore from Backup",
+        "restoreHint": "Replace the corrupt file with a previous backup.",
+        "salvage": "Export Salvageable Data",
+        "salvageHint": "Export whatever data can be read from the corrupt file as JSON."
+      },
+      "pick": {
+        "selectFile": "Select a file to restore:",
+        "checkedHint": "Each file was checked: it has to open, pass the database integrity check and hold a project. Files that do not are greyed out. Your current file is kept before anything is replaced.",
+        "size": "{{sizeKb}} KB · {{modifiedAt}}",
+        "cannotRestore": "Cannot be restored: {{problem}}.",
+        "notPassed": "it did not pass the checks"
+      },
+      "tryAnother": "Try Another Option",
+      "openProject": "Open Project"
+    },
+    "savePermission": {
+      "title": "Folder Access Needed",
+      "actionOpen": "open this project",
+      "actionSave": "save your changes",
+      "denied": "Stalagmight couldn't {{action}} because the system denied access to the folder.",
+      "reasonMac": "This usually happens after a macOS or app update, which can reset previously-granted folder permissions.",
+      "reasonOther": "This usually happens when the folder is read-only, is owned by another account, or is held by security software.",
+      "notCorrupted": "Your data is not corrupted.",
+      "fixHeading": "To fix it:",
+      "macStep1": "Open <hl>System Settings → Privacy & Security → Full Disk Access</hl> (or Files and Folders).",
+      "macStep2": "Enable access for <hl>Stalagmight</hl>, including the folder where your <code>.stalx</code> files live (often Downloads or Documents).",
+      "macStep3": "Restart Stalagmight and try again.",
+      "otherSteps": "Check that Stalagmight has permission to read and write the folder where your <code>.stalx</code> files are stored, then restart the app and try again.",
+      "openSettingsFailed": "Couldn't open System Settings - open it from the Apple menu, then follow the steps above.",
+      "openSettings": "Open System Settings",
+      "ok": "OK"
+    },
+    "unsavedChanges": {
+      "title": "Unsaved Changes",
+      "messageQuit": "You have unsaved changes. Quit anyway?",
+      "messageNewProject": "You have unsaved changes. Create a new project anyway?",
+      "messageOpenProject": "You have unsaved changes. Open another project anyway?",
+      "messageBack": "You have unsaved changes. Are you sure you want to go back?",
+      "messageImportAsNew": "Import as a new project?",
+      "noteImportAsNew": "Unsaved changes in {{project}} will be lost. The import continues after that.",
+      "noteQuit": "Save your changes, or discard them and quit.",
+      "note": "Your changes will be lost.",
+      "discardQuit": "Discard & Quit",
+      "discard": "Discard Changes",
+      "saveQuit": "Save & Quit"
+    },
+    "confirm": {
+      "title": {
+        "station": "Delete Station",
+        "shotSplit": "Delete Shot & Split Section",
+        "shot": "Delete Shot",
+        "lastShot": "Delete Shot & Section",
+        "section": "Delete Section",
+        "default": "Confirm"
+      },
+      "message": {
+        "station": "Deleting a station will delete all connected shots. Are you sure?",
+        "shot": "Are you sure you want to delete this shot?",
+        "lastShot": "Deleting the last shot will remove the entire section. Continue?",
+        "section": "Are you sure you want to delete this section and all its shots?",
+        "default": "Are you sure?"
+      },
+      "errors": {
+        "loadImpactsFailed": "Failed to load shot impacts",
+        "deleteShot": "Failed to delete shot",
+        "splitSection": "Failed to split section",
+        "deleteSection": "Failed to delete section",
+        "deleteFailed": "Delete failed"
+      },
+      "defaultSplitNameA": "Section A",
+      "defaultSplitNameB": "Section B",
+      "stationNote": "Note: To delete a station, delete the shots connected to it instead.",
+      "splitNameA": "Section A name (first half)",
+      "splitNameB": "Section B name (second half)",
+      "relationshipsRemoved": "The following relationships will also be removed:",
+      "stationMerges_one": "{{count}} station merge",
+      "stationMerges_other": "{{count}} station merges",
+      "loopClosures_one": "{{count}} loop closure",
+      "loopClosures_other": "{{count}} loop closures",
+      "sectionOffset": "1 section offset",
+      "stationOffsets_one": "{{count}} station offset",
+      "stationOffsets_other": "{{count}} station offsets",
+      "zeroDatums_one": "{{count}} zero datum",
+      "zeroDatums_other": "{{count}} zero datums",
+      "impactTitle": "Deleting this shot will update station relationships:",
+      "deleteAndSplit": "Delete & Split"
+    },
+    "error": {
+      "title": "Error",
+      "fallbackMessage": "An error occurred.",
+      "reportHintWithStack": "If this error persists, please report it as a bug and include the error message and stack trace above.",
+      "reportHint": "If this error persists, please report it as a bug and include this error message.",
+      "copied": "Copied!",
+      "copyFailed": "Failed",
+      "copy": "Copy to clipboard",
+      "ok": "OK"
+    },
+    "dialogWrapper": {
+      "closeDialog": "Close dialog",
+      "discardTitle": "Unsaved Changes",
+      "discardMessage": "You have unsaved changes. Are you sure you want to close?",
+      "discardNote": "Your changes will be lost.",
+      "discard": "Discard Changes"
+    },
+    "swapComments": {
+      "title": "Move comment",
+      "beingMoved": "Comment being moved:",
+      "targetHas": "Target already has a comment:",
+      "overwrite": "Overwrite",
+      "swap": "Swap"
+    },
+    "removeClosure": {
+      "title": "Remove Closure",
+      "removeFailed": "Failed to remove closure",
+      "notFound": "Station not found.",
+      "sectionFallback": "Section {{id}}",
+      "intro": "Select a closure connected to this station to remove.",
+      "empty": "No closures found.",
+      "removing": "Removing..."
+    },
+    "unmergeStations": {
+      "title": "Unmerge Stations",
+      "unmergeFailed": "Failed to unmerge stations",
+      "notFound": "Station not found.",
+      "sectionFallback": "Section {{id}}",
+      "intro": "This station is merged with multiple stations. Select one merge to remove.",
+      "empty": "No merged stations found.",
+      "unmerging": "Unmerging...",
+      "unmerge": "Unmerge"
+    },
+    "merge": {
+      "title": "Merge Stations",
+      "mergeFailed": "Failed to merge stations",
+      "sectionFallback": "Section {{id}}",
+      "stationA": "Station A:",
+      "stationB": "Station B:",
+      "merging": "Merging...",
+      "merge": "Merge"
+    },
+    "closure": {
+      "title": "Create Loop Closure",
+      "createFailed": "Failed to create loop closure",
+      "sectionFallback": "Section {{id}}",
+      "stationA": "Station A:",
+      "stationB": "Station B:",
+      "error": "Error:",
+      "pathLength": "Path length:",
+      "misclosureDistance": "Misclosure distance:",
+      "horizontalMisclosure": "Horizontal misclosure:",
+      "verticalMisclosure": "Vertical misclosure:",
+      "creating": "Creating...",
+      "create": "Create Closure"
+    },
+    "reverseSection": {
+      "title": "Reverse Section",
+      "titleMulti": "Reverse {{count}} Sections",
+      "confirm": "Reverse",
+      "confirmMulti": "Reverse {{count}} Sections",
+      "editingDisabled": "Editing is disabled in the current view.",
+      "reverseFailed": "Failed to reverse section",
+      "intro": "Renumber this section end-to-end, so the last station becomes station 0.",
+      "introMulti": "Renumber {{count}} sections end-to-end, so each section's last station becomes station 0.",
+      "sectionFallback": "Section {{id}}",
+      "stationMapping": "(station 0 → {{last}}, station {{last}} → 0)",
+      "caveDoesNotMove": "The cave does not move: every station keeps its position on the map, and merges, loop closures, zero datums and comments stay on the station they were set on. Only the numbering direction changes.",
+      "swapLeftRight": "Swap left/right passage measurements",
+      "swapLeftRightHint": "Tick this if LRUD was recorded facing along the survey direction, so what was on the left is now on the right. Leave it unticked to keep the values as recorded.",
+      "stale": "One or more of the selected sections no longer exists. Close this and pick the sections again."
+    },
+    "sectionAdjust": {
+      "title": "Adjust Section Position",
+      "notFound": "Section not found",
+      "adjustFailed": "Failed to adjust section position",
+      "adjusting": "Adjusting: <blob>{{name}}</blob>",
+      "sectionFallback": "Section {{id}}",
+      "connectedNote_one": "Merged with {{count}} other - all {{total}} sections move together so the merge stays aligned.",
+      "connectedNote_other": "Merged with {{count}} others - all {{total}} sections move together so the merge stays aligned.",
+      "dx": "dx (meters)",
+      "dy": "dy (meters)",
+      "positiveEast": "Positive = East",
+      "positiveNorth": "Positive = North",
+      "previewApplied": "Preview applied. Press Apply to confirm or Cancel to revert.",
+      "applying": "Applying..."
+    },
+    "insertStation": {
+      "editingDisabled": "Editing is disabled in the current view.",
+      "insertFailed": "Failed to insert station",
+      "titleIn": "Insert Station in {{sectionName}}",
+      "title": "Insert Station",
+      "intro": "Splits the shot into two, adding a station at the given distance from its start.",
+      "distanceMeters": "Distance from start (meters)",
+      "distancePercent": "Distance from start (%)",
+      "preview": "Shot A: {{a}} m / Shot B: {{b}} m",
+      "previewTotal": "Total shot length: {{total}} m (both sides must be at least {{min}} m)",
+      "inserting": "Inserting...",
+      "confirm": "Insert Station"
+    },
+    "editStation": {
+      "title": "Edit Station",
+      "notFound": "Station not found",
+      "invalidGps": "Please enter valid GPS coordinates",
+      "setZeroDatumFailed": "Failed to set zero datum",
+      "removeZeroDatumFailed": "Failed to remove zero datum",
+      "updateZeroDatumFailed": "Failed to update zero datum",
+      "updateCommentFailed": "Failed to update comment",
+      "genericError": "An error occurred",
+      "coordinatesNote": "Station coordinates are calculated from shots and cannot be edited directly.",
+      "id": "ID",
+      "x": "X",
+      "y": "Y",
+      "sectionFallback": "Section {{id}}",
+      "metersValue": "{{value}} m",
+      "mergedWith": "Merged with:",
+      "comment": "Comment",
+      "commentPlaceholder": "Add a comment...",
+      "setZeroDatum": "Set as Zero Datum",
+      "gps": "GPS:",
+      "gpsParsed": "Lat: {{lat}}, Lon: {{lon}}",
+      "gpsHelp": "GPS coordinates for this station. Other stations will have their GPS calculated relative to this datum.",
+      "saving": "Saving..."
+    },
+    "drawShot": {
+      "titlePrepend": "Add Shot Before Section",
+      "titleAppend": "Add Shot After Station #{{index}}",
+      "title": "Draw New Shot",
+      "sectionFallback": "Section {{id}}",
+      "lengthNonNegative": "Length must be 0 or greater",
+      "lengthPositive": "Length must be greater than 0",
+      "azimuthInRequired": "Azimuth In is required",
+      "azimuthRange": "Azimuth must be between -360 and 360",
+      "createFailed": "Failed to create shot",
+      "from": "From:",
+      "azimuthIn": "Azimuth In (degrees)",
+      "azimuthOut": "Azimuth Out (degrees)",
+      "sameAsIn": "Same as in",
+      "reverseDirection": "Reverse shot direction",
+      "reverseDirectionHint": "(you measured this leg from the far end: swaps both ends of the shot)",
+      "length": "Length (meters)",
+      "lengthPlaceholder": "Shot distance",
+      "depthIn": "Depth In (meters)",
+      "depthOut": "Depth Out (meters)",
+      "lrudOptional": "LRUD (optional)",
+      "left": "Left",
+      "right": "Right",
+      "up": "Up",
+      "down": "Down",
+      "shotKind": "Shot kind",
+      "shotKindHint": "(a jump is swum; a reference is a survey tie)",
+      "creating": "Creating...",
+      "create": "Create Shot"
+    },
+    "editShot": {
+      "title": "Edit Shot",
+      "notFound": "Shot not found",
+      "lengthPositive": "Length must be greater than 0",
+      "azimuthInRange": "Azimuth In must be between -360 and 360",
+      "azimuthOutRange": "Azimuth Out must be between -360 and 360",
+      "updateFailed": "Failed to update shot",
+      "summary": "Section: {{section}} | Shot ID: {{shotId}}",
+      "sectionFallback": "Section {{id}}",
+      "frozen": "Geometry fields are locked - this shot is part of an adjusted survey network.",
+      "azimuthIn": "Azimuth In (°)",
+      "azimuthOut": "Azimuth Out (°)",
+      "length": "Length (m)",
+      "depthIn": "Depth In (m)",
+      "depthOut": "Depth Out (m)",
+      "pitchIn": "Pitch In (°)",
+      "pitchOut": "Pitch Out (°)",
+      "optional": "Optional",
+      "lrud": "LRUD (m)",
+      "leftShort": "L",
+      "rightShort": "R",
+      "upShort": "U",
+      "downShort": "D",
+      "comment": "Comment",
+      "commentPlaceholder": "Optional comment",
+      "saving": "Saving..."
+    },
     "unrecognisedShotKind": {
       "title": "Unreadable shot types",
       "body": "{{count}} shot(s) in this project store a type this version does not recognise - from a file written by a newer build, a hand-edit, or corruption. They have been treated as reference ties for now, which keeps them OUT of gas, penetration and the ruler, so nothing can route through a leg we could not read. Tell us what they really are, or leave them as they stand.",
@@ -1209,6 +1664,24 @@
         "aria": "Entrance elevation",
         "notRecorded": "Not recorded",
         "readOnlyReason": "Entrance elevation cannot be edited in this read-only view."
+      },
+      "northReference": {
+        "label": "Default north reference",
+        "help": "What the azimuths of a section that declares no north of its own are measured against. For magnetic or grid north, enter the correction that turns them to true north (degrees, east positive).",
+        "options": {
+          "none": "Not recorded",
+          "magnetic": "Magnetic north",
+          "true": "True north",
+          "grid": "Grid north"
+        },
+        "correctionAria": "Correction to true north, in degrees east",
+        "correctionUnit": "° east",
+        "blocked": {
+          "newerFile": "A newer version of Stalagmight saved this project: update Stalagmight to change the north reference.",
+          "lock": "This project is open read-only: acquire the lock to change the north reference.",
+          "workspace": "The north reference turns the survey: switch to Survey to change it.",
+          "closures": "Switch to the Raw Data View to change the north reference."
+        }
       }
     },
     "unsaved": {
@@ -1234,6 +1707,8 @@
       "emptyTitle": "Nothing imported",
       "deferredSaveTitle": "Import Warning",
       "unknown": "Unknown error during import",
+      "cancelled": "Import cancelled. Nothing was imported.",
+      "cancelling": "Cancelling...",
       "transportFallback": "Failed to import the {{format}} file",
       "wallsMissingFiles_one": "No surveys were imported: {{count}} referenced .SRV file was not found next to the project. Put the survey files in the same folder as the .wpj, or import a .srv file directly.",
       "wallsMissingFiles_other": "No surveys were imported: {{count}} referenced .SRV files were not found next to the project. Put the survey files in the same folder as the .wpj, or import a .srv file directly.",
@@ -1252,12 +1727,35 @@
       "unanchoredInfoShort_one": "{{count}} section unanchored",
       "unanchoredInfoShort_other": "{{count}} sections unanchored",
       "zeroDatumCreated": "Zero datum created on \"{{section}}\"",
+      "orphanLookupFailed": "Imported, but unattached sections could not be matched: {{reason}}",
       "toast": "{{source}} import: {{summary}}",
       "viewDetails": "View details",
       "hideDetails": "Hide details",
       "continue": "Continue to map"
     },
     "mergeProjects": {
+      "title": "Merge Projects",
+      "defaultName": "merged_project",
+      "defaultNameFrom": "{{name}}_merged",
+      "lengthKm": "{{length}} km",
+      "lengthM": "{{length}} m",
+      "errors": {
+        "nameRequired": "Please enter a name for the merged project",
+        "noneSelected": "No projects selected",
+        "failed": "Failed to merge projects"
+      },
+      "saveDialogTitle": "Save Merged Project",
+      "projectsHeading": "Projects to merge ({{count}})",
+      "projectStats": "({{count}} sections, {{length}})",
+      "totalSections": "Total sections:",
+      "totalLength": "Total length:",
+      "nameLabel": "Merged project name",
+      "namePlaceholder": "Enter project name",
+      "archiveOriginals": "Archive original project files (rename to .stalx.archived)",
+      "openAfterMerge": "Open merged project after creation",
+      "info": "Merging will combine all sections from the selected projects into a new project file. Section IDs will be renumbered to avoid conflicts. Zero datums will be preserved.",
+      "merging": "Merging...",
+      "merge": "Merge Projects",
       "warningToast": "Merge complete - {{message}}"
     },
     "importBlocked": {
@@ -1281,9 +1779,12 @@
       "title": "Import as new project?",
       "body": "{{fileName}} will be converted into a new Stalagmight project. Your original file is never modified.",
       "closeNotice": "{{projectName}} will be closed.",
-      "confirm": "Close and import"
+      "confirm": "Close and import",
+      "parsing": "Reading {{fileName}}..."
     },
     "newProjectForImport": {
+      "saveDialogTitle": "Save Project",
+      "fallbackFileName": "Project",
       "title": "Create Project for Import",
       "importingFrom": {
         "dmp": "Importing from DMP file:",
@@ -1390,6 +1891,11 @@
       "importing": "Importing..."
     },
     "dmpNewImport": {
+      "importingTag": "(importing)",
+      "importingShort": "(imp)",
+      "mergeOption": "stn {{importStation}} → {{target}} stn {{existingStation}}",
+      "stn": "stn {{index}}",
+      "sectionFallbackName": "Section {{id}}",
       "title": "Connection Wizard",
       "progress": "{{placed}} of {{total}} sections placed",
       "skipped": "{{count}} skipped",
@@ -1404,7 +1910,8 @@
       "hideAlternatives": "Hide alternatives",
       "confirm": "Confirm",
       "skip": "Skip",
-      "noSuggestions": "No more automatic connections found.",
+      "suggestionsFailed": "Placement suggestions could not be computed: {{reason}}",
+      "placeManually": "Place manually",
       "handoffMessage": "{{count}} sections will be configured manually.",
       "placing": "Placing {{count}} sections...",
       "allPlaced": "All sections placed!",
@@ -1424,6 +1931,12 @@
       "removeImportedFailed": "Could not remove the imported sections.",
       "removeImportedSaveFailed": "The sections were removed, but the project could not be saved, so the file on disk still contains them. Try again, or save the project from the main window.",
       "removeImportedWrongProject": "Could not remove the imported sections: a different project is now open. Close this wizard and remove them from the project they were imported into.",
+      "importWrongProject": "Nothing was imported: a different project is now open than the one this import started in. Close this wizard and import the file again.",
+      "anchorImportFailed": "Failed to import zero datum section",
+      "importFailed": "Import failed",
+      "lateImportFailed": "Late import failed",
+      "segmentImportFailed": "Segment import failed",
+      "segmentTargetUnresolved": "Segment import failed: unresolved relative placement target",
       "mergeStation": "Merge at",
       "sectionSettings": "Section Settings",
       "backWizard": "Go Back?",
@@ -1438,6 +1951,7 @@
       "overlapMode_keepBoth": "Keep both (reference)",
       "noOverlapShots": "No overlapping shots detected for this suggestion.",
       "manualPlacing": {
+        "suggestionTarget": "→ {{section}} stn {{station}}",
         "segmentHeader": "Segment {{current}} of {{total}}",
         "sections": "Sections",
         "anchorStation": "Anchor: {{section}} stn {{station}}",
@@ -1462,7 +1976,9 @@
         "noSections": "No existing sections available",
         "doNotPlace": "Do not place",
         "doNotPlaceDescription": "Skip this segment entirely - its sections will not be imported",
-        "next": "Next"
+        "next": "Next",
+        "cannotPlaceOnMap": "This segment cannot be placed on the map: its anchor section is not in the DMP file. Click a station in the preview to set another anchor, or choose Do not place.",
+        "cannotPlaceOnMapNoPreview": "This segment cannot be placed on the map: its anchor section is not in the DMP file. Choose Do not place."
       }
     },
     "compassImport": {
@@ -1550,6 +2066,7 @@
       "checkingDuplicates": "Checking for duplicates..."
     },
     "gpxSelection": {
+      "elevationValue": "{{value}}m",
       "title": "Import GPX File",
       "stats": {
         "waypoints": "Waypoints",
@@ -1593,6 +2110,9 @@
       "depth": "Depth: {{range}}",
       "duplicateHashWarning": "File may have been imported before (same hash detected)",
       "duplicateSectionsWarning": "{{duplicates}} of {{total}} sections already imported (auto-deselected)",
+      "fileCheckFailed": "Could not check whether this file was imported before ({{reason}}).",
+      "sectionCheckFailed": "Could not check for sections already in the project ({{reason}}) - duplicates are not flagged.",
+      "parseWarningsTitle": "Not all of this file could be read:",
       "defaultValues": "Default Values (apply to all sections)",
       "surveyorLabel": "Surveyor",
       "surveyorPlaceholder": "Enter surveyor name...",
@@ -1651,6 +2171,7 @@
       "skipAll": "Skip All"
     },
     "zeroDatumSelection": {
+      "noShots": "No shots",
       "title": "Select Zero Datum Section",
       "subtitle": "A zero datum ties one station to a real-world GPS position, so this section will establish the GPS reference point for this project. All other sections will be positioned relative to this one.",
       "helpTooltip": "The zero datum is the one station whose GPS coordinates you supply directly. Every other station's position is computed relative to it, so its section becomes the anchor for the whole survey.",
@@ -1660,6 +2181,8 @@
       "totalLength": "{{length}} total"
     },
     "zeroDatumConfig": {
+      "stationOption": "Station {{index}}",
+      "gpsParsed": "Lat: {{lat}}, Lon: {{lon}}",
       "title": "Configure Zero Datum",
       "zeroDatumHeading": "Zero Datum Location",
       "zeroDatumDescription": "Choose which station is the fixed reference point (zero datum) and enter its GPS coordinates.",
@@ -1681,21 +2204,82 @@
       "shotsHeading": "Shot Data"
     },
     "export": {
+      "title": "Export",
+      "phases": {
+        "preparingExport": "Preparing export...",
+        "generating": "Generating...",
+        "writingFile": "Writing file...",
+        "complete": "Export complete",
+        "preparing": "Preparing..."
+      },
+      "exportType": "Export Type",
+      "surveyData": "Survey Data",
+      "mapImage": "Map Image",
+      "format": "Format",
+      "resolution": "Resolution",
+      "dpi": {
+        "low": "Low (72 DPI)",
+        "medium": "Medium (150 DPI)",
+        "high": "High (300 DPI)",
+        "print": "Print (600 DPI)"
+      },
+      "lineWeightThreshold": "Line-weight threshold",
+      "lineWeightHelp": "Segments connected to ≥ this many other segments via reference shots are drawn thick.",
+      "labelsOptions": "Comments & Labels Options",
+      "labels": {
+        "sectionNames": "Section names",
+        "stationLabels": "Station labels",
+        "stationComments": "Station comments",
+        "shotComments": "Shot comments",
+        "shotData": "Shot data",
+        "penetration": "Penetration-distance labels"
+      },
+      "color": "Color",
+      "colorModes": {
+        "none": "None (monochrome)",
+        "section": "By section",
+        "depth": "By depth",
+        "distance": "By distance"
+      },
+      "colorSvgNote": "SVG export is always monochrome. Choose PNG or PDF to color the map.",
+      "colorNote": "Depth / distance gradients match the survey map. Color applies to PNG / PDF.",
+      "preview": "Preview",
+      "exporting": "Exporting...",
+      "previewRendering": "Rendering preview...",
+      "previewNoProject": "No project loaded",
+      "previewFailed": "Preview failed: {{error}}",
       "failed": "Export failed - try a different folder or file name",
       "notes": {
         "azimuth-rotated-to-true": "Bearings rotated to true north for Ariane",
         "azimuth-mixed-unresolved": "Some sections have no declination - Ariane will re-correct all",
-        "gps-anchors-not-written": "Some GPS anchors are not at an entrance and were not written to the file"
+        "gps-anchors-not-written": "Some GPS anchors are not at an entrance and were not written to the file",
+        "xml-chars-replaced": "Some names or comments held characters Ariane cannot read - they were replaced with � in the file"
       }
     },
     "tmlUnanchoredWarning": {
+      "sectionLabel": "{{name}} (#{{id}})",
       "titleAllUnanchored": "No section is connected to a zero datum",
       "titlePartial": "Some sections aren't connected to a zero datum",
-      "bodyAllUnanchored": "No section in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to anchor the survey, or continue to export without georeferencing.",
-      "bodyPartial_one": "{{count}} of {{total}} sections is not connected to a zero datum and will export without georeferencing. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect it, or continue to export as-is.",
-      "bodyPartial_other": "{{count}} of {{total}} sections are not connected to a zero datum and will export without georeferencing. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect them, or continue to export as-is.",
+      "bodyAllUnanchored": "No section in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"{{menuItem}}\" to anchor the survey, or continue to export without georeferencing.",
+      "bodyPartial_one": "{{count}} of {{total}} sections is not connected to a zero datum and will export without georeferencing. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"{{menuItem}}\" to connect it, or continue to export as-is.",
+      "bodyPartial_other": "{{count}} of {{total}} sections are not connected to a zero datum and will export without georeferencing. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"{{menuItem}}\" to connect them, or continue to export as-is.",
       "listHeading": "Sections without a zero datum connection",
       "sectionFallbackName": "Section {{id}}"
+    },
+    "overwriteConfirm": {
+      "title": "Overwrite File?",
+      "saving": "Saving...",
+      "overwrite": "Overwrite",
+      "message": "A file named <name>{{fileName}}</name> already exists. Do you want to replace it?",
+      "messageUnknown": "Stalagmight could not check whether a file named <name>{{fileName}}</name> already exists. If it does, saving will replace it.",
+      "warning": "This will overwrite the existing file. This action cannot be undone.",
+      "warningUnknown": "Any existing file with this name will be overwritten. This action cannot be undone."
+    },
+    "overwriteRewritten": {
+      "title": "Replace File?",
+      "message": "This file is saved as {{fileName}}, because this format needs the {{extension}} extension. A file with that name already exists. Replacing it cannot be undone.",
+      "messageUnknown": "This file is saved as {{fileName}}, because this format needs the {{extension}} extension. Stalagmight could not check whether a file with that name already exists; if one does, it will be replaced. This cannot be undone.",
+      "replace": "Replace"
     },
     "about": {
       "title": "About Stalagmight",
@@ -1818,6 +2402,12 @@
       "clipped_other": "{{count}} outside the table were dropped",
       "skipped_one": "{{count}} skipped (read-only or invalid)",
       "skipped_other": "{{count}} skipped (read-only or invalid)"
+    },
+    "fillReport": {
+      "written_one": "Filled {{count}} cell",
+      "written_other": "Filled {{count}} cells",
+      "skipped_one": "{{count}} skipped (invalid)",
+      "skipped_other": "{{count}} skipped (invalid)"
     },
     "validation": {
       "nonPositiveLength": "Length must be greater than 0",
@@ -2342,6 +2932,14 @@
   },
   "map": {
     "fitToViewTitle": "Fit to view",
+    "contextLost": {
+      "reload": "Reload map"
+    },
+    "renderFatal": {
+      "labels": "Map labels unavailable (font failed to load)",
+      "measurePath": "Measured-path highlight unavailable (GPU)",
+      "survey": "Survey rendering unavailable (WebGL2/GPU)"
+    },
     "webgl2Unavailable": {
       "title": "This map needs WebGL2",
       "body": "Your graphics driver did not provide WebGL2, so the map cannot be drawn. Updating the driver may help. The rest of the app still works."
@@ -2373,7 +2971,9 @@
       "aria": "Distance scale from {{min}} (near) to {{max}} (far)",
       "fromEntrance": "from entrance",
       "fromStation": "from {{id}}",
-      "computing": "Distance: computing…"
+      "computing": "Distance: computing…",
+      "originRemoved": "The distance origin's station was deleted, so distances are measured from the entrance again.",
+      "computeFailed": "Couldn't compute distances; the map shows its usual colors."
     },
     "gasLegend": {
       "title": "Gas reach",
@@ -2384,6 +2984,7 @@
       "key": {
         "beyondRange": "Beyond gas range",
         "stageDrop": "Stage drop",
+        "stageDropNotReached": "Stage drop not reached",
         "finalTurn": "Turnaround",
         "route": "Planned route",
         "routeJump": "Jump leg (swum shortcut)",
@@ -2407,6 +3008,7 @@
       "direct": "Direct",
       "alongLine": "Along line",
       "noPath": "No connected path",
+      "pathFailed": "Couldn't compute the path",
       "depthDiff": "Depth diff"
     },
     "move": {
@@ -2416,6 +3018,10 @@
         "shot": "Click a shot to pick it up."
       },
       "dropInstructions": "Click to drop it here. Esc to cancel.",
+      "cancelled": "Move cancelled.",
+      "cancelledOtherChange": "Move cancelled. Your other change was not applied; try it again.",
+      "cancelledSurveyChanged": "Move cancelled because the survey changed.",
+      "cancelledReadOnly": "Move cancelled because the map is now read-only.",
       "station": "Station",
       "segment": "Segment",
       "shot": "Shot"
@@ -2481,6 +3087,13 @@
     }
   },
   "editSection": {
+    "loadImpactsFailed": "Failed to load shot impacts",
+    "updateSectionFailed": "Failed to update section",
+    "deleteShotFailed": "Failed to delete shot",
+    "updateShotFailed": "Failed to update shot",
+    "createShotFailed": "Failed to create shot",
+    "reverseTitle": "Renumber this section end-to-end (the cave does not move)",
+    "sectionFallback": "Section {{id}}",
     "title": "Edit Section",
     "notFound": "Section not found",
     "midShot": "This is a mid-section shot.",
@@ -2507,7 +3120,8 @@
       "emptySections": "Not imported - no shots left to import: {{names}}",
       "sectionIncomplete_one": "\"{{name}}\": 1 shot is missing required values. Fill it in or clear the row.",
       "sectionIncomplete_other": "\"{{name}}\": {{count}} shots are missing required values. Fill them in or clear the rows.",
-      "placementHint": "Placement: Click to place section. Esc for more placement options and metadata changes."
+      "placementHint": "Placement: Click to place section. Esc for more placement options and metadata changes.",
+      "orphanLookupFailed": "Imported, but unattached sections could not be matched: {{reason}}"
     }
   },
   "banners": {
@@ -2520,10 +3134,49 @@
       "saveNow": "Save now",
       "dismiss": "Dismiss"
     },
+    "internalError": {
+      "lead": "Internal error - save your work and restart Stalagmight.",
+      "detail": "The app recovered and saving still works, but undo, redo and SpeleoDB pushes may be refused until you restart."
+    },
     "historyDiscarded": {
       "lead": "Edit history could not be read and was discarded.",
       "detail": "Your survey data is unaffected. The next save replaces the unreadable history.",
       "dismiss": "Dismiss"
+    },
+    "loadRepairs": {
+      "lead": "Some stored values could not be used and were changed when this project opened: {{items}}.",
+      "detail": "Saving makes the change permanent. Details are in the log.",
+      "dismiss": "Dismiss",
+      "items": {
+        "shots_one": "{{count}} shot with an invalid value reset",
+        "shots_other": "{{count}} shots with invalid values reset",
+        "sectionOffsets_one": "{{count}} section move reset",
+        "sectionOffsets_other": "{{count}} section moves reset",
+        "stationOffsets_one": "{{count}} station move reset",
+        "stationOffsets_other": "{{count}} station moves reset",
+        "gpsPoints_one": "{{count}} GPS tie point dropped",
+        "gpsPoints_other": "{{count}} GPS tie points dropped"
+      }
+    },
+    "newerFile": {
+      "lead": "This project was saved by a newer version of Stalagmight. Update Stalagmight to edit it.",
+      "detail": "It is open read-only: you can view and export it, but changes and saves are off so this version cannot drop what the newer one stored.",
+      "saveRefused": "Not saved: this project was saved by a newer version of Stalagmight."
+    },
+    "speleoLinkUnreadable": {
+      "lead": "This project's SpeleoDB link could not be read, so it opened as a local project.",
+      "detail": "Saving over this file is turned off so the link is not lost. Use Save As to keep your changes in another file."
+    },
+    "settingsUnreadable": {
+      "lead": "Some stored project settings could not be read: {{names}}.",
+      "detail": "Saving is off so the file keeps its stored values - defaults are in use for now. To save again, set them in Project Settings and save that dialog; you can still view and export.",
+      "reopenNote": "Not all of them can be set there: reopen the project to try again.",
+      "saveRefused": "Not saved: stored project settings could not be read.",
+      "names": {
+        "validation": "validation thresholds",
+        "surface_elevation": "entrance elevation",
+        "default_azimuth_reference": "default north reference"
+      }
     }
   },
   "integrityRepair": {
@@ -2532,12 +3185,25 @@
       "issue_other": "issues",
       "needWord_one": "needs",
       "needWord_other": "need",
-      "partial": "Fixed {{fixed}} {{issueWord}}; {{remaining}} {{needWord}} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.",
+      "partial": "Fixed {{fixed}} {{issueWord}}; {{remaining}} {{needWord}} manual attention (recompute or remove drifted loop closures, fix non-finite shots, correct GPS tie points with impossible values). Save to keep the fix.",
       "full": "Repaired {{fixed}} {{issueWord}}. Save to keep the fix.",
       "failed": "Repair failed - nothing was changed. Please try again."
+    },
+    "blocked": {
+      "newerFile": "Update Stalagmight to repair",
+      "lock": "Acquire the lock to repair",
+      "workspace": "Switch to Survey to repair",
+      "closures": "Switch to the Raw Data View to repair"
     }
   },
   "debugDialog": {
+    "title": "Debug Logs",
+    "refresh": "Refresh",
+    "frontendBadge": "FE",
+    "filterAll": "All",
+    "entries": "{{shown}}/{{total}} entries",
+    "empty": "No log entries yet.",
+    "noMatches": "No entries match this filter.",
     "toasts": {
       "refreshed": "Logs refreshed",
       "copied": "Logs copied",
@@ -2546,6 +3212,9 @@
   },
   "editGate": {
     "readOnlyNotice": "This project is open read-only - click Start editing to take the write lock.",
+    "newerFileNotice": "Read-only: a newer version of Stalagmight saved this project.",
+    "workspaceReadOnlyNotice": "Plan and Export are read-only - switch to Survey to edit the survey.",
+    "adoptionInProgressNotice": "This project is being handed over to SpeleoDB - you can edit it once the upload has finished.",
     "commandFailed": "The change could not be applied."
   },
   "importGate": {
@@ -2763,7 +3432,7 @@
       "needsStages": "Add {{count}} stage cylinder(s) to your rig to use this strategy.",
       "stageReserveLabel": "Stage reserve",
       "safetyMarginLabel": "Safety margin",
-      "safetyMarginHint": "Extra gas held back from every cylinder on top of thirds - a conservatism knob for teams of two or specific caves.",
+      "safetyMarginHint": "Extra pressure held back in every cylinder on top of thirds: each tank turns this many bar earlier on its gauge. A conservatism knob for teams of two or specific caves.",
       "advancedTitle": "Advanced gas strategy",
       "advancedBody": "Use only if you're trained to balance gas across back gas and stages.",
       "advancedConfirm": "I understand",
@@ -2814,7 +3483,9 @@
       "stageDropPressure": "Stage {{n}} drop",
       "resetDrop": "reset",
       "resetDropHint": "Move this stage drop back to its strategy-computed point.",
-      "overReserveWarning": "A drop was moved past its reserve; the plan breathes into stage reserve gas.",
+      "overReserveWarning": "A drop was moved past its reserve point: breathing the stage that far uses its reserve gas. The plan does not count that gas, so the reach stays that of the default drop.",
+      "dropNotReached": "not reached",
+      "dropNotReachedWarning": "A pinned drop is past the turnaround: the gas runs out on the way there, so the dive turns early and the stage is carried the whole dive.",
       "budget": "Turn budget",
       "maxPenetration": "Gas to farthest point",
       "maxPenetrationHint": "Gas consumed to reach the deepest in-budget station (a volume, not a distance).",
@@ -2832,6 +3503,7 @@
     "map": {
       "dropDraggableTooltip": "Stage {{n}} drop: drag or arrow-key to move; Delete to reset",
       "dropOverReserveTooltip": "Stage {{n}} drop: moved past reserve (breathing into reserve gas)",
+      "dropNotReachedTooltip": "Stage {{n}} drop: not reached - the dive turns before this pin and carries the stage",
       "dropAria": "Stage {{n}} drop point: drag or use arrow keys to move it along the route, Delete to reset",
       "finalTurnTooltip": "Turn around here",
       "scooterDropTooltip": "Scooters parked here - the passage beyond is swum",
@@ -2850,6 +3522,7 @@
       "segmentNoun_other": "segments",
       "inheritedHint": "Following the plan speed. Type a number to give this leg its own pace, or clear the cell to go back.",
       "explicitHint": "This leg flies its own pace. Clear the cell to follow the plan speed again.",
+      "nonPositiveSpeed": "Speed must be greater than zero.",
       "origin": "Origin",
       "waypointN": "WP {{n}}",
       "endpoint": "Endpoint",
@@ -2922,6 +3595,8 @@
     "discardConfirm": "Discard unsaved changes to \"{{name}}\"?",
     "staleRefs_one": "{{count}} station this plan referenced no longer exists; it has been cleared.",
     "staleRefs_other": "{{count}} stations this plan referenced no longer exist; they have been cleared.",
+    "speedsDropped_one": "{{count}} span speed in this plan was outside the range the planner can fly and was dropped; that span uses the plan speed.",
+    "speedsDropped_other": "{{count}} span speeds in this plan were outside the range the planner can fly and were dropped; those spans use the plan speed.",
     "unresolvedPins": "A route point no longer matches a station in the survey. Re-place it before saving this plan."
   },
   "planTables": {
@@ -3132,27 +3807,60 @@
     "cancel": "Cancel"
   },
   "validation": {
+    "gps": {
+      "couldNotParse": "Could not parse GPS coordinates. Supported formats: DD (48.8584, 2.2945), DMS (48°51'30\"N 2°17'40\"E), DDM (48°51.5'N 2°17.67'E), UTM (31U 448251 5411932), MGRS (31UDQ4825111932), Plus Codes (8FW4V75V+8Q), URL (Google/OSM/Bing Maps links), What3words (requires API)",
+      "dashReadAsMinus": "Read \"{{dash}}\" as a minus sign.",
+      "ddFormat": "Invalid DD format. Expected: lat, lon (e.g., 48.8584, 2.2945)",
+      "ddmFormat": "Invalid DDM format. Expected: deg°min.dec'N deg°min.dec'E (e.g., 48°51.5'N 2°17.67'E)",
+      "ddmMinutesRange": "Minutes must be between 0 and 59.99",
+      "degreesNotWhole": "Degrees must be a whole number when minutes follow.",
+      "dmsFormat": "Invalid DMS format. Expected: deg°min'sec\"N deg°min'sec\"E or deg min sec N deg min sec E (direction letters or signed degrees required)",
+      "dmsMinutesRange": "Minutes must be between 0 and 59",
+      "emptyInput": "Empty input",
+      "geoQueryNotCoordinates": "This geo: link asks the map to search for a place rather than giving the point's coordinates - paste the point's coordinates instead.",
+      "hemisphereFromText": "Took the hemisphere from \"{{text}}\" - read as {{value}}.",
+      "hemisphereLetters": "Use N or S for the latitude and E or W for the longitude.",
+      "inputTooLong": "This text is too long to be coordinates ({{length}} characters; at most {{max}}) - paste only the coordinates.",
+      "latitudeInvalid": "Latitude must be a valid number",
+      "latitudeRange": "Latitude must be between {{min}} and {{max}}",
+      "letterMissing": "One coordinate has a hemisphere letter and the other has neither a letter nor a sign - add the missing N/S or E/W.",
+      "letterReadAsText": "Read \"{{text}}\" as part of the text, not as a hemisphere.",
+      "longitudeInvalid": "Longitude must be a valid number",
+      "longitudeRange": "Longitude must be between {{min}} and {{max}}",
+      "mapUrlNoCoordinates": "Could not extract coordinates from URL. Supported: Google Maps (place name, @lat,lon, or ?q=lat,lon), OpenStreetMap (#map=zoom/lat/lon), Bing Maps (cp=lat~lon)",
+      "mgrsBandLetter": "Invalid MGRS band letter (must be C-X, excluding I and O)",
+      "mgrsDigits": "MGRS coordinates must have even length between 2 and 10 digits",
+      "mgrsFormat": "Invalid MGRS format. Expected: zoneNumberBandLetter 100kmSquare coordinates (e.g., 31UDQ4825111932)",
+      "mgrsNeedsLibrary": "MGRS format recognized but conversion requires a dedicated library. Please use DD, DMS, DDM, UTM, or Plus Codes for offline coordinate conversion.",
+      "mgrsZoneRange": "MGRS zone must be between 1 and 60",
+      "minutesNotWhole": "Minutes must be a whole number when seconds follow.",
+      "mixedFormats": "Latitude and longitude are written in different formats - give both as degrees, degrees and minutes, or degrees, minutes and seconds.",
+      "notMapUrl": "Input does not appear to be a map URL",
+      "plusCodeFormat": "Invalid Plus Code format. Expected: 8 characters + \"+\" + 2+ characters (e.g., 8FW4V75V+8Q)",
+      "plusCodeInvalidCharacter": "Invalid Plus Code character '{{character}}' at position {{position}}",
+      "plusCodeMissingCharacter": "Invalid Plus Code: missing character at position {{position}}",
+      "plusOverriddenByLetter": "The plus sign and \"{{letter}}\" disagree - read as {{value}} (the letter wins).",
+      "secondsRange": "Seconds must be between 0 and 59.99",
+      "signOnMinutes": "Only the degrees can carry a sign, not the minutes or seconds.",
+      "signOverridesLetter": "The minus sign and \"{{letter}}\" disagree - read as {{value}} (the minus sign wins).",
+      "utmBandLetter": "Invalid UTM band letter (must be C-X, excluding I and O)",
+      "utmBandMismatch": "UTM northing {{northing}} is at {{latitude}}, outside latitude band {{band}} ({{from}} to {{to}}) - check the band letter and the northing.",
+      "utmBandSAmbiguous": "\"S\" read as latitude band S (32°N to 40°N). For the southern hemisphere, enter \"{{suggestion}}\" instead.",
+      "utmEastingRange": "UTM easting typically between 100000 and 900000",
+      "utmFormat": "Invalid UTM format. Expected: zone band easting northing (e.g., 31U 448251 5411932 or 31 U 448251 5411932)",
+      "utmNeitherNorth": "UTM northing {{northing}} fits neither latitude band N (0° to 8°N) nor the northern hemisphere (0° to 84°N).",
+      "utmNeitherSouth": "UTM northing {{northing}} fits neither latitude band S (32°N to 40°N) nor the southern hemisphere (80°S to 0°).",
+      "utmNorthingRange": "UTM northing must be between 0 and 10000000",
+      "utmReadAsNorthernHemisphere": "\"N\" read as the northern hemisphere - latitude band N (0° to 8°N) does not fit this northing.",
+      "utmReadAsSouthernHemisphere": "\"S\" read as the southern hemisphere - latitude band S (32°N to 40°N) does not fit this northing.",
+      "utmZoneRange": "UTM zone must be between 1 and 60",
+      "what3wordsFormat": "Invalid What3words format. Expected: word.word.word (e.g., filled.count.soap)",
+      "what3wordsNeedsApi": "What3words requires API access for conversion. Please use DD, DMS, DDM, UTM, MGRS, or Plus Codes for offline use."
+    },
     "import": {
       "azimuthInRange": "Azimuth in {{value}} must be between 0 and 360 degrees.",
       "azimuthOutRange": "Azimuth out {{value}} must be between 0 and 360 degrees.",
-      "lengthPositive": "Length must be positive.",
-      "mergeTargetMissing": "Merge target section is required.",
-      "mergeTargetNotFound": "Merge target section not found.",
-      "sectionNotPlaced": "Section has not been placed."
-    },
-    "section": {
-      "duplicateMarker": "Duplicate marker {{marker}}."
-    },
-    "shot": {
-      "azimuthDiff": "Azimuth in/out differ by {{diff}} (threshold {{threshold}}).",
-      "azimuthInRange": "Azimuth in {{value}} must be between 0 and 360 degrees.",
-      "azimuthOutRange": "Azimuth out {{value}} must be between 0 and 360 degrees.",
-      "depthChange": "Depth change {{change}} exceeds {{max}}.",
-      "lengthRequired": "Length is required.",
-      "lengthTooLong": "Length {{length}} exceeds {{max}}.",
-      "lengthTooShort": "Length {{length}} is below {{min}}.",
-      "lrudNegative": "{{name}} value {{value}} must be 0 or greater.",
-      "lrudTooLarge": "{{name}} value {{value}} exceeds {{max}}."
+      "lengthPositive": "Length must be positive."
     }
   },
   "telemetry": {
@@ -3242,7 +3950,8 @@
       "messageNoLock": "You have changes that have not been uploaded to SpeleoDB, and you no longer hold the write lock - so they cannot be uploaded right now. They stay on this computer and will still be here next time you open the project.",
       "closeAnyway": "Close anyway",
       "thenOpen": "Once this project is closed, the project you chose opens.",
-      "thenNew": "Once this project is closed, the new-project dialog opens."
+      "thenNew": "Once this project is closed, the new-project dialog opens.",
+      "thenImport": "Once this project is closed, the import continues."
     },
     "quit": {
       "title": "Quit with changes not on SpeleoDB",
@@ -3352,7 +4061,8 @@
       "lockToRestore": "The project is read-only. View opens a revision for inspection (the SpeleoDB Update returns you to the latest). Revert takes the write lock, uploads the chosen revision as a new revision, and releases it again.",
       "forceEditActive": "You are force-editing without the write lock. Finish or discard those edits (reconnect or save a local copy) before you can view or restore a revision.",
       "unknownAuthor": "unknown author",
-      "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - take the write lock and upload your changes first, or use Revert (that route asks before replacing them)."
+      "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - take the write lock and upload your changes first, or use Revert (that route asks before replacing them).",
+      "viewBlockedByUnreadable": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. Viewing a revision replaces that copy, so nothing was replaced - if another program is using the file, close it and try again, or use Revert (that route asks before replacing it)."
     },
     "restore": {
       "title": "Restore revision {{sha}}",
@@ -3361,6 +4071,7 @@
       "unsavedWarning": "You have unsaved changes that will be discarded.",
       "confirmButton": "Restore revision",
       "discardWarning": "The working copy has changes that are not on SpeleoDB - including any earlier restore you have not pushed. Restoring this revision replaces them, and they are not on the server, so this cannot be undone.",
+      "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. Restoring this revision replaces that copy, so any such changes would be lost, and this cannot be undone.",
       "discardOffer": "Replace my changes & restore",
       "discardConfirm": "Yes, replace my changes & restore",
       "restoring": "Restoring…",
@@ -3429,6 +4140,7 @@
       "consequence": "Your project history is not rewritten - the revert lands as a new revision on top of the current one. When it finishes the project is read-only again, exactly as it is now.",
       "unsavedWarning": "You have changes that are not saved to disk. Save or discard them first - a revert replaces the working copy, so it cannot keep them.",
       "unpushedWarning": "This copy has changes that are not on SpeleoDB. A revert replaces them, and they are not on the server, so this cannot be undone.",
+      "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. A revert replaces that copy, so any such changes would be lost, and this cannot be undone.",
       "messageLabel": "Commit message",
       "commitMessage": "Revert to revision {{sha}}",
       "confirmButton": "Revert",
@@ -3450,6 +4162,7 @@
         "restoreFailed": "The write lock was released and nothing was changed.",
         "restoreFailedLockHeld": "You still hold the write lock, because this copy has changes that are not on SpeleoDB.",
         "lockStillHeld": "The write lock was kept, because releasing it would leave your unpushed changes unprotected.",
+        "lockStillHeldUnreadable": "The write lock was kept, because releasing it would leave any changes in that copy unprotected.",
         "pushFailed": "Revision {{sha}} is in your working copy and you still hold the write lock, but it could not be uploaded. That upload is all that is left, so retry it below.",
         "pushUnconfirmed": "The upload could not be confirmed, so the revert may or may not have reached SpeleoDB. Your working copy and the write lock are both kept, so retry it below - a revert that did land is recognised as yours rather than uploaded a second time.",
         "notEditing": "Revision {{sha}} is in your working copy, but your SpeleoDB session ended before it could be uploaded, so nothing was published and no write lock is held. Close this dialog, sign in again, then start editing to upload it."
@@ -3463,6 +4176,8 @@
         "upToDate": "Already up to date.",
         "released": "Changes uploaded and the write lock released.",
         "releasedNothingToUpload": "Write lock released. Nothing to upload.",
+        "lockHeldElsewhere": "Changes uploaded and editing finished here. The write lock was taken by another session of your account (another window or computer, or before this app restarted), so it was left with that session, not released.",
+        "lockHeldElsewhereNothingToUpload": "Editing finished here. Nothing to upload. The write lock was taken by another session of your account (another window or computer, or before this app restarted), so it was left with that session, not released.",
         "pushed": "Changes pushed to SpeleoDB.",
         "startFailed": "Could not start editing",
         "updateFailed": "Could not update",
@@ -3514,7 +4229,13 @@
       "keepLocal": "Keep the local copy & open it",
       "takeRemote": "Take the server copy & discard my changes",
       "discardWarning": "Taking the server copy permanently deletes the changes made to \"{{name}}\" on this computer. They are not on SpeleoDB, so there is no other copy and this cannot be undone.",
-      "takeRemoteConfirm": "Yes, discard my changes"
+      "takeRemoteConfirm": "Yes, discard my changes",
+      "unreadable": {
+        "title": "The copy on this computer could not be read",
+        "message": "\"{{name}}\" has already been opened on this computer, but that local copy could not be read, so we cannot tell whether it has changes SpeleoDB has never seen. A save may have been interrupted, or another program may be using it. Nothing has been downloaded yet.",
+        "keepHint": "Keeping the local copy downloads nothing and overwrites nothing. Opening it lets an interrupted save roll back to the last one that finished; if another program is using the file, close it first.",
+        "discardWarning": "Taking the server copy permanently replaces the copy of \"{{name}}\" on this computer. It could not be read, so any changes in it that are not on SpeleoDB would be lost, and this cannot be undone."
+      }
     },
     "transport": {
       "refused": "Could not reach SpeleoDB at {{endpoint}} - the server refused the connection. Check that it is running and that the address is right.",
@@ -3536,6 +4257,8 @@
       "pushFailed": "Your changes were NOT uploaded and are still only on this computer. {{message}}",
       "retryPush": "Retry upload",
       "startEditingToRetry": "Start editing to upload",
+      "lockLostTo": "{{email}} now holds the SpeleoDB write lock on this project, so editing has been switched off. Changes you have not uploaded stay on this computer.",
+      "lockLost": "You no longer hold the SpeleoDB write lock on this project (it was released or expired), so editing has been switched off. Your changes are still only on this computer - start editing to take the lock again and upload them.",
       "noAnchor": "This survey has no georeferenced zero datum, so SpeleoDB generated no new map geometry. Your data is still stored and shared; any existing online map may be stale."
     },
     "heldLocks": {
@@ -3636,7 +4359,8 @@
       },
       "visibilityOptions": {
         "private": "Private",
-        "public": "Public"
+        "public": "Public",
+        "unknown": "Unknown"
       },
       "rendering": {
         "label": "Web-map rendering",
@@ -3693,7 +4417,8 @@
         "WEB_VIEWER": "Web Viewer",
         "READ_ONLY": "Read only",
         "READ_AND_WRITE": "Read & write",
-        "ADMIN": "Admin"
+        "ADMIN": "Admin",
+        "UNKNOWN": "Unknown"
       },
       "addFailed": "Could not add the collaborator",
       "addTeamFailed": "Could not add the team",
@@ -3725,5 +4450,61 @@
     "normal": "Permanent",
     "jump": "Jump",
     "reference": "Reference"
+  },
+  "saveWarnings": {
+    "undoHistoryDropped": "Saved, but the undo history could not be kept and was cleared.",
+    "displaySettingsNotSaved": "Saved, but display settings could not be kept - they reset on reopen.",
+    "databaseNotReopened": "Saved, but the file could not be reopened - reopen the project.",
+    "sideTablesNotCarried": "Saved, but the original file could not be read: the new file has no ignored warnings, SpeleoDB link or undo-history markers.",
+    "other": "Saved, with a warning: {{message}}"
+  },
+  "contextMenu": {
+    "editStation": "Edit Station",
+    "mergeWith": "Merge With...",
+    "unmergeStations": "Unmerge Stations",
+    "removeClosure": "Remove Closure",
+    "addShotBefore": "Add Shot Before",
+    "addShotAfter": "Add Shot After",
+    "setZeroDatum": "Set Zero Datum",
+    "editSection": "Edit Section",
+    "reverseSection": "Reverse Section",
+    "reverseSections_one": "Reverse {{count}} Section",
+    "reverseSections_other": "Reverse {{count}} Sections",
+    "deleteSection": "Delete Section",
+    "deleteStation": "Delete Station",
+    "editShot": "Edit Shot",
+    "insertStation": "Insert Station...",
+    "markAsJump": "Mark as Jump",
+    "markAsReference": "Mark as Reference",
+    "unmarkJump": "Unmark Jump",
+    "unmarkReference": "Unmark Reference",
+    "deleteShot": "Delete Shot",
+    "adjustPosition": "Adjust Position...",
+    "zoomToSection": "Zoom to Section",
+    "sectionFallback": "Section {{id}}"
+  },
+  "errorBoundary": {
+    "panelError": "{{panel}} encountered an error",
+    "tryAgain": "Try Again"
+  },
+  "detailLink": {
+    "station": {
+      "notFound": "station not found",
+      "select": "Select station",
+      "selectNamed": "Select station {{name}}",
+      "selected": "Selected station {{name}}"
+    },
+    "shot": {
+      "notFound": "shot not found",
+      "select": "Select shot",
+      "selectNamed": "Select shot {{name}}",
+      "selected": "Selected shot {{name}}"
+    },
+    "section": {
+      "notFound": "section not found",
+      "select": "Select section",
+      "selectNamed": "Select section {{name}}",
+      "selected": "Selected section {{name}}"
+    }
   }
 }

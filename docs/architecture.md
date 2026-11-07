@@ -5,7 +5,7 @@
 ## Workspace layout
 
 The Rust backend is a cargo workspace rooted at `src-tauri/Cargo.toml` (a
-hybrid root: the `stalagmight` app package lives there too). Eight library
+hybrid root: the `stalagmight` app package lives there too). Nine library
 crates sit under `src-tauri/crates/`:
 
 | Crate | Contents | Key deps |
@@ -17,15 +17,16 @@ crates sit under `src-tauri/crates/`:
 | `stalagmight-export` | CSV / JSON / image (SVG->PNG/PDF) / TML export, dive profile | models, parsers |
 | `stalagmight-speleodb` | SpeleoDB client: HTTP surface, auth/token storage, dump handling, sync, TLS policy, metrics | models, telemetry |
 | `stalagmight-core` | `AppState`, the command executors, undo/redo, project I/O orchestration, config I/O (`config/`), `tile_providers`; shared test helpers behind the `test-support` feature | export, models, parsers, persistence, speleodb |
+| `stalagmight-tiles` | The map-tile engine behind the `stalagmight-tiles://` protocol and `fetch_tile`: RFC 9111 caching client over the persistence tile caches, retrying fetch, ArcGIS tilemap probe, stale-if-error, overzoom fallback. Tauri-free, so `cargo test -p stalagmight-tiles` never builds the app | core, persistence |
 | `stalx-reader` | Read-only `.stalx` reader for external consumers (SpeleoDB server-side maps, #593); nothing in the app depends on it | models, persistence |
-| `stalagmight` (app, at `src-tauri/`) | The thin Tauri layer: `commands/` (IPC handlers), `lib.rs` (the single `generate_handler!`), `main.rs`, `tile_attribution.rs`, `webkit_memory.rs`, `examples/`, `tests/` | all of the above except stalx-reader |
+| `stalagmight` (app, at `src-tauri/`) | The thin Tauri layer: `commands/` (IPC handlers), `lib.rs` (the single `generate_handler!`, the tile protocol registration), `main.rs`, `tile_attribution.rs`, `webkit_memory.rs`, `examples/`, `tests/` | all of the above except stalx-reader |
 
 The layering is strict and one-way - models -> telemetry / parsers /
-persistence -> export / speleodb -> core -> app, where `->` reads "is depended
-on by" - so a lower crate never imports from a higher one. The workspace root also carries the shared
+persistence -> export / speleodb -> core -> tiles -> app, where `->` reads "is
+depended on by" - so a lower crate never imports from a higher one. The workspace root also carries the shared
 `[workspace.dependencies]`, the `[workspace.lints]` policy every member
-inherits, and the `telemetry` feature, which forwards to the members that
-implement it (`stalagmight-telemetry`, `stalagmight-speleodb`).
+inherits, and the `telemetry` feature, which forwards to the member that
+implements it (`stalagmight-telemetry`).
 
 ## State Flow
 
@@ -35,6 +36,28 @@ User Action → Zustand Store → Tauri IPC → Rust Command Executor
      └──────────── State Update ←──────── Command Result
 ```
 
+### Reading the project back: binary for the app, JSON for the harness
+
+Two commands return the open project with its stations, stats and frozen shots,
+and both are kept on purpose (#576 REFRESH-CMDS):
+
+- **`get_project_state_binary`** is the app's own read. `refreshProjectState`
+  issues it after every edit; it is the load's msgpack + typed-array envelope
+  (`core/load_binary.rs` `encode_refresh`, decoded by `utils/loadProjectBinary.ts`),
+  and an empty answer means no project is open. The load itself uses
+  `load_project_full_binary`, the same layout.
+- **`get_project_state`** is the same read as JSON. Nothing in `src/` calls it.
+  It stays for the agent harness (`e2e/agent/`: the journeys, the fuzz and import
+  oracles read the project as data) and for debugging, where a readable payload
+  from the devtools console beats a byte envelope. Do not remove it with the app's
+  last caller gone, and do not route the app back through it: at 75,000 shots it
+  is ~36 MB of JSON per edit (docs/performance.md, "The Refresh After an Edit").
+
+Both take the settled snapshot and share `measured_state` (`commands/project.rs`),
+so the two cannot describe different projects. Shot readings in the binary form
+are f32 (the PRECISION note in `load_binary.rs`), which is why the edit paths send
+only the fields the user changed (#576 F32-EDIT).
+
 ## Command Pattern
 
 All persistent operations go through the Rust `Command` enum in
@@ -42,6 +65,164 @@ All persistent operations go through the Rust `Command` enum in
 executes them and manages undo/redo; the executor bodies are split one module per command
 family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
 `src-tauri/crates/core/src/core/state/`.
+
+## Command results and errors
+
+Every fallible IPC command returns `Result<T, CommandError>` (#576 C4). There is
+one error envelope: `CommandError` (`crates/core/src/core/command_error.rs`) carries
+a `code: CommandErrorCode` (`crates/models/src/command_error.rs`, one ts-rs enum for
+the whole app, A6), a display-only `message`, and optional payloads flattened into
+the same wire object (`details` and `speleodb_managed` for an open, the SpeleoDB
+`status` / `transport` / `unpushed_local` / `dump_candidates`, `history_step` and
+`reversed_sections` for a failed undo/redo, `session_closed`, `remote_link`). The
+frontend routes on the code and never on the message: the string markers that used
+to be prefixed onto the text (`EDIT_DISABLED: ...`, `FS_PERMISSION_DENIED: ...`) and
+matched with `startsWith` are gone. The subsystems keep their own error types where
+they need them and carry the same code: `LoadError` (open / create) and the SpeleoDB
+crate's `SpeleoErrorDto` / `SpeleoDbError::Refused` convert into `CommandError`
+losslessly at the boundary. A command that cannot otherwise fail (`can_undo`,
+`check_project_integrity`, `set_workspace_mode`) answers a `Result` too, so a body that
+crashes on the pool still answers, with `INTERNAL_ERROR`: the frontend awaits such
+calls inside its edit queue, and one that never answered held every later edit behind
+it (#576 RV5-6). `get_config` does too (#576 NF-W7E-5; it used to re-raise the crash,
+so the call never resolved). One stays infallible: `get_network_status` (a crash reads
+as offline). The settings
+write commands in `commands/config.rs` still return `Result<_, String>` (rejected as a
+plain string), except `save_display_setting`, whose refusal of a write made for
+another project is coded (`PROJECT_CHANGED`, #576 RV6b-2).
+
+The success side is per command (A12). `AppState` methods still build their answer
+in the internal `CommandResult` accumulator, which no longer crosses the IPC: each
+command converts it with `CommandResult::into_outcome::<T>()` into the type that says
+exactly what it reports - `EditOutcome`, `SectionCreated`, `ShotCreated`,
+`ReverseOutcome` (a parity-reduced `reversed_sections`), `BatchOutcome`,
+`HistoryOutcome` (`reversed_steps`, the ordered per-step log a consumer composes),
+`ImportOutcome`, `SaveOutcome`, `DeleteProjectOutcome`, `ProjectFileOutcome`
+(`crates/core/src/core/outcome.rs`) - and a failure into a `CommandError` with the
+producer's code (`CommandResult::refused`).
+
+**SpeleoDB link bits (D22).** Every survey mutation answers through
+`commands/pool.rs` `run_mutation`, which attaches `remote_link` (`has_unpushed_edits`,
+`unwound`, read by `AppState::remote_link_bits` right after the command) to its
+outcome and to its error. The frontend applies it in one place, `invokeIpc`
+(`src/utils/ipc.ts`), so no editing path keeps its own copy of the backend's dirty
+bookkeeping (the copies used to drift: a provable no-op such as reversing a shot-less
+section marked the copy un-pushed on screen while the backend stayed clean). A source
+tripwire fails when a command whose answer carries the bits is not run through
+`run_mutation`.
+
+## Where commands run
+
+Tauri runs a plain (non-`async`) `#[tauri::command]` inline in its IPC handler, on
+the **main thread**: the window cannot repaint, scroll or deliver an event until it
+returns, and every later IPC call - `cancel_loading` included - waits behind it. So
+no command does its work there (#576 C2). Every command is `async`, generic over the
+Tauri `Runtime`, takes the `AppHandle`, and hands its body to the blocking pool
+through `commands/pool.rs` (`pool::run` / `run_mutation`, and `run_stateless` for a body
+that needs no `AppState`); the main thread only
+parses the arguments.
+The SpeleoDB commands do the same through their own `run_blocking`. A contract test
+(`app_contract_tests.rs`) fails when a registered command is not `async`.
+
+Because they are generic, tests call the registered command itself with a
+`tauri::test` app (`run(cmd(h(&app), ..))` in `command_tests.rs`); there are no
+`*_impl` twins for tests to call instead (#576 C9).
+
+Commands now run **concurrently**, which makes two rules explicit:
+
+- **Mutations stay serialized.** Every project mutation (`execute`, undo/redo, the
+  imports, repair, settings, save, the project-slot commits) takes `command_lock`
+  for its whole span, as before - see [undo-redo.md](undo-redo.md#lock-ordering). So
+  does a write into a side table a save carries (a display setting, an Ignore or
+  Un-ignore): the save rebuilds the file from a snapshot of those tables and renames
+  it over the open one, so a write landing in between was lost (#576 RV5-1). The
+  frontend additionally issues its edits one at a time through its mutation queue
+  (`store/mutationQueue.ts`), so they apply in the order the user made them.
+- **A read of the project is a settled read.** A command mutates the project and
+  then settles it (orphan conversion, frame renormalisation, the reconcile, the undo
+  push) under one `command_lock` span but several `project` acquisitions, so a read
+  that takes only the `project` lock can catch a project that was changed and not
+  yet settled - an edit without its undo entry, offsets not yet re-solved. Every IPC
+  read of the project therefore either takes `AppState::settled_snapshot()` (the
+  snapshot is taken under `command_lock`, then read with no lock held - for anything
+  that does real work on it) or runs a short query under `AppState::settled_read`.
+  Never call either while holding `command_lock` (it is not reentrant); inside a
+  command, read `project_snapshot()`. Reads of other cells (config, recent projects,
+  display settings, logs, caches) take only their own lock.
+
+The open project is held copy-on-write (`core/state/project_slot.rs`, #576 A9): a
+snapshot is an O(1) `Arc` clone that later edits never change, and a writer copies
+the project only while a snapshot of it is still alive. `get_project_state()` is the
+explicit deep copy, for the few callers that must own the project.
+
+`cancel_loading` is not a command in this sense: it flips the active load's token
+and takes no `command_lock`, so it is never queued behind the import or load it
+cancels (`commands/import_offthread_tests.rs`, `core/state/command_ordering_tests.rs`).
+
+## IPC trust boundary
+
+The custom Tauri commands take paths and payloads straight from the webview, and
+`src-tauri/capabilities/default.json` does not bound them: a capability grants the
+**plugin** commands the page may call (the dialog and opener plugins), never the
+app's own `#[tauri::command]`s. The fs plugin is not registered at all (#576
+NF-W12FS-2): the two file operations the page used to ask it for - whether a save
+would replace a file, and the corruption-recovery salvage write - are app commands
+(`save_target_exists`, `write_salvaged_data`), because its scope held no user path,
+so both failed for every path in the real app (#576 HFI-2, HFI-3). Nor does `withGlobalTauri` decide
+reachability: `window.__TAURI_INTERNALS__.invoke` is injected regardless (see
+docs/app-modes.md).
+
+The real boundary is that **only the app's bundled frontend runs in the webview**:
+a strict CSP (`script-src 'self'`, no inline script, no remote origin; see
+`tauri.conf.json`) and React's escaping of survey text are what keep a script out.
+Defence in depth for the day that fails (#576 C11-D1): every command that writes,
+replaces or deletes a file at a path it is handed - the exports (CSV, JSON, Ariane,
+image, dive profile), Save As, create, merge (and the sources it archives), delete,
+rename-by-path, restore from backup, repair, the salvage write and the SpeleoDB
+unlink - first runs `commands/write_path.rs` `check_write_path`: the file must have
+the extension of
+what is written, must not be inside the app's own configuration, data or cache
+folders (the SpeleoDB managed-project cache excepted, for projects), and must not
+be inside a system folder (`/etc`, `/usr`, `/bin`, ..., `C:\Windows`,
+`C:\Program Files`). The list is deliberately narrow - `/home`, `/var`,
+`/run/media`, `/mnt`, `/media`, `/opt` and `/tmp` are places users save to.
+On Windows the path must also name a plain file in a folder, judged from its
+text before the disk is asked (#576 W24-D1): a device, volume or drive-relative
+path (`\\?\GLOBALROOT\...`, `\\?\Volume{...}\...`, `\\.\pipe\...`, the NT prefix
+`\??\`, `C:x.stalx`), an alternate data stream (a `:` after the drive:
+`notes.txt:x.stalx`, `C:\Windows:x.stalx`), a device name (CON, PRN, AUX, NUL,
+COM0-9, LPT0-9, COM and LPT with the superscript digits ¹ ² ³, CONIN$, CONOUT$,
+in any case, with any extension, trailing dots or spaces) and this computer
+reached as a network share (`localhost`; 127.0.0.0/8 in any spelling Windows reads
+as an IPv4 address, such as `127.1`, `2130706433`, `0x7f000001` or `0x7f.1`;
+`::1`; its own name) are refused, as are older-file upgrades there. The `\\?\`
+and `\\.\` forms of a drive or UNC path, `UNC` in any case, name the plain
+folder, and a name is compared as Win32 opens it (`C:\Windows.\` is
+`C:\Windows\`), except in a `\\?\` path.
+A folder counts however the path reaches it: the path is compared folded and as
+the write reaches it on disk, one component at a time, links followed - so
+`<dir>/missing/../link-to-the-app-folder/x`, which a write that makes the missing
+folders first goes through, is refused like the link itself (#576 RV12-1).
+Opening a project (`load_project_full`, `load_project_full_binary`) opens it
+wherever it is - viewing and exporting a project kept in the app's folders or a
+system folder work as anywhere else - but it is not always read-only: an
+older-schema file is upgraded in place with a `.pre-v<N>.backup` copy written
+beside it. That write alone is checked (#576 RV4-R-M3-OPEN): the loads ask
+`load_upgrade_refusal` (the same two folder rules, without the extension rule -
+the open dialog offers "All Files"), and in those folders an older file is refused
+before anything is written (`Database::open_existing_refusing_upgrade`, load error
+`UPGRADE_REFUSED`) with a message saying to copy the project somewhere writable;
+a current or newer file opens untouched. Commands that only read keep taking any
+path, with one exception: the overwrite prompts' existence probe
+(`save_target_exists`) answers only for a path the write after it may write (the
+same three rules), so it tells a page script nothing about the app's own or a
+system folder; a failed probe is an error, and the prompt then asks as if the file
+were there (#576 E10-D1), while a refused one (`WRITE_PATH_REFUSED`) goes straight
+to the write, which refuses it with the reason (#576 HFI-2-D2). The New Project
+pre-check (`check_create_target`, #576 RV15-2) is the create's own check run
+alone - same file, same answer, nothing created - so the webview can refuse a
+create before it cancels a load in progress or shows its loading state; it tells
+a page script nothing `create_project_full` would not.
 
 ## Data Model
 
@@ -106,7 +287,7 @@ drawn by a custom WebGL layer (`src/components/Map/surveyLayer/customRender/`), 
 the *sole* survey renderer: the stock bulk layers were deleted, so there is no fallback -
 an unrecoverable GL failure removes the dead layer and surfaces an error. Hit-testing does
 not depend on MapLibre either; it runs against the SoA geometry index. What is still stock
-MapLibre in `SurveyLayer.tsx` are the small GeoJSON auxiliaries: loop closures, the
+MapLibre in `SurveyLayer.ts` (`surveyLayer/auxiliaryLayers.ts`) are the small GeoJSON auxiliaries: loop closures, the
 gas-route highlight, merge ghosts, and the interact hover/selection overlay - the last of
 which holds only the few features the user is currently touching, so its size tracks
 interaction state, not survey size. Global View is custom-only too
@@ -149,12 +330,14 @@ in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 | `src-tauri/src/commands/cache.rs` | Cache IPC commands (stats, clear, fetch) |
 | `src-tauri/src/commands/survey_geometry.rs` | Survey geometry IPC command (`get_survey_geometry_for_file`) |
 | `src/store/projectStore.ts` | Frontend state, Tauri IPC calls |
+| `src/store/speleoStoreHandle.ts` | Late-bound handle projectStore and its slices use to reach speleoStore, which imports projectStore (no value-import cycle; `pnpm lint:import-cycles`) |
 | `src/store/uiStore.ts` | UI state (selection, tools, panels, `appMode`) |
 | `src/store/gasPlanStore.ts` | Gas/dive-plan inputs (runtime only, never persisted) |
 | `src/store/globalViewStore.ts` | Global View state (selection, geometry loading) |
 | `src/hooks/useEditingBlocked.ts` | The one sanctioned read-only predicate (map mode + SpeleoDB lock) |
 | `src/components/Map/MapCanvas.tsx` | MapLibre map initialization |
-| `src/components/Map/SurveyLayer.tsx` | Survey layer: custom-renderer wiring, GeoJSON auxiliaries, interaction |
+| `src/components/Map/createSurveyMap.ts` | The one map factory for the survey map, Global View and section preview: shared options, rotation/pitch disabling, the Android tile protocol, satellite reload on reconnect |
+| `src/components/Map/SurveyLayer.ts` | Survey layer: custom-renderer wiring, GeoJSON auxiliaries, interaction (helpers under `surveyLayer/`) |
 | `src/components/Map/surveyLayer/customRender/controller.ts` | Custom WebGL survey renderer (buffers, colors, layer lifecycle) |
 | `src/components/GlobalView/GlobalView.tsx` | Global View container component |
 | `src/components/GlobalView/GlobalViewMap.tsx` | MapLibre map for Global View |
@@ -162,12 +345,11 @@ in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 | `src/components/GlobalView/ViewModeToggle.tsx` | View mode toggle and `useViewMode` hook |
 | `src/components/GlobalView/MetadataPanel.tsx` | System metadata display with aggregate stats |
 | `src/utils/coordinates.ts` | Coordinate transforms (meters ↔ GPS) |
-| `src/utils/tileProtocol.ts` | MapLibre tile protocol for caching |
+| `src/utils/tileProtocol.ts` | Android MapLibre tile protocol: registered once at app start, never removed |
 | `src/utils/tileConfig.ts` | Tile source config; platform-specific `stalagmight-tiles` URL form |
 | `src/hooks/useProject.ts` | Project file operations hook |
 | `src/hooks/useMapTools.ts` | Map tool handlers |
 | `src/hooks/useKeyboardShortcuts.ts` | Global keyboard shortcut handler |
-| `src/hooks/useFpsMonitor.ts` | FPS monitoring (no consumer today - see below) |
 | `src/theme/tokens.ts` | Color theme token definitions (10 themes) |
 | `src/components/Map/GridOverlay.tsx` | Theme-aware coordinate grid overlay |
 | `src/components/Dialogs/KeyboardShortcutsDialog.tsx` | Keyboard shortcuts overlay (`?` key) |
@@ -235,9 +417,24 @@ The baseline is a high-water mark: a legitimate growth bumps it, and a split low
 (shrinks aren't auto-captured). Metric = code LOC minus comments/blanks and `#[cfg(test)]`
 items.
 
+Whole **test files** are measured too, under their own thresholds (warn 3000 / fail
+5000 code LOC, the baseline's `test_files` section): a file under `src-tauri/tests/`, or a
+`tests.rs` / `*_tests.rs` / `*_fuzz.rs` / `test_helpers.rs` that its parent declares
+under `#[cfg(test)]` (a production file merely *named* `*_tests.rs` is measured as
+production). The three test monoliths at/above 3000 (`commands/command_tests.rs`,
+`core/state/fuzz_undo_tests.rs` and `models/project/gas/tests.rs`) are frozen: new tests go
+into a new submodule, not into them. (`core/state/tests.rs`, once the largest, is now a
+module root over topic files in `core/state/tests/`, #576 E1; `models/project/tests.rs` and
+`persistence/sqlite/tests.rs` followed the same way, #576 AFK-D3.) The scan also covers the
+first-party Rust outside the crates' `src/`: the build scripts, `src-tauri/examples`,
+the agent harness's OS helper and `scripts/lib/slice-rs`.
+
 The frontend has an identical twin - `pnpm lint:ts-file-size`
 (`scripts/check-ts-file-size.mjs`, baseline `ts-file-size-baseline.json`), same 1500/2000
-thresholds, also a `check`-job gate. Both must pass before pushing.
+thresholds. It covers `src/` (tests and generated IPC types excluded) and every
+`.ts`/`.tsx` under `e2e-playwright/` and `e2e/` (generated `e2e/agent/replays/`
+excluded) - so the ~4.8k-LOC IPC mock is frozen too. It runs in the `check` job and the
+`smoke` job (which sees `e2e-playwright/` changes). Both must pass before pushing.
 
 ### Mutex Lock Ordering
 
@@ -251,9 +448,40 @@ if let Ok(config) = self.config.lock() {
 }
 
 // GOOD - release lock before calling
-let value = self.config.lock().map(|c| c.some_field).unwrap_or(default);
+let value = self.config.lock().some_field;
 self.do_something_with(value);
 ```
+
+### Mutex Poisoning (one policy, #576 A11)
+
+A panic that unwinds through a held guard POISONS the mutex: the data is still
+there, possibly half-way through an edit, and std's `lock()` reports the crash on
+every later call. Every lock in the backend crates is a
+`models::poison_policy::RecoveringMutex`, whose only way in is the policy:
+
+- `lock()` RECOVERS the data and returns the guard (never a `Result`). The first
+  poisoned cell is logged once and raises the `internal-error` event once per
+  session; the frontend shows a persistent "save your work and restart" banner
+  (`InternalErrorBanner`). Saving keeps working.
+- A short, named list of operations REFUSES instead, because continuing would
+  replay or publish what the crash may have half-written: undo / redo / undo to /
+  redo to, the SpeleoDB undo-chain walk, and the SpeleoDB upload. The save goes
+  through but writes an empty Undo/Redo history (with the `UNDO_HISTORY_DROPPED`
+  warning), so the restarted session cannot replay it either (#576 RV5-PI-2). The
+  list and the reason for each live on `AppState::refuse_after_crash`; add to it
+  there, not at a call site.
+
+There is no method that returns std's `LockResult`, so `.lock().unwrap()`,
+`.lock().expect(..)`, `if let Ok(..) = x.lock()` and `.lock().map_err(..)` do not
+compile on a cell. `AppState`'s cells report to its own monitor; process-wide cells
+(log ring buffer, telemetry, tile caches, the launch queue) report to
+`poison_policy::global_monitor()`, which app setup forwards into the managed
+state's monitor so the user sees one banner. `poison_policy_tests.rs` enumerates
+every `AppState` cell by exhaustive destructuring, poisons each and drives the
+public API through it. A lock outside `AppState` is not in that list, so
+`models/src/raw_lock_scan_tests.rs` scans the backend sources and fails on any std
+`Mutex`/`RwLock` in production code (test code and `poison_policy.rs` itself
+excepted): wrap a new lock in `RecoveringMutex` (#576 RV5-PI-5).
 
 ### Safe File Save
 
@@ -287,7 +515,8 @@ components included, so that datum's station lands on the origin
 (`Project::renormalize_frame`, issue #469). The add does it inside
 `Project::set_zero_datum` (the subsequent-datum placement reads that invariant, and
 the import loop and redo never reach an epilogue); every other promotion does it in
-the forward epilogue. It runs forward only:
+the forward epilogue (`AppState::forward_epilogue`, which every forward entry point
+runs, #576 A4). It runs forward only:
 `resolve_offsets`' cascade never re-derives a seed's offset, so a whole-project
 translation is a no-op for the load path, and every affected command's undo restores
 the recorded map rather than re-deriving a frame.
@@ -296,10 +525,13 @@ the recorded map rather than re-deriving a frame.
 
 - Use `Database::open_existing()` for reading (doesn't create files)
 - Use `Database::open()` for writing (creates if needed)
-- Shot IDs are generated on load: `section_id * FEATURE_ID_STRIDE + sequence_order`
-  (`FEATURE_ID_STRIDE` = 100000, `src-tauri/crates/models/src/id_stride.rs`, mirrored in
-  `src/utils/ids.ts`). They are therefore *not* stable identity - use `Shot::uuid` for
-  anything that has to survive a save/load
+- Shot IDs are generated on load: `section_id * FEATURE_ID_STRIDE + position`, the
+  shot's 0-based place in the stored `sequence_order` (the two agree for every file
+  the app writes; a foreign file's gaps are closed). `FEATURE_ID_STRIDE` = 100000,
+  `src-tauri/crates/models/src/id_stride.rs`, mirrored in `src/utils/ids.ts`; a file
+  with a section of more than `FEATURE_ID_STRIDE - 1` shots is refused. They are
+  therefore *not* stable identity - use `Shot::uuid` for anything that has to survive
+  a save/load
 
 ### Coordinate Transformation (Zero Datum)
 
@@ -314,6 +546,29 @@ When a station is set as zero datum with GPS coordinates, the system converts GP
 - `geodetic_to_ecef(lat, lon, alt)` - WGS84 to ECEF (public)
 - `ecef_to_enu(dx, dy, dz, lat0, lon0)` - ECEF diff to ENU (private)
 - `gps_to_local(gps, origin)` - Main entry point returning (east, north)
+- `local_to_gps(east, north, origin)` - the inverse, `Option<(lat, lon)>` (below)
+- `unwrap_longitude(lon, reference)` - the explicit drawing step (below)
+
+**The inverse, one algorithm** (#576 GEO-D1): `local_to_gps` finds where the
+origin's vertical through (east, north) meets the WGS84 surface - a quadratic
+for the up offset, then the closed-form latitude of a surface point. It is exact
+to rounding (the round trip through `gps_to_local` is within nanometres out to
+50 km), returns the longitude in [-180, 180], and is `None` only beyond the
+horizon (about an earth radius out) or for a non-finite input. The frontend's
+`enuToGps` (`src/utils/coordinates.ts`) runs the same solve operation for
+operation, so the workspace map, the data table's GPS column and Global View put
+a station on the same fix (#576 D36). The parity table `FRONTEND_PARITY` in
+geo.rs is pinned to the backend there and read from source by
+`src/utils/__tests__/coordinates.test.ts`, which holds `enuToGps` to it: the two
+sides agree to within 1e-9 degrees.
+
+| Caller | Longitude | Beyond the horizon |
+|--------|-----------|--------------------|
+| Global View (`survey_geometry.rs`) | `unwrap_longitude`: continuous with the origin across the antimeridian, may leave [-180, 180] | the project shows as failed to load, with the reason |
+| Workspace map (`metersToMapCoords`) | `unwrapLongitude`, the same step | pinned near the horizon in its own direction (the vertical's closest approach to the ellipsoid, a point above the surface), so the camera and bounds stay finite |
+| GPS column (`xyToGps`) | [-180, 180] | blank cell |
+| TML import, datum carried past dropped shots | [-180, 180] (a storable `GpsCoordinates`) | anchored at the file's own fix, with a log warning |
+| stalx reader (`stalx-reader`) | [-180, 180] | station left without coordinates |
 
 **Important notes**:
 - Altitude is always 0; `depth_reference` is meters below surface, not ellipsoid height
@@ -360,7 +615,8 @@ GlobalSurveyLayer.ts
 
 Map tiles route through the `stalagmight-tiles` custom protocol, served by the
 Rust handler registered in `src-tauri/src/lib.rs` via
-`register_asynchronous_uri_scheme_protocol` (SQLite caching + offline support).
+`register_asynchronous_uri_scheme_protocol` (SQLite caching + offline support);
+the engine it calls is the `stalagmight-tiles` member (`src-tauri/crates/tiles`).
 The frontend builds the MapLibre source URL in `src/utils/tileConfig.ts`
 (`getTileConfig`).
 
@@ -371,7 +627,7 @@ preference:
 |----------|-------------------|
 | macOS / Linux (WRY) | `stalagmight-tiles://<provider>/{z}/{y}/{x}` (provider = host) |
 | **Windows (WebView2)** | `http://stalagmight-tiles.localhost/<provider>/{z}/{y}/{x}` (provider in path) |
-| Android | `stalagmight-tiles://<provider>/{z}/{y}/{x}` via MapLibre `addProtocol` (see `tileProtocol.ts`) |
+| Android | `stalagmight-tiles://<provider>/{z}/{y}/{x}` via MapLibre `addProtocol` (see `tileProtocol.ts`; registered once at app start for every map, never unregistered) |
 
 **Why:** WebView2 cannot navigate a bare custom URI scheme, so it serves
 Tauri-registered protocols only under `http://<scheme>.localhost/...`. Using the
@@ -393,18 +649,21 @@ const [viewMode, setViewMode] = useViewMode();
 ```
 
 Marker visibility is controlled by three effects:
-1. **Creation effect** - sets initial `el.style.display` based on `viewModeRef.current` and geometry state
-2. **Styles effect** - updates marker colors (selection, error) without recreating markers
+1. **Creation effect** - runs only when the set of systems (or the theme) changes; builds
+   each marker once and sets its initial style and `el.style.display` from refs
+   (`viewModeRef`, `geometryStatesRef`, `selectedProjectIdRef`). It must not depend on
+   loading state or selection: that rebuilt every marker on every system load (#576 D10)
+2. **Styles effect** - updates marker colors (selection, error), the loading spinner and
+   `data-loading-state` in place
 3. **Visibility-sync effect** - toggles `el.style.display` (`'none'` / `'flex'`) on `viewMode` and `geometryStates` changes
 
-Switching to markers mode cancels pending geometry loads to save resources.
+Switching to markers mode cancels pending geometry loads to save resources. A system
+whose load failed is not retried on its own (the known causes do not heal); it stays a
+red marker until the user clicks it, the recent list reloads, or the view switches back
+to survey (#576 D10-D1).
 
 ### FPS Monitoring
 
-`src/hooks/useFpsMonitor.ts` tracks frame rate with `requestAnimationFrame` and fires
-`onThrottleNeeded` / `onThrottleRestore` around a threshold pair (default 30 / 45 fps).
-
-It currently has **no consumer**. The auto-throttle it was written for increased
-whole-source GeoJSON simplification in Global View; that source no longer exists, so there
-is nothing left to coarsen. Wire it to something real or delete it - do not assume Global
-View is still throttling itself.
+There is no FPS-driven throttle. The `useFpsMonitor` hook written for Global View's
+whole-source GeoJSON simplification lost its purpose with that source and was deleted
+(#576 D27-32(e)); the live FPS readout is `useMapDevStats`' own loop.

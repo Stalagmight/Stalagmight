@@ -5,16 +5,21 @@ import { DialogWrapper } from './DialogWrapper';
 import { ValidationSettings } from './settings/ValidationSettings';
 import { SettingsSection } from './settings/SettingsSection';
 import { SettingRow } from './settings/SettingRow';
+import { DefaultNorthReferenceRow, useNorthReferenceDraft } from './settings/DefaultNorthReferenceRow';
 import { ProjectSettingsSpeleoStub } from './settings/ProjectSettingsSpeleoStub';
 import { getPanelId, getTabId, type SettingsCategory } from './SettingsSidebar';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { isSettingUnreadable, liftUnreadableSetting } from '../../store/unreadableSettings';
+import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig, type Config } from '../../types/config';
 import { isValidationConfigValid } from '../../utils/validation';
 import { TOAST_KEYS } from '../../utils/toastKeys';
-import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { useEditBlockedReason, useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { isEditGateCode } from '../../utils/editErrors';
+import type { CommandRefused } from '../../store/commandResult';
 import { convertLength, convertLengthToMeters, clampPrecision } from '../../utils/formatStats';
 
 // A compiler-checked subset of SettingsCategory, so these tabs can never drift
@@ -27,8 +32,9 @@ const EMPTY_CHANGED: ReadonlySet<string> = new Set();
 /**
  * Per-project settings (#57). Mirrors the global Settings dialog's structure
  * (sidebar tabs + sections) but edits the values stored in the .stalx that
- * travel with the project: General = project name, Validation = the same
- * thresholds as the global settings (which are the defaults for new projects).
+ * travel with the project: General = project name, entrance elevation and the
+ * default north reference (#576 NF-W3-2), Validation = the same thresholds as
+ * the global settings (which are the defaults for new projects).
  */
 export function ProjectSettingsDialog() {
   const { t } = useTranslation();
@@ -47,10 +53,16 @@ export function ProjectSettingsDialog() {
       setSurfaceElevation: s.setSurfaceElevation,
     })),
   );
-  // read-only mode has no server backstop (see useEditingBlocked's docs/app-modes.md
-  // guard-parity rule): the backend also rejects via guard_mutation, but the field
-  // must disable itself too.
+  // The elevation field disables itself in every read-only mode (docs/app-modes.md
+  // guard-parity rule): the backend also rejects it via guard_mutation, but the UI
+  // gate comes first.
   const editingBlocked = useEditingBlocked();
+  // [#576 RV3-FE-14] The name and the thresholds stay editable in the read-only
+  // workspaces (they are on the backend's allowlist), but not on a project whose
+  // metadata the backend refuses to change at all: a file a newer version saved, or a
+  // SpeleoDB project open without the lock (`guard_metadata_mutation`).
+  const blockedReason = useEditBlockedReason();
+  const metadataBlocked = blockedReason === 'newerFile' || blockedReason === 'lock';
   const panelIdBase = useId();
 
   const [tab, setTab] = useState<ProjectSettingsTab>('general');
@@ -109,6 +121,12 @@ export function ProjectSettingsDialog() {
   const elevationValid = elevationParsed === null || Number.isFinite(elevationParsed);
   const elevationDraftChanged = elevationDraft !== elevationInitialDraft;
 
+  // Default north reference (#576 NF-W3-2): saved with the name and thresholds, but a
+  // survey edit (NF-W3-2-PLAN) - it turns every section that declares none - so, like
+  // the elevation, it is disabled in every read-only mode, Plan and Export included,
+  // and says why. The backend refuses a changed one there.
+  const north = useNorthReferenceDraft(project?.default_azimuth_reference);
+
   // ValidationSettings is built against a full Config; wrap the project's
   // validation in a synthetic config and funnel its onChange back into local
   // state. It only ever mutates `.validation`.
@@ -134,7 +152,20 @@ export function ProjectSettingsDialog() {
     validationValid &&
     !hasValidationError &&
     elevationValid &&
+    north.valid &&
     !saving;
+
+  // A refused write keeps the dialog open; say why - unless the refusal already said so
+  // itself: a move carry (GHOST-2) and a read-only refusal (an edit-gate code, which the
+  // store's edit path shows as the friendly read-only notice, #576 NF-W2RO-1) do.
+  const reportSaveFailure = useCallback(
+    (result: CommandRefused) => {
+      setSaving(false);
+      if (isMoveCarryRefusal(result) || isEditGateCode(result.code)) return;
+      showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
+    },
+    [showToast, t]
+  );
 
   const handleSave = useCallback(async () => {
     if (
@@ -143,6 +174,7 @@ export function ProjectSettingsDialog() {
       !isValidationConfigValid(validation) ||
       hasValidationError ||
       !elevationValid ||
+      !north.valid ||
       saving
     )
       return;
@@ -151,17 +183,33 @@ export function ProjectSettingsDialog() {
     // it routes through executeCommand, which marks every success dirty, so even
     // the backend's no-op early-return would otherwise leave an unsaved-changes
     // prompt and a misleading history item for a Save that changed nothing (Codex).
+    //
+    // [#576 B15 follow-up] ...except while the stored thresholds could not be read:
+    // then saving this dialog IS the user setting them (the ones shown are the
+    // defaults standing in), which is what lets a project save write them again -
+    // not where the backend refuses any metadata change (RV3-FE-14): there an
+    // untouched Save would only earn a refusal, so it sends nothing and closes.
+    // The default north reference rides the same command (#576 NF-W3-2), and is set
+    // by it the same way while unread - but, as a survey edit, only where editing is
+    // not blocked (NF-W3-2-PLAN), like the elevation below.
     const currentValidation = project.validation ?? defaultConfig.validation;
+    const settingsUnread =
+      (isSettingUnreadable('validation') && !metadataBlocked) ||
+      (isSettingUnreadable('default_azimuth_reference') && !editingBlocked);
     const settingsChanged =
       trimmedName !== (project.name ?? '') ||
-      JSON.stringify(validation) !== JSON.stringify(currentValidation);
-    if (settingsChanged) {
-      const result = await updateProjectSettings(trimmedName, validation);
+      JSON.stringify(validation) !== JSON.stringify(currentValidation) ||
+      north.changed;
+    if (settingsChanged || settingsUnread) {
+      const result = await updateProjectSettings(trimmedName, validation, north.reference);
       if (!result.success) {
-        setSaving(false);
-        showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
+        reportSaveFailure(result);
         return;
       }
+      liftUnreadableSetting('validation');
+      // The backend sets an unread reference only outside Plan/Export (its workspace
+      // check, NF-W3-2-PLAN); mirror that so the banner and the backend agree.
+      if (useUIStore.getState().appMode === 'survey') liftUnreadableSetting('default_azimuth_reference');
     }
     // Compare the DRAFT STRING against what it was seeded with, not the
     // re-parsed/re-converted value against the stored meters: the draft is
@@ -176,18 +224,23 @@ export function ProjectSettingsDialog() {
     // between typing and clicking Save, silently discard an already-staged
     // change (closeDialog() would still run). The backend is authoritative -
     // attempt the write whenever the draft changed, and if guard_mutation
-    // rejects it (EDIT_DISABLED), fall into the same failure path as a
+    // rejects it (an edit-gate code), fall into the same failure path as a
     // rejected name/validation save: dialog stays open, error shown, the
     // user's staged draft is untouched.
-    if (elevationDraftChanged) {
+    //
+    // [#576 B15 follow-up] An unread stored elevation is set by saving the dialog
+    // (as for the thresholds above) - unless editing is blocked, where the field
+    // is disabled and the backend would refuse the write.
+    const elevationUnread = isSettingUnreadable('surface_elevation') && !editingBlocked;
+    if (elevationDraftChanged || elevationUnread) {
       const elevationMeters =
         elevationParsed === null ? null : convertLengthToMeters(elevationParsed, elevationUnit);
       const result = await setSurfaceElevation(elevationMeters);
       if (!result.success) {
-        setSaving(false);
-        showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
+        reportSaveFailure(result);
         return;
       }
+      liftUnreadableSetting('surface_elevation');
     }
     setSaving(false);
     closeDialog();
@@ -203,9 +256,13 @@ export function ProjectSettingsDialog() {
     setSurfaceElevation,
     validation,
     closeDialog,
-    showToast,
-    t,
+    reportSaveFailure,
     project,
+    editingBlocked,
+    metadataBlocked,
+    north.valid,
+    north.changed,
+    north.reference,
   ]);
 
   return (
@@ -292,6 +349,12 @@ export function ProjectSettingsDialog() {
                         </span>
                       </div>
                     </SettingRow>
+                    <DefaultNorthReferenceRow
+                      draft={north}
+                      disabledReason={
+                        blockedReason !== null ? t(`dialogs.projectSettings.northReference.blocked.${blockedReason}`) : null
+                      }
+                    />
                   </SettingsSection>
                 </div>
               )}

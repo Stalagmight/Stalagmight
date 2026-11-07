@@ -74,3 +74,19 @@ jobs:
         run: node scripts/check-third-party-licenses.test.mjs
       - name: Third-party license bundle gate
         run: node scripts/check-third-party-licenses.mjs
+      # Pre-push checklist drift (#576 E6): every gate ci.yml, e2e-smoke.yml and
+      # this workflow run must appear in the CLAUDE.md Pre-Push Checklist. It
+      # lives HERE for the same reason as the gates above: the checklist is a
+      # markdown file, and `check`/`smoke` path-ignore `**/*.md`, so a
+      # CLAUDE.md-only edit runs no other workflow. Pure Node, sub-second.
+      - name: Pre-push checklist - fixture test
+        run: node scripts/check-prepush-checklist.test.mjs
+      - name: Pre-push checklist matches the CI gates
+        run: node scripts/check-prepush-checklist.mjs
+      # The smoke canary list (#576 E5) lives in docs/TESTING.md, which the
+      # smoke job path-ignores; this copy runs it on a docs-only edit to the
+      # table. Pure Node; the smoke job runs the same pair on spec changes.
+      - name: Critical-feature smoke canaries - fixture test
+        run: node scripts/check-smoke-features.test.mjs
+      - name: Critical-feature smoke canaries
+        run: node scripts/check-smoke-features.mjs

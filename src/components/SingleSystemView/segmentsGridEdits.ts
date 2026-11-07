@@ -52,6 +52,16 @@ export function clampSegmentSpeed(mPerMin: number): number {
   return clamp(mPerMin, MIN_SEGMENT_SPEED_M_PER_MIN, MAX_SEGMENT_SPEED_M_PER_MIN);
 }
 
+/**
+ * A speed edit value the reducer writes: finite and strictly positive. Zero or below is no
+ * pace at all - clamped up to the engine minimum it would fly the span at 0.1 m/min, inflating
+ * its gas and collapsing reach - so it is skipped, as the pre-grid PositiveNumberField never
+ * committed one (D39d). A positive value outside the engine range still commits, clamped.
+ */
+export function isCommittableSpeed(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
 /** Truthy tokens a typed/pasted boolean cell accepts (lowercased, trimmed). */
 const TRUE_TOKENS = new Set(['1', 'true', 't', 'yes', 'y', 'on', 'x', '✓']);
 /** Falsy tokens, same normalisation. */
@@ -107,7 +117,7 @@ function applyOne(
     // `number-nullable`: a cleared cell returns the span to inheriting the plan
     // speed, which is what `speed_m_per_min: null` has meant since `defaultSegment`.
     if (edit.value === null) return { ...seg, speed_m_per_min: null };
-    if (typeof edit.value !== 'number' || !Number.isFinite(edit.value)) return seg;
+    if (!isCommittableSpeed(edit.value)) return seg;
     return {
       ...seg,
       speed_m_per_min: clampSegmentSpeed(speedFromDisplay(edit.value, ctx.units)),
@@ -162,15 +172,13 @@ export function applySegmentEdits(
   // Rows whose speed THIS batch wrote (a no-op speed edit still counts: pasting
   // an identical speed is still the paste authoring it). The scooter untick
   // branch consults this so it never wipes a speed the same batch supplied.
+  // A skipped speed (non-finite, or <= 0) supplied nothing, so it does not count.
   const speedAuthored = new Set<number>();
   for (const edit of edits) {
     const current = next ?? segments;
     const seg = current[edit.row];
     if (seg === undefined) continue;
-    if (
-      edit.colKey === SEG_COL.speed &&
-      (edit.value === null || (typeof edit.value === 'number' && Number.isFinite(edit.value)))
-    ) {
+    if (edit.colKey === SEG_COL.speed && (edit.value === null || isCommittableSpeed(edit.value))) {
       speedAuthored.add(edit.row);
     }
     const updated = applyOne(seg, edit, ctx, speedAuthored.has(edit.row));

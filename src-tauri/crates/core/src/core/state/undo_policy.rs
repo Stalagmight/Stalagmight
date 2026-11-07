@@ -32,7 +32,6 @@ impl AppState {
         let link = self
             .database
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .and_then(|db| db.load_speleo_link().ok())
             .flatten();
@@ -69,26 +68,19 @@ impl AppState {
         // Save rewrites the whole database while holding `project`, then renames the
         // fresh file over the live one. Hold the same lock through this database edit so
         // a save cannot snapshot the old mode and overwrite a successful setting change.
-        let project_guard = self.project.lock().map_err(|_| {
-            super::speleodb::local_dto(SpeleoDbError::Io("project lock poisoned".to_owned()))
-        })?;
+        let project_guard = self.project.lock();
         // Must be a remote project: a local one has no policy to set (the fixed window is
         // unconditional there), and no link row to write it into.
         let _link = self.speleodb_validated_link()?;
-        if !self.edit_enabled() {
-            return Err(super::speleodb::local_dto(SpeleoDbError::Io(
-                "start editing before changing the undo-history setting".to_owned(),
-            )));
-        }
-        let db_guard = self.database.lock().map_err(|_| {
-            super::speleodb::local_dto(SpeleoDbError::Io("database lock poisoned".to_owned()))
-        })?;
+        // [#576 A8] The write below is a method of the gate's proof, so it cannot be
+        // moved ahead of the check (a policy written first would ride the next push).
+        let gate = self.speleodb_undo_mode_gate()?;
+        let db_guard = self.database.lock();
         let db = db_guard
             .as_ref()
             .ok_or_else(|| super::speleodb::local_dto(SpeleoDbError::NoRemoteProject))?;
         let now = chrono::Utc::now().to_rfc3339();
-        db.set_speleo_undo_mode_and_mark_forward_edit(mode, &now)
-            .map_err(|e| super::speleodb::local_dto(SpeleoDbError::Io(e.to_string())))?;
+        gate.write(db, mode, &now)?;
         drop(db_guard);
         drop(project_guard);
         self.sync_undo_depth_limit();
@@ -107,74 +99,44 @@ impl AppState {
     /// budget; everything else goes back onto the configured entry-count window.
     ///
     /// Takes the `database` lock (via [`Self::undo_policy`]) and then `undo_stack`, so
-    /// it must not be called while either is held. Callers that already hold a link pass
-    /// it to [`Self::sync_undo_depth_limit_for`].
+    /// it must not be called while either is held. A project-slot commit arms the bound
+    /// itself, from the policy its own link resolves (`commit_open_session`, through
+    /// [`arm_undo_depth_limit`]).
     pub(crate) fn sync_undo_depth_limit(&self) {
         let policy = self.undo_policy();
-        self.apply_undo_depth_limit(policy);
-    }
-
-    /// [`Self::sync_undo_depth_limit`] over a link the caller has ALREADY read - for the
-    /// two load paths, which hold the just-opened database handle directly and have to
-    /// arm the bound BEFORE the persisted stack is restored into it.
-    ///
-    /// Takes only the `undo_stack` lock, never `database`, so it is safe at a point where
-    /// the live handle is mid-swap.
-    pub(crate) fn sync_undo_depth_limit_for(&self, link: Option<&SpeleoLink>) {
-        let policy = self.undo_policy_for(link);
-        self.apply_undo_depth_limit(policy);
+        // Same reasoning as the commit's: skipping the arm left the stack on its previous
+        // bound, and the next `enforce_depth_limit` then truncates to it.
+        let mut undo = self.undo_stack.lock();
+        arm_undo_depth_limit(&mut undo, policy);
     }
 
     /// [#469] How many persisted history rows the load paths may read for a project
     /// whose link is `link`, per stack.
     ///
-    /// The mirror of [`Self::sync_undo_depth_limit_for`], answered BEFORE the rows are
-    /// read rather than after they are in memory. A count-window project reads its own
-    /// window, because that is exactly what survives the restore's `enforce_depth_limit`;
-    /// a Full-mode linked project has no count window, so it reads the derived ceiling
-    /// [`MAX_PERSISTED_HISTORY_ROWS`], past which the byte budget would evict anyway.
+    /// The mirror of the bound the commit arms ([`arm_undo_depth_limit`]), answered
+    /// BEFORE the rows are read rather than after they are in memory. A count-window
+    /// project reads its own window, because that is exactly what survives the restore's
+    /// `enforce_depth_limit`; a Full-mode linked project has no count window, so it reads
+    /// the derived ceiling [`MAX_PERSISTED_HISTORY_ROWS`], past which the byte budget would
+    /// evict anyway.
     ///
     /// The window comes off the undo stack rather than the config because it is the
     /// stack's own `history_limit` that `use_count_limit` re-arms moments later; reading
     /// the config here would let the two disagree if a reload landed between them.
-    /// Takes only the `undo_stack` lock, so it is safe wherever
-    /// `sync_undo_depth_limit_for` is.
+    /// Takes only the `undo_stack` lock, never `database`, so it is safe at a point where
+    /// the live handle is mid-swap.
     pub(crate) fn history_load_row_cap(&self, link: Option<&SpeleoLink>) -> usize {
         if self.undo_policy_for(link).unlimited_depth() {
             return MAX_PERSISTED_HISTORY_ROWS;
         }
-        let window = self
-            .undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .history_limit();
+        let window = self.undo_stack.lock().history_limit();
         window.min(MAX_PERSISTED_HISTORY_ROWS)
-    }
-
-    fn apply_undo_depth_limit(&self, policy: UndoPolicy) {
-        // Same reasoning: skipping the arm left the stack on its previous bound, and the
-        // `enforce_depth_limit` at the end of a load then truncates to it - the loss the
-        // load path says no later re-arm can undo.
-        let mut undo = self
-            .undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if policy.unlimited_depth() {
-            undo.set_byte_budget(crate::core::undo::UNDO_BYTE_BUDGET_BYTES);
-        } else {
-            undo.use_count_limit();
-        }
     }
 
     /// The global default. Recover a poisoned guard so a panic cannot replace an
     /// explicit `Disabled` setting with [`UndoMode::default`] (`Full`).
     pub(super) fn global_undo_mode(&self) -> UndoMode {
-        self.config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .speleodb
-            .undo_mode
-            .resolved()
+        self.config.lock().speleodb.undo_mode.resolved()
     }
 
     /// An explicit project value, or the global default for a legacy NULL that has
@@ -197,7 +159,6 @@ impl AppState {
         let stored_mode = self
             .database
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .and_then(|db| db.load_speleo_link().ok())
             .flatten()
@@ -227,6 +188,67 @@ impl AppState {
                 purpose = "initialize a legacy SpeleoDB undo policy (#303)",
                 "Could not materialize the project's undo mode; this session will keep the resolved value in memory"
             );
+        }
+    }
+}
+
+/// [#303] Put `stack` on the depth bound `policy` calls for: the byte budget for Full
+/// mode on a linked project, the configured entry-count window for everything else.
+/// Idempotent; trims immediately if the stack already exceeds the new bound.
+pub(super) fn arm_undo_depth_limit(stack: &mut crate::core::UndoStack, policy: UndoPolicy) {
+    if policy.unlimited_depth() {
+        stack.set_byte_budget(crate::core::undo::UNDO_BYTE_BUDGET_BYTES);
+    } else {
+        stack.use_count_limit();
+    }
+}
+
+/// [#576 A8] The undo-mode setter's edit gate as a type: the policy write is a method
+/// of [`EditSessionOpen`], made only by the check, so writing the policy before
+/// checking the gate does not compile.
+mod undo_mode_gate {
+    use super::AppState;
+    use crate::models::UndoMode;
+    use crate::persistence::Database;
+    use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
+
+    /// Proof that the edit gate was open when the setter checked it.
+    pub(super) struct EditSessionOpen {
+        _checked: (),
+    }
+
+    impl AppState {
+        /// Changing what the next push ships needs an edit session.
+        #[expect(
+            clippy::result_large_err,
+            reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                      repo-wide change outside #576 A8"
+        )]
+        pub(super) fn speleodb_undo_mode_gate(&self) -> Result<EditSessionOpen, SpeleoErrorDto> {
+            if !self.edit_enabled() {
+                return Err(super::super::speleodb::local_dto(SpeleoDbError::refused(
+                    "start editing before changing the undo-history setting".to_owned(),
+                )));
+            }
+            Ok(EditSessionOpen { _checked: () })
+        }
+    }
+
+    impl EditSessionOpen {
+        /// The policy, the dirty stamp and the chain clear, in one transaction.
+        #[expect(
+            clippy::result_large_err,
+            reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                      repo-wide change outside #576 A8"
+        )]
+        pub(super) fn write(
+            &self,
+            db: &Database,
+            mode: UndoMode,
+            now: &str,
+        ) -> Result<(), SpeleoErrorDto> {
+            db.set_speleo_undo_mode_and_mark_forward_edit(mode, now)
+                .map_err(|e| super::super::speleodb::local_dto(SpeleoDbError::Io(e.to_string())))
         }
     }
 }
@@ -264,9 +286,9 @@ mod tests {
         }
     }
 
-    fn poison_mutex<T>(mutex: &std::sync::Mutex<T>) {
+    fn poison_mutex<T>(mutex: &crate::models::poison_policy::RecoveringMutex<T>) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = mutex.lock().expect("lock before poisoning");
+            let _guard = mutex.lock();
             panic!("poison mutex for undo-policy coverage");
         }));
     }
@@ -279,12 +301,12 @@ mod tests {
         with_isolated_config(|| {
             let state = state();
 
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Full;
+            state.config.lock().speleodb.undo_mode = UndoMode::Full;
             let policy = state.undo_policy_for(Some(&link_with(Some(UndoMode::Disabled))));
             assert_eq!(policy.mode, UndoMode::Disabled);
             assert!(!policy.pushes_history());
 
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            state.config.lock().speleodb.undo_mode = UndoMode::Disabled;
             let policy = state.undo_policy_for(Some(&link_with(Some(UndoMode::Full))));
             assert_eq!(policy.mode, UndoMode::Full);
             assert!(policy.pushes_history());
@@ -299,10 +321,10 @@ mod tests {
             let state = state();
             let mut link = link_with(None);
 
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            state.config.lock().speleodb.undo_mode = UndoMode::Disabled;
             link.undo_mode = Some(state.effective_undo_mode(link.undo_mode));
 
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Full;
+            state.config.lock().speleodb.undo_mode = UndoMode::Full;
             assert_eq!(state.undo_policy_for(Some(&link)).mode, UndoMode::Disabled);
         });
     }
@@ -311,7 +333,7 @@ mod tests {
     fn poisoned_config_lock_preserves_a_disabled_global_default() {
         with_isolated_config(|| {
             let state = state();
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            state.config.lock().speleodb.undo_mode = UndoMode::Disabled;
             poison_mutex(&state.config);
 
             let policy = state.undo_policy_for(Some(&link_with(None)));
@@ -327,7 +349,7 @@ mod tests {
     fn a_project_with_no_link_is_local_whatever_the_default() {
         with_isolated_config(|| {
             let state = state();
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Full;
+            state.config.lock().speleodb.undo_mode = UndoMode::Full;
 
             let policy = state.undo_policy_for(None);
             assert!(!policy.linked);
@@ -382,37 +404,12 @@ mod tests {
         });
     }
 
-    /// The lock gate is the FIRST thing after the link lookup, so no write can slip in
-    /// ahead of it. Structural, for the reason above.
-    #[test]
-    fn the_undo_mode_write_is_gated_before_it_mutates() {
-        let src = include_str!("undo_policy.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production region precedes the test module");
-        let verb = src
-            .split_once("pub fn speleodb_set_undo_mode")
-            .map(|(_, rest)| rest)
-            .expect("the verb is in this file");
-        let gate = verb
-            .find("if !self.edit_enabled()")
-            .expect("the verb must check the edit gate");
-        let write = verb
-            .find("set_speleo_undo_mode_and_mark_forward_edit")
-            .expect("the verb writes the link");
-        assert!(
-            gate < write,
-            "the edit gate must precede the write - checking afterwards would leave the \
-             policy on disk for the next push to ship"
-        );
-    }
-
     /// With no linked project open, status reports the application default.
     #[test]
     fn undo_mode_status_reports_the_global_value_without_a_project() {
         with_isolated_config(|| {
             let state = state();
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            state.config.lock().speleodb.undo_mode = UndoMode::Disabled;
 
             // No project open at all: the GLOBAL default, and not overridden. Not
             // `UndoPolicy::local()`'s Full - that answers "is this project exempt
@@ -433,7 +430,7 @@ mod tests {
                 .expect("save link");
 
             let state = state();
-            *state.database.lock().expect("database lock") = Some(db);
+            *state.database.lock() = Some(db);
             poison_mutex(&state.database);
 
             assert_eq!(state.undo_mode_status(), UndoMode::Disabled);
@@ -455,11 +452,7 @@ mod tests {
             );
 
             // Everything else reads exactly the window `use_count_limit` re-arms.
-            state
-                .undo_stack
-                .lock()
-                .expect("undo stack lock")
-                .set_history_limit(7);
+            state.undo_stack.lock().set_history_limit(7);
             assert_eq!(state.history_load_row_cap(None), 7);
             assert_eq!(
                 state.history_load_row_cap(Some(&link_with(Some(UndoMode::Disabled)))),
@@ -467,11 +460,7 @@ mod tests {
             );
 
             // ...and never more than the ceiling, whatever the config asks for.
-            state
-                .undo_stack
-                .lock()
-                .expect("undo stack lock")
-                .set_history_limit(usize::MAX);
+            state.undo_stack.lock().set_history_limit(usize::MAX);
             assert_eq!(state.history_load_row_cap(None), MAX_PERSISTED_HISTORY_ROWS);
         });
     }
@@ -483,9 +472,8 @@ mod tests {
     /// the loader returning `Err`, and the Playwright specs drive a mock. Nothing joined
     /// "the loader failed" to "the user is told".
     ///
-    /// Goes through `open_project` because `do_load_project_full` needs an `AppHandle`
-    /// and has no unit entry point; the structural assertions below are what keep the two
-    /// paths from diverging.
+    /// [#576 A8] Through BOTH load paths: `do_load_project_full` needs only an event
+    /// sink, so it is driven here like `open_project` rather than pinned by its text.
     #[test]
     fn a_history_that_cannot_be_read_sets_the_discarded_flag() {
         with_isolated_config(|| {
@@ -518,12 +506,19 @@ mod tests {
                 .expect("insert hostile row");
             }
 
-            let state = state();
-            assert!(state.open_project(path).success, "the project still opens");
-            assert!(
-                state.history_discarded(),
-                "an unreadable history must be recorded, or the banner never appears"
-            );
+            for load in LOAD_PATHS {
+                let state = state();
+                assert!(
+                    load.run(&state, &path),
+                    "{}: the project still opens",
+                    load.name
+                );
+                assert!(
+                    state.history_discarded(),
+                    "{}: an unreadable history must be recorded, or the banner never appears",
+                    load.name
+                );
+            }
         });
     }
 
@@ -549,95 +544,129 @@ mod tests {
         });
     }
 
-    /// [#469, #473] Both load paths read the persisted history through the row-capped,
-    /// budget-sharing loader, resolve the cap before they read, and share ONE budget
-    /// across the two stacks.
+    /// One production load path, as these tests drive it.
+    struct LoadPath {
+        name: &'static str,
+        run: fn(&AppState, &std::path::Path) -> bool,
+    }
+
+    impl LoadPath {
+        fn run(&self, state: &AppState, path: &std::path::Path) -> bool {
+            (self.run)(state, path)
+        }
+    }
+
+    /// The plain open and the progress-reporting full load. The full load refuses to
+    /// run without an event sink, and needs nothing else (#576 A8).
+    const LOAD_PATHS: [LoadPath; 2] = [
+        LoadPath {
+            name: "open_project",
+            run: |state, path| state.open_project(path.to_path_buf()).success,
+        },
+        LoadPath {
+            name: "do_load_project_full",
+            run: |state, path| {
+                state.set_event_sink(std::sync::Arc::new(crate::core::events::NullEventSink));
+                state.do_load_project_full(path.to_path_buf()).is_ok()
+            },
+        },
+    ];
+
+    /// A history row whose gzip trailer declares more than any budget admits: refused
+    /// on the declared size alone, so a load that FETCHES it discards the history.
+    fn insert_hostile_history_row(path: &std::path::Path, table: &str, sequence: i64) {
+        let mut liar = vec![0x1f, 0x8b, 0x08, 0x00];
+        liar.extend_from_slice(&[0_u8; 8]);
+        liar.extend_from_slice(&u32::MAX.to_le_bytes());
+        let conn = rusqlite::Connection::open(path).expect("raw connection");
+        conn.execute(
+            &format!(
+                "INSERT INTO {table} (sequence, command_json, undo_data_json, executed_at) \
+                 VALUES (?1, ?2, ?3, ?4)"
+            ),
+            rusqlite::params![sequence, liar.clone(), liar, "2026-08-08T00:00:00+00:00"],
+        )
+        .expect("insert hostile row");
+    }
+
+    /// [#469] Both load paths read the history through the row cap, resolved BEFORE the
+    /// read, so the rows past it are never fetched at all - not fetched and then trimmed.
     ///
-    /// Structural because both failures are invisible in behaviour: an uncapped read
-    /// produces the same restored stack as a capped one - the trim afterwards sees to
-    /// that - and a per-stack budget produces the same stack as a shared one, on every
-    /// file except a hostile one. They differ only in how much of that hostile file
-    /// reaches memory. `do_load_project_full` needs an `AppHandle`, so it has no
-    /// unit-test entry point of its own; this is what keeps the two paths from drifting.
+    /// [#576 A8] Behavioural, where it used to be a source scan of `project_load.rs` on
+    /// the grounds that the difference is invisible. It is visible through the
+    /// inflation budget: the OLDEST row of each stack declares a size no budget admits,
+    /// so the history survives a load only if that row is never read. A cap of two
+    /// leaves it out; the cap of three in the second pass is the positive control that
+    /// the row is really there and really refused once fetched.
     #[test]
-    fn both_load_paths_read_the_history_under_a_cap() {
-        let src = include_str!("project_load.rs");
-        assert_eq!(
-            src.matches("load_undo_stack_with_timestamps_within(")
-                .count(),
-            2,
-            "both load paths read the undo table through the capped, budget-sharing loader"
-        );
-        assert_eq!(
-            src.matches("load_redo_stack_with_timestamps_within(")
-                .count(),
-            2,
-            "both load paths read the redo table through the capped, budget-sharing loader"
-        );
-        assert!(
-            !src.contains("load_undo_stack_with_timestamps()")
-                && !src.contains("load_redo_stack_with_timestamps()"),
-            "an unwindowed history read is exactly what #469 removed from this file"
-        );
-        // [#473] Exactly one budget per load path. Two would mean the undo and redo
-        // stacks each got a full one, bounding an open at 2x the constant while every
-        // comment says 1x - the defect this pins.
-        assert_eq!(
-            src.matches("Database::load_history_budget()").count(),
-            2,
-            "each load path creates ONE budget and hands it to both stacks"
-        );
+    fn both_load_paths_leave_the_rows_past_the_cap_unread() {
+        with_isolated_config(|| {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let path = temp_dir.path().join("deep-history.stalx");
+            {
+                let mut db = Database::open(&path).expect("open database");
+                db.save_project(&crate::models::Project::new("Deep".to_owned(), None))
+                    .expect("save project");
+            }
+            {
+                // Two well-formed rows per stack (sequences 0 and 1, written the way the
+                // app writes them), the newest two...
+                let db = Database::open_existing(&path).expect("reopen database");
+                db.save_undo_stack(vec![
+                    (r#"{"c":1}"#.to_owned(), r#"{"u":1}"#.to_owned()),
+                    (r#"{"c":2}"#.to_owned(), r#"{"u":2}"#.to_owned()),
+                ])
+                .expect("seed undo");
+                db.save_redo_stack_with_timestamps(vec![
+                    (r#"{"c":3}"#.to_owned(), r#"{"u":3}"#.to_owned(), None),
+                    (r#"{"c":4}"#.to_owned(), r#"{"u":4}"#.to_owned(), None),
+                ])
+                .expect("seed redo");
+            }
+            // ...and one hostile row per stack, OLDER than both: past a cap of two.
+            for table in ["undo_stack", "redo_stack"] {
+                insert_hostile_history_row(&path, table, -1);
+            }
 
-        // [#473] BOTH project-slot commits in project_create.rs clear the discarded-
-        // history flag. Only `create_project` has a behavioural test - the other,
-        // `do_create_project_full`, needs an `AppHandle` and so has no unit-test entry
-        // point, which is exactly the asymmetry that let the flag be forgotten in the
-        // first place. A stale `true` here puts a data-loss banner over a new project.
-        let create_src = include_str!("project_create.rs");
-        assert_eq!(
-            create_src.matches("set_history_discarded(false)").count(),
-            2,
-            "every project-slot commit in project_create.rs must clear the flag"
-        );
-        // [#473] ...and BOTH load paths write it from what their own load actually did.
-        // `a_history_that_cannot_be_read_sets_the_discarded_flag` covers `open_project`
-        // behaviourally; `do_load_project_full` needs an `AppHandle` and cannot be unit
-        // tested, so this count is what keeps it from silently losing the write.
-        assert_eq!(
-            src.matches("set_history_discarded(history_discarded)")
-                .count(),
-            2,
-            "both load paths must record whether their history survived"
-        );
+            for load in LOAD_PATHS {
+                for (cap, fetches_the_hostile_row) in [(2, false), (3, true)] {
+                    let state = state();
+                    state.undo_stack.lock().set_history_limit(cap);
+                    assert!(load.run(&state, &path), "{}: the project opens", load.name);
+                    assert_eq!(
+                        state.history_discarded(),
+                        fetches_the_hostile_row,
+                        "{} with a row cap of {cap}: the row past the cap must never be \
+                         read (a load that reads the whole table and trims afterwards has \
+                         already paid for, and refused on, the row it then drops)",
+                        load.name
+                    );
+                }
+            }
+        });
+    }
 
-        for func in ["fn open_project", "pub fn do_load_project_full"] {
-            // Slice at the NEXT item in the `impl AppState` block rather than at the end
-            // of the file. Both are 4-space-indented methods, so the next `///`, `pub` or
-            // `fn` at that indent ends this one. Without the cut, `open_project`'s slice
-            // ran through `do_load_project_full` and would have passed on ITS cap and read
-            // even if `open_project` had lost both - the check has to be scoped to one
-            // function to mean anything.
-            let start = src
-                .find(func)
-                .unwrap_or_else(|| panic!("{func} is present"))
-                + func.len();
-            let rest = &src[start..];
-            let end = ["\n    /// ", "\n    pub ", "\n    pub(", "\n    fn "]
-                .iter()
-                .filter_map(|boundary| rest.find(boundary))
-                .min()
-                .unwrap_or(rest.len());
-            let body = &rest[..end];
-            let cap = body
-                .find("history_load_row_cap(")
-                .unwrap_or_else(|| panic!("{func} resolves a load cap"));
-            let read = body
-                .find("load_undo_stack_with_timestamps_within(")
-                .unwrap_or_else(|| panic!("{func} reads the undo table"));
-            assert!(
-                cap < read,
-                "{func} must resolve the cap BEFORE the read - the whole point is that \
-                 the rows past it are never fetched"
+    /// [#473] Each load path mints ONE inflation budget and hands it to both stacks.
+    ///
+    /// A sanctioned source scan (#576 A8-D2, docs/testing-recipes.md "Source scans"):
+    /// a per-stack budget changes only how much of a hostile file reaches memory, which
+    /// a test can observe only with a history big enough to fill the budget for real.
+    #[test]
+    fn each_load_path_mints_one_history_budget_for_both_stacks() {
+        use crate::models::source_scan::{fn_body, prod_region};
+        let src = prod_region(
+            include_str!("project_load.rs"),
+            "pub fn do_load_project_full_with(",
+        );
+        for signature in ["fn open_project_with(", "pub fn do_load_project_full_with("] {
+            assert_eq!(
+                fn_body(src, signature)
+                    .matches("Database::load_history_budget()")
+                    .count(),
+                1,
+                "RULE (#473, one history budget per open): `{signature}` must mint exactly \
+                 one inflation budget and share it between the undo and redo stacks - a \
+                 budget per stack doubles the ceiling every doc states"
             );
         }
     }
@@ -657,54 +686,8 @@ mod tests {
     /// boundary so test code may keep using them. Still weaker than a compile error - it
     /// cannot see the other crates - but it covers every file a history reader would
     /// plausibly be added to.
-    /// Does this `#[cfg(test)]` gate a `mod`, rather than a gated `use` or fn?
     ///
-    /// `from` starts AT the attribute. Skips its own line, then any blank or attribute
-    /// lines, and answers on the first line that is neither. This crate puts `#[expect]`
-    /// lint waivers between the gate and the module, and those waivers are usually
-    /// MULTI-LINE, so the skip has to balance brackets rather than test for a `#[` prefix:
-    /// a waiver's continuation line (`clippy::unwrap_used,`) looks like ordinary code and
-    /// ended the scan early, which is what made a first version of this report every
-    /// `#[expect]`-waivered test module in the crate as production.
-    fn gates_a_module(from: &str) -> bool {
-        let bracket_delta = |line: &str| -> i32 {
-            let opens = i32::try_from(line.matches('[').count()).unwrap_or(0);
-            let closes = i32::try_from(line.matches(']').count()).unwrap_or(0);
-            opens - closes
-        };
-        let mut depth = 0_i32;
-        for line in from.lines().skip(1) {
-            if depth > 0 {
-                depth += bracket_delta(line);
-                continue;
-            }
-            let trimmed = line.trim_start();
-            // Blank, comment, or attribute lines all sit BETWEEN the gate and the module.
-            // The comment case is not hypothetical: `speleodb/sync.rs` explains its
-            // `#[expect]` waiver in three `//` lines between the two, and leaving them out
-            // meant that file was never cut - its whole test module counted as production,
-            // which both risks a false offender and inflates `production_bytes`, the one
-            // number that is supposed to notice a bad cut.
-            if trimmed.is_empty() || trimmed.starts_with("//") {
-                continue;
-            }
-            if trimmed.starts_with("#[") {
-                depth += bracket_delta(line);
-                continue;
-            }
-            // An INLINE module (`mod tests {`) ends the production region. A DECLARATION
-            // (`mod adversarial_tests;`) does not: its body is a separate file the walk
-            // visits on its own, while the rest of THIS file is still production.
-            // `core/state/mod.rs` opens with fourteen such declarations and closes with
-            // `pub use app_state::AppState;` - treating the first one as the boundary
-            // discarded every production line after it, in the module root of the very
-            // directory this guard exists to watch.
-            let is_mod = trimmed.starts_with("mod ") || trimmed.starts_with("pub mod ");
-            return is_mod && !trimmed.trim_end().ends_with(';');
-        }
-        false
-    }
-
+    /// [#576 A8] The cut is the shared `models::source_scan::test_module_start`.
     #[test]
     fn no_production_caller_mints_its_own_history_budget() {
         // The bare names. The trailing `(` in each form below separates them from the
@@ -797,10 +780,8 @@ mod tests {
                 // cut walks forward over any further attribute lines and requires a `mod`
                 // at the end of them. Anything else (a gated `use`, a gated fn) is not a
                 // module boundary and does not end the production region.
-                let production = text
-                    .match_indices("#[cfg(test)]")
-                    .find(|&(at, _)| gates_a_module(&text[at..]))
-                    .map_or(text.as_str(), |(at, _)| &text[..at]);
+                let production = crate::models::source_scan::test_module_start(&text)
+                    .map_or(text.as_str(), |at| &text[..at]);
                 scanned += 1;
                 production_bytes += production.len();
                 total_bytes += text.len();
@@ -827,7 +808,8 @@ mod tests {
         );
         assert!(
             offenders.is_empty(),
-            "production code must share the open's budget through the `_within` loaders \
+            "RULE (sanctioned scan, #576 A8-D2 - one history budget per open, #473): \
+             production code must share the open's budget through the `_within` loaders \
              (see Database::load_history_budget), never mint its own: {offenders:?}"
         );
     }
@@ -846,9 +828,9 @@ mod tests {
             }
 
             let state = state();
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            state.config.lock().speleodb.undo_mode = UndoMode::Disabled;
             assert!(state.open_project(path).success);
-            let db_guard = state.database.lock().expect("database lock");
+            let db_guard = state.database.lock();
             let db = db_guard.as_ref().expect("open database installed");
             let link = db
                 .load_speleo_link()

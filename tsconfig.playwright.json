@@ -1,17 +1,12 @@
 {
+  // The Playwright program (e2e-playwright/ + playwright.config.ts). Shared
+  // options and strictness: tsconfig.base.json.
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-
-    "strict": true,
-    "strictNullChecks": true,
-    "noImplicitAny": true,
 
     // The specs import from `src/`, which pulls ~200 app files into this
     // program. These two keep it buildable when that reach grows: without
@@ -22,12 +17,11 @@
     // that playwright.config.ts and the specs rely on for `process`.
     "types": ["vite/client", "node"],
 
-    "skipLibCheck": true,
-    // Type-check only. Without this, a bare `tsc -p tsconfig.playwright.json`
-    // emits a .js next to every .ts in the program - including the src/ files
-    // the specs import - and litters the tree with hundreds of untracked files.
-    // tsconfig.json and tsconfig.agent.json both set it for the same reason.
-    "noEmit": true
+    // The program is ~200 src/ files bigger than its own tree; the cache makes
+    // a re-run after a one-spec edit cheap. Its own file, so the three
+    // programs never overwrite each other's build info.
+    "incremental": true,
+    "tsBuildInfoFile": "./node_modules/.cache/tsc/tsconfig.playwright.tsbuildinfo"
   },
   "include": ["e2e-playwright/**/*", "playwright.config.ts"]
 }

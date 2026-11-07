@@ -11,7 +11,7 @@
 //!   the newcomer and forwards its argv to the running instance.
 //!
 //! All three converge here. Paths are pushed onto [`PendingLaunchFiles`] and the
-//! frontend is nudged with [`LAUNCH_FILE_EVENT`]; the frontend drains the queue
+//! frontend is nudged with [`LaunchFileQueued`]; the frontend drains the queue
 //! via [`take_pending_launch_files`] once it is ready and routes each path
 //! through its own unified open/import router. The queue - rather than an event
 //! payload - is what makes a cold launch work at all: the file is known long
@@ -24,17 +24,19 @@
 //! that would displace open work.
 
 use std::collections::HashSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager, Runtime, Url};
+use tauri::{AppHandle, Manager, Runtime, Url};
 
-/// Payload-free nudge telling the frontend to drain the pending-launch queue.
+use crate::models::poison_policy::RecoveringMutex;
+
+/// Payload-free nudge telling the frontend to drain the pending-launch queue
+/// (`core::events::LaunchFileQueued`, #576 C13).
 ///
 /// Deliberately carries no path: the queue is the single source of truth, so a
 /// listener that misses this event (or is not mounted yet) still gets the file
 /// on its next drain, and no path can be handled twice.
-pub const LAUNCH_FILE_EVENT: &str = "launch-file-queued";
+pub use crate::core::events::LaunchFileQueued;
 
 /// Extensions the OS may hand us, lowercase and without the leading dot.
 ///
@@ -240,21 +242,25 @@ pub fn launch_paths_from_urls(urls: &[Url]) -> Vec<String> {
 /// Managed Tauri state. Holding them here (instead of emitting a path with the
 /// event) is what lets a cold launch work: the OS tells us the file before the
 /// webview exists, and the frontend picks it up when its stores are ready.
-#[derive(Debug, Default)]
-pub struct PendingLaunchFiles(Mutex<Vec<String>>);
+#[derive(Debug)]
+pub struct PendingLaunchFiles(RecoveringMutex<Vec<String>>);
+
+impl Default for PendingLaunchFiles {
+    fn default() -> Self {
+        Self(RecoveringMutex::new("pending_launch_files", Vec::new()))
+    }
+}
 
 impl PendingLaunchFiles {
     /// Queue paths not already queued; returns how many were newly added.
     ///
     /// Capped at [`MAX_LAUNCH_PATHS`] across the whole queue, not per call: a
     /// frontend that is slow (or waiting on the user's confirm) must not let
-    /// repeated forwards grow it without bound. A poisoned lock is treated as
-    /// "nothing queued" rather than a panic - a dropped open request is
-    /// recoverable, a crashed event loop is not.
+    /// repeated forwards grow it without bound. A poisoned lock is recovered
+    /// like every lock (#576 A11), never a panic: a crashed event loop is not
+    /// recoverable.
     pub fn push_all(&self, paths: Vec<String>) -> usize {
-        let Ok(mut queue) = self.0.lock() else {
-            return 0;
-        };
+        let mut queue = self.0.lock();
         let before = queue.len();
         let mut dropped = 0usize;
         for path in paths {
@@ -280,10 +286,7 @@ impl PendingLaunchFiles {
 
     /// Remove and return everything queued.
     pub fn take(&self) -> Vec<String> {
-        self.0
-            .lock()
-            .map(|mut queue| std::mem::take(&mut *queue))
-            .unwrap_or_default()
+        std::mem::take(&mut *self.0.lock())
     }
 }
 
@@ -302,7 +305,7 @@ pub fn queue_and_notify<R: Runtime>(app: &AppHandle<R>, paths: Vec<String>) {
     if pending.push_all(paths) == 0 {
         return;
     }
-    if let Err(e) = app.emit(LAUNCH_FILE_EVENT, ()) {
+    if let Err(e) = super::event_sink::emit_event::<LaunchFileQueued, _>(app, ()) {
         tracing::warn!(
             error = %e,
             purpose = "notify the frontend of an OS-opened file",
@@ -344,10 +347,33 @@ pub fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Whether this process registers `tauri-plugin-single-instance`.
+///
+/// Always, except in a DEBUG build launched by the agent harness
+/// (`STALAGMIGHT_TEST_HOOKS=1`, which `e2e/agent/session.ts` sets for every
+/// session it starts and a normal launch never does). The plugin claims one
+/// name on the D-Bus session bus per app identifier, so with it registered two
+/// harness sessions on one machine kill each other: the second app is
+/// terminated and its argv forwarded to the first, and a parallel
+/// `agent:fuzz-matrix` lost 9 of 12 cells that way (#576 HFI-7). The same
+/// mechanism forwarded a harness launch into the user's own open app.
+///
+/// Two layers, the same rule `commands/debug.rs` applies to its hooks: the
+/// environment variable alone is not enough, because `debug_build` is
+/// `cfg!(debug_assertions)` at the call site, so a release binary ignores the
+/// variable and keeps the plugin whatever its environment says. (The release
+/// HARNESS build drops the plugin at compile time instead, through `--features
+/// e2e`.) Pure so both answers are testable from a debug test build.
+pub fn single_instance_enabled(debug_build: bool, test_hooks: Option<&OsStr>) -> bool {
+    !(debug_build && test_hooks == Some(OsStr::new("1")))
+}
+
 /// Drain the files the OS asked us to open since the last call.
 #[tauri::command]
-pub fn take_pending_launch_files(pending: tauri::State<'_, PendingLaunchFiles>) -> Vec<String> {
-    pending.take()
+pub async fn take_pending_launch_files<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Vec<String>, crate::core::CommandError> {
+    super::pool::run_stateless(move || Ok(app.state::<PendingLaunchFiles>().take())).await
 }
 
 #[cfg(test)]
@@ -592,5 +618,34 @@ mod tests {
             declared, accepted,
             "tauri.conf.json fileAssociations and LAUNCHABLE_EXTENSIONS disagree"
         );
+    }
+
+    #[test]
+    fn single_instance_stays_on_in_release_even_with_test_hooks() {
+        // A release binary ignores the variable: the harness switch must never
+        // reach a production build, whatever its environment says.
+        assert!(single_instance_enabled(false, Some(OsStr::new("1"))));
+        assert!(single_instance_enabled(false, None));
+    }
+
+    #[test]
+    fn harness_debug_build_drops_single_instance() {
+        // #576 HFI-7: a debug build started by the agent harness
+        // (STALAGMIGHT_TEST_HOOKS=1) must not claim the session-bus name, or
+        // parallel harness sessions kill each other.
+        assert!(!single_instance_enabled(true, Some(OsStr::new("1"))));
+    }
+
+    #[test]
+    fn plain_debug_build_keeps_single_instance() {
+        // `./scripts/dev.sh` and every other debug launch without the harness
+        // switch behave exactly as before.
+        assert!(single_instance_enabled(true, None));
+        for other in ["0", "true", "", "1 "] {
+            assert!(
+                single_instance_enabled(true, Some(OsStr::new(other))),
+                "STALAGMIGHT_TEST_HOOKS={other:?} is not the harness switch"
+            );
+        }
     }
 }

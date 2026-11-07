@@ -5,11 +5,11 @@ import { dispatchMapPointer } from './controls';
 export interface MapFeatureClickRequest {
   featureType: 'shot' | 'station';
   sectionId: number;
-  shotId?: number;
-  stationIndex?: number;
-  button?: 'left' | 'right';
+  shotId?: number | undefined;
+  stationIndex?: number | undefined;
+  button?: 'left' | 'right' | undefined;
   /** Disable for tools whose click intentionally does not update selection. */
-  verifySelection?: boolean;
+  verifySelection?: boolean | undefined;
 }
 
 export interface ResolvedMapFeatureClick {
@@ -41,6 +41,9 @@ interface MapPostClickState {
 }
 
 function validateRequest(request: MapFeatureClickRequest): void {
+  if (request.featureType !== 'shot' && request.featureType !== 'station') {
+    throw new Error('map_feature_click needs a featureType of shot or station');
+  }
   if (!Number.isInteger(request.sectionId)) throw new Error('map_feature_click needs an integer sectionId');
   if (request.featureType === 'shot' && !Number.isInteger(request.shotId)) {
     throw new Error('map_feature_click for a shot needs an integer shotId');
@@ -193,15 +196,20 @@ export async function mapFeatureClick(
     );
   }
   if (postClick.interactionSequence <= resolved.interactionSequenceBefore) {
-    throw new Error(`map_feature_click did not reach a semantic map interaction handler via ${target}`);
+    // The target is the page's own description of the element (its test id and
+    // classes), so it goes on a later line, which the runners withhold.
+    throw new Error(`map_feature_click did not reach a semantic map interaction handler\n  via: ${target}`);
   }
 
   const shouldVerify = request.verifySelection ?? true;
   if (shouldVerify) {
     if (!selectionMatches(request, postClick.selection)) {
+      // The selection is the app's store value, so it goes on a later line; the
+      // request's type and ids were checked by `validateRequest`.
       throw new Error(
-        `map_feature_click selected ${JSON.stringify(postClick.selection)} instead of ${request.featureType} ` +
-          `${request.sectionId}:${request.featureType === 'shot' ? request.shotId : request.stationIndex}`,
+        `map_feature_click selected something else instead of ${request.featureType} ` +
+          `${request.sectionId}:${request.featureType === 'shot' ? request.shotId : request.stationIndex}\n` +
+          `  selected: ${JSON.stringify(postClick.selection)}`,
       );
     }
   }

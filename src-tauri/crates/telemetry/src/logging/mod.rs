@@ -5,7 +5,9 @@ use serde::Serialize;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+
+use stalagmight_models::poison_policy::RecoveringMutex;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use ts_rs::TS;
@@ -31,7 +33,9 @@ static LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 /// monotonic sequence number and a wall-clock timestamp (ms since the epoch).
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct RingLogEntry {
+    #[ts(type = "number")]
     pub seq: u64,
+    #[ts(type = "number")]
     pub ts_ms: i64,
     pub line: String,
 }
@@ -42,12 +46,13 @@ pub struct RingLogEntry {
 #[derive(Clone, Debug, Default, Serialize, TS)]
 pub struct LogsSince {
     pub entries: Vec<RingLogEntry>,
+    #[ts(type = "number")]
     pub latest_seq: u64,
     pub dropped: bool,
 }
 
 /// Global ring buffer for recent log entries, readable by the `get_recent_logs` command.
-static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<RingLogEntry>>>> = OnceLock::new();
+static LOG_BUFFER: OnceLock<Arc<RecoveringMutex<VecDeque<RingLogEntry>>>> = OnceLock::new();
 
 /// The directory the rolling file appender was actually opened in, recorded by
 /// [`init`].
@@ -66,20 +71,19 @@ static ACTIVE_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// Append a formatted line to a ring buffer, minting a fresh sequence number and
 /// timestamp and evicting the oldest entry when full. Shared by the tracing
 /// layer and the frontend-log bridge so both paths stay consistent.
-fn push_line_to(buffer: &Mutex<VecDeque<RingLogEntry>>, line: String) {
-    if let Ok(mut buf) = buffer.lock() {
-        let seq = LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
-        let ts_ms = chrono::Utc::now().timestamp_millis();
-        if buf.len() >= RING_BUFFER_CAPACITY {
-            buf.pop_front();
-        }
-        buf.push_back(RingLogEntry { seq, ts_ms, line });
+fn push_line_to(buffer: &RecoveringMutex<VecDeque<RingLogEntry>>, line: String) {
+    let mut buf = buffer.lock();
+    let seq = LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let ts_ms = chrono::Utc::now().timestamp_millis();
+    if buf.len() >= RING_BUFFER_CAPACITY {
+        buf.pop_front();
     }
+    buf.push_back(RingLogEntry { seq, ts_ms, line });
 }
 
 /// A tracing `Layer` that captures formatted log lines into a shared ring buffer.
 struct RingBufferLayer {
-    buffer: Arc<Mutex<VecDeque<RingLogEntry>>>,
+    buffer: Arc<RecoveringMutex<VecDeque<RingLogEntry>>>,
 }
 
 impl<S> tracing_subscriber::Layer<S> for RingBufferLayer
@@ -172,7 +176,10 @@ where
 /// only stderr and the in-memory ring buffer are used - no panic.
 pub fn init() -> Option<WorkerGuard> {
     // Create the in-memory ring buffer
-    let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(RING_BUFFER_CAPACITY)));
+    let buffer = Arc::new(RecoveringMutex::new(
+        "log_buffer",
+        VecDeque::with_capacity(RING_BUFFER_CAPACITY),
+    ));
     LOG_BUFFER.set(Arc::clone(&buffer)).ok();
     let ring_layer = RingBufferLayer { buffer };
 
@@ -222,8 +229,7 @@ pub fn init() -> Option<WorkerGuard> {
 pub fn get_recent_logs() -> Vec<String> {
     LOG_BUFFER
         .get()
-        .and_then(|buf| buf.lock().ok())
-        .map(|buf| buf.iter().map(|e| e.line.clone()).collect())
+        .map(|buf| buf.lock().iter().map(|e| e.line.clone()).collect())
         .unwrap_or_default()
 }
 
@@ -250,8 +256,7 @@ fn logs_since_from(buf: &VecDeque<RingLogEntry>, after_seq: u64) -> LogsSince {
 pub fn get_recent_logs_since(after_seq: u64) -> LogsSince {
     LOG_BUFFER
         .get()
-        .and_then(|buf| buf.lock().ok())
-        .map(|buf| logs_since_from(&buf, after_seq))
+        .map(|buf| logs_since_from(&buf.lock(), after_seq))
         .unwrap_or_default()
 }
 
@@ -715,10 +720,10 @@ mod tests {
 
     #[test]
     fn push_line_mints_monotonic_seq_and_line() {
-        let buffer = Mutex::new(VecDeque::new());
+        let buffer = RecoveringMutex::new("log_buffer", VecDeque::new());
         push_line_to(&buffer, "a".to_string());
         push_line_to(&buffer, "b".to_string());
-        let buf = buffer.lock().expect("lock");
+        let buf = buffer.lock();
         assert_eq!(buf.len(), 2);
         assert!(buf[1].seq > buf[0].seq, "seq must be strictly increasing");
         assert_eq!(buf[0].line, "a");
@@ -815,12 +820,12 @@ mod tests {
     fn ring_buffer_evicts_oldest_at_capacity() {
         // Push past capacity: the ring must stay bounded and retain the NEWEST
         // entries with seq order intact (the eviction path was untested).
-        let buffer = Mutex::new(VecDeque::new());
+        let buffer = RecoveringMutex::new("log_buffer", VecDeque::new());
         let total = RING_BUFFER_CAPACITY + 25;
         for i in 0..total {
             push_line_to(&buffer, format!("line-{i}"));
         }
-        let buf = buffer.lock().expect("lock");
+        let buf = buffer.lock();
         assert_eq!(buf.len(), RING_BUFFER_CAPACITY, "ring must be bounded");
         assert_eq!(
             buf.back().expect("newest").line,

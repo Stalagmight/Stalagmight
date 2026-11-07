@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { IPC_COMMAND_NAMES } from '../../types/ipc/IpcCommands';
+import type { IpcCommandName } from '../../utils/ipc';
+import { INERT_COMMANDS } from '../../../e2e-playwright/mocks/ipc/inert';
 
 /**
  * Mock contract tripwire (issue #275).
@@ -11,19 +14,32 @@ import { fileURLToPath } from 'node:url';
  * `default: console.warn(...); return null`, so a new `#[tauri::command]`
  * added to the registry without a matching mock case makes any spec that
  * exercises it fail silently (returns null instead of real data) rather than
- * with a clear error. This test parses both sides of the contract and fails
+ * with a clear error. This test compares both sides of the contract and fails
  * loudly on drift in either direction. It bit PR #59's
  * `split_shot_at_distance`; see the class documented in CLAUDE.md.
+ *
+ * The registered side is the generated command manifest (#576 C3:
+ * `IPC_COMMAND_NAMES`, read out of `generate_handler!` by `pnpm gen:ipc-types`
+ * and gated fresh by CI), not a re-parse of lib.rs. The mocked side is still the
+ * case labels; what each case RETURNS is checked by `typecheck:playwright`
+ * through `MockReply` (e2e-playwright/mocks/ipc/types.ts).
  */
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../../../');
-const LIB_RS_PATH = path.join(REPO_ROOT, 'src-tauri/src/lib.rs');
 const MOCK_TS_PATH = path.join(REPO_ROOT, 'e2e-playwright/mocks/tauri-ipc.ts');
+// The command families split out of the mock (#576 E8): each module exports one
+// `MockCommandFamily` factory with its own `switch (cmd)`.
+const MOCK_FAMILY_DIR = path.join(REPO_ROOT, 'e2e-playwright/mocks/ipc');
 
-const libRsSource = fs.readFileSync(LIB_RS_PATH, 'utf8');
 const mockTsSource = fs.readFileSync(MOCK_TS_PATH, 'utf8');
+const mockFamilySources = fs
+  .readdirSync(MOCK_FAMILY_DIR)
+  .filter((name) => name.endsWith('.ts'))
+  .sort()
+  .map((name) => ({ name, source: fs.readFileSync(path.join(MOCK_FAMILY_DIR, name), 'utf8') }))
+  .filter(({ source }) => /export const \w+: MockCommandFamily\b/.test(source));
 
 /**
  * Scans `source` starting at `openIndex` (which must point at an opening
@@ -128,38 +144,9 @@ function stripComments(source: string): string {
   return out.join('');
 }
 
-/**
- * Parses the `tauri::generate_handler![...]` command list out of
- * `src-tauri/src/lib.rs`. Every entry there is fully qualified
- * (`commands::<module>::<fn>`), so this extracts the last path segment as
- * the wire command name Tauri dispatches on.
- */
-function parseRegisteredRustCommands(source: string): string[] {
-  const macroMatch = /tauri::generate_handler!\s*\[/.exec(source);
-  if (!macroMatch) {
-    throw new Error(
-      'parseRegisteredRustCommands: could not find `tauri::generate_handler![` in src-tauri/src/lib.rs. ' +
-        'Has the invoke_handler registration moved or been renamed?'
-    );
-  }
-  const openIndex = source.indexOf('[', macroMatch.index);
-  const closeIndex = findMatchingBracket(source, openIndex, '[', ']');
-  const block = stripComments(source.slice(openIndex + 1, closeIndex));
-
-  const commandRegex = /\bcommands::[A-Za-z_][A-Za-z0-9_]*::([A-Za-z_][A-Za-z0-9_]*)\b/g;
-  const names = new Set<string>();
-  let match: RegExpExecArray | null;
-  while ((match = commandRegex.exec(block)) !== null) {
-    names.add(match[1]!);
-  }
-
-  if (names.size === 0) {
-    throw new Error(
-      'parseRegisteredRustCommands: found the generate_handler! block but extracted zero command names. ' +
-        'The `commands::<module>::<fn>` pattern this test looks for may no longer match.'
-    );
-  }
-  return [...names].sort();
+/** Every command the backend registers, from the generated manifest. */
+function registeredRustCommands(): string[] {
+  return [...IPC_COMMAND_NAMES].sort();
 }
 
 /**
@@ -171,10 +158,9 @@ function parseRegisteredRustCommands(source: string): string[] {
  * `switch (table)` inside the `get_raw_table` case) are excluded: they are
  * masked out before the case-label scan runs.
  *
- * Deliberately scopes to only the FIRST `switch (cmd)` block in the file.
- * The file also defines a second, unused legacy helper
- * (`setupTauriMocksWithProject`) with its own tiny `switch (cmd)` that no
- * spec calls into; it is not "the mock" this tripwire is about.
+ * Scopes to the FIRST `switch (cmd)` block in the file, which is the only one
+ * (pinned below: the unused second installer that had its own tiny dispatcher
+ * was deleted, #576 RV5-PI-7).
  */
 function parseMockedCommands(source: string): string[] {
   const switchMatch = /switch\s*\(\s*cmd\s*\)\s*\{/.exec(source);
@@ -218,172 +204,228 @@ function parseMockedCommands(source: string): string[] {
   return [...names].sort();
 }
 
+/**
+ * Every command the mock handles: the core's switch (`tauri-ipc.ts`) plus the switch of
+ * each command family under `e2e-playwright/mocks/ipc/` (#576 E8). A family file whose
+ * factory the core does not list in `MOCK_COMMAND_FAMILIES` is never asked about any
+ * command, so its cases are not mocked - that fails here rather than counting them.
+ */
+function parseAllMockedCommands(): string[] {
+  const listMatch = /const MOCK_COMMAND_FAMILIES[^=]*=\s*\[([^\]]*)\]/.exec(mockTsSource);
+  if (!listMatch) {
+    throw new Error('parseAllMockedCommands: could not find `MOCK_COMMAND_FAMILIES` in e2e-playwright/mocks/tauri-ipc.ts.');
+  }
+  const registeredFamilies = new Set(listMatch[1]!.split(',').map((s) => s.trim()).filter(Boolean));
+  const names = new Set(parseMockedCommands(mockTsSource));
+  for (const { name, source } of mockFamilySources) {
+    const family = /export const (\w+): MockCommandFamily\b/.exec(source)?.[1];
+    if (!family || !registeredFamilies.has(family)) {
+      throw new Error(
+        `parseAllMockedCommands: the command family ${family ?? '?'} (e2e-playwright/mocks/ipc/${name}) ` +
+          'is not listed in MOCK_COMMAND_FAMILIES in tauri-ipc.ts, so none of its cases is reachable.'
+      );
+    }
+    for (const cmd of parseMockedCommands(source)) names.add(cmd);
+  }
+  return [...names].sort();
+}
+
+/**
+ * Every command the frontend names in a string literal (`invokeIpc('x', ...)`, a raw
+ * `invoke('x')`, a queued call, a command list), scanned over the non-test files under
+ * `src/` (the generated IPC types excluded). A registered command NOT named anywhere has
+ * no UI path a spec could reach it by.
+ */
+function frontendCommandNames(): Set<string> {
+  const srcRoot = path.join(REPO_ROOT, 'src');
+  const skipDirs = new Set([path.join(srcRoot, 'test'), path.join(srcRoot, 'types', 'ipc')]);
+  const files: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === '__tests__' || entry.name === '__mocks__' || skipDirs.has(full)) continue;
+        walk(full);
+      } else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+        files.push(full);
+      }
+    }
+  };
+  walk(srcRoot);
+  const source = files.map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+  return new Set(IPC_COMMAND_NAMES.filter((name) => new RegExp(`['"\`]${name}['"\`]`).test(source)));
+}
+
+/** The case groups of the first `switch (cmd) { ... }` in `source`: each run of labels with its body. */
+function parseCaseGroups(source: string): Array<{ labels: string[]; body: string }> {
+  const switchMatch = /switch\s*\(\s*cmd\s*\)\s*\{/.exec(source);
+  if (!switchMatch) throw new Error('parseCaseGroups: no `switch (cmd) {` found');
+  const openIndex = source.indexOf('{', switchMatch.index);
+  const closeIndex = findMatchingBracket(source, openIndex, '{', '}');
+  let block = stripComments(source.slice(openIndex + 1, closeIndex));
+  // Nested blocks that are not the command's own: an inner `switch` (whose labels are
+  // not commands) and every function body (whose `return` answers the callback, not
+  // the command), blanked to spaces so offsets stay put.
+  const mask = (pattern: RegExp) => {
+    for (;;) {
+      pattern.lastIndex = 0;
+      const found = pattern.exec(block);
+      if (!found) return;
+      const open = found.index + found[0].length - 1;
+      const close = findMatchingBracket(block, open, '{', '}');
+      block = block.slice(0, found.index) + ' '.repeat(close + 1 - found.index) + block.slice(close + 1);
+    }
+  };
+  mask(/switch\s*\([^()]*\)\s*\{/g);
+  mask(/=>\s*\{/g);
+  mask(/\bfunction\b[^{;]*\{/g);
+
+  // A label is a whole word: `zoom_default:` is a config key, not the switch's default.
+  const labelRun = /(?:\s*(?<![\w$])case\s+(['"])(?:(?!\1).)*\1\s*:)+|\s*(?<![\w$])default\s*:/g;
+  const groups: Array<{ labels: string[]; start: number; end: number; isDefault: boolean }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = labelRun.exec(block)) !== null) {
+    const labels = [...match[0].matchAll(/case\s+(['"])((?:(?!\1).)*)\1\s*:/g)].map((m) => m[2]!);
+    if (groups.length > 0) groups[groups.length - 1]!.end = match.index;
+    groups.push({ labels, start: match.index + match[0].length, end: block.length, isDefault: labels.length === 0 });
+  }
+  return groups
+    .filter((g) => !g.isDefault)
+    .map((g) => ({ labels: g.labels, body: block.slice(g.start, g.end) }));
+}
+
+/** The text of the statement that starts at `start`, up to its `;` at bracket depth 0. */
+function statementAt(source: string, start: number): string {
+  let depth = 0;
+  for (let i = start; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      i += 1;
+      while (i < source.length && source[i] !== quote) i += source[i] === '\\' ? 2 : 1;
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    else if (ch === ')' || ch === ']' || ch === '}') depth -= 1;
+    else if (ch === ';' && depth === 0) return source.slice(start, i + 1);
+  }
+  return source.slice(start);
+}
+
+/**
+ * The answers of a case group a scan finds untyped: a `return` whose value is not
+ * written `satisfies MockReply<'<one of the group's labels>'>` (or a Promise of one), a
+ * rejection, or a sub-command's own reply. Tauri plugin bridge cases are not commands
+ * and have no manifest entry, so they are not held to it.
+ */
+function untypedReturns(source: string, file: string): string[] {
+  const out: string[] = [];
+  for (const { labels, body } of parseCaseGroups(source)) {
+    const commands = labels.filter((l) => !l.startsWith('plugin:'));
+    if (commands.length === 0) continue;
+    for (const ret of body.matchAll(/\breturn\b/g)) {
+      const stmt = statementAt(body, ret.index!).replace(/\s+/g, ' ');
+      const typed = commands.some((c) => stmt.includes(`MockReply<'${c}'>`));
+      const passThrough =
+        /^return Promise\.reject\(/.test(stmt) || /^return (result|ctx\.unhandled);$/.test(stmt);
+      if (!typed && !passThrough) out.push(`${file} case ${commands.join('/')}: ${stmt.slice(0, 120)}`);
+    }
+  }
+  return out;
+}
+
 // ----------------------------------------------------------------------------
-// Allowlist: registered Rust commands with no mock case in the shared switch,
-// each with a one-line reason it's deliberately unmocked today. If a command
-// listed here gains real e2e coverage, add a mock case and remove the entry
-// (the "allowlist entries stay accurate" test below catches a stale removal
-// the other way: a command that no longer needs the exemption).
+// The commands the mock deliberately does not answer: only commands NO frontend code
+// names, so no spec can reach them (checked below). A command that gains a UI path
+// needs a mock case, or an entry in mocks/ipc/inert.ts, before its first spec runs:
+// a spec that reaches an unanswered command fails at teardown (#576 E3-D2).
 // ----------------------------------------------------------------------------
-const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
-  // Dev/debug-only, not reachable via any UI flow a spec drives.
-  debug_trigger_panic: 'dev-only crash-testing command, not reachable via any UI flow',
-  get_memory_stats: 'dev/debug memory probe, not reachable via any UI flow',
-
-  // Telemetry pipeline: fire-and-forget background reporting, not asserted
-  // on by mocked e2e specs.
-  flush_telemetry: 'background telemetry flush, not exercised by mocked e2e specs',
-  is_telemetry_available: 'background telemetry probe, not exercised by mocked e2e specs',
-  set_telemetry_enabled: 'background telemetry toggle, not exercised by mocked e2e specs',
-  track_events: 'background telemetry event batch, not exercised by mocked e2e specs',
-
-  // Recovery/corruption-repair workflow: covered via the file's own
-  // `__MOCK_IPC_OVERRIDES__` escape hatch, set per-spec, not the shared switch.
-  attempt_repair: 'covered via __MOCK_IPC_OVERRIDES__ in corruption-recovery.spec.ts',
-  export_salvageable_data: 'covered via __MOCK_IPC_OVERRIDES__ in corruption-recovery.spec.ts',
-  list_backups: 'covered via __MOCK_IPC_OVERRIDES__ in corruption-recovery.spec.ts / recovery-integrity.spec.ts',
-  restore_from_backup: 'covered via __MOCK_IPC_OVERRIDES__ in corruption-recovery.spec.ts / recovery-integrity.spec.ts',
-
-  // Undo/redo history dropdown: covered via a spec-local invoke override
-  // layered on top of the shared mock, not the shared switch itself.
-  get_undo_stack: 'covered via a spec-local invoke override in undo-redo-dropdown.spec.ts',
-  get_redo_stack: 'covered via a spec-local invoke override in undo-redo-dropdown.spec.ts',
-  undo_to: 'covered via a spec-local invoke override in undo-redo-dropdown.spec.ts',
-  redo_to: 'covered via a spec-local invoke override in undo-redo-dropdown.spec.ts',
-
-  // Legacy/alternate import-format two-step parse+execute flows: no mocked
-  // spec drives the parse step end to end (only the "execute" commands for
-  // the formats that ARE covered, e.g. execute_walls_import, are mocked).
-  parse_compass: 'no mocked spec drives the compass parse+execute two-step import flow',
-  execute_compass_import: 'no mocked spec drives the compass parse+execute two-step import flow',
-  parse_walls: 'walls-import-dialog.spec.ts uses execute_walls_import directly; parse_walls is not called',
-
-  // SpeleoDB collaborative write-workflow: exercised only by the env-gated
-  // live-server tests (docs/speleodb-dev-testing.md), not mocked Playwright specs.
-  speleodb_adopt_ariane: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-  speleodb_done: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-  speleodb_force_edit: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-  speleodb_get_revisions: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-  speleodb_open_project: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-  speleodb_open_project_discarding_local:
-    'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-  speleodb_push: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-  speleodb_restore_revision: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-  speleodb_dump_candidates:
-    'Read-only #258 probe: downloads a dump and reports whether it holds more than one ' +
-    'openable file. Same live-server dependency as the write-workflow commands below.',
-  speleodb_start_editing: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-  speleodb_update: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-
-  // Dock/panel layout persistence: only unit-tested (uiStore.savePanelSizes.test.ts).
-  // The one e2e spec that resizes a panel (panel-interactions.spec.ts) only
-  // asserts the client-side width, never the backend persist call.
-  update_panel_layout: 'persistence round-trip is unit-tested (uiStore), not asserted by any e2e spec',
-  update_panel_sizes: 'persistence round-trip is unit-tested (uiStore), not asserted by any e2e spec',
-
-  // Tile-cache detail commands: no e2e spec drives a real tile fetch (map
-  // tiles come from mocked layers); get_cache_stats/clear_tile_cache/
-  // get_network_status/get_tile_providers ARE mocked and cover the tile
-  // cache UI paths specs actually exercise.
-  fetch_tile: 'no e2e spec drives a real tile fetch (map tiles are mocked at the layer level)',
-  get_tile_fetch_stats: 'no e2e spec drives a real tile fetch (map tiles are mocked at the layer level)',
-
-  // Section-graph / relationship queries and warning-resolution: no
-  // frontend caller reaches these from any mocked e2e flow today.
-  get_rigid_connected_section_ids:
-    'SectionAdjustDialog calls it (section-adjust-dialog.spec.ts) but no spec asserts on the derived connected count; a null response is swallowed by the dialog\'s own .catch()',
-  export_tml:
-    'export-dialog.spec.ts drives the TML export flow, but only asserts the dialog closes afterward, which happens regardless of the (missing) mock response',
-  get_section_relationships:
-    'ConfirmDialog calls it when deleting a section, but no seeded e2e project has merges/closures/offsets on the deleted section, so a null fallback renders identically to a real empty response',
-  create_section_and_merge: 'no mocked spec drives the drag-to-merge-during-import flow',
-  resolve_warning: 'no mocked spec drives the warning-resolution flow',
-  unresolve_warning: 'no mocked spec drives the warning-resolution flow',
-  get_recent_logs_since: 'no frontend caller (only get_recent_logs, the unbounded variant, is used)',
-
-  // Real, wired feature with genuinely zero e2e coverage today (not a
-  // silent-failure risk yet since no spec touches it, but worth a follow-up
-  // issue: e2e-playwright has no spec for the comment-move tool at all).
-  move_comment: 'move-comment tool + swap-comments dialog have no e2e-playwright coverage of any kind yet',
+const UNMOCKED_COMMAND_REASONS: Partial<Record<IpcCommandName, string>> = {
+  debug_trigger_panic: 'dev-only crash trigger: no frontend code calls it (the debug build reaches it from the agent harness)',
+  get_recent_logs_since: 'no frontend caller (the Debug dialog reads get_recent_logs, the unbounded variant)',
 };
 
-// ----------------------------------------------------------------------------
-// Allowlist: mock `case` labels in the shared switch with no matching
-// registered Rust command. Most are deliberate legacy-name fallthrough
-// aliases grouped with a real command; a few are stale/dead pre-existing
-// mock cases with no Rust command and no frontend caller.
-// ----------------------------------------------------------------------------
-const STALE_MOCK_CASE_REASONS: Record<string, string> = {
-  get_project: 'fallthrough alias for get_project_state (legacy command name kept for compat)',
-  get_recent_projects: 'fallthrough alias for list_recent_projects (legacy command name kept for compat)',
-  get_warnings: 'fallthrough alias for get_project_warnings (legacy command name kept for compat)',
-  parse_dmp: 'fallthrough alias for import_dmp (legacy command name kept for compat)',
-  get_stations: 'stale pre-existing dead mock case; no matching Rust command and no frontend caller',
-  get_undo_state: 'stale pre-existing dead mock case; no matching Rust command and no frontend caller',
-  move_shot: 'stale pre-existing dead mock case; the move_shot tool dispatches the move_station IPC command',
-};
+const inertCommands = Object.keys(INERT_COMMANDS);
 
-describe('mock contract tripwire (#275)', () => {
-  it('parses a non-empty registered Rust command list', () => {
-    expect(parseRegisteredRustCommands(libRsSource).length).toBeGreaterThan(0);
+describe('mock contract tripwire (#275, #576 E3)', () => {
+  it('reads a non-empty registered Rust command list from the manifest', () => {
+    expect(registeredRustCommands().length).toBeGreaterThan(0);
   });
 
   it('parses a non-empty mocked command list', () => {
-    expect(parseMockedCommands(mockTsSource).length).toBeGreaterThan(0);
+    expect(parseAllMockedCommands().length).toBeGreaterThan(0);
   });
 
-  it('every registered Rust command has a mock case or an allowlist reason', () => {
-    const registered = parseRegisteredRustCommands(libRsSource);
-    const mocked = new Set(parseMockedCommands(mockTsSource));
-
-    const missing = registered.filter((cmd) => !mocked.has(cmd) && !(cmd in UNMOCKED_COMMAND_REASONS));
-
-    if (missing.length > 0) {
-      throw new Error(
-        `${missing.length} registered #[tauri::command](s) have no mock case in e2e-playwright/mocks/tauri-ipc.ts ` +
-          `and no allowlist entry: ${missing.join(', ')}. ` +
-          'Add a mock case in tauri-ipc.ts or allowlist with a reason.'
-      );
-    }
-  });
-
-  it('every mock case corresponds to a registered command or an allowlist reason', () => {
-    const registered = new Set(parseRegisteredRustCommands(libRsSource));
-    const mocked = parseMockedCommands(mockTsSource);
-
-    const orphaned = mocked.filter((cmd) => !registered.has(cmd) && !(cmd in STALE_MOCK_CASE_REASONS));
-
-    if (orphaned.length > 0) {
-      throw new Error(
-        `${orphaned.length} mock case(s) in e2e-playwright/mocks/tauri-ipc.ts have no matching registered ` +
-          `#[tauri::command] and no allowlist entry: ${orphaned.join(', ')}. ` +
-          'Add a mock case in tauri-ipc.ts or allowlist with a reason.'
-      );
-    }
-  });
-
-  it('UNMOCKED_COMMAND_REASONS has no stale entries', () => {
-    const registered = new Set(parseRegisteredRustCommands(libRsSource));
-    const mocked = new Set(parseMockedCommands(mockTsSource));
-
-    const stale = Object.keys(UNMOCKED_COMMAND_REASONS).filter(
-      (cmd) => !registered.has(cmd) || mocked.has(cmd)
+  it('every registered command has a mock case, an inert entry or a no-UI-path reason', () => {
+    const mocked = new Set(parseAllMockedCommands());
+    const missing = registeredRustCommands().filter(
+      (cmd) => !mocked.has(cmd) && !inertCommands.includes(cmd) && !(cmd in UNMOCKED_COMMAND_REASONS)
     );
-
-    expect(stale, 'these allowlist entries no longer need an exemption; remove them').toEqual([]);
+    console.log(
+      `[E3] registered ${registeredRustCommands().length}, mocked ${mocked.size}, inert ${inertCommands.length}, ` +
+        `unmocked (no UI path) ${Object.keys(UNMOCKED_COMMAND_REASONS).length}, missing ${missing.length}`
+    );
+    expect(
+      missing,
+      'registered #[tauri::command](s) with no mock case (e2e-playwright/mocks/tauri-ipc.ts or mocks/ipc/), ' +
+        'no inert entry (mocks/ipc/inert.ts) and no reason here'
+    ).toEqual([]);
   });
 
-  it('ignores command paths and case labels that appear only in comments', () => {
-    const rustSource = [
-      'fn main() { builder.invoke_handler(tauri::generate_handler![',
-      '    commands::project::real_command,',
-      '    // TODO: also register commands::project::phantom_from_line_comment here',
-      '    /* commands::project::phantom_from_block_comment, */',
-      '    commands::export::other_real_command,',
-      ']); }',
-    ].join('\n');
-    expect(parseRegisteredRustCommands(rustSource)).toEqual(['other_real_command', 'real_command']);
+  it('every command the frontend names is answered by the mock (a case or an inert entry)', () => {
+    const mocked = new Set(parseAllMockedCommands());
+    const unanswered = [...frontendCommandNames()]
+      .filter((cmd) => !mocked.has(cmd) && !inertCommands.includes(cmd))
+      .sort();
+    expect(unanswered, 'commands a UI path reaches that no mock case or inert entry answers').toEqual([]);
+  });
 
+  it('every mock case and inert entry names a registered command', () => {
+    const registered = new Set(registeredRustCommands());
+    const orphaned = [...parseAllMockedCommands(), ...inertCommands].filter((cmd) => !registered.has(cmd));
+    expect(orphaned, 'mock cases / inert entries for commands the backend does not register').toEqual([]);
+  });
+
+  it('the no-UI-path reasons are only for commands no frontend code names, and nothing answers', () => {
+    const named = frontendCommandNames();
+    const mocked = new Set(parseAllMockedCommands());
+    const registered = new Set(registeredRustCommands());
+    const wrong = Object.keys(UNMOCKED_COMMAND_REASONS).filter(
+      (cmd) => named.has(cmd) || mocked.has(cmd) || inertCommands.includes(cmd) || !registered.has(cmd)
+    );
+    expect(wrong, 'these entries have a UI path, an answer, or no command: move them or remove them').toEqual([]);
+  });
+
+  it('an inert command has a reason and no mock case of its own', () => {
+    const mocked = new Set(parseAllMockedCommands());
+    const bad = Object.entries(INERT_COMMANDS)
+      .filter(([cmd, entry]) => mocked.has(cmd) || !entry || entry.reason.trim().length < 10)
+      .map(([cmd]) => cmd);
+    expect(bad).toEqual([]);
+  });
+
+  it('every reply a mock case returns is typed against the generated manifest', () => {
+    const untyped = [
+      ...untypedReturns(mockTsSource, 'tauri-ipc.ts'),
+      ...mockFamilySources.flatMap(({ name, source }) => untypedReturns(source, `ipc/${name}`)),
+    ];
+    expect(untyped, "write each reply `satisfies MockReply<'<command>'>` (e2e-playwright/mocks/ipc/types.ts)").toEqual([]);
+  });
+
+  it('flags an untyped reply and accepts a typed one or a rejection (scan self-test)', () => {
+    const source = [
+      'switch (cmd) {',
+      "  case 'good': return 1 satisfies MockReply<'good'>;",
+      "  case 'bad': { const xs = [1].map((x) => { return x; }); return { success: true }; }",
+      "  case 'refused': return Promise.reject({ code: 'FAILED', message: 'no' });",
+      "  case 'plugin:window|close': return null;",
+      '  default: return null;',
+      '}',
+    ].join('\n');
+    expect(untypedReturns(source, 'fixture')).toEqual(['fixture case bad: return { success: true };']);
+  });
+
+  it('ignores case labels that appear only in comments', () => {
     const tsSource = [
       'switch (cmd) {',
       "  case 'real_case':",
@@ -395,15 +437,21 @@ describe('mock contract tripwire (#275)', () => {
     ].join('\n');
     expect(parseMockedCommands(tsSource)).toEqual(['real_case']);
   });
+});
 
-  it('STALE_MOCK_CASE_REASONS has no stale entries', () => {
-    const registered = new Set(parseRegisteredRustCommands(libRsSource));
-    const mocked = new Set(parseMockedCommands(mockTsSource));
-
-    const stale = Object.keys(STALE_MOCK_CASE_REASONS).filter(
-      (cmd) => registered.has(cmd) || !mocked.has(cmd)
+// [#576 RV5-PI-7] The mock has ONE dispatcher. A second, uncalled installer with
+// its own `switch (cmd)` answered unannotated, non-wire shapes (save_project
+// without warnings; get_project / load_project, which are not commands) that no
+// MockReply check covered, and would have been a silent second mock for any spec
+// that reached for it.
+describe('the mock has one installer (#576 RV5-PI-7)', () => {
+  it('carries no second, unchecked dispatcher', () => {
+    const dispatchers = (mockTsSource.match(/switch\s*\(\s*cmd\s*\)/g) ?? []).length;
+    console.log(
+      `[RV5-PI-7] setupTauriMocksWithProject in the mock: ${mockTsSource.includes('setupTauriMocksWithProject')}; ` +
+        `switch (cmd) dispatchers in tauri-ipc.ts: ${dispatchers}`,
     );
-
-    expect(stale, 'these allowlist entries no longer need an exemption; remove them').toEqual([]);
+    expect(mockTsSource).not.toContain('setupTauriMocksWithProject');
+    expect(dispatchers).toBe(1);
   });
 });

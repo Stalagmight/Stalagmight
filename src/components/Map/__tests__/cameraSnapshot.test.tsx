@@ -8,17 +8,18 @@
  * boundary could miss hover/click until the camera crossed a bin.
  * The quantization was reverted; this pins the exact-center behavior.
  *
- * `cameraSnapshot` reads only `this.map`, so `Object.create` + a fake map
- * exercises it without the heavy SurveyLayer constructor.
+ * `cameraSnapshot` (surveyLayer/surveyHitTester.ts) reads only the map, so a
+ * fake map exercises it without the heavy SurveyLayer constructor.
  */
 import { describe, expect, it, vi } from 'vitest';
 
 // maplibre-gl runs `window.URL.createObjectURL` at module-init (worker setup),
-// which jsdom lacks; SurveyLayer's import chain pulls it in transitively. The
-// unit under test (cameraSnapshot) never touches maplibre, so stub the module.
+// which jsdom lacks. The unit under test (cameraSnapshot) never touches
+// maplibre, so stub the module in case anything on its import chain loads it.
 vi.mock('maplibre-gl', () => ({ default: {} }));
 
-import SurveyLayer from '../SurveyLayer';
+import type { Map as MaplibreMap } from 'maplibre-gl';
+import { cameraSnapshot } from '../surveyLayer/surveyHitTester';
 
 interface FakeMapState {
   center: { lng: number; lat: number };
@@ -37,13 +38,8 @@ function snapshotFor(state: FakeMapState): { key: string; axisAligned: boolean }
     getPitch: () => state.pitch,
     getZoom: () => state.zoom,
   };
-  // Bypass the constructor: cameraSnapshot() only touches this.map.
-  const layer = Object.create(SurveyLayer.prototype) as {
-    map: unknown;
-    cameraSnapshot: () => { key: string; axisAligned: boolean };
-  };
-  layer.map = map;
-  return layer.cameraSnapshot();
+  // cameraSnapshot() only touches these five map getters.
+  return cameraSnapshot(map as unknown as MaplibreMap);
 }
 
 const base: FakeMapState = {
@@ -55,7 +51,7 @@ const base: FakeMapState = {
   height: 600,
 };
 
-describe('SurveyLayer.cameraSnapshot key', () => {
+describe('SurveyHitTester cameraSnapshot key', () => {
   it('changes on a sub-pixel center shift (no quantization binning)', () => {
     const a = snapshotFor(base);
     // A shift far below one device pixel at z12 - the old pixel-bin key would

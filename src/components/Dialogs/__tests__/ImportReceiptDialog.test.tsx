@@ -8,14 +8,7 @@ import type { ImportReceipt } from '../../../types/ipc/ImportReceipt';
 
 const closeDialog = vi.fn();
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, opts?: Record<string, unknown>) => {
-      if (!opts) return key;
-      return `${key}:${JSON.stringify(opts)}`;
-    },
-  }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).translationStub('keyAndOptions'));
 
 const dialogData: { receipt?: ImportReceipt | undefined } = {};
 
@@ -23,22 +16,13 @@ vi.mock('../../../store/uiStore', () => ({
   useUIStore: (sel: (s: unknown) => unknown) => sel({ closeDialog, dialogData }),
 }));
 
-vi.mock('../../../utils/telemetry', () => ({ trackDialogComplete: vi.fn() }));
+vi.mock('../../../utils/telemetry', async () => (await import('../../../test/factories/telemetry')).telemetryStubs());
 
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ children, title }: { children: React.ReactNode; title: string }) => (
-    <div>
-      <div data-testid="dialog-title">{title}</div>
-      {children}
-    </div>
-  ),
-}));
+vi.mock('../DialogWrapper', async () =>
+  (await import('../../../test/factories/components')).dialogWrapperStub({ title: 'testid' }),
+);
 
-vi.mock('../../common/Button', () => ({
-  Button: ({ children, ...rest }: React.ComponentProps<'button'>) => (
-    <button {...rest}>{children}</button>
-  ),
-}));
+vi.mock('../../common/Button', async () => (await import('../../../test/factories/components')).buttonStub());
 
 import { trackDialogComplete } from '../../../utils/telemetry';
 import ImportReceiptDialog from '../ImportReceiptDialog';

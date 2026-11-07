@@ -111,9 +111,9 @@ function lexMak(text: string): { char: string; text: string }[] {
   const directives: { char: string; text: string }[] = [];
   let index = 0;
   while (index < text.length) {
-    while (index < text.length && (/\s/.test(text[index]) || text[index] === '\x1a')) index += 1;
+    while (index < text.length && (/\s/.test(text[index]!) || text[index] === '\x1a')) index += 1;
     if (index >= text.length) break;
-    const char = text[index];
+    const char = text[index]!; // index < text.length: the break above
     if (!MAK_DISPATCH_CHARS.includes(char)) throw new Error(`Unexpected character '${char}'`);
     let depth = 0;
     let end = -1;
@@ -181,7 +181,7 @@ function extractSpans(body: string): { tokens: string[]; lrud: string | null } {
   };
   let i = 0;
   while (i < chars.length) {
-    const c = chars[i];
+    const c = chars[i]!;
     if (/\s/.test(c)) {
       flush();
     } else if (c === '#') {
@@ -216,7 +216,7 @@ function parseWallsVector(
   const body = at === -1 ? line : line.slice(0, at);
   const { tokens, lrud } = extractSpans(body);
   if (tokens.length < 2) return null;
-  return { from: tokens[0], to: tokens[1], columns: tokens.slice(2), lrud };
+  return { from: tokens[0]!, to: tokens[1]!, columns: tokens.slice(2), lrud };
 }
 
 /** `is_anonymous` (`walls/units.rs:441-443`): exactly `-` or `--`, never `---`. */
@@ -264,15 +264,16 @@ function scanXmlElements(xml: string): ScannedElement[] {
   const pattern = /<(\/?)([A-Za-z_][\w.:-]*)((?:"[^"]*"|[^<>"])*?)(\/?)>/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(xml)) !== null) {
+    // All four groups are non-optional, so each is a string on every match.
     if (match[1] === '/') continue;
-    out.push({ tag: match[2].split(':').pop() ?? '', attrs: match[3], selfClosing: match[4] === '/' });
+    out.push({ tag: match[2]!.split(':').pop() ?? '', attrs: match[3]!, selfClosing: match[4] === '/' });
   }
   return out;
 }
 
 function attributeValue(attrs: string, name: string): string | null {
   const match = new RegExp(`\\s${name}="([^"]*)"`).exec(attrs);
-  return match === null ? null : match[1];
+  return match === null ? null : match[1]!; // group 1 is non-optional
 }
 
 // ---------------------------------------------------------------------------
@@ -297,19 +298,26 @@ describe('randomCompassDatSpec (valid)', () => {
       expect(blocks).toHaveLength(spec.surveys.length);
       for (const [index, block] of blocks.entries()) {
         const lines = compassLines(block);
+        // Throws exactly where `lines[n].trim()` / `.startsWith()` would have on a
+        // block too short to have line n.
+        const lineAt = (n: number): string => {
+          const line = lines[n];
+          if (line === undefined) throw new Error(`survey block ${index} has no line ${n}`);
+          return line;
+        };
         // NON-BLANK cave name. The terminator is `opt(ws(tag("\x0c")))` and
         // `ws` runs `multispace0` AFTER the form feed, so an all-whitespace
         // cave-name line is eaten by it: the next survey's `SURVEY NAME:` is
         // then read as ITS cave name and `many0` stops with no error at all.
         // Measured - it turned a 3-survey `.dat` into a 1-survey one.
-        expect(lines[0].trim()).not.toBe('');
-        expect(lines[1]).toBe(`SURVEY NAME: ${spec.surveys[index].name}`);
-        expect(lines[2].startsWith('SURVEY DATE:')).toBe(true);
+        expect(lineAt(0).trim()).not.toBe('');
+        expect(lines[1]).toBe(`SURVEY NAME: ${spec.surveys[index]!.name}`); // one block per survey: asserted above
+        expect(lineAt(2).startsWith('SURVEY DATE:')).toBe(true);
         expect(lines[3]).toBe('SURVEY TEAM:');
         // `multispace1` after the tag is greedy ACROSS newlines, so a blank team
         // line swallows the parameter line and kills the survey.
-        expect(lines[4].trim()).not.toBe('');
-        expect(lines[5].startsWith('DECLINATION:')).toBe(true);
+        expect(lineAt(4).trim()).not.toBe('');
+        expect(lineAt(5).startsWith('DECLINATION:')).toBe(true);
         // `tag("FORMAT: ")` requires the trailing space, or the whole survey
         // silently reads as feet + degrees + no backsights + no corrections.
         expect(lines[5]).toContain('  FORMAT: ');
@@ -322,6 +330,7 @@ describe('randomCompassDatSpec (valid)', () => {
       const spec = randomCompassDatSpec(mulberry32(seed), 'valid');
       for (const [index, entry] of datRowsOf(spec).entries()) {
         const survey = spec.surveys[index];
+        if (survey === undefined) throw new Error(`seed ${seed}: no survey ${index} for a rendered block`);
         expect(entry.rows).toHaveLength(survey.shots.length);
         const expected = compassHasBacksights(survey.format) ? 11 : 9;
         for (const row of entry.rows) {
@@ -383,7 +392,8 @@ describe('randomCompassDatSpec (valid)', () => {
       const spec = randomCompassDatSpec(mulberry32(seed), 'valid');
       if (spec.surveys.length < 2) continue;
       const stationsOf = (index: number): Set<string> =>
-        new Set(spec.surveys[index].shots.flatMap((shot) => [shot.from, shot.to]));
+        // Called with 0 and 1 only, after the length < 2 skip above.
+        new Set(spec.surveys[index]!.shots.flatMap((shot) => [shot.from, shot.to]));
       const first = stationsOf(0);
       const overlap = [...stationsOf(1)].some((station) => first.has(station));
       if (overlap) shared += 1;
@@ -538,12 +548,14 @@ describe('randomWallsSrvSpec (valid)', () => {
       const spec = randomWallsSrvSpec(mulberry32(seed), 'valid');
       const vectors = wallsVectorLines(spec).map(parseWallsVector);
       for (const [index, vector] of vectors.entries()) {
-        const lrud = spec.shots[index].lrud ?? null;
+        const shot = spec.shots[index];
+        if (shot === undefined) throw new Error(`seed ${seed}: no shot ${index} for a vector line`);
+        const lrud = shot.lrud ?? null;
         // An unterminated span makes the delimiter a literal name character and
         // swallows the LRUD into a measurement token.
         if (lrud === null) expect(vector?.lrud).toBeNull();
         else expect(vector?.lrud).toBe(lrud.map(String).join(','));
-        const to = spec.shots[index].to;
+        const to = shot.to;
         if (isAnonymousStation(to)) expect(vector?.to).toBe(to);
       }
     }
@@ -655,9 +667,10 @@ describe('randomWallsProjectSpec (valid)', () => {
           const parsed = parseWpjRef(directive.rest);
           expect(parsed.fields.length).toBeGreaterThanOrEqual(12);
           expect(parsed.fields.every((value) => Number.isFinite(value))).toBe(true);
+          // fields.length >= 12 is asserted above.
           expect(Number.isInteger(parsed.fields[2])).toBe(true);
-          expect(Math.abs(parsed.fields[2])).toBeGreaterThanOrEqual(1);
-          expect(Math.abs(parsed.fields[2])).toBeLessThanOrEqual(60);
+          expect(Math.abs(parsed.fields[2]!)).toBeGreaterThanOrEqual(1);
+          expect(Math.abs(parsed.fields[2]!)).toBeLessThanOrEqual(60);
           expect(Number.isInteger(parsed.fields[5])).toBe(true);
           expect(parsed.fields[5]).toBeGreaterThanOrEqual(0);
           expect(parsed.fields[5]).toBeLessThanOrEqual(65535);
@@ -686,7 +699,8 @@ describe('randomWallsProjectSpec (valid)', () => {
       const { srvs } = randomWallsProjectSpec(mulberry32(seed), 'valid');
       if (srvs.length < 2) continue;
       const stationsOf = (index: number): Set<string> =>
-        new Set(srvs[index].srv.shots.flatMap((shot) => [shot.from, shot.to]));
+        // Called with 0 and 1 only, after the length < 2 skip above.
+        new Set(srvs[index]!.srv.shots.flatMap((shot) => [shot.from, shot.to]));
       const first = stationsOf(0);
       if ([...stationsOf(1)].some((station) => first.has(station))) shared += 1;
       else disjoint += 1;

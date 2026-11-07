@@ -38,6 +38,11 @@ const PATHS = [
   '/x/out-\u202e\u6d1e\u7a74.svg',
   `/x/${'n'.repeat(200)}.png`,
   'C:\\x\\out.txt',
+  'C:\\x\\.svg',
+  '\\\\srv\\share\\out.svg',
+  '/x/CaveA\\.svg',
+  '/x/CaveA\\.',
+  '/x/a\\b.tml',
   'relative/out',
   'bare',
 ];
@@ -55,9 +60,11 @@ describe('the harness mirror of ensureExtension', () => {
     }
   });
 
-  it('agrees on the property the fuzzer depends on - REPLACE, not append', () => {
-    expect(ensureExtension('/x/out.txt', 'csv')).toBe('/x/out.csv');
-    expect(ensureExtensionMirror('/x/out.txt', 'csv')).toBe('/x/out.csv');
+  it('agrees on the property the fuzzer depends on - replace a known extension, append to anything else', () => {
+    expect(ensureExtension('/x/out.png', 'csv')).toBe('/x/out.csv');
+    expect(ensureExtensionMirror('/x/out.png', 'csv')).toBe('/x/out.csv');
+    expect(ensureExtension('/x/out.txt', 'csv')).toBe('/x/out.txt.csv');
+    expect(ensureExtensionMirror('/x/out.txt', 'csv')).toBe('/x/out.txt.csv');
   });
 });
 

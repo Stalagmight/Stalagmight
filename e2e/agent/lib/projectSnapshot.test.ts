@@ -249,6 +249,42 @@ describe('SAVE_HEALING_MUTATIONS', () => {
 
     expect(classified.unknown).toHaveLength(1);
   });
+
+  // #576 NF-FZDET-1: the save stamps Section::created_at on a section that has
+  // none yet (NF-W14BE-1), and the payload carries it from then on.
+  it('accepts the creation time a save stamps on a section, absent -> an RFC 3339 stamp', () => {
+    const classified = classifyDiffs(
+      [
+        { path: 'project.sections[3].created_at', expected: '<absent>', actual: '"2026-11-05T21:57:28.123456789+00:00"' },
+        { path: 'project.sections[4].created_at', expected: '<absent>', actual: '"2026-11-05T21:57:28+00:00"' },
+      ],
+      SAVE_HEALING_MUTATIONS,
+    );
+
+    expect(classified.unknown).toEqual([]);
+    expect(classified.asymmetries.map((a) => a.id)).toEqual(['save-stamps-section-creation-times']);
+  });
+
+  it('rejects a section creation time that changes, goes or is not a stamp', () => {
+    const classified = classifyDiffs(
+      [
+        // A stamp the section had is written back byte for byte (#576 RV14-2):
+        // another one - even the same moment in another form - is not the heal.
+        { path: 'project.sections[0].created_at', expected: '"2026-01-01T10:00:00+05:00"', actual: '"2026-01-01T05:00:00+00:00"' },
+        { path: 'project.sections[1].created_at', expected: '"2026-01-01T10:00:00+00:00"', actual: '"2026-11-05T21:57:28+00:00"' },
+        { path: 'project.sections[2].created_at', expected: '"2026-01-01T10:00:00+00:00"', actual: '<absent>' },
+        { path: 'project.sections[5].created_at', expected: '<absent>', actual: 'null' },
+        { path: 'project.sections[6].created_at', expected: '<absent>', actual: '"2026-11-05"' },
+        { path: 'project.sections[7].created_at', expected: '<absent>', actual: '"2026-13-45T25:61:00+00:00"' },
+        // The project's own creation time is not stamped by a save.
+        { path: 'project.created_at', expected: '"2026-01-01T10:00:00Z"', actual: '"2026-11-05T21:57:28Z"' },
+      ],
+      SAVE_HEALING_MUTATIONS,
+    );
+
+    expect(classified.known).toEqual([]);
+    expect(classified.unknown).toHaveLength(7);
+  });
 });
 
 describe('shotSetDelta', () => {

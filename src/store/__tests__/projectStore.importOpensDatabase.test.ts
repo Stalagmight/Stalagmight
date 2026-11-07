@@ -14,14 +14,11 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => String(e),
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(stringOfError);
 
 import { useProjectStore } from '../projectStore';
+import { invokeIpcMock, stubGetErrorMessage, stringOfError } from '../../test/factories/ipc';
 
 const deferred = () => {
   useProjectStore.setState({

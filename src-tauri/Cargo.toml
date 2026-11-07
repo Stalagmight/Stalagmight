@@ -20,6 +20,7 @@ members = [
     "crates/speleodb",
     "crates/stalx-reader",
     "crates/telemetry",
+    "crates/tiles",
 ]
 resolver = "2"
 # Required: path deps inside the workspace directory are auto-adopted as
@@ -75,14 +76,16 @@ tempfile = "3.24.0"
 
 [features]
 e2e = ["tauri-plugin-webdriver-automation"]
-# Forwards to the members that own the implementations, and stays a real
-# feature of this crate too: the root's own `#[cfg(feature = "telemetry")]`
-# users (the registry coverage tests in commands/) are gated on it. The
-# speleodb member forwards for the same reason (its metrics.rs coverage test).
-telemetry = ["stalagmight-telemetry/telemetry", "stalagmight-speleodb/telemetry"]
+# Forwards to the member that owns the implementation, and stays a real
+# feature of this crate too: `commands::telemetry` reports through
+# `cfg!(feature = "telemetry")` whether this build carries the collector. The
+# event-name registry and its coverage tests no longer need it (#576 B7).
+telemetry = ["stalagmight-telemetry/telemetry"]
 # Dev-only: gates the gen_ipc_types example so it isn't compiled in normal
-# builds/tests. Enabled by `pnpm gen:ipc-types`.
-ipc-typegen = []
+# builds/tests. Enabled by `pnpm gen:ipc-types`. `syn` reads the command
+# manifest out of `generate_handler!` and the `#[tauri::command]` signatures
+# (#576 C3); it is compiled only for the generator.
+ipc-typegen = ["dep:syn"]
 
 [lib]
 name = "stalagmight_lib"
@@ -112,8 +115,8 @@ stalagmight-parsers = { path = "crates/parsers" }
 stalagmight-persistence = { path = "crates/persistence" }
 stalagmight-speleodb = { path = "crates/speleodb" }
 stalagmight-telemetry = { path = "crates/telemetry" }
+stalagmight-tiles = { path = "crates/tiles" }
 tauri = { version = "2", features = ["devtools"] }
-tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { workspace = true, features = ["derive"] }
@@ -135,11 +138,13 @@ ts-rs = { workspace = true, features = ["no-serde-warnings"] }
 anyhow = { workspace = true }
 directories = { workspace = true }
 sha2 = { workspace = true }
-# The tile fetch. The exact pin (and the `multipart` feature it exists for)
-# is explained on the speleodb member's entry (crates/speleodb).
+# Tile attribution lookup and the network-status probe (the tile fetch itself
+# is the stalagmight-tiles member). The exact pin (and the `multipart` feature
+# it exists for) is explained on the speleodb member's entry (crates/speleodb).
 ureq = { workspace = true }
 http = { workspace = true }
-image = { workspace = true }
+# Generator-only (the `ipc-typegen` feature): parses the command registry.
+syn = { version = "2", features = ["full", "visit"], optional = true }
 tauri-plugin-webdriver-automation = { git = "https://github.com/FumblingBarbell/tauri-webdriver", branch = "fix/resolve-element-refs-in-execute-sync", optional = true }
 
 # Second-instance forwarding for the OS file association (#424): "Open with" on
@@ -262,8 +267,11 @@ unwrap_in_result = "deny"
 # Clone-spam, cont.: force explicit Rc::clone(&x) over x.clone(); no Rc clones in vec![x; n].
 clone_on_ref_ptr = "deny"
 rc_clone_in_vec_init = "deny"
-# String nonsense, cont.: String.to_string() is a pointless re-alloc.
-string_to_string = "deny"
+# String nonsense, cont.: String.to_string() is a pointless re-alloc. Its lint,
+# `string_to_string` (denied here until #576 W52-5), was removed from clippy - the
+# pinned 1.97.1 already reports "has been removed: `clippy::implicit_clone` covers
+# those cases" - so the deny enforced nothing. Its successor `implicit_clone` is
+# configured above, at warn.
 # Misc AI footguns: redundant type annotations, mem::forget leaks, lossy float literals.
 redundant_type_annotations = "deny"
 mem_forget = "deny"
@@ -299,4 +307,3 @@ tempfile = { workspace = true }
 # saved file themselves; the config I/O itself lives in stalagmight-core now.
 toml = { workspace = true }
 tauri = { version = "2", features = ["test"] }
-libc = "0.2"

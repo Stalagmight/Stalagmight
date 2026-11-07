@@ -16,8 +16,7 @@
 const isDev = typeof import.meta !== 'undefined'
   && (import.meta as { env?: { DEV?: boolean } }).env?.DEV === true;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyArgs = readonly any[];
+type AnyArgs = readonly unknown[];
 
 export const debugLog: (...args: AnyArgs) => void = isDev
   ? console.log.bind(console)

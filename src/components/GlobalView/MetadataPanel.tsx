@@ -1,6 +1,6 @@
 import { type FC, useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invokeIpc } from '../../utils/ipc';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import type { ProjectMetadata } from '../../types/project';
 import { ResizablePanel } from '../common/Panel';
 import { ElidedPath } from '../common/ElidedPath';
@@ -64,27 +64,13 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
 
   const handleShowInFolder = useCallback(async () => {
     if (!singleProject?.file_path) return;
+    // [#576 HFI-5] The opener plugin's own call, as the recents right-click menu makes
+    // it: `reveal_item_in_dir` takes `paths`, and a hand-built `{ path }` was refused.
+    // No `open_path` fallback: the capabilities do not grant it, so it only failed too.
     try {
-      // Use Tauri shell plugin to reveal in file explorer
-      // Note: This command opens the parent folder with the file selected
-      await invokeIpc(
-        'plugin:opener|reveal_item_in_dir',
-        { path: singleProject.file_path },
-        { purpose: 'reveal project in folder', fields: { path: singleProject.file_path } }
-      );
+      await revealItemInDir(singleProject.file_path);
     } catch (error) {
       console.error('Failed to show in folder:', error);
-      // Fallback: try to open the directory
-      try {
-        const dirPath = singleProject.file_path.substring(0, singleProject.file_path.lastIndexOf('/'));
-        await invokeIpc(
-          'plugin:opener|open_path',
-          { path: dirPath },
-          { purpose: 'open project folder after reveal failed', fields: { path: dirPath } }
-        );
-      } catch (fallbackError) {
-        console.error('Fallback also failed:', fallbackError);
-      }
     }
   }, [singleProject?.file_path]);
 

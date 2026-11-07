@@ -1,31 +1,38 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function SplitSectionDialog() {
-  const { closeDialog, dialogData, setSelection } = useUIStore();
-  const { deleteShotAndSplit } = useProjectStore();
+  const { t } = useTranslation();
+  const { closeDialog, dialogData, setSelection } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData, setSelection: s.setSelection })),
+  );
+  const deleteShotAndSplit = useProjectStore((s) => s.deleteShotAndSplit);
 
   const sectionId = dialogData.sectionId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
   const sectionName = dialogData.sectionName as string | undefined;
 
-  const defaultNameA = sectionName ? `${sectionName}-A` : 'Section-A';
-  const defaultNameB = sectionName ? `${sectionName}-B` : 'Section-B';
+  const defaultNameA = sectionName ? `${sectionName}-A` : t('dialogs.splitSection.defaultNameA');
+  const defaultNameB = sectionName ? `${sectionName}-B` : t('dialogs.splitSection.defaultNameB');
 
   const [nameA, setNameA] = useState(defaultNameA);
   const [nameB, setNameB] = useState(defaultNameB);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Re-initialize names when sectionName changes
+  // Re-initialize names when sectionName changes. i18n.t, not the hook's t:
+  // a language change must not reset names the user typed.
   useEffect(() => {
-    setNameA(sectionName ? `${sectionName}-A` : 'Section-A');
-    setNameB(sectionName ? `${sectionName}-B` : 'Section-B');
+    setNameA(sectionName ? `${sectionName}-A` : i18n.t('dialogs.splitSection.defaultNameA'));
+    setNameB(sectionName ? `${sectionName}-B` : i18n.t('dialogs.splitSection.defaultNameB'));
   }, [sectionName]);
 
   const isDirty = nameA !== defaultNameA || nameB !== defaultNameB;
@@ -46,10 +53,10 @@ export default function SplitSectionDialog() {
         trackDialogComplete('split-section');
         closeDialog();
       } else {
-        setError(result.error ?? 'Failed to split section');
+        setError(result.error ?? t('dialogs.splitSection.errors.splitSection'));
       }
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to split section'));
+      setError(getErrorMessage(e, t('dialogs.splitSection.errors.splitSection')));
     } finally {
       setIsLoading(false);
     }
@@ -59,7 +66,7 @@ export default function SplitSectionDialog() {
 
   return (
     <DialogWrapper
-      title="Delete Shot & Split Section"
+      title={t('dialogs.splitSection.title')}
       onClose={handleClose}
       size="md"
       isDirty={isDirty}
@@ -68,7 +75,7 @@ export default function SplitSectionDialog() {
     >
       <div className="space-y-4">
         <p className="text-text-secondary">
-          Deleting this shot will split the section into two. Name the resulting sections:
+          {t('dialogs.splitSection.intro')}
         </p>
 
         {error && (
@@ -79,7 +86,7 @@ export default function SplitSectionDialog() {
 
         <div className="space-y-3">
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Section A name (first half)</label>
+            <label className="block text-sm text-text-secondary mb-1">{t('dialogs.splitSection.nameA')}</label>
             <input
               type="text"
               value={nameA}
@@ -90,7 +97,7 @@ export default function SplitSectionDialog() {
             />
           </div>
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Section B name (second half)</label>
+            <label className="block text-sm text-text-secondary mb-1">{t('dialogs.splitSection.nameB')}</label>
             <input
               type="text"
               value={nameB}
@@ -104,7 +111,7 @@ export default function SplitSectionDialog() {
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={handleClose} disabled={isLoading} data-testid="split-section-cancel">
-            Cancel
+            {t('common.actions.cancel')}
           </Button>
           <Button
             variant="danger"
@@ -112,7 +119,7 @@ export default function SplitSectionDialog() {
             disabled={isLoading || !isValid}
             data-testid="split-confirm"
           >
-            {isLoading ? 'Splitting...' : 'Delete & Split'}
+            {isLoading ? t('dialogs.splitSection.splitting') : t('dialogs.splitSection.confirm')}
           </Button>
         </div>
       </div>

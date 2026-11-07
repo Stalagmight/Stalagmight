@@ -8,6 +8,8 @@ import {
   ensureDmpNewImportDialogVisible,
   openAppMenu,
 } from './helpers/app';
+import { recordIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * DMP Import Dialog E2E Tests
@@ -78,17 +80,51 @@ test.describe('DMP Import Dialog', () => {
   });
 
   /**
-   * Test 6.1: should parse and display DMP file data in Step 1 dialog
+   * Test 6.1: parse, display, and import through to the receipt (the DMP canary)
    *
    * Verifies the DmpSelectionDialog (Step 1) correctly displays parsed DMP data
-   * including section names, shot counts, and file metadata.
+   * including section names, shot counts, and file metadata - and then that the
+   * selection actually imports (#576 RV3-FE-7: this canary used to stop at the
+   * selection dialog): import_sections carries exactly the selected section,
+   * the section lands in the project, and the receipt toast reports it.
    */
-  test('should parse and display DMP file data in import dialog @smoke', async ({
+  test('parses a DMP, shows its sections, and imports the selection through to the receipt @smoke', async ({
     page,
   }) => {
-    await createProjectAndOpenImportDialog(page);
+    await createProject(page, 'DMP Import Test');
+    await createSectionViaStore(page, {
+      name: 'Anchor Section',
+      shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: -1, depth_out: -2 }],
+    });
+    // The wizard offers this connection to the existing section, so the import
+    // finishes on Confirm (no manual placement).
+    await page.evaluate(() => {
+      const setSuggestions = (window as unknown as Record<string, unknown>).__MOCK_SET_IMPORT_PLACEMENT_SUGGESTIONS__;
+      if (typeof setSuggestions !== 'function') {
+        throw new Error('Mock suggestion setter not available');
+      }
+      (setSuggestions as (suggestions: unknown[]) => void)([
+        {
+          existingStationIndex: 0,
+          importStationIndex: 0,
+          score: 0.95,
+          matchedShots: 0,
+          direction: 'forward',
+          isPartial: false,
+          confidence: 'high',
+          existingSectionName: 'Anchor Section',
+          importSectionIndex: 0,
+          importSectionName: 'Main Passage',
+          targetType: 'existing',
+          existingSectionId: 1,
+          targetImportIndex: null,
+        },
+      ]);
+    });
+    await openDmpSelectionDialog(page);
 
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
+    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
 
     // Verify dialog has correct ARIA role
     await expect(dialog).toHaveAttribute('role', 'dialog');
@@ -122,6 +158,39 @@ test.describe('DMP Import Dialog', () => {
     await expect(stats.locator('[data-testid="stats-shot-count"]')).toContainText('shots');
     await expect(stats.locator('[data-testid="stats-total-length"]')).toBeVisible();
     await expect(stats.locator('[data-testid="stats-depth-range"]')).toContainText('Depth:');
+
+    // Import only Main Passage, through the wizard's suggested connection.
+    await recordIpcCalls(page, ['import_sections']);
+    await dialog.locator('[data-testid="select-none-button"]').click();
+    await page.locator('[data-testid="section-checkbox-0"]').click();
+    await proceedToDmpSectionConfig(page);
+    await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
+    await page.getByTestId('confirm-button').click();
+
+    const [call] = await waitForIpcCall(page, 'import_sections');
+    const sent = call.args.sections as Array<{ name?: string; shots?: unknown[] }>;
+    expect(sent.map((section) => section.name)).toEqual(['Main Passage']);
+    expect(sent[0]!.shots?.length ?? 0).toBeGreaterThan(0);
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeHidden({ timeout: 15000 });
+    await expect.poll(() => countSections(page), { timeout: 10000 }).toBe(2);
+    // A warning-free receipt is a toast (not the modal): one section landed.
+    await expect(page.getByTestId('toast').filter({ hasText: 'import:' })).toContainText('1 section', {
+      timeout: 10000,
+    });
+    // #576 NF-FIX3B-2: the backend mints a uuid for every shot it imports, and uuid
+    // anchors (plan pins, the distance origin) resolve through it; the mock's
+    // import_sections used to build its shots without one. Read off the mock backend's
+    // project: the store refreshes through the binary envelope, which carries no uuid
+    // (#576 A9-D2).
+    const uuids = await page.evaluate(() => {
+      const sections = (window as E2EWindow).__E2E_MOCKS__!.getCurrentProject()!.sections as Array<{
+        shots: Array<{ uuid?: string | null }>;
+      }>;
+      return sections.map((section) => section.shots.map((shot) => shot.uuid ?? null));
+    });
+    expect(uuids[1]!.length).toBe(sent[0]!.shots?.length); // uuids[1]: two sections polled above
+    expect(uuids[1]!.every((uuid) => typeof uuid === 'string'), `imported uuids: ${JSON.stringify(uuids[1])}`).toBe(true);
+    expect(new Set(uuids.flat()).size).toBe(uuids.flat().length);
   });
 
   /**
@@ -618,14 +687,6 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
       ]);
     });
 
-    // Reset tracking call counter
-    await page.evaluate(() => {
-      const reset = (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ as
-        | (() => void)
-        | undefined;
-      if (reset) reset();
-    });
-
     // Capture import_sections arguments for fileHash verification
     await page.evaluate(() => {
       const tauri = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
@@ -804,26 +865,22 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
   });
 
   /**
-   * Test: import_sections NOT called when import has errors
+   * Test: a section with validation errors does not import before an explicit
+   * placement action.
    *
-   * When importing a section with validation errors, the import cannot proceed,
-   * so import_sections should not be called.
+   * The file hash rides on `import_sections` (it is recorded inside that
+   * command), so "nothing imported" is also "no hash recorded". This used to be
+   * titled after `track_imported_file`, an IPC command the frontend never
+   * called and #576 NF-TRACK-IMPORTED removed; the title now says what the
+   * assertion checks.
    */
-  test('should not call track_imported_file when import has errors', async ({ page }) => {
+  test('does not import a section with validation errors before an explicit placement action', async ({ page }) => {
     await createProject(page, 'Hash Track Error');
     await page.evaluate(() => {
       const resetSuggestions = (window as unknown as Record<string, unknown>).__MOCK_RESET_IMPORT_PLACEMENT_SUGGESTIONS__;
       if (typeof resetSuggestions === 'function') {
         (resetSuggestions as () => void)();
       }
-    });
-
-    // Reset tracking call counter
-    await page.evaluate(() => {
-      const reset = (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ as
-        | (() => void)
-        | undefined;
-      if (reset) reset();
     });
 
     // Capture import_sections arguments to confirm no import occurs

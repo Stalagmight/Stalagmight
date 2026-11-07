@@ -11,22 +11,25 @@
  *
  * `.tsx` so this runs in the jsdom tier (renderHook).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  // The one-arg call (humanizeSpeleoError) must still yield a string.
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'mock error',
-}));
+vi.mock('../utils/ipc');
+// The one-arg call (humanizeSpeleoError) must still yield a string.
+stubGetErrorMessage(fallbackOr('mock error'));
 
 import { useSpeleoActions } from './useSpeleoActions';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../test/factories/ipc';
 
 let saveProjectMock: ReturnType<typeof vi.fn>;
+
+/** [#576 NF-W8FE-2] Done and Push answer the wire envelope, never a bare outcome. */
+function report<R>(result: R): { result: R; save_warnings: [] } {
+  return { result, save_warnings: [] };
+}
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
@@ -49,7 +52,7 @@ beforeEach(() => {
 
 describe('useSpeleoActions - flush to disk after a confirmed push/unlock', () => {
   it('unlock (done → released) saves the project to disk (quiet autosave)', async () => {
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -60,7 +63,7 @@ describe('useSpeleoActions - flush to disk after a confirmed push/unlock', () =>
   });
 
   it('push (→ pushed) saves the project to disk (quiet autosave)', async () => {
-    invokeIpcMock.mockResolvedValue({ kind: 'pushed' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'pushed' }));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -71,7 +74,7 @@ describe('useSpeleoActions - flush to disk after a confirmed push/unlock', () =>
   });
 
   it('does NOT flush on an unconfirmed push (no false-clean local state)', async () => {
-    invokeIpcMock.mockResolvedValue({ kind: 'push_unconfirmed' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'push_unconfirmed' }));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -82,7 +85,7 @@ describe('useSpeleoActions - flush to disk after a confirmed push/unlock', () =>
   });
 
   it('does NOT flush on a divergence result', async () => {
-    invokeIpcMock.mockResolvedValue({ kind: 'divergence_needed' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'divergence_needed' }));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -93,7 +96,7 @@ describe('useSpeleoActions - flush to disk after a confirmed push/unlock', () =>
   });
 
   it('a failed flush does not surface as a push failure (best-effort, stays quiet)', async () => {
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     saveProjectMock.mockRejectedValue(new Error('disk full'));
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
@@ -175,7 +178,7 @@ describe('useSpeleoActions - a failed push/unlock raises the persistent banner (
     });
     invokeIpcMock.mockRejectedValue({
       message: 'Network error talking to SpeleoDB: Invalid argument',
-      action: 'Retry',
+      code: 'SPELEODB_RETRY',
       status: null,
       transport: 'Unknown',
     });
@@ -195,7 +198,7 @@ describe('useSpeleoActions - a failed push/unlock raises the persistent banner (
     useSpeleoStore.setState({
       banner: { kind: 'push_failed', message: 'old', origin: 'push', pushMessage: null },
     });
-    invokeIpcMock.mockResolvedValue({ kind: 'divergence_needed' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'divergence_needed' }));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -236,7 +239,7 @@ describe('useSpeleoActions - the release toast reflects whether anything was upl
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
     seedLink(true);
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -254,7 +257,7 @@ describe('useSpeleoActions - the release toast reflects whether anything was upl
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
     seedLink(false);
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -278,7 +281,7 @@ describe('useSpeleoActions - toast kinds', () => {
   it('a landed push asks for a success toast', async () => {
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
-    invokeIpcMock.mockResolvedValue({ kind: 'pushed' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'pushed' }));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -291,7 +294,7 @@ describe('useSpeleoActions - toast kinds', () => {
   it('a released lock asks for a success toast', async () => {
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -604,7 +607,7 @@ describe('useSpeleoActions - the shared busy flag is ownership-checked (#270)', 
     useSpeleoStore.setState({ applyPush: vi.fn(), applyStartEditing: vi.fn() });
     // Both calls hang until we settle them by hand, so the two verbs genuinely
     // overlap the way they do when a close lands mid-push.
-    let settlePush: (r: { kind: string }) => void = () => {};
+    let settlePush: (r: { result: { kind: string }; save_warnings: [] }) => void = () => {};
     let settleStart: (r: { kind: string }) => void = () => {};
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_push') return new Promise((res) => { settlePush = res; });
@@ -634,7 +637,7 @@ describe('useSpeleoActions - the shared busy flag is ownership-checked (#270)', 
     // Now the abandoned push lands. Its `finally` must NOT clear a flag it no
     // longer owns - doing so re-opened the mid-push dismiss route above.
     await act(async () => {
-      settlePush({ kind: 'pushed' });
+      settlePush(report({ kind: 'pushed' }));
       await pushDone;
     });
     expect(useSpeleoStore.getState().busy).toBe(true);
@@ -658,7 +661,7 @@ describe('useSpeleoActions - a no-op push/release is reported honestly (#270)', 
   it('push (→ not_editing) warns instead of claiming success, and does not flush', async () => {
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
-    invokeIpcMock.mockResolvedValue({ kind: 'not_editing' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'not_editing' }));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -675,7 +678,7 @@ describe('useSpeleoActions - a no-op push/release is reported honestly (#270)', 
   it('done (→ not_editing) warns, and the caller sees a kind that is not "released"', async () => {
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
-    invokeIpcMock.mockResolvedValue({ kind: 'not_editing' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'not_editing' }));
     const { result } = renderHook(() => useSpeleoActions());
 
     let resolved: { kind: string } | null = null;
@@ -706,7 +709,7 @@ describe('useSpeleoActions - a no-op push/release is reported honestly (#270)', 
     useSpeleoStore.setState({
       banner: { kind: 'push_failed', message: 'the old error', origin, pushMessage: 'my notes' },
     });
-    invokeIpcMock.mockResolvedValue({ kind: 'not_editing' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'not_editing' }));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -898,5 +901,53 @@ describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)',
     });
 
     expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push', { message: null });
+  });
+});
+
+/**
+ * #576 RV4-FE-SP4 / RV4-R-NITS S-8, consistent with RV2-R-15: Discard changes and Take
+ * remote replace the survey like a Restore does, so the read-only Plan and Export
+ * workspaces refuse them before any IPC, with the notice a refused edit gets, instead of
+ * reaching the backend (and, for Take remote, re-pulling) first.
+ */
+describe('useSpeleoActions - survey swaps refused in the Plan/Export workspace (#576 RV4-FE-SP4)', () => {
+  afterEach(() => {
+    useUIStore.setState({ appMode: 'survey' });
+  });
+  const notice = 'Plan and Export are read-only - switch to Survey to edit the survey.';
+
+  it('Discard changes in Plan refuses before the IPC', async () => {
+    useUIStore.setState({ appMode: 'plan' });
+    invokeIpcMock.mockResolvedValue(null);
+    const { result } = renderHook(() => useSpeleoActions());
+    let outcome: Awaited<ReturnType<typeof result.current.discardChanges>> | undefined;
+
+    await act(async () => {
+      outcome = await result.current.discardChanges(true);
+    });
+
+    const commands = invokeIpcMock.mock.calls.map((c) => c[0]);
+    console.log(`[SP4] discard in plan: outcome=${outcome} ipc=${JSON.stringify(commands)}`);
+    expect(outcome).toBe('workspace_read_only');
+    expect(commands).toEqual([]);
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(notice, 'edit-disabled', 'warning');
+  });
+
+  it('Take remote in Export refuses before the IPC', async () => {
+    useUIStore.setState({ appMode: 'export' });
+    invokeIpcMock.mockResolvedValue('/cache/p1.stalx');
+    const { result } = renderHook(() => useSpeleoActions());
+    let took: Awaited<ReturnType<typeof result.current.takeRemote>> | undefined;
+
+    await act(async () => {
+      took = await result.current.takeRemote();
+    });
+
+    const commands = invokeIpcMock.mock.calls.map((c) => c[0]);
+    console.log(`[SP4] take remote in export: took=${took} ipc=${JSON.stringify(commands)}`);
+    // [#576 NF-FIX4FE-1] Reported as the refusal it is, so the dialog can close.
+    expect(took).toBe('workspace_read_only');
+    expect(commands).toEqual([]);
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(notice, 'edit-disabled', 'warning');
   });
 });

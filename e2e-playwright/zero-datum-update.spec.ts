@@ -455,3 +455,68 @@ test.describe('Zero Datum Update - Single Undo Entry', () => {
     expect(finalLength - baselineLength).toBe(0);
   });
 });
+
+/**
+ * #576 (D39e, D37): what the Edit Station GPS field previews is what Save
+ * stores, an ambiguous reading is shown rather than guessed silently, and a
+ * reading impossible for its own letter cannot be saved.
+ */
+test.describe('Zero Datum Update - coordinate entry', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await createProject(page, 'Zero Datum Entry Test');
+    await injectZeroDatumFixture(page, 25.0, -80.0);
+    await extendMocksWithZeroDatumTracking(page);
+  });
+
+  test('previews, notes and stores UTM "33S" as the southern hemisphere; refuses an impossible band', async ({
+    page,
+  }) => {
+    await openEditStationDialog(page, 1, 0);
+    const dialog = page.getByTestId('edit-station-dialog');
+    const gpsInput = dialog.getByTestId('station-gps-input');
+
+    // Band U cannot hold a northing at 78.96N: error, no preview, Save refuses.
+    await gpsInput.fill('33U 512345 8765432');
+    await expect(dialog.getByTestId('station-gps-error')).toContainText('band U');
+    await expect(dialog.getByTestId('station-gps-parsed')).toHaveCount(0);
+    await dialog.getByTestId('edit-station-save').click();
+    await expect(dialog).toContainText('Please enter valid GPS coordinates');
+    expect(await getZeroDatumCalls(page)).toHaveLength(0);
+
+    // "33S" with a southern northing: read as the southern hemisphere, with a note.
+    await gpsInput.fill('33S 512345 8765432');
+    await expect(dialog.getByTestId('station-gps-parsed')).toHaveText('Lat: -11.168093, Lon: 15.113069');
+    await expect(dialog.getByTestId('station-gps-note')).toContainText('southern hemisphere');
+    await expect(dialog.getByTestId('station-gps-format')).toHaveText('UTM');
+    await dialog.getByTestId('edit-station-save').click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    const calls = (await getZeroDatumCalls(page)).filter((c) => c.cmd === 'set_zero_datum');
+    expect(calls).toHaveLength(1);
+    const coords = calls[0]!.args.coordinates as { latitude: number; longitude: number };
+    expect(coords.latitude).toBeCloseTo(-11.1680928, 5);
+    expect(coords.longitude).toBeCloseTo(15.1130686, 5);
+  });
+
+  test('keeps the sign of a -0 DDM degree and flags a swapped decimal pair', async ({ page }) => {
+    await openEditStationDialog(page, 1, 0);
+    const dialog = page.getByTestId('edit-station-dialog');
+    const gpsInput = dialog.getByTestId('station-gps-input');
+
+    await gpsInput.fill(`-0°30.5'N 87°18.5'W`);
+    await expect(dialog.getByTestId('station-gps-parsed')).toHaveText('Lat: -0.508333, Lon: -87.308333');
+    await expect(dialog.getByTestId('station-gps-note')).toContainText('minus sign');
+
+    // Advisory only: the swapped pair still parses.
+    await gpsInput.fill('-87.3, 20.5');
+    await expect(dialog.getByTestId('station-gps-transposed-warning')).toBeVisible();
+    await expect(dialog.getByTestId('station-gps-note')).toHaveCount(0);
+
+    // Clearing the field clears the preview, the note and the hint.
+    await gpsInput.fill('');
+    await expect(dialog.getByTestId('station-gps-parsed')).toHaveCount(0);
+    await expect(dialog.getByTestId('station-gps-transposed-warning')).toHaveCount(0);
+  });
+});

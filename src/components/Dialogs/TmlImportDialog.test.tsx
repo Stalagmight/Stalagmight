@@ -9,18 +9,18 @@
  * utils/__tests__/saveFeedback.test.ts; this guards the dialog wiring + ordering.
  *
  * Plus the #411 repairs: a terminal failure never navigates, the empty project a
- * cancelled/failed import leaves behind is acknowledged, Cancel is dead while the
- * import runs, and the preview counts what will actually import.
+ * cancelled/failed import leaves behind is acknowledged, and the preview counts
+ * what will actually import. Cancel WHILE the import runs (it asks the backend to
+ * stop it) is covered for all five import dialogs in
+ * __tests__/importCancel.test.tsx.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-  setSource: vi.fn(),
-}));
+vi.mock('../../utils/telemetry', async () =>
+  (await import('../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
+);
 // SectionPreview and the map panel pull maplibre-gl (WebGL) at module load,
 // which jsdom cannot execute. What the map DRAWS is covered by
 // utils/__tests__/tmlPreviewLayout.test.ts, on the pure layout function.
@@ -37,21 +37,18 @@ vi.mock('./WizardMapPanel', () => ({
 }));
 // invokeIpc is used here only for suggest_orphan_placements; mock it so the
 // orphan branch resolves and we can assert whether it ran.
-vi.mock('../../utils/ipc', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/ipc')>()),
-  invokeIpc: vi.fn(),
-}));
+vi.mock('../../utils/ipc');
 
 import TmlImportDialog from './TmlImportDialog';
-import { invokeIpc } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { refusedBy } from '../../store/commandResult';
 import type { CommandResult, TmlFile, TmlShot, ValidationWarning } from '../../types/commands';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 import type { Project } from '../../types/project';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.mocked(invokeIpc);
 const trackDialogCompleteMock = vi.mocked(trackDialogComplete);
 
 const SAVE_WARNING: ValidationWarning = {
@@ -111,8 +108,8 @@ const okWithoutSectionIds = (receipt: ImportReceipt): CommandResult =>
 /** A section carrying one shot per flavour asked for. */
 const shot = (overrides: Partial<TmlShot> = {}): TmlShot =>
   ({
-    id: 1n,
-    from_id: 0n,
+    id: 1,
+    from_id: 0,
     shot_type: 'Real',
     azimuth: 0,
     length: 10,
@@ -130,7 +127,7 @@ const shot = (overrides: Partial<TmlShot> = {}): TmlShot =>
     excluded: false,
     latitude: 0,
     longitude: 0,
-    closure_to_id: 0n,
+    closure_to_id: 0,
     section: 'S',
     ...overrides,
   }) as TmlShot;
@@ -145,8 +142,8 @@ const withShots = (shots: TmlShot[]): TmlFile => ({
       date: null,
       color: '#3b82f6',
       is_branch_split: false,
-      start_ariane_id: 0n,
-      end_ariane_id: 0n,
+      start_ariane_id: 0,
+      end_ariane_id: 0,
       start_depth: 0,
     },
   ],
@@ -307,6 +304,36 @@ describe('TmlImportDialog failure handling (#411 C2)', () => {
     expect(setView).not.toHaveBeenCalled();
   });
 
+  /**
+   * #576 RV4-FE-MISC4: a CANCELLED import into the project created for it is not a
+   * failure. The residue prompt printed the backend's machine marker verbatim
+   * ("IMPORT_CANCELLED: ...") in its error box; it now asks the same keep/discard
+   * question with the cancelled wording the other import dialogs' toast uses - routed
+   * on the refusal's code (#576 A6), never on its sentence.
+   */
+  it('words a cancelled import as cancelled in the residue prompt, never the raw marker', async () => {
+    openEmptyImportProject();
+    executeTmlImport.mockResolvedValue(
+      refusedBy({ code: 'IMPORT_CANCELLED', message: 'the TML import was cancelled; nothing was imported' }),
+    );
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+
+    await clickImport();
+
+    const prompt = await screen.findByTestId('tml-import-residue-dialog');
+    console.log('[MISC4] residue prompt text:', prompt.textContent);
+    expect(prompt).not.toHaveTextContent('IMPORT_CANCELLED');
+    expect(prompt).not.toHaveTextContent('the TML import was cancelled; nothing was imported');
+    expect(screen.queryByTestId('tml-import-residue-error')).toBeNull();
+    expect(screen.getByTestId('tml-import-residue-cancelled')).toHaveTextContent(
+      'Import cancelled. Nothing was imported.',
+    );
+    // Still the keep/discard question about the empty project.
+    expect(screen.getByTestId('tml-import-residue-keep')).toBeInTheDocument();
+    expect(screen.getByTestId('tml-import-residue-discard')).toBeInTheDocument();
+    expect(openDialog).not.toHaveBeenCalledWith('error', expect.anything());
+  });
+
   it('raises the residue prompt on a TRANSPORT failure too, instead of stranding the empty project', async () => {
     openEmptyImportProject();
     executeTmlImport.mockRejectedValue(new Error('network gone'));
@@ -346,20 +373,6 @@ describe('TmlImportDialog failure handling (#411 C2)', () => {
     );
     expect(screen.queryByTestId('tml-import-residue-dialog')).toBeNull();
     expect(importContext()).toBeNull();
-  });
-
-  it('disables Cancel while the import is in flight', async () => {
-    executeTmlImport.mockReturnValue(new Promise(() => {})); // never settles
-    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
-
-    const cancel = (await screen.findByTestId('tml-import-cancel')) as HTMLButtonElement;
-    expect(cancel.disabled).toBe(false);
-
-    await clickImport();
-
-    await waitFor(() => expect(cancel.disabled).toBe(true));
-    await userEvent.click(cancel);
-    expect(closeDialog).not.toHaveBeenCalled();
   });
 });
 
@@ -422,9 +435,9 @@ describe('TmlImportDialog empty-project residue (#411 C2)', () => {
 describe('TmlImportDialog preview honesty (#411 C4)', () => {
   it('counts only the shots that will actually import', async () => {
     const file = withShots([
-      shot({ id: 1n }),
-      shot({ id: 2n, excluded: true }),
-      shot({ id: 3n, shot_type: 'Closure' }),
+      shot({ id: 1 }),
+      shot({ id: 2, excluded: true }),
+      shot({ id: 3, shot_type: 'Closure' }),
     ]);
     render(<TmlImportDialog tmlFile={file} filePath="/tmp/cave.tml" />);
 
@@ -438,7 +451,7 @@ describe('TmlImportDialog preview honesty (#411 C4)', () => {
   });
 
   it('blocks the import when nothing survives the current options', async () => {
-    const file = withShots([shot({ shot_type: 'Closure' }), shot({ id: 2n, excluded: true })]);
+    const file = withShots([shot({ shot_type: 'Closure' }), shot({ id: 2, excluded: true })]);
     render(<TmlImportDialog tmlFile={file} filePath="/tmp/cave.tml" />);
 
     expect(await screen.findByTestId('tml-import-empty')).toBeInTheDocument();
@@ -454,8 +467,8 @@ describe('TmlImportDialog preview honesty (#411 C4)', () => {
     const file: TmlFile = {
       ...tmlFile,
       sections: [
-        withShots([shot({ id: 1n })]).sections[0]!,
-        { ...withShots([shot({ id: 2n, excluded: true })]).sections[0]!, name: 'All excluded' },
+        withShots([shot({ id: 1 })]).sections[0]!,
+        { ...withShots([shot({ id: 2, excluded: true })]).sections[0]!, name: 'All excluded' },
       ],
     };
     render(<TmlImportDialog tmlFile={file} filePath="/tmp/cave.tml" />);
@@ -657,24 +670,24 @@ describe('TmlImportDialog section selection and placement (#425)', () => {
     sections: [
       {
         name: 'A',
-        shots: [shot({ id: 1n, from_id: 0n, ...over })],
+        shots: [shot({ id: 1, from_id: 0, ...over })],
         surveyor: null,
         date: null,
         color: '#3b82f6',
         is_branch_split: false,
-        start_ariane_id: 0n,
-        end_ariane_id: 1n,
+        start_ariane_id: 0,
+        end_ariane_id: 1,
         start_depth: 0,
       },
       {
         name: 'B',
-        shots: [shot({ id: 2n, from_id: 1n })],
+        shots: [shot({ id: 2, from_id: 1 })],
         surveyor: null,
         date: null,
         color: '#ef4444',
         is_branch_split: false,
-        start_ariane_id: 1n,
-        end_ariane_id: 2n,
+        start_ariane_id: 1,
+        end_ariane_id: 2,
         start_depth: 0,
       },
     ],
@@ -723,13 +736,13 @@ describe('TmlImportDialog section selection and placement (#425)', () => {
         ...twoSections().sections,
         {
           name: 'C',
-          shots: [shot({ id: 3n, from_id: 2n })],
+          shots: [shot({ id: 3, from_id: 2 })],
           surveyor: null,
           date: null,
           color: '#22c55e',
           is_branch_split: false,
-          start_ariane_id: 2n,
-          end_ariane_id: 3n,
+          start_ariane_id: 2,
+          end_ariane_id: 3,
           start_depth: 0,
         },
       ],
@@ -813,24 +826,24 @@ describe('TmlImportDialog placement is not walked over by other controls (#425)'
     sections: [
       {
         name: 'A',
-        shots: [shot({ id: 1n, from_id: 0n, latitude: 20.5, longitude: -87.1 })],
+        shots: [shot({ id: 1, from_id: 0, latitude: 20.5, longitude: -87.1 })],
         surveyor: null,
         date: null,
         color: '#3b82f6',
         is_branch_split: false,
-        start_ariane_id: 0n,
-        end_ariane_id: 1n,
+        start_ariane_id: 0,
+        end_ariane_id: 1,
         start_depth: 0,
       },
       {
         name: 'B',
-        shots: [shot({ id: 2n, from_id: 1n })],
+        shots: [shot({ id: 2, from_id: 1 })],
         surveyor: null,
         date: null,
         color: '#ef4444',
         is_branch_split: false,
-        start_ariane_id: 1n,
-        end_ariane_id: 2n,
+        start_ariane_id: 1,
+        end_ariane_id: 2,
         start_depth: 0,
       },
     ],
@@ -878,24 +891,24 @@ describe('TmlImportDialog root agreement (#425 review)', () => {
     sections: [
       {
         name: 'Dropped',
-        shots: [shot({ id: 1n, from_id: 0n, excluded: true })],
+        shots: [shot({ id: 1, from_id: 0, excluded: true })],
         surveyor: null,
         date: null,
         color: '#3b82f6',
         is_branch_split: false,
-        start_ariane_id: 0n,
-        end_ariane_id: 1n,
+        start_ariane_id: 0,
+        end_ariane_id: 1,
         start_depth: 0,
       },
       {
         name: 'Survivor',
-        shots: [shot({ id: 2n, from_id: 1n })],
+        shots: [shot({ id: 2, from_id: 1 })],
         surveyor: null,
         date: null,
         color: '#ef4444',
         is_branch_split: false,
-        start_ariane_id: 1n,
-        end_ariane_id: 2n,
+        start_ariane_id: 1,
+        end_ariane_id: 2,
         start_depth: 0,
       },
     ],
@@ -940,8 +953,8 @@ describe('TmlImportDialog root agreement (#425 review)', () => {
         {
           ...firstSectionAllExcluded.sections[1]!,
           name: 'Crafted',
-          shots: [shot({ id: 1n, from_id: 0n, latitude: Number.NaN, longitude: Number.NaN })],
-          start_ariane_id: 0n,
+          shots: [shot({ id: 1, from_id: 0, latitude: Number.NaN, longitude: Number.NaN })],
+          start_ariane_id: 0,
         },
       ],
     };
@@ -955,35 +968,35 @@ describe('TmlImportDialog root agreement (#425 review)', () => {
 
 describe('TmlImportDialog reads the ids the wire actually delivers (#566)', () => {
   /**
-   * Every other fixture in this file builds `BigInt` ids because that is what
-   * the GENERATED types say. Tauri's IPC is JSON and serde writes an `i64` as a
-   * JSON number, so the shipped app hands this dialog plain numbers - and a
-   * lookup that only worked for bigints made every non-root section look
-   * stranded the moment the dialog opened.
+   * Tauri's IPC is JSON and serde writes an `i64` as a JSON number, so the
+   * shipped app hands this dialog plain numbers - and a lookup that only worked
+   * for the bigints the generated types used to declare made every non-root
+   * section look stranded the moment the dialog opened. The types say `number`
+   * since #576 C6; this pins the dialog on a file built straight from them.
    */
   const wireIds: TmlFile = {
     ...tmlFile,
     sections: [
       {
         name: 'A',
-        shots: [{ ...shot(), id: 1 as unknown as bigint, from_id: 0 as unknown as bigint }],
+        shots: [{ ...shot(), id: 1, from_id: 0 }],
         surveyor: null,
         date: null,
         color: '#3b82f6',
         is_branch_split: false,
-        start_ariane_id: 0 as unknown as bigint,
-        end_ariane_id: 1 as unknown as bigint,
+        start_ariane_id: 0,
+        end_ariane_id: 1,
         start_depth: 0,
       },
       {
         name: 'B',
-        shots: [{ ...shot(), id: 2 as unknown as bigint, from_id: 1 as unknown as bigint }],
+        shots: [{ ...shot(), id: 2, from_id: 1 }],
         surveyor: null,
         date: null,
         color: '#ef4444',
         is_branch_split: false,
-        start_ariane_id: 1 as unknown as bigint,
-        end_ariane_id: 2 as unknown as bigint,
+        start_ariane_id: 1,
+        end_ariane_id: 2,
         start_depth: 0,
       },
     ],
@@ -1006,5 +1019,35 @@ describe('TmlImportDialog reads the ids the wire actually delivers (#566)', () =
     // Deselecting A leaves B as the new root, which is not stranded...
     await userEvent.click(await screen.findByTestId('tml-section-0'));
     expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
+  });
+});
+
+/**
+ * #576 NF-DMPS-1: a rejected `suggest_orphan_placements` was swallowed
+ * ("non-fatal"), so the step that offers to attach unanchored sections was
+ * skipped without a word. The DMP wizard says so (NF-AN4-N4); this importer
+ * now does too, through the shared helper, and the import still completes.
+ */
+describe('TmlImportDialog orphan lookup failure (#576 NF-DMPS-1)', () => {
+  it('says so in a warning toast and still completes the import', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'suggest_orphan_placements') throw new Error('orphan matcher unavailable (test)');
+      return 0; // count_unanchored_sections
+    });
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+
+    await clickImport();
+
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled()); // the import completed
+    expect(showToast).toHaveBeenCalledWith(
+      'Imported, but unattached sections could not be matched: orphan matcher unavailable (test)',
+      'orphan-lookup-failed',
+      'warning',
+    );
+    expect(openDialog).not.toHaveBeenCalledWith('orphan-placement', expect.anything());
   });
 });

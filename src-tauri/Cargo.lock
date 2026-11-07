@@ -611,7 +611,6 @@ dependencies = [
  "miette",
  "nom",
  "thiserror 2.0.21",
- "utm",
  "uuid",
 ]
 
@@ -4444,8 +4443,6 @@ dependencies = [
  "chrono",
  "directories",
  "http",
- "image",
- "libc",
  "serde",
  "serde_json",
  "sha2",
@@ -4456,10 +4453,11 @@ dependencies = [
  "stalagmight-persistence",
  "stalagmight-speleodb",
  "stalagmight-telemetry",
+ "stalagmight-tiles",
+ "syn 2.0.114",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
- "tauri-plugin-fs",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tauri-plugin-webdriver-automation",
@@ -4542,6 +4540,7 @@ dependencies = [
  "chrono",
  "compass_data",
  "igrf",
+ "libc",
  "proj4rs",
  "quick-xml 0.37.5",
  "serde",
@@ -4612,6 +4611,20 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "ts-rs",
+ "ureq",
+]
+
+[[package]]
+name = "stalagmight-tiles"
+version = "0.0.0"
+dependencies = [
+ "http",
+ "image",
+ "serde",
+ "serde_json",
+ "stalagmight-core",
+ "stalagmight-persistence",
+ "tracing",
  "ureq",
 ]
 
@@ -5922,12 +5935,6 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
-
-[[package]]
-name = "utm"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95b09e3b3a0abd1ccb77673a6b7b8875d9d1c80626154add451cf18392dc4c3c"
 
 [[package]]
 name = "uuid"

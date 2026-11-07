@@ -7,9 +7,9 @@ import { formatFixed, formatNumber } from '../../i18n/format';
 import { useNetworkStore } from '../../store/networkStore';
 
 export interface CacheStats {
-  total_tiles: bigint;
-  total_bytes: bigint;
-  providers: Record<string, { tiles: bigint; bytes: bigint }>;
+  total_tiles: number;
+  total_bytes: number;
+  providers: Record<string, { tiles: number; bytes: number }>;
 }
 
 export interface RenderProfile {
@@ -405,7 +405,7 @@ export function useMapDevStats(map: maplibregl.Map): MapDevStatsData {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const stats = await invokeIpc<CacheStats>('get_cache_stats', undefined, { purpose: 'fetch tile cache stats' });
+        const stats = await invokeIpc('get_cache_stats', undefined, { purpose: 'fetch tile cache stats' });
         setCacheStats(stats);
       } catch (e) {
         console.debug('[useMapDevStats] Failed to fetch cache stats:', e);
@@ -614,8 +614,7 @@ export function useMapDevStats(map: maplibregl.Map): MapDevStatsData {
 }
 
 /** Format a byte count as a human-readable string (B/KB/MB/GB), i18n-aware. */
-export function formatBytes(t: TFunction, bytes: number | bigint): string {
-  const value = typeof bytes === 'bigint' ? Number(bytes) : bytes;
+export function formatBytes(t: TFunction, value: number): string {
   const sizes = [
     t('map.devStats.units.bytes'),
     t('map.devStats.units.kilobytes'),

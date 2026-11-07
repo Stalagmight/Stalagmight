@@ -5,10 +5,10 @@ use chrono::{Datelike, NaiveDate};
 use crate::parsers::geo::non_empty;
 
 use super::{
-    apply_segment, apply_units_options, datum_recognized, is_anonymous, is_omitted, parse_angle,
-    parse_depth, parse_dms, parse_length, set_prefix, split_first_token, strip_inline_comment,
-    utm_to_wgs84, AngleUnit, Case, LengthUnit, LrudType, OrderElem, ParsedSurvey, VectorType,
-    WallsFix, WallsRef, WallsUnits, WallsVector,
+    apply_segment, apply_units_options, datum_recognized, is_anonymous, is_omitted,
+    is_walls_separator, parse_angle, parse_depth, parse_dms, parse_length, set_prefix,
+    split_first_token, strip_inline_comment, utm_to_wgs84, AngleUnit, Case, LengthUnit, LrudType,
+    OrderElem, ParsedSurvey, VectorType, WallsFix, WallsRef, WallsUnits, WallsVector,
 };
 
 // ---------------------------------------------------------------------------
@@ -48,7 +48,12 @@ pub(crate) fn parse_srv_contents(
 
     for (line_no, raw) in contents.lines().enumerate() {
         let line = raw.trim_end_matches(['\r', '\n']);
+        // `trimmed` only classifies the line (blank, comment, directive). The
+        // text that gets parsed is trimmed of Walls separators only, so a
+        // U+00A0 at either end of the line stays in the station name or value
+        // it touches, as it does mid-line.
         let trimmed = line.trim();
+        let fields = line.trim_matches(is_walls_separator);
         if trimmed.is_empty() {
             continue;
         }
@@ -78,7 +83,7 @@ pub(crate) fn parse_srv_contents(
 
         // Directive line.
         if trimmed.starts_with('#') {
-            let expanded = match expand_macros(trimmed, &macros) {
+            let expanded = match expand_macros(fields.trim_start(), &macros) {
                 Ok(s) => s,
                 Err(e) => {
                     warnings.push(format!("{name}:{}: {e}", line_no + 1));
@@ -102,7 +107,7 @@ pub(crate) fn parse_srv_contents(
         }
 
         // Vector / data line.
-        let expanded = match expand_macros(trimmed, &macros) {
+        let expanded = match expand_macros(fields, &macros) {
             Ok(s) => s,
             Err(e) => {
                 warnings.push(format!("{name}:{}: {e}", line_no + 1));
@@ -203,9 +208,9 @@ pub(crate) fn handle_directive(
         "segment" | "seg" | "s" => {
             apply_segment(segment, rest.trim());
         }
-        "prefix" | "prefix1" => set_prefix(units, 0, rest.trim()),
-        "prefix2" => set_prefix(units, 1, rest.trim()),
-        "prefix3" => set_prefix(units, 2, rest.trim()),
+        "prefix" | "prefix1" => set_prefix(units, 0, rest.trim_matches(is_walls_separator)),
+        "prefix2" => set_prefix(units, 1, rest.trim_matches(is_walls_separator)),
+        "prefix3" => set_prefix(units, 2, rest.trim_matches(is_walls_separator)),
         "fix" => {
             if let Some(fix) = parse_fix(rest, units, georef) {
                 fixes.push(fix);
@@ -300,7 +305,9 @@ pub(crate) fn parse_vector_line(
         let azimuth_deg = if horiz < 1e-9 {
             None
         } else {
-            Some((east.atan2(north).to_degrees() + units.rect).rem_euclid(360.0))
+            Some(crate::models::normalize_azimuth(
+                east.atan2(north).to_degrees() + units.rect,
+            ))
         };
         let inc_up = up_rect.atan2(horiz).to_degrees();
         // RECT vectors carry the same trailing `<L R U D>` passage dimensions as
@@ -452,15 +459,39 @@ pub(crate) struct ExtractedSpans {
     pub(crate) lrud: Option<String>,
 }
 
-/// True when `close` occurs at or after `start` in `chars` AND that closer is at
-/// end-of-body or immediately followed by whitespace - i.e. a *properly
-/// terminated* span. Returns the closer's index. Genuine Walls only treats a
-/// token-initial `<`/`*` as an LRUD when the matching `>`/`*` is followed by
-/// whitespace or end-of-line (`wall-srv.cpp`: `!pNote[1] || isspace(pNote[1])`);
-/// otherwise the delimiter is part of a station name.
-pub(crate) fn find_span_end(chars: &[char], start: usize, close: char) -> Option<usize> {
-    (start..chars.len())
-        .find(|&j| chars[j] == close && chars.get(j + 1).is_none_or(|c| c.is_whitespace()))
+/// The first `close` at or after `start` in `chars` that *properly terminates*
+/// a span, as `(closer index, index to resume scanning at)`. Genuine Walls
+/// only treats a token-initial `<`/`*` as an LRUD when the matching `>`/`*` is
+/// followed by whitespace or end-of-line (`wall-srv.cpp`: `!pNote[1] ||
+/// isspace(pNote[1])`); otherwise the delimiter is part of a station name.
+///
+/// "Whitespace" here is a Walls separator ([`is_walls_separator`]), the rule
+/// the tokenizer splits fields by - with one exception (#576 WALLS-LRUD,
+/// decision "only trailing NBSP closes"): a closer followed by nothing but
+/// no-break spaces (U+00A0, often pasted from a word processor) and
+/// separators up to the end of the line still closes, and that blank tail is
+/// consumed with it. Anywhere else a U+00A0 joins the fields it sits
+/// between, so `*A*<NBSP>B` is one station name, not LRUD `A` plus station
+/// `<NBSP>B`; at the end of the line there is nothing left to join, so an
+/// LRUD followed by one is not lost.
+pub(crate) fn find_span_end(chars: &[char], start: usize, close: char) -> Option<(usize, usize)> {
+    (start..chars.len()).find_map(|j| {
+        if chars[j] != close {
+            return None;
+        }
+        match chars.get(j + 1) {
+            None => Some((j, j + 1)),
+            Some(&c) if is_walls_separator(c) => Some((j, j + 1)),
+            Some('\u{a0}')
+                if chars[j + 1..]
+                    .iter()
+                    .all(|&c| c == '\u{a0}' || is_walls_separator(c)) =>
+            {
+                Some((j, chars.len()))
+            }
+            Some(_) => None,
+        }
+    })
 }
 
 /// Walk a vector line body, pulling out `<...>`/`*...*` (LRUD) and `(...)`
@@ -481,7 +512,7 @@ pub(crate) fn extract_spans(body: &str) -> ExtractedSpans {
     while i < chars.len() {
         let c = chars[i];
         match c {
-            c if c.is_whitespace() => flush(&mut current, &mut tokens),
+            c if is_walls_separator(c) => flush(&mut current, &mut tokens),
             '#' => {
                 // Inline directive (segment) - stop collecting measurement
                 // tokens; the rest of the line doesn't carry geometry.
@@ -499,9 +530,9 @@ pub(crate) fn extract_spans(body: &str) -> ExtractedSpans {
             // an unterminated `*8` swallowed the rest of the line as a bogus LRUD.
             '<' | '*' if current.is_empty() => {
                 let close = if c == '<' { '>' } else { '*' };
-                if let Some(end) = find_span_end(&chars, i + 1, close) {
+                if let Some((end, resume)) = find_span_end(&chars, i + 1, close) {
                     lrud = Some(chars[i + 1..end].iter().collect());
-                    i = end + 1;
+                    i = resume;
                     continue;
                 }
                 current.push(c); // unterminated → literal name character
@@ -527,13 +558,15 @@ pub(crate) fn extract_spans(body: &str) -> ExtractedSpans {
 
 /// Combine an azimuth fs/bs pair into two forward-direction degree readings.
 fn combine_azimuth(az: &FsBs, units: &WallsUnits) -> (Option<f64>, Option<f64>) {
-    let fs = az.fs.map(|v| (v + units.inca).rem_euclid(360.0));
+    let fs = az
+        .fs
+        .map(|v| crate::models::normalize_azimuth(v + units.inca));
     let bs_forward = az.bs.map(|v| {
         let corrected = v + units.incab;
         if units.type_ab_corrected {
-            corrected.rem_euclid(360.0)
+            crate::models::normalize_azimuth(corrected)
         } else {
-            (corrected + 180.0).rem_euclid(360.0)
+            crate::models::normalize_azimuth(corrected + 180.0)
         }
     });
     if units.type_ab_no_avg {

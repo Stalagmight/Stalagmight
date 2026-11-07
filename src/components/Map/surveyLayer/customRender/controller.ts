@@ -1,7 +1,7 @@
 /**
  * Controller wiring the custom-render prototype into SurveyLayer (#customRender).
  *
- * Keeps SurveyLayer.tsx to a few integration lines: SurveyLayer constructs one
+ * Keeps SurveyLayer.ts to a few integration lines: SurveyLayer constructs one
  * of these, calls `sync(...)` after each geometry flush, and `destroy()` on
  * teardown. Everything else - building buffers from SoA, resolving colors,
  * adding/removing the custom layer, and toggling the stock bulk layers'
@@ -22,10 +22,12 @@
  * the vector-tile publish path are likewise untouched.
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
+import { hasLiveStyle } from '../../mapUtils';
 import type { GpsOrigin } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { debugLog } from '../../../../utils/debugLog';
+import { clearRendererBuffers, recordRendererBuild } from '../../../../utils/memoryProbe';
 import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
 import { gasBeyondReachFeatureIds, type GasReachFeatureState } from '../../../../utils/gasReach';
 import type { DisplayColorContext } from '../displayColor';
@@ -213,7 +215,7 @@ const HIGHLIGHT_NONE = 0;
 
 export class SurveyCustomController {
   private readonly map: MaplibreMap;
-  private readonly layerId: string;
+  readonly layerId: string;
   private layer: SurveyCustomLayer | null = null;
   private active = false;
   private lastParams: CustomSyncParams | null = null;
@@ -402,12 +404,20 @@ export class SurveyCustomController {
     return this.map.getLayer('survey-interact-shots') ? 'survey-interact-shots' : undefined;
   }
 
-  /** Re-add the layer after MapLibre rebuilt the style without it (context
-   *  restore / worker restart, see styleRestore.ts). */
-  reattach(): void {
+  /**
+   * Re-add the live layer after MapLibre rebuilt the style without it (a WebGL
+   * context restore or a worker restart; see surveyLayer/glContextRecovery.ts).
+   * The SAME layer object goes back, so MapLibre re-runs its onAdd: programs
+   * recompile and buffers re-upload from the layer's data on the live context
+   * (reAddCustomLayer first frees what a worker restart left behind). Without a
+   * `beforeId` it goes below the interact overlay, as on enable. A re-add that
+   * cannot draw is the same unrecoverable state as a failed enable. No-op when
+   * nothing was drawing.
+   */
+  reattach(beforeId?: string): void {
     const layer = this.layer;
-    if (!this.active || !layer) return;
-    if (!reAddCustomLayer(this.map, layer, this.beforeId())) {
+    if (!this.active || !layer || this.disposed || this.fatal) return;
+    if (!reAddCustomLayer(this.map, layer, beforeId ?? this.beforeId())) {
       this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
       return;
     }
@@ -447,6 +457,9 @@ export class SurveyCustomController {
     );
     this.scheduleRestore(() => {
       this.selfDisableScheduled = false;
+      // Released in between (the map unmounted): nothing left to tear down, and
+      // no one to tell.
+      if (this.disposed) return;
       if (this.active) this.tearDownFatal(reason);
     });
   }
@@ -460,7 +473,10 @@ export class SurveyCustomController {
    */
   private tearDownFatal(reason: string): void {
     this.fatal = true;
-    removeCustomLayer(this.map, this.layer);
+    // The style is gone when the map was removed or lost its WebGL context before
+    // this deferred teardown ran: MapLibre took the layer with it (its onRemove
+    // ran), so there is nothing left to remove (#576 NF-MAP-3).
+    if (hasLiveStyle(this.map)) removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.active = false; // set directly: onActiveChange must NOT fire (no republish).
     this.map.triggerRepaint();
@@ -539,6 +555,7 @@ export class SurveyCustomController {
     const data: CustomRenderData = { anchorX, anchorY, line, circle, ...this.sizeFields(params) };
 
     const totalBytes = line.byteLength + circle.byteLength;
+    recordRendererBuild('survey-geometry', totalBytes);
     debugLog('[customRender] build', {
       ms: +(performance.now() - t0).toFixed(1),
       shotSegments: line.segmentCount,
@@ -947,7 +964,7 @@ export class SurveyCustomController {
 
   /**
    * Lightweight release WITHOUT touching the map (no removeLayer, no stock
-   * republish). Called on MapCanvas unmount via SurveyLayer.releaseVtRegistry(),
+   * republish). Called on MapCanvas unmount via SurveyLayer.release(),
    * which deliberately skips the full {@link destroy} for unmount speed. Without
    * this the window sync hook would pin this controller (and its cached
    * SurveyData + GL buffers) alive until the next SurveyLayer overwrites the
@@ -968,6 +985,7 @@ export class SurveyCustomController {
     this.lastSurveyData = null;
     this.lastStationRel = null;
     this.lastAllReference = null;
+    clearRendererBuffers('survey-geometry');
   }
 
   destroy(): void {

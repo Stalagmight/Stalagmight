@@ -14,6 +14,7 @@ import { computeProposedRaw, type ManualKind } from '../WarningResolution';
 import { normalizeAzimuth, averageAzimuth } from '../../../utils/azimuth';
 import { horizontalLength } from '../../../utils/resolutionPreview';
 import type { Shot } from '../../../types/project';
+import { makeShot as shotOf } from '../../../test/factories/survey';
 
 const LRUD_FIELDS = ['left', 'right', 'up', 'down'] as const;
 type LrudField = (typeof LRUD_FIELDS)[number];
@@ -38,25 +39,18 @@ function impliedInclination(shot: Shot): number {
 
 // --- A shot fixture builder --------------------------------------------------
 function makeShot(overrides: Partial<Shot> = {}): Shot {
-  return {
-    id: 1,
+  return shotOf({
     azimuth_in: 100,
     azimuth_out: 110,
     length: 5,
-    depth_in: 0,
     depth_out: 2,
     pitch_in: 30,
     pitch_out: 30,
     left: -1,
     right: 2,
     up: -3,
-    down: null,
-    comment: null,
-    kind: 'Normal' as const,
-    marker_index: null,
-    temperature: null,
     ...overrides,
-  };
+  });
 }
 
 function negativeLrudOf(shot: Shot): LrudField[] {

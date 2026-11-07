@@ -4,6 +4,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'url';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 
+import { foldLocalPaths } from './shareableFailure';
+
 /**
  * `node:sqlite` is loaded through `createRequire` rather than a static import
  * because vite CANNOT resolve it. Vite's builtin check strips the `node:`
@@ -30,7 +32,10 @@ export function fixtureSourcePath(name: string): string {
 /** Copy a tracked fixture before the app can migrate or otherwise mutate it. */
 export function materializeFixture(name: string, destinationDir: string): string {
   const source = fixtureSourcePath(name);
-  if (!fs.existsSync(source)) throw new Error(`fixture missing: ${source}`);
+  // The name is the caller's - a scenario's constant, but also a knob, an MCP
+  // argument or a trace's `reload` step - so it goes on a later line, which the
+  // runners withhold (#576 W51).
+  if (!fs.existsSync(source)) throw new Error(`fixture missing from e2e/fixtures/\n  name: ${path.basename(name)}`);
 
   fs.mkdirSync(destinationDir, { recursive: true });
   const destination = path.join(destinationDir, path.basename(name));
@@ -115,9 +120,9 @@ export function isInsideTrackedFixtures(resolved: string): boolean {
 export function stripUndoHistory(databasePath: string): StripUndoHistoryResult {
   const resolved = path.resolve(databasePath);
   if (isInsideTrackedFixtures(resolved)) {
-    throw new Error(`refusing to strip undo history from the tracked fixture ${resolved}; copy it first`);
+    throw new Error(`refusing to strip undo history from the tracked fixture ${foldLocalPaths(resolved)}; copy it first`);
   }
-  if (!fs.existsSync(resolved)) throw new Error(`no such .stalx: ${resolved}`);
+  if (!fs.existsSync(resolved)) throw new Error(`no such .stalx: ${foldLocalPaths(resolved)}`);
 
   const cleared: Record<string, number> = {};
   const missing: string[] = [];

@@ -17,12 +17,13 @@
  * The post-attach `__E2E_TEST__` check in session.ts stays as the definitive
  * backstop; this is the cheap pre-flight.
  */
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync, execSync, spawn } from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { agentBuildMode, binaryPathFor, cargoTargetDir, type AgentBuildMode } from '../../lib/env';
+import { passLinesFolded } from './foldedLines';
 import { isDarwinTarget } from './platform';
 
 /**
@@ -434,8 +435,8 @@ export function stampStaleReasons(
     distIndexHash: string;
     /** Canonical path of the checkout this start runs from. */
     repoRoot: string;
-    mode?: AgentBuildMode;
-    features?: string;
+    mode?: AgentBuildMode | undefined;
+    features?: string | undefined;
   },
 ): string[] {
   if (!stamp) {
@@ -723,7 +724,13 @@ function schemasClean(): boolean {
 
 function schemaDiff(): string {
   try {
-    return execSync(`git diff -- ${SCHEMA_PATHSPEC}`, { cwd: repoRoot, encoding: 'utf8' });
+    // stderr discarded, as in `gitHeadFor`: a diff we could not read is '' below,
+    // and git's own error can name the checkout.
+    return execSync(`git diff -- ${SCHEMA_PATHSPEC}`, {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
   } catch {
     return '';
   }
@@ -752,7 +759,36 @@ export function isPluginAclChurn(diff: string): boolean {
   return added.length > 0 && added.every((line) => line.includes(PLUGIN_ACL_MARKER));
 }
 
-export function buildApp(onLog?: (line: string) => void, mode: AgentBuildMode = agentBuildMode()): void {
+/**
+ * Runs the build `command` in a shell, its stdout and its stderr both passed to
+ * this process's stderr a line at a time with the checkout folded to `<repo>`
+ * and the home directory to `~` (`passLinesFolded`, #576 W47-NF3). Inherited,
+ * cargo's `Compiling <crate> (<path>)` and Tauri's `Built application at:
+ * <path>` printed raw beside a runner's shareable lines - `agent:scenario`,
+ * `agent:journeys` and `agent:smoke` build in-process. Rejects as `execSync`
+ * threw, `Command failed: <command>`, when the build exits non-zero or dies.
+ */
+function runBuildCommand(command: string, options: { cwd: string; env: NodeJS.ProcessEnv }): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // stdout too goes to stderr, NEVER to this process's stdout: under the MCP
+    // server, stdout is the JSON-RPC stream and any build chatter (pnpm/vite log
+    // to stdout) would corrupt the protocol framing.
+    const child = spawn(command, { ...options, shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const write = (text: string): void => {
+      process.stderr.write(text);
+    };
+    const passed = Promise.all([passLinesFolded(child.stdout, write), passLinesFolded(child.stderr, write)]);
+    child.once('error', reject);
+    child.once('close', (code: number | null) => {
+      void passed.then(() => (code === 0 ? resolve() : reject(new Error(`Command failed: ${command}`))));
+    });
+  });
+}
+
+export async function buildApp(
+  onLog?: (line: string) => void,
+  mode: AgentBuildMode = agentBuildMode(),
+): Promise<void> {
   // Two independent reasons to pass `--features e2e`, UNIONED rather than
   // either-or: the PROFILE asks for it (release keeps `debug_trigger_panic`'s
   // body compiled in - `FEATURES_FOR_MODE`), and the PLATFORM asks for it
@@ -785,12 +821,9 @@ export function buildApp(onLog?: (line: string) => void, mode: AgentBuildMode = 
   // during the cargo leg is older than the binary's eventual mtime. Stamping
   // the start, not the finish, is what makes `checkBuildFreshness` catch it.
   const buildStartedAtMs = Date.now();
-  // Build output goes to stderr (fd 2), NEVER inherited stdout: under the MCP
-  // server, stdout is the JSON-RPC stream and any build chatter (pnpm/vite log
-  // to stdout) would corrupt the protocol framing.
-  execSync(command, {
+  // Build output goes to stderr, folded - see runBuildCommand.
+  await runBuildCommand(command, {
     cwd: repoRoot,
-    stdio: ['ignore', 2, 2],
     env: {
       ...process.env,
       VITE_E2E: '1',
@@ -873,7 +906,10 @@ export function writeBuildStamp(
     fs.mkdirSync(path.dirname(stampPath), { recursive: true });
     fs.writeFileSync(stampPath, `${JSON.stringify(stamp, null, 2)}\n`);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    onLog?.(`Warning: could not write E2E build stamp (${msg}); next start will rebuild.`);
+    // The errno code, never the message: an fs message quotes the stamp's path,
+    // and CARGO_TARGET_DIR can sit outside the checkout and the home directory,
+    // where the caller's fold does not reach (#576 W51).
+    const code = (err as NodeJS.ErrnoException).code ?? 'io';
+    onLog?.(`Warning: could not write E2E build stamp (${code}); next start will rebuild.`);
   }
 }

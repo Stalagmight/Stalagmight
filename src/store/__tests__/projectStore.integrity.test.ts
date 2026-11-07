@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { failOnRefreshErrors } from '../../test/refreshGuard';
 
 import { useProjectStore } from '../projectStore';
+import { emptyBinaryRefresh, invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
+vi.mock('../../utils/ipc');
+// [#576 NF-W6A-5] The refresh every edit/import ends with reads bytes; a test that
+// gives none answers "no project open" rather than making the decoder throw.
+emptyBinaryRefresh();
 
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+// [#576 NF-W6A-5] Every refresh this file drives must be answered by its mock.
+failOnRefreshErrors();
 
 describe('projectStore integrity banner dismiss lifecycle', () => {
   let issues: string[];
@@ -139,7 +143,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     saveBlocked = true;
     invokeIpcMock.mockImplementation(async (command: string) => {
       if (command === 'undo') return { success: true };
-      if (command === 'get_project_state') return null; // refreshProjectState
+      if (command === 'get_project_state_binary') return new ArrayBuffer(0); // refreshProjectState
       if (command === 'check_project_integrity') return { messages: issues, save_blocked: saveBlocked };
       return undefined;
     });
@@ -249,12 +253,12 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     });
     invokeIpcMock.mockImplementation(async (command: string) => {
       if (command === 'remove_loop_closure') return { success: true };
-      if (command === 'get_project_state') return null; // refreshProjectState
+      if (command === 'get_project_state_binary') return new ArrayBuffer(0); // refreshProjectState
       if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
       return undefined; // refreshUndoState / refreshWarnings - best-effort
     });
 
-    await useProjectStore.getState().removeLoopClosure(1n);
+    await useProjectStore.getState().removeLoopClosure(1);
 
     expect(useProjectStore.getState().integrityIssues).toEqual([]);
   });
@@ -359,7 +363,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
 
   it('refreshes project state after a save that healed a corrupt project', async () => {
     // The Rust save heals dup UUIDs / non-finite / orphan offsets in memory, so the
-    // frontend must refresh (get_project_state) to match the saved file.
+    // frontend must refresh (get_project_state_binary) to match the saved file.
     useProjectStore.setState({
       project: { file_path: '/p.stalx' } as never,
       integrityIssues: ['non-finite shot geometry'],
@@ -368,7 +372,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     let getProjectStateCalled = false;
     invokeIpcMock.mockImplementation(async (command: string) => {
       if (command === 'save_project') return { success: true };
-      if (command === 'get_project_state') { getProjectStateCalled = true; return null; }
+      if (command === 'get_project_state_binary') { getProjectStateCalled = true; return new ArrayBuffer(0); }
       if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
       return undefined;
     });
@@ -379,7 +383,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
 
   it('does not refresh project state after a clean save', async () => {
     // No integrity issues → the save can't have healed anything → skip the extra
-    // get_project_state fetch (no churn on the common path).
+    // get_project_state_binary fetch (no churn on the common path).
     useProjectStore.setState({
       project: { file_path: '/p.stalx' } as never,
       integrityIssues: [],
@@ -388,7 +392,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     let getProjectStateCalled = false;
     invokeIpcMock.mockImplementation(async (command: string) => {
       if (command === 'save_project') return { success: true };
-      if (command === 'get_project_state') { getProjectStateCalled = true; return null; }
+      if (command === 'get_project_state_binary') { getProjectStateCalled = true; return new ArrayBuffer(0); }
       if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
       return undefined;
     });
@@ -409,7 +413,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     });
     invokeIpcMock.mockImplementation(async (command: string) => {
       if (command === 'save_project') return { success: true };
-      if (command === 'get_project_state') return null; // refreshProjectState
+      if (command === 'get_project_state_binary') return new ArrayBuffer(0); // refreshProjectState
       if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
       return undefined;
     });

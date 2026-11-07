@@ -43,6 +43,7 @@ import {
   readTrace,
   restoreTraceEnv,
   sameSignature,
+  shareableSignature,
   shrinkableSteps,
   writeTrace,
   type FailureSignature,
@@ -50,10 +51,11 @@ import {
   type TraceStep,
 } from './lib/fuzzTrace';
 import { ddmin, type ShrinkVerdict } from './lib/fuzzShrink';
+import { foldLocalPaths, shareableErrorText, valueShape } from './lib/shareableFailure';
 // Safe to import statically, unlike the scenarios below: this module freezes
 // nothing at import and reads `STALAGMIGHT_FUZZ_CORPUS_DIR` at call time, which
 // its own tests pin.
-import { CORPUS_DIR_ENV, corpusAvailable, corpusLookup } from './lib/fixtureCorpus';
+import { CORPUS_DIR_ENV, corpusAvailable, corpusLookup, redactCorpusText } from './lib/fixtureCorpus';
 
 interface Args {
   trace: string;
@@ -61,6 +63,20 @@ interface Args {
   maxTests: number;
   out: string | null;
 }
+
+/** The flags this runner takes. An error names one of them, and anything else by its shape (#576 W51). */
+const FLAGS: ReadonlySet<string> = new Set(['--release', '--max-tests', '--out']);
+const shownFlag = (flag: string | undefined): string => (flag !== undefined && FLAGS.has(flag) ? flag : valueShape(flag));
+
+/**
+ * A trace's header fields as printed (#576 W51). A trace is a file from wherever
+ * the user got it: a knob name prints when it has the harness's shape
+ * (`STALAGMIGHT_` and upper-case words) and a revision when it is one, anything
+ * else by its shape (`valueShape`: a number as itself).
+ */
+const envKey = (key: string): string => (/^STALAGMIGHT_[A-Z0-9_]{1,64}$/.test(key) ? key : valueShape(key));
+const gitRev = (rev: unknown): string =>
+  typeof rev === 'string' && /^(?:[0-9a-f]{7,40}|unknown)$/.test(rev) ? rev.slice(0, 12) : valueShape(rev);
 
 function parseArgs(argv: string[]): Args {
   const [trace, ...rest] = argv;
@@ -75,11 +91,11 @@ function parseArgs(argv: string[]): Args {
       continue;
     }
     const value = rest[i + 1];
-    if (value === undefined) throw new Error(`flag ${flag} needs a value`);
+    if (value === undefined) throw new Error(`flag ${shownFlag(flag)} needs a value`);
     i += 1;
     if (flag === '--max-tests') args.maxTests = Number(value);
     else if (flag === '--out') args.out = path.resolve(value);
-    else throw new Error(`unknown flag ${flag}`);
+    else throw new Error(`unknown flag, ${valueShape(flag)}`);
   }
   return args;
 }
@@ -107,7 +123,7 @@ async function main(): Promise<number> {
   const { refused, cleared } = restoreTraceEnv(trace.env);
   if (refused.length > 0) {
     process.stdout.write(
-      `REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.join(', ')}\n`,
+      `REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.map(envKey).join(', ')}\n`,
     );
   }
   if (cleared.length > 0) {
@@ -116,7 +132,7 @@ async function main(): Promise<number> {
     // between the two runs and every replay in the shrink inherits it.
     process.stdout.write(
       `CLEARED ${cleared.length} knob(s) the recording did not have, back to their defaults: ` +
-        `${cleared.join(', ')}\n`,
+        `${cleared.map(envKey).join(', ')}\n`,
     );
   }
 
@@ -137,17 +153,18 @@ async function main(): Promise<number> {
   const { getScenario, runScenario } = await import('./scenarios');
   const { AppSession } = await import('./session');
   if (!getScenario(trace.scenario)) {
-    throw new Error(`trace names scenario "${trace.scenario}", which this build does not have`);
+    // Not a registry name, so its shape (#576 W51): the trace is a file from wherever the user got it.
+    throw new Error(`trace names scenario ${valueShape(trace.scenario)}, which this build does not have`);
   }
 
   const session = new AppSession();
   const started = await session.start({ build: 'auto' });
   process.stdout.write(
     `session ${started.state} (${started.buildMode} build ${started.buildAction})\n` +
-      `trace ${args.trace}\n` +
-      `  scenario=${trace.scenario} seed=${trace.seed} fixture=${trace.fixture} ` +
-      `steps=${trace.steps.length} rev=${trace.gitRev.slice(0, 12)}\n` +
-      `  env=${JSON.stringify(trace.env)}\n`,
+      `trace ${foldLocalPaths(args.trace)}\n` +
+      `  scenario=${trace.scenario} seed=${valueShape(trace.seed)} fixture=${foldLocalPaths(String(trace.fixture))} ` +
+      `steps=${trace.steps.length} rev=${gitRev(trace.gitRev)}\n` +
+      `  env=${Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${foldLocalPaths(String(value))}`).join(' ')}\n`,
   );
 
   // Said BEFORE the baseline replay, not after it, and it RESOLVES the ids
@@ -183,10 +200,11 @@ async function main(): Promise<number> {
       await runScenario(trace.scenario, session, { seed: trace.seed, iterations: trace.iterations });
       return null;
     } catch (err) {
-      return {
-        message: err instanceof Error ? err.message : String(err),
-        signature: failureSignature(err instanceof Error ? err.message : String(err)),
-      };
+      // Redacted before it is printed, compared or written into the minimal
+      // trace: a replay that copied a corpus entry can fail on a message that
+      // quotes it (#576 HFI-13).
+      const message = redactCorpusText(err instanceof Error ? err.message : String(err));
+      return { message, signature: failureSignature(message) };
     } finally {
       replayTimesMs.push(Date.now() - started);
     }
@@ -210,11 +228,18 @@ async function main(): Promise<number> {
       failed = true;
       return 1;
     }
-    process.stdout.write(`baseline failure reproduced in ${replayTimesMs[0]} ms:\n${describeSignature(baseline.signature)}\n`);
-    if (trace.failure && !sameSignature(trace.failure.signature, baseline.signature)) {
+    // What is printed and compared with the trace header is the SHAREABLE
+    // signature (#576 W21-NF1): the full one can quote the app's text, and a
+    // written trace carries only the shareable one. ddmin below still compares
+    // full signatures, in memory. The full baseline goes to the session's
+    // actions.jsonl, which is not for sharing.
+    if (session.hasRecorder) session.recorder.event('scenario-failure', { scenario: trace.scenario, message: baseline.message });
+    const published = shareableSignature(baseline.message);
+    process.stdout.write(`baseline failure reproduced in ${replayTimesMs[0]} ms:\n${describeSignature(published)}\n`);
+    if (trace.failure && !sameSignature(shareableSignature(trace.failure.message), published)) {
       process.stdout.write(
         'NOTE: the replay signature differs from the one recorded in the trace header.\n' +
-          `  recorded:\n${describeSignature(trace.failure.signature)}\n` +
+          `  recorded:\n${describeSignature(shareableSignature(trace.failure.message))}\n` +
           '  Shrinking against the REPLAYED signature, which is what this build does now.\n',
       );
     }
@@ -271,16 +296,19 @@ async function main(): Promise<number> {
           `${result.stats.divergent} failed DIFFERENTLY and were rejected`,
         `  wall clock: ${(wallMs / 1000).toFixed(1)} s, ${Math.round(perReplay)} ms per replay ` +
           `(${replayTimesMs.length} replays incl. the baseline)`,
-        `  minimal trace: ${outPath}`,
+        // Folded (#576 W51): the minimal trace sits beside the one the user gave,
+        // and a step's `rel` or label can carry a path.
+        `  minimal trace: ${foldLocalPaths(outPath)}`,
         '',
         'minimal action list:',
-        describeSteps(minimal),
+        foldLocalPaths(describeSteps(minimal)),
         '',
       ].join('\n'),
     );
   } catch (err) {
     failed = true;
-    process.stdout.write(`shrink failed: ${err instanceof Error ? err.stack : String(err)}\n`);
+    // Shareable crash form (#576 W23-NF2), like every other line this prints.
+    process.stdout.write(`shrink failed: ${shareableErrorText(err)}\n`);
   } finally {
     await session.stop('fuzz-shrink');
     fs.rmSync(scratch, { recursive: true, force: true });
@@ -292,7 +320,7 @@ async function main(): Promise<number> {
 main().then(
   (code) => process.exit(code),
   (err: unknown) => {
-    process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+    process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
     process.exit(1);
   },
 );

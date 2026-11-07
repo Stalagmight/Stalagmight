@@ -298,7 +298,7 @@ test.describe('GlobalView Map', () => {
 
       // Configure a long delay for the alpha system's geometry loading
       await page.evaluate(() => {
-        (window as unknown as Record<string, (path: string, delay: number) => void>).__MOCK_SET_GEOMETRY_DELAY__(
+        (window as unknown as Record<string, (path: string, delay: number) => void>).__MOCK_SET_GEOMETRY_DELAY__!(
           '/projects/cave-alpha.stalx', 60000
         );
       });
@@ -346,7 +346,7 @@ test.describe('GlobalView Map', () => {
 
       // Configure one system to fail geometry loading
       await page.evaluate(() => {
-        (window as unknown as Record<string, (path: string) => void>).__MOCK_SET_GEOMETRY_ERROR__(
+        (window as unknown as Record<string, (path: string) => void>).__MOCK_SET_GEOMETRY_ERROR__!(
           '/projects/cave-alpha.stalx'
         );
       });

@@ -1,0 +1,62 @@
+name: OS Helper
+
+# Format, lint, build and test the agent harness's Tier-2 OS helper
+# (e2e/agent/os/helper, the `stalagmight-oshelper` crate) - #576 NF-OSHELPER.
+#
+# It is a standalone crate (an empty [workspace] table keeps it out of the
+# src-tauri workspace), so `check`'s fmt loop, clippy and `cargo test
+# --workspace` never see it, and the harness only builds it on demand on a
+# maintainer's Mac. Its tests (key-spec parsing, the hand-rolled JSON, the CLI
+# surface, drag pacing) therefore ran nowhere automatically.
+#
+# macOS only: the crate links CoreGraphics/CoreFoundation and does not compile
+# for any other target. The tests are written to run unattended - `preflight`
+# only reads the two grants, and the window/frontmost cases skip themselves
+# unless a live session opts in - so no Accessibility or Screen Recording grant
+# is needed on the runner.
+#
+# Path-filtered (an allowlist, unlike `check`/`smoke`): a macOS runner costs
+# several times a Linux one, and nothing outside this crate can change its
+# outcome. Safe to block on because `master` is unprotected (#122).
+on:
+  push:
+    branches: [master]
+    paths: ['e2e/agent/os/helper/**', '.github/workflows/os-helper.yml']
+  pull_request:
+    branches: [master]
+    paths: ['e2e/agent/os/helper/**', '.github/workflows/os-helper.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: os-helper-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  os-helper:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch @ 2026-06-30
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: e2e/agent/os/helper
+      # Lints first, like `check`: both are cheap next to the test build.
+      - name: Formatting (cargo fmt --check)
+        run: cargo fmt --manifest-path e2e/agent/os/helper/Cargo.toml --check
+      # The crate has no [lints] table of its own, so this is clippy's default
+      # set, promoted to errors - a lint that is not a gate is decoration
+      # (docs/linting.md).
+      - name: Clippy
+        run: cargo clippy --locked --manifest-path e2e/agent/os/helper/Cargo.toml --all-targets -- -D warnings
+      # --locked: the crate has its own committed Cargo.lock.
+      - name: Tests
+        if: ${{ !cancelled() }}
+        run: cargo test --locked --manifest-path e2e/agent/os/helper/Cargo.toml
+      - name: Release build (what ensureHelperBuilt() produces)
+        if: ${{ !cancelled() }}
+        run: cargo build --locked --release --manifest-path e2e/agent/os/helper/Cargo.toml

@@ -87,7 +87,7 @@ test.describe('Walls import dialog - survey selection gating', () => {
     const calls = await getWallsImportCalls(page);
     expect(calls).toHaveLength(1);
     // select-all ⇒ omit the filter (null), so a full import stays unfiltered.
-    expect(calls[0].selectedSurveys).toBeNull();
+    expect(calls[0]!.selectedSurveys).toBeNull();
   });
 
   test('a subset sends explicit sorted survey indices', async ({ page }) => {
@@ -102,7 +102,7 @@ test.describe('Walls import dialog - survey selection gating', () => {
     await page.getByTestId('walls-import-confirm').click();
     const calls = await getWallsImportCalls(page);
     expect(calls).toHaveLength(1);
-    expect(calls[0].selectedSurveys).toEqual([0]);
+    expect(calls[0]!.selectedSurveys).toEqual([0]);
   });
 
   test('splay-only selection is disabled until Include-splays is on', async ({ page }) => {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../../utils/ipc';
+import { chainSettingWrite, SETTING_KEYS } from '../../../utils/settingWriteChain';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
 import { Button } from '../../common/Button';
@@ -177,7 +178,7 @@ export function AdvancedSettings({
   panelIdBase,
 }: SettingsCategoryProps) {
   const { t } = useTranslation();
-  const { setConfig } = useProjectStore();
+  const setConfig = useProjectStore((s) => s.setConfig);
   const [isReloading, setIsReloading] = useState(false);
   const [reloadMessage, setReloadMessage] = useState<string | null>(null);
   const mountedRef = useRef(true);
@@ -222,7 +223,7 @@ export function AdvancedSettings({
     const ps = config.placement_suggestion;
     if (ps) {
       if (ps.azimuth_sigma <= 0 || ps.length_sigma <= 0 || ps.depth_sigma <= 0) {
-        errors.push('Placement suggestion sigma values must be positive');
+        errors.push(t('settings.advanced.validation.placementSigma'));
       }
     }
 
@@ -306,15 +307,25 @@ export function AdvancedSettings({
     setIsReloading(true);
     setReloadMessage(null);
     try {
-      const newConfig = await invokeIpc<Config>('reload_config', undefined, { purpose: 'reload config from disk' });
+      // [#576 RV9b-3] A config re-read, so in the config chain like every other
+      // (`reloadConfigInOrder`): issued while a settings save is in flight, it
+      // could answer with the file before the save and land in the store after
+      // the save's re-read. The store write is part of the same step.
+      // [#576 NF-W10FE-2] Unconditional: the backend has reloaded whether or not
+      // this tab is still open, and the store is global - skipping it after an
+      // unmount left the app on the old config until the next re-read.
+      const newConfig = await chainSettingWrite(SETTING_KEYS.config, async () => {
+        const fresh = await invokeIpc('reload_config', undefined, { purpose: 'reload config from disk' });
+        setConfig(fresh);
+        return fresh;
+      });
 
       if (!mountedRef.current) return;
 
       const changes = computeConfigDiff(config, newConfig);
 
-      // Update both the store and the local dialog state via onChange
-      // This ensures the UI reflects the reloaded config and clears unsaved changes
-      setConfig(newConfig);
+      // The store took the reloaded config above; the local dialog state follows
+      // via onChange, so the UI reflects it and unsaved changes are cleared.
       onChange(newConfig);
 
       if (changes.length > 0) {
@@ -489,7 +500,7 @@ export function AdvancedSettings({
 
       <SettingsSection title={t('settings.advanced.sections.placementSuggestion')} data-testid="section-placement-suggestion">
         {/* Scoring Weights */}
-        <p className="text-xs text-text-secondary font-medium mt-1 mb-2">Scoring Weights</p>
+        <p className="text-xs text-text-secondary font-medium mt-1 mb-2">{t('settings.advanced.placementSuggestion.groups.weights')}</p>
         <PsRow field="azimuth_weight" i18nKey="azimuthWeight" step={0.05} min={0} max={1}
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsAzimuthWeight} t={t} />
         <PsRow field="length_weight" i18nKey="lengthWeight" step={0.05} min={0} max={1}
@@ -500,7 +511,7 @@ export function AdvancedSettings({
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsDepthOutWeight} t={t} />
 
         {/* Scoring Sensitivity (Sigma) */}
-        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">Scoring Sensitivity (Sigma)</p>
+        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">{t('settings.advanced.placementSuggestion.groups.sigma')}</p>
         <PsRow field="azimuth_sigma" i18nKey="azimuthSigma" step={1} min={0.1} max={180}
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsAzimuthSigma} t={t} />
         <PsRow field="length_sigma" i18nKey="lengthSigma" step={0.1} min={0.01} max={100}
@@ -509,7 +520,7 @@ export function AdvancedSettings({
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsDepthSigma} t={t} />
 
         {/* Score Thresholds */}
-        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">Score Thresholds</p>
+        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">{t('settings.advanced.placementSuggestion.groups.thresholds')}</p>
         <PsRow field="min_shot_score" i18nKey="minShotScore" step={0.05} min={0} max={1}
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMinShotScore} t={t} />
         <PsRow field="min_aggregate_score" i18nKey="minAggregateScore" step={0.05} min={0} max={1}
@@ -518,7 +529,7 @@ export function AdvancedSettings({
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsSingleShotPenalty} t={t} />
 
         {/* Hard Cutoffs */}
-        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">Hard Cutoffs</p>
+        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">{t('settings.advanced.placementSuggestion.groups.cutoffs')}</p>
         <PsRow field="max_azimuth_error_full" i18nKey="maxAzimuthErrorFull" step={1} min={0} max={180}
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxAzErrorFull} t={t} />
         <PsRow field="max_azimuth_error_partial" i18nKey="maxAzimuthErrorPartial" step={1} min={0} max={180}
@@ -531,7 +542,7 @@ export function AdvancedSettings({
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxLenErrorFloor} t={t} />
 
         {/* Limits */}
-        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">Limits</p>
+        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">{t('settings.advanced.placementSuggestion.groups.limits')}</p>
         <PsRow field="max_reference_shots" i18nKey="maxReferenceShots" step={1} min={1} max={50}
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxRefShots} t={t} />
         <PsRow field="max_suggestions" i18nKey="maxSuggestions" step={1} min={1} max={100}

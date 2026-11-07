@@ -45,7 +45,11 @@ use std::path::Path;
 use ts_rs::TS;
 use usvg::{Options, Tree};
 
+use super::atomic::write_atomic_bytes;
 use crate::models::{Project, StationRef};
+
+mod label_index;
+use label_index::{LabelBox, PlacedLabels, ShotEnds};
 
 /// Output image format.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -196,9 +200,16 @@ fn depth_gradient_color(depth: f64, min_d: f64, max_d: f64, ramp: DepthRamp<'_>)
 fn depth_range(project: &Project, stations: &[crate::models::Station]) -> (f64, f64) {
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
-    for s in stations {
-        min = min.min(s.coordinates.z);
-        max = max.max(s.coordinates.z);
+    // A non-finite depth can only be on a station the drawing never reads
+    // (`ensure_finite_geometry` refused the rest, #576 RV3-R-9); it must not
+    // throw the whole ramp back to its default.
+    for z in stations
+        .iter()
+        .map(|s| s.coordinates.z)
+        .filter(|z| z.is_finite())
+    {
+        min = min.min(z);
+        max = max.max(z);
     }
     for section in &project.sections {
         for shot in &section.shots {
@@ -397,7 +408,7 @@ fn export_svg(
     stations: Vec<crate::models::Station>,
 ) -> Result<()> {
     let svg = generate_svg_string_with_stations(project, options, stations)?;
-    std::fs::write(path, svg).context("Failed to write SVG file")?;
+    write_atomic_bytes(path, svg.as_bytes()).context("Failed to write SVG file")?;
     tracing::info!(path = ?path, "Exported SVG");
     Ok(())
 }
@@ -440,7 +451,8 @@ fn export_png(
     let transform = tiny_skia::Transform::from_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-    pixmap.save_png(path).context("Failed to save PNG file")?;
+    let png = pixmap.encode_png().context("Failed to encode PNG")?;
+    write_atomic_bytes(path, &png).context("Failed to save PNG file")?;
 
     tracing::info!(path = ?path, dpi = options.dpi, width = width, height = height, "Exported PNG");
     Ok(())
@@ -466,7 +478,7 @@ fn export_pdf(
     )
     .map_err(|e| anyhow::anyhow!("Failed to convert SVG to PDF: {e:?}"))?;
 
-    std::fs::write(path, pdf).context("Failed to write PDF file")?;
+    write_atomic_bytes(path, &pdf).context("Failed to write PDF file")?;
 
     tracing::info!(path = ?path, "Exported PDF");
     Ok(())
@@ -525,6 +537,129 @@ const PEN_LABEL_CHAR_WIDTH_RATIO: f64 = 0.55;
 /// rasterization.
 const MIN_BOUNDS_EXTENT_M: f64 = 1.0;
 
+/// Refuse to draw geometry that is not finite (#576 B21).
+///
+/// One station at inf or NaN - an absurd tape such as a 1e200 typo overflows
+/// the horizontal length, or a corrupt offset arrives from a file - poisons
+/// every station after it, and the drawing silently degenerates: `f64::min` /
+/// `max` skip NaN and accept inf, so the viewBox became `-inf -inf inf inf`
+/// and the PNG a blank 5x5 pixmap, both reported as a successful export. The
+/// first offending station is named by section and shot (station `k` is where
+/// the section's `k`-th shot ends), in section order, so the user can find
+/// and fix the reading that caused it.
+///
+/// Only the stations the export DRAWS are checked ([`drawn_stations`], #576
+/// RV3-R-9): one that only reference shots reach is not drawn, so a bad value
+/// there does not refuse an export that never reads it.
+fn ensure_finite_geometry(
+    project: &Project,
+    station_by_ref: &HashMap<StationRef, &crate::models::Station>,
+) -> Result<()> {
+    let drawn = drawn_stations(project, station_by_ref);
+    for section in &project.sections {
+        for index in 0..=section.shots.len() as u32 {
+            let station_ref = StationRef::new(section.id, index);
+            if drawn.as_ref().is_some_and(|d| !d.contains(&station_ref)) {
+                continue;
+            }
+            let Some(station) = station_by_ref.get(&station_ref) else {
+                continue;
+            };
+            let c = station.coordinates;
+            if c.x.is_finite() && c.y.is_finite() && c.z.is_finite() {
+                continue;
+            }
+            // The name comes from imported files and reaches the UI and the
+            // log: no control characters, and a bounded length.
+            let name: String = section
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Section {}", section.id))
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(60)
+                .collect();
+            let place = if index == 0 {
+                "starts".to_string()
+            } else {
+                format!("shot {index} ends")
+            };
+            anyhow::bail!(
+                "Cannot draw the map: in section \"{name}\", {place} at a position that is not a \
+                 finite number (x {}, y {}, depth {}). Check the length and depths of that shot \
+                 and the ones before it.",
+                c.x,
+                c.y,
+                c.z
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The stations the drawing reads coordinates from, or `None` when it draws
+/// none (#576 RV3-R-9). Matches what the passes below read:
+/// - both ends of every non-reference shot (shot lines, the bounds, section
+///   names, shot-data labels);
+/// - every station colocated with one of those by a merge or an aligned
+///   closure, transitively: the station-label, comment and penetration passes
+///   treat such a point as drawn and may place their text at any station on
+///   it;
+/// - every zero datum (its star, and the bounds).
+///
+/// `None` mirrors the bounds' fallback: with nothing drawn they read EVERY
+/// station, so every station must be finite.
+fn drawn_stations(
+    project: &Project,
+    station_by_ref: &HashMap<StationRef, &crate::models::Station>,
+) -> Option<HashSet<StationRef>> {
+    let refs: Vec<StationRef> = station_by_ref.keys().copied().collect();
+    let index: HashMap<StationRef, usize> = refs.iter().enumerate().map(|(i, r)| (*r, i)).collect();
+    let mut points = UnionFind::new(refs.len());
+    let mut colocate = |a: Option<StationRef>, b: Option<StationRef>| {
+        if let (Some(&a), Some(&b)) = (a.and_then(|a| index.get(&a)), b.and_then(|b| index.get(&b)))
+        {
+            points.union(a, b);
+        }
+    };
+    for merge in &project.station_merges {
+        colocate(
+            project.resolve_key(&merge.station_a),
+            project.resolve_key(&merge.station_b),
+        );
+    }
+    for closure in project.loop_closures.iter().filter(|c| c.is_aligned) {
+        colocate(
+            project.resolve_key(&closure.station_a),
+            project.resolve_key(&closure.station_b),
+        );
+    }
+
+    let mut drawn_points: HashSet<usize> = HashSet::new();
+    for section in &project.sections {
+        for (i, shot) in section.shots.iter().enumerate() {
+            if shot.kind.is_virtual() {
+                continue;
+            }
+            for end in [i, i + 1] {
+                if let Some(&at) = index.get(&StationRef::new(section.id, end as u32)) {
+                    drawn_points.insert(points.find(at));
+                }
+            }
+        }
+    }
+    let mut drawn: HashSet<StationRef> = HashSet::new();
+    for (i, station_ref) in refs.iter().enumerate() {
+        let zero_datum = station_by_ref
+            .get(station_ref)
+            .is_some_and(|s| s.is_zero_datum);
+        if zero_datum || drawn_points.contains(&points.find(i)) {
+            drawn.insert(*station_ref);
+        }
+    }
+    (!drawn.is_empty()).then_some(drawn)
+}
+
 /// Generate SVG content as a string from the measured station coordinates.
 /// Pure: never touches the filesystem.
 pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Result<String> {
@@ -546,6 +681,7 @@ pub fn generate_svg_string_with_stations(
     // inflate the viewBox and shrink the visible map.
     let station_by_ref: HashMap<StationRef, &crate::models::Station> =
         stations.iter().map(|s| (s.station_ref, s)).collect();
+    ensure_finite_geometry(project, &station_by_ref)?;
     let mut min_x = f64::MAX;
     let mut max_x = f64::MIN;
     let mut min_y = f64::MAX;
@@ -1196,7 +1332,10 @@ pub fn generate_svg_string_with_stations(
     // stars, then appended to by pen-distance labels (Pass 3) and station
     // labels (Pass 4) so all three mutually dodge. Only seeded when at least
     // one label pass will read it (skip the filter + allocation otherwise).
-    let mut placed: Vec<(f64, f64, f64, f64)> = Vec::new();
+    //
+    // A grid, not a list (#576 B22): every candidate used to be tested
+    // against every box placed so far, quadratic in the label count.
+    let mut placed = PlacedLabels::new(px(PEN_LABEL_PX) * 4.0);
     if options.show_penetration_labels
         || options.show_station_labels
         || options.show_section_names
@@ -1207,7 +1346,7 @@ pub fn generate_svg_string_with_stations(
         let star_r = px(STAR_OUTER_PX);
         for &i in &zero_datum_indices {
             let s = &stations[i];
-            placed.push((
+            placed.insert((
                 s.coordinates.x - star_r,
                 -s.coordinates.y - star_r,
                 star_r * 2.0,
@@ -1215,6 +1354,18 @@ pub fn generate_svg_string_with_stations(
             ));
         }
     }
+
+    // Which drawn shots leave each point, for the passes that aim a label
+    // into the open wedge at a station. Indexed once (#576 B22) instead of
+    // scanning every shot of the survey per labelled station.
+    let shot_ends = if options.show_penetration_labels
+        || options.show_station_labels
+        || options.show_station_comments
+    {
+        ShotEnds::new(project, &stations, &station_index)
+    } else {
+        ShotEnds::default()
+    };
 
     // Pass 3: penetration-distance labels at each thick segment's deepest
     // station. Only attempted when the project has at least one zero datum
@@ -1293,32 +1444,11 @@ pub fn generate_svg_string_with_stations(
                 // itself. Fallback placements rotate around the primary
                 // in 45° steps and are only reached when another label
                 // (or the zero-datum star) is already occupying the spot.
-                let primary = label_open_space_angle(si, &stations, project, &station_index);
-                let mut chosen: Option<(f64, f64, (f64, f64, f64, f64))> = None;
-                let mut candidate_angles: Vec<f64> = Vec::with_capacity(9);
-                candidate_angles.push(primary);
-                for k in 1..=4 {
-                    candidate_angles.push(primary + (k as f64) * quarter_turn);
-                    candidate_angles.push(primary - (k as f64) * quarter_turn);
-                }
-                for angle in candidate_angles {
-                    let lx = sx + offset * angle.cos();
-                    let ly = sy + offset * angle.sin();
-                    let bb = (lx - text_w * 0.5, ly - text_h * 0.5, text_w, text_h);
-                    let overlap = placed.iter().any(|p| {
-                        bb.0 < p.0 + p.2
-                            && bb.0 + bb.2 > p.0
-                            && bb.1 < p.1 + p.3
-                            && bb.1 + bb.3 > p.1
-                    });
-                    if !overlap {
-                        chosen = Some((lx, ly, bb));
-                        break;
-                    }
-                }
-                if let Some((lx, ly, bb)) = chosen {
+                let primary = shot_ends.open_space_angle(stations[si].coordinates);
+                let offsets = radial_offsets(primary, quarter_turn, offset);
+                if let Some((lx, ly, bb)) = place_near(sx, sy, &offsets, text_w, text_h, &placed) {
                     let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
-                    placed.push(bb);
+                    placed.insert(bb);
                 }
                 // If every candidate collided, drop the label rather
                 // than stack it on top of another - better to lose one
@@ -1423,13 +1553,13 @@ pub fn generate_svg_string_with_stations(
                     let text = stations[si].station_ref.station_index.to_string();
                     let text_w = char_w * text.chars().count() as f64;
                     let text_h = label_size;
-                    let primary = label_open_space_angle(si, &stations, project, &station_index);
+                    let primary = shot_ends.open_space_angle(stations[si].coordinates);
                     let offsets = radial_offsets(primary, quarter_turn, offset);
                     if let Some((lx, ly, bb)) =
                         place_near(sx, sy, &offsets, text_w, text_h, &placed)
                     {
                         let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
-                        placed.push(bb);
+                        placed.insert(bb);
                     }
                 }
                 svg.push_str("</g>\n");
@@ -1453,7 +1583,7 @@ pub fn generate_svg_string_with_stations(
                 let sy = -stations[i].coordinates.y;
                 let text_w = char_w * text.chars().count() as f64;
                 let text_h = label_size;
-                let primary = label_open_space_angle(i, &stations, project, &station_index);
+                let primary = shot_ends.open_space_angle(stations[i].coordinates);
                 let offsets = radial_offsets(primary, quarter_turn, offset);
                 if let Some((lx, ly, bb)) = place_near(sx, sy, &offsets, text_w, text_h, &placed) {
                     if !opened {
@@ -1470,7 +1600,7 @@ pub fn generate_svg_string_with_stations(
                         r#"<text x="{lx:.2}" y="{ly:.2}">{t}</text>"#,
                         t = escape_xml_text(&text),
                     );
-                    placed.push(bb);
+                    placed.insert(bb);
                 }
             }
             if opened {
@@ -1541,7 +1671,7 @@ pub fn generate_svg_string_with_stations(
                     r#"<text x="{lx:.2}" y="{ly:.2}">{t}</text>"#,
                     t = escape_xml_text(&text),
                 );
-                placed.push(bb);
+                placed.insert(bb);
             }
         }
         if opened {
@@ -1628,7 +1758,7 @@ pub fn generate_svg_string_with_stations(
                         opened = true;
                     }
                     let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
-                    placed.push(bb);
+                    placed.insert(bb);
                 }
             }
         }
@@ -1682,7 +1812,7 @@ pub fn generate_svg_string_with_stations(
                         r#"<text x="{lx:.2}" y="{ly:.2}">{t}</text>"#,
                         t = escape_xml_text(&text),
                     );
-                    placed.push(bb);
+                    placed.insert(bb);
                 }
             }
         }
@@ -1756,116 +1886,40 @@ fn trim_polyline_end(points: &mut Vec<(f64, f64)>, from_start: bool, mut dist: f
     }
 }
 
-/// Return the angle (in screen coordinates - y axis flipped, same frame the
-/// SVG itself uses) that points into the largest empty wedge between the
-/// *drawn* (non-reference) shot directions incident to `station_idx`.
-///
-/// Used to pick a label-placement direction that is guaranteed not to
-/// overlap any line at the labelled station, no matter how the
-/// surrounding passages bend. Stations physically colocated with
-/// `station_idx` (via station_merges or aligned closures, detected here
-/// by coordinate equality) contribute their incident shots too - merged
-/// stations are the same point, so a shot leaving the merged twin still
-/// leaves *this* station.
-///
-/// If no drawn shot touches the station, returns `FRAC_PI_2` (screen
-/// down) as an arbitrary but deterministic fallback.
-fn label_open_space_angle(
-    station_idx: usize,
-    stations: &[crate::models::Station],
-    project: &Project,
-    station_index: &HashMap<StationRef, usize>,
-) -> f64 {
-    let si_pos = stations[station_idx].coordinates;
-    let eps = 1e-6_f64;
-    let mut dirs: Vec<f64> = Vec::new();
-    let push_dir = |dirs: &mut Vec<f64>, sx: f64, sy: f64, ox: f64, oy: f64| {
-        let dx = ox - sx;
-        // Screen y is flipped relative to world y.
-        let dy = -(oy - sy);
-        if dx.abs() > eps || dy.abs() > eps {
-            dirs.push(dy.atan2(dx));
-        }
-    };
-    for section in &project.sections {
-        for (i, shot) in section.shots.iter().enumerate() {
-            if shot.kind.is_virtual() {
-                continue;
-            }
-            let from_ref = StationRef::new(section.id, i as u32);
-            let to_ref = StationRef::new(section.id, (i + 1) as u32);
-            let (Some(&fi), Some(&ti)) = (station_index.get(&from_ref), station_index.get(&to_ref))
-            else {
-                continue;
-            };
-            let from_pos = stations[fi].coordinates;
-            let to_pos = stations[ti].coordinates;
-            if (from_pos.x - si_pos.x).abs() < eps && (from_pos.y - si_pos.y).abs() < eps {
-                push_dir(&mut dirs, si_pos.x, si_pos.y, to_pos.x, to_pos.y);
-            }
-            if (to_pos.x - si_pos.x).abs() < eps && (to_pos.y - si_pos.y).abs() < eps {
-                push_dir(&mut dirs, si_pos.x, si_pos.y, from_pos.x, from_pos.y);
-            }
-        }
-    }
-    if dirs.is_empty() {
-        return std::f64::consts::FRAC_PI_2;
-    }
-    dirs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let two_pi = std::f64::consts::TAU;
-    let n = dirs.len();
-    let mut best_gap = -1.0_f64;
-    let mut best_mid = 0.0_f64;
-    for i in 0..n {
-        let a = dirs[i];
-        let b = if i + 1 < n {
-            dirs[i + 1]
-        } else {
-            dirs[0] + two_pi
-        };
-        let gap = b - a;
-        if gap > best_gap {
-            best_gap = gap;
-            best_mid = a + gap * 0.5;
-        }
-    }
-    best_mid
-}
-
 /// Returns the first candidate `(x, y)` in `offsets` (each a `(dx, dy)`
 /// relative to `(hub_x, hub_y)`) whose text bounding box doesn't collide
 /// with `placed`, along with that box. `None` if every candidate collided -
 /// callers drop the label rather than stack it on top of another. Shared by
 /// every label pass that dodges collisions from a single anchor point
-/// (station labels/comments, section names, shot data/comments); Pass 3
-/// (penetration labels) predates this helper and keeps its own inline copy.
+/// (penetration labels, station labels/comments, section names, shot
+/// data/comments).
 fn place_near(
     hub_x: f64,
     hub_y: f64,
     offsets: &[(f64, f64)],
     text_w: f64,
     text_h: f64,
-    placed: &[(f64, f64, f64, f64)],
-) -> Option<(f64, f64, (f64, f64, f64, f64))> {
+    placed: &PlacedLabels,
+) -> Option<(f64, f64, LabelBox)> {
     for &(dx, dy) in offsets {
         let lx = hub_x + dx;
         let ly = hub_y + dy;
         let bb = (lx - text_w * 0.5, ly - text_h * 0.5, text_w, text_h);
-        let overlap = placed.iter().any(|p| {
-            bb.0 < p.0 + p.2 && bb.0 + bb.2 > p.0 && bb.1 < p.1 + p.3 && bb.1 + bb.3 > p.1
-        });
-        if !overlap {
+        if !placed.overlaps(bb) {
             return Some((lx, ly, bb));
         }
     }
     None
 }
 
-/// Nine candidate `(dx, dy)` offsets at distance `offset` from a station:
-/// `primary` first, then ± `step` fallback directions rotating outward (the
-/// mirror is dropped at the step where + and - coincide). 8 distinct candidates
-/// for the callers' pi/4 step. Mirrors the order Pass 3/4 used before
-/// [`place_near`] existed.
+/// Candidate `(dx, dy)` offsets at distance `offset` from a station: `primary`
+/// first, then +/- `step` fallback directions rotating outward, the mirror
+/// dropped at the step where + and - coincide - 8 distinct candidates for the
+/// callers' pi/4 step. That is the order Pass 4 used before [`place_near`]
+/// existed. Pass 3's old inline list tried 9: it also kept primary - pi, the
+/// same direction as primary + pi up to float rounding, so it could only have
+/// placed a label the second one refused if a box edge lay within ~1e-16 of the
+/// offset (#576 RV3-R-NITS, B22: practically unobservable, not restored).
 fn radial_offsets(primary: f64, step: f64, offset: f64) -> Vec<(f64, f64)> {
     let mut out = Vec::with_capacity(8);
     out.push((offset * primary.cos(), offset * primary.sin()));
@@ -1976,25 +2030,18 @@ impl UnionFind {
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::models::test_fixtures::straight_shot;
     use crate::models::{GpsCoordinates, SectionData, ShotData, ShotKind, StationMerge};
     use tempfile::NamedTempFile;
 
     fn make_shot(length: f64, azimuth: f64, is_virtual: bool) -> ShotData {
-        ShotData {
-            azimuth_in: azimuth,
-            azimuth_out: azimuth,
-            length,
-            depth_in: 0.0,
-            depth_out: 0.0,
-            // Image export only cares about virtual-vs-not, so either virtual
-            // kind exercises the same paths; Jump is the migration default.
-            kind: if is_virtual {
-                ShotKind::Jump
-            } else {
-                ShotKind::Normal
-            },
-            ..Default::default()
-        }
+        // Image export only cares about virtual-vs-not, so either virtual
+        // kind exercises the same paths; Jump is the migration default.
+        straight_shot(azimuth, length).with_kind(if is_virtual {
+            ShotKind::Jump
+        } else {
+            ShotKind::Normal
+        })
     }
 
     fn simple_project() -> Project {
@@ -2006,6 +2053,180 @@ mod tests {
             ..Default::default()
         });
         project
+    }
+
+    // ---- Non-finite geometry (#576 B21) -----------------------------------
+
+    /// Absurd tapes (typos near `f64::MAX`, or a corrupt file) overflow every
+    /// station after them to inf/NaN. The image export used to write a blank
+    /// 5x5 PNG or an SVG with an infinite viewBox and report success; it now
+    /// refuses, naming the first section and shot whose station is not
+    /// finite, and writes nothing. (One 1e200 tape used to be enough; its
+    /// horizontal length stays finite since #576 NF-TML-1.)
+    #[test]
+    fn non_finite_geometry_is_refused_naming_section_and_shot() {
+        let mut project = Project::new("Absurd".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![
+                make_shot(f64::MAX, 0.0, false),
+                make_shot(f64::MAX, 0.0, false),
+                make_shot(10.0, 0.0, false),
+            ],
+            ..Default::default()
+        });
+
+        let err = generate_svg_string(&project, &ExportImageOptions::default())
+            .expect_err("non-finite geometry must not render");
+        let message = err.to_string();
+        assert!(
+            message.contains("\"Main\"") && message.contains("shot 2"),
+            "the error names the section and the shot: {message}"
+        );
+
+        for format in [ImageFormat::Png, ImageFormat::Svg, ImageFormat::Pdf] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let path = dir.path().join("map.out");
+            let options = ExportImageOptions {
+                format,
+                ..ExportImageOptions::default()
+            };
+            assert!(
+                export_image(&project, &path, &options).is_err(),
+                "{format:?}"
+            );
+            assert!(!path.exists(), "{format:?}: nothing is written");
+        }
+    }
+
+    /// Any route to a non-finite coordinate is refused, not only an
+    /// overflowing tape - here a NaN in the (caller-supplied) station set, on
+    /// the second section's first shot.
+    #[test]
+    fn a_non_finite_station_from_any_source_is_refused() {
+        let mut project = simple_project();
+        project.add_section(SectionData {
+            name: Some("Side".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![make_shot(4.0, 90.0, false), make_shot(4.0, 90.0, false)],
+            ..Default::default()
+        });
+        let side = project.sections[1].id;
+        let mut stations = project.compute_station_coordinates();
+        for station in &mut stations {
+            if station.station_ref == StationRef::new(side, 1) {
+                station.coordinates.y = f64::NAN;
+            }
+        }
+        let message =
+            generate_svg_string_with_stations(&project, &ExportImageOptions::default(), stations)
+                .expect_err("a NaN station must not render")
+                .to_string();
+        assert!(
+            message.contains("\"Side\"") && message.contains("shot 1"),
+            "{message}"
+        );
+    }
+
+    /// [#576 RV3-R-9] The check covers what the export DRAWS. The end of a
+    /// trailing reference shot is drawn by nothing - not the bounds, not a
+    /// label - so a non-finite one there no longer refuses the export, and the
+    /// drawing is finite. Merged onto a drawn station it IS drawn (a label or
+    /// comment can sit at it), so it is refused again; and when nothing at all
+    /// is drawn the bounds read every station, so every station is checked.
+    #[test]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the printed outcomes are the evidence a run captures"
+    )]
+    fn only_stations_the_export_draws_must_be_finite() {
+        let mut project = Project::new("CaveA".to_string(), None);
+        let main = project
+            .add_section(SectionData {
+                name: Some("Main".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false), make_shot(4.0, 90.0, true)],
+                ..Default::default()
+            })
+            .id;
+        let with_nan_at = |project: &Project, at: StationRef| {
+            let mut stations = project.compute_station_coordinates();
+            for station in &mut stations {
+                if station.station_ref == at {
+                    station.coordinates.x = f64::NAN;
+                }
+            }
+            stations
+        };
+        let options = ExportImageOptions {
+            show_station_labels: true,
+            show_station_comments: true,
+            ..ExportImageOptions::default()
+        };
+
+        let undrawn = generate_svg_string_with_stations(
+            &project,
+            &options,
+            with_nan_at(&project, StationRef::new(main, 2)),
+        );
+        println!(
+            "NaN at the end of a trailing reference shot -> {}",
+            undrawn
+                .as_ref()
+                .map_or_else(|e| format!("refused: {e}"), |_| "exported".to_string())
+        );
+        let svg = undrawn.unwrap();
+        assert!(
+            !svg.contains("NaN") && !svg.contains("inf"),
+            "the drawing must be finite: {svg}"
+        );
+
+        // Merged onto the start of a drawn shot: drawn, so refused.
+        let side = project
+            .add_section(SectionData {
+                name: Some("Side".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(3.0, 180.0, false)],
+                ..Default::default()
+            })
+            .id;
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(main, 2).into(),
+            station_b: StationRef::new(side, 0).into(),
+            merged_at: chrono::Utc::now(),
+        });
+        let merged = generate_svg_string_with_stations(
+            &project,
+            &options,
+            with_nan_at(&project, StationRef::new(main, 2)),
+        );
+        println!(
+            "...merged onto a drawn station -> {:?}",
+            merged.as_ref().map(|_| "exported")
+        );
+        assert!(merged.is_err());
+
+        // Nothing drawn at all: the bounds read every station.
+        let mut only_reference = Project::new("CaveB".to_string(), None);
+        let lone = only_reference
+            .add_section(SectionData {
+                name: Some("Ref".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(4.0, 90.0, true)],
+                ..Default::default()
+            })
+            .id;
+        let nothing_drawn = generate_svg_string_with_stations(
+            &only_reference,
+            &options,
+            with_nan_at(&only_reference, StationRef::new(lone, 1)),
+        );
+        println!(
+            "...in a project that draws nothing -> {:?}",
+            nothing_drawn.as_ref().map(|_| "exported")
+        );
+        assert!(nothing_drawn.is_err());
     }
 
     // ---- Output shape ------------------------------------------------------
@@ -4760,5 +4981,133 @@ mod tests {
             svg.contains(r#"class="shot-comments""#),
             "shot comments should render alongside shot data: {svg}"
         );
+    }
+
+    // ---- Label placement at scale (#576 B22) ------------------------------
+
+    /// A survey dense enough that every label pass collides: `sections`
+    /// sections of `shots_each` short shots fanning out from a shared hub,
+    /// each merged onto the previous one, some aligned closures, stations of
+    /// unmerged sections colocated at the origin, station and shot comments,
+    /// and a zero datum for the penetration labels.
+    fn dense_labelled_project(sections: usize, shots_each: usize) -> Project {
+        let mut project = Project::new("Dense".to_string(), None);
+        for s in 0..sections {
+            let shots = (0..shots_each)
+                .map(|i| ShotData {
+                    comment: (i % 7 == 3).then(|| format!("note {s}/{i}")),
+                    ..make_shot(
+                        1.0 + (i % 3) as f64,
+                        ((s * 37 + i * 23) % 360) as f64,
+                        i % 11 == 10,
+                    )
+                })
+                .collect();
+            project.add_section(SectionData {
+                name: Some(format!("S{s}")),
+                color: "#000000".to_string(),
+                shots,
+                ..Default::default()
+            });
+        }
+        let ids: Vec<_> = project.sections.iter().map(|s| s.id).collect();
+        let merged_at = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for pair in ids.windows(2).step_by(2) {
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(pair[0], (shots_each / 2) as u32).into(),
+                station_b: StationRef::new(pair[1], 0).into(),
+                merged_at,
+            });
+        }
+        for (k, pair) in ids.windows(2).enumerate().filter(|(k, _)| k % 5 == 1) {
+            project.loop_closures.push(crate::models::LoopClosure {
+                id: k as u64,
+                station_a: StationRef::new(pair[0], shots_each as u32).into(),
+                station_b: StationRef::new(pair[1], 1).into(),
+                path_length: 10.0,
+                misclosure_distance: 0.1,
+                error_percentage: 1.0,
+                horizontal_misclosure: 0.1,
+                vertical_misclosure: 0.0,
+                strategy: crate::models::ClosureStrategy::Batch,
+                is_aligned: k % 2 == 1,
+            });
+        }
+        for (k, &id) in ids.iter().enumerate().filter(|(k, _)| k % 3 == 0) {
+            project
+                .station_comments
+                .insert(StationRef::new(id, 2).into(), format!("station note {k}"));
+        }
+        let gps = GpsCoordinates::new(20.5, -87.3, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(ids[0], 0), gps)
+            .unwrap();
+        project
+    }
+
+    fn every_label() -> ExportImageOptions {
+        ExportImageOptions {
+            show_penetration_labels: true,
+            show_station_labels: true,
+            show_section_names: true,
+            show_station_comments: true,
+            show_shot_comments: true,
+            show_shot_data: true,
+            ..Default::default()
+        }
+    }
+
+    /// FNV-1a, so a whole document can be pinned in one constant.
+    fn fnv1a(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &b| {
+            (hash ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// The label passes were made linear (#576 B22) without changing a byte:
+    /// this document - every label kind, colliding everywhere, with merged,
+    /// aligned-closure and colocated-unmerged stations - was rendered by the
+    /// quadratic implementation and pinned here before the change.
+    #[test]
+    fn dense_label_export_is_byte_identical_to_the_quadratic_placement() {
+        let svg = generate_svg_string(&dense_labelled_project(12, 30), &every_label()).unwrap();
+        let labels = svg.matches("<text ").count();
+        assert!(
+            labels > 300,
+            "the fixture must exercise placement: {labels} labels"
+        );
+        assert_eq!(
+            (svg.len(), fnv1a(svg.as_bytes())),
+            DENSE_LABEL_SVG_PIN,
+            "the dense-label SVG changed ({labels} labels)"
+        );
+    }
+
+    /// `(length, FNV-1a)` of `dense_label_export_is_byte_identical_to_the_quadratic_placement`'s
+    /// document as the pre-#576-B22 placement wrote it.
+    const DENSE_LABEL_SVG_PIN: (usize, u64) = (23_156, 16_253_259_044_443_610_700);
+
+    /// Timing probe, not a test: `cargo test -p stalagmight-export --lib
+    /// label_placement_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing probe; run by hand"]
+    #[expect(clippy::print_stderr)]
+    fn label_placement_timing() {
+        for (sections, shots_each) in [(40, 50), (100, 50), (200, 50)] {
+            let project = dense_labelled_project(sections, shots_each);
+            let labels_off = ExportImageOptions::default();
+            let start = std::time::Instant::now();
+            generate_svg_string(&project, &labels_off).unwrap();
+            let off = start.elapsed();
+            let start = std::time::Instant::now();
+            generate_svg_string(&project, &every_label()).unwrap();
+            let on = start.elapsed();
+            eprintln!(
+                "{} shots: labels off {} ms, every label on {} ms",
+                sections * shots_each,
+                off.as_millis(),
+                on.as_millis()
+            );
+        }
     }
 }

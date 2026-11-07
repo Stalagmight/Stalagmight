@@ -2,7 +2,8 @@
  * MapLibre `CustomLayerInterface` for the global view's bulk survey geometry
  * (#customRender). Sibling of `Map/surveyLayer/customRender/surveyCustomLayer.ts`
  * with the same GL discipline (binds its own program/buffers/attributes/uniforms
- * every frame, sets premultiplied-alpha blend, re-uploads on context restore,
+ * every frame, sets premultiplied-alpha blend, re-uploads in onAdd - which
+ * GlobalSurveyLayer re-runs after a WebGL context restore, as MapLibre does not -
  * self-disables + notifies on a first-frames `gl.getError()` probe), tailored to
  * the global view: every system drawn at once in its own color, with per-system
  * hover (a uniform), selection / search-dim (per-vertex flags), and reference
@@ -28,6 +29,7 @@ import {
   bindVec2,
   bindFloat,
   bindColor,
+  layerGlError,
 } from '../../Map/surveyLayer/customRender/glProgram';
 
 /** Notified when the layer disables itself mid-render; fired from inside
@@ -315,7 +317,9 @@ export class GlobalCustomLayer implements CustomLayerInterface {
 
   private checkFrameError(gl: WebGL2RenderingContext, data: GlobalCustomRenderData): void {
     if (this.checkedFrames >= MAX_CHECKED_FRAMES) return;
-    const err = gl.getError();
+    // A frame drawn as the context goes reports CONTEXT_LOST_WEBGL: not a fault
+    // of this layer, which comes back with the context (#576 D38).
+    const err = layerGlError(gl);
     if (err !== gl.NO_ERROR) {
       const code = `0x${err.toString(16)}`;
       const reason = `gl-error-${code}`;

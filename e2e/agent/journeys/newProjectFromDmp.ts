@@ -50,7 +50,7 @@ interface ParsedDmp {
 
 /**
  * Mirror of the selection dialog's DEFAULT selection and shot conversion
- * (`src/hooks/useImportState.ts` `isImportableDmpShot`, and
+ * (`src/utils/shotConversion.ts` `isImportableDmpShot`, and
  * `DmpSelectionDialog.tsx`'s initial `selectedIndices`): a shot is importable
  * when it is `Standard` and its length is not the 1.0 excluded-shot sentinel
  * (`DEFAULT_EXCLUDED_DMP_SHOT_LENGTH = 1`); a section is selected by default
@@ -107,12 +107,9 @@ function primaryAction(screen: string, live: Record<string, 0 | 1 | 2>): Move | 
     case 'wiz-init':
     case 'wiz-placing':
     case 'wiz-blank':
-    // `wiz-no-suggest` renders no skip button (it classifies on
-    // !currentSuggestion, and skip-button renders only WITH one) - it
-    // self-transitions to manual placing. `wiz-done` has no footer buttons in
-    // phase 'done'; it auto-advances via the completion effect. Both are
-    // transients here; if either sticks, the poll budget names it.
-    case 'wiz-no-suggest':
+    // `wiz-done` has no footer buttons in phase 'done'; it auto-advances via
+    // the completion effect. A transient here; if it sticks, the poll budget
+    // names it.
     case 'wiz-done':
       return null; // transient - observe again
     case 'orphan-placement':

@@ -177,7 +177,7 @@ impl PanelsConfig {
         normalize_column_widths(&mut self.import_shots_column_widths);
         // The eight column-key LISTS need the same ceiling as the width maps
         // beside them, and for the same reason - see `normalize_column_names`.
-        // Doing it here rather than in `update_data_table_view_impl` is what
+        // Doing it here rather than in `update_data_table_view` is what
         // makes it hold on BOTH doors: the partial IPC command and the
         // whole-`Config` `update_config` both end in `normalize_except_shortcuts`,
         // and `Config::load` calls it too, so an already-bloated file on disk is
@@ -210,7 +210,7 @@ impl PanelsConfig {
 
 /// The accepted values for `data_table_azimuth_mode` / `data_table_inclination_mode`.
 ///
-/// Shared with `commands::config::update_data_table_view_impl`, which rejects
+/// Shared with `commands::config::update_data_table_view`, which rejects
 /// anything outside it, so the validating door and the repairing door cannot
 /// drift apart into two different notions of "valid mode".
 pub const DATA_TABLE_ANGLE_MODES: [&str; 3] = ["avg", "inout", "off"];

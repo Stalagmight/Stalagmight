@@ -1,14 +1,12 @@
 use crate::core::{Command, UndoData};
-use crate::models::{ClosureStrategy, SectionId, SectionUpdates, ShotId, ShotUpdates};
+use crate::models::{ClosureStrategy, SectionId, SectionUpdates, ShotId, ShotUpdates, StationKey};
 
 use super::AppState;
 
 impl AppState {
     /// Generate undo data before executing a command
     pub(super) fn generate_undo_data(&self, cmd: &Command) -> UndoData {
-        let Ok(proj_guard) = self.project.lock() else {
-            return UndoData::None;
-        };
+        let proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_ref() else {
             return UndoData::None;
@@ -437,18 +435,46 @@ impl AppState {
                 }
             }
 
-            // For station comment, inverse is restoring the previous comment
+            // For station comment, inverse is restoring the previous comment:
+            // the station's whole comment, every key that names it joined
+            // (#576 W30-NF1), as the forward command replaces all of them.
+            //
+            // [#576 RV19a-2] That inverse stores the text under the CANONICAL
+            // key, so it is exact only when no other key names the station.
+            // When one does (a legacy `Index` key), record the rows themselves:
+            // the inverse moved such a comment to the canonical key, and undoing
+            // the append that made the legacy key name the station then deleted
+            // it with the shot.
             Command::SetStationComment {
                 station_ref,
                 comment: _,
             } => {
-                let previous_comment = project
-                    .key_for_ref(*station_ref)
-                    .and_then(|key| project.station_comments.get(&key).cloned());
-                UndoData::InverseCommand(Command::SetStationComment {
-                    station_ref: *station_ref,
-                    comment: previous_comment,
-                })
+                let canonical = project.key_for_ref(*station_ref);
+                let mut previous: Vec<(StationKey, String)> = project
+                    .station_comments
+                    .iter()
+                    .filter(|(key, _)| {
+                        key.section_id == station_ref.section_id
+                            && project.key_is_ref(key, *station_ref)
+                    })
+                    .map(|(key, text)| (key.clone(), text.clone()))
+                    .collect();
+                if previous
+                    .iter()
+                    .any(|(key, _)| Some(key) != canonical.as_ref())
+                {
+                    previous.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    UndoData::StationCommentRows {
+                        station_ref: *station_ref,
+                        previous,
+                    }
+                } else {
+                    let previous_comment = AppState::station_comment(project, *station_ref);
+                    UndoData::InverseCommand(Command::SetStationComment {
+                        station_ref: *station_ref,
+                        comment: previous_comment,
+                    })
+                }
             }
 
             // Move commands use inverse commands
@@ -469,7 +495,7 @@ impl AppState {
                     .collect();
                 let mut previous_offsets = std::collections::HashMap::new();
                 for sid in &connected {
-                    previous_offsets.insert(*sid, project.section_offsets.get(sid).copied());
+                    previous_offsets.insert(*sid, project.section_offsets().get(sid).copied());
                 }
                 UndoData::SegmentMoveInfo {
                     affected_sections: connected,
@@ -509,16 +535,30 @@ impl AppState {
             // which captures before+after snapshots and pushes directly.
             Command::Batch { .. } => UndoData::None,
 
-            // Non-undoable commands
-            _ => UndoData::None,
+            // [#576 A7] Every variant is named, so a new command cannot fall
+            // through to "no undo data" without someone deciding it should.
+            //
+            // Not undoable at all (`is_undoable` is false), so never reached.
+            Command::CreateProject { .. }
+            | Command::OpenProject { .. }
+            | Command::SaveProject { .. }
+            | Command::CloseProject
+            | Command::MergeProjects { .. }
+            | Command::RepairIntegrity => UndoData::None,
+            // Label-only: `execute()` refuses them, and the paths that apply
+            // them record their own snapshot pair (`push_snapshot_undo`).
+            Command::UpdateProjectSettings | Command::SetSurfaceElevation => UndoData::None,
+            // Undoable only as part of a `Batch` (the DMP import sends it inside
+            // one), whose snapshot pair covers it. On its own it records nothing,
+            // so `execute()` pushes no entry - but it still clears redo and marks
+            // a remote copy edited, which is why `is_undoable` keeps it.
+            Command::UntrackImport { .. } => UndoData::None,
         }
     }
 
     /// Finalize undo data after command execution (for commands that create new entities)
     pub(super) fn finalize_undo_data(&self, cmd: &Command, undo_data: UndoData) -> UndoData {
-        let Ok(proj_guard) = self.project.lock() else {
-            return undo_data;
-        };
+        let proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_ref() else {
             return undo_data;
@@ -693,26 +733,80 @@ impl AppState {
             // failure can trigger rollback.
             Command::Batch { .. } => undo_data,
 
-            _ => undo_data,
+            // [#576 A7] Complete before execution: `generate_undo_data` already
+            // recorded everything the undo needs.
+            Command::UpdateSectionMetadata { .. }
+            | Command::UpdateShot { .. }
+            | Command::SetShotKind { .. }
+            | Command::RemoveLoopClosure { .. }
+            | Command::SetZeroDatum { .. }
+            | Command::SetStationComment { .. }
+            | Command::MoveSection { .. }
+            | Command::MoveSegment { .. } => undo_data,
+
+            // Record nothing here (see the matching arms of
+            // `generate_undo_data`): not undoable, label-only, or batch-only.
+            Command::CreateProject { .. }
+            | Command::OpenProject { .. }
+            | Command::SaveProject { .. }
+            | Command::CloseProject
+            | Command::MergeProjects { .. }
+            | Command::RepairIntegrity
+            | Command::UpdateProjectSettings
+            | Command::SetSurfaceElevation
+            | Command::UntrackImport { .. } => undo_data,
         }
     }
 
     /// Check if a command should be pushed to undo stack
+    ///
+    /// [#576 A7] An exhaustive classification, not a list of exceptions: a new
+    /// `Command` variant does not compile until it is placed in one of the two
+    /// arms, so it cannot become silently un-undoable (and silently clear
+    /// redo) by being forgotten.
     pub(super) fn is_undoable(cmd: &Command) -> bool {
-        // This is also a privacy boundary for Full-mode SpeleoDB history: the
-        // lifecycle variants below carry local filesystem paths, so making one
-        // undoable can publish those paths in `command_json`. Keep this list and
-        // `path_bearing_commands_never_enter_shared_undo_history` in sync.
-        !matches!(
-            cmd,
+        match cmd {
+            // This is also a privacy boundary for Full-mode SpeleoDB history: the
+            // lifecycle variants carry local filesystem paths, so making one
+            // undoable can publish those paths in `command_json`. Keep this arm and
+            // `path_bearing_commands_never_enter_shared_undo_history` in sync.
             Command::OpenProject { .. }
-                | Command::SaveProject { .. }
-                | Command::CloseProject
-                | Command::CreateProject { .. }
-                | Command::MergeProjects { .. }
-                // Records its own snapshot-pair undo inside repair_open_project_integrity;
-                // never routed through execute() anyway.
-                | Command::RepairIntegrity
-        )
+            | Command::SaveProject { .. }
+            | Command::CloseProject
+            | Command::CreateProject { .. }
+            | Command::MergeProjects { .. }
+            // Records its own snapshot-pair undo inside repair_open_project_integrity;
+            // never routed through execute() anyway.
+            | Command::RepairIntegrity => false,
+
+            Command::CreateSection { .. }
+            | Command::DeleteSection { .. }
+            | Command::UpdateSectionMetadata { .. }
+            | Command::ReverseSection { .. }
+            | Command::CreateShot { .. }
+            | Command::UpdateShot { .. }
+            | Command::DeleteShot { .. }
+            | Command::SetShotKind { .. }
+            | Command::MergeStations { .. }
+            | Command::UnmergeStations { .. }
+            | Command::UnmergeStationPair { .. }
+            | Command::CreateLoopClosure { .. }
+            | Command::RemoveLoopClosure { .. }
+            | Command::SetZeroDatum { .. }
+            | Command::RemoveZeroDatum { .. }
+            | Command::SetStationComment { .. }
+            | Command::MoveSection { .. }
+            | Command::MoveSegment { .. }
+            | Command::MoveStation { .. }
+            | Command::MoveComment { .. }
+            | Command::Batch { .. }
+            // Batch-only in practice; see its `generate_undo_data` arm for why
+            // it stays in this arm although it records nothing standalone.
+            | Command::UntrackImport { .. }
+            // Label-only entries pushed by their own paths; `execute()` refuses
+            // them before this classification matters.
+            | Command::UpdateProjectSettings
+            | Command::SetSurfaceElevation => true,
+        }
     }
 }

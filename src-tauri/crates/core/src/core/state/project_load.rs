@@ -1,3 +1,4 @@
+use super::session_commit::{CommandsHeld, SessionCommit, SessionHistory};
 use super::AppState;
 use crate::core::CommandResult;
 use crate::persistence::Database;
@@ -15,7 +16,14 @@ impl AppState {
     /// strand the shell on a project the backend no longer has open. If this is
     /// ever exposed over IPC, the guard question returns; a tripwire test pins
     /// the non-exposure (`the_legacy_open_project_is_not_exposed_over_ipc`).
-    pub(super) fn open_project(&self, path: PathBuf) -> CommandResult {
+    ///
+    /// The body of [`Self::open_project`] and [`Self::open_project_held`] [#576
+    /// NF-W4C-3]: `held` is a `command_lock` span the caller already holds, and `None`
+    /// takes the lock around the commit only, after the file read, as the open always
+    /// has. First in this impl because the source tripwires that pin the open's
+    /// history cap and its shared commit (`undo_policy`, `speleodb_session` tests)
+    /// read the first open-project definition in this file.
+    fn open_project_with(&self, held: Option<&CommandsHeld<'_>>, path: PathBuf) -> CommandResult {
         tracing::info!(
             path = ?path,
             purpose = "resume editing",
@@ -24,8 +32,8 @@ impl AppState {
         // `try_exists()` rather than `exists()`: a metadata-access denial (e.g.
         // macOS folder-permission loss after an OS/app update) must not collapse to
         // a misleading "not found" - `exists()` would do exactly that. Parity with
-        // `do_load_project_full` (#169 / #92 / #104). A denial is tagged with
-        // `PERMISSION_DENIED_CODE`, matching the save path's `save_failure`.
+        // `do_load_project_full` (#169 / #92 / #104). A denial carries
+        // `FS_PERMISSION_DENIED`, matching the save path's `save_failure`.
         // NOTE: `open_project` is the legacy command - its frontend consumer
         // (`openProject`, projectStore.ts) does NOT strip the marker or run
         // `isPermissionError` (the load/save paths do). So this tag is currently
@@ -52,10 +60,9 @@ impl AppState {
                         reason = "permission denied",
                         "Project open failed"
                     );
-                    return CommandResult::failure(format!(
-                        "{}: Cannot access {}: {e}",
-                        crate::core::loading::PERMISSION_DENIED_CODE,
-                        path.display()
+                    return CommandResult::refused(crate::core::CommandError::new(
+                        crate::models::CommandErrorCode::FsPermissionDenied,
+                        format!("Cannot access {}: {e}", path.display()),
                     ));
                 }
                 tracing::warn!(
@@ -81,9 +88,27 @@ impl AppState {
                 return CommandResult::failure(format!("{e}"));
             }
         };
+        // [#576 B6-D1] A file a newer build saved is viewed, never written: see
+        // the same step in `do_load_project_full`.
+        let newer_schema = db.newer_schema_version();
+        let db = match newer_schema {
+            None => db,
+            Some(_) => match db.into_read_only(&path) {
+                Ok(db) => db,
+                Err(e) => {
+                    tracing::error!(
+                        path = ?path,
+                        purpose = "resume editing",
+                        reason = %e,
+                        "Failed to reopen a newer-version project read-only"
+                    );
+                    return CommandResult::failure(format!("{e}"));
+                }
+            },
+        };
 
-        let mut project = match db.load_project() {
-            Ok(p) => p,
+        let (mut project, load_report) = match db.load_project_with_report() {
+            Ok(loaded) => loaded,
             Err(e) => {
                 tracing::error!(
                     path = ?path,
@@ -96,6 +121,14 @@ impl AppState {
         };
 
         project.file_path = Some(path.clone());
+        // [#576 B15] Stored settings the load could not read: the project opens
+        // with defaults in their place, and every save is refused while they are
+        // unread (committed with the project below).
+        let unread_settings: Vec<String> = load_report
+            .unreadable_settings
+            .iter()
+            .map(|key| (*key).to_owned())
+            .collect();
 
         // Same legacy-seeding as do_load_project_full: a project with no stored
         // `validation` row gets the user's global thresholds, not the hardcoded
@@ -136,7 +169,12 @@ impl AppState {
         // two load entry points can't diverge. Idempotent; non-fatal.
         let live_shot_uuids = project.shot_uuid_by_position();
         project.ensure_shot_uuids();
-        if let Err(e) = db.backfill_resolved_warning_uuids(&live_shot_uuids) {
+        // [#576 B6-D1] A write - skipped on a newer file, which is never written.
+        let backfilled = match newer_schema {
+            None => db.backfill_resolved_warning_uuids(&live_shot_uuids),
+            Some(_) => Ok(0),
+        };
+        if let Err(e) = backfilled {
             tracing::warn!(
                 error = %e,
                 purpose = "upgrade legacy ignores to UUID keying",
@@ -181,38 +219,48 @@ impl AppState {
         // loader default to its own would bound the open at 2x the constant, because the
         // undo strings are still resident while the redo stack inflates.
         let history_budget = Database::load_history_budget();
-        let undo_entries =
-            match db.load_undo_stack_with_timestamps_within(history_row_cap, &history_budget) {
-                Ok(loaded) => loaded
-                    .into_iter()
-                    .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-                    .collect::<Vec<_>>(),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "restore edit history",
-                        "Failed to load undo stack from database; starting with empty history"
-                    );
-                    history_discarded = true;
-                    Vec::new()
+        // [#576 B6-D1] A newer file's history is not read at all: see the same step
+        // in `do_load_project_full`.
+        let undo_entries = match newer_schema {
+            Some(_) => Vec::new(),
+            None => {
+                match db.load_undo_stack_with_timestamps_within(history_row_cap, &history_budget) {
+                    Ok(loaded) => loaded
+                        .into_iter()
+                        .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                        .collect::<Vec<_>>(),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            purpose = "restore edit history",
+                            "Failed to load undo stack from database; starting with empty history"
+                        );
+                        history_discarded = true;
+                        Vec::new()
+                    }
                 }
-            };
-        let redo_entries =
-            match db.load_redo_stack_with_timestamps_within(history_row_cap, &history_budget) {
-                Ok(loaded) => loaded
-                    .into_iter()
-                    .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-                    .collect::<Vec<_>>(),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "restore edit history",
-                        "Failed to load redo stack from database; starting with empty redo history"
-                    );
-                    history_discarded = true;
-                    Vec::new()
+            }
+        };
+        let redo_entries = match newer_schema {
+            Some(_) => Vec::new(),
+            None => {
+                match db.load_redo_stack_with_timestamps_within(history_row_cap, &history_budget) {
+                    Ok(loaded) => loaded
+                        .into_iter()
+                        .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                        .collect::<Vec<_>>(),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            purpose = "restore edit history",
+                            "Failed to load redo stack from database; starting with empty redo history"
+                        );
+                        history_discarded = true;
+                        Vec::new()
+                    }
                 }
-            };
+            }
+        };
         // [#303] ...and the inherited-history watermark that goes with them. Read from the
         // SAME database handle, before it is swapped, so it describes these entries.
         // `UndoStack::next_stamp` needs it to keep a new entry above the cut the push
@@ -228,108 +276,54 @@ impl AppState {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
             });
 
-        // ALL commits under ONE `project` acquisition, exactly as
-        // `do_load_project_full`'s finalization and for the same reason (round
-        // 5): the delete's check-and-teardown serializes on this mutex, and a
-        // slot commit in its own span let a delete of this path land between
-        // the slot and the handles - tearing down a half-built session that
-        // this function then finished building into an empty world.
-        let mut proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *proj_guard = Some(project);
-        // A session boundary (a project committed into the slot), bumped under
-        // the guard per the `speleodb_session` rule.
-        self.bump_speleodb_session();
-        // [#473] Under the SAME acquisition that commits the project, so the flag can
-        // only ever describe the project in the slot. Unconditional, so a clean load
-        // clears the previous project's verdict.
-        self.set_history_discarded(history_discarded);
-
-        // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
-        // local-only ⇒ enabled (see do_load_project_full). Off the link read above,
-        // which came from the same handle before `db` moves.
-        let is_remote = speleo_link.is_some();
-        self.set_edit_enabled(!is_remote);
-        // #213: force-edit is per-session; a fresh open never starts force-editing.
-        self.set_force_editing(false);
-
-        *self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
-        // Opened an existing project from disk - its initial save is not deferred.
-        self.initial_save_deferred
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-
-        // Clear display settings cache (settings will be loaded from DB by frontend)
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-
-        // [#303] Arm the depth bound for the project about to be restored BEFORE its
-        // entries go in, not after. `load_from_persisted_with_timestamps` ends in
-        // `enforce_depth_limit`, so whichever bound is in force at that instant is the one
-        // that trims - and until this call it is still the PREVIOUS project's (or the
-        // startup default, `Count(undo_history_limit)`). A Full-mode linked project holding
-        // more than that many entries therefore lost the oldest ones on open, the next
-        // full-rewrite save wrote the truncation to disk, and the next push shipped a
-        // commit missing the history it was supposed to carry. Re-arming afterwards cannot
-        // undo it: Count -> Bytes has nothing to put back.
-        //
-        // Resolved from the link read off the file's own handle rather than through
-        // `undo_policy()`, which takes the `database` lock this path is mid-swap on.
-        self.sync_undo_depth_limit_for(speleo_link.as_ref());
-
-        // Restore persisted undo/redo stacks
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            // [#303] Unconditionally, and before the entries: a project with no history
-            // can still carry a watermark, and a value left over from the PREVIOUS project
-            // would otherwise floor this one's stamps at an unrelated instant.
-            undo_stack.set_inherited_through(speleo_undo_watermark);
-            if undo_entries.is_empty() && redo_entries.is_empty() {
-                undo_stack.clear();
-            } else {
-                undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
-                // ...and against the project they will be replayed onto: a
-                // restored entry that cannot find its shot fails and is pushed
-                // straight back, sealing off everything under it (#413).
-                if let Some(project) = proj_guard.as_ref() {
-                    undo_stack.drop_entries_addressing_a_missing_shot(project);
-                }
-                tracing::info!(
-                    undo = undo_stack.len(),
-                    purpose = "restore edit history",
-                    "Restored undo/redo stacks from database"
-                );
-            }
-        }
-
-        // No second `sync_undo_depth_limit()` after the restore: it would re-resolve the
-        // SAME policy from the SAME file and re-apply the SAME bound, and the one thing it
-        // could still do differently is fail its `database` lock and fall back to the count
-        // window - i.e. re-introduce the truncation the arming above exists to avoid.
-
-        // Add to recent projects and persist to config
+        // [#576 A5] ALL commits under ONE `project` acquisition, through the commit
+        // every load, create and close shares - for the same reason as
+        // `do_load_project_full`'s finalization (round 5): the delete's
+        // check-and-teardown serializes on that mutex, and a slot commit in its own
+        // span let a delete of this path land between the slot and the handles.
         let path_display = format!("{}", path.display());
-        if let Ok(mut recent) = self.recent_projects.lock() {
-            recent.retain(|p| p != &path);
-            recent.insert(0, path);
-            if let Ok(mut config) = self.config.lock() {
-                recent.truncate(config.general.recent_projects_max);
-                // Update config with recent projects and save
-                config.general.recent_projects.clone_from(&recent);
-                if let Err(e) = config.save() {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "persist recent projects list",
-                        "Failed to save config with recent projects"
-                    );
-                }
-            }
+        // [#303] The depth bound the entries are restored under, resolved from the link
+        // read off the file's own handle rather than through `undo_policy()`, which takes
+        // the `database` lock this commit is mid-swap on.
+        let policy = self.undo_policy_for(speleo_link.as_ref());
+        // [#576 A1] Under `command_lock`, taken only now that the file has been read,
+        // so the commit cannot land inside an edit of the previous project - or under
+        // the caller's span when it already holds one [#576 NF-W4C-3].
+        {
+            let own_commands;
+            let commands = if let Some(commands) = held {
+                commands
+            } else {
+                own_commands = self.hold_commands();
+                &own_commands
+            };
+            self.commit_open_session(
+                commands,
+                SessionCommit {
+                    project: Some(project),
+                    database: Some(db),
+                    // Opened an existing project from disk - its initial save is not deferred.
+                    initial_save_deferred: false,
+                    // [Track B] (#191) Read-only edit gate: remote => edit disabled, local-only
+                    // => enabled (see do_load_project_full). Off the link read above, which came
+                    // from the same handle before `db` moves.
+                    edit_enabled: speleo_link.is_none(),
+                    history_discarded,
+                    // [#576 B6-D1] The read-only state of a file a newer build saved.
+                    newer_file_schema: newer_schema,
+                    unreadable_project_settings: unread_settings,
+                    // Settings will be loaded from the DB by the frontend.
+                    display_settings: Vec::new(),
+                    history: SessionHistory {
+                        policy,
+                        inherited_through: speleo_undo_watermark,
+                        undo: undo_entries,
+                        redo: redo_entries,
+                    },
+                    recent: Some(path),
+                },
+            );
         }
-
-        drop(proj_guard);
 
         tracing::info!(
             path = %path_display,
@@ -339,15 +333,43 @@ impl AppState {
         CommandResult::success()
     }
 
+    /// The legacy open (see `open_project_with` above for what it does and does not
+    /// guard), taking `command_lock` for its commit only.
+    pub(super) fn open_project(&self, path: PathBuf) -> CommandResult {
+        self.open_project_with(None, path)
+    }
+
+    /// [`Self::open_project`] inside a `command_lock` span the caller already holds
+    /// [#576 NF-W4C-3] - the Ariane adoption's, whose reopen at the cache path (and
+    /// whose failure-path reopen of the project it replaced) are steps of that one
+    /// span. The file read runs inside the span too, which is the point there.
+    pub(super) fn open_project_held(
+        &self,
+        commands: &CommandsHeld<'_>,
+        path: PathBuf,
+    ) -> CommandResult {
+        self.open_project_with(Some(commands), path)
+    }
+
     /// Load a project with full progress reporting.
     /// This is the main implementation used by load_project_full command.
     ///
     /// All computation happens locally, then state is committed at the end.
     /// Cancellation is honored up to finalization; once finalization begins, it is
     /// non-cancellable to avoid partial AppState updates.
-    pub fn do_load_project_full(
+    ///
+    /// [#576 RV4-R-M3-OPEN] `upgrade_refusal` is for a file in a place nothing may
+    /// be written (the app's own folders, a system folder): it opens as anywhere
+    /// else, but an older-format file - one the open would upgrade in place and
+    /// copy beside itself first - is refused with the code `UPGRADE_REFUSED` and its
+    /// `older_format` message, untouched; an unstamped file the open would complete
+    /// in place, with its `unstamped` message (#576 RV6b-R3). `None` everywhere a
+    /// user keeps projects.
+    ///
+    pub fn do_load_project_full_with(
         &self,
         path: PathBuf,
+        upgrade_refusal: Option<&crate::persistence::UpgradeRefusal>,
     ) -> Result<crate::core::loading::LoadProjectFullResult, crate::core::loading::LoadError> {
         use crate::core::loading::{
             DisplaySettings, LoadError, LoadProjectFullResult, LoadingPhase, ProgressEmitter,
@@ -364,8 +386,9 @@ impl AppState {
         );
 
         // Check if the same project is already open (avoid unnecessary reload)
-        if let Ok(proj_guard) = self.project.lock() {
-            if let Some(ref project) = *proj_guard {
+        {
+            let proj_guard = self.project.lock();
+            if let Some(project) = proj_guard.as_ref() {
                 if project.file_path.as_ref() == Some(&path) {
                     return Err(LoadError::already_open());
                 }
@@ -457,7 +480,11 @@ impl AppState {
             }
         };
         // Local variable only - NO state mutation until Finalizing
-        let db = match Database::open_existing(&path) {
+        let opened = match upgrade_refusal {
+            None => Database::open_existing(&path),
+            Some(refusal) => Database::open_existing_refusing_upgrade(&path, refusal),
+        };
+        let db = match opened {
             Ok(db) => db,
             Err(e) => {
                 // A hostile schema is refused before anything reads the file (#608);
@@ -484,26 +511,90 @@ impl AppState {
                 {
                     early_return_err!(LoadError::permission(msg, &path.display().to_string()));
                 }
+                // [#576 B1-D1] A file from before the first public release: its own
+                // code, and the message alone (it says what to do), not a generic
+                // database failure. The file was not touched. [#576 C4] Recognised by
+                // its type, not by a prefix on the message.
+                if let Some(pre_release) = e.downcast_ref::<crate::persistence::PreReleaseFile>() {
+                    early_return_err!(LoadError::with_details(
+                        crate::models::CommandErrorCode::PreReleaseFile,
+                        pre_release.to_string(),
+                        path.display().to_string()
+                    ));
+                }
+                // [#576 RV4-R-M3-OPEN] An older file in a place nothing may be
+                // written: the same shape - its own code, the message alone (it says
+                // to copy the project somewhere writable), the file untouched.
+                // [#576 C4] Recognised by its type, not by a prefix on the message.
+                if let Some(refused) = e.downcast_ref::<crate::persistence::UpgradeRefused>() {
+                    early_return_err!(LoadError::with_details(
+                        crate::models::CommandErrorCode::UpgradeRefused,
+                        refused.to_string(),
+                        path.display().to_string()
+                    ));
+                }
                 // Detect corruption-specific errors and return CORRUPT code
                 // so the frontend can offer recovery options
                 if msg.contains("integrity check failed") || msg.contains("corrupted") {
                     early_return_err!(LoadError::corrupt(msg, &path.display().to_string()));
                 }
-                early_return_err!(LoadError::new("DATABASE", msg));
+                early_return_err!(LoadError::new(
+                    crate::models::CommandErrorCode::Database,
+                    msg
+                ));
             }
+        };
+        // [#576 B6-D1] A file a NEWER build saved opens read-only, and is never
+        // written: `open_existing` ran no migration and no undo purge on it, the
+        // load-time backfills below are skipped, its history is not restored, and
+        // the session holds it through a READ-ONLY connection so nothing else that
+        // reaches the handle (display settings are deliberately ungated) can write
+        // it either. Committed below as `newer_file_schema`, which closes the edit
+        // gate and refuses every save; the frontend learns it from the result.
+        let newer_schema = db.newer_schema_version();
+        let db = match newer_schema {
+            None => db,
+            Some(_) => match db.into_read_only(&path) {
+                Ok(db) => db,
+                Err(e) => early_return_err!(LoadError::new(
+                    crate::models::CommandErrorCode::Database,
+                    e.to_string()
+                )),
+            },
         };
         check_cancelled!();
         progress.complete_phase(LoadingPhase::OpeningDatabase);
+        // [#576 RV4-R-M3-D2] A file where nothing may be written (the app's own
+        // folders, a system folder): the load writes nothing to it either. The
+        // repairs below that would write - the legacy ignore-UUID backfill, the
+        // unreadable-kind repair, the kind-classification persist and the undo-mode
+        // materialization - are kept in memory only, as for a file a newer build
+        // saved. Only the LOAD's own writes are refused: the session is an ordinary
+        // writable one (RV4-R-M3-OPEN), so the next save persists them - an in-place
+        // save (Ctrl+S, an autosave, the save on close) into this same file
+        // included - and a display toggle writes this file at once, with no save.
+        let protected = upgrade_refusal.is_some();
 
         // === PHASE 1: Loading project data (20%) ===
         progress.start_phase(LoadingPhase::LoadingProjectData);
-        let mut project = match db.load_project() {
-            Ok(p) => p,
+        let (mut project, load_report) = match db.load_project_with_report() {
+            Ok(loaded) => loaded,
             Err(e) => {
-                early_return_err!(LoadError::new("DATABASE", e.to_string()));
+                early_return_err!(LoadError::new(
+                    crate::models::CommandErrorCode::Database,
+                    e.to_string()
+                ));
             }
         };
         project.file_path = Some(path.clone());
+        // [#576 B15] Stored settings the load could not read: the project opens
+        // with defaults in their place, and every save is refused while they are
+        // unread (committed with the project below).
+        let unread_settings: Vec<String> = load_report
+            .unreadable_settings
+            .iter()
+            .map(|key| (*key).to_owned())
+            .collect();
         // Legacy projects (saved before #57) have no persisted `validation` row;
         // load_project() filled `project.validation` with the hardcoded default.
         // Override it with the user's GLOBAL thresholds (the "defaults for new
@@ -536,7 +627,15 @@ impl AppState {
         // anchors on the shot UUID. The
         // minted UUIDs persist on the next save (matching save_project's call).
         project.ensure_shot_uuids();
-        match db.backfill_resolved_warning_uuids(&live_shot_uuids) {
+        // [#576 B6-D1] A write - skipped on a newer file, which is never written.
+        // [#576 RV4-R-M3-D2] And where nothing may be written: the legacy rows stay
+        // keyed by position, which still suppresses their warnings this session
+        // (the position fallback), and a save re-keys them by UUID.
+        let backfilled = match newer_schema {
+            None if !protected => db.backfill_resolved_warning_uuids(&live_shot_uuids),
+            _ => Ok(0),
+        };
+        match backfilled {
             Ok(n) if n > 0 => tracing::info!(
                 upgraded = n,
                 purpose = "upgrade legacy ignores to UUID keying",
@@ -574,7 +673,17 @@ impl AppState {
         // fail-closed choice, so a corrupt or future byte cannot invent a
         // swimmable leg - but that substitution is a guess, not a verdict. Stash
         // them so the frontend can ask the user what each one really is.
-        match db.unrecognised_shot_kinds() {
+        //
+        // [#576 B6-D1] Not on a newer file. Its unknown kinds are most likely kinds
+        // the newer build added; they are shown fail-closed as Reference all the
+        // same, but rewriting them on disk is exactly the write such a file must
+        // never get, and asking the user to re-pick each one would only lead to an
+        // edit the read-only project refuses.
+        let scanned = match newer_schema {
+            None => db.unrecognised_shot_kinds(),
+            Some(_) => Ok(Vec::new()),
+        };
+        match scanned {
             Ok(found) => {
                 if !found.is_empty() {
                     tracing::warn!(
@@ -589,7 +698,16 @@ impl AppState {
                     // writes the fail-closed value, not a choice taken from the
                     // user - picking anything else stays an ordinary undoable
                     // SetShotKind on top.
-                    match db.repair_unrecognised_shot_kinds() {
+                    //
+                    // [#576 RV4-R-M3-D2] Not where nothing may be written: the
+                    // substitution stays session-only there, and the user is still
+                    // asked.
+                    let repaired = if protected {
+                        Ok(0)
+                    } else {
+                        db.repair_unrecognised_shot_kinds()
+                    };
+                    match repaired {
                         Ok(n) if n > 0 => tracing::info!(
                             repaired = n,
                             purpose = "persist the fail-closed substitution (#27)",
@@ -612,7 +730,8 @@ impl AppState {
             }
         }
 
-        if db.is_kind_classification_pending() {
+        // [#576 B6-D1] Never on a newer file: the pass writes its verdicts through.
+        if newer_schema.is_none() && db.is_kind_classification_pending() {
             let reclassified =
                 project.classify_virtual_shots(&crate::models::ClassifyScope::WholeProject);
             tracing::info!(
@@ -626,9 +745,11 @@ impl AppState {
             // process if the user closes without saving - and the next open
             // would then keep the migration's Jump seed for good.
             //
-            // Addressed by (section_id, sequence_order), which is what the rows
-            // are keyed by on disk - `Shot::id` is a synthesised in-memory value
-            // and would hit the wrong rows. Virtual shots only: `Normal` is what
+            // Addressed by (section_id, position in the loaded section), which
+            // `persist_backfilled_shot_kinds` resolves to the row through the
+            // loader's own `ORDER BY sequence_order` - `Shot::id` is a
+            // synthesised in-memory value and would hit the wrong rows. Virtual
+            // shots only: `Normal` is what
             // the migration already wrote for every non-legacy-reference row, so
             // re-stamping them would be one UPDATE per shot in the project on a
             // load that is already paying for the schema migration.
@@ -646,13 +767,16 @@ impl AppState {
             // v12->v13 migration has already rewritten this file's schema
             // without a lock to produce - is the smaller hazard by a wide margin.
             //
-            // `shot.id % FEATURE_ID_STRIDE`, not the enumerate() index: the
-            // loader reads `ORDER BY section_id, sequence_order` and pushes
-            // sequentially, so the index is the shot's RANK, while the id
-            // carries the raw stored `sequence_order` (read.rs synthesises
-            // `section_id * FEATURE_ID_STRIDE + seq` from the column). They
-            // differ the moment a legacy file has a gap in the sequence, and
-            // a miss here is permanent because the flag is cleared with it.
+            // The enumerate() index IS that position: nothing between the load
+            // and here adds, removes or reorders a shot. It used to be
+            // `shot.id % FEATURE_ID_STRIDE`, back when the loader numbered
+            // shots by their stored rank; a rank gap in a legacy file made the
+            // two differ, and a miss here is permanent because the flag is
+            // cleared with it (B35(f), #576).
+            //
+            // [#576 RV4-R-M3-D2] Where nothing may be written the verdicts stay in
+            // memory and the flag stays set, so the pass runs again on the next
+            // open - exactly what a failed persist below leads to.
             let verdicts: Vec<_> = project
                 .sections
                 .iter()
@@ -660,17 +784,18 @@ impl AppState {
                     section
                         .shots
                         .iter()
-                        .filter(|shot| shot.kind.is_virtual())
-                        .map(|shot| {
-                            (
-                                section.id,
-                                shot.id % crate::models::FEATURE_ID_STRIDE,
-                                shot.kind,
-                            )
-                        })
+                        .enumerate()
+                        .filter(|(_, shot)| shot.kind.is_virtual())
+                        .map(|(position, shot)| (section.id, position as u32, shot.kind))
                 })
                 .collect();
-            if let Err(e) = db.persist_backfilled_shot_kinds(&verdicts) {
+            if protected {
+                tracing::info!(
+                    reclassified,
+                    purpose = "load a project where nothing may be written (#576 RV4-R-M3-D2)",
+                    "Kept the classified shot kinds in memory only"
+                );
+            } else if let Err(e) = db.persist_backfilled_shot_kinds(&verdicts) {
                 // Non-fatal: the flag is cleared in the same transaction as
                 // the writes, so a failure here leaves both undone and the
                 // (idempotent) backfill simply runs again on the next open.
@@ -783,9 +908,32 @@ impl AppState {
         //
         // [#469] Read BEFORE the entries rather than after, because the depth it resolves
         // is also the bound the LOAD runs under; see `history_load_row_cap`.
-        let mut speleo_link = db.load_speleo_link().ok().flatten();
+        //
+        // [#576 B35(b) review] A link that cannot be READ still opens as "no link" - the
+        // project is usable as a local one - but it is not silent: every save that would
+        // rewrite this file is refused (the rebuilt file would lose the row), so the
+        // load result says so and the frontend tells the user when the project opens.
+        let (mut speleo_link, speleo_link_unreadable) = match db.load_speleo_link() {
+            Ok(link) => (link, false),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve SpeleoDB hand-off link on save",
+                    "The speleo_link table could not be read; opening as a local project \
+                     whose in-place saves are refused"
+                );
+                (None, true)
+            }
+        };
         if let Some(link) = &mut speleo_link {
-            self.materialize_undo_mode(&db, link);
+            if protected {
+                // [#576 RV4-R-M3-D2, RV6b-R2] The legacy NULL mode is resolved for
+                // this session only: writing it would rewrite the link row of a
+                // file where nothing may be written.
+                link.undo_mode = Some(self.effective_undo_mode(link.undo_mode));
+            } else {
+                self.materialize_undo_mode(&db, link);
+            }
         }
         let history_row_cap = self.history_load_row_cap(speleo_link.as_ref());
 
@@ -797,38 +945,53 @@ impl AppState {
         // loader default to its own would bound the open at 2x the constant, because the
         // undo strings are still resident while the redo stack inflates.
         let history_budget = Database::load_history_budget();
-        let undo_entries =
-            match db.load_undo_stack_with_timestamps_within(history_row_cap, &history_budget) {
-                Ok(loaded) => loaded
-                    .into_iter()
-                    .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-                    .collect::<Vec<_>>(),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "restore edit history",
-                        "Failed to load undo stack from database; starting with empty history"
-                    );
-                    history_discarded = true;
-                    Vec::new()
+        // [#576 B6-D1] A newer file's history is not read at all. It stays in the
+        // file for the build that wrote it, but no migration arm here has vetted
+        // its payloads - the hazard the open-time purge used to cover (a forged
+        // future stamp over pre-v17 entries replays into a wiped section name) -
+        // and the project is read-only, so there is nothing for it to undo. Not
+        // read rather than read-and-dropped: a format this build does not know can
+        // fail to parse, and that must not raise the discarded-history banner.
+        let undo_entries = match newer_schema {
+            Some(_) => Vec::new(),
+            None => {
+                match db.load_undo_stack_with_timestamps_within(history_row_cap, &history_budget) {
+                    Ok(loaded) => loaded
+                        .into_iter()
+                        .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                        .collect::<Vec<_>>(),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            purpose = "restore edit history",
+                            "Failed to load undo stack from database; starting with empty history"
+                        );
+                        history_discarded = true;
+                        Vec::new()
+                    }
                 }
-            };
-        let redo_entries =
-            match db.load_redo_stack_with_timestamps_within(history_row_cap, &history_budget) {
-                Ok(loaded) => loaded
-                    .into_iter()
-                    .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-                    .collect::<Vec<_>>(),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "restore edit history",
-                        "Failed to load redo stack from database; starting with empty redo history"
-                    );
-                    history_discarded = true;
-                    Vec::new()
+            }
+        };
+        let redo_entries = match newer_schema {
+            Some(_) => Vec::new(),
+            None => {
+                match db.load_redo_stack_with_timestamps_within(history_row_cap, &history_budget) {
+                    Ok(loaded) => loaded
+                        .into_iter()
+                        .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                        .collect::<Vec<_>>(),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            purpose = "restore edit history",
+                            "Failed to load redo stack from database; starting with empty redo history"
+                        );
+                        history_discarded = true;
+                        Vec::new()
+                    }
                 }
-            };
+            }
+        };
         // [#303] ...and the inherited-history watermark that goes with them. Read from the
         // SAME database handle, before it is swapped, so it describes these entries.
         // `UndoStack::next_stamp` needs it to keep a new entry above the cut the push
@@ -844,11 +1007,6 @@ impl AppState {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
             });
 
-        // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
-        // data is written even if a previous panic poisoned a mutex. This is acceptable
-        // during finalization because the alternative (silently skipping) leads to
-        // inconsistent state that is harder to diagnose.
-
         // [Track B] (fix M1) Swapping to a DIFFERENT project while still holding the
         // OLD project's SpeleoDB write lock must release that lock, or it stays locked
         // for every other editor until the app quits - `close_project`/quit release,
@@ -859,115 +1017,65 @@ impl AppState {
         // new project on the old server. A same-project fast-forward reload doesn't
         // reach here (it `close_project`s first, clearing the link) and the "already
         // open" guard rejects reopening the same path, so neither releases our lock.
+        //
+        // [#576 A1] From here to the end of the commit under `command_lock`, taken only
+        // now that the file has been read and solved: an edit of the outgoing project
+        // finishes before the old link is read and the slot is swapped, and none can
+        // start in between. The detached release takes `project` only briefly and
+        // never `speleodb_lock_ops` on this thread, so it is safe under it.
+        let commands = self.hold_commands();
+        // [#576 RV4-R-C2] Re-checked now that the lock is held, still before any state
+        // write: the wait for an in-flight command can be long, and a newer load that
+        // started meanwhile has cancelled this one. Committing anyway let the older
+        // project land last (the mutex is not fair), leaving the backend on a project
+        // the frontend had moved past.
+        check_cancelled!();
         self.speleodb_release_held_lock_detached();
 
-        // ALL commits under ONE `project` acquisition. The delete's
-        // check-and-teardown (`delete_project`) takes this same mutex and
-        // reasons "strictly before the load, or strictly after it"; when the
-        // slot was committed in its own span and the database / gates / undo /
-        // recents in later ones, a delete of this very path landing after the
-        // slot commit was NEITHER - it matched the freshly-installed project,
-        // tore the half-built session down, and this function then went on
-        // installing its handles into an empty world and returned success over
-        // a project the backend no longer had (round 5). One guard makes the
-        // finalization the atom that argument needs. The guard is held over
-        // the recents/config write too - the delete prunes recents only after
-        // its own teardown, so the row this adds must not land between the two.
-        // Lock order is the documented one: `project` is outermost of
-        // {project, database, undo_stack}, and recents/config are leaves.
-        let mut proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        // Commit 1: Project state mutation
-        *proj_guard = Some(project.clone());
-        // A session boundary (a project committed into the slot), bumped under
-        // the guard per the `speleodb_session` rule.
-        self.bump_speleodb_session();
-        // [#473] Under the SAME acquisition that commits the project - a cancelled load
-        // never reaches this finalize section, so it cannot leave its verdict on the
-        // project the user actually opened.
-        self.set_history_discarded(history_discarded);
-
-        // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
-        // carrying a speleo_link row) opened WITHOUT a write lock is read-only.
-        // There is no lock-acquire path yet (#191), so the rule is simply: remote
-        // ⇒ edit disabled; local-only ⇒ edit enabled (default-true; the gate is a
-        // no-op off-SpeleoDB). Off the link read above, taken from the same handle
-        // before `db` is moved into the handle slot.
+        // [#576 A5] ALL commits under ONE `project` acquisition, through the commit
+        // every load, create and close shares. The delete's check-and-teardown
+        // (`delete_project`) takes this same mutex and reasons "strictly before the
+        // load, or strictly after it"; when the slot was committed in its own span and
+        // the database / gates / undo / recents in later ones, a delete of this very
+        // path landing after the slot commit was NEITHER - it matched the freshly-
+        // installed project, tore the half-built session down, and this function then
+        // went on installing its handles into an empty world and returned success over
+        // a project the backend no longer had (round 5).
+        //
+        // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one carrying
+        // a speleo_link row) opened WITHOUT a write lock is read-only; local-only =>
+        // edit enabled. Off the link read above, taken from the same handle before
+        // `db` is moved into the handle slot.
         let is_remote = speleo_link.is_some();
-        self.set_edit_enabled(!is_remote);
-        // #213: force-edit is per-session; a fresh open never starts force-editing.
-        self.set_force_editing(false);
-
-        // Commit 2: Database handle mutation
-        *self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
-        // Loaded an existing project from disk - its initial save is not deferred.
-        self.initial_save_deferred
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-
-        // Commit 3: Display settings cache clear
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-
-        // [#303] As in the non-staged load: arm the depth bound BEFORE the entries are
-        // restored under it, from the link read off this file's own handle. Late, the
-        // restore's own `enforce_depth_limit` would trim a Full-mode project's history
-        // down to the count window and no later re-arm could put it back.
-        self.sync_undo_depth_limit_for(speleo_link.as_ref());
-
-        // Commit 4: Undo/redo stack restore
-        {
-            let mut undo_stack = self
-                .undo_stack
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            // [#303] Unconditionally, and before the entries: a project with no history
-            // can still carry a watermark, and a value left over from the PREVIOUS project
-            // would otherwise floor this one's stamps at an unrelated instant.
-            undo_stack.set_inherited_through(speleo_undo_watermark);
-            if undo_entries.is_empty() && redo_entries.is_empty() {
-                undo_stack.clear();
-            } else {
-                undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
-                // ...and against the project they will be replayed onto: a
-                // restored entry that cannot find its shot fails and is pushed
-                // straight back, sealing off everything under it (#413).
-                undo_stack.drop_entries_addressing_a_missing_shot(&project);
-                tracing::info!(
-                    undo = undo_stack.len(),
-                    purpose = "restore edit history",
-                    "Restored undo/redo stacks from database"
-                );
-            }
-        }
-
-        // Commit 5: Recent projects update
-        {
-            let mut recent = self
-                .recent_projects
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            recent.retain(|p| p != &path);
-            recent.insert(0, path.clone());
-            if let Ok(mut config) = self.config.lock() {
-                recent.truncate(config.general.recent_projects_max);
-                config.general.recent_projects.clone_from(&recent);
-                if let Err(e) = config.save() {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "persist recent projects list",
-                        "Failed to save config with recent projects"
-                    );
-                }
-            }
-        }
-
-        drop(proj_guard);
+        // [#303] As in the non-staged load: the depth bound the entries are restored
+        // under, from the link read off this file's own handle.
+        let policy = self.undo_policy_for(speleo_link.as_ref());
+        self.commit_open_session(
+            &commands,
+            SessionCommit {
+                project: Some(project.clone()),
+                database: Some(db),
+                // Loaded an existing project from disk - its initial save is not deferred.
+                initial_save_deferred: false,
+                edit_enabled: !is_remote,
+                // [#473] A cancelled load never reaches this finalize section, so it cannot
+                // leave its verdict on the project the user actually opened.
+                history_discarded,
+                // [#576 B6-D1] The value handed to the frontend below, so the two gates
+                // cannot disagree about this load (the #270 shape).
+                newer_file_schema: newer_schema,
+                unreadable_project_settings: unread_settings.clone(),
+                display_settings: Vec::new(),
+                history: SessionHistory {
+                    policy,
+                    inherited_through: speleo_undo_watermark,
+                    undo: undo_entries,
+                    redo: redo_entries,
+                },
+                recent: Some(path.clone()),
+            },
+        );
+        drop(commands);
 
         progress.complete_phase(LoadingPhase::Finalizing);
 
@@ -993,6 +1101,23 @@ impl AppState {
             // Same verdict the edit gate above was derived from, so the frontend
             // gate and the backend gate can never disagree about this load (#270).
             is_remote,
+            // [#576 B6-D1] Likewise the newer-version read-only state.
+            newer_schema_version: newer_schema,
+            // [#576 B35(b) review] Read off the same link read the edit gate used.
+            speleo_link_unreadable,
+            // [#576 B15] ...and the settings whose unread state refuses saves.
+            unreadable_project_settings: unread_settings,
+            // [#576 B35(h)] ...and what the load reset or dropped.
+            load_repairs: load_report.repairs,
         })
+    }
+
+    /// [`Self::do_load_project_full_with`] for a file where a user keeps projects:
+    /// an older-format file is upgraded in place as usual.
+    pub fn do_load_project_full(
+        &self,
+        path: PathBuf,
+    ) -> Result<crate::core::loading::LoadProjectFullResult, crate::core::loading::LoadError> {
+        self.do_load_project_full_with(path, None)
     }
 }

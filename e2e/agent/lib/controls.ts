@@ -1,31 +1,32 @@
 import type { Browser } from 'webdriverio';
 import { randomUUID } from 'node:crypto';
+import { foldThenCut } from './fixtureCorpus';
 import { evalInApp } from './page';
 import { cssStringLiteral, testIdSelector } from '../../../scripts/lib/test-id-selector.mjs';
 
 export interface ElementTarget {
-  testid?: string;
-  selector?: string;
+  testid?: string | undefined;
+  selector?: string | undefined;
 }
 
 export interface DragRequest {
-  fromTestid?: string;
-  fromSelector?: string;
-  fromX?: number;
-  fromY?: number;
-  toTestid?: string;
-  toSelector?: string;
-  toX?: number;
-  toY?: number;
-  button?: 'left' | 'right' | 'middle';
-  durationMs?: number;
+  fromTestid?: string | undefined;
+  fromSelector?: string | undefined;
+  fromX?: number | undefined;
+  fromY?: number | undefined;
+  toTestid?: string | undefined;
+  toSelector?: string | undefined;
+  toX?: number | undefined;
+  toY?: number | undefined;
+  button?: 'left' | 'right' | 'middle' | undefined;
+  durationMs?: number | undefined;
 }
 
 export interface ScrollRequest extends ElementTarget {
-  deltaX?: number;
-  deltaY?: number;
-  block?: ScrollLogicalPosition;
-  inline?: ScrollLogicalPosition;
+  deltaX?: number | undefined;
+  deltaY?: number | undefined;
+  block?: ScrollLogicalPosition | undefined;
+  inline?: ScrollLogicalPosition | undefined;
 }
 
 export interface SelectOptionRequest extends ElementTarget {
@@ -130,10 +131,10 @@ export async function hoverElement(browser: Browser, target: ElementTarget): Pro
 }
 
 export async function dragPointer(browser: Browser, request: DragRequest): Promise<{
-  fromSelector?: string;
-  toSelector?: string;
-  fromPoint?: { x: number; y: number };
-  toPoint?: { x: number; y: number };
+  fromSelector?: string | undefined;
+  toSelector?: string | undefined;
+  fromPoint?: { x: number; y: number } | undefined;
+  toPoint?: { x: number; y: number } | undefined;
 }> {
   const fromSelector = targetSelector({ testid: request.fromTestid, selector: request.fromSelector });
   const toSelector = targetSelector({ testid: request.toTestid, selector: request.toSelector });
@@ -230,7 +231,7 @@ export async function selectOption(browser: Browser, request: SelectOptionReques
 
 export async function queryElementState(browser: Browser, target: ElementTarget): Promise<ElementState> {
   const selector = requireSelector(target, 'element_state');
-  return evalInApp<ElementState>(
+  const state = await evalInApp<ElementState>(
     browser,
     `
       const selector = args[0];
@@ -248,7 +249,7 @@ export async function queryElementState(browser: Browser, target: ElementTarget)
           testid: el.getAttribute('data-testid'),
           id: el.id || null,
           role: el.getAttribute('role'),
-          text: (el.textContent || '').trim().slice(0, 500),
+          text: (el.textContent || '').trim(),
           value: hasValue ? String(el.value) : null,
           displayed: style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0,
           disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true'),
@@ -264,6 +265,11 @@ export async function queryElementState(browser: Browser, target: ElementTarget)
     `,
     [selector],
   );
+  // The page sends each element's whole text, and it is cut to 500 characters
+  // here, after the corpus fold (#576 W33-NF3). Cut in the page, a corpus name
+  // across character 500 reached the MCP server's fold as a stub no fold
+  // matches, and its start went into the tool answer and the action log.
+  return { ...state, elements: state.elements.map((element) => ({ ...element, text: foldThenCut(element.text, 500) })) };
 }
 
 export async function answerFileDialog(
@@ -366,7 +372,9 @@ export async function mapClick(
     [lngLat, button],
   );
   if (!outcome) throw new Error('map not available');
-  if ('error' in outcome) throw new Error(outcome.error);
+  // The page's refusal quotes the point, and a map position is where the cave
+  // is: it ends a `failed:` headline, which the runners print as its length.
+  if ('error' in outcome) throw new Error(`map click failed: ${outcome.error}`);
   const target = await dispatchMapPointer(browser, { x: outcome.x, y: outcome.y }, button);
   const interactionSequence = await evalInApp<number>(
     browser,
@@ -377,7 +385,9 @@ export async function mapClick(
     `,
   );
   if (interactionSequence <= outcome.interactionSequenceBefore) {
-    throw new Error(`map ${outcome.interaction} handler did not process the click dispatched to ${target}`);
+    // The target is the page's own description of the element - its test id and
+    // classes - so it goes on a later line, which the runners withhold.
+    throw new Error(`map ${outcome.interaction} handler did not process the click\n  dispatched to: ${target}`);
   }
   return { x: outcome.x, y: outcome.y, interaction: outcome.interaction, interactionSequence };
 }

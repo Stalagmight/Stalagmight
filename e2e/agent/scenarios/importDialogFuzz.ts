@@ -28,13 +28,19 @@
  * real files reach the shapes nobody would think to generate. A run with no
  * corpus counts `corpus:absent` and is exactly as valid, just narrower.
  *
- * NOTHING THIS RUN WRITES EVER NAMES A CORPUS FILE. A corpus entry is
+ * NOTHING THIS RUN PUBLISHES NAMES A CORPUS FILE. A corpus entry is
  * identified everywhere by `corpusFileId` - a 5-hex fold of its relative path -
  * because a survey filename can name a cave, a landowner or an unreleased
  * project, and a metric key, a log line, a failure payload and a recorded trace
  * are all things that end up attached to an issue. The real path stays inside
  * `lib/fixtureCorpus.ts`, which states the full rule; the `corpusFile` trace
- * step carries the id, and `fuzzTrace.ts` refuses to write anything else.
+ * step carries the id, the step that OPENS the copy carries
+ * `fuzzTrace.corpusEntryRel` rather than its basename (#576 HFI-13), and
+ * `fuzzTrace.ts` refuses to write or read anything else. What the app echoes
+ * back is folded by `fixtureCorpus.redactCorpusText` wherever it is printed.
+ * The session's own working files are NOT publishable and are not covered: the
+ * copy under `fuzz-files/` keeps its real names, and the sweep's `findings/`
+ * and the app's logs quote them.
  *
  * ## The shape of a run
  *
@@ -92,26 +98,13 @@
  * distinguishable from "the geometry did not match", and the ORPHAN PLACEMENT
  * check above now holds both of the dialog's answers to account.
  *
- * ## `wiz-no-suggest` is a transition, not a screen
+ * ## No `wiz-no-suggest` screen
  *
- * `wizard-no-suggestions` reads like the "nothing could be placed
- * automatically" surface and is not one. It renders while `phase ===
- * 'suggesting'` with no current suggestion, which is only the gap between the
- * pool running dry and `transitionToPlacingOrManual` setting `isImporting` - and
- * that call sets it synchronously, so the frame rarely survives a paint. It has
- * no control of its own either: the footer renders nothing for a
- * suggestion-less `suggesting` phase, leaving the wizard's standing Cancel and
- * Back. Over the 130-cell corpus campaign the digest never sampled it once, so
- * the two generators that named it never ran.
- *
- * The options a user is actually offered when nothing was suggested are on
- * `manual_placing` - reuse a skipped suggestion, attach to an existing section,
- * place on the map by hand, or discard - together with a map placement and a
- * shot table. So the bridge's settle predicate WAITS through the frame and the
- * walk arrives at `wiz-manual`, where those live. The screen id, its digest
- * classification and its escape path all stay: a frame that outlasts the settle
- * cap is a genuine hang, and it must still be named and still be escapable when
- * the escape oracle comes for it.
+ * When the suggestion pool runs dry the wizard goes straight to
+ * `manual_placing` (reuse a skipped suggestion, attach to an existing section,
+ * place on the map by hand, or discard, with a map placement and a shot
+ * table), so the walk meets that as `wiz-manual`. The "no suggestions" frame
+ * the digest used to classify is no longer rendered (#576 NF-W8D4-1).
  *
  * ## What is asserted
  *
@@ -385,16 +378,18 @@ import { mulberry32, type Scenario, type ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import { ORACLE_GLOBAL, oracleInjectionSource } from '../lib/fuzzOracleCore';
 import { mapClick } from '../lib/controls';
+import { isCorpusEntryRel, planReplay, traceHasWellFormedFlows, TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
+import { fuzzFixture } from '../lib/fuzzKnobs';
 import {
-  defaultTracePath,
-  planReplay,
-  readTrace,
-  traceHasWellFormedFlows,
-  TraceRecorder,
-  writeTrace,
-  type FuzzTrace,
-  type TraceStep,
-} from '../lib/fuzzTrace';
+  describeRunError,
+  failureText,
+  isWebDriverStall,
+  MoveLog,
+  openReplay,
+  RERUN_WITH,
+  throwFailure,
+  writeRunTrace,
+} from '../lib/fuzzHarness';
 import {
   materializeSurveyFile,
   randomSurveyFileSpec,
@@ -408,13 +403,19 @@ import {
   corpusLookup,
   describeCorpus,
   discoverCorpus,
+  foldThenCut,
   materializeCorpusEntry,
+  redactCorpusText,
+  registerCorpusRedactions as registerProcessRedactions,
   type CorpusEntry,
 } from '../lib/fixtureCorpus';
 import type { ImportScreenDigest } from '../lib/importScreenDigest';
 import { LogCursor } from '../lib/logs';
+import { valueShape } from '../lib/shareableFailure';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import {
   checkAccounting,
+  checkFrozenDelete,
   checkIpcContract,
   checkPushed,
   checkReceipt,
@@ -422,9 +423,9 @@ import {
   checkRoundtripState,
   checkTempFiles,
   ImportOracleError,
+  importGateRefusalSeen,
   leftoverTempNames,
   captureReceipt,
-  receiptClaimFrom,
   s4WorkStarted,
   type CountedProject,
   type FileHandoff,
@@ -439,6 +440,7 @@ import {
   IMPORT_GUARDED_SCREENS,
   isEscaped,
   NON_FLOW_SCREENS,
+  OVERLAP_MODES,
   progressMode,
   WEDGE_EXEMPT_SCREENS,
   type ScreenId,
@@ -454,12 +456,18 @@ import {
   type Move,
 } from './importDialogBridge';
 import {
+  CorpusEntryPaths,
+  FileSeq,
+  moveFromTraceStep,
+  moveTraceStep,
+  sourceTraceStep,
+} from './importDialogTrace';
+import {
   AUX_INTERJECT_STREAM_SALT,
   auxInterjectProbability,
   buildAuxInterjection,
   buildInterjection,
   corpusDrawProbability,
-  describeSource,
   drawAuxInterjection,
   drawInterjection,
   enabledFamilies,
@@ -534,11 +542,10 @@ function forceStationsVisible(): boolean {
 // ---------------------------------------------------------------------------
 // Knobs. Read at CALL time, never frozen at import: a replay restores the
 // recording's environment AFTER this module is loaded (see scenario-run.ts).
+// The fixture and the trace replay/record paths are the shared ones in
+// `lib/fuzzKnobs.ts`.
 // ---------------------------------------------------------------------------
 
-function fixtureName(): string {
-  return process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
-}
 function flowsPerEpisode(): number {
   const raw = Number(process.env.STALAGMIGHT_FUZZ_IMPORT_FLOWS_PER_EPISODE);
   return Number.isInteger(raw) && raw > 0 ? raw : 3;
@@ -546,12 +553,6 @@ function flowsPerEpisode(): number {
 function maxFlowSteps(): number {
   const raw = Number(process.env.STALAGMIGHT_FUZZ_IMPORT_MAX_FLOW_STEPS);
   return Number.isInteger(raw) && raw > 0 ? raw : 140;
-}
-function replayTracePath(): string {
-  return process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
-}
-function traceOutPath(): string {
-  return process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
 }
 
 // ---------------------------------------------------------------------------
@@ -665,20 +666,6 @@ const ORPHAN_DECLINES: ReadonlySet<string> = new Set(['orphan-skip', 'orphan-clo
  */
 const OVERLAP_MODES_ALWAYS_LEGAL: ReadonlySet<string> = new Set(['existing_data', 'keep_both']);
 
-/**
- * `mutate` actions a REPLAYED trace may drive - the DOM allowlist's twin.
- *
- * One entry: `closeProject`, which the wave-3 auxiliary interjection plays at
- * `idle`. The set REFUSES anything else loudly, which is the point - a trace
- * naming `loadProject` or `deleteProject` must not be quietly skipped inside a
- * privileged webview with the `__E2E_TEST__` hooks live.
- *
- * `ui:confirmPlacement` is deliberately still absent: that store action
- * ABANDONS a placement rather than completing one (see the note in
- * `importDialogGenerators.ts`), so it reaches a state no user can.
- */
-const REPLAYABLE_UI_ACTIONS: ReadonlySet<string> = new Set(['closeProject']);
-
 function actionableCount(digest: ImportScreenDigest): number {
   let count = 0;
   for (const state of Object.values(digest.live)) if (state === 2) count += 1;
@@ -693,6 +680,23 @@ interface Bounds extends FlowBounds {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * A refused map click as its `mapSkip:*` metric key names it (#576 W51): a code
+ * for each refusal `lib/controls.ts` `mapClick` words itself, and `other` for
+ * any other error. The key prints in the runner's PASS line and the matrix
+ * report, and an error's own text - a page script's message, or a map position,
+ * which is where the cave is - is for neither.
+ */
+export const mapSkipCode = (err: unknown): string => {
+  if (!(err instanceof Error)) return 'unknown';
+  if (err.message === 'map not available') return 'map-not-available';
+  if (err.message.startsWith('map click failed: map point is outside the visible viewport')) return 'outside-viewport';
+  if (err.message.startsWith('map click failed: ')) return 'click-refused';
+  if (err.message === 'map interaction hooks are unavailable') return 'no-interaction-hooks';
+  if (/^map \w+ handler did not process the click/.test(err.message)) return 'not-processed';
+  return 'other';
+};
+
 export const importDialogFuzz: Scenario = {
   name: SCENARIO,
   description:
@@ -701,7 +705,7 @@ export const importDialogFuzz: Scenario = {
   defaultIterations: 3,
 
   async run(ctx: ScenarioContext, { iterations }): Promise<void> {
-    const fixture = fixtureName();
+    const fixture = fuzzFixture();
     const sessionDir = ctx.artifactsDir;
     if (!sessionDir) {
       throw new Error(`${SCENARIO} needs a session artifacts dir to write its generated files into`);
@@ -763,38 +767,35 @@ export const importDialogFuzz: Scenario = {
       if (!inventory.configured) ctx.log(`corpus: set ${CORPUS_DIR_ENV} to widen this run's inputs`);
     }
 
-    const replayPath = replayTracePath();
-    const traceOut = traceOutPath();
-    const replay: FuzzTrace | null = replayPath ? readTrace(replayPath) : null;
-    if (replay && replay.scenario !== SCENARIO) {
-      throw new Error(`trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`);
-    }
-    // The recorded steps carry ids and rels resolved against THAT project, so
-    // replaying them elsewhere drives moves at things that do not exist there:
-    // an invented failure, or a green run, either way not the recorded bug.
-    if (replay && replay.fixture !== fixture) {
-      throw new Error(
-        `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${fixture}; ` +
-          `re-run with STALAGMIGHT_FUZZ_FIXTURE=${replay.fixture} ` +
-          `(pnpm agent:scenario --trace restores it for you).`,
-      );
-    }
+    // `openReplay` refuses a trace recorded by another scenario or on another
+    // fixture: the recorded steps carry ids and rels resolved against THAT
+    // project, so replaying them elsewhere drives moves at things that do not
+    // exist there - an invented failure, or a green run, either way not the
+    // recorded bug.
+    const { replayPath, traceOut, replay } = openReplay(SCENARIO, fixture, RERUN_WITH);
 
     const recorder = new TraceRecorder();
-    const history: string[] = [];
     /**
-     * Substrings a failure payload must never contain, and what to say instead.
+     * The run's move history and the move RUNNING RIGHT NOW (`lib/fuzzHarness.ts`):
+     * `execute` arms a move before it runs and disarms it after, so a failure
+     * names a move that never returned instead of the one before it.
+     */
+    const moveLog = new MoveLog();
+    /**
+     * Substrings printed output must never contain, and what to say instead.
      *
      * `describeSource` keeps a corpus file's NAME out of every label this run
-     * writes, but the app puts it back: an import that fails quotes the path it
-     * was given, and the copy under `fuzz-files/corpus-N/` keeps the original
+     * writes, and the trace names an opened entry by `corpusEntryRel`, but the
+     * app puts the name back: an import that fails quotes the path it was
+     * given, and the copy under `fuzz-files/corpus-N/` keeps the original
      * basename because a `.mak` names its sibling `.dat` files and a `.wpj`
      * names its `.srv` tree - renaming them would break the very files the
      * corpus exists to exercise. So the file names are real, and a failure
      * message that echoes one would carry it into the issue the failure gets
-     * attached to. Filled in as entries are materialized; applied by `fail`.
+     * attached to. Filled in as entries are materialized; applied by `fail`,
+     * and - because the list is the PROCESS's (`fixtureCorpus.redactCorpusText`)
+     * - by the runners that print the oracle sweep's findings too (#576 HFI-13).
      */
-    const redactions: { find: string; say: string }[] = [];
 
     /**
      * Register the redactions for one materialized corpus entry.
@@ -805,27 +806,19 @@ export const importDialogFuzz: Scenario = {
      * messages - straight into `fail()` output, the trace and the printed
      * detail. One helper is what stops the next call site from forgetting.
      *
-     * The directory goes FIRST so a full path is redacted whole rather than
-     * leaving `<corpus #id>/<basename>` behind. `names` is every segment the copy
-     * created AT ANY DEPTH - a Walls project's `.PATH` subfolder can name a cave
-     * system exactly as well as a file can, and a single-level readdir here used
-     * to miss all of them.
+     * `names` is every segment the copy created AT ANY DEPTH - a Walls
+     * project's `.PATH` subfolder can name a cave system exactly as well as a
+     * file can, and a single-level readdir here used to miss all of them.
      */
     const registerCorpusRedactions = (id: string, destination: string, names: readonly string[]): void => {
-      const tag = `<corpus #${id}>`;
-      redactions.unshift({ find: destination, say: tag });
-      for (const name of names) {
-        redactions.push({ find: name, say: `${tag}/file` });
-      }
+      registerProcessRedactions(id, destination, names);
     };
 
-    const redact = (text: string): string => {
-      let out = text;
-      for (const entry of redactions) out = out.split(entry.find).join(entry.say);
-      return out;
-    };
-    let inFlight: string | null = null;
-    let fileSeq = 0;
+    const redact = redactCorpusText;
+    /** Where this run's corpus entry tokens point, on a replay - see `CorpusEntryPaths`. */
+    const corpusEntries = new CorpusEntryPaths();
+    /** Numbers the walk's input files and new projects - see `FileSeq`. */
+    const files = new FileSeq();
     let lastUndoDepth = -1;
     /**
      * Episodes that ran with NO project open, recorded so a replay can reproduce
@@ -839,57 +832,72 @@ export const importDialogFuzz: Scenario = {
      */
     const headlessEpisodes: number[] = [];
 
-    const dumpTrace = (failure: { message: string } | null): string | null => {
-      const target = traceOut || defaultTracePath(sessionDir, SCENARIO, ctx.seed);
-      try {
-        return writeTrace(
-          target,
-          recorder.build({
-            scenario: SCENARIO,
-            seed: ctx.seed,
-            iterations,
-            fixture,
-            // v3 = the five-format vocabulary: corpus sources, the armed
-            // keyboard picker, and the auxiliary interjection stream.
-            stream: 'import-v3',
-            failure,
-            noProjectEpisodes: headlessEpisodes,
-          }),
-        );
-      } catch {
-        return null;
-      }
-    };
+    const dumpTrace = (failure: { message: string } | null): string | null =>
+      writeRunTrace(
+        ctx,
+        recorder,
+        {
+          scenario: SCENARIO,
+          iterations,
+          fixture,
+          // v3 = the five-format vocabulary: corpus sources, the armed
+          // keyboard picker, and the auxiliary interjection stream.
+          stream: 'import-v3',
+          noProjectEpisodes: headlessEpisodes,
+        },
+        failure,
+        traceOut,
+      );
+
+    /**
+     * Every error `fail` has thrown. A throw that is NOT one of these died
+     * outside the oracles - a stall, a harness error - and the run's catch
+     * routes it through `fail` so it gets the reproduce line, the move history
+     * and the trace a failure is owed (#576 HFI-9).
+     */
+    const raisedByFail = new WeakSet<object>();
+    /**
+     * The step a dispatch that has NOT RETURNED would have recorded, or null.
+     * Set immediately before each dispatching await and cleared the moment it
+     * returns, so a stall leaves exactly the move it stalled on - which goes
+     * into the trace as its last step, because a trace that stopped one move
+     * short would replay green.
+     */
+    let inFlightStep: TraceStep | null = null;
+    /** Set when the run died on a stall: the page is not answering, so skip in-page cleanup. */
+    let pageStalled = false;
 
     /**
      * Annotated on the CONST so TypeScript treats a `fail(...)` call as
-     * never-returning - the same form `undoRedoFuzz.ts` uses, for the same
-     * reason (a caller ending in one needs no dead `return` after it).
+     * never-returning (a caller ending in one needs no dead `return` after it).
      */
     const fail: (headline: string, detail?: string) => never = (headline, detail = '') => {
-      const tail = history.slice(-HISTORY_TAIL).map((line) => `    ${line}`);
-      // A move that has not RETURNED has no history line yet, so name it here:
-      // without this the tail ends on the move BEFORE the one that failed, which
-      // reads as an attribution and is one.
-      if (inFlight !== null) tail.push(`    ${inFlight} -> IN FLIGHT (had not returned)`);
+      // The tail ends on the move that had not RETURNED, if any: without that it
+      // would end on the move BEFORE the one that failed, which reads as an
+      // attribution and is one.
+      const tail = moveLog.tail(HISTORY_TAIL);
       // REDACTED, because this text is what goes into an issue: the app quotes
       // the path it was handed, and a corpus copy keeps its original file name.
       const message = redact(
-        [
+        failureText(
           headline,
-          `  reproduce: pnpm agent:scenario ${SCENARIO} --seed ${ctx.seed} --iterations ${iterations}` +
-            `${fixture === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${fixture}`}` +
-            `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
-          `  fixture=${fixture} flowsPerEpisode=${flowsPerEpisode()} maxFlowSteps=${maxFlowSteps()}`,
-          ...(detail ? [detail] : []),
-          `  last ${tail.length} move(s):`,
-          ...tail,
-        ].join('\n'),
+          [
+            `  reproduce: pnpm agent:scenario ${SCENARIO} --seed ${ctx.seed} --iterations ${iterations}` +
+              `${fixture === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${fixture}`}` +
+              `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
+            `  fixture=${fixture} flowsPerEpisode=${flowsPerEpisode()} maxFlowSteps=${maxFlowSteps()}`,
+          ],
+          detail,
+          'move(s)',
+          tail,
+        ),
       );
-      // The trace carries the message VERBATIM, so a shrink compares signatures
-      // taken from the same text a human reads.
-      const written = dumpTrace({ message });
-      throw new Error(written ? `${message}\n  trace: ${written}` : message);
+      try {
+        throwFailure(message, dumpTrace);
+      } catch (thrown) {
+        if (typeof thrown === 'object' && thrown !== null) raisedByFail.add(thrown);
+        throw thrown;
+      }
     };
 
     // ---- paths -----------------------------------------------------------
@@ -914,7 +922,7 @@ export const importDialogFuzz: Scenario = {
       const root = path.resolve(sessionDir);
       const target = path.resolve(root, rel);
       if (target !== root && !target.startsWith(root + path.sep)) {
-        throw new Error(`generated file path ${JSON.stringify(rel)} escapes ${root}`);
+        throw new Error(`generated file path ${valueShape(rel)} escapes ${root}`);
       }
       return target;
     };
@@ -967,6 +975,11 @@ export const importDialogFuzz: Scenario = {
         registerCorpusRedactions(source.id, destination, copied.names);
         return copied.path;
       }
+      // A replayed corpus entry is a TOKEN, bound when its `corpusFile` step
+      // materialized the copy; unbound (the step was shrunk away, or this
+      // machine lacks the entry) it is a missing file like any other.
+      const entry = corpusEntries.resolve(source.rel);
+      if (entry !== undefined) return entry;
       const target = resolveRel(source.rel);
       return fs.existsSync(target) ? target : null;
     };
@@ -981,30 +994,8 @@ export const importDialogFuzz: Scenario = {
      */
     const recordFileSource = (source: FileSource, record: boolean): void => {
       if (!record) return;
-      if (source.origin === 'gen') {
-        recorder.record({
-          kind: 'genFile',
-          spec: source.spec,
-          rel: source.rel,
-          label: describeSource(source),
-        });
-        return;
-      }
-      if (source.origin === 'corpus') {
-        recorder.record({
-          kind: 'corpusFile',
-          corpusId: source.id,
-          // The resolution key. `corpusId` is 20 bits and labels the file in
-          // everything a human reads; this is what a replay looks it up by, so
-          // a corpus holding a second file that folds to the same id cannot be
-          // materialized in its place.
-          corpusHash: source.hash,
-          // The DIRECTORY the copy lands in; the `route`/`fileDialog` step that
-          // follows names the file inside it.
-          rel: source.dirRel,
-          label: describeSource(source),
-        });
-      }
+      const step = sourceTraceStep(source);
+      if (step !== null) recorder.record(step);
     };
 
     /**
@@ -1045,7 +1036,7 @@ export const importDialogFuzz: Scenario = {
     const dispatchable = (move: FuzzMove): FuzzMove => {
       if (move.kind !== 'input' || move.value !== PROJECT_DIR_PLACEHOLDER) return move;
       fs.mkdirSync(projectsDir, { recursive: true });
-      return { ...move, value: path.join(projectsDir, `import-${ctx.seed}-${fileSeq}.stalx`) };
+      return { ...move, value: path.join(projectsDir, `import-${ctx.seed}-${files.value}.stalx`) };
     };
 
     /** The map's current centre, so a placement click lands on the survey. */
@@ -1114,6 +1105,11 @@ export const importDialogFuzz: Scenario = {
       /** `dataTableFullScreen` at the same instant. `key:` chords only. */
       fullscreenAtDispatch: boolean | null;
       /**
+       * On a `route`, the toasts it raised, read when it returned
+       * (`RouteOutcome.toastsRaised`, #576 HFI2-F3). Null on every other move.
+       */
+      toastsRaisedAtDispatch: string[] | null;
+      /**
        * What a file entry point did with the path. Null for every other move.
        *
        * The distinction S4's grace window turns on - see `errorGraceVerdict`.
@@ -1124,20 +1120,42 @@ export const importDialogFuzz: Scenario = {
       handoff: FileHandoff | null;
     }
 
+    /** Record what a performed move did - the one shape `moveTraceStep` builds. */
+    const recordMove = (move: FuzzMove): void => {
+      const step = moveTraceStep(move);
+      if (step !== null) recorder.record(step);
+    };
+
+    /**
+     * One dispatching await, with `step` as the in-flight step while it runs.
+     * A throw leaves `inFlightStep` set - see its comment - and propagates.
+     */
+    const dispatch = async <T>(step: TraceStep | null, call: () => Promise<T>): Promise<T> => {
+      inFlightStep = step;
+      const out = await call();
+      inFlightStep = null;
+      return out;
+    };
+
+    /** A corpus draw, or a replayed corpus entry token. */
+    const fromCorpus = (source: FileSource): boolean =>
+      source.origin === 'corpus' || (source.origin === 'disk' && isCorpusEntryRel(source.rel));
+
     /** Run one move, record it if it happened, and report the screen after. */
     const execute = async (move: FuzzMove, record: boolean): Promise<Executed> => {
-      inFlight = move.label;
+      moveLog.startingMove(move.label);
       let performed = false;
       let skip: string | null = null;
       let offAtDispatch: boolean | null = null;
       let dialogAtDispatch: string | null = null;
       let placementAtDispatch: boolean | null = null;
       let fullscreenAtDispatch: boolean | null = null;
+      let toastsRaisedAtDispatch: string[] | null = null;
       let handoff: FileHandoff | null = null;
       let digest: ImportScreenDigest;
 
       if (move.kind === 'ui') {
-        const outcome = await runUiStep(ctx, move as Move);
+        const outcome = await dispatch(record ? moveTraceStep(move) : null, () => runUiStep(ctx, move as Move));
         performed = outcome.performed;
         skip = outcome.reason;
         offAtDispatch = outcome.offAtDispatch;
@@ -1146,49 +1164,37 @@ export const importDialogFuzz: Scenario = {
         fullscreenAtDispatch = outcome.fullscreenAtDispatch;
         digest = outcome.digest;
         noteBridgeTiming(outcome.timing);
-        if (record && performed) {
-          recorder.record(
-            move.double === true
-              ? { kind: 'ui', testid: move.testid, double: true, label: move.label }
-              : { kind: 'ui', testid: move.testid, label: move.label },
-          );
-        }
+        if (record && performed) recordMove(move);
       } else if (move.kind === 'input') {
         // The dispatched value may carry a substituted path; the RECORDED one
         // never does - see `dispatchable`.
-        const outcome = await runUiStep(ctx, dispatchable(move) as Move);
+        const outcome = await dispatch(record ? moveTraceStep(move) : null, () =>
+          runUiStep(ctx, dispatchable(move) as Move),
+        );
         performed = outcome.performed;
         skip = outcome.reason;
         offAtDispatch = outcome.offAtDispatch;
         dialogAtDispatch = outcome.dialogAtDispatch;
         digest = outcome.digest;
         noteBridgeTiming(outcome.timing);
-        if (record && performed) {
-          recorder.record({
-            kind: 'input',
-            testid: move.testid,
-            value: move.value,
-            mode: move.mode,
-            label: move.label,
-          });
-        }
+        if (record && performed) recordMove(move);
       } else if (move.kind === 'openFile') {
         const live = move;
         const absolute = sourceOnDisk(live.source);
         if (absolute === null) {
           // A REPLAY whose `genFile` step ddmin cut away, or a corpus entry
           // this machine does not have.
-          skip = live.source.origin === 'corpus' ? 'corpus-missing' : 'file-missing';
+          skip = fromCorpus(live.source) ? 'corpus-missing' : 'file-missing';
           digest = await observeScreen(ctx, false);
         } else {
           recordFileSource(live.source, record);
-          const rel = live.source.rel;
           if (live.via === 'route') {
-            const routed = await routeFile(ctx, absolute);
+            const routed = await dispatch(record ? moveTraceStep(move) : null, () => routeFile(ctx, absolute));
             if (!routed.routed) fail('the E2E routeOpenedFile hook is missing; rebuild with VITE_E2E=1');
             performed = true;
             dialogAtDispatch = routed.dialogAtDispatch;
             placementAtDispatch = routed.placementAtDispatch;
+            toastsRaisedAtDispatch = routed.toastsRaised;
             // `routeOpenedFile` returns void, so acceptance is read off the two
             // values its guards consulted on the same tick. Those guards are
             // `importFlowOwnsScreen(ui)` (an import-flow dialog, or placement)
@@ -1198,29 +1204,31 @@ export const importDialogFuzz: Scenario = {
             // return before anything is parsed.
             handoff =
               routed.dialogAtDispatch !== null || routed.placementAtDispatch ? 'gate-refused' : 'accepted';
-            if (record) recorder.record({ kind: 'route', rel, label: move.label });
+            if (record) recordMove(move);
             digest = await observeScreen(ctx);
           } else {
-            const answered = await answerFileDialogInPage(ctx, live.trigger, 'open', absolute);
+            const answered = await dispatch(record ? moveTraceStep(move) : null, () =>
+              answerFileDialogInPage(ctx, live.trigger, 'open', absolute),
+            );
             performed = answered.performed;
             skip = answered.reason;
             digest = answered.digest;
             handoff = answered.consumed ? 'accepted' : 'unconsumed';
             if (performed && !answered.consumed) ctx.metric('dialogAnswerUnconsumed');
-            if (record && performed) {
-              recorder.record({ kind: 'fileDialog', trigger: live.trigger, dialog: 'open', rel, label: move.label });
-            }
+            if (record && performed) recordMove(move);
           }
         }
       } else if (move.kind === 'keyFile') {
         const live = move;
         const absolute = sourceOnDisk(live.source);
         if (absolute === null) {
-          skip = live.source.origin === 'corpus' ? 'corpus-missing' : 'file-missing';
+          skip = fromCorpus(live.source) ? 'corpus-missing' : 'file-missing';
           digest = await observeScreen(ctx, false);
         } else {
           recordFileSource(live.source, record);
-          const answered = await answerKeyboardFileDialog(ctx, live.chord, absolute);
+          const answered = await dispatch(record ? moveTraceStep(move) : null, () =>
+            answerKeyboardFileDialog(ctx, live.chord, absolute),
+          );
           performed = answered.performed;
           skip = answered.reason;
           digest = answered.digest;
@@ -1229,31 +1237,25 @@ export const importDialogFuzz: Scenario = {
           // documented gate, so it is counted rather than asserted.
           handoff = answered.consumed ? 'accepted' : 'unconsumed';
           ctx.metric(answered.consumed ? 'keyPickerConsumed' : 'keyPickerSwallowed');
-          if (record && performed) {
-            recorder.record({
-              kind: 'fileDialog',
-              trigger: `key:${live.chord}`,
-              dialog: 'open',
-              rel: live.source.rel,
-              label: move.label,
-            });
-          }
+          if (record && performed) recordMove(move);
         }
       } else if (move.kind === 'closeProject') {
-        const res = await ctx.callAction('project', 'closeProject', []);
+        const res = await dispatch(record ? moveTraceStep(move) : null, () =>
+          ctx.callAction('project', 'closeProject', []),
+        );
         performed = res.ok;
         if (!res.ok) skip = 'close-refused';
-        if (record && performed) recorder.record({ kind: 'mutate', action: 'closeProject', args: [], label: move.label });
+        if (record && performed) recordMove(move);
         digest = await observeScreen(ctx);
       } else if (move.kind === 'cancelDialog') {
         const live = move;
-        const answered = await answerFileDialogInPage(ctx, live.trigger, 'open', null);
+        const answered = await dispatch(record ? moveTraceStep(move) : null, () =>
+          answerFileDialogInPage(ctx, live.trigger, 'open', null),
+        );
         performed = answered.performed;
         skip = answered.reason;
         digest = answered.digest;
-        if (record && performed) {
-          recorder.record({ kind: 'fileDialog', trigger: live.trigger, dialog: 'open', rel: null, label: move.label });
-        }
+        if (record && performed) recordMove(move);
       } else if (move.kind === 'mapClick') {
         const live = move;
         // A relative draw is resolved HERE and recorded ABSOLUTE: replay must
@@ -1265,37 +1267,48 @@ export const importDialogFuzz: Scenario = {
             ? live.lngLat
             : [live.lngLat[0] + (centre[0] as number), live.lngLat[1] + (centre[1] as number)];
         try {
-          await ctx.exclusive(() => mapClick(ctx.browser, at));
+          await dispatch(record ? { kind: 'mapClick', lngLat: at, label: move.label } : null, () =>
+            ctx.exclusive(() => mapClick(ctx.browser, at)),
+          );
           performed = true;
           if (record) recorder.record({ kind: 'mapClick', lngLat: at, label: move.label });
         } catch (err) {
+          // A STALL is not an impossible click: the page stopped answering, and
+          // swallowing it here would let the walk carry on into the next
+          // timeout with the attribution lost.
+          if (isWebDriverStall(err)) throw err;
           // Outside the viewport, or no map on this screen. Both are ordinary
           // impossible moves - skipped and counted, exactly like an absent
           // testid - because a shrunk trace reaches states with a different
           // camera and would otherwise die at the first recorded click.
           skip = 'map-unavailable';
-          ctx.metric(`mapSkip:${err instanceof Error ? err.message.slice(0, 32) : 'unknown'}`);
+          // A code, not the error's text (#576 W51; it was the text folded
+          // and cut, W33-NF3): a metric key reaches the runner's PASS line and
+          // the matrix report, and neither folds it.
+          ctx.metric(`mapSkip:${mapSkipCode(err)}`);
         }
         digest = await observeScreen(ctx);
       } else if (move.kind === 'undo' || move.kind === 'redo') {
         const which = move.kind;
-        const res = await ctx.callAction('project', which, []);
+        const res = await dispatch(record ? moveTraceStep(move) : null, () => ctx.callAction('project', which, []));
         performed = res.ok;
         if (!res.ok) skip = `${which}-refused`;
-        if (record && performed) recorder.record(which === 'undo' ? { kind: 'undo' } : { kind: 'redo' });
+        if (record && performed) recordMove(move);
         digest = await observeScreen(ctx);
       } else {
         fs.mkdirSync(projectsDir, { recursive: true });
         const target = path.join(projectsDir, `flow-save-${ctx.seed}.stalx`);
-        const res = await ctx.callAction('project', 'saveProject', [target]);
+        const res = await dispatch(record ? moveTraceStep(move) : null, () =>
+          ctx.callAction('project', 'saveProject', [target]),
+        );
         performed = res.ok;
         if (!res.ok) skip = 'save-refused';
-        if (record && performed) recorder.record({ kind: 'save' });
+        if (record && performed) recordMove(move);
         digest = await observeScreen(ctx);
       }
 
-      inFlight = null;
-      history.push(`${move.label}${performed ? '' : ` -> SKIPPED (${skip ?? 'unknown'})`} [${digest.screen}]`);
+      moveLog.finishedMove();
+      moveLog.note(`${move.label}${performed ? '' : ` -> SKIPPED (${skip ?? 'unknown'})`} [${digest.screen}]`);
       ctx.metric(performed ? 'movesPerformed' : `skip:${skip ?? 'unknown'}`);
       return {
         digest,
@@ -1305,6 +1318,7 @@ export const importDialogFuzz: Scenario = {
         dialogAtDispatch,
         placementAtDispatch,
         fullscreenAtDispatch,
+        toastsRaisedAtDispatch,
         handoff,
       };
     };
@@ -1349,7 +1363,10 @@ export const importDialogFuzz: Scenario = {
           // `failureSignature` builds a shrink's target from the first line: a
           // generic "unknown screen" headline matches every unknown screen, and
           // ddmin then accepts a candidate that fails on a different one.
-          `S1 UNKNOWN SCREEN ${JSON.stringify(digest.dialog)}: a dialog is up that this build's ` +
+          // A store value (`activeDialog: string | null`): it prints as a test
+          // id does, the words of the app's source and other text as its
+          // length (#576 W51).
+          `S1 UNKNOWN SCREEN "${shareableTestId(digest.dialog)}": a dialog is up that this build's ` +
             'screen table does not name',
           `  activeDialog=${JSON.stringify(digest.dialog)} after: ${move.label}\n` +
             `  dom: ${digest.why}\n` +
@@ -1391,7 +1408,8 @@ export const importDialogFuzz: Scenario = {
         } else {
           fail(
             'S4 UNEXPECTED ERROR DIALOG: a move with no business failing raised one',
-            `  after: ${move.label}\n  error: ${digest.err ?? '(no text)'}\n` +
+            // The digest carries the whole text; folded, THEN cut (#576 W33-NF3).
+            `  after: ${move.label}\n  error: ${digest.err === null ? '(no text)' : foldThenCut(digest.err, 300)}\n` +
               `  started no fallible work: ${work.reason}`,
           );
         }
@@ -1576,7 +1594,7 @@ export const importDialogFuzz: Scenario = {
       ctx,
       digest,
       filesRel: FILES_REL,
-      fileSeq,
+      fileSeq: files.value,
       corpus,
     });
 
@@ -1624,7 +1642,7 @@ export const importDialogFuzz: Scenario = {
         const move = buildInterjection(kind, genEnv(digest));
         if (move !== null) {
           ctx.metric(`interject:${kind}`);
-          if (move.kind === 'openFile') fileSeq += 1;
+          files.noteMove(move);
           return move;
         }
       }
@@ -1633,7 +1651,7 @@ export const importDialogFuzz: Scenario = {
         const move = buildAuxInterjection(kind, genEnv(digest));
         if (move !== null) {
           ctx.metric(`interject:${kind}`);
-          if (move.kind === 'keyFile') fileSeq += 1;
+          files.noteMove(move);
           return move;
         }
         ctx.metric(`interjectSkipped:${kind}`);
@@ -1659,77 +1677,11 @@ export const importDialogFuzz: Scenario = {
         // screen samples, which is an estimate presented as a measurement. This
         // is the measurement.
         if (generator.screens.length > 1) ctx.metric(`gen@${digest.screen}:${generator.name}`);
-        if (move.kind === 'openFile') fileSeq += 1;
+        files.noteMove(move);
         return move;
       }
       ctx.metric(`noMove:${digest.screen}`);
       return null;
-    };
-
-    /** A replayed file reference: the bytes are already on disk at `rel`. */
-    const replaySource = (rel: string): FileSource =>
-      rel.startsWith('fixtures/')
-        ? { origin: 'fixture', name: path.basename(rel), rel }
-        : { origin: 'disk', rel };
-
-    /** Turn a recorded step back into a move, or null when it is not one. */
-    const moveFromStep = (step: TraceStep): FuzzMove | null => {
-      switch (step.kind) {
-        case 'ui':
-          return step.double === true
-            ? { kind: 'ui', testid: step.testid, double: true, label: step.label }
-            : { kind: 'ui', testid: step.testid, label: step.label };
-        case 'input':
-          return { kind: 'input', testid: step.testid, value: step.value, mode: step.mode, label: step.label };
-        case 'route':
-          return {
-            kind: 'openFile',
-            source: replaySource(step.rel),
-            via: 'route',
-            trigger: 'routeOpenedFile',
-            label: step.label,
-          };
-        case 'fileDialog': {
-          if (step.rel === null) return { kind: 'cancelDialog', trigger: step.trigger, label: step.label };
-          const rel = Array.isArray(step.rel) ? (step.rel[0] as string) : step.rel;
-          // A `key:<chord>` trigger is the ARMED-KEYBOARD picker, not a click on
-          // an element - it has no testid, so it cannot go through the click
-          // path at all.
-          if (step.trigger.startsWith('key:')) {
-            return {
-              kind: 'keyFile',
-              chord: step.trigger.slice('key:'.length),
-              source: replaySource(rel),
-              label: step.label,
-            };
-          }
-          return {
-            kind: 'openFile',
-            source: replaySource(rel),
-            via: 'dialog',
-            trigger: step.trigger,
-            label: step.label,
-          };
-        }
-        case 'mapClick':
-          return { kind: 'mapClick', lngLat: step.lngLat, label: step.label };
-        case 'undo':
-          return { kind: 'undo', label: 'replay undo' };
-        case 'redo':
-          return { kind: 'redo', label: 'replay redo' };
-        case 'save':
-          return { kind: 'save', label: 'replay save' };
-        case 'mutate':
-          // The store-action twin of the DOM allowlist: a trace names an action,
-          // and only the ones this scenario produces may be dispatched.
-          if (step.action === 'closeProject') return { kind: 'closeProject', label: step.label };
-          throw new Error(
-            `refusing to replay mutate "${step.action}": ${SCENARIO} replays ` +
-              `${REPLAYABLE_UI_ACTIONS.size === 0 ? 'no store actions' : [...REPLAYABLE_UI_ACTIONS].join(', ')}`,
-          );
-        default:
-          return null;
-      }
     };
 
     // ---- injection + generator self-check ---------------------------------
@@ -1800,10 +1752,14 @@ export const importDialogFuzz: Scenario = {
      * cleanly when replayed on its own.
      */
     const forceClean = async (): Promise<void> => {
-      await ctx.callAction('ui', 'cancelPlacementMode', []).catch(() => undefined);
-      await ctx.callAction('ui', 'closeDialog', []).catch(() => undefined);
-      await ctx.callAction('ui', 'setImportContext', [null]).catch(() => undefined);
-      await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
+      // After a STALL every in-page call would wait out the same budget again,
+      // only to fail; the session is torn down after a failure anyway.
+      if (!pageStalled) {
+        await ctx.callAction('ui', 'cancelPlacementMode', []).catch(() => undefined);
+        await ctx.callAction('ui', 'closeDialog', []).catch(() => undefined);
+        await ctx.callAction('ui', 'setImportContext', [null]).catch(() => undefined);
+        await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
+      }
       for (const dir of [filesDir, projectsDir]) {
         try {
           fs.rmSync(dir, { recursive: true, force: true });
@@ -2120,7 +2076,6 @@ export const importDialogFuzz: Scenario = {
           // Snapshots taken BEFORE the move, for the three inline checks: each
           // is only meaningful against the state its own move acted on.
           const screenBefore = before.screen;
-          const rowsBefore = before.rows;
           // The two store values `importFlowOwnsScreen` consults, as the digest
           // that CLASSIFIED this move saw them - see the IMPORT GATE branch.
           const dialogBefore = before.dialog;
@@ -2235,7 +2190,7 @@ export const importDialogFuzz: Scenario = {
             // interjection, and the failure blamed the dispatcher for a chord it
             // had swallowed correctly - the dialog was simply gone by then.
             const gatesAtDispatch: string[] = [];
-            if (outcome.dialogAtDispatch !== null) gatesAtDispatch.push(`activeDialog="${outcome.dialogAtDispatch}"`);
+            if (outcome.dialogAtDispatch !== null) gatesAtDispatch.push(`activeDialog="${shareableTestId(outcome.dialogAtDispatch)}"`);
             if (outcome.placementAtDispatch === true) gatesAtDispatch.push('placementMode active');
             if (outcome.fullscreenAtDispatch === true) gatesAtDispatch.push('dataTableFullScreen');
             if (gatesAtDispatch.length > 0 && digest.screen === 'export-modal') {
@@ -2250,18 +2205,8 @@ export const importDialogFuzz: Scenario = {
           }
           if (frozenDelete && outcome.performed) {
             ctx.metric('frozenDeleteRefused');
-            if (digest.rows !== rowsBefore) {
-              fail(
-                'FROZEN DELETE: an all-frozen selection was deleted anyway',
-                `  rendered rows ${rowsBefore} -> ${digest.rows}; the wizard must refuse and say so`,
-              );
-            }
-            if (!digest.toast.includes('dmp-wizard-frozen-delete')) {
-              fail(
-                'FROZEN DELETE: the refusal was SILENT',
-                `  no dmp-wizard-frozen-delete toast; toasts=${JSON.stringify(digest.toast)}`,
-              );
-            }
+            // On the grid's DATA rows, not the rendered window (#576 HFI2-F5).
+            guarded(() => checkFrozenDelete(before, digest));
           }
           // INCOMPLETE SHOTS. `handleConfirm`, `handleSkip` and
           // `handleSegmentPlace` all open with `if (refuseIncompleteShots()) return;`
@@ -2397,7 +2342,9 @@ export const importDialogFuzz: Scenario = {
             // disabled option - so a refusal here is the guard being reached, and
             // worth counting rather than asserting.
             if (!outcome.performed && outcome.skip === 'option-absent') {
-              ctx.metric(`overlapModeRefused:${overlapMode}`);
+              // A replayed move's value is a trace's text: only the picker's own
+              // option values name a metric (#576 W51).
+              ctx.metric(`overlapModeRefused:${OVERLAP_MODES.includes(overlapMode) ? overlapMode : 'other'}`);
               // But the guard must never disable ALL of them. `existing_data` and
               // `keep_both` are unconditional in the source, and a build where
               // one of them stopped being offered would leave a user with an
@@ -2466,13 +2413,19 @@ export const importDialogFuzz: Scenario = {
             // move from `new-project` to `tml-config` three moves later, for a
             // reason that has nothing to do with the routed file, and a
             // screen-equality check reports the guard as broken when it worked.
-            if (sameScreenAtDispatch && !digest.toast.includes(IMPORT_GATE_TOAST_KEY)) {
+            // Read when the route RETURNED (#576 HFI2-F3): the settle behind
+            // `digest` can outlast the toast while a wizard calculation runs.
+            if (
+              sameScreenAtDispatch &&
+              !importGateRefusalSeen(outcome.toastsRaisedAtDispatch, digest.toast, IMPORT_GATE_TOAST_KEY)
+            ) {
               fail(
                 'IMPORT GATE: a second file was routed into a screen an import already owned',
                 `  screen ${screenBefore} -> ${digest.screen}; routeOpenedFile must refuse and SAY so (#411)\n` +
                   `  activeDialog at dispatch=${JSON.stringify(outcome.dialogAtDispatch)} ` +
                   `placement=${outcome.placementAtDispatch}\n` +
-                  `  toasts: ${JSON.stringify(digest.toast)}`,
+                  `  toasts raised by the route: ${JSON.stringify(outcome.toastsRaisedAtDispatch)}; ` +
+                  `after settle: ${JSON.stringify(digest.toast)}`,
               );
             }
           }
@@ -2518,10 +2471,14 @@ export const importDialogFuzz: Scenario = {
               // A REPLAY needs the redactions as much as a recording does - the
               // app echoes the basenames it opened, and a replayed failure is
               // exactly the message somebody attaches to an issue.
-              if (!copied.skipped) registerCorpusRedactions(lookup.entry.id, destination, copied.names);
+              if (!copied.skipped) {
+                registerCorpusRedactions(lookup.entry.id, destination, copied.names);
+                corpusEntries.bind(step.rel, copied.path);
+              }
               continue;
             }
-            const move = moveFromStep(step);
+            // Counted as the live walk counts a drawn one - see `FileSeq`.
+            const move = moveFromTraceStep(step, files, SCENARIO);
             if (move === null) {
               ctx.metric(`replay:unsupported:${step.kind}`);
               continue;
@@ -2753,6 +2710,16 @@ export const importDialogFuzz: Scenario = {
 
     try {
       await runEpisodes();
+    } catch (err) {
+      if (typeof err === 'object' && err !== null && raisedByFail.has(err)) throw err;
+      // Died OUTSIDE the oracles - a WebDriver call that outran its budget, or
+      // a harness error. Same treatment as any failure: the move that had not
+      // returned goes into the trace and the history, and `fail` prints the
+      // reproduce line and writes the trace (#576 HFI-9).
+      const report = describeRunError(err, moveLog.inFlight());
+      if (inFlightStep !== null) recorder.record(inFlightStep);
+      pageStalled = report.stall;
+      fail(report.headline, report.detail);
     } finally {
       await forceClean();
     }

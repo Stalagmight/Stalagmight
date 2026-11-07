@@ -13,6 +13,7 @@
 use std::env;
 use std::fs;
 use std::ops::Range;
+use syn::spanned::Spanned;
 use syn::{File, ImplItem, Item};
 
 fn main() {
@@ -204,8 +205,13 @@ fn print_toc(file_path: &str, syntax: &File, total_lines: usize) {
     }
 }
 
-/// Find the actual line range for an item in source
-fn find_item_range(lines: &[&str], start_hint: usize) -> Range<usize> {
+/// The 0-based, end-exclusive line range to print for an item whose keyword
+/// token sits on 1-based line `start_hint` and whose last token sits on 1-based
+/// line `end_line`. The end comes from the item's syn span (#576 E18(g)): the
+/// old end was found by counting `{`/`}` over raw characters, so a brace in a
+/// string, char literal or comment cut the item short or ran it on, and a
+/// braceless item (`mod x;`) ran on until the next stray brace.
+fn find_item_range(lines: &[&str], start_hint: usize, end_line: usize) -> Range<usize> {
     // Start from the hint line and work backwards to find doc comments/attributes
     let mut actual_start = start_hint.saturating_sub(1);
 
@@ -230,27 +236,13 @@ fn find_item_range(lines: &[&str], start_hint: usize) -> Range<usize> {
         }
     }
 
-    // Find end by counting braces
-    let mut brace_count = 0;
-    let mut found_open = false;
-    let mut end_line = start_hint;
+    actual_start..end_line.max(start_hint).min(lines.len())
+}
 
-    for (i, line) in lines.iter().enumerate().skip(start_hint.saturating_sub(1)) {
-        for c in line.chars() {
-            if c == '{' {
-                brace_count += 1;
-                found_open = true;
-            } else if c == '}' {
-                brace_count -= 1;
-            }
-        }
-        if found_open && brace_count == 0 {
-            end_line = i + 1;
-            break;
-        }
-    }
-
-    actual_start..end_line
+/// The last 1-based line of any syntax node, from its span (needs
+/// proc-macro2's `span-locations`, enabled in Cargo.toml).
+fn end_line_of<T: Spanned>(node: &T) -> usize {
+    node.span().end().line
 }
 
 fn print_lines(lines: &[&str], range: Range<usize>) {
@@ -268,7 +260,7 @@ fn extract_function(syntax: &File, name: &str, lines: &[&str]) {
         if let Item::Fn(f) = item {
             if f.sig.ident == name {
                 let start_line = f.sig.fn_token.span.start().line;
-                let range = find_item_range(lines, start_line);
+                let range = find_item_range(lines, start_line, end_line_of(f));
                 print_lines(lines, range);
                 return;
             }
@@ -280,7 +272,7 @@ fn extract_function(syntax: &File, name: &str, lines: &[&str]) {
                 if let ImplItem::Fn(m) = impl_item {
                     if m.sig.ident == name {
                         let start_line = m.sig.fn_token.span.start().line;
-                        let range = find_item_range(lines, start_line);
+                        let range = find_item_range(lines, start_line, end_line_of(m));
                         print_lines(lines, range);
                         return;
                     }
@@ -299,7 +291,7 @@ fn extract_impl(syntax: &File, name: &str, lines: &[&str]) {
             let type_name = get_type_name(&i.self_ty);
             if type_name == name || type_name.contains(name) {
                 let start_line = i.impl_token.span.start().line;
-                let range = find_item_range(lines, start_line);
+                let range = find_item_range(lines, start_line, end_line_of(i));
                 print_lines(lines, range);
                 return;
             }
@@ -315,7 +307,7 @@ fn extract_struct(syntax: &File, name: &str, lines: &[&str]) {
         if let Item::Struct(s) = item {
             if s.ident == name {
                 let start_line = s.struct_token.span.start().line;
-                let range = find_item_range(lines, start_line);
+                let range = find_item_range(lines, start_line, end_line_of(s));
                 print_lines(lines, range);
                 return;
             }
@@ -331,7 +323,7 @@ fn extract_enum(syntax: &File, name: &str, lines: &[&str]) {
         if let Item::Enum(e) = item {
             if e.ident == name {
                 let start_line = e.enum_token.span.start().line;
-                let range = find_item_range(lines, start_line);
+                let range = find_item_range(lines, start_line, end_line_of(e));
                 print_lines(lines, range);
                 return;
             }
@@ -347,7 +339,7 @@ fn extract_trait(syntax: &File, name: &str, lines: &[&str]) {
         if let Item::Trait(t) = item {
             if t.ident == name {
                 let start_line = t.trait_token.span.start().line;
-                let range = find_item_range(lines, start_line);
+                let range = find_item_range(lines, start_line, end_line_of(t));
                 print_lines(lines, range);
                 return;
             }
@@ -363,7 +355,7 @@ fn extract_mod(syntax: &File, name: &str, lines: &[&str]) {
         if let Item::Mod(m) = item {
             if m.ident == name {
                 let start_line = m.mod_token.span.start().line;
-                let range = find_item_range(lines, start_line);
+                let range = find_item_range(lines, start_line, end_line_of(m));
                 print_lines(lines, range);
                 return;
             }
@@ -397,4 +389,55 @@ fn extract_lines(range_str: &str, lines: &[&str], total_lines: usize) {
     }
 
     print_lines(lines, (start - 1)..end);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Locate a top-level fn / mod / struct the way the extractors do and
+    /// return the 1-based inclusive line range they would print.
+    fn printed(source: &str, kind: &str, name: &str) -> (usize, usize) {
+        let syntax = syn::parse_file(source).expect("sample parses");
+        let lines: Vec<&str> = source.lines().collect();
+        for item in &syntax.items {
+            let found = match (kind, item) {
+                ("fn", Item::Fn(f)) if f.sig.ident == name => {
+                    Some((f.sig.fn_token.span.start().line, end_line_of(f)))
+                }
+                ("mod", Item::Mod(m)) if m.ident == name => {
+                    Some((m.mod_token.span.start().line, end_line_of(m)))
+                }
+                ("struct", Item::Struct(s)) if s.ident == name => {
+                    Some((s.struct_token.span.start().line, end_line_of(s)))
+                }
+                _ => None,
+            };
+            if let Some((start, end)) = found {
+                let range = find_item_range(&lines, start, end);
+                return (range.start + 1, range.end);
+            }
+        }
+        panic!("{kind} {name} not found");
+    }
+
+    const SAMPLE: &str = "/// Formats a closing brace.\nfn closer() -> String {\n    let s = \"}\"; // a brace in a string\n    let open = '{';\n    format!(\"{open}{s}\")\n}\n\nfn after() -> u32 {\n    42\n}\n\n#[cfg(test)]\nmod tests;\n\n/// Mentions } and {.\nstruct Holder {\n    text: &'static str,\n}\n";
+
+    #[test]
+    fn a_brace_in_a_string_or_char_literal_does_not_cut_the_fn_short() {
+        // The brace counter stopped at line 3 (the "}" string).
+        assert_eq!(printed(SAMPLE, "fn", "closer"), (1, 6));
+        assert_eq!(printed(SAMPLE, "fn", "after"), (8, 10));
+    }
+
+    #[test]
+    fn a_braceless_mod_prints_its_attribute_and_one_line() {
+        // The brace counter ran on to the next stray brace (the doc comment below).
+        assert_eq!(printed(SAMPLE, "mod", "tests"), (12, 13));
+    }
+
+    #[test]
+    fn a_brace_in_a_doc_comment_does_not_shift_the_struct() {
+        assert_eq!(printed(SAMPLE, "struct", "Holder"), (15, 18));
+    }
 }

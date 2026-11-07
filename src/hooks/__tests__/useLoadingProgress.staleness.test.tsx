@@ -1,16 +1,11 @@
 /**
- * [#486] The store's `loading.loadingId` is a `bigint` (initialized `0n`, and
- * set to a real `bigint` by the result path via `BigInt(env.loading_id)`).
- * The Tauri `loading-progress` event, however, arrives as a plain JSON
- * number - the ts-rs `bigint` type on `LoadingProgress` only describes the
- * binary/IPC result path, not `listen<T>`'s JSON decode.
- *
- * The old code compared/stored that raw number directly
- * (`eventLoadingId !== currentState.loadingId`), so a numerically-equal id
- * failed the comparison (`2 !== 2n`) and every progress event after the
- * result-path write was discarded as "stale" - freezing the progress UI for
- * the rest of the load. This locks the fix: the event id is normalized to
- * bigint before it is compared against or written into the store.
+ * [#486] The store's `loading.loadingId` and the Tauri `loading-progress`
+ * event's `loadingId` must compare as the same kind of value. The event arrives
+ * as a plain JSON number; the ids used to be declared `bigint`, and a store
+ * holding `2n` discarded the event carrying `2` as "stale" (`2 !== 2n`),
+ * freezing the progress UI for the rest of the load. Since #576 C6 every
+ * generated loadingId is declared `number`, the shape every path delivers, and
+ * the event id is compared and stored as given.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from '@testing-library/react';
@@ -37,7 +32,7 @@ function Harness() {
 
 function progressPayload(overrides: Partial<LoadingProgress>): LoadingProgress {
   return {
-    loadingId: 0n,
+    loadingId: 0,
     phase: 'loading_project_data',
     phaseIndex: 0,
     phaseCount: 1,
@@ -52,8 +47,7 @@ function progressPayload(overrides: Partial<LoadingProgress>): LoadingProgress {
 /** Fire a `loading-progress` event, mimicking Tauri's JSON decode (a plain number id). */
 async function emitProgress(loadingId: number, overrides: Partial<LoadingProgress> = {}) {
   for (const cb of [...listeners]) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- simulating the untyped JSON wire payload
-    await cb({ payload: progressPayload({ loadingId: loadingId as any, ...overrides }) });
+    await cb({ payload: progressPayload({ loadingId, ...overrides }) });
   }
 }
 
@@ -65,23 +59,23 @@ beforeEach(() => {
       ...s.loading,
       isLoading: true,
       error: undefined,
-      loadingId: 0n,
+      loadingId: 0,
       clientOpId: 1,
       phase: undefined,
     },
   }));
 });
 
-describe('useLoadingProgress - event loadingId normalization (#486)', () => {
-  it('accepts a JSON-number event id that numerically equals the store bigint id', async () => {
-    useProjectStore.setState((s) => ({ loading: { ...s.loading, loadingId: 2n } }));
+describe('useLoadingProgress - event loadingId (#486, #576 C6)', () => {
+  it('accepts a JSON-number event id equal to the store id', async () => {
+    useProjectStore.setState((s) => ({ loading: { ...s.loading, loadingId: 2 } }));
     render(<Harness />);
     await Promise.resolve();
 
     await emitProgress(2, { phaseIndex: 3, overallPercent: 42 });
 
     expect(useProjectStore.getState().loading.overallProgress).toBe(42);
-    expect(useProjectStore.getState().loading.loadingId).toBe(2n);
+    expect(useProjectStore.getState().loading.loadingId).toBe(2);
   });
 
   it('rejects a genuinely stale event id, then accepts a matching one (positive control)', async () => {
@@ -91,7 +85,7 @@ describe('useLoadingProgress - event loadingId normalization (#486)', () => {
     // proves the listener IS wired up and DOES apply a matching id, so the
     // first assertion's "unchanged" reading isn't a false negative.
     useProjectStore.setState((s) => ({
-      loading: { ...s.loading, loadingId: 2n, overallProgress: 7 },
+      loading: { ...s.loading, loadingId: 2, overallProgress: 7 },
     }));
     render(<Harness />);
     await Promise.resolve();
@@ -103,20 +97,20 @@ describe('useLoadingProgress - event loadingId normalization (#486)', () => {
     expect(useProjectStore.getState().loading.overallProgress).toBe(99);
   });
 
-  it('stores the event loadingId as a bigint, not a JSON number', async () => {
+  it('stores the event loadingId as the plain number it arrived as', async () => {
     // Seed the store's OWN loadingId (rather than leaving it at the initial
-    // 0n "awaiting handshake" state) so this exercises the equality branch
+    // 0 "awaiting handshake" state) so this exercises the equality branch
     // directly, not the module-global `lastSeenBackendLoadingId` tracker used
     // only while awaiting the first event - that counter is never reset
-    // between tests in this file, so a 0n-seeded assertion would silently
+    // between tests in this file, so a 0-seeded assertion would silently
     // depend on every earlier test's emitted ids staying below this one.
-    useProjectStore.setState((s) => ({ loading: { ...s.loading, loadingId: 5n } }));
+    useProjectStore.setState((s) => ({ loading: { ...s.loading, loadingId: 5 } }));
     render(<Harness />);
     await Promise.resolve();
 
     await emitProgress(5, { phaseIndex: 0 });
 
-    expect(useProjectStore.getState().loading.loadingId).toBe(5n);
-    expect(typeof useProjectStore.getState().loading.loadingId).toBe('bigint');
+    expect(useProjectStore.getState().loading.loadingId).toBe(5);
+    expect(typeof useProjectStore.getState().loading.loadingId).toBe('number');
   });
 });

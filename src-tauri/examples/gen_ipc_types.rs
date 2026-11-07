@@ -3,6 +3,7 @@
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use ts_rs::TS;
 
@@ -12,29 +13,35 @@ use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryIt
 use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::project::ProjectState;
 use stalagmight_lib::commands::section::{SegmentGeometry, SegmentSectionGeometry};
-use stalagmight_lib::commands::survey_geometry::{
-    GeometryShot, SurveyGeometry, SurveyGeometryError,
-};
+use stalagmight_lib::commands::survey_geometry::{GeometryShot, SurveyGeometry};
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
-    ConfigSaveReport, DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, DpvRig,
-    DpvUnit, ExportConfig, GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin,
-    ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig,
-    MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig, PlacementSuggestionConfig,
-    ProviderCacheConfig, ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback,
-    ShortcutsConfig, ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel,
-    SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode, TokenFallback, UnitsConfig,
-    ValidationConfig,
+    ConfigPatch, ConfigSaveReport, DebugConfig, DecimalPrecision, DepthGradientConfig,
+    DisplayConfig, DpvRig, DpvUnit, ExportConfig, GasConfig, GasUnits, GeneralConfig,
+    GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
+    MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig,
+    PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset, ReserveProfile,
+    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
+    StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
+    ThemeMode, TokenFallback, UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
-    CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
-    ReversedSection, ValidationWarning, WarningSeverity,
+    Command, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
+    ReversedSection, SpeleoDoneReport, SpeleoPublishReport, SpeleoPushReport, ValidationWarning,
+    WarningSeverity,
 };
+use stalagmight_lib::core::command_error::{CommandError, CommandErrorCode, HistoryStepFailure};
+use stalagmight_lib::core::events::InternalErrorNotice;
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
-    SpeleoManagedFile,
+    OpenFileFlags, SpeleoManagedFile,
 };
-use stalagmight_lib::core::state::VirtualShotMode;
+use stalagmight_lib::core::outcome::{
+    BatchOutcome, DeleteProjectOutcome, EditOutcome, HistoryOutcome, ImportOutcome,
+    ProjectFileOutcome, RemoteLinkBits, ReverseOutcome, SaveOutcome, SectionCreated, ShotCreated,
+};
+use stalagmight_lib::core::state::{DisplaySettingTarget, VirtualShotMode};
+use stalagmight_lib::core::WorkspaceMode;
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
 use stalagmight_lib::models::placement_suggest::{
@@ -60,11 +67,13 @@ use stalagmight_lib::parsers::gpx::{
     GpxTrackSegment, GpxWaypoint,
 };
 use stalagmight_lib::parsers::tml::{
-    TmlClosure, TmlFile, TmlGeoCoding, TmlParseAnomalies, TmlRootPlacement, TmlSection, TmlShot,
-    TmlShotType, TmlUnit,
+    TmlClosure, TmlFile, TmlGeoCoding, TmlParseAnomalies, TmlRootPlacement, TmlScaledDepthInMarker,
+    TmlSection, TmlShot, TmlShotType, TmlUnit,
 };
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
-use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
+use stalagmight_lib::persistence::{
+    BackupInfo, BackupKind, RawTableData, RepairResult, SalvageWriteResult, SalvagedData,
+};
 use stalagmight_lib::speleodb::{
     AdoptUpload, DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult,
     RemoteState, SpeleoAdoptResult, SpeleoCollaborator, SpeleoCollaborators, SpeleoDbAction,
@@ -78,6 +87,19 @@ use stalagmight_lib::speleodb::{
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
+#[path = "gen_ipc_types/commands.rs"]
+mod commands;
+#[path = "gen_ipc_types/events.rs"]
+mod events;
+
+/// `(Rust ident, TS name)` of every exported type: the command manifest resolves
+/// the types in a `#[tauri::command]` signature against it.
+static EXPORTED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+// The manifest declares these id aliases `number`; pin that they are still `u32`.
+const _: fn(stalagmight_lib::models::SectionId, stalagmight_lib::models::ShotId) -> (u32, u32) =
+    |section, shot| (section, shot);
+
 fn export<T: TS + 'static>(out_dir: &Path) {
     let export_to = T::EXPORT_TO
         .and_then(|path| Path::new(path).file_name())
@@ -85,6 +107,16 @@ fn export<T: TS + 'static>(out_dir: &Path) {
     let out_path = out_dir.join(export_to);
     T::export_to(&out_path).expect("Failed to export TS type");
     flatten_import_paths(&out_path);
+    let rust_path = std::any::type_name::<T>();
+    let rust_ident = rust_path
+        .split('<')
+        .next()
+        .and_then(|path| path.rsplit("::").next())
+        .unwrap_or(rust_path);
+    EXPORTED
+        .lock()
+        .expect("export registry lock")
+        .push((rust_ident.to_string(), T::name()));
 }
 
 /// Rewrite every `import type { X } from "<somewhere>/X";` to the sibling form
@@ -136,8 +168,23 @@ fn main() {
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/types/ipc");
     fs::create_dir_all(&out_dir).expect("Failed to create ipc types directory");
 
+    // [#576 C4/A6] The one error every fallible command rejects with
+    export::<CommandError>(&out_dir);
+    export::<CommandErrorCode>(&out_dir);
+    export::<HistoryStepFailure>(&out_dir);
+    // [#576 A12/D22] The per-command success values that replaced CommandResult
+    export::<RemoteLinkBits>(&out_dir);
+    export::<EditOutcome>(&out_dir);
+    export::<SectionCreated>(&out_dir);
+    export::<ShotCreated>(&out_dir);
+    export::<ReverseOutcome>(&out_dir);
+    export::<BatchOutcome>(&out_dir);
+    export::<HistoryOutcome>(&out_dir);
+    export::<ImportOutcome>(&out_dir);
+    export::<SaveOutcome>(&out_dir);
+    export::<DeleteProjectOutcome>(&out_dir);
+    export::<ProjectFileOutcome>(&out_dir);
     // Core command/result types
-    export::<CommandResult>(&out_dir);
     export::<ReversedSection>(&out_dir);
     export::<ImportReceipt>(&out_dir);
     export::<CommentHolder>(&out_dir);
@@ -145,12 +192,20 @@ fn main() {
     export::<IntegrityCheckResult>(&out_dir);
     export::<ValidationWarning>(&out_dir);
     export::<WarningSeverity>(&out_dir);
+    // [#576 C3] execute_batch's payload and set_workspace_mode's argument
+    export::<Command>(&out_dir);
+    export::<WorkspaceMode>(&out_dir);
 
     // Loading/progress types
     export::<DisplaySettings>(&out_dir);
     export::<LoadingPhase>(&out_dir);
     export::<LoadingProgress>(&out_dir);
+    // [#576 A11] the internal-error banner event's payload
+    export::<InternalErrorNotice>(&out_dir);
     export::<LoadProjectFullResult>(&out_dir);
+    export::<OpenFileFlags>(&out_dir);
+    // [#576 NF-W8FE-3] save_display_setting's identity of the project a write is for
+    export::<DisplaySettingTarget>(&out_dir);
     export::<CreateProjectFullResult>(&out_dir);
     export::<SpeleoManagedFile>(&out_dir);
 
@@ -262,6 +317,7 @@ fn main() {
     export::<TmlGeoCoding>(&out_dir);
     export::<TmlClosure>(&out_dir);
     export::<TmlParseAnomalies>(&out_dir);
+    export::<TmlScaledDepthInMarker>(&out_dir);
     export::<TmlRootPlacement>(&out_dir);
 
     // Compass import
@@ -292,7 +348,6 @@ fn main() {
     // Survey geometry
     export::<GeometryShot>(&out_dir);
     export::<SurveyGeometry>(&out_dir);
-    export::<SurveyGeometryError>(&out_dir);
 
     // Memory probe (debug)
     export::<ProcessMemory>(&out_dir);
@@ -304,8 +359,10 @@ fn main() {
 
     // Recovery (SPEC 14.4)
     export::<BackupInfo>(&out_dir);
+    export::<BackupKind>(&out_dir);
     export::<RepairResult>(&out_dir);
     export::<SalvagedData>(&out_dir);
+    export::<SalvageWriteResult>(&out_dir);
 
     // Raw table browsing (data table fullscreen)
     export::<RawTableData>(&out_dir);
@@ -357,6 +414,8 @@ fn main() {
     export::<SpeleoDbConfig>(&out_dir);
     export::<TokenFallback>(&out_dir);
     export::<ConfigSaveReport>(&out_dir);
+    // [#576 D27-32(c)] one changed setting, for patch_config
+    export::<ConfigPatch>(&out_dir);
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
@@ -377,6 +436,8 @@ fn main() {
     export::<SpeleoRewindTarget>(&out_dir);
     export::<stalagmight_lib::models::UndoMode>(&out_dir);
     export::<SpeleoSessionStatus>(&out_dir);
+    // [#576 C4] No command rejects with these any more (they reject with
+    // CommandError), but `SpeleoLinkStatus::server_error` still carries the DTO.
     export::<SpeleoDbAction>(&out_dir);
     export::<SpeleoErrorDto>(&out_dir);
     // #270: why a transport call never reached the server, so the FE can render a
@@ -400,12 +461,17 @@ fn main() {
     export::<DoneResult>(&out_dir);
     export::<UpdateResult>(&out_dir);
     export::<PushResult>(&out_dir);
+    // [#576 NF-W2SAVE-1] Done / Push answers carrying the pre-push save's warnings
+    export::<SpeleoDoneReport>(&out_dir);
+    export::<SpeleoPushReport>(&out_dir);
     // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
     export::<Visibility>(&out_dir);
     export::<SpeleoProjectMetadata>(&out_dir);
     export::<SpeleoProjectMetadataPatch>(&out_dir);
     export::<SpeleoPublishParams>(&out_dir);
     export::<SpeleoPublishResult>(&out_dir);
+    // [#576 NF-W4M-2] The publish answer, carrying its saves' warnings
+    export::<SpeleoPublishReport>(&out_dir);
     // #215 full Project Settings: collaborator roster (users + teams) + team picker
     export::<SpeleoCollaborator>(&out_dir);
     export::<SpeleoTeamGrant>(&out_dir);
@@ -414,7 +480,20 @@ fn main() {
     export::<SpeleoUserSuggestion>(&out_dir);
 
     let export_list = [
-        "CommandResult",
+        "CommandError",
+        "CommandErrorCode",
+        "HistoryStepFailure",
+        "RemoteLinkBits",
+        "EditOutcome",
+        "SectionCreated",
+        "ShotCreated",
+        "ReverseOutcome",
+        "BatchOutcome",
+        "HistoryOutcome",
+        "ImportOutcome",
+        "SaveOutcome",
+        "DeleteProjectOutcome",
+        "ProjectFileOutcome",
         "ReversedSection",
         "ImportReceipt",
         "CommentHolder",
@@ -422,10 +501,15 @@ fn main() {
         "IntegrityCheckResult",
         "ValidationWarning",
         "WarningSeverity",
+        "Command",
+        "WorkspaceMode",
         "DisplaySettings",
         "LoadingPhase",
         "LoadingProgress",
+        "InternalErrorNotice",
         "LoadProjectFullResult",
+        "OpenFileFlags",
+        "DisplaySettingTarget",
         "CreateProjectFullResult",
         "SpeleoManagedFile",
         "Project",
@@ -520,6 +604,7 @@ fn main() {
         "TmlGeoCoding",
         "TmlClosure",
         "TmlParseAnomalies",
+        "TmlScaledDepthInMarker",
         "TmlRootPlacement",
         "CompassFile",
         "CompassSurveySummary",
@@ -538,14 +623,15 @@ fn main() {
         "SegmentSectionGeometry",
         "GeometryShot",
         "SurveyGeometry",
-        "SurveyGeometryError",
         "ProcessMemory",
         "MemoryStats",
         "RingLogEntry",
         "LogsSince",
         "BackupInfo",
+        "BackupKind",
         "RepairResult",
         "SalvagedData",
+        "SalvageWriteResult",
         "RawTableData",
         "Config",
         "GeneralConfig",
@@ -593,6 +679,7 @@ fn main() {
         "SpeleoDbConfig",
         "TokenFallback",
         "ConfigSaveReport",
+        "ConfigPatch",
         "Permission",
         "SpeleoProjectSummary",
         "TokenStorage",
@@ -619,16 +706,23 @@ fn main() {
         "DoneResult",
         "UpdateResult",
         "PushResult",
+        "SpeleoDoneReport",
+        "SpeleoPushReport",
         "Visibility",
         "SpeleoProjectMetadata",
         "SpeleoProjectMetadataPatch",
         "SpeleoPublishParams",
         "SpeleoPublishResult",
+        "SpeleoPublishReport",
         "SpeleoCollaborator",
         "SpeleoTeamGrant",
         "SpeleoCollaborators",
         "SpeleoTeamOption",
         "SpeleoUserSuggestion",
+        // [#576 C3] the command manifest (written by `commands::write_manifest`)
+        "IpcCommands",
+        // [#576 C13] the event manifest (written by `events::write_events`)
+        "IpcEvents",
     ];
 
     let mut generated =
@@ -660,6 +754,47 @@ fn main() {
     );
 
     write_default_config(&out_dir);
+
+    // [#576 C3] The command manifest, typed against everything exported above.
+    let exported = EXPORTED.lock().expect("export registry lock").clone();
+    commands::write_manifest(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &out_dir,
+        &commands::TypeTable::new(&exported),
+    );
+    // [#576 C13] The event manifest.
+    events::write_events(
+        &out_dir,
+        &exported.iter().map(|(_, ts)| ts.clone()).collect(),
+    );
+
+    assert_no_bigint(&out_dir);
+}
+
+/// [#576 C6] ts-rs 7 declares every `u64`/`i64` as `bigint`, but no IPC path
+/// delivers one: `invoke()` results and events are JSON numbers, and the msgpack
+/// load envelope is decoded with `useBigInt64: false`, which yields numbers too.
+/// A `bigint` declaration is therefore a lie the Playwright mock repeats, so the
+/// generator refuses to leave one in the tree. The fix is `#[ts(type = "number")]`
+/// on the field - sound because every such value (ids, counters, byte sizes,
+/// epoch milliseconds) stays far below 2^53, where a JS number is exact.
+fn assert_no_bigint(out_dir: &Path) {
+    let mut offenders: Vec<String> = fs::read_dir(out_dir)
+        .expect("ipc types directory should be readable")
+        .map(|entry| entry.expect("ipc types directory entry").path())
+        .filter(|path| {
+            fs::read_to_string(path)
+                .expect("generated TS file should be readable")
+                .contains("bigint")
+        })
+        .map(|path| path.display().to_string())
+        .collect();
+    offenders.sort();
+    assert!(
+        offenders.is_empty(),
+        "generated IPC types declare `bigint`, which no IPC path delivers - add \
+         #[ts(type = \"number\")] to the u64/i64 field(s) in: {offenders:?}"
+    );
 }
 
 /// Emit `Config::default()`, serialized through the same `serde_json` path the

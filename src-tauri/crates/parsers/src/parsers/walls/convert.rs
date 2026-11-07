@@ -7,6 +7,10 @@ use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource, North
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
+use crate::parsers::station_graph::{
+    build_closures, place_chains, split_into_chains, topological_sort_configs, Anchor, ConfigOrder,
+    PlacementPolicy,
+};
 
 use super::{
     ParsedSurvey, ParsedWalls, WallsFile, WallsImportOptions, WallsRef, WallsSurveySummary,
@@ -327,7 +331,7 @@ pub fn convert_walls_to_import_configs(
                     v.from, v.to
                 ));
             }
-            let measured = |a: Option<f64>| a.map(|x| x.rem_euclid(360.0)).unwrap_or(0.0);
+            let measured = |a: Option<f64>| a.map(crate::models::normalize_azimuth).unwrap_or(0.0);
             let azimuth_in = measured(v.azimuth_in);
             let azimuth_out = measured(v.azimuth_out);
 
@@ -446,6 +450,8 @@ pub fn convert_walls_to_import_configs(
     for survey in &kept {
         let split = split_into_chains(&survey.vectors, |v| (v.from.as_str(), v.to.as_str()));
         let multi = split.len() > 1;
+        // To-typed legs whose section is dropped below for want of a next leg.
+        let mut stranded_lruds = 0usize;
         for (chain_idx, chain) in split.iter().enumerate() {
             if chain.is_empty() {
                 continue;
@@ -491,7 +497,13 @@ pub fn convert_walls_to_import_configs(
                 // belongs to its TO station - i.e. the FROM of the NEXT shot - so
                 // it is adopted from the previous leg in the chain. (A To survey
                 // thus shifts each cross-section one shot forward; the final To
-                // station's LRUD has no outgoing shot and is dropped.)
+                // station's LRUD has no outgoing shot and is dropped - and
+                // counted for the receipt, #576 B31.)
+                let measured =
+                    v.left.is_some() || v.right.is_some() || v.up.is_some() || v.down.is_some();
+                if v.lrud_is_to && measured && pos + 1 == chain.len() {
+                    stranded_lruds += 1;
+                }
                 let own_lrud = if v.lrud_is_to {
                     (None, None, None, None)
                 } else {
@@ -600,8 +612,10 @@ pub fn convert_walls_to_import_configs(
                     Some(_) => {
                         for (shot, &idx) in shots.iter_mut().zip(chain.iter()) {
                             let correction = survey.vectors[idx].azimuth_correction;
-                            shot.azimuth_in = (shot.azimuth_in + correction).rem_euclid(360.0);
-                            shot.azimuth_out = (shot.azimuth_out + correction).rem_euclid(360.0);
+                            shot.azimuth_in =
+                                crate::models::normalize_azimuth(shot.azimuth_in + correction);
+                            shot.azimuth_out =
+                                crate::models::normalize_azimuth(shot.azimuth_out + correction);
                         }
                         warnings.push(format!(
                             "Section '{}': the shots declare more than one declination, which a \
@@ -626,6 +640,19 @@ pub fn convert_walls_to_import_configs(
                 azimuth_reference,
             });
         }
+        // Same words as the Compass importer's `end_of_chain_lrud_note`.
+        let label = &survey.label;
+        match stranded_lruds {
+            0 => {}
+            1 => warnings.push(format!(
+                "Survey '{label}': 1 end-of-chain cross-section had no shot to attach to and was \
+                 dropped (the survey records LRUDs at each shot's To station)."
+            )),
+            n => warnings.push(format!(
+                "Survey '{label}': {n} end-of-chain cross-sections had no shot to attach to and \
+                 were dropped (the survey records LRUDs at each shot's To station)."
+            )),
+        }
     }
 
     if coincident_ties > 0 {
@@ -639,21 +666,25 @@ pub fn convert_walls_to_import_configs(
     // Pass 2b: spanning-tree placement over chain connectivity. Each component
     // is rooted at a fixed station (ZeroDatum) when it contains one, else at
     // Origin; the rest of the component chains to its root via FromImporting.
+    let names: Vec<&[String]> = chains.iter().map(|c| c.names.as_slice()).collect();
+    let graph_anchors: Vec<Anchor> = anchors
+        .iter()
+        .map(|a| Anchor {
+            station: &a.station,
+            coordinates: a.coordinates,
+        })
+        .collect();
     let placements = place_chains(
-        &chains.iter().map(|c| c.names.clone()).collect::<Vec<_>>(),
-        &anchors,
+        &names,
+        &PlacementPolicy::Walls {
+            anchors: &graph_anchors,
+        },
         &mut warnings,
         |idx| chains[idx].label.clone(),
     );
 
     // Pass 2c: loop closures for shared stations that aren't tree edges.
-    let closures = build_closures(
-        &chains
-            .iter()
-            .map(|c| (c.section_index, c.names.clone()))
-            .collect::<Vec<_>>(),
-        &placements,
-    );
+    let closures = build_closures(&names, &placements);
 
     // Emit configs in BFS creation order.
     let mut configs: Vec<ImportSectionConfig> = Vec::with_capacity(chains.len());
@@ -676,7 +707,7 @@ pub fn convert_walls_to_import_configs(
             azimuth_reference: Some(chain.azimuth_reference),
         });
     }
-    topological_sort_configs(&mut configs);
+    topological_sort_configs(&mut configs, ConfigOrder::Rebuild);
 
     // Collapse identical warnings (e.g. the one-per-shot declination / missing-
     // azimuth notes) to a single line each, preserving first-seen order.
@@ -807,29 +838,6 @@ pub(crate) fn survey_fixed_station_count(survey: &ParsedSurvey) -> u32 {
         .count() as u32
 }
 
-/// Generic head-to-tail chain splitter.
-pub(crate) fn split_into_chains<T>(
-    items: &[T],
-    ends: impl Fn(&T) -> (&str, &str),
-) -> Vec<Vec<usize>> {
-    let mut chains: Vec<Vec<usize>> = Vec::new();
-    let mut current: Vec<usize> = Vec::new();
-    let mut prev_to: Option<String> = None;
-    for (i, item) in items.iter().enumerate() {
-        let (from, to) = ends(item);
-        let continues = prev_to.as_deref() == Some(from);
-        if !continues && !current.is_empty() {
-            chains.push(std::mem::take(&mut current));
-        }
-        current.push(i);
-        prev_to = Some(to.to_string());
-    }
-    if !current.is_empty() {
-        chains.push(current);
-    }
-    chains
-}
-
 /// Walk the station graph assigning each station an absolute depth (+down),
 /// seeding each component from a known depth-gauge reading, else a fixed-station
 /// anchor depth, else 0. Gauge readings win because they are the authoritative
@@ -953,314 +961,4 @@ pub(crate) fn build_station_depths(
         }
     }
     depth
-}
-
-pub(crate) struct Placements {
-    pub(crate) placement: Vec<Option<ImportPlacement>>,
-    pub(crate) creation_order: Vec<usize>,
-    /// For each chain: (parent chain index, merge station index) when joined.
-    pub(crate) merge_station: Vec<Option<u32>>,
-    pub(crate) parent: Vec<Option<usize>>,
-}
-
-/// Spanning-tree placement over chain connectivity. Each connected component is
-/// rooted at a fixed station (ZeroDatum) when it contains one, else at Origin;
-/// every other chain in the component merges to its discoverer via
-/// FromImporting, and shared stations that aren't the tree edge become loop
-/// closures (see [`build_closures`]). At most ONE zero datum is emitted per
-/// component - the model forbids multiple datums per merge component - so extra
-/// fixed stations in the same connected survey ride along via merges + closures
-/// rather than becoming separate datums.
-pub(crate) fn place_chains(
-    chain_names: &[Vec<String>],
-    anchors: &[AnchorGeo],
-    warnings: &mut Vec<String>,
-    label_of: impl Fn(usize) -> String,
-) -> Placements {
-    let n = chain_names.len();
-    // Build chain adjacency: two chains neighbor iff they share a station name.
-    let mut occurrences: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (ci, names) in chain_names.iter().enumerate() {
-        for name in names {
-            occurrences.entry(name.as_str()).or_default().push(ci);
-        }
-    }
-    // Connect each station's occurrences as a star (hub = first chain) rather
-    // than a full clique: O(k) edges instead of O(k²) for a station shared by k
-    // chains. Every adjacency edge still corresponds to a shared station (so each
-    // spanning-tree merge is valid) and the connected components are identical;
-    // loop closures for the other shared occurrences are emitted separately in
-    // `build_closures`.
-    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for occ in occurrences.values() {
-        let hub = occ[0];
-        for &other in &occ[1..] {
-            if other != hub {
-                adjacency[hub].push(other);
-                adjacency[other].push(hub);
-            }
-        }
-    }
-    for nbrs in adjacency.iter_mut() {
-        nbrs.sort_unstable();
-        nbrs.dedup();
-    }
-
-    // Per-chain station-name -> first index, so `shared_station` is O(child len)
-    // instead of re-scanning the whole parent chain for every name.
-    let chain_index: Vec<HashMap<&str, u32>> = chain_names
-        .iter()
-        .map(|names| {
-            let mut m: HashMap<&str, u32> = HashMap::new();
-            for (i, name) in names.iter().enumerate() {
-                m.entry(name.as_str()).or_insert(i as u32);
-            }
-            m
-        })
-        .collect();
-    let shared_station = |child: usize, parent: usize| -> Option<(u32, u32)> {
-        for (ci, cname) in chain_names[child].iter().enumerate() {
-            if let Some(&pi) = chain_index[parent].get(cname.as_str()) {
-                return Some((ci as u32, pi));
-            }
-        }
-        None
-    };
-
-    // Fixed-station name -> anchor index (first declaration wins per name).
-    let anchor_by_name: HashMap<&str, usize> = {
-        let mut m = HashMap::new();
-        for (i, a) in anchors.iter().enumerate() {
-            m.entry(a.station.as_str()).or_insert(i);
-        }
-        m
-    };
-    // A fixed station that no shot references can't be anchored to anything.
-    for a in anchors {
-        if !occurrences.contains_key(a.station.as_str()) {
-            warnings.push(format!(
-                "Fixed station '{}' isn't used by any shot; no zero datum created for it.",
-                a.station
-            ));
-        }
-    }
-    // For each chain, the first station that is a fixed-station anchor.
-    let chain_anchor: Vec<Option<(u32, usize)>> = chain_names
-        .iter()
-        .map(|names| {
-            names
-                .iter()
-                .enumerate()
-                .find_map(|(k, nm)| anchor_by_name.get(nm.as_str()).map(|&ai| (k as u32, ai)))
-        })
-        .collect();
-
-    let mut placement: Vec<Option<ImportPlacement>> = vec![None; n];
-    let mut merge_station: Vec<Option<u32>> = vec![None; n];
-    let mut parent: Vec<Option<usize>> = vec![None; n];
-    let mut visited = vec![false; n];
-    let mut creation_order: Vec<usize> = Vec::with_capacity(n);
-    let have_any_anchor = !anchors.is_empty();
-
-    for start in 0..n {
-        if visited[start] {
-            continue;
-        }
-        // Discover the whole component first so it can be rooted at an anchor.
-        let mut component: Vec<usize> = Vec::new();
-        {
-            let mut seen: HashSet<usize> = HashSet::new();
-            let mut stack = vec![start];
-            seen.insert(start);
-            while let Some(c) = stack.pop() {
-                component.push(c);
-                for &nb in &adjacency[c] {
-                    if seen.insert(nb) {
-                        stack.push(nb);
-                    }
-                }
-            }
-        }
-        component.sort_unstable();
-
-        // Root at a fixed station if the component has one (smallest chain idx).
-        let anchored_chains: Vec<usize> = component
-            .iter()
-            .copied()
-            .filter(|&ci| chain_anchor[ci].is_some())
-            .collect();
-        let root = anchored_chains.first().copied().unwrap_or(component[0]);
-
-        if let Some((st_idx, ai)) = chain_anchor[root] {
-            placement[root] = Some(ImportPlacement::ZeroDatum {
-                coordinates: anchors[ai].coordinates,
-                station_index: st_idx,
-            });
-            if anchored_chains.len() > 1 {
-                let extras: Vec<&str> = anchored_chains
-                    .iter()
-                    .skip(1)
-                    .filter_map(|&ci| chain_anchor[ci].map(|(_, j)| anchors[j].station.as_str()))
-                    .collect();
-                warnings.push(format!(
-                    "Component anchored at '{}'; {} other fixed station(s) in the same connected \
-                     survey are kept via merges + loop closures, not as separate datums: {}.",
-                    anchors[ai].station,
-                    extras.len(),
-                    extras.join(", "),
-                ));
-            }
-        } else {
-            placement[root] = Some(ImportPlacement::Origin);
-            if have_any_anchor {
-                warnings.push(format!(
-                    "Section '{}' is a separate component with no fixed station; placed at origin.",
-                    label_of(root)
-                ));
-            }
-        }
-        visited[root] = true;
-        creation_order.push(root);
-
-        // BFS the component from its root, merging via FromImporting.
-        let mut queue: VecDeque<usize> = VecDeque::new();
-        queue.push_back(root);
-        while let Some(p) = queue.pop_front() {
-            for nb in adjacency[p].clone() {
-                if visited[nb] {
-                    continue;
-                }
-                if let Some((child_st, parent_st)) = shared_station(nb, p) {
-                    placement[nb] = Some(ImportPlacement::FromImporting {
-                        import_station: child_st,
-                        target_section_index: p as u32,
-                        target_station_index: parent_st,
-                    });
-                    merge_station[nb] = Some(child_st);
-                    parent[nb] = Some(p);
-                }
-                visited[nb] = true;
-                creation_order.push(nb);
-                queue.push_back(nb);
-            }
-        }
-    }
-
-    Placements {
-        placement,
-        creation_order,
-        merge_station,
-        parent,
-    }
-}
-
-/// Emit loop closures for shared stations that aren't the spanning-tree edge.
-pub(crate) fn build_closures(
-    chains: &[(u32, Vec<String>)],
-    placements: &Placements,
-) -> Vec<ImportClosure> {
-    let mut canonical: HashMap<&str, (u32, u32)> = HashMap::new();
-    for (section_index, names) in chains {
-        for (k, name) in names.iter().enumerate() {
-            canonical
-                .entry(name.as_str())
-                .and_modify(|prev| {
-                    if *section_index < prev.0 {
-                        *prev = (*section_index, k as u32);
-                    }
-                })
-                .or_insert((*section_index, k as u32));
-        }
-    }
-    let mut closures = Vec::new();
-    let mut seen: HashSet<(u32, u32, u32, u32)> = HashSet::new();
-    for (ci, (section_index, names)) in chains.iter().enumerate() {
-        let merge_st = placements.merge_station[ci];
-        let parent_section = placements.parent[ci].map(|p| chains[p].0);
-        for (k, name) in names.iter().enumerate() {
-            if let Some(&(canon_sec, canon_st)) = canonical.get(name.as_str()) {
-                // The canonical occurrence itself needs no closure.
-                if canon_sec == *section_index && canon_st == k as u32 {
-                    continue;
-                }
-                // A station revisited later within the SAME chain (a contiguous
-                // intra-chain loop, e.g. A->B->C->A) is the same physical station
-                // as its canonical occurrence and must be tied by an
-                // intra-section closure - fall through to emit it. The
-                // already-joined-by-merge shortcut only applies to cross-section
-                // ties.
-                if canon_sec != *section_index
-                    && Some(k as u32) == merge_st
-                    && parent_section == Some(canon_sec)
-                {
-                    continue;
-                }
-                let key = (*section_index, k as u32, canon_sec, canon_st);
-                if seen.insert(key) {
-                    closures.push(ImportClosure {
-                        from_section_index: *section_index,
-                        from_station_index: k as u32,
-                        to_section_index: canon_sec,
-                        to_station_index: canon_st,
-                    });
-                }
-            }
-        }
-    }
-    closures
-}
-
-/// Reorder configs so any `FromImporting` target precedes its dependent.
-pub(crate) fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
-    if configs.len() <= 1 {
-        return;
-    }
-    let pos_of: HashMap<u32, usize> = configs
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.section_index, i))
-        .collect();
-    let dep: Vec<Option<usize>> = configs
-        .iter()
-        .map(|c| match &c.placement {
-            ImportPlacement::FromImporting {
-                target_section_index,
-                ..
-            } => pos_of.get(target_section_index).copied(),
-            _ => None,
-        })
-        .collect();
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); configs.len()];
-    let mut placed = vec![false; configs.len()];
-    let mut order: Vec<usize> = Vec::with_capacity(configs.len());
-    let mut ready: VecDeque<usize> = VecDeque::new();
-    for (i, d) in dep.iter().enumerate() {
-        match d {
-            Some(target) if *target < configs.len() => children[*target].push(i),
-            _ => ready.push_back(i),
-        }
-    }
-    while let Some(i) = ready.pop_front() {
-        if placed[i] {
-            continue;
-        }
-        placed[i] = true;
-        order.push(i);
-        for &child in &children[i] {
-            if !placed[child] {
-                ready.push_back(child);
-            }
-        }
-    }
-    for i in 0..configs.len() {
-        if !placed[i] {
-            order.push(i);
-        }
-    }
-    let mut reordered: Vec<Option<ImportSectionConfig>> = configs.drain(..).map(Some).collect();
-    for idx in order {
-        if let Some(config) = reordered[idx].take() {
-            configs.push(config);
-        }
-    }
 }

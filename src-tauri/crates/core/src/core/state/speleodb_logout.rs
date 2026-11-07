@@ -77,10 +77,7 @@ impl AppState {
     /// that costs here is not a re-asked prompt but a lost RECORD: the launch after
     /// it reads `false` off disk and skips a keyring entry that really exists.
     pub(super) fn speleodb_persist_keychain_belief(&self, held_for: Option<String>) {
-        let mut config = self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut config = self.config.lock();
         // Compared as the PAIR, so a belief that keeps its answer but changes whose
         // account it is about is still a write. Guarding on the bool alone let the
         // stamp go stale under it, which is the same "no name on it" state this
@@ -152,19 +149,14 @@ impl AppState {
         &self,
         read: &crate::config::SpeleoDbConfig,
     ) {
-        let mut config = self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut config = self.config.lock();
         if config.speleodb.email != read.email
             || config.speleodb.keychain_has_token != read.keychain_has_token
             || config.speleodb.keychain_token_account != read.keychain_token_account
         {
             return; // written since we read it; that write knows something we don't
         }
-        let Ok(session) = self.speleodb.lock() else {
-            return;
-        };
+        let session = self.speleodb.lock();
         let raised_since = session.token_store.keychain_has_token();
         drop(session);
         if raised_since {
@@ -208,10 +200,7 @@ impl AppState {
     /// keychain that starts working again would then never get its `false` to disk,
     /// and the launch after it would still skip a keyring that now works.
     pub(super) fn speleodb_persist_keychain_declined(&self, declined: bool) {
-        let mut config = self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut config = self.config.lock();
         if config.speleodb.keychain_declined == declined {
             return; // no write, no disk churn on every login
         }
@@ -270,7 +259,7 @@ impl AppState {
     ///
     /// A POISONED config mutex is recovered (`into_inner`) rather than treated as
     /// "cannot write", exactly as the save pipeline does with the project lock
-    /// (`project_io::close_project_if_open_at`): a poisoned lock means some other
+    /// (`project_io::close_project_if_open_at_held`): a poisoned lock means some other
     /// thread panicked mid-mutation, which is a reason to be careful with what is
     /// in there - not a reason to leave a live rehydrate seed behind. Skipping was
     /// the unsafe direction.
@@ -279,10 +268,7 @@ impl AppState {
         email: Option<String>,
         held_for: Option<String>,
     ) -> Result<(), String> {
-        let mut config = self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut config = self.config.lock();
         config.speleodb.email = email;
         config.speleodb.keychain_has_token = held_for.is_some();
         config.speleodb.keychain_token_account = held_for;
@@ -325,8 +311,8 @@ impl AppState {
         // Nothing inside takes this guard again: the gate half no longer does,
         // and the release path (`speleodb_release_held_lock_best_effort`) posts
         // directly and touches only the session record.
-        let _lock_ops = self.speleodb_lock_ops_guard();
-        self.speleodb_logout_drop_gates();
+        let lock_ops = self.speleodb_lock_ops_guard();
+        let gates_dropped = self.speleodb_logout_drop_gates(&lock_ops);
 
         // Drop the session AND the persisted rehydrate seed FIRST, then report. The
         // ordering is load-bearing: an early return on the credential failure would
@@ -340,11 +326,7 @@ impl AppState {
         // operation, so a half-written session is exactly what it wants to clear -
         // the same reasoning as the config mutex above and the save pipeline's
         // project lock.
-        let cleared = self
-            .speleodb
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .forget_reporting();
+        let cleared = self.speleodb_forget_session_in_span(gates_dropped);
         // ONE save for both halves. Whether the sweep reported a failure or not, this
         // session no longer has a keychain entry it can claim, and recording no belief
         // is the safe direction: a surviving entry costs a sign-in, never a silent
@@ -355,38 +337,20 @@ impl AppState {
         logout_residue_error(cleared.err().map(|e| e.to_string()), seed_cleared.err())
     }
 
-    /// The gate half of [`Self::speleodb_logout`]: surrender the write lock if one is
-    /// held, and drop the edit / force-edit gates.
-    ///
-    /// A held write lock exists only on a remote EDIT session (`edit_enabled` + a
-    /// remote link); a read-only open or a local project holds none. The gates are
-    /// dropped independently of whether the token still resolves - a logged-out
-    /// session must not keep editing a project it can never push.
-    ///
-    /// **The caller must hold `speleodb_lock_ops`**, and hold it until the
-    /// credential is gone. Logout is a SpeleoDB lock operation - it ends an edit
-    /// session and hands its mutex back - and being unsynchronized is what let it
-    /// land INSIDE a Start Editing, between that flow's token read and its
-    /// commit. The guard lives in [`Self::speleodb_logout`] rather than here
-    /// because the span has to outlast this function: see there for what a
-    /// gate-half-only span left open.
-    fn speleodb_logout_drop_gates(&self) {
-        // A session boundary even though the project slot never moves (footgun
-        // 5.8): the token an in-flight Start Editing would commit a claim over is
-        // being forgotten, so the commit guard must see this. Bumped under a brief
-        // `project` acquisition per the `speleodb_session` rule; taken and dropped
-        // before the gates/lock work below, none of which needs it. Bumped even on
-        // the read-only early return: the boundary is the LOGOUT, not the release.
-        {
-            let _proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.bump_speleodb_session();
-        }
-        if !self.edit_enabled() {
-            return;
-        }
+    /// [#576 A8] Drop the session (token, keychain entry, plaintext) - inside the
+    /// SAME lock-ops span the gate half ran in: it takes the gate half's
+    /// [`logout_span::GatesDropped`], which borrows that span, so a forget after the span
+    /// closed (or under a fresh one) does not compile. A forget outside it would let a
+    /// Start Editing read the not-yet-forgotten token (#576 RV8a-1).
+    fn speleodb_forget_session_in_span(
+        &self,
+        _gates_dropped: logout_span::GatesDropped<'_>,
+    ) -> Result<(), crate::speleodb::auth::SecretStoreError> {
+        self.speleodb.lock().forget_reporting()
+    }
+
+    /// The edit-session half of [`Self::speleodb_logout_drop_gates`].
+    fn speleodb_logout_release_and_drop_gates(&self) {
         match self.speleodb_open_link() {
             // Remote edit session: best-effort RELEASE the lock (needs the token, so
             // before `forget`), then drop the gates. #213: a force-editor holds NO
@@ -418,6 +382,61 @@ impl AppState {
                 self.set_edit_enabled(false);
                 self.set_force_editing(false);
             }
+        }
+    }
+}
+
+/// [#576 A8 RV8a-1] The logout's gate half as a proof that borrows the lock-ops span it
+/// ran in: the credential forget takes it, so the two cannot be split across spans.
+mod logout_span {
+    use super::super::speleodb_session::LockOpsHeld;
+    use super::AppState;
+
+    /// Proof the gate half ran inside the span it borrows. Made only by
+    /// [`AppState::speleodb_logout_drop_gates`] below.
+    pub(super) struct GatesDropped<'s> {
+        _span: &'s LockOpsHeld<'s>,
+    }
+
+    impl AppState {
+        /// The gate half of [`AppState::speleodb_logout`]: surrender the write lock if one is
+        /// held, and drop the edit / force-edit gates.
+        ///
+        /// A held write lock exists only on a remote EDIT session (`edit_enabled` + a
+        /// remote link); a read-only open or a local project holds none. The gates are
+        /// dropped independently of whether the token still resolves - a logged-out
+        /// session must not keep editing a project it can never push.
+        ///
+        /// **The caller must hold `speleodb_lock_ops`**, and hold it until the
+        /// credential is gone. Logout is a SpeleoDB lock operation - it ends an edit
+        /// session and hands its mutex back - and being unsynchronized is what let it
+        /// land INSIDE a Start Editing, between that flow's token read and its
+        /// commit. The guard lives in [`AppState::speleodb_logout`] rather than here
+        /// because the span has to outlast this function: see there for what a
+        /// gate-half-only span left open.
+        ///
+        /// [#576 A8 RV8a-1] Returns the proof the credential forget takes, borrowing the
+        /// caller's span - so the forget runs in this span, not merely in a span.
+        /// [#576 RV9a-3] The proof's only producer: it lives in this module, whose field
+        /// nothing outside can fill, so no gate-less proof can be made for a fresh span.
+        pub(super) fn speleodb_logout_drop_gates<'s>(
+            &self,
+            lock_ops: &'s LockOpsHeld<'s>,
+        ) -> GatesDropped<'s> {
+            // A session boundary even though the project slot never moves (footgun
+            // 5.8): the token an in-flight Start Editing would commit a claim over is
+            // being forgotten, so the commit guard must see this. Bumped under a brief
+            // `project` acquisition per the `speleodb_session` rule; taken and dropped
+            // before the gates/lock work below, none of which needs it. Bumped even on
+            // the read-only early return: the boundary is the LOGOUT, not the release.
+            {
+                let _proj_guard = self.project.lock();
+                self.bump_speleodb_session();
+            }
+            if self.edit_enabled() {
+                self.speleodb_logout_release_and_drop_gates();
+            }
+            GatesDropped { _span: lock_ops }
         }
     }
 }

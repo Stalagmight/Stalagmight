@@ -1,13 +1,13 @@
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import type * as maplibregl from 'maplibre-gl';
 import { GlobalCustomController } from './customRender/globalController';
-import { onStyleRestored } from '../Map/surveyLayer/customRender/styleRestore';
 import { generateSystemColor, type SystemGeometry } from './systemColor';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import { watchDevicePixelRatio } from '../../utils/dprWatcher';
 import { attachLongPressTouch } from '../../utils/longPressTouch';
 import { useUIStore } from '../../store/uiStore';
 import { hasLiveStyle } from '../Map/mapUtils';
+import { watchGlContextLoss } from '../Map/surveyLayer/glContextRecovery';
 import i18n from '../../i18n';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import type { DecimalPrecision } from '../../types/config';
@@ -101,8 +101,6 @@ export default class GlobalSurveyLayer {
   private customRender: GlobalCustomController | null = null;
   /** Dispose for the device-pixel-ratio watcher (custom layer bakes dpr). */
   private dprWatcherDispose: (() => void) | undefined;
-  /** Dispose for the re-add after a style rebuild (context / worker restore). */
-  private styleRestoreDispose: (() => void) | undefined;
 
   // Bound event handlers for cleanup
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
@@ -116,6 +114,11 @@ export default class GlobalSurveyLayer {
   // src/utils/longPressTouch.ts.
   private detachLongPressTouch: (() => void) | null = null;
 
+  /** Detach for the WebGL context-loss recovery (#576 D38). */
+  private detachGlContextWatch: (() => void) | null = null;
+  /** Systems that arrived while the context was lost, applied after the restore. */
+  private updateWhileStyleless: SystemGeometry[] | null = null;
+
   constructor(map: MaplibreMap, callbacks: GlobalSurveyLayerCallbacks = {}) {
     this.map = map;
     this.callbacks = callbacks;
@@ -127,7 +130,23 @@ export default class GlobalSurveyLayer {
     // Rebuild the custom global layer when the DPR changes (window moved to a
     // different-scale monitor); it bakes dpr into device-pixel sizes.
     this.dprWatcherDispose = watchDevicePixelRatio(() => this.customRender?.resync());
-    this.styleRestoreDispose = onStyleRestored(map, () => this.customRender?.reattach());
+    // MapLibre drops custom layers when it rebuilds the style (a WebGL context
+    // loss or a worker restart) and never re-adds them; the survey map does this
+    // itself and so must the Global View, or every system's survey stays blank
+    // until the view is reopened (#576 D38, #606).
+    this.detachGlContextWatch = watchGlContextLoss(map, {
+      layers: () => (this.customRender ? [this.customRender] : []),
+      afterRestore: () => this.replayAfterContextRestore(),
+    });
+  }
+
+  /** After a context restore: apply what the lost window could not, and the
+   *  theme's paint, which bailed on the missing style. */
+  private replayAfterContextRestore(): void {
+    const pending = this.updateWhileStyleless;
+    this.updateWhileStyleless = null;
+    if (pending) this.update(pending);
+    this.applyThemeColors(this.themeColors);
   }
 
   /**
@@ -166,7 +185,8 @@ export default class GlobalSurveyLayer {
     const xy = pointLikeToXY(point);
     // Camera key so the hit index reprojects only when the camera moved, not on
     // every hover (a single large system would otherwise re-project all of its
-    // endpoints per mousemove). Mirrors SurveyLayer.cameraSnapshot's key.
+    // endpoints per mousemove). Mirrors the survey map's cameraSnapshot key
+    // (Map/surveyLayer/surveyHitTester.ts).
     const c = this.map.getCenter();
     const cv = this.map.getCanvas();
     const cameraKey = `${this.map.getZoom()}|${c.lng}|${c.lat}|${this.map.getBearing()}|${this.map.getPitch()}|${cv.width}|${cv.height}`;
@@ -241,7 +261,12 @@ export default class GlobalSurveyLayer {
       this.contextMenuOpen = false;
       this.hideTooltip();
     };
-    this.map.getCanvas().addEventListener('mouseleave', this.boundMapLeave);
+    // `mouseout`, not `mouseleave`, as the survey map does (#576 W39-NF4,
+    // W41-NF2): the canvas has no children, so both fire on the same moves, but
+    // React enters a panel row (onMouseEnter) from this mouseout as it bubbles to
+    // the root, and mouseleave comes after that. Handled here, the map's hover is
+    // cleared before a row could set one, not after.
+    this.map.getCanvas().addEventListener('mouseout', this.boundMapLeave);
 
     // Context menu handler for right-click
     this.boundContextMenu = (e: MouseEvent) => {
@@ -291,6 +316,12 @@ export default class GlobalSurveyLayer {
    * which draws every system and owns interaction hit-testing.
    */
   update(systems: SystemGeometry[]): void {
+    // No style while the WebGL context is lost: a first build would add its layer
+    // to it and throw. Keep the latest systems for the restore to apply.
+    if (!hasLiveStyle(this.map)) {
+      this.updateWhileStyleless = systems;
+      return;
+    }
     // Rebuild the per-system color map (kept for getSystemColor / hasData); the
     // custom renderer resolves its own colors from generateSystemColor.
     this.systemColors.clear();
@@ -512,14 +543,15 @@ export default class GlobalSurveyLayer {
    * Destroy the layer, removing all sources and event handlers.
    */
   destroy(): void {
+    this.detachGlContextWatch?.();
+    this.detachGlContextWatch = null;
+    this.updateWhileStyleless = null;
     // Tear down the custom layer (removes it) so it never outlives Global View
     // (#customRender).
     this.customRender?.destroy();
     this.customRender = null;
     this.dprWatcherDispose?.();
     this.dprWatcherDispose = undefined;
-    this.styleRestoreDispose?.();
-    this.styleRestoreDispose = undefined;
 
     // Drop the touch long-press listeners and any pending hold
     this.detachLongPressTouch?.();
@@ -536,7 +568,7 @@ export default class GlobalSurveyLayer {
       this.map.off('mousemove', this.boundMouseMove);
     }
     if (this.boundMapLeave) {
-      this.map.getCanvas().removeEventListener('mouseleave', this.boundMapLeave);
+      this.map.getCanvas().removeEventListener('mouseout', this.boundMapLeave);
     }
     if (this.boundContextMenu) {
       this.map.getCanvas().removeEventListener('contextmenu', this.boundContextMenu);

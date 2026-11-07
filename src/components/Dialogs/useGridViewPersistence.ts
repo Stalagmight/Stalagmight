@@ -26,6 +26,7 @@ import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc } from '../../utils/ipc';
+import { chainSettingWrite } from '../../utils/settingWriteChain';
 import { stableWidths } from '../SingleSystemView/useDataTableViewPersistence';
 
 /** The layout a host owns and hands in. */
@@ -47,8 +48,8 @@ export interface GridViewPersistenceConfig {
   orderField: string;
   hiddenField: string;
   widthsField: string;
-  /** Partial-update command for those fields. */
-  command: string;
+  /** Partial-update command for those fields (all three take the same arguments). */
+  command: 'update_new_section_view' | 'update_edit_section_view' | 'update_import_shots_view';
   /** Hidden set for a config that has never stored one. Only used when the
    *  field is ABSENT - see the seed effect. */
   fallbackHidden: readonly string[];
@@ -135,18 +136,22 @@ export function useGridViewPersistence(
           },
         });
       }
-      void invokeIpc(
-        command,
-        { columnOrder, hiddenColumns: hidden, columnWidths },
-        { purpose: `persist ${toastKey} grid view state` }
+      // [#576 SETTINGS-ORDER] In save order: the unmount flush and the next mount's
+      // first save can both be in flight, and the older layout must not land last.
+      void chainSettingWrite(command, () =>
+        invokeIpc(
+          command,
+          { columnOrder, hiddenColumns: hidden, columnWidths },
+          { purpose: `persist ${toastKey} grid view state` }
+          // In the config chain, behind the settings saves made before it ([#576 RV6b-3]).
+        ).then(() => useProjectStore.getState().reloadConfigInOrder())
       )
-        .then(() => useProjectStore.getState().loadConfig())
         .catch((e) => {
           if (lastSavedRef.current === snapshot) {
             lastSavedRef.current = previouslySaved;
             // Undo the optimistic publish from DISK, so a remount cannot seed
             // from values that never landed and treat them as saved.
-            void useProjectStore.getState().loadConfig();
+            void useProjectStore.getState().reloadConfigInOrder();
           }
           console.error(`Failed to save ${toastKey} view state:`, e);
           showToast(t('dataTable.viewSaveFailed'), toastKey, 'error');

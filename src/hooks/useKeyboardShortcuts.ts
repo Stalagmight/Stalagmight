@@ -331,7 +331,16 @@ export function useKeyboardShortcuts() {
     showStations: s.showStations,
     showToast: s.showToast,
   })));
-  const { undo, redo, saveProject, project, stations, config } = useProjectStore();
+  const { undo, redo, saveProject, project, stations, config } = useProjectStore(
+    useShallow((s) => ({
+      undo: s.undo,
+      redo: s.redo,
+      saveProject: s.saveProject,
+      project: s.project,
+      stations: s.stations,
+      config: s.config,
+    })),
+  );
 
   // Ref for shortcut map - uses ref to avoid stale closures in event handlers
   // Initialize with defaults to handle first render before useEffect runs
@@ -353,7 +362,12 @@ export function useKeyboardShortcuts() {
       // to Stations). Mirrors the existing defaultPrevented guard in the Escape
       // branch, generalized to every reserved key.
       if (event.defaultPrevented) return;
-      const { activeDialog } = useUIStore.getState();
+      const { activeDialog, screenOccupants } = useUIStore.getState();
+      // #576 D39(c): a prompt outside the `activeDialog` slot (held-lock, telemetry
+      // opt-in, storage choice, dump picker - `useScreenOccupant`) owns the keyboard
+      // like a dialog, Escape included: its own frame answers Escape, and the branch
+      // below would otherwise clear the selection or close a dialog beneath it.
+      if (screenOccupants > 0) return;
       if (activeDialog && event.key !== 'Escape') {
         // Allow ? to toggle the keyboard shortcuts overlay closed
         if (!(event.key === '?' && activeDialog === 'keyboard-shortcuts')) {
@@ -714,7 +728,7 @@ export function useKeyboardShortcuts() {
               if (result && !result.success) {
                 // A save blocked by integrity issues is not a "real" error -
                 // route to Review & Repair instead of an error window.
-                surfaceSaveFailure(result.error, openDialog);
+                surfaceSaveFailure(result, openDialog, useProjectStore.getState());
               }
             });
             maybeShowToast(action);

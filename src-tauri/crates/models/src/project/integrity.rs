@@ -140,6 +140,37 @@ impl Project {
             }
         }
 
+        // [#576 B35(g)] A GPS tie point whose values are finite but impossible
+        // (latitude past the pole, longitude past 180, a depth reference beyond
+        // the bound older builds did not enforce). The load keeps it as stored -
+        // dropping it would move that part of the cave, clamping would invent a
+        // position - so it is surfaced here for the user to correct. Warning, not
+        // Critical: the project still opens, saves and edits; Repair leaves it to
+        // the user (only they know the right value), and a non-finite one never
+        // gets this far (the load drops it).
+        for datum in &self.zero_datums {
+            let gps = &datum.gps;
+            let Err(reason) =
+                crate::GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference)
+            else {
+                continue;
+            };
+            // A datum whose station no longer resolves is already reported as
+            // `dangling_zero_datum_ref` above.
+            let Some(station) = self.resolve_key(&datum.station_ref) else {
+                continue;
+            };
+            violations.push(IntegrityViolation {
+                severity: ViolationSeverity::Warning,
+                category: "invalid_zero_datum".to_string(),
+                message: format!(
+                    "GPS tie point at {} has impossible values: {reason}. Correct it in that \
+                     station's Edit Station dialog",
+                    self.format_station_ref_for_display(station)
+                ),
+            });
+        }
+
         // Two or more zero datums in one merge-connected component over-constrain
         // the rigid group (two GPS anchors), so the offset cascade tears a merge
         // edge apart. The interactive guards (set_zero_datum / merge_stations)

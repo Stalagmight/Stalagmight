@@ -18,29 +18,21 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { createSession } from './createSession';
 import { listJourneys, getJourney } from './journeys';
-import { runJourney, type JourneyResult } from './journeys/framework';
-import { runSweep, newOracleState, type Finding } from './lib/oracles';
+import { journeyVerdictLine, runJourney } from './journeys/framework';
+import { ledgerRecord, type JourneyRecord, type RunRecord } from './journeys/ledger';
+import { findingsSummary, runSweep, newOracleState } from './lib/oracles';
+import { foldLocalPaths, progressLogger, shareableErrorText, valueShape } from './lib/shareableFailure';
 import { callStoreAction } from './lib/stores';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-
-interface JourneyRecord extends JourneyResult {
-  sweepFindings: Finding[];
-}
-
-interface RunRecord {
-  kind: 'uat-journeys';
-  date: string;
-  gitSha: string;
-  platform: string;
-  verdict: 'pass' | 'fail';
-  journeys: JourneyRecord[];
-}
 
 function gitSha(): string {
   try {
     return execFileSync('git', ['-C', repoRoot, 'rev-parse', '--short', 'HEAD'], {
       encoding: 'utf8',
+      // Not passed through (#576 W51): git's refusal ("dubious ownership in
+      // repository at '<path>'") names the checkout; the sha is 'unknown' then.
+      stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
   } catch {
     return 'unknown';
@@ -59,37 +51,6 @@ function parseArgs(argv: string[]): { only: string | null; ledger: boolean; rele
   return { only, ledger, release };
 }
 
-/**
- * The docs/uat/runs/ record is COMMITTED to the public tree, and a failing
- * run's check details and sweep findings carry absolute session paths and raw
- * log lines - content the marker-based `lint:private-leaks` scanner cannot be
- * assumed to catch. Scrub before writing: absolute home paths collapse to
- * their basename, and sweep findings keep only kind + severity. The verbatim
- * record still lands in the session artifacts (`run.jsonl`) for triage.
- */
-function sanitizeForLedger(record: RunRecord): RunRecord {
-  const scrubText = (text: string): string =>
-    text.replace(/\/(?:Users|home)\/[^\s'")\]]+/g, (m) => `<path>/${path.basename(m)}`);
-  return {
-    ...record,
-    journeys: record.journeys.map((j) => ({
-      ...j,
-      ...(j.aborted !== undefined ? { aborted: scrubText(j.aborted) } : {}),
-      checks: j.checks.map((c) =>
-        c.detail !== undefined ? { ...c, detail: scrubText(c.detail) } : c,
-      ),
-      // ALLOWLIST, not a spread: Finding carries a free-form `detail` (crash
-      // marker text, error-boundary dumps, leftover-temp paths) that must
-      // never reach the committed record.
-      sweepFindings: j.sweepFindings.map((f) => ({
-        severity: f.severity,
-        kind: f.kind,
-        message: `<scrubbed - see the session run.jsonl>`,
-      })),
-    })),
-  };
-}
-
 function writeLedger(record: RunRecord): void {
   const uatDir = path.join(repoRoot, 'docs', 'uat');
   const runsDir = path.join(uatDir, 'runs');
@@ -98,7 +59,10 @@ function writeLedger(record: RunRecord): void {
   const runFile = path.join(runsDir, `${stamp}-${record.gitSha}.jsonl`);
   // 'wx' so a same-second rerun fails loudly instead of silently replacing the
   // evidence a previously appended ledger line points at (append-only ledger).
-  fs.writeFileSync(runFile, `${JSON.stringify(sanitizeForLedger(record))}\n`, { flag: 'wx' });
+  // The record is COMMITTED to the public tree: codes, counts and code locations
+  // only (#576 W39-NF1, journeys/ledger.ts). The verbatim record is the session's
+  // uat/run.jsonl.
+  fs.writeFileSync(runFile, `${JSON.stringify(ledgerRecord(record))}\n`, { flag: 'wx' });
 
   const ledgerFile = path.join(uatDir, 'ledger.md');
   const failed = record.journeys.filter((j) => j.verdict === 'fail').map((j) => j.journey);
@@ -108,7 +72,7 @@ function writeLedger(record: RunRecord): void {
     `${failed.length ? `, failed: ${failed.join(', ')}` : ''} ` +
     `([record](runs/${path.basename(runFile)}))\n`;
   fs.appendFileSync(ledgerFile, line);
-  process.stdout.write(`ledger: ${runFile}\n`);
+  process.stdout.write(`ledger: ${foldLocalPaths(runFile)}\n`);
 }
 
 async function main(): Promise<void> {
@@ -120,7 +84,8 @@ async function main(): Promise<void> {
   const names = only ? [only] : listJourneys();
   for (const name of names) {
     if (!getJourney(name)) {
-      process.stderr.write(`unknown journey "${name}"; known: ${listJourneys().join(', ')}\n`);
+      // Not a registry name, so its shape (#576 W51): `--only` is the user's text.
+      process.stderr.write(`unknown journey, ${valueShape(name)}; known: ${listJourneys().join(', ')}\n`);
       process.exit(2);
     }
   }
@@ -139,17 +104,20 @@ async function main(): Promise<void> {
       const journey = getJourney(name);
       if (!journey) continue;
       process.stdout.write(`\n== ${name} ==\n`);
-      const result = await runJourney(journey, session, (m) => process.stdout.write(`   · ${m}\n`));
+      // Shareable progress lines (#576 W33-NF1); the full text goes to actions.jsonl.
+      const log = progressLogger(
+        (line) => process.stdout.write(`   · ${line}\n`),
+        session.hasRecorder ? session.recorder : undefined,
+      );
+      const result = await runJourney(journey, session, log);
       const sweep = await runSweep(session, oracle, { full: true, recorder: session.recorder });
       const breaches = sweep.findings.filter((f) => f.severity === 'fatal' || f.severity === 'error');
       const verdict: 'pass' | 'fail' = result.verdict === 'fail' || breaches.length > 0 ? 'fail' : 'pass';
       records.push({ ...result, verdict, sweepFindings: sweep.findings });
-      const failedChecks = result.checks.filter((c) => !c.ok);
+      // The abort reason in the shareable form, the sweep as counts (#576 W33-NF1, HFI2-F2).
       process.stdout.write(
-        `${verdict.toUpperCase()}: ${name} (${result.durationMs}ms, ` +
-          `${result.checks.length - failedChecks.length}/${result.checks.length} checks)` +
-          `${result.aborted ? ` aborted: ${result.aborted}` : ''}` +
-          `${breaches.length ? ` sweep=${JSON.stringify(breaches)}` : ''}\n`,
+        // Counts only (#576 HFI2-F2); the text is in the session's run.jsonl.
+        journeyVerdictLine(verdict, result, breaches.length ? ` sweep=${findingsSummary(breaches)}` : ''),
       );
     }
   } finally {
@@ -177,6 +145,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W23-NF2): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });

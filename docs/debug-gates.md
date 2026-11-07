@@ -23,7 +23,7 @@ measurable fraction of the wall clock.
 | Level | When it fires by default | Use for |
 |-------|--------------------------|---------|
 | `error!` | always | Conditions a user should care about (corruption, save failed, FK violation). |
-| `warn!`  | always | Recoverable anomalies (poisoned mutex, FK rebuild fallback). |
+| `warn!`  | always | Recoverable anomalies (FK rebuild fallback). A poisoned mutex logs at `error!` once per lock and raises the internal-error banner (docs/architecture.md, Mutex Poisoning). |
 | `info!`  | always (default filter is `info,stalagmight=debug`) | **Once-per-lifecycle** events: app startup, project create / open / save / close success, schema migrations, full integrity check. |
 | `debug!` | on by default (the default filter enables `stalagmight=debug`); silence with `RUST_LOG=info` | Per-operation chatter, sub-phase timings, load-loop progress, per-section import timing. |
 | `trace!` | off everywhere by default | Per-shot / per-row spam. (A handful of callers: tilemap cache hits, closure correction/metrics.) |
@@ -89,20 +89,20 @@ and document that fact at the call site, the way that function does.
 ### Profile harnesses
 
 `profile_tml_import_full` and `profile_stalx_load` live in
-`src-tauri/crates/core/src/core/state/tests.rs`. They are unit tests with `#[ignore]` -
+`src-tauri/crates/core/src/core/state/tests/profile_harness_tests.rs`. They are unit tests with `#[ignore]` -
 they never run with `cargo test` unless explicitly opted in:
 
 ```bash
 # Profile a TML import end-to-end (parse + convert + execute_import_sections)
 STALAGMIGHT_PROFILE_TML=/path/to/file.tml \
   cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
-  core::state::tests::profile_tml_import_full -- --nocapture --ignored
+  core::state::tests::profile_harness_tests::profile_tml_import_full -- --nocapture --ignored
 
 # Profile a stalx load end-to-end (open + load + station coords + warnings +
 # undo/redo + binary encode)
 STALAGMIGHT_PROFILE_STALX=/path/to/file.stalx \
   cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
-  core::state::tests::profile_stalx_load -- --nocapture --ignored
+  core::state::tests::profile_harness_tests::profile_stalx_load -- --nocapture --ignored
 ```
 
 Combine with `RUST_LOG=stalagmight=debug` to also get the in-code sub-phase
@@ -168,10 +168,15 @@ in `uiStore.ts`):
   zoom-choppiness investigation); it's now folded into this toggle instead
   of always being on screen.
 - **Memory Stats** - shows the in-window `MemoryProbe` panel, which polls
-  backend RSS and frontend feature counts on a 2 s interval; the
-  **Snapshot** button copies a JSON dump to clipboard for pasting into bug
-  reports. Also force-visible via the `debug.memory_probe` config flag (see
-  [`configuration.md`](configuration.md)), independent of the menu toggle.
+  backend RSS on a 2 s interval next to the custom renderer's buffer bytes
+  (each controller publishes the size of its last build) and the store
+  counts; the **Snapshot** button copies a JSON dump to clipboard for pasting
+  into bug reports. Also force-visible via the `debug.memory_probe` config flag
+  (see [`configuration.md`](configuration.md)), independent of the menu
+  toggle. Its freeze detector (a `longtask` observer plus a
+  requestAnimationFrame frame-gap chain) runs only while the panel is visible
+  and stops when it is hidden, so freezes before you open it are not listed:
+  open it, then reproduce.
 
 Dev/Map/Zoom Stats are three panels sharing one `useMapDevStats` hook
 (`src/components/Map/useMapDevStats.ts`) so the WebGL draw-call
@@ -189,7 +194,7 @@ comment in `src/components/MemoryProbe/MemoryProbe.tsx::takeSnapshot`.
 
 A few panels are gated by a runtime config flag set in `config.toml` (locations
 and full schema in [`configuration.md`](configuration.md)). The hit-detection
-log at the click handler in `SurveyLayer.tsx` is the clearest example -
+log at the click handler in `SurveyLayer.ts` is the clearest example -
 controlled by `debug.map.log_hit_detection`. Off by default; toggle in the
 config file when you need to see which feature was picked on each click.
 

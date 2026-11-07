@@ -8,7 +8,9 @@
 // re-added the day after #229 removed the directory).
 //
 // It scans every git-TRACKED text file (`git ls-files` - exactly the set that
-// gets published) for a small set of high-signal markers:
+// gets published), and every tracked PATH string - binaries and vendored files
+// included, since a file named after a person is published too (#576 E18(e)) -
+// for a small set of high-signal markers:
 //   - maintainer names / handles. These also catch a name-bearing personal path
 //     (`/home/daniel`, `/Users/ndh`). Suppressed only in ROOT attribution files
 //     (README, CONTRIBUTING, AUTHORS, LICENSE, CHANGELOG, SECURITY, …), where
@@ -49,10 +51,14 @@
 //
 // Usage:  node scripts/check-private-leaks.mjs   (or: pnpm lint:private-leaks)
 
-import { execFileSync } from 'child_process';
-import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import {
+  MAX_SCAN_BYTES, hasBinaryExt, looksBinary, listTracked, makeReader, asEntry, toScanText,
+} from './lib/tracked-files.mjs';
+
+// Re-exported for the fixture test (the helper now lives in lib/).
+export { looksBinary };
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -130,10 +136,11 @@ export const RULES = [
 // test pins that. Add a row here only for a real, justified exception.
 export const ALLOW = [];
 
-// Skip a file larger than this without scanning (logged). Bounds scan time and the
-// violations array against an adversarial multi-MB single-line file on a fork PR;
-// no tracked text file legitimately approaches this.
-const MAX_SCAN_BYTES = 5 * 1024 * 1024;
+// MAX_SCAN_BYTES (5 MB) and BINARY_EXT come from scripts/lib/tracked-files.mjs,
+// shared with the dash guard so the two cannot drift. An oversized file FAILS
+// the gate. Text formats that can carry a leak - `.svg` (title/desc/comments),
+// `.snap` (serialized DOM/paths) - are deliberately NOT binary, so they get
+// scanned.
 
 // Whole files excluded from the scan.
 const EXCLUDE_EXACT = new Set([
@@ -145,23 +152,13 @@ const EXCLUDE_PREFIXES = [
   'src-tauri/vendor/', // vendored upstream crate - left verbatim (its own author/license)
   'src/types/ipc/', // generated IPC types
 ];
-// Genuinely-binary extensions (skipped before reading). NOTE: text formats that
-// can carry a leak - `.svg` (title/desc/comments), `.snap` (serialized DOM/paths)
-// - are deliberately NOT here, so they get scanned; the null-byte `looksBinary`
-// guard + MAX_SCAN_BYTES still protect against a real binary or a huge file.
-const BINARY_EXT = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'ico', 'icns', 'pdf', 'webp',
-  'woff', 'woff2', 'ttf', 'otf', 'eot', 'zip', 'gz', 'tgz', 'bz2', 'xz', '7z',
-  'wasm', 'dmp', 'stalx', 'tml', 'db', 'sqlite', 'sqlite3', 'bin', 'keystore', 'jks',
-  'p12', 'der', 'class', 'jar', 'mp4', 'mov', 'webm',
-]);
-
-export function isExcluded(rel) {
+// A tracked SYMLINK is never excluded by extension: its content is its target
+// string, which is text whatever the name says.
+export function isExcluded(rel, { symlink = false } = {}) {
   if (EXCLUDE_EXACT.has(rel)) return true;
   if (EXCLUDE_PREFIXES.some((p) => rel.startsWith(p))) return true;
   if (rel.endsWith('Cargo.lock') || rel.endsWith('pnpm-lock.yaml')) return true;
-  const ext = rel.includes('.') ? rel.slice(rel.lastIndexOf('.') + 1).toLowerCase() : '';
-  return BINARY_EXT.has(ext);
+  return !symlink && hasBinaryExt(rel);
 }
 
 // Attribution exemption applies only to ROOT-level files (no path separator), so a
@@ -174,8 +171,7 @@ export function isAttributionFile(rel) {
 // Scan one file's text. Returns [{ruleId, lineNo, why, match}]. Note: the matched
 // substring (`match`) is the MARKER itself (e.g. "SCW_", "daniel") - never the
 // whole line - so printing it to a public CI log can't publish an adjacent secret.
-export function findLeaks(text, rel) {
-  const attribution = isAttributionFile(rel);
+export function findLeaks(text, rel, { attribution = isAttributionFile(rel) } = {}) {
   const out = [];
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -193,6 +189,15 @@ export function findLeaks(text, rel) {
   return out;
 }
 
+// Every rule over one tracked PATH string (#576 E18(e)): a file NAMED after a
+// maintainer or a private planning doc is published as surely as one that
+// mentions it. The root-attribution exemption does not apply to paths, and
+// paths are checked before the content exclusions (binaries, vendored,
+// generated): an image named after a person passes no content scan at all.
+export function findPathLeaks(rel) {
+  return findLeaks(rel, rel, { attribution: false }).map((v) => ({ ...v, lineNo: 0 }));
+}
+
 function isAllowed(rel, ruleId) {
   return ALLOW.some((a) => a.file === rel && a.ruleId === ruleId);
 }
@@ -205,88 +210,92 @@ export function gateFails(violations, skipped) {
   return violations.length > 0 || skipped.length > 0;
 }
 
-function gitTrackedFiles() {
-  const out = execFileSync('git', ['ls-files', '-z'], {
-    cwd: REPO_ROOT,
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  return out.toString('utf8').split('\0').filter(Boolean);
-}
-
-export function looksBinary(buf) {
-  const n = Math.min(buf.length, 8000);
-  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
-  return false;
-}
-
-function main() {
-  let files;
-  try {
-    files = gitTrackedFiles();
-  } catch (e) {
-    console.error(`check-private-leaks: could not list tracked files (run from a git repo): ${e.message}`);
-    return 1;
-  }
-
+// Scan tracked entries: repo-relative paths, or {rel, symlink} as
+// listTracked() returns them. `readFile` is injected (a file's bytes, or
+// `{ symlink: '<target>' }` for a link) so the fixture test can drive the
+// fail-closed branches that a healthy tree never reaches.
+export function scan(files, readFile) {
   const violations = [];
   const skipped = []; // {rel, reason} - oversized/unreadable; each FAILS the gate (fail-closed, #232)
+  const symlinks = []; // scanned as their link text, never followed
   let scanned = 0;
-  for (const rel of files.sort()) {
-    if (isExcluded(rel)) continue;
-    const full = path.join(REPO_ROOT, rel);
-    let buf;
+  const entries = [...files].map(asEntry).sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+  for (const { rel, symlink } of entries) {
+    for (const v of findPathLeaks(rel)) violations.push({ rel, path: true, ...v });
+    if (isExcluded(rel, { symlink })) continue;
+    let result;
     try {
-      buf = fs.readFileSync(full);
+      result = readFile(rel);
     } catch (e) {
       // staged-but-absent / submodule pointer / permission / race. Don't drop it
       // silently - a leak-containing file that fails to read must not pass as clean.
       skipped.push({ rel, reason: `unreadable (${e.code || e.message})` });
       continue;
     }
-    if (buf.length > MAX_SCAN_BYTES) {
-      skipped.push({ rel, reason: `${(buf.length / 1048576).toFixed(1)} MB > ${MAX_SCAN_BYTES / 1048576} MB cap` });
+    // A NUL byte in a non-binary extension, or an oversized file, is undecidable:
+    // fail closed (#232 / #241) instead of skipping silently.
+    const t = toScanText(result, MAX_SCAN_BYTES);
+    if (t.skip) {
+      skipped.push({ rel, reason: t.skip });
       continue;
     }
-    if (looksBinary(buf)) {
-      // A NUL byte in a file whose extension is NOT a known binary type (those are
-      // excluded before we ever read them) is undecidable: it could be a mislabeled
-      // binary, or a text file with an embedded NUL that hides a marker past it. Fail
-      // closed (#232 / #241) instead of skipping silently -- if it is genuinely binary,
-      // add its extension to BINARY_EXT so it is excluded up front.
-      skipped.push({ rel, reason: 'binary-like content (NUL byte) in a non-binary extension' });
-      continue;
-    }
+    // A symlink is scanned as its TARGET STRING - what git publishes for it -
+    // and never followed (NF-LINK). Following it (the old behaviour) read
+    // whatever the link pointed at, on a CI runner possibly a file outside the
+    // repo chosen by a fork PR, and failed a dangling link as "unreadable"
+    // while the link text itself (`-> ../personaldocs/x.md`) was never checked.
+    if (t.link) symlinks.push(rel);
     scanned++;
-    for (const v of findLeaks(buf.toString('utf8'), rel)) {
+    for (const v of findLeaks(t.text, rel)) {
       if (isAllowed(rel, v.ruleId)) continue;
-      violations.push({ rel, ...v });
+      violations.push({ rel, link: t.link, ...v });
     }
   }
+  return { violations, skipped, scanned, symlinks };
+}
 
+export function report(result, log = console.log, err = console.error) {
+  const { violations, skipped, scanned, symlinks = [] } = result;
   if (!gateFails(violations, skipped)) {
-    console.log(`✓ private-leak scan: ${scanned} tracked text files, no internal/personal references.`);
+    const note = symlinks.length ? ` (${symlinks.length} symlink(s) scanned as their link text, not followed)` : '';
+    log(`✓ private-leak scan: ${scanned} tracked text files, no internal/personal references.${note}`);
     return 0;
   }
 
-  console.error('\n✗ private-leak scan failed:\n');
+  err('\n✗ private-leak scan failed:\n');
   for (const v of violations) {
     // Print the MARKER and location only - never the surrounding line (a public CI
     // log on a public repo must not echo a secret that sits beside the marker).
-    console.error(`  [${v.ruleId}] ${v.rel}:${v.lineNo}  (matched "${v.match}")`);
-    console.error(`      ${v.why}\n`);
+    const where = v.path ? ' (path)' : `${v.link ? ' (symlink target)' : ''}:${v.lineNo}`;
+    err(`  [${v.ruleId}] ${v.rel}${where}  (matched "${v.match}")`);
+    err(`      ${v.why}\n`);
   }
   // Fail closed on a skip: a file the scanner can't read (or that exceeds the size
   // cap) must not pass as clean - else a marker could be smuggled inside it (#232).
   for (const s of skipped) {
-    console.error(`  [unscanned] ${s.rel} - ${s.reason}`);
-    console.error('      could not scan this file; failing closed (shrink it, or exclude it deliberately).\n');
+    err(`  [unscanned] ${s.rel} - ${s.reason}`);
+    err('      could not scan this file; failing closed (shrink it, or exclude it deliberately).\n');
   }
-  console.error(
+  err(
     'Remove the reference (move it to the maintainer-only private repo) or shrink/exclude\n' +
       'the unscanned file. If a match is genuinely benign, add an ALLOW row with a reason in\n' +
       'scripts/check-private-leaks.mjs. See the file header for the rationale.\n',
   );
   return 1;
+}
+
+export function main() {
+  let files;
+  try {
+    files = listTracked(REPO_ROOT);
+  } catch (e) {
+    // The first line only (`Command failed: ...`): the rest repeats the child's
+    // stderr, which already reached the terminal and can name the checkout's
+    // absolute path (#576 W51).
+    console.error(`check-private-leaks: could not list tracked files (run from a git repo): ${e.message.split('\n')[0]}`);
+    return 1;
+  }
+  return report(scan(files, makeReader(REPO_ROOT)));
 }
 
 const isMainModule =

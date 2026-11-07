@@ -37,9 +37,11 @@ export function parseDisplayPool(raw: string | undefined): string[] {
   }
   const malformed = entries.filter((entry) => !/^:\d+$/.test(entry));
   if (malformed.length > 0) {
+    // The entries are the user's own text, so the line a runner prints counts
+    // them and the next line, which it withholds, names them (#576 W51).
     throw new Error(
-      `STALAGMIGHT_AGENT_DISPLAYS has malformed display(s) ${JSON.stringify(malformed)}; ` +
-        `entries must look like ":87"`,
+      `STALAGMIGHT_AGENT_DISPLAYS has ${malformed.length} malformed display(s); ` +
+        `entries must look like ":87"\n  malformed: ${JSON.stringify(malformed)}`,
     );
   }
   return entries;

@@ -3,13 +3,19 @@ import * as maplibregl from 'maplibre-gl';
 import { metersToMapCoords } from '../../utils/coordinates';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { hasLiveStyle, BOTTOM_SURVEY_LAYERS } from './mapUtils';
+import { canWriteStyle, hasLiveStyle, BOTTOM_SURVEY_LAYERS } from './mapUtils';
 import { getThemeColor } from '../../utils/themeColors';
 import type { GpsOrigin } from '../../types/config';
 
 interface GridOverlayProps {
   map: maplibregl.Map;
   gpsOrigin: GpsOrigin | null;
+  /**
+   * Moves once the style is back after a WebGL context restore (useStyleEpoch):
+   * the grid is a style layer, so writes skipped while the style was gone are
+   * made again (#576 NF-MAP-5).
+   */
+  styleEpoch?: number;
 }
 
 /** Available grid spacing options in meters */
@@ -19,13 +25,13 @@ export const GRID_SPACING_OPTIONS = [1, 5, 10, 25, 50, 100] as const;
  * GridOverlay renders a coordinate grid on the map that scales with the survey data.
  * Grid lines are rendered in map coordinates (meters) and update when the map view changes.
  */
-export default function GridOverlay({ map, gpsOrigin }: GridOverlayProps) {
+export default function GridOverlay({ map, gpsOrigin, styleEpoch = 0 }: GridOverlayProps) {
   const layerAdded = useRef(false);
   const showGrid = useUIStore((s) => s.showGrid);
   const gridSpacing = useUIStore((s) => s.gridSpacing);
   // Subscribe to resolvedTheme so gridColor re-reads the CSS variable on theme change
   useUIStore((s) => s.resolvedTheme);
-  const { stations } = useProjectStore();
+  const stations = useProjectStore((s) => s.stations);
 
   const gridColor = getThemeColor('--cc-grid-default');
 
@@ -97,7 +103,10 @@ export default function GridOverlay({ map, gpsOrigin }: GridOverlayProps) {
 
   // Add/update grid layer
   useEffect(() => {
-    if (!map) return;
+    // No style while the WebGL context is lost: reading it throws (#576 NF-MAP-5).
+    // A rebuilt style that has not loaded yet holds no grid and refuses the add
+    // (RV18-MAP-1); styleEpoch runs this again once it has loaded.
+    if (!map || !canWriteStyle(map)) return;
 
     const sourceId = 'grid-source';
     const layerId = 'grid-lines';
@@ -144,8 +153,9 @@ export default function GridOverlay({ map, gpsOrigin }: GridOverlayProps) {
       }
 
       layerAdded.current = true;
-    } else if (!showGrid && layerAdded.current) {
-      // Remove layer and source
+    } else if (!showGrid) {
+      // Remove layer and source. Not gated on layerAdded: a style restored after
+      // a WebGL context loss can carry the grid back after it was turned off.
       if (map.getLayer(layerId)) {
         map.removeLayer(layerId);
       }
@@ -177,28 +187,28 @@ export default function GridOverlay({ map, gpsOrigin }: GridOverlayProps) {
       }
       layerAdded.current = false;
     };
-  }, [map, showGrid, generateGridGeoJSON, gridColor]);
+  }, [map, showGrid, generateGridGeoJSON, gridColor, styleEpoch]);
 
   // Update grid color when config changes
   useEffect(() => {
-    if (!map || !showGrid) return;
+    if (!map || !showGrid || !hasLiveStyle(map)) return;
 
     const layerId = 'grid-lines';
     if (map.getLayer(layerId)) {
       map.setPaintProperty(layerId, 'line-color', gridColor);
     }
-  }, [map, showGrid, gridColor]);
+  }, [map, showGrid, gridColor, styleEpoch]);
 
   // Update grid when spacing changes
   useEffect(() => {
-    if (!map || !showGrid) return;
+    if (!map || !showGrid || !hasLiveStyle(map)) return;
 
     const sourceId = 'grid-source';
     const source = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
     if (source) {
       source.setData(generateGridGeoJSON());
     }
-  }, [map, showGrid, gridSpacing, generateGridGeoJSON]);
+  }, [map, showGrid, gridSpacing, generateGridGeoJSON, styleEpoch]);
 
   return null;
 }

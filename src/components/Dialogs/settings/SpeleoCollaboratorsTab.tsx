@@ -55,6 +55,7 @@ type ArmedAction =
 function RosterRowActions({
   kind,
   id,
+  testKey,
   name,
   current,
   levels,
@@ -67,6 +68,10 @@ function RosterRowActions({
   kind: 'user' | 'team';
   /** Row identity: the email for a user, the team id for a team. */
   id: string;
+  /** What this row's test ids are keyed by: the position for a user, never the
+   *  email (a test id is printed where a run reports what it clicked; #576
+   *  W47-NF1), the team id for a team. */
+  testKey: string;
   /** Human-readable subject of this row, for the per-row aria labels. */
   name: string;
   /** The tier the SERVER currently has for this row. */
@@ -82,7 +87,7 @@ function RosterRowActions({
   const row = `${kind}:${id}`;
   const staged = armed?.kind === 'level' && armed.row === row ? armed.permission : null;
   const removeArmed = armed?.kind === 'remove' && armed.row === row;
-  const testId = (part: string) => `speleodb-collab-${kind}-${part}-${id}`;
+  const testId = (part: string) => `speleodb-collab-${kind}-${part}-${testKey}`;
 
   return (
     <>
@@ -95,7 +100,14 @@ function RosterRowActions({
           // change: there is nothing left to apply, so drop the staged step.
           setArmed(next === current ? null : { kind: 'level', row, permission: next });
         }}
-        options={levels.map((p) => ({ value: p, label: t(levelKey(p)) }))}
+        options={[
+          // [#576 B16] A tier the server added after this build shipped is shown as
+          // the current value, but cannot be picked: it is never sent back.
+          ...(levels.includes(current)
+            ? []
+            : [{ value: current, label: t(levelKey(current)), disabled: true }]),
+          ...levels.map((p) => ({ value: p, label: t(levelKey(p)) })),
+        ]}
         size="sm"
         pending={staged !== null}
         aria-label={t('speleodb.collaborators.levelFor', { name })}
@@ -202,10 +214,10 @@ export function SpeleoCollaboratorsTab() {
     setLoadError(null);
     void (async () => {
       try {
-        const list = await invokeIpc<SpeleoCollaborators>('speleodb_list_collaborators');
+        const list = await invokeIpc('speleodb_list_collaborators');
         // Only an admin can add, so only an admin needs the team picker.
         const options = canManage
-          ? await invokeIpc<SpeleoTeamOption[]>('speleodb_list_teams')
+          ? await invokeIpc('speleodb_list_teams')
           : [];
         if (cancelled) return;
         setRoster(list);
@@ -252,7 +264,7 @@ export function SpeleoCollaboratorsTab() {
     if (!email) return;
     void mutate(
       () =>
-        invokeIpc<SpeleoCollaborators>('speleodb_add_collaborator', {
+        invokeIpc('speleodb_add_collaborator', {
           email,
           permission: newLevel,
         }).then((r) => {
@@ -267,7 +279,7 @@ export function SpeleoCollaboratorsTab() {
     if (!newTeamId) return;
     void mutate(
       () =>
-        invokeIpc<SpeleoCollaborators>('speleodb_add_team', {
+        invokeIpc('speleodb_add_team', {
           teamId: newTeamId,
           permission: newTeamLevel,
         }).then((r) => {
@@ -329,8 +341,10 @@ export function SpeleoCollaboratorsTab() {
           </p>
 
           <ul className="space-y-1" data-testid="speleodb-collaborators-users">
-            {roster.users.map((u) => (
-              <li key={u.email} className="flex items-center gap-2" data-testid={`speleodb-collab-user-${u.email}`}>
+            {/* Rows are keyed by position in their test ids: a test id is printed where a
+                run reports what it clicked, and must not carry an email (#576 W47-NF1). */}
+            {roster.users.map((u, i) => (
+              <li key={u.email} className="flex items-center gap-2" data-testid={`speleodb-collab-user-${i}`}>
                 <span className="flex-1 min-w-0 truncate text-sm">
                   {u.email}
                   {u.is_self && (
@@ -341,6 +355,7 @@ export function SpeleoCollaboratorsTab() {
                   <RosterRowActions
                     kind="user"
                     id={u.email}
+                    testKey={String(i)}
                     name={u.email}
                     current={u.permission}
                     levels={USER_LEVELS}
@@ -350,7 +365,7 @@ export function SpeleoCollaboratorsTab() {
                     onSetLevel={(permission) =>
                       void mutate(
                         () =>
-                          invokeIpc<SpeleoCollaborators>('speleodb_set_collaborator', {
+                          invokeIpc('speleodb_set_collaborator', {
                             email: u.email,
                             permission,
                           }),
@@ -360,7 +375,7 @@ export function SpeleoCollaboratorsTab() {
                     onRemove={() =>
                       void mutate(
                         () =>
-                          invokeIpc<SpeleoCollaborators>('speleodb_remove_collaborator', {
+                          invokeIpc('speleodb_remove_collaborator', {
                             email: u.email,
                           }),
                         'speleodb.collaborators.removeFailed',
@@ -386,6 +401,7 @@ export function SpeleoCollaboratorsTab() {
                     <RosterRowActions
                       kind="team"
                       id={g.team_id}
+                      testKey={g.team_id}
                       name={g.team_name}
                       current={g.permission}
                       levels={TEAM_LEVELS}
@@ -395,7 +411,7 @@ export function SpeleoCollaboratorsTab() {
                       onSetLevel={(permission) =>
                         void mutate(
                           () =>
-                            invokeIpc<SpeleoCollaborators>('speleodb_set_team', {
+                            invokeIpc('speleodb_set_team', {
                               teamId: g.team_id,
                               permission,
                             }),
@@ -405,7 +421,7 @@ export function SpeleoCollaboratorsTab() {
                       onRemove={() =>
                         void mutate(
                           () =>
-                            invokeIpc<SpeleoCollaborators>('speleodb_remove_team', {
+                            invokeIpc('speleodb_remove_team', {
                               teamId: g.team_id,
                             }),
                           'speleodb.collaborators.removeFailed',

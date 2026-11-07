@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
+import type { TFunction, TOptions } from 'i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useShallow } from 'zustand/react/shallow';
@@ -21,7 +22,7 @@ import {
   TargetIcon,
   WaypointIcon,
 } from './icons';
-import { SHOT_KIND_CYCLE, SHOT_KIND_MENU_LABEL } from '../../utils/shotKind';
+import { SHOT_KIND_CYCLE } from '../../utils/shotKind';
 import {
   EntityDeleteSymbol,
   EntityEditSymbol,
@@ -45,6 +46,28 @@ interface ContextMenuItem {
   disabled?: boolean;
   danger?: boolean;
   separator?: boolean;
+}
+
+/**
+ * A survey-menu entry before its label is rendered. `labelKey` (an en.json key, with
+ * `labelParams` for its placeholders) is also the entry's identity: it picks the leading icon
+ * (`iconForKey`) and the read-only exemption, so neither depends on the language the label is
+ * rendered in. A separator has no label (`labelKey: ''`).
+ */
+interface SurveyMenuItem extends Omit<ContextMenuItem, 'label'> {
+  labelKey: string;
+  labelParams?: TOptions;
+}
+
+/**
+ * Label key of the shot-kind entry that sets `kind` on a shot that is `current` (#27). Going back
+ * to permanent reads "Unmark <current kind>" (the menu never lists the kind the shot already is,
+ * so `current` is virtual then). One whole phrase per kind, so a translation can inflect the name.
+ */
+function shotKindEntryKey(kind: ShotKind, current: ShotKind): string {
+  if (kind === 'Jump') return 'contextMenu.markAsJump';
+  if (kind === 'Reference') return 'contextMenu.markAsReference';
+  return current === 'Jump' ? 'contextMenu.unmarkJump' : 'contextMenu.unmarkReference';
 }
 
 /**
@@ -156,7 +179,16 @@ export default function ContextMenu() {
   // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
   // closure-adjusted for the right-click edit items.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  const { project, stations, setShotKind, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
+  const { project, stations, setShotKind, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore(
+    useShallow((s) => ({
+      project: s.project,
+      stations: s.stations,
+      setShotKind: s.setShotKind,
+      unmergeStations: s.unmergeStations,
+      unmergeStationPair: s.unmergeStationPair,
+      removeLoopClosure: s.removeLoopClosure,
+    })),
+  );
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -195,8 +227,7 @@ export default function ContextMenu() {
         'menu must say which scroll invalidates it; see useDismissableLayer.',
     );
   }
-  const scrollScopeRef = useRef<HTMLElement | null>(null);
-  scrollScopeRef.current = scrollScope ? document.querySelector<HTMLElement>(scrollScope) : null;
+  const scrollScopeRef = useLatest<HTMLElement | null>(scrollScope ? document.querySelector<HTMLElement>(scrollScope) : null);
 
   useDismissableLayer({
     open: true,
@@ -245,7 +276,7 @@ export default function ContextMenu() {
    * whole selection in one go - separate entries rather than one ambiguous item,
    * so it is always obvious how many sections are about to change.
    */
-  const reverseItems = (sectionId: SectionId): ContextMenuItem[] => {
+  const reverseItems = (sectionId: SectionId): SurveyMenuItem[] => {
     // Deduped so the count the menu label promises matches the sections it acts
     // on. Defence in depth on the behaviour: a repeat is NOT a silent no-op - it
     // reverses the section twice, and the backend parity-reduces such a pair out
@@ -258,9 +289,9 @@ export default function ContextMenu() {
           .map((s) => s.sectionId as SectionId)
       ),
     ];
-    const items: ContextMenuItem[] = [
+    const items: SurveyMenuItem[] = [
       {
-        label: 'Reverse Section',
+        labelKey: 'contextMenu.reverseSection',
         action: () => {
           openDialog('reverse-section', { sectionIds: [sectionId] });
         },
@@ -268,7 +299,8 @@ export default function ContextMenu() {
     ];
     if (selectedSectionIds.length > 1 && selectedSectionIds.includes(sectionId)) {
       items.push({
-        label: `Reverse ${selectedSectionIds.length} Sections`,
+        labelKey: 'contextMenu.reverseSections',
+        labelParams: { count: selectedSectionIds.length },
         action: () => {
           openDialog('reverse-section', { sectionIds: selectedSectionIds });
         },
@@ -277,7 +309,7 @@ export default function ContextMenu() {
     return items;
   };
 
-  const buildMenuItems = (): ContextMenuItem[] => {
+  const buildMenuItems = (): SurveyMenuItem[] => {
     if (!target) return [];
 
     if (target.type === 'station') {
@@ -286,7 +318,7 @@ export default function ContextMenu() {
       const currentStation = stations.find((station) => sameStationRef(station.station_ref, target.ref));
       const mergedStations = currentStation?.merged_with ?? [];
       const directClosures = (() => {
-        const deduped = new Map<string, { closureId: bigint; stationRef: StationRef }>();
+        const deduped = new Map<string, { closureId: number; stationRef: StationRef }>();
         for (const closure of currentStation?.closures_with ?? []) {
           if (closure.is_transitive) continue;
           const key = closure.closure_id.toString();
@@ -318,15 +350,15 @@ export default function ContextMenu() {
         pitch_out: neighborShot.pitch_out,
       } : undefined;
 
-      const items: ContextMenuItem[] = [
+      const items: SurveyMenuItem[] = [
         {
-          label: 'Edit Station',
+          labelKey: 'contextMenu.editStation',
           action: () => {
             openDialog('edit-station', { stationRef: target.ref });
           },
         },
         {
-          label: 'Merge With...',
+          labelKey: 'contextMenu.mergeWith',
           action: () => {
             setActiveTool('merge');
             setMergeStationA(target.ref);
@@ -338,7 +370,7 @@ export default function ContextMenu() {
 
       if (mergedStations.length > 0) {
         items.push({
-          label: 'Unmerge Stations',
+          labelKey: 'contextMenu.unmergeStations',
           action: () => {
             if (mergedStations.length === 1) {
               const mergeTarget = mergedStations[0]!;
@@ -366,7 +398,7 @@ export default function ContextMenu() {
 
       if (directClosures.length > 0) {
         items.push({
-          label: 'Remove Closure',
+          labelKey: 'contextMenu.removeClosure',
           action: () => {
             if (directClosures.length === 1) {
               trackContextMenuAction('remove-closure', 'context-menu');
@@ -388,7 +420,7 @@ export default function ContextMenu() {
       // controls where the shot is inserted; the entered azimuth is stored as-is.
       if (isFirstStation) {
         items.push({
-          label: 'Add Shot Before',
+          labelKey: 'contextMenu.addShotBefore',
           action: () => {
             openDialog('draw-shot', {
               fromStation: {
@@ -406,7 +438,7 @@ export default function ContextMenu() {
       // "Add Shot After" - only for last station
       if (isLastStation) {
         items.push({
-          label: 'Add Shot After',
+          labelKey: 'contextMenu.addShotAfter',
           action: () => {
             openDialog('draw-shot', {
               fromStation: {
@@ -421,12 +453,11 @@ export default function ContextMenu() {
         });
       }
 
-      items.push({ label: '', action: () => {}, separator: true });
+      items.push({ labelKey: '', action: () => {}, separator: true });
       items.push({
-        // This exact English string is quoted by ExportControls' TML-unanchored-warning
-        // dialog copy (dialogs.tmlUnanchoredWarning.* in en.json). Translating this label
-        // will desync that quote - update both together.
-        label: 'Set Zero Datum',
+        // ExportControls' TML-unanchored-warning dialog quotes this label through
+        // this key ({{menuItem}} in dialogs.tmlUnanchoredWarning.*, #576 NF-W8FE-1).
+        labelKey: 'contextMenu.setZeroDatum',
         action: () => {
           openDialog('edit-station', {
             stationRef: target.ref,
@@ -435,24 +466,24 @@ export default function ContextMenu() {
           });
         },
       });
-      items.push({ label: '', action: () => {}, separator: true });
+      items.push({ labelKey: '', action: () => {}, separator: true });
       items.push({
-        label: 'Edit Section',
+        labelKey: 'contextMenu.editSection',
         action: () => {
           openDialog('edit-section', { sectionId });
         },
       });
       items.push(...reverseItems(sectionId));
       items.push({
-        label: 'Delete Section',
+        labelKey: 'contextMenu.deleteSection',
         action: () => {
           openDialog('confirm-delete', { type: 'section', sectionId });
         },
         danger: true,
       });
-      items.push({ label: '', action: () => {}, separator: true });
+      items.push({ labelKey: '', action: () => {}, separator: true });
       items.push({
-        label: 'Delete Station',
+        labelKey: 'contextMenu.deleteStation',
         action: () => {
           openDialog('confirm-delete', { type: 'station', stationRef: target.ref });
         },
@@ -478,21 +509,21 @@ export default function ContextMenu() {
         pitch_out: sourceShot.pitch_out,
       } : undefined;
 
-      const items: ContextMenuItem[] = [
+      const items: SurveyMenuItem[] = [
         {
-          label: 'Edit Shot',
+          labelKey: 'contextMenu.editShot',
           action: () => {
             openDialog('edit-shot', { sectionId: target.sectionId, shotId: target.shotId });
           },
         },
         {
-          label: 'Insert Station...',
+          labelKey: 'contextMenu.insertStation',
           action: () => {
             openDialog('insert-station', {
               sectionId: target.sectionId,
               shotId: target.shotId,
               shotLength: sourceShot?.length ?? 0,
-              sectionName: section?.name ?? `Section ${target.sectionId}`,
+              sectionName: section?.name ?? t('contextMenu.sectionFallback', { id: target.sectionId }),
               // Only set from a map right-click; the dialog prefills the exact
               // clicked spot when present and starts blank otherwise.
               alongT: target.type === 'shot' ? target.alongT : undefined,
@@ -506,12 +537,7 @@ export default function ContextMenu() {
         // <what it currently is>" rather than a generic "Mark as Permanent",
         // since that is how the user thinks of undoing the mark.
         ...SHOT_KIND_CYCLE.filter((kind) => kind !== shotKind).map((kind) => ({
-          // Hardcoded English to match every other label in this file; the
-          // menu has no i18n wiring (tracked separately).
-          label:
-            kind === 'Normal'
-              ? `Unmark ${SHOT_KIND_MENU_LABEL[shotKind]}`
-              : `Mark as ${SHOT_KIND_MENU_LABEL[kind]}`,
+          labelKey: shotKindEntryKey(kind, shotKind),
           action: async () => {
             trackContextMenuAction('set-shot-kind', 'context-menu');
             await setShotKind(target.sectionId, target.shotId, kind);
@@ -524,7 +550,7 @@ export default function ContextMenu() {
       // "Add Shot Before" - only for first shot (prepend mode)
       if (isFirst) {
         items.push({
-          label: 'Add Shot Before',
+          labelKey: 'contextMenu.addShotBefore',
           action: () => {
             openDialog('draw-shot', {
               fromStation: {
@@ -542,7 +568,7 @@ export default function ContextMenu() {
       // "Add Shot After" - only for last shot
       if (isLast) {
         items.push({
-          label: 'Add Shot After',
+          labelKey: 'contextMenu.addShotAfter',
           action: () => {
             openDialog('draw-shot', {
               fromStation: {
@@ -557,27 +583,27 @@ export default function ContextMenu() {
         });
       }
 
-      items.push({ label: '', action: () => {}, separator: true });
+      items.push({ labelKey: '', action: () => {}, separator: true });
       items.push({
-        label: 'Edit Section',
+        labelKey: 'contextMenu.editSection',
         action: () => {
           openDialog('edit-section', { sectionId: target.sectionId });
         },
       });
       items.push(...reverseItems(target.sectionId));
       items.push({
-        label: 'Delete Section',
+        labelKey: 'contextMenu.deleteSection',
         action: () => {
           openDialog('confirm-delete', { type: 'section', sectionId: target.sectionId });
         },
         danger: true,
       });
-      items.push({ label: '', action: () => {}, separator: true });
+      items.push({ labelKey: '', action: () => {}, separator: true });
       // Position-aware Delete Shot using shared helper.
       // Disabled when section/shot lookup fails (stale target).
       const canDelete = shotIndex >= 0 && totalShots > 0;
       items.push({
-        label: 'Delete Shot',
+        labelKey: 'contextMenu.deleteShot',
         action: () => {
           if (!canDelete) return;
           const { dialog, data } = getDeleteShotDialog(
@@ -586,7 +612,7 @@ export default function ContextMenu() {
             isFirst,
             isLast,
             totalShots,
-            section?.name ?? `Section ${target.sectionId}`,
+            section?.name ?? t('contextMenu.sectionFallback', { id: target.sectionId }),
           );
           openDialog(dialog, data);
         },
@@ -600,29 +626,29 @@ export default function ContextMenu() {
     if (target.type === 'section') {
       return [
         {
-          label: 'Edit Section',
+          labelKey: 'contextMenu.editSection',
           action: () => {
             openDialog('edit-section', { sectionId: target.sectionId });
           },
         },
         ...reverseItems(target.sectionId),
         {
-          label: 'Adjust Position...',
+          labelKey: 'contextMenu.adjustPosition',
           action: () => {
             openDialog('section-adjust', { sectionId: target.sectionId });
           },
         },
         {
-          label: 'Zoom to Section',
+          labelKey: 'contextMenu.zoomToSection',
           action: () => {
             triggerZoomToSection(target.sectionId);
             trackDialogComplete('context-menu');
             closeDialog();
           },
         },
-        { label: '', action: () => {}, separator: true },
+        { labelKey: '', action: () => {}, separator: true },
         {
-          label: 'Delete Section',
+          labelKey: 'contextMenu.deleteSection',
           action: () => {
             openDialog('confirm-delete', { type: 'section', sectionId: target.sectionId });
           },
@@ -632,7 +658,7 @@ export default function ContextMenu() {
     }
 
     if (target.type === 'datatable-shot') {
-      const items: ContextMenuItem[] = [];
+      const items: SurveyMenuItem[] = [];
 
       // Look up the source shot for geometry copying
       const sourceSection = project?.sections.find((s) => s.id === target.sectionId);
@@ -650,7 +676,7 @@ export default function ContextMenu() {
       // "Add Shot Before" - only for first shot (prepend mode)
       if (target.isFirst) {
         items.push({
-          label: 'Add Shot Before',
+          labelKey: 'contextMenu.addShotBefore',
           action: () => {
             openDialog('draw-shot', {
               fromStation: {
@@ -668,7 +694,7 @@ export default function ContextMenu() {
       // "Add Shot After" - only for last shot
       if (target.isLast) {
         items.push({
-          label: 'Add Shot After',
+          labelKey: 'contextMenu.addShotAfter',
           action: () => {
             openDialog('draw-shot', {
               fromStation: {
@@ -685,12 +711,12 @@ export default function ContextMenu() {
 
       // Separator before delete (only if there are add items above)
       if (items.length > 0) {
-        items.push({ label: '', action: () => {}, separator: true });
+        items.push({ labelKey: '', action: () => {}, separator: true });
       }
 
       // "Delete Shot" - position-aware using shared helper
       items.push({
-        label: 'Delete Shot',
+        labelKey: 'contextMenu.deleteShot',
         action: () => {
           const { dialog, data } = getDeleteShotDialog(
             target.sectionId,
@@ -713,57 +739,54 @@ export default function ContextMenu() {
 
   // Leading action icon per menu item (shown at the Icons+ highlighting level).
   const showIcons = syntacticLevelAtLeast(syntacticLevel, 'icons');
-  const iconForLabel = (label: string): ReactNode => {
-    switch (label) {
-      case 'Edit Station':
+  // Keyed on the entry's label KEY, never its rendered text, so every locale gets the same icons.
+  const iconForKey = (labelKey: string): ReactNode => {
+    switch (labelKey) {
+      case 'contextMenu.editStation':
         return <EntityEditSymbol entity="station" size={18} />;
-      case 'Edit Shot':
+      case 'contextMenu.editShot':
         return <EntityEditSymbol entity="shot" size={18} />;
-      case 'Edit Section':
+      case 'contextMenu.editSection':
         return <EntityEditSymbol entity="section" size={18} />;
-      case 'Reverse Section':
+      case 'contextMenu.reverseSection':
+      case 'contextMenu.reverseSections':
         return <EntityReverseSymbol entity="section" size={18} />;
-      case 'Insert Station...':
+      case 'contextMenu.insertStation':
         return <EntityAddSymbol entity="station" size={18} />;
-      case 'Merge With...':
+      case 'contextMenu.mergeWith':
         return <ToolGlyph tool="merge" size={16} />;
-      case 'Unmerge Stations':
-      case 'Remove Closure':
+      case 'contextMenu.unmergeStations':
+      case 'contextMenu.removeClosure':
         return <EntityUnlinkSymbol entity="station" size={18} />;
-      case 'Add Shot Before':
-      case 'Add Shot After':
+      case 'contextMenu.addShotBefore':
+      case 'contextMenu.addShotAfter':
         return <EntityAddSymbol entity="shot" size={18} />;
       // #27: the shot glyph with the same letter badge the data table shows,
       // so "R" here and "R" in the J/R cell are visibly the same thing. The
       // Unmark variants strike the letter through.
-      case `Mark as ${SHOT_KIND_MENU_LABEL.Jump}`:
+      case 'contextMenu.markAsJump':
         return <EntityJumpSymbol entity="shot" size={18} />;
-      case `Mark as ${SHOT_KIND_MENU_LABEL.Reference}`:
+      case 'contextMenu.markAsReference':
         return <EntityReferenceKindSymbol entity="shot" size={18} />;
-      case `Unmark ${SHOT_KIND_MENU_LABEL.Jump}`:
+      case 'contextMenu.unmarkJump':
         return <EntityJumpUnmarkSymbol entity="shot" size={18} />;
-      case `Unmark ${SHOT_KIND_MENU_LABEL.Reference}`:
+      case 'contextMenu.unmarkReference':
         return <EntityReferenceUnmarkSymbol entity="shot" size={18} />;
-      case 'Set Zero Datum':
+      case 'contextMenu.setZeroDatum':
         return <EntityDatumSymbol entity="station" size={18} />;
-      case 'Delete Section':
+      case 'contextMenu.deleteSection':
         return <EntityDeleteSymbol entity="section" size={18} />;
-      case 'Delete Station':
+      case 'contextMenu.deleteStation':
         return <EntityDeleteSymbol entity="station" size={18} />;
-      case 'Delete Shot':
+      case 'contextMenu.deleteShot':
         return <EntityDeleteSymbol entity="shot" size={18} />;
-      case 'Adjust Position...':
+      case 'contextMenu.adjustPosition':
         return <EntityMoveSymbol entity="section" size={18} />;
-      case 'Zoom to Section':
+      case 'contextMenu.zoomToSection':
         return <ToolGlyph tool="zoom" size={16} />;
       default:
-        // "Reverse N Sections" carries the count in its label, so it can't be a
-        // literal case.
-        if (label.startsWith('Reverse ')) {
-          return <EntityReverseSymbol entity="section" size={18} />;
-        }
-        // Fallback for any unmapped label (every other current menu label is
-        // handled by an explicit case above).
+        // Fallback for any unmapped key (every current menu entry is handled by
+        // an explicit case above).
         return <ArrowUpRightIcon size={16} />;
     }
   };
@@ -776,9 +799,8 @@ export default function ContextMenu() {
   // gets no menu. Survey keeps the full menu, with the closure-adjusted (read-only) view disabling
   // mutations as before.
   //
-  // Labels are i18n keys and each item carries its own `icon`, NOT `iconForLabel` - that helper
-  // matches on English label strings and would silently fall back to the generic arrow under any
-  // other locale.
+  // The plan entries arrive rendered, each with its own `icon`; the survey entries arrive keyed
+  // (`SurveyMenuItem`) and are rendered here, with the icon `iconForKey` picks for the key.
   let items: ContextMenuItem[];
   if (appMode !== 'survey') {
     items =
@@ -789,12 +811,11 @@ export default function ContextMenu() {
     // Survey view: closure-adjusted geometry is read-only - disable mutations (all except
     // read-only navigation like "Zoom to Section"). Edits are made on the measured view.
     const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly;
-    const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Section']);
-    items = buildMenuItems().map((item) => {
-      const withIcon = item.separator ? item : { ...item, icon: iconForLabel(item.label) };
-      return geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
-        ? { ...withIcon, disabled: true }
-        : withIcon;
+    const READ_ONLY_SAFE_KEYS = new Set(['contextMenu.zoomToSection']);
+    items = buildMenuItems().map(({ labelKey, labelParams, ...item }) => {
+      if (item.separator) return { ...item, label: '' };
+      const entry = { ...item, label: t(labelKey, labelParams ?? {}), icon: iconForKey(labelKey) };
+      return geometryReadOnly && !READ_ONLY_SAFE_KEYS.has(labelKey) ? { ...entry, disabled: true } : entry;
     });
   }
 

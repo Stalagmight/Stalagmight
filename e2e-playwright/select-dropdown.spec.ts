@@ -37,17 +37,17 @@ async function pressUntilActiveDescendant(
   expectedId: string,
   maxAttempts = 5,
 ): Promise<void> {
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+  // Retry the press itself (a keystroke can land before the listbox handler is
+  // attached), but wait on the attribute rather than sleeping between tries.
+  let attempts = 0;
+  await expect(async () => {
+    attempts += 1;
+    expect(attempts, `${key} never moved aria-activedescendant to ${expectedId}`).toBeLessThanOrEqual(maxAttempts);
     await trigger.focus();
     await expect(trigger).toBeFocused();
     await page.keyboard.press(key);
-    const active = await trigger.getAttribute('aria-activedescendant');
-    if (active === expectedId) {
-      return;
-    }
-    await page.waitForTimeout(25);
-  }
-  await expect.poll(async () => trigger.getAttribute('aria-activedescendant')).toBe(expectedId);
+    await expect(trigger).toHaveAttribute('aria-activedescendant', expectedId, { timeout: 250 });
+  }).toPass({ timeout: 5000 });
 }
 
 /**

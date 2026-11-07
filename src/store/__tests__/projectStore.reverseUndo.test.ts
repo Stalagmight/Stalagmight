@@ -2,24 +2,26 @@
  * Undo/redo of a section reverse must move the frontend's positional refs back
  * with it (#24).
  *
- * The hazard: a reverse renumbers station `i` to `N - i`, and the
- * distance-gradient origin is a plain `StationRef`. Undo restores the old
- * numbering but leaves it where the forward mirror put it - still IN RANGE, now
- * naming the opposite physical station, so the penetration ramp silently
- * re-roots from the far end while still looking correct. No error is raised.
+ * The hazard: a reverse renumbers station `i` to `N - i`, and the frontend holds
+ * plain `StationRef`s. Undo restores the old numbering, and a ref left where the
+ * forward reverse put it is still IN RANGE, now naming the opposite physical
+ * station. No error is raised.
  *
- * The GAS PLAN's pins used to ride along here and no longer do (#310): they hold
- * backend anchors and are re-resolved around every mutation, which is
- * reverse-proof by construction. One test below pins that they are NOT mirrored
- * a second time; the anchor round trip itself is covered in
- * `gasPlanAnchors.test.ts`.
+ * The GAS PLAN's pins (#310) and the distance-gradient origin (#576 D39(g)) are
+ * anchor-resolved around every mutation, which is reverse-proof by construction;
+ * the tests below pin that each is applied ONCE, from its anchor, and never
+ * mirrored on top. The anchor round trip itself is covered in
+ * `gasPlanAnchors.test.ts` and `projectStore.distanceOriginAnchor.test.ts`.
  *
- * `executeUndoRedo` therefore re-mirrors the sections the backend reports on the
- * result as renumbered (`CommandResult.reversed_sections`, populated for a
- * forward reverse and for the undo/redo that re-reverses it). These tests drive
- * the real store action with the IPC mocked, so deleting that wiring fails here.
+ * What the reverse log still drives is the clearing of the refs that have no
+ * "same place" (selection, merge staging, comment pickup): `executeUndoRedo`
+ * reads the sections the backend reports as renumbered (`reversed_sections` on a
+ * forward reverse's outcome, `reversed_steps` on the undo/redo that re-reverses it,
+ * and `reversed_sections` on a failed jump's CommandError, #576 A12). These tests
+ * drive the real store action - and the real `invokeIpc`, with Tauri's `invoke`
+ * mocked - so deleting that wiring fails here.
  *
- * From `undo_to`/`redo_to` the field is an ORDERED PER-STEP LOG - one entry per
+ * From `undo_to`/`redo_to` the log is an ORDERED PER-STEP LOG - one entry per
  * reversing step, repeats intact, each carrying the shot count in force at ITS
  * step - so the store composes the entries into one transform per section and
  * applies it once. The Playwright IPC mock stubs undo/redo as no-ops that never
@@ -30,14 +32,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useProjectStore } from '../projectStore';
 import { useGasPlanStore } from '../gasPlanStore';
 import { useUIStore } from '../uiStore';
+import { useSpeleoStore } from '../speleoStore';
 import type { ReversedSection } from '../../types/ipc/ReversedSection';
+import type { CommandError } from '../../types/ipc/CommandError';
+import type { HistoryOutcome } from '../../types/ipc/HistoryOutcome';
 import type { Station } from '../../types/project';
+import { projectStateEnvelope } from '../../test/projectStateEnvelope';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeIpcMock }));
 
 const SECTION = 4;
 
@@ -98,36 +102,44 @@ function projectWith(stations: Station[]) {
 /**
  * Point every read-only refresh IPC at a project whose stations are `stations`,
  * and have undo/redo report `reversedSections` as renumbered. Omit it for an
- * operation that reversed nothing: the field is then absent from the wire, which
- * is what the backend does for every other command. `error` turns the undo into
- * a FAILED one that still reports what it managed to apply.
+ * operation that reversed nothing: the log is then empty (an outcome's
+ * `reversed_steps`) or absent (a failure's `reversed_sections`), which is what the
+ * backend does for every other step. `failedAt` ([N, M]) turns the undo into a
+ * FAILED one - "failed at step N of M", `HISTORY_STEP_FAILED` - that still reports
+ * what it managed to apply, and the link bits the backend's dirty flip left
+ * (#576 A18(a), D22).
  */
 function serveState(
   stations: Station[],
   reversedSections?: ReversedSection[],
-  error?: string
+  failedAt?: [number, number]
 ) {
   invokeIpcMock.mockImplementation(async (command: string) => {
     switch (command) {
       case 'undo':
       case 'redo':
       case 'undo_to':
+        if (failedAt) {
+          throw {
+            code: 'HISTORY_STEP_FAILED',
+            message: `Undo failed at step ${failedAt[0]} of ${failedAt[1]}: boom`,
+            history_step: { failed_step: failedAt[0], total_steps: failedAt[1] },
+            ...(reversedSections === undefined ? {} : { reversed_sections: reversedSections }),
+            remote_link: { has_unpushed_edits: true, unwound: false },
+          } satisfies CommandError;
+        }
         return {
-          success: error === undefined,
+          reversed_steps: reversedSections ?? [],
           warnings: [],
-          error: error ?? null,
-          section_ids: [],
-          ...(reversedSections === undefined
-            ? {}
-            : { reversed_sections: reversedSections }),
-        };
-      case 'get_project_state':
-        return {
+          remote_link: null,
+        } satisfies HistoryOutcome;
+      case 'get_project_state_binary':
+        return projectStateEnvelope({
           project: projectWith(stations),
           stations,
           stats: null,
           frozen_shots: [],
-        };
+        });
       case 'can_undo':
       case 'can_redo':
         return false;
@@ -143,6 +155,16 @@ function serveState(
 
 const ref = (station_index: number) => ({ section_id: SECTION, station_index });
 
+/** On top of `serveState`: the origin's anchor re-resolves to `resolveTo` after the edit. */
+function withOriginAnchor(resolveTo: { section_id: number; station_index: number } | null) {
+  const inner = invokeIpcMock.getMockImplementation()!;
+  invokeIpcMock.mockImplementation(async (command: string, args?: unknown) => {
+    if (command === 'plan_anchors_for_refs') return [{ origin: true }];
+    if (command === 'plan_refs_for_anchors') return [resolveTo];
+    return inner(command, args);
+  });
+}
+
 describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -153,12 +175,14 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     useProjectStore.setState({ stations: line(REVERSED), project: null });
   });
 
-  it('mirrors the distance-gradient origin and clears armed tool state', async () => {
+  it('takes the origin from its anchor once - no mirror on top - and clears armed tool state', async () => {
     useUIStore.setState({ distanceGradientOrigin: ref(3) });
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(3) });
     serveState(line(FORWARD), [reversed(3)]);
+    withOriginAnchor(ref(0));
     await useProjectStore.getState().undo();
 
+    // A leftover mirror would take the re-resolved 0 on to 3 - 0 = 3.
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(0));
     expect(useUIStore.getState().selection).toBeNull();
   });
@@ -178,10 +202,11 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     expect(after.waypoints).toEqual([ref(1)]);
   });
 
-  it('re-mirrors on redo too, and on a multi-step undo_to', async () => {
+  it('re-resolves on redo too, and on a multi-step undo_to', async () => {
     useUIStore.setState({ distanceGradientOrigin: ref(3) });
 
     serveState(line(FORWARD), [reversed(3)]);
+    withOriginAnchor(ref(0));
     await useProjectStore.getState().redo();
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(0));
 
@@ -189,6 +214,7 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     // reports one entry per reversing step it walked past.
     useProjectStore.setState({ stations: line(FORWARD) });
     serveState(line(REVERSED), [reversed(3)]);
+    withOriginAnchor(ref(3));
     await useProjectStore.getState().undoTo(2);
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(3));
   });
@@ -205,17 +231,17 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     expect(useUIStore.getState().selection).toBeNull();
   });
 
-  it('mirrors a section that was reversed AND moved in the same operation', async () => {
+  it('clears for a section that was reversed AND moved in the same operation', async () => {
     // The case that defeats any position-diffing inference: undoing a batch that
     // both reversed and moved the section leaves its stations matching NEITHER
     // the old numbering nor its mirror, so the geometry reports nothing while
     // the numbering really did flip. The backend says so outright instead.
-    useUIStore.setState({ distanceGradientOrigin: ref(1) });
+    useUIStore.getState().setSelection({ type: 'station', stationRef: ref(1) });
 
     serveState(line(REVERSED_AND_MOVED), [reversed(3)]);
     await useProjectStore.getState().undo();
 
-    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(2));
+    expect(useUIStore.getState().selection).toBeNull();
   });
 
   it('treats an equal-count double reverse as a TOTAL no-op', async () => {
@@ -241,39 +267,61 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
   it('composes two reverses at DIFFERENT counts instead of cancelling them', async () => {
     // `[Reverse, CreateShot, Reverse]` walked back by one `undo_to`: the steps
     // mirrored against 4 shots then 3, so the net map is `i -> 3 - (4 - i)`, i.e.
-    // one station down. Cancelling the repeat (parity) would leave the pin at 3;
-    // dividing by the post-range count alone would send it to 0.
-    useUIStore.setState({ distanceGradientOrigin: ref(3) });
+    // one station down - a renumbering, unlike the equal-count pair above, so the
+    // selection it shifted is cleared. (The arithmetic itself is pinned in
+    // reverseAftermath.test.ts, composeReverseTransforms.)
+    useUIStore.getState().setSelection({ type: 'station', stationRef: ref(3) });
 
     serveState(line(FORWARD), [reversed(4), reversed(3)]);
     await useProjectStore.getState().undoTo(2);
 
-    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(2));
+    expect(useUIStore.getState().selection).toBeNull();
   });
 
-  it('mirrors what a PARTIALLY failed undo_to already applied', async () => {
+  it('re-resolves after a PARTIALLY failed undo_to too, and clears what it renumbered', async () => {
     // The earlier steps flipped their sections and cannot be rolled back, so the
     // backend attaches them to the failure return. Ignoring the field on
-    // `success === false` leaves the pins on the opposite physical stations with
-    // only a step-N-of-M toast to explain it.
+    // a failure would leave the selection on the opposite physical
+    // station; the origin's anchor is re-resolved in the seam's `finally`.
     useUIStore.setState({ distanceGradientOrigin: ref(1) });
+    useUIStore.getState().setSelection({ type: 'station', stationRef: ref(1) });
 
-    serveState(line(FORWARD), [reversed(3)], 'Undo failed at step 2 of 3: boom');
+    serveState(line(FORWARD), [reversed(3)], [2, 3]);
+    withOriginAnchor(ref(2));
     const result = await useProjectStore.getState().undoTo(2);
 
     expect(result.success).toBe(false);
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(2));
+    expect(useUIStore.getState().selection).toBeNull();
   });
 
-  it('ignores the field on a failure that mutated nothing', async () => {
-    // Step 1 of N failing means no step landed, so there is nothing to mirror -
-    // and `executeUndoRedo` only reads the field for the partial case.
+  it('ignores the field when the FIRST step failed, so no step landed', async () => {
+    // Step 1 of N failing means no step LANDED, so there is no renumbering to
+    // mirror - and `executeUndoRedo` only reads the field for the partial case.
+    // (The failing step itself may still have changed the project - #576 A18(a),
+    // pinned by the dirty-bit test below - but it reports no renumbering.)
     useUIStore.setState({ distanceGradientOrigin: ref(3) });
 
-    serveState(line(REVERSED), [reversed(3)], 'Undo failed at step 1 of 3: boom');
+    serveState(line(REVERSED), [reversed(3)], [1, 3]);
     await useProjectStore.getState().undoTo(2);
 
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(3));
+  });
+
+  it('marks the copy dirty even when step 1 itself failed (#576 A18(a))', async () => {
+    // The failing step can mutate before it reports, so the backend marks the
+    // SpeleoDB copy un-pushed for ANY failed jump past its index check. Mirroring
+    // only N > 1 left the frontend's dirty bits clean while the backend's was set.
+    useSpeleoStore.getState().setLinkOnOpen({ permission: 'ADMIN' });
+    useProjectStore.setState({ isDirty: false });
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+
+    serveState(line(FORWARD), undefined, [1, 3]);
+    const result = await useProjectStore.getState().undoTo(2);
+
+    expect(result.success).toBe(false);
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
   });
 });
 
@@ -285,14 +333,14 @@ describe('frontend mutation ordering (#24)', () => {
     useProjectStore.setState({ project: null });
   });
 
-  it('applies aftermath in ISSUE order when two operations overlap', async () => {
-    // The transforms do not commute when the counts differ: reverse at N, a shot-count edit,
-    // reverse at N+1. `executeCommand` and `executeUndoRedo` are separate async chains, each
-    // awaiting its own IPC call and its own refresh, so without a shared queue the SECOND
-    // operation can finish first and its aftermath lands before the first one's - walking the
-    // pins onto a different station, in range and silent.
+  it('runs one operation, anchors included, at a time in ISSUE order when two overlap', async () => {
+    // `executeCommand` and `executeUndoRedo` are separate async chains, each awaiting its own
+    // IPC calls and its own refresh, so without a shared queue the SECOND operation can finish
+    // first. The anchor round trip makes the order matter twice over: the second edit must
+    // anchor the origin against the survey the FIRST left, and re-resolve after its own.
     const stations = line([0, 1, 2, 3, 4, 5, 6, 7]);
     useUIStore.setState({ distanceGradientOrigin: ref(1) });
+    const order: string[] = [];
 
     // The FIRST call resolves slowly, the second immediately - so completion order would be
     // reversed if nothing serialised them.
@@ -302,14 +350,23 @@ describe('frontend mutation ordering (#24)', () => {
     });
     let call = 0;
     invokeIpcMock.mockImplementation(async (command: string) => {
-      if (command === 'get_project_state') {
-        return { project: projectWith(stations), stations, stats: null, frozen_shots: [] };
+      if (command === 'get_project_state_binary') {
+        return projectStateEnvelope({ project: projectWith(stations), stations, stats: null, frozen_shots: [] });
       }
       if (command === 'can_undo' || command === 'can_redo') return false;
       if (command === 'get_project_warnings') return [];
       if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
+      if (command === 'plan_anchors_for_refs') {
+        order.push(`anchor ${call + 1}`);
+        return [{ origin: true }];
+      }
+      if (command === 'plan_refs_for_anchors') {
+        order.push(`resolve ${call}`);
+        return [ref(call === 1 ? 6 : 0)];
+      }
       // Both mutations report a reverse, at DIFFERENT counts.
       call += 1;
+      order.push(`reverse ${call}`);
       const shot_count = call === 1 ? 7 : 6;
       if (call === 1) await firstHeld;
       return {
@@ -327,8 +384,7 @@ describe('frontend mutation ordering (#24)', () => {
     releaseFirst?.();
     await Promise.all([first, second]);
 
-    // Composed in issue order: i -> 7 - i then i -> 6 - i, i.e. 1 -> 6 -> 0.
-    // The reverse order would give 1 -> 5 -> 2, a different station.
+    expect(order).toEqual(['anchor 1', 'reverse 1', 'resolve 1', 'anchor 2', 'reverse 2', 'resolve 2']);
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(0));
   });
 
@@ -347,13 +403,13 @@ describe('frontend mutation ordering (#24)', () => {
     // `refreshProjectState` would put project A back and mask the boundary entirely.
     let openProjectCreatedAt = '2026-01-01T00:00:00Z';
     invokeIpcMock.mockImplementation(async (command: string, args?: unknown) => {
-      if (command === 'get_project_state') {
-        return {
+      if (command === 'get_project_state_binary') {
+        return projectStateEnvelope({
           project: { ...projectWith(stations), created_at: openProjectCreatedAt },
           stations,
           stats: null,
           frozen_shots: [],
-        };
+        });
       }
       if (command === 'can_undo' || command === 'can_redo') return false;
       if (command === 'get_project_warnings') return [];
@@ -427,13 +483,13 @@ describe('a project that opens during the anchor flush cancels the mutation (#31
           return [{ id: 'endpoint' }];
         case 'plan_refs_for_anchors':
           return [ref(3)];
-        case 'get_project_state':
-          return {
+        case 'get_project_state_binary':
+          return projectStateEnvelope({
             project: { ...projectWith(stations), created_at: openProject.createdAt },
             stations,
             stats: null,
             frozen_shots: [],
-          };
+          });
         case 'can_undo':
         case 'can_redo':
           return false;

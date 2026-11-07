@@ -10,7 +10,7 @@ import { speedToDisplay } from '../../utils/formatGas';
 import { buildSegmentColumns } from './segmentsGridColumns';
 import { applySegmentEdits, SEG_COL } from './segmentsGridEdits';
 import { planGridHeight, usePlanGridFillHeight } from './planGridHeight';
-import { usePasteReportToast } from './usePasteReportToast';
+import { useBulkEditReportToast } from '../common/useBulkEditReportToast';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import type { PlanSegment } from '../../types/ipc.generated';
 import type { StationRef } from '../../types/project';
@@ -123,7 +123,7 @@ export function SegmentsTable() {
   );
 
   const labels = useGridLabels('gasPanel.segments.segmentNoun');
-  const onPasteReport = usePasteReportToast(TOAST_KEYS.PLAN_SEGMENTS_PASTE);
+  const onPasteReport = useBulkEditReportToast(TOAST_KEYS.PLAN_SEGMENTS_PASTE);
   const onEdit = useCallback(
     (row: number, colKey: string, value: unknown) => applyEdits([{ row, colKey, value }]),
     [applyEdits]

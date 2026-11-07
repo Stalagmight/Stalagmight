@@ -13,24 +13,13 @@ import { render, screen, fireEvent } from '@testing-library/react';
 // The grid is virtualized and jsdom gives the virtualizer no layout to measure, so without
 // this mock it renders zero rows and every cell query fails - the same shim the grid's own
 // component tests use.
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: 33 + index * 33,
-        size: 33,
-      })),
-    getTotalSize: () => count * 33,
-    scrollToIndex: () => {},
-  }),
-}));
+vi.mock('@tanstack/react-virtual', () => import('../../test/factories/virtualizer'));
 
 import { CylindersTable } from './CylindersTable';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { defaultConfig } from '../../types/config';
 import type { Cylinder, GasReachField } from '../../types/ipc.generated';
+import { NoopResizeObserver } from '../../test/factories/dom';
 
 function tank(over: Partial<Cylinder> = {}): Cylinder {
   return {
@@ -82,11 +71,7 @@ function fakeField(overrides: Partial<GasReachField> = {}): GasReachField {
 beforeAll(() => {
   // jsdom has no ResizeObserver; the grid measures its scroller with one.
   if (typeof ResizeObserver === 'undefined') {
-    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    };
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = NoopResizeObserver;
   }
   // jsdom does not implement scrollIntoView; the role Select calls it on open.
   Element.prototype.scrollIntoView = vi.fn();

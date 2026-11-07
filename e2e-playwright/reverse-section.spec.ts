@@ -2,8 +2,16 @@
  * Reverse Section end-to-end (#24).
  *
  * Covers the three menu surfaces that expose the action, the confirm dialog's
- * left/right choice, the multi-select entry, and the Edit Section dialog's
- * disabled-while-dirty rule.
+ * left/right choice and the request it sends, the multi-select entry and its one
+ * batch, what the frontend does with the reply (the positional refs it mirrors, the
+ * state it clears), and the Edit Section dialog's disabled-while-dirty rule.
+ *
+ * The transform itself is the backend's (#576 E3): the mock answers a reverse with
+ * its canned `reversed_sections` and leaves the shots as they were. The per-shot
+ * transform, the anchor compensation and the mirroring of merges, closures, datums
+ * and comments are pinned in Rust (models `project/reverse.rs` tests and
+ * `project/mock_narrowing_tests.rs`, core `reverse_tests.rs`); this spec asserts the
+ * request the UI sends and the UI's handling of the reply.
  */
 import { test, expect, type Page } from './fixtures/coverage';
 import {
@@ -13,24 +21,13 @@ import {
   waitForMapReady,
   waitForNoDialogs,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
+import { recordIpcCalls, getIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
+import type { CommandError } from '../src/types/ipc/CommandError';
 
 type StationRef = { section_id: number; station_index: number };
 
-/**
- * Every field the reverse touches differs from every other, so a wrong transform
- * cannot look like a right one:
- *
- * * `azimuth_in !== azimuth_out` - the transform reciprocates AND swaps them, so
- *   an equal pair could not tell a correct reverse from one that only
- *   reciprocates (or only swaps).
- * * `depth_in !== depth_out` and `pitch_in !== -pitch_out` - both are swapped,
- *   and pitch is negated as well.
- * * `left !== right` - swapped only when the user opts in.
- *
- * Values are exactly representable in float32: the mock round-trips shots through
- * the binary IPC wire (`load_project_full_binary`), so 0.1 would come back a few
- * ulps off and every assertion below would need a tolerance.
- */
+/** A shot whose readings differ field by field; the values are arbitrary. */
 function buildShot(index: number) {
   const base = index + 1;
   return {
@@ -48,12 +45,12 @@ function buildShot(index: number) {
   };
 }
 
-/** Reciprocal of a forward azimuth, normalised to [0, 360) - `reverse.rs::reciprocal`. */
-function reciprocal(azimuth: number): number {
-  return (((azimuth + 180) % 360) + 360) % 360;
-}
-
-async function setup(page: Page, sectionCount = 1) {
+// Typed by count: the length check at the end of setup() throws unless exactly
+// `sectionCount` ids came back.
+function setup(page: Page): Promise<[number]>;
+function setup(page: Page, sectionCount: 2): Promise<[number, number]>;
+function setup(page: Page, sectionCount: 3): Promise<[number, number, number]>;
+async function setup(page: Page, sectionCount = 1): Promise<number[]> {
   await setupMockedPage(page);
   await createProject(page, 'Reverse Section');
 
@@ -70,8 +67,8 @@ async function setup(page: Page, sectionCount = 1) {
   await waitForNoDialogs(page);
 
   const ids = await page.evaluate(() => {
-    const state = (window as any).__E2E_TEST__.projectStore.getState();
-    return (state.project?.sections ?? []).map((s: any) => s.id) as number[];
+    const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
+    return (state.project?.sections ?? []).map((s) => s.id) as number[];
   });
   if (ids.length !== sectionCount) {
     throw new Error(`Expected ${sectionCount} sections, got ${ids.length}`);
@@ -82,7 +79,7 @@ async function setup(page: Page, sectionCount = 1) {
 async function openContextMenu(page: Page, target: Record<string, unknown>) {
   await page.evaluate(
     ({ target }) => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('context-menu', {
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('context-menu', {
         target,
         position: { x: 140, y: 140 },
       });
@@ -91,65 +88,26 @@ async function openContextMenu(page: Page, target: Record<string, unknown>) {
   );
 }
 
-type ShotSnapshot = {
-  id: number;
-  length: number;
-  azimuth_in: number;
-  azimuth_out: number;
-  depth_in: number;
-  depth_out: number;
-  pitch_in: number | null;
-  pitch_out: number | null;
-  left: number | null;
-  right: number | null;
-};
-
-async function readShots(page: Page, sectionId: number): Promise<ShotSnapshot[]> {
-  return page.evaluate((id) => {
-    const state = (window as any).__E2E_TEST__.projectStore.getState();
-    const section = state.project.sections.find((s: any) => s.id === id);
-    return (section?.shots ?? []).map((s: any) => ({
-      id: s.id,
-      length: s.length,
-      azimuth_in: s.azimuth_in,
-      azimuth_out: s.azimuth_out,
-      depth_in: s.depth_in,
-      depth_out: s.depth_out,
-      pitch_in: s.pitch_in,
-      pitch_out: s.pitch_out,
-      left: s.left,
-      right: s.right,
-    }));
+/**
+ * Make the mock answer the post-reverse re-resolution of a 3-shot section's anchors the way
+ * the backend does (station i becomes station 3 - i), for the station-ref-keeping tests.
+ */
+async function mirrorAnchorsOnReverse(page: Page, sectionId: number): Promise<void> {
+  await page.evaluate((id) => {
+    const resolution: Record<string, StationRef> = {};
+    for (let i = 0; i <= 3; i += 1) resolution[`${id}:${i}`] = { section_id: id, station_index: 3 - i };
+    (window as E2EWindow).__MOCK_SET_ANCHOR_RESOLUTION__!(resolution);
   }, sectionId);
 }
 
-/** The section's map anchor, which a reverse must move to keep the cave still. */
-async function readSectionOffset(page: Page, sectionId: number): Promise<[number, number]> {
-  return page.evaluate((id) => {
-    const state = (window as any).__E2E_TEST__.projectStore.getState();
-    const offsets = state.project?.section_offsets ?? {};
-    const entry = Array.isArray(offsets)
-      ? (offsets as Array<[number, [number, number]]>).find(([k]) => Number(k) === id)?.[1]
-      : (offsets as Record<string, [number, number]>)[String(id)];
-    return (entry ?? [0, 0]) as [number, number];
-  }, sectionId);
-}
-
-async function readComment(
-  page: Page,
-  sectionId: number,
-  stationIndex: number
-): Promise<string | undefined> {
-  return page.evaluate(
-    ({ id, index }) => {
-      const state = (window as any).__E2E_TEST__.projectStore.getState();
-      return (state.stations ?? []).find(
-        (s: any) =>
-          s.station_ref.section_id === id && s.station_ref.station_index === index
-      )?.comment as string | undefined;
-    },
-    { id: sectionId, index: stationIndex }
-  );
+/** The frontend asked the backend to re-resolve its anchors AFTER the reverse it sent. */
+async function expectReResolvedAfterTheReverse(page: Page): Promise<void> {
+  await expect
+    .poll(async () => {
+      const order = (await getIpcCalls(page)).map((c) => c.cmd);
+      return order.indexOf('plan_refs_for_anchors', order.indexOf('reverse_section')) > 0;
+    })
+    .toBe(true);
 }
 
 async function reverseFromSectionMenu(page: Page, sectionId: number): Promise<void> {
@@ -166,10 +124,10 @@ test.describe('Reverse Section', () => {
   test('is offered from the sections panel, map station and map shot menus', async ({ page }) => {
     const [sectionId] = await setup(page);
     const shotIds = await page.evaluate((id) => {
-      const state = (window as any).__E2E_TEST__.projectStore.getState();
-      return state.project.sections
-        .find((s: any) => s.id === id)
-        .shots.map((s: any) => s.id);
+      const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
+      return state.project!.sections
+        .find((s) => s.id === id)!
+        .shots.map((s) => s.id);
     }, sectionId);
 
     for (const target of [
@@ -187,8 +145,8 @@ test.describe('Reverse Section', () => {
   test('is absent from the shot-scoped datatable menu', async ({ page }) => {
     const [sectionId] = await setup(page);
     const shotIds = await page.evaluate((id) => {
-      const state = (window as any).__E2E_TEST__.projectStore.getState();
-      return state.project.sections.find((s: any) => s.id === id).shots.map((s: any) => s.id);
+      const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
+      return state.project!.sections.find((s) => s.id === id)!.shots.map((s) => s.id);
     }, sectionId);
 
     await openContextMenu(page, {
@@ -203,9 +161,9 @@ test.describe('Reverse Section', () => {
     await expect(page.getByRole('button', { name: 'Reverse Section' })).toHaveCount(0);
   });
 
-  test('reverses shot order and leaves left/right alone by default', async ({ page }) => {
+  test('confirming sends the reverse, leaving left/right alone by default', async ({ page }) => {
     const [sectionId] = await setup(page);
-    const before = await readShots(page, sectionId);
+    await recordIpcCalls(page, ['reverse_section', 'execute_batch']);
 
     await openContextMenu(page, { type: 'section', sectionId });
     await page.getByRole('button', { name: 'Reverse Section' }).click();
@@ -217,22 +175,16 @@ test.describe('Reverse Section', () => {
     await page.getByTestId('reverse-confirm').click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
-    await expect.poll(async () => (await readShots(page, sectionId)).map((s) => s.length)).toEqual(
-      before.map((s) => s.length).reverse()
-    );
-
-    const after = await readShots(page, sectionId);
-    // Ids stay attached to positions; the records moved under them.
-    expect(after.map((s) => s.id)).toEqual(before.map((s) => s.id));
-    // Left/right untouched: the last shot's values are now on the first row.
-    expect(after[0]!.left).toBe(before[before.length - 1]!.left);
-    expect(after[0]!.right).toBe(before[before.length - 1]!.right);
+    // One single-section reverse reached the backend, without the left/right swap.
+    const [call] = await waitForIpcCall(page, 'reverse_section');
+    expect(call.args).toEqual({ sectionId, swapLeftRight: false });
+    expect(await getIpcCalls(page, 'reverse_section')).toHaveLength(1);
+    expect(await getIpcCalls(page, 'execute_batch')).toHaveLength(0);
   });
 
-  test('swaps left/right when the user opts in', async ({ page }) => {
+  test('opting in sends the left/right swap with the reverse', async ({ page }) => {
     const [sectionId] = await setup(page);
-    const before = await readShots(page, sectionId);
-    const lastBefore = before[before.length - 1]!;
+    await recordIpcCalls(page, ['reverse_section']);
 
     await openContextMenu(page, { type: 'section', sectionId });
     await page.getByRole('button', { name: 'Reverse Section' }).click();
@@ -240,212 +192,15 @@ test.describe('Reverse Section', () => {
     await page.getByTestId('reverse-confirm').click();
     await expect(page.getByTestId('reverse-section-dialog')).not.toBeVisible({ timeout: 5000 });
 
-    await expect.poll(async () => (await readShots(page, sectionId))[0]!.left).toBe(
-      lastBefore.right
-    );
-    const after = await readShots(page, sectionId);
-    expect(after[0]!.right).toBe(lastBefore.left);
-  });
-
-  test('reciprocates and swaps the readings, swaps depths and negates pitch', async ({ page }) => {
-    // The per-field transform (models/project/reverse.rs). Every test above reads
-    // only `length` and `left`/`right`, so the whole reciprocate-and-swap - the
-    // part that actually keeps the cave still - was unasserted: a reverse that
-    // merely re-ordered the shots passed them all.
-    const [sectionId] = await setup(page);
-    const before = await readShots(page, sectionId);
-
-    await reverseFromSectionMenu(page, sectionId);
-    await expect
-      .poll(async () => (await readShots(page, sectionId)).map((s) => s.length))
-      .toEqual(before.map((s) => s.length).reverse());
-
-    const after = await readShots(page, sectionId);
-    expect(after).toHaveLength(before.length);
-    after.forEach((shot, i) => {
-      const source = before[before.length - 1 - i]!;
-      // azimuth_in/out are two FORWARD readings of the same line, not a
-      // foresight/backsight pair - so they are reciprocated AND swapped.
-      // Swapping alone leaves the circular mean (the bearing geometry walks)
-      // untouched and the section pointing the way it did before.
-      expect(shot.azimuth_in).toBeCloseTo(reciprocal(source.azimuth_out), 4);
-      expect(shot.azimuth_out).toBeCloseTo(reciprocal(source.azimuth_in), 4);
-      expect(shot.depth_in).toBeCloseTo(source.depth_out, 5);
-      expect(shot.depth_out).toBeCloseTo(source.depth_in, 5);
-      // Pitch is signed slope, so travelling the other way flips it as well as
-      // re-associating it with the other end.
-      expect(shot.pitch_in).toBeCloseTo(-source.pitch_out!, 5);
-      expect(shot.pitch_out).toBeCloseTo(-source.pitch_in!, 5);
-      // Not opted in, so left/right travel with the record untouched.
-      expect(shot.left).toBeCloseTo(source.left!, 5);
-      expect(shot.right).toBeCloseTo(source.right!, 5);
-    });
-  });
-
-  test('swaps every shot left/right when the user opts in, and nothing else', async ({ page }) => {
-    const [sectionId] = await setup(page);
-    const before = await readShots(page, sectionId);
-
-    await openContextMenu(page, { type: 'section', sectionId });
-    await page.getByRole('button', { name: 'Reverse Section' }).click();
-    await page.getByTestId('reverse-swap-lr').check();
-    await page.getByTestId('reverse-confirm').click();
-    await expect(page.getByTestId('reverse-section-dialog')).not.toBeVisible({ timeout: 5000 });
-    await expect
-      .poll(async () => (await readShots(page, sectionId)).map((s) => s.length))
-      .toEqual(before.map((s) => s.length).reverse());
-
-    const after = await readShots(page, sectionId);
-    after.forEach((shot, i) => {
-      const source = before[before.length - 1 - i]!;
-      expect(shot.left).toBeCloseTo(source.right!, 5);
-      expect(shot.right).toBeCloseTo(source.left!, 5);
-      // The opt-in is left/right ONLY - up/down are absolute and never mirror,
-      // and the azimuth transform is unaffected by the choice.
-      expect(shot.azimuth_in).toBeCloseTo(reciprocal(source.azimuth_out), 4);
-    });
-  });
-
-  test('swaps readings exactly 180 apart instead of reciprocating them', async ({ page }) => {
-    // A pair exactly 180 apart has an undefined circular mean, and
-    // reciprocate-and-swap maps it to ITSELF - the shot would keep its old
-    // bearing while the rest of the section turned around, which is the one way
-    // a reverse can move the cave. `reverse_shots` swaps such a pair instead.
-    //
-    // The second section is the same degenerate pair written out of range, which
-    // only reads as degenerate once both readings are normalised to [0, 360)
-    // first - and, because that branch swaps its operands verbatim, only comes
-    // back in range if the normalisation happened before the swap. Reachable:
-    // validation only WARNS on an out-of-range azimuth and the DMP parser stores
-    // headings verbatim.
-    await setupMockedPage(page);
-    await createProject(page, 'Reverse Antipodal');
-    await seedProjectWithSections(page, [
-      {
-        name: 'Antipodal',
-        direction: 'in',
-        shots: [{ azimuth_in: 30, azimuth_out: 210, length: 10, depth_in: 0, depth_out: 0 }],
-      },
-      {
-        name: 'Antipodal, out of range',
-        direction: 'in',
-        shots: [{ azimuth_in: 30, azimuth_out: -150, length: 10, depth_in: 0, depth_out: 0 }],
-      },
-    ]);
-    await waitForMapReady(page);
-    await waitForNoDialogs(page);
-
-    const ids = await page.evaluate(() =>
-      ((window as any).__E2E_TEST__.projectStore.getState().project?.sections ?? []).map(
-        (s: any) => s.id as number
-      )
-    );
-    expect(ids).toHaveLength(2);
-
-    for (const id of ids) {
-      await reverseFromSectionMenu(page, id);
-      // Swapped, not reciprocated: reciprocate-and-swap would hand back the
-      // original (30, 210) unchanged.
-      await expect.poll(async () => (await readShots(page, id))[0]!.azimuth_in).toBe(210);
-      expect((await readShots(page, id))[0]!.azimuth_out).toBe(30);
-    }
-  });
-
-  test('compensates the anchor with the true circular mean of out-of-range readings', async ({
-    page,
-  }) => {
-    // 600 degrees is 240; paired with 0 the true circular mean is 300, the short
-    // way round. Rust's `%` - and JS's - truncate toward zero and return the
-    // ANTIPODE 120 for a pair this far apart, which is the bug #24 fixed in
-    // `average_azimuth_of`. The anchor compensation would then point the wrong
-    // way and the passage would jump by twice its own span on every reverse.
-    await setupMockedPage(page);
-    await createProject(page, 'Reverse Out Of Range');
-    await seedProjectWithSections(page, [
-      {
-        name: 'Far out of range',
-        direction: 'in',
-        shots: [{ azimuth_in: 600, azimuth_out: 0, length: 10, depth_in: 0, depth_out: 0 }],
-      },
-    ]);
-    await waitForMapReady(page);
-    await waitForNoDialogs(page);
-
-    const sectionId = await page.evaluate(
-      () => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].id as number
-    );
-    const offsetBefore = await readSectionOffset(page, sectionId);
-
-    await reverseFromSectionMenu(page, sectionId);
-
-    const meanRad = (300 * Math.PI) / 180;
-    await expect
-      .poll(async () => (await readSectionOffset(page, sectionId))[0] - offsetBefore[0])
-      .toBeCloseTo(10 * Math.sin(meanRad), 4);
-    const offsetAfter = await readSectionOffset(page, sectionId);
-    expect(offsetAfter[1] - offsetBefore[1]).toBeCloseTo(10 * Math.cos(meanRad), 4);
-  });
-
-  test('never writes a non-finite section offset', async ({ page }) => {
-    // `NaN !== 0` is TRUE, so a bare "did it move?" check admits a non-finite
-    // displacement into `section_offsets`, which has no other finite guard - and
-    // save rewrites a non-finite offset to 0.0, teleporting the section to the
-    // origin (the exact opposite of what the compensation is for). A finite
-    // length is enough to produce one: squaring 1e200 overflows to Infinity, and
-    // `Infinity * sin(0)` is NaN.
-    await setupMockedPage(page);
-    await createProject(page, 'Reverse Overflow');
-    await seedProjectWithSections(page, [
-      {
-        name: 'Overflowing',
-        direction: 'in',
-        shots: [{ azimuth_in: 0, azimuth_out: 0, length: 1e200, depth_in: 0, depth_out: 0 }],
-      },
-    ]);
-    await waitForMapReady(page);
-    await waitForNoDialogs(page);
-
-    const sectionId = await page.evaluate(
-      () => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].id as number
-    );
-
-    await reverseFromSectionMenu(page, sectionId);
-
-    const offset = await readSectionOffset(page, sectionId);
-    expect(Number.isFinite(offset[0])).toBe(true);
-    expect(Number.isFinite(offset[1])).toBe(true);
-  });
-
-  test('writes the anchor without clobbering a neighbouring section', async ({ page }) => {
-    // `section_offsets` reaches the backend-facing mock in two shapes: the JS
-    // Record the create/import paths build, and the `[sectionId, [dx, dy]]` pairs
-    // the binary load path (and `__E2E_MOCKS__.setCurrentProject`) carry.
-    // `offsets["2"] = [dx, dy]` on the pair form sets ELEMENT 2 - silently
-    // replacing another section's entry with a bare coordinate.
-    const ids = await setup(page, 2);
-    await page.evaluate((sectionIds) => {
-      const project = (window as any).__E2E_MOCKS__.getCurrentProject();
-      project.section_offsets = [
-        [sectionIds[0], [1, 2]],
-        [sectionIds[1], [3, 4]],
-      ];
-    }, ids);
-
-    await reverseFromSectionMenu(page, ids[0]!);
-
-    // The reversed section's anchor moved...
-    await expect
-      .poll(async () => (await readSectionOffset(page, ids[0]!))[0])
-      .not.toBe(1);
-    // ...and its neighbour's is exactly as it was.
-    expect(await readSectionOffset(page, ids[1]!)).toEqual([3, 4]);
+    const [call] = await waitForIpcCall(page, 'reverse_section');
+    expect(call.args).toEqual({ sectionId, swapLeftRight: true });
   });
 
   test('offers a separate entry for a multi-section selection', async ({ page }) => {
     const ids = await setup(page, 2);
 
     await page.evaluate((sectionIds) => {
-      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      const ui = (window as E2EWindow).__E2E_TEST__.uiStore.getState();
       ui.setSelection({ type: 'section', sectionId: sectionIds[0] });
       ui.addToSelection({ type: 'section', sectionId: sectionIds[1] });
     }, ids);
@@ -462,10 +217,9 @@ test.describe('Reverse Section', () => {
 
   test('reverses every selected section as one batched action', async ({ page }) => {
     const ids = await setup(page, 2);
-    const before = await Promise.all(ids.map((id) => readShots(page, id)));
 
     await page.evaluate((sectionIds) => {
-      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      const ui = (window as E2EWindow).__E2E_TEST__.uiStore.getState();
       ui.setSelection({ type: 'section', sectionId: sectionIds[0] });
       ui.addToSelection({ type: 'section', sectionId: sectionIds[1] });
     }, ids);
@@ -476,58 +230,19 @@ test.describe('Reverse Section', () => {
     await page.getByTestId('reverse-confirm').click();
     await waitForNoDialogs(page);
 
-    // Both sections reversed, not just the first.
-    for (const [i, id] of ids.entries()) {
-      const after = await readShots(page, id);
-      expect(after.map((s) => s.length)).toEqual(
-        [...before[i]!].reverse().map((s) => s.length)
-      );
-    }
-
-    // One batch, carrying both sections - not one command per section, which
-    // would half-apply on failure and need one Undo each.
+    // One batch, carrying a reverse of both sections - not one command per section,
+    // which would half-apply on failure and need one Undo each.
+    await expect
+      .poll(() => page.evaluate(() => ((window as E2EWindow).__MOCK_EXECUTE_BATCH_CALLS__ ?? []).length))
+      .toBe(1);
     const batches = await page.evaluate(
-      () => (window as any).__MOCK_EXECUTE_BATCH_CALLS__ as unknown[] | undefined
+      () => (window as E2EWindow).__MOCK_EXECUTE_BATCH_CALLS__ as unknown[] | undefined
     );
     expect(batches).toHaveLength(1);
-    expect(batches![0]).toHaveLength(2);
-  });
-
-  test('moves the anchor and the station comment with the section', async ({ page }) => {
-    // The dialog promises "the cave does not move ... comments stay on the
-    // station they were set on". Both live outside the shot vec, so a reverse
-    // that only reciprocated the shots would pass every test above.
-    const [sectionId] = await setup(page);
-
-    await page.evaluate(
-      (id) =>
-        (window as any).__E2E_TEST__.projectStore
-          .getState()
-          .updateStationComment({ section_id: id, station_index: 0 }, 'at the entrance'),
-      sectionId
-    );
-    await expect
-      .poll(() => readComment(page, sectionId, 0))
-      .toBe('at the entrance');
-
-    const offsetBefore = await readSectionOffset(page, sectionId);
-
-    await reverseFromSectionMenu(page, sectionId);
-
-    // Station 0 is now the far end, so the anchor gained the section's span.
-    const offsetAfter = await readSectionOffset(page, sectionId);
-    expect(offsetAfter).not.toEqual(offsetBefore);
-
-    // The comment travelled to the same physical station, now numbered 3.
-    await expect.poll(() => readComment(page, sectionId, 3)).toBe('at the entrance');
-    expect(await readComment(page, sectionId, 0)).toBeUndefined();
-
-    // And reversing back restores both - the transform is its own inverse.
-    await reverseFromSectionMenu(page, sectionId);
-    await expect.poll(() => readComment(page, sectionId, 0)).toBe('at the entrance');
-    const offsetRestored = await readSectionOffset(page, sectionId);
-    expect(offsetRestored[0]).toBeCloseTo(offsetBefore[0], 9);
-    expect(offsetRestored[1]).toBeCloseTo(offsetBefore[1], 9);
+    expect(batches![0]).toEqual([
+      { type: 'reverse_section', section_id: ids[0], swap_left_right: false },
+      { type: 'reverse_section', section_id: ids[1], swap_left_right: false },
+    ]);
   });
 
   test('shift-clicking sections panel rows reaches the multi-section entry', async ({ page }) => {
@@ -554,9 +269,9 @@ test.describe('Reverse Section', () => {
     const ids = await setup(page, 2);
     const selectedSectionIds = () =>
       page.evaluate(() =>
-        ((window as any).__E2E_TEST__.uiStore.getState().multiSelection ?? [])
-          .filter((s: any) => s.type === 'section')
-          .map((s: any) => s.sectionId as number)
+        ((window as E2EWindow).__E2E_TEST__.uiStore.getState().multiSelection ?? [])
+          .filter((s) => s.type === 'section')
+          .map((s) => s.sectionId as number)
       );
 
     await page.getByTestId(`section-row-${ids[0]}`).click();
@@ -568,7 +283,7 @@ test.describe('Reverse Section', () => {
     // Dismissed through the store rather than Escape: the Escape shortcut also
     // CLEARS the selection, which would hide whether the second ctrl-click below
     // toggled the row off or the keypress did it.
-    await page.evaluate(() => (window as any).__E2E_TEST__.uiStore.getState().closeDialog());
+    await page.evaluate(() => (window as E2EWindow).__E2E_TEST__.uiStore.getState().closeDialog());
     await waitForNoDialogs(page);
 
     await page.getByTestId(`section-row-${ids[1]}`).click({ modifiers: ['ControlOrMeta'] });
@@ -588,7 +303,7 @@ test.describe('Reverse Section', () => {
     const ids = await setup(page, 3);
 
     await page.evaluate((sectionIds) => {
-      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      const ui = (window as E2EWindow).__E2E_TEST__.uiStore.getState();
       ui.setSelection({ type: 'section', sectionId: sectionIds[0] });
       ui.addToSelection({ type: 'section', sectionId: sectionIds[1] });
     }, ids);
@@ -611,7 +326,7 @@ test.describe('Reverse Section', () => {
     const ids = await setup(page, 2);
 
     await page.evaluate((sectionIds) => {
-      (window as any).__E2E_TEST__.uiStore.setState({
+      (window as E2EWindow).__E2E_TEST__.uiStore.setState({
         selection: { type: 'section', sectionId: sectionIds[0] },
         multiSelection: [
           { type: 'section', sectionId: sectionIds[0] },
@@ -632,14 +347,14 @@ test.describe('Reverse Section', () => {
 
   test('surfaces a rejected reverse and leaves the dialog open to retry', async ({ page }) => {
     // The read-only self-check has its own test; this is the OTHER error surface -
-    // a `{ success: false }` from the backend, which must render `result.error`
-    // verbatim rather than closing the dialog on a reverse that never happened.
+    // a refusal from the backend (a `CommandError` rejection), whose message must
+    // render verbatim rather than closing the dialog on a reverse that never happened.
     const [sectionId] = await setup(page);
-    const before = await readShots(page, sectionId);
+    await recordIpcCalls(page, ['reverse_section']);
 
     await page.evaluate(() => {
-      (window as any).__MOCK_IPC_OVERRIDES__ = {
-        reverse_section: { success: false, error: 'Section is locked by another editor' },
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = {
+        reverse_section: { __reject: { code: 'FAILED', message: 'Section is locked by another editor' } satisfies CommandError },
       };
     });
 
@@ -651,16 +366,17 @@ test.describe('Reverse Section', () => {
     await expect(page.getByTestId('reverse-section-dialog')).toBeVisible();
     // Re-armed, so the user can retry once the cause is cleared.
     await expect(page.getByTestId('reverse-confirm')).toBeEnabled();
-    expect((await readShots(page, sectionId)).map((s) => s.length)).toEqual(
-      before.map((s) => s.length)
-    );
+    // The message is the backend's answer to the one request that was sent.
+    expect((await getIpcCalls(page, 'reverse_section')).map((c) => c.args)).toEqual([
+      { sectionId, swapLeftRight: false },
+    ]);
   });
 
   test('Cancel closes the dialog without reversing anything', async ({ page }) => {
     const [sectionId] = await setup(page);
-    const before = await readShots(page, sectionId);
+    await recordIpcCalls(page, ['reverse_section', 'execute_batch']);
     await page.evaluate(() =>
-      (window as any).__E2E_TEST__.projectStore.setState({ isDirty: false })
+      (window as E2EWindow).__E2E_TEST__.projectStore.setState({ isDirty: false })
     );
 
     await openContextMenu(page, { type: 'section', sectionId });
@@ -670,15 +386,13 @@ test.describe('Reverse Section', () => {
     await dialog.getByRole('button', { name: 'Cancel' }).click();
 
     await expect(dialog).not.toBeVisible();
-    expect((await readShots(page, sectionId)).map((s) => s.length)).toEqual(
-      before.map((s) => s.length)
-    );
-    // Nothing was submitted, so the project is still clean.
+    // Nothing reached the backend, so the project is still clean.
     expect(
       await page.evaluate(
-        () => (window as any).__E2E_TEST__.projectStore.getState().isDirty as boolean
+        () => (window as E2EWindow).__E2E_TEST__.projectStore.getState().isDirty as boolean
       )
     ).toBe(false);
+    expect(await getIpcCalls(page)).toEqual([]);
   });
 
   test('moves the gas plan pins with the sections they sit on', async ({ page }) => {
@@ -688,15 +402,23 @@ test.describe('Reverse Section', () => {
     const [sectionId] = await setup(page);
 
     await page.evaluate((id) => {
-      const gas = (window as any).__E2E_TEST__.gasPlanStore.getState();
+      const gas = (window as E2EWindow).__E2E_TEST__.gasPlanStore.getState();
       gas.setOrigin({ section_id: id, station_index: 0 });
       gas.setEndpoint({ section_id: id, station_index: 1 });
     }, sectionId);
+    // [#576 E3] The backend re-places an anchored pin after the reverse (3 shots -> 4
+    // stations: 0 becomes 3, 1 becomes 2 - pinned by core dive_plan
+    // `anchored_pins_survive_a_section_reverse`); the mock answers what the spec says it
+    // does. What is asserted here is the frontend's half: it re-resolves its pins around
+    // the edit and applies the answer.
+    await mirrorAnchorsOnReverse(page, sectionId);
+    await recordIpcCalls(page, ['reverse_section', 'plan_refs_for_anchors']);
 
     await reverseFromSectionMenu(page, sectionId);
+    await expectReResolvedAfterTheReverse(page);
 
     const pins = await page.evaluate(() => {
-      const gas = (window as any).__E2E_TEST__.gasPlanStore.getState();
+      const gas = (window as E2EWindow).__E2E_TEST__.gasPlanStore.getState();
       return { origin: gas.origin, endpoint: gas.endpoint };
     });
     // 3 shots -> 4 stations: 0 mirrors to 3, 1 mirrors to 2.
@@ -714,7 +436,7 @@ test.describe('Reverse Section', () => {
     const [sectionId] = await setup(page);
 
     await page.evaluate((id) => {
-      const gas = (window as any).__E2E_TEST__.gasPlanStore.getState();
+      const gas = (window as E2EWindow).__E2E_TEST__.gasPlanStore.getState();
       const origin = { section_id: id, station_index: 0 };
       gas.setOrigin(origin);
       gas.applyLoadedPlan(1, {
@@ -730,10 +452,14 @@ test.describe('Reverse Section', () => {
       });
     }, sectionId);
 
+    await mirrorAnchorsOnReverse(page, sectionId);
+    await recordIpcCalls(page, ['reverse_section', 'plan_refs_for_anchors']);
+
     await reverseFromSectionMenu(page, sectionId);
+    await expectReResolvedAfterTheReverse(page);
 
     const after = await page.evaluate(() => {
-      const gas = (window as any).__E2E_TEST__.gasPlanStore.getState();
+      const gas = (window as E2EWindow).__E2E_TEST__.gasPlanStore.getState();
       return { origin: gas.origin, baseline: gas.loadedPlanBaseline?.origin ?? null };
     });
     expect(after.origin).toEqual({ section_id: sectionId, station_index: 3 });
@@ -747,14 +473,14 @@ test.describe('Reverse Section', () => {
     const [sectionId] = await setup(page);
 
     await page.evaluate((id) => {
-      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      const ui = (window as E2EWindow).__E2E_TEST__.uiStore.getState();
       ui.setSelection({ type: 'section', sectionId: id });
       ui.setMergeStationA({ section_id: id, station_index: 0 });
     }, sectionId);
 
     // Precondition: both are actually set, so the assertions below cannot pass vacuously.
     const before = await page.evaluate(() => {
-      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      const ui = (window as E2EWindow).__E2E_TEST__.uiStore.getState();
       return { selection: ui.selection, mergeStationA: ui.mergeStationA };
     });
     expect(before.selection).not.toBeNull();
@@ -763,7 +489,7 @@ test.describe('Reverse Section', () => {
     await reverseFromSectionMenu(page, sectionId);
 
     const after = await page.evaluate(() => {
-      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      const ui = (window as E2EWindow).__E2E_TEST__.uiStore.getState();
       return { selection: ui.selection, mergeStationA: ui.mergeStationA };
     });
     expect(after.selection).toBeNull();
@@ -777,15 +503,18 @@ test.describe('Reverse Section', () => {
     const [sectionId] = await setup(page);
 
     await page.evaluate((id) => {
-      (window as any).__E2E_TEST__.uiStore
+      (window as E2EWindow).__E2E_TEST__.uiStore
         .getState()
         .setDistanceGradientOrigin({ section_id: id, station_index: 0 });
     }, sectionId);
+    await mirrorAnchorsOnReverse(page, sectionId);
+    await recordIpcCalls(page, ['reverse_section', 'plan_refs_for_anchors']);
 
     await reverseFromSectionMenu(page, sectionId);
+    await expectReResolvedAfterTheReverse(page);
 
     const origin = await page.evaluate(
-      () => (window as any).__E2E_TEST__.uiStore.getState().distanceGradientOrigin
+      () => (window as E2EWindow).__E2E_TEST__.uiStore.getState().distanceGradientOrigin
     );
     expect(origin).toEqual({ section_id: sectionId, station_index: 3 });
   });
@@ -795,10 +524,10 @@ test.describe('Reverse Section', () => {
     // and the mode can flip while the dialog is up - so the check has to run at
     // confirm time, not at open time.
     const [sectionId] = await setup(page);
-    const before = await readShots(page, sectionId);
+    await recordIpcCalls(page, ['reverse_section', 'execute_batch']);
 
     await page.evaluate((id) => {
-      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      const ui = (window as E2EWindow).__E2E_TEST__.uiStore.getState();
       ui.openDialog('reverse-section', { sectionIds: [id] });
       ui.setAppMode('plan');
     }, sectionId);
@@ -807,11 +536,9 @@ test.describe('Reverse Section', () => {
     await page.getByTestId('reverse-confirm').click();
 
     await expect(page.getByTestId('reverse-error')).toBeVisible();
-    // The dialog stays up and nothing was reversed.
+    // The dialog stays up and no reverse was sent.
     await expect(page.getByTestId('reverse-section-dialog')).toBeVisible();
-    expect((await readShots(page, sectionId)).map((s) => s.length)).toEqual(
-      before.map((s) => s.length)
-    );
+    expect(await getIpcCalls(page)).toEqual([]);
   });
 
   test('disables confirm when a listed section has gone away', async ({ page }) => {
@@ -822,7 +549,7 @@ test.describe('Reverse Section', () => {
     const ids = await setup(page, 2);
 
     await page.evaluate((sectionIds) => {
-      (window as any).__E2E_TEST__.uiStore
+      (window as E2EWindow).__E2E_TEST__.uiStore
         .getState()
         .openDialog('reverse-section', { sectionIds });
     }, ids);
@@ -830,7 +557,7 @@ test.describe('Reverse Section', () => {
     await expect(page.getByTestId('reverse-confirm')).toHaveText('Reverse 2 Sections');
 
     await page.evaluate(
-      (id) => (window as any).__E2E_TEST__.projectStore.getState().deleteSection(id),
+      (id) => (window as E2EWindow).__E2E_TEST__.projectStore.getState().deleteSection(id),
       ids[1]
     );
 
@@ -851,28 +578,28 @@ test.describe('Reverse Section', () => {
     await waitForNoDialogs(page);
 
     const sectionId = await page.evaluate(
-      () => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].id as number
+      () => (window as E2EWindow).__E2E_TEST__.projectStore.getState().project!.sections[0]!.id as number
     );
     await page.evaluate(() =>
-      (window as any).__E2E_TEST__.projectStore.setState({ isDirty: false })
+      (window as E2EWindow).__E2E_TEST__.projectStore.setState({ isDirty: false })
     );
 
     // The dialog now REFUSES rather than submitting a no-op: with nothing that would
     // actually change, Confirm is disabled, so the user is not offered an action that
     // would close the dialog and fire a completed-reverse event having done nothing.
     await page.evaluate((id) => {
-      (window as any).__E2E_TEST__.uiStore
+      (window as E2EWindow).__E2E_TEST__.uiStore
         .getState()
         .openDialog('reverse-section', { sectionIds: [id] });
     }, sectionId);
     await expect(page.getByTestId('reverse-section-dialog')).toBeVisible();
     await expect(page.getByTestId('reverse-confirm')).toBeDisabled();
 
-    await page.evaluate(() => (window as any).__E2E_TEST__.uiStore.getState().closeDialog());
+    await page.evaluate(() => (window as E2EWindow).__E2E_TEST__.uiStore.getState().closeDialog());
 
     expect(
       await page.evaluate(
-        () => (window as any).__E2E_TEST__.projectStore.getState().isDirty as boolean
+        () => (window as E2EWindow).__E2E_TEST__.projectStore.getState().isDirty as boolean
       )
     ).toBe(false);
   });
@@ -881,7 +608,7 @@ test.describe('Reverse Section', () => {
     const [sectionId] = await setup(page);
 
     await page.evaluate((id) => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: id });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: id });
     }, sectionId);
     await expect(page.getByTestId('edit-section-dialog')).toBeVisible();
 

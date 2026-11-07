@@ -7,7 +7,16 @@
  */
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import type { E2EWindow } from './helpers/e2eWindow';
+import type { Section } from '../src/types/ipc/Section';
 
+/**
+ * [#576 NF-W7F-3] The id=0 fixtures are complete wire `Section`s (`satisfies Section`),
+ * written through the store's own `setState`, so a field the backend always sends and
+ * the fixture lacks fails typecheck:playwright instead of reaching the app as undefined.
+ * They used to carry no `quality`, `next_shot_id`, `reverse_parity`, `gauge_shot_uuid`
+ * or `gauge_neighbour_uuid`, behind a window view that took any value as given.
+ */
 /**
  * Helper to create a new project
  */
@@ -30,7 +39,7 @@ async function createProject(page: Page, name: string) {
 async function injectId0Fixture(page: Page) {
   // First wait for the project store to be ready with a project
   await page.waitForFunction(() => {
-    const store = (window as any).__E2E_TEST__?.projectStore;
+    const store = (window as E2EWindow).__E2E_TEST__?.projectStore;
     return store && store.getState()?.project !== null;
   }, { timeout: 5000 });
 
@@ -41,7 +50,13 @@ async function injectId0Fixture(page: Page) {
       surveyor: 'Test Surveyor',
       date: '2026-01-20',
       color: '#4ecdc4',
-      direction: 'in' as const,
+      direction: 'in',
+      quality: 1,
+      // Section 0's id band starts at 0 (`id * FEATURE_ID_STRIDE`); one shot minted.
+      next_shot_id: 1,
+      reverse_parity: false,
+      gauge_shot_uuid: null,
+      gauge_neighbour_uuid: null,
       shots: [{
         id: 0,
         azimuth_in: 90,
@@ -60,10 +75,10 @@ async function injectId0Fixture(page: Page) {
         marker_index: 0,
         temperature: null,
       }]
-    };
+    } satisfies Section;
 
     // Get current state - project is guaranteed non-null by waitForFunction
-    const store = (window as any).__E2E_TEST__.projectStore.getState();
+    const store = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
     const existingProject = store.project;
     if (!existingProject) {
       throw new Error('Project is null - cannot inject fixture');
@@ -99,21 +114,21 @@ async function injectId0Fixture(page: Page) {
     ];
 
     // Update store state atomically
-    (window as any).__E2E_TEST__.projectStore.setState({
+    (window as E2EWindow).__E2E_TEST__.projectStore.setState({
       project,
       stations: newStations,
     });
 
     // Also update the mock backend so refresh returns updated data
-    if ((window as any).__E2E_MOCKS__?.setCurrentProject) {
-      (window as any).__E2E_MOCKS__.setCurrentProject(project);
+    if ((window as E2EWindow).__E2E_MOCKS__?.setCurrentProject) {
+      (window as E2EWindow).__E2E_MOCKS__!.setCurrentProject(project);
     }
   });
 
   // Wait for React to re-render with the new state - use waitForFunction to be more reliable
   await page.waitForFunction(() => {
-    const state = (window as any).__E2E_TEST__.projectStore.getState();
-    return state.project?.sections?.some((s: any) => s.id === 0 && s.name === 'Zero Section');
+    const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
+    return state.project?.sections?.some((s) => s.id === 0 && s.name === 'Zero Section');
   }, { timeout: 5000 });
 
   // Wait for the section to appear in the UI
@@ -131,7 +146,7 @@ test.describe('ID=0 Bug Fixes', () => {
   test('Edit Section dialog opens, loads data, saves, and persists when sectionId === 0', async ({ page }) => {
     // Open the Edit Section dialog via store
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
     });
 
     // Wait for dialog to appear
@@ -154,7 +169,7 @@ test.describe('ID=0 Bug Fixes', () => {
 
     // Verify persistence: re-open dialog and check the value persisted
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
     await expect(nameInput).toHaveValue('Modified Section Name');
@@ -163,7 +178,7 @@ test.describe('ID=0 Bug Fixes', () => {
   test('Edit Shot dialog opens, loads data, saves, and persists when shotId === 0', async ({ page }) => {
     // Open the Edit Shot dialog via store
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-shot', { sectionId: 0, shotId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('edit-shot', { sectionId: 0, shotId: 0 });
     });
 
     // Wait for dialog to appear
@@ -188,7 +203,7 @@ test.describe('ID=0 Bug Fixes', () => {
 
     // Verify persistence: re-open dialog and check the value persisted
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-shot', { sectionId: 0, shotId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('edit-shot', { sectionId: 0, shotId: 0 });
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
     // Check the depth out field shows the new value
@@ -200,14 +215,14 @@ test.describe('ID=0 Bug Fixes', () => {
     // Verify the section exists before opening dialog
     await expect.poll(async () => {
       return page.evaluate(() => {
-        const state = (window as any).__E2E_TEST__.projectStore.getState();
-        return state.project?.sections?.some((s: any) => s.id === 0);
+        const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
+        return state.project?.sections?.some((s) => s.id === 0);
       });
     }, { timeout: 5000 }).toBe(true);
 
     // Open the Section Adjust dialog via store
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('section-adjust', { sectionId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('section-adjust', { sectionId: 0 });
     });
 
     // Wait for dialog to appear
@@ -221,8 +236,11 @@ test.describe('ID=0 Bug Fixes', () => {
     const dxInput = page.getByTestId('dx-input');
     await dxInput.fill('5');
 
-    // Wait for debounced preview
-    await page.waitForTimeout(300);
+    // The debounced preview has dispatched its move_section to the backend.
+    await expect.poll(() => page.evaluate(() =>
+      (((window as unknown as { __MOCK_MOVE_CALLS__?: Array<{ command: string }> }).__MOCK_MOVE_CALLS__) ?? [])
+        .filter((c) => c.command === 'move_section').length,
+    )).toBeGreaterThan(0);
 
     // Click Apply button
     const applyButton = dialog.locator('button:has-text("Apply")');
@@ -237,14 +255,14 @@ test.describe('ID=0 Bug Fixes', () => {
     // Verify the section exists before opening dialog
     await expect.poll(async () => {
       return page.evaluate(() => {
-        const state = (window as any).__E2E_TEST__.projectStore.getState();
-        return state.project?.sections?.some((s: any) => s.id === 0);
+        const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
+        return state.project?.sections?.some((s) => s.id === 0);
       });
     }, { timeout: 5000 }).toBe(true);
 
     // Open the Section Adjust dialog via store
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('section-adjust', { sectionId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('section-adjust', { sectionId: 0 });
     });
 
     // Wait for dialog to appear
@@ -258,8 +276,11 @@ test.describe('ID=0 Bug Fixes', () => {
     const dxInput = page.getByTestId('dx-input');
     await dxInput.fill('5');
 
-    // Wait for debounced preview
-    await page.waitForTimeout(300);
+    // The debounced preview has dispatched its move_section to the backend.
+    await expect.poll(() => page.evaluate(() =>
+      (((window as unknown as { __MOCK_MOVE_CALLS__?: Array<{ command: string }> }).__MOCK_MOVE_CALLS__) ?? [])
+        .filter((c) => c.command === 'move_section').length,
+    )).toBeGreaterThan(0);
 
     // Click Cancel button
     const cancelButton = dialog.locator('button:has-text("Cancel")');
@@ -273,7 +294,7 @@ test.describe('ID=0 Bug Fixes', () => {
   test('DataTable renders warnings for section with id=0', async ({ page }) => {
     // Inject a warning for sectionId=0, shotId=0
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.projectStore.setState({
+      (window as E2EWindow).__E2E_TEST__.projectStore.setState({
         warnings: [{
           sectionId: 0,
           shotId: 0,
@@ -288,7 +309,7 @@ test.describe('ID=0 Bug Fixes', () => {
 
     // Open DataTable via store (direct state set)
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.setState({ dataTableOpen: true });
+      (window as E2EWindow).__E2E_TEST__.uiStore.setState({ dataTableOpen: true });
     });
 
     // Wait for DataTable to be visible
@@ -298,19 +319,27 @@ test.describe('ID=0 Bug Fixes', () => {
     // subsequent switch to section id=0 is observable (the table auto-selects
     // sections[0] = Zero Section, which would mask a broken id=0 selection).
     await page.evaluate(() => {
-      const store = (window as any).__E2E_TEST__.projectStore;
+      const store = (window as E2EWindow).__E2E_TEST__.projectStore;
       const project = store.getState().project;
+      if (!project) throw new Error('Project is null - cannot add the second section');
       const otherSection = {
         id: 1,
         name: 'One Section',
         surveyor: 'Test Surveyor',
         date: '2026-01-20',
         color: '#ff6b6b',
-        direction: 'in' as const,
+        direction: 'in',
+        quality: 1,
+        next_shot_id: 100000,
+        reverse_parity: false,
+        gauge_shot_uuid: null,
+        gauge_neighbour_uuid: null,
         shots: [],
-      };
-      store.setState({ project: { ...project, sections: [...project.sections, otherSection] } });
-      (window as any).__E2E_TEST__.uiStore.getState().setSelection({ type: 'section', sectionId: 1 });
+      } satisfies Section;
+      (window as E2EWindow).__E2E_TEST__.projectStore.setState({
+        project: { ...project, sections: [...project.sections, otherSection] },
+      });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().setSelection({ type: 'section', sectionId: 1 });
     });
     await expect(page.getByTestId('data-table-section-pill')).toContainText('One Section', { timeout: 3000 });
 
@@ -319,7 +348,7 @@ test.describe('ID=0 Bug Fixes', () => {
     // exercises the `selection.sectionId !== undefined` path with sectionId=0 -
     // a falsy check would ignore the selection and leave the pill on 'One Section'.
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().setSelection({ type: 'section', sectionId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().setSelection({ type: 'section', sectionId: 0 });
     });
 
     // Header pill follows the selection - proves the id=0 section was resolved
@@ -341,7 +370,7 @@ test.describe('ID=0 Edge Cases', () => {
   test('Edit Section dialog handles save with surveyor change for id=0', async ({ page }) => {
     // Open the Edit Section dialog
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
     });
 
     const dialog = page.getByTestId('edit-section-dialog');
@@ -363,7 +392,7 @@ test.describe('ID=0 Edge Cases', () => {
 
     // Verify persistence: re-open and check
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
     await expect(surveyorInput).toHaveValue('New Surveyor');
@@ -372,7 +401,7 @@ test.describe('ID=0 Edge Cases', () => {
   test('Edit Section dialog handles save with color change for id=0', async ({ page }) => {
     // Open the Edit Section dialog
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
     });
 
     const dialog = page.getByTestId('edit-section-dialog');
@@ -394,7 +423,7 @@ test.describe('ID=0 Edge Cases', () => {
 
     // Verify persistence: re-open and check
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
     await expect(colorHexInput).toHaveValue('#ff0000');
@@ -403,7 +432,7 @@ test.describe('ID=0 Edge Cases', () => {
   test('Edit Section dialog handles save with direction change for id=0', async ({ page }) => {
     // Open the Edit Section dialog
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
     });
 
     const dialog = page.getByTestId('edit-section-dialog');
@@ -414,16 +443,11 @@ test.describe('ID=0 Edge Cases', () => {
     // The test ID is attached directly to the trigger button.
     await directionSelect.click();
 
-    // Wait for dropdown and click the "Out" option
-    // Use data-testid if available, otherwise scope carefully
-    await page.waitForTimeout(100); // Wait for dropdown to render
-    const outOption = page.locator('[data-testid="direction-option-out"], [role="option"]:has-text("Out")').first();
-    if (await outOption.isVisible().catch(() => false)) {
-      await outOption.click();
-    } else {
-      // Fallback: find dropdown content and click Out within it
-      await page.locator('button:text-is("Out")').click();
-    }
+    // Wait for the dropdown, then click the "Out" option (Select derives each
+    // option's test ID from its own: `<testId>-option-<value>`).
+    const outOption = page.getByTestId('section-direction-select-option-out');
+    await expect(outOption).toBeVisible();
+    await outOption.click();
 
     // Save within the dialog
     await dialog.getByRole('button', { name: 'Save' }).click();
@@ -433,7 +457,7 @@ test.describe('ID=0 Edge Cases', () => {
 
     // Verify persistence: re-open and check direction changed
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
     // Check the select shows "Out"
@@ -443,7 +467,7 @@ test.describe('ID=0 Edge Cases', () => {
   test('Edit Section dialog handles save without changes for id=0', async ({ page }) => {
     // Open the Edit Section dialog
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
     });
 
     const dialog = page.getByTestId('edit-section-dialog');

@@ -6,17 +6,54 @@ The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cav
 
 | Phase | What happens |
 |-------|-------------|
-| `init` | Import the zero-datum section (if provided), then call `suggest_all_import_placements` for all remaining sections |
+| `init` | Import the zero-datum section (if provided), then call `suggest_all_import_placements` for all remaining sections. If that call FAILS the wizard stays here, visible, on "placement suggestions could not be computed: <reason>" with Retry and Place manually (#576 D24) - a successful empty answer is not a failure and goes straight on. A failed anchor import is shown here too |
 | `suggesting` | Present suggestions one at a time; user confirms, edits, or skips each |
-| `manual_placing` | Nothing was suggested for the remaining sections, so they are offered one SEGMENT at a time (`computeUnreachableSegments`) with four choices: reuse a skipped suggestion, attach to an existing section, place on the map by hand, or discard. Entered with `autoStartManualPlacementPending` set, which hides the dialog (`DialogWrapper`'s `hidden`) until the map placement it auto-starts has begun |
-| `placing` | Late import: build batch `ImportSectionConfig[]` for anything manual placement added and call `import_sections` again (overlap treatment already ran on the way out of `suggesting`) |
-| `done` | All sections placed and `onComplete` fires; if any remain unconnected the wizard re-enters `manual_placing` instead |
+| `manual_placing` | Nothing was suggested for the remaining sections, so they are offered one SEGMENT at a time (`computeUnreachableSegments`) with four choices: reuse a skipped suggestion, attach to an existing section, place on the map by hand, or discard. Entered with the auto-start handoff pending (`handoffPending`), which hides the dialog (`DialogWrapper`'s `hidden`) until the map placement it auto-starts has been attempted |
+| `placing` | Late import: build batch `ImportSectionConfig[]` for anything manual placement added and call `import_sections` again (overlap treatment already ran on the way out of `suggesting`). Started by the call that empties the queue, by a reopen on an empty queue, and by Retry - the one failure Retry is offered for |
+| `done` | All sections placed and `onComplete` fires, once; if any remain unconnected the wizard re-enters `manual_placing` instead |
 
-The phase union is declared inline at `DmpNewImportDialog.tsx`'s `phase` state and
-mirrored, for the onboarding tour, as `DmpImportWizardPhase` in `src/store/uiStore.ts`.
-The STORE copy only ever takes `suggesting`, `manual_placing` or `null`, so it is not
-a phase oracle - the DOM markers (`wizard-suggestion`, `wizard-manual-placing`, ...)
-are.
+### The state machine (`wizardState.ts`)
+
+The phases are a discriminated union in
+`src/components/Dialogs/dmpWizard/wizardState.ts` (#576 D4), each carrying the
+data that phase has and nothing else: `init {calculating}`,
+`suggesting {suggestion, alternatives, mergeOffset}`,
+`manual_placing {queue (never empty), anchor, previewAnchor, mode, fromExisting, handoffPending}`,
+`placing`, `done` - beside them the open exit confirmation `{kind, count}`. So a
+suggestion while placing, an anchor with no segment, both confirmations open or a
+hidden dialog outside manual placing cannot be represented. Every transition is an
+action of the pure `wizardReducer`, and `useWizardState`'s `dispatch` returns the
+state it produced, so the dialog makes transitions as CALLS from whatever decided
+them (an import resolving, a click) - the late import and the `done` completion
+used to be effects watching for their phase, and the `done` one re-ran whenever the
+run's busy flag flipped. Not in the reducer, on purpose: the run (below) and the
+run's plan data (connections, skips, edits, placements, pools), which async steps
+read synchronously through refs.
+
+The dialog renders one body per phase - `SuggestingStep`, `ManualPlacingStep`,
+`StatusStep` (init / placing / done, `WizardStatus.tsx`) - with that step's actions
+in `WizardFooter`, and the Cancel/Back `ExitConfirmations` over any of them. The
+section on screen is edited through `useSectionEditor` (its rows, the overlap view
+over them, the row mutators, the half-filled-row gate).
+
+The phase is mirrored, for the onboarding tour, as `DmpImportWizardPhase` in
+`src/store/uiStore.ts`. The STORE copy only ever takes `suggesting`,
+`manual_placing` or `null`, so it is not a phase oracle - the DOM markers
+(`wizard-suggestion`, `wizard-manual-placing`, ...) are.
+
+### The run (`useDmpImportRun`)
+
+The imports themselves live in a headless hook,
+`src/components/Dialogs/dmpWizard/useDmpImportRun.ts` (#576 D4): the zero-datum
+anchor, the early and late batches, the segment placed on the map, the per-run
+accumulators they bank into (section ids, receipts, the DMP index -> section id
+map, the pending overlap updates, the project the run belongs to - `DmpRunCarry`,
+which `SavedManualPlacingState` extends), and the Back/Cancel withdrawal. The
+dialog decides WHAT to send (`buildBatchImport`, the overlap treatment) and what
+happens next (its phases). Every import goes through the store's `importSections`
+and refuses when the run's project has been replaced. A failure is typed by the
+step that failed (`DmpRunFailure.kind`), so the dialog can show it where the user
+is looking instead of in one shared error string.
 
 ### The manual-placement round trip
 
@@ -31,12 +68,22 @@ empty list there aggregates to `undefined`, which App.tsx reads as "no receipt
 to show". A new per-run accumulator has to be added to the struct in the same
 change that introduces it.
 
-Three live completion sites pass that aggregate to `onComplete`: early import,
-late import, and the `done` phase. A fourth, the pending-segment import, is
-dormant: it fires on `SavedManualPlacingState.pendingSegmentImport`, which
-nothing writes any more (`buildSavedState` omits it, and it is the only place
-a saved state is built). Pre-existing, and left in place - it still carries the
-aggregate, so it stays correct if a caller ever sets that field again.
+Three completion sites pass that aggregate to `onComplete`: early import,
+late import, and the `done` phase.
+
+A segment dropped on the map is NOT imported by the placement callback (#576
+D13): the instance that started the placement has already closed, so its errors
+went nowhere. The drop only records the placement and reopens the wizard -
+hidden, as for any auto-started handoff - with it pending in
+`SavedManualPlacingState.placedSegment`. The reopened instance imports it on
+mount (`importPlacedSegmentNow`), busy from its first render, so Cancel/Back and
+the auto-start handoff wait for the answer (and App.tsx's window-close import
+guard covers it, since the wizard is the active dialog). Imported: the placement
+joins `directPlacements`, the queue advances, and the auto-start effect hands off
+the next segment - or, with the queue empty, the wizard goes to `placing`.
+Refused: the segment stays queued, its placement is dropped, and the wizard
+becomes visible on that segment's manual-placing screen with the reason
+(`wizard-error`), where the user can place it again or choose another option.
 
 `importedSectionIds` is the other per-run accumulator on that struct, and it
 fails LOUDER when it is not carried: App.tsx gates `suggest_orphan_placements`
@@ -49,7 +96,7 @@ to do while the direct route always ran it.
 Because the imports are eager, both exits have to decide what happens to
 sections that are ALREADY in the project - `connections` does not answer that
 question (it is a client-side record that has imported nothing), so both gates
-read `importedSectionIdsRef` as well.
+read the run's imported section ids as well.
 
 * **Cancel** offers three actions once anything is imported: remove and close,
   keep and close, or continue editing. The copy names the count.
@@ -121,6 +168,12 @@ test:
   hash is per-file, so a file also imported in an earlier session loses its
   file-level duplicate flag (its per-section flags stand).
 
+A removal that does not complete (the batch refused, the save failed, the run's
+project no longer open) is reported INSIDE the confirmation that asked for it
+(`cancel-confirm-error` / `back-confirm-error`), in a slot of its own
+(`DmpWithdrawalFailure`): the wizard's own failure - the late import's, say, with
+the Retry that re-runs it - is left as it was behind the dialog (#576 NF-AN4-N2).
+
 Two residues, both deliberate:
 
 * **Remove and close empties the project; the file itself stays where you
@@ -175,7 +228,11 @@ When a suggestion has `matchedShots > 0`, the wizard shows an overlap mode picke
 | `existing_data` | Delete actionable overlap shots | No change | No change |
 | `keep_both` | Mark overlap shots as reference (no deletion) | No change | No change |
 
-The overlap mode is persisted to the project config.
+The overlap mode is persisted to the config as that one setting
+(`patchConfig` of `import.overlap_mode`): config writes land in the order they
+were made, so switching the mode and straight back saves the second choice
+(#576 RV6b-1 - sending the whole config compared it against a copy not yet
+re-read, found nothing changed, and kept the first).
 
 ### Centralized Overlap Treatment
 
@@ -200,6 +257,13 @@ import_sections IPC → sections + existingShotUpdates
 `applyAllOverlapTreatments` walks the full suggestion pool. For each suggestion:
 
 - **Confirmed suggestions** (matched by field comparison to `confirmedOverlapsRef`): use `computeActionableIds` with the user's merge station to determine which overlap shots to process.
+
+An EXISTING target's readings are read as the backend stored them, not as the
+store holds them: the binary envelope carries every reading as an f32, so a
+length stored as 1.2 reaches the store as 1.2000000476837158. The import side
+takes the shortest decimal that is the same f32 (`storedReadings`), so a row that
+takes the existing section's data ("existing data", or interpolated with it) is
+created without the rounding noise (#576 NF-W7F-2).
 - **Unconfirmed suggestions**: use the full `computeOverlapIds` result.
 
 The function handles two target paths:
@@ -219,7 +283,7 @@ When multiple overlap offsets are possible, a dropdown lets the user choose whic
 
 When the target existing section has positional constraints on **both sides** of the overlap shot range, `interpolate` and `import_data` are disabled:
 
-- The overlap mode dropdown greys out those options (`isTargetDoublyAnchored` useMemo)
+- The overlap mode dropdown greys out those options (`targetDoublyAnchored`, `dmpWizard/doublyAnchored.ts`)
 - The current mode auto-switches to `existing_data` if it was set to a blocked mode
 - The backend independently skips `ExistingShotUpdate` entries for doubly-anchored sections as a safety net
 
@@ -263,7 +327,7 @@ Each DMP section can be edited before import:
 - **Metadata**: name, surveyor, date, color, direction, quality
 - **Shots**: add, delete, insert before/after, modify values
 
-Edit state is stored in `sectionEditsRef` (a `Map<number, SectionEditState>`) and restored when the user revisits a section. The `effectiveShots` derived view applies overlap transformations without mutating the raw edit state.
+Edit state is stored in `sectionEditsRef` (a `Map<number, SectionEditState>`) and restored when the user revisits a section (`useSectionEditor`). The `effectiveShots` derived view applies overlap transformations without mutating the raw edit state.
 
 ## Preview & Segment Context
 
@@ -278,7 +342,7 @@ The preview has two coordinate frames:
 
 ### Context Gathering
 
-A single `useEffect` computes `segmentContext: { importSide, targetSide }`:
+One effect (`useSuggestionContext`, run while `SuggestingStep` is on screen) computes `segmentContext: { importSide, targetSide }`:
 
 1. **Import-side BFS** - `computeDmpBfsContext(importIdx, ...)` walks `importing`-type virtual connections from the current import section, collecting:
    - DMP neighbor geometry (positioned relative to the import section)
@@ -320,7 +384,7 @@ When all suggestions are exhausted (or skipped), the early import runs on the tr
    4. For disconnected components, search the full suggestion pool for fallback `existing`-type anchors
    5. Multi-pass emit: retry sections whose `from_importing` target hasn't been emitted yet
    6. Adjust station indices for deleted overlap shots
-3. IPC call: `import_sections(sections, fileHash, existingShotUpdates)`
+3. `import_sections(sections, fileHash, existingShotUpdates)` through the store's `importSections`, i.e. `executeCommand`'s edit path (refresh, dirty flags, deferred-save resolution, integrity re-check - #576 D6). All four wizard imports - the zero-datum anchor, early, late, and the segment placed on the map - take that path (`useDmpImportRun`).
 
 Sections unreachable after all passes remain in the wizard's manual segment-placement flow until the user places or discards them.
 
@@ -344,12 +408,13 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 | Function | Location | Purpose |
 |----------|----------|---------|
 | `applyAllOverlapTreatments` | `src/utils/overlapTreatment.ts` | Single-pass overlap mutation for all suggestions |
-| `buildBatchImport` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Construct ordered `ImportSectionConfig[]` for backend |
+| `buildBatchImport` | `src/components/Dialogs/dmpWizard/buildBatchImport.ts` (re-exported by `DmpNewImportDialog.tsx`) | Construct ordered `ImportSectionConfig[]` for backend |
+| `wizardReducer` | `src/components/Dialogs/dmpWizard/wizardState.ts` | Every phase transition of the wizard |
 | `buildAdjacency` | `src/utils/segmentContext.ts` | Adjacency map from `importing`-type connections |
 | `computeDmpBfsContext` | `src/utils/segmentContext.ts` | BFS collecting DMP neighbor geometry + existing anchors |
 | `stationPositionFromShotLines` | `src/utils/segmentContext.ts` | Extract XY from backend `shot_lines` (station 0 = `[0][0]`, station N = `[N-1][1]`) |
 | `discoverBridgedDmpSections` | `src/utils/segmentContext.ts` | Find DMP sections connected through shared existing sections |
-| `computeStationsFromDmpShots` | `src/components/Dialogs/SectionPreview.tsx` | XY station positions from DMP shot headings + lengths |
+| `computeStationsFromDmpShots` | `src/components/Dialogs/SectionPreview.tsx` | Station positions (x, y, z) of a DMP section's `Standard` shots, station 0 at the origin, walked by the frontend's one copy of the backend's walk (`walkStations`, `src/utils/stationWalk.ts`): the mean of the in/out headings, the tape projected by the depth change, the north-reference correction it is given (none for a DMP section, which records magnetic with no correction) |
 | `computeOverlapIds` | `src/utils/overlapHelpers.ts` | Set of import shot IDs in the overlap region |
 | `computeActionableIds` | `src/utils/overlapHelpers.ts` | Subset of overlap IDs based on merge station choice |
 | `computeTargetShotIndex` | `src/utils/overlapHelpers.ts` | Map import overlap ID → target section shot index |
@@ -362,7 +427,33 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 |---------|-------|--------|-------|
 | `suggest_all_import_placements` | `ImportSectionForSuggestion[]` | `CrossSectionSuggestion[]` | Compares against existing + other imports |
 | `get_segment_geometry` | `sectionId` | `SegmentGeometry` | All connected sections' shot-lines, centered on queried section |
-| `import_sections` | `sections, fileHash, existingShotUpdates` | `CommandResult` | Batch import with atomic existing shot updates and undo support |
+| `import_sections` | `sections, fileHash, existingShotUpdates`, provenance, `sourceWarnings` | `ImportOutcome` | Batch import with atomic existing shot updates and undo support; `sourceWarnings` lead the receipt |
+
+## Parse Warnings
+
+`parse_dmp` does not drop what it cannot read silently; each loss becomes one
+sentence in `DmpFile.warnings` (#576 B13):
+
+* **A last section with no end-of-section marker** (a download cut short) is
+  read like any other, up to its last whole record, and imported - with a
+  warning that names it and says how many shots were read. A v5 record carries
+  start and end magic, so a record torn mid-way, or whole-length with a broken
+  end magic, is never read as a shot. The bytes a device writes after its last
+  section (an ASCII `MN2Over`, or a lone zero byte) do not begin with a section
+  header and raise nothing.
+* **A section that stops at a damaged record** keeps the shots before it. The
+  record is not skipped: a section is a chain of legs, so skipping one would
+  hang every later shot off the wrong station.
+* **A section that cannot be read at all** is left out and named by its position
+  in the file (its name may be part of what is damaged).
+
+`DmpSelectionDialog` lists them on step 1, where the user can still leave a
+partial section out. The wizard hands them to `import_sections` as
+`sourceWarnings` with the run's FIRST import only (nothing banked in
+`importedReceipts` yet - the list survives the map-placement reopen): a run's
+receipts are concatenated at completion, so sending them every time would
+repeat them once per batch. The backend puts them first on the receipt, the
+slot `decorate_receipt` gives every other importer's converter warnings.
 
 ## Backend Safety Guards
 
@@ -392,6 +483,15 @@ Back/Cancel transactionality:
 whose IPC mock keeps a fake project that `import_sections` and `execute_batch`
 really mutate, so "the second pass leaves one section" is measured rather than
 inferred from call counts. That a batch of `delete_section` is ONE undo entry is
-pinned in Rust: `batched_section_deletes_are_one_undo_entry`.
+pinned in Rust: `batched_section_deletes_are_one_undo_entry`. A case that clicks an
+exit right after the anchor import waits for the run to let go of it
+(`anchorImportSettled`): the mock records the id before the store's import path has
+returned, and the exits stay shut until it has (#576 NF-FIX5-2).
 
-Backend integration test for overlap interpolation: `src-tauri/crates/core/src/core/state/tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).
+The state machine's transitions:
+`src/components/Dialogs/dmpWizard/__tests__/wizardState.test.ts` (pure reducer
+cases); the overlap-mode write:
+`src/components/Dialogs/__tests__/DmpNewImportDialog.overlapModeWrite.test.tsx`;
+existing-data readings: `src/utils/__tests__/overlapTreatmentExistingData.test.ts`.
+
+Backend integration test for overlap interpolation: `src-tauri/crates/core/src/core/state/tests/delete_section_cascade_tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).

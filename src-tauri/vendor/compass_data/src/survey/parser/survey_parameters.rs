@@ -416,6 +416,22 @@ mod tests {
         }
     }
 
+    /// Stalagmight fork: the public accessor reports the flag where the
+    /// format carries one, and nothing for the 11/12-character formats.
+    #[test]
+    fn test_lrud_association_accessor() {
+        for (format, expected) in [
+            ("FORMAT: DDDDUDLRLAD", None),
+            ("FORMAT: DDDDUDLRLADN", None),
+            ("FORMAT: DDDDUDLRLADNF", Some(LRUDAssociation::FromStation)),
+            ("FORMAT: DDDDUDLRLADNT", Some(LRUDAssociation::ToStation)),
+            ("FORMAT: DDDDUDLRLADadBT", Some(LRUDAssociation::ToStation)),
+        ] {
+            let (_, parsed) = parse_survey_format(format).unwrap();
+            assert_eq!(parsed.lrud_association(), expected, "{format}");
+        }
+    }
+
     #[test]
     fn test_parse_survey_format_15() {
         let (_, format) = parse_survey_format("FORMAT: DDDDUDLRLADadNF").unwrap();

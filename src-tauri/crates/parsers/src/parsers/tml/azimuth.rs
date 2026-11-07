@@ -107,10 +107,6 @@ pub(super) fn tml_azimuth_reference(tml: &TmlFile, warnings: &mut Vec<String>) -
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    reason = "test module: a failed unwrap is the failure report"
-)]
 mod tests {
     use super::*;
     use crate::parsers::tml::test_helpers::parse_synthetic_tmlu;

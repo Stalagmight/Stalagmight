@@ -1,7 +1,8 @@
-//! Registry coverage tests that read APP-side sources - `src/lib.rs`'s
-//! `generate_handler![]` block, the frontend `src/` tree (both resolved
-//! relative to this crate's `CARGO_MANIFEST_DIR`) - or enumerate the
-//! app-level `tile_providers`. Relocated from `telemetry::registry` ahead of
+//! Registry coverage tests that read APP-side sources - the frontend `src/`
+//! tree (resolved relative to this crate's `CARGO_MANIFEST_DIR`) - or
+//! enumerate the app-level `tile_providers`. (`command.*` events are not in
+//! the registry: their vocabulary is the generated IPC command manifest,
+//! #576 C3.) Relocated from `telemetry::registry` ahead of
 //! the crate split: the files they open stay with the app crate, and
 //! `tile_providers` sits above `telemetry`.
 
@@ -9,10 +10,10 @@ use std::collections::HashSet;
 
 use crate::telemetry::registry::{EVENT_NAMES, SOURCE_NAMES};
 
-/// Bare names of commands removed from the app but kept in the vocabulary.
-/// They intentionally have no live handler and no frontend tracking, so the
-/// `command.*` and `undo-after.*` coverage checks skip them.
-const REMOVED_COMMANDS: &[&str] = &["adjust_loop_closures", "resolve_all_warnings"];
+/// Bare names of commands removed from the app whose `undo-after.*` slot is kept
+/// in the vocabulary. They intentionally have no live handler and no frontend
+/// tracking, so the `undo-after.*` coverage check skips them.
+const REMOVED_COMMANDS: &[&str] = &["adjust_loop_closures"];
 
 /// Dialog keys removed from `App.tsx` whose registry slots are likewise
 /// retained. The `action.dialog.*` / `dialog-cancel.*` / `dwell.dialog.*`
@@ -51,71 +52,6 @@ fn every_tile_provider_has_consumption_events() {
             );
         }
     }
-}
-
-/// Commands registered in `generate_handler![]` that are excluded from
-/// the `command.*` exhaustiveness check (they are telemetry internals).
-const TELEMETRY_COMMANDS: &[&str] = &[
-    "track_events",
-    "flush_telemetry",
-    "is_telemetry_available",
-    "set_telemetry_enabled",
-];
-
-#[test]
-fn registry_covers_all_commands() {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let lib_path = format!("{manifest_dir}/src/lib.rs");
-    let lib_src = std::fs::read_to_string(&lib_path)
-        .unwrap_or_else(|e| panic!("Failed to read {lib_path}: {e}"));
-
-    // Extract the generate_handler![...] block. The bracket-counting helper
-    // (shared with app_contract_tests) survives attributes inside the block,
-    // which a first-`]` slice would truncate at.
-    let block = super::app_contract_tests::generate_handler_block(&lib_src);
-
-    // Parse command names from each line
-    let mut handler_commands: HashSet<String> = HashSet::new();
-    for line in block.lines() {
-        let trimmed = line.trim();
-        // Skip empty lines and comments
-        if trimmed.is_empty() || trimmed.starts_with("//") {
-            continue;
-        }
-        // Extract the last :: segment, e.g. "commands::project::create_project,"
-        let name = trimmed
-            .rsplit("::")
-            .next()
-            .unwrap()
-            .trim_end_matches(',')
-            .trim();
-        if !TELEMETRY_COMMANDS.contains(&name) {
-            handler_commands.insert(format!("command.{name}"));
-        }
-    }
-
-    // Build set of command.* entries from EVENT_NAMES, excluding the retained
-    // slots of removed commands (which have no live handler by design).
-    let removed: HashSet<String> = REMOVED_COMMANDS
-        .iter()
-        .map(|c| format!("command.{c}"))
-        .collect();
-    let registry_commands: HashSet<String> = EVENT_NAMES
-        .iter()
-        .filter(|n| n.starts_with("command."))
-        .map(|n| (*n).to_string())
-        .filter(|n| !removed.contains(n))
-        .collect();
-
-    let missing: Vec<_> = handler_commands.difference(&registry_commands).collect();
-    let stale: Vec<_> = registry_commands.difference(&handler_commands).collect();
-
-    assert!(
-        missing.is_empty() && stale.is_empty(),
-        "EVENT_NAMES command.* entries out of sync with generate_handler![]:\n  \
-         Missing from registry: {missing:?}\n  \
-         Stale in registry: {stale:?}"
-    );
 }
 
 /// Helper: read a frontend source file relative to the project root.

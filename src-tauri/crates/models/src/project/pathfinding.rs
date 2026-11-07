@@ -5,6 +5,9 @@ use crate::{Coordinates, Section, SectionId, Shot, Station, StationRef};
 
 use super::{HeapItem, PathEdge, PathStep, Project, StationPath};
 
+#[cfg(test)]
+mod path_length_tests;
+
 impl Project {
     /// Calculate the path length between two stations through shots, merges, and closures.
     /// Both merges and closures are zero-distance edges.
@@ -45,23 +48,25 @@ impl Project {
         // lookup would contain every section).
         let merge_adj = self.build_station_merge_adjacency();
 
-        let closure_adj = if include_closures {
-            let mut adj: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
-            for closure in &self.loop_closures {
-                let (Some(a), Some(b)) = (
-                    self.resolve_key(&closure.station_a),
-                    self.resolve_key(&closure.station_b),
-                ) else {
-                    continue;
-                };
-                adj.entry(a).or_default().push(b);
-                adj.entry(b).or_default().push(a);
-            }
-            Some(adj)
-        } else {
-            None
-        };
+        let closure_adj = include_closures.then(|| self.build_station_closure_adjacency());
         self.path_length_dijkstra(station_a, station_b, &merge_adj, closure_adj.as_ref())
+    }
+
+    /// Every loop closure as a zero-cost edge both ways, in `loop_closures`
+    /// order: the closure half of the graph [`Self::path_length_dijkstra`] walks.
+    pub(super) fn build_station_closure_adjacency(&self) -> HashMap<StationRef, Vec<StationRef>> {
+        let mut adj: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for closure in &self.loop_closures {
+            let (Some(a), Some(b)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) else {
+                continue;
+            };
+            adj.entry(a).or_default().push(b);
+            adj.entry(b).or_default().push(a);
+        }
+        adj
     }
 
     /// Shortest survey-distance from `station_a` to `station_b`: shots are
@@ -170,14 +175,26 @@ impl Project {
 
         // No path found (shouldn't happen if sections are connected)
         // Fall back to sum of all reachable section lengths.
+        //
+        // [#576 RV19a-9] Not through a closure joining exactly these two
+        // stations: a walk that found no route had none in its graph (the
+        // restamp lifts the measured closure's own edge out; creation measures
+        // before the closure exists), so counting the sections behind one
+        // summed the far side too - a restamp came out longer than creation.
+        // Any other caller would have walked such an edge at zero cost and
+        // never got here, so for them nothing changes.
         let fallback_sections = if closure_adj.is_some() {
-            self.get_connected_section_ids(station_a.section_id)
+            self.connected_section_ids_without_pair(station_a, station_b)
         } else {
             self.get_merged_section_ids(station_a.section_id)
         };
-        fallback_sections
+        // [#576 FZ-DET] Summed in PROJECT order, not the set's: float addition
+        // is not associative, so a hash-ordered sum came out a last bit apart
+        // from one run to the next (18.455 vs 18.455000000000002), and the
+        // closure's stored path length and error percentage with it.
+        self.sections
             .iter()
-            .filter_map(|sid| self.get_section(*sid))
+            .filter(|s| fallback_sections.contains(&s.id))
             .flat_map(|s| s.shots.iter())
             // Clamp negative lengths to 0, consistent with the main-loop edges (#176).
             .map(|shot| shot.length.max(0.0))
@@ -725,10 +742,12 @@ impl Project {
     ///
     /// ⚠ **A rider is the second quantity along the COST-optimal path, not its own minimum.** The
     /// caller wants what the chosen route costs in the rider's units, not the different route that
-    /// would minimise the rider. For the gas engine that is both the honest reading (the diver flies
-    /// one route, the gas-optimal one) and the conservative one: scooter distance along the
-    /// gas-optimal path is by definition `>=` the achievable minimum, so a cap on it can only ever
-    /// under-state reach. Do not "fix" this into a second search.
+    /// would minimise the rider. Scooter distance along the gas-optimal path is by definition `>=`
+    /// the achievable minimum, so a cap on it can only ever under-state reach. Where the gas engine
+    /// needs more - the cheapest gas among the routes a scooter's range covers, which round a loop
+    /// is not the gas-optimal path when that runs out of range - it does its own two-criteria search,
+    /// in `gas/range_route.rs` (#576 NF-W11GAS-1, NF-W12GAS-1), and reads this function's riders only
+    /// along the gas-optimal path it also needs. Keep this one single-criterion.
     ///
     /// `cost_scale` must be finite and positive, or an infinite edge could stop reading as
     /// unreachable; callers validate their speeds at the config boundary.

@@ -2,13 +2,22 @@ import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
-import { useProjectStore } from './store/projectStore';
+import { useProjectStore, selectNewerFileReadOnly } from './store/projectStore';
+import { LoadRepairsBanner } from './components/common/LoadRepairsBanner';
+import { InternalErrorBanner } from './components/common/InternalErrorBanner';
+import { useInternalErrorEvent } from './hooks/useInternalErrorEvent';
+import { SETTABLE_UNREADABLE_SETTINGS } from './store/unreadableSettings';
+import { isMoveCarryRefusal } from './store/moveCarry';
 import { useUIStore } from './store/uiStore';
 import { useSpeleoStore } from './store/speleoStore';
 import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
 import { useShallow } from 'zustand/react/shallow';
 import { invokeIpc, getErrorMessage } from './utils/ipc';
+import { isEditGateCode } from './utils/editErrors';
+import { errorCode } from './utils/commandError';
+import { useEditBlockedReason, editBlockedReasonNow } from './hooks/useEditingBlocked';
 import {
+  saveFailureOf,
   surfaceSaveFailure,
   shouldShowAutosaveBanner,
   completeImportToSingleView,
@@ -19,7 +28,7 @@ import { routeOpenedFile } from './utils/openOrImport';
 import { useLaunchWithFile } from './utils/launchWithFile';
 import { guardQuit } from './utils/quit';
 import { isDroppableFilePath } from './utils/fileDialogs';
-import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
+import { useBeforeUnload, useLoadingProgress, useSpeleoPrePushSave, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
 import { registerOnboardingRestart } from './hooks/useOnboardingRestart';
 import { ORIENTATION_FLOW_ID } from './onboarding/flows';
@@ -29,7 +38,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoUnwindDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, SpeleoDbProjectDialog, SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog, ImportReceiptDialog, ImportAsNewProjectDialog, LaunchOpenConfirmDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoUnwindDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, SpeleoDbProjectDialog, SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog, ImportReceiptDialog, ImportAsNewProjectDialog, LaunchOpenConfirmDialog, RewrittenPathOverwritePrompt } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu, ToastStack } from './components/common';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
@@ -41,8 +50,20 @@ import { ZERO_DATUM_CARRY_KEY, readCarriedZeroDatumConfig, carryZeroDatumConfig 
 
 function App() {
   const { t } = useTranslation();
-  const { project, stations, loading, loadConfig, config, isDirty, setConfig } = useProjectStore();
+  const { project, stations, loading, reloadConfigInOrder, config, isDirty, setConfig } = useProjectStore(
+    useShallow((s) => ({
+      project: s.project,
+      stations: s.stations,
+      loading: s.loading,
+      reloadConfigInOrder: s.reloadConfigInOrder,
+      config: s.config,
+      isDirty: s.isDirty,
+      setConfig: s.setConfig,
+    })),
+  );
   const integrityIssues = useProjectStore((s) => s.integrityIssues);
+  // #576 D39(a): why Repair (a survey mutation) is unavailable right now, if it is.
+  const repairBlocked = useEditBlockedReason();
   const integrityDismissed = useProjectStore((s) => s.integrityDismissed);
   const integritySaveBlocked = useProjectStore((s) => s.integritySaveBlocked);
   const checkProjectIntegrity = useProjectStore((s) => s.checkProjectIntegrity);
@@ -55,6 +76,9 @@ function App() {
   const historyDiscardedDismissed = useProjectStore((s) => s.historyDiscardedDismissed);
   const checkHistoryDiscarded = useProjectStore((s) => s.checkHistoryDiscarded);
   const dismissHistoryDiscarded = useProjectStore((s) => s.dismissHistoryDiscarded);
+  const newerFileReadOnly = useProjectStore(selectNewerFileReadOnly);
+  const speleoLinkUnreadable = useProjectStore((s) => s.speleoLinkUnreadable);
+  const unreadableProjectSettings = useProjectStore((s) => s.unreadableProjectSettings);
   const autosaveFailure = useProjectStore((s) => s.autosaveFailure);
   const autosaveFailureKind = useProjectStore((s) => s.autosaveFailureKind);
   const clearAutosaveFailure = useProjectStore((s) => s.clearAutosaveFailure);
@@ -128,8 +152,14 @@ function App() {
   // Listen for loading progress events from backend
   useLoadingProgress();
 
+  // [#576 RV4-R-S6] What a failed Done / Push's pre-push save could not keep
+  useSpeleoPrePushSave();
+
   // Event-driven network status orchestrator (tile transport events + offline polling)
   useNetworkStatus();
+
+  // [#576 A11] The backend's one-shot internal-error notice, for InternalErrorBanner
+  useInternalErrorEvent();
 
   // Whole-UI zoom via Ctrl+= / Ctrl+- / Ctrl+0 (persisted)
   useUiScale();
@@ -196,14 +226,15 @@ function App() {
   );
 
   useEffect(() => {
-    // Load config on startup
-    loadConfig();
+    // Load config on startup - in the config chain [#576 NF-W8FE-4], so a settings
+    // save made while it is in flight cannot be overtaken by its answer.
+    void reloadConfigInOrder();
 
     // Flush telemetry on page unload (best-effort)
     const handleUnload = () => { void flushTelemetry(); };
     window.addEventListener('beforeunload', handleUnload);
     return () => window.removeEventListener('beforeunload', handleUnload);
-  }, [loadConfig]);
+  }, [reloadConfigInOrder]);
 
   // Initialize telemetry once config is loaded (only collects if user opted in)
   useEffect(() => {
@@ -318,7 +349,7 @@ function App() {
       }
       try {
         await getCurrentWindow().setTitle(title);
-      } catch (e) {
+      } catch {
         // Fallback for dev mode or if Tauri API unavailable
         document.title = title;
       }
@@ -406,13 +437,10 @@ function App() {
       return;
     }
 
-    void useProjectStore.getState().updateConfig({
-      ...currentConfig,
-      general: {
-        ...currentConfig.general,
-        onboarding_completed_flows: normalized,
-      },
-    });
+    // [#576 D27-32(c)] This one setting, not the whole store snapshot.
+    void useProjectStore
+      .getState()
+      .patchConfig([{ path: ['general', 'onboarding_completed_flows'], value: normalized }]);
   }, []);
 
   // The one-shot rule applies to the ORIENTATION tour only (#331). It used to
@@ -514,7 +542,7 @@ function App() {
       general: { ...currentConfig.general, onboarding_first_launch_done: true },
     };
     store.setConfig(nextConfig);
-    void store.updateConfig(nextConfig);
+    void store.patchConfig([{ path: ['general', 'onboarding_first_launch_done'], value: true }]);
   }, [onboarding.activeFlowId]);
 
   const disableOnboardingGuides = useCallback(() => {
@@ -534,10 +562,20 @@ function App() {
       },
     };
     store.setConfig(nextConfig);
-    void store.updateConfig(nextConfig);
+    void store.patchConfig([{ path: ['general', 'onboarding_enabled'], value: false }]);
   }, []);
 
   const handleRepairIntegrity = async () => {
+    // #576 D39(a): Repair mutates the survey, so the read-only contract applies. The
+    // button is disabled while editing is blocked; re-checked here for a dialog left
+    // open across a mode switch.
+    const blocked = editBlockedReasonNow();
+    if (blocked !== null) {
+      useUIStore
+        .getState()
+        .showToast(t(`integrityRepair.blocked.${blocked}`), TOAST_KEYS.EDIT_DISABLED, 'warning');
+      return;
+    }
     setRepairingIntegrity(true);
     try {
       const { fixed, remaining } = await repairProjectIntegrity();
@@ -563,7 +601,11 @@ function App() {
       if (useProjectStore.getState().integrityIssues.length === 0) {
         closeIntegrityDialog();
       }
-    } catch {
+    } catch (e) {
+      // A move-carry refusal (GHOST-2) is not a failed repair and is its own notice;
+      // nor is a read-only refusal (#576 D39(a)), which the store already showed as
+      // the read-only notice.
+      if (isMoveCarryRefusal(e) || isEditGateCode(errorCode(e))) return;
       // repairProjectIntegrity re-throws on a real failure (e.g. the IPC rejected
       // during teardown) rather than reporting a fake no-op success. Surface it and
       // keep the dialog open - integrityIssues is untouched, so the banner/save-block
@@ -582,6 +624,11 @@ function App() {
 
   return (
     <div className="h-full bg-background text-text-primary flex flex-col relative" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+      {/* [#576 A11] Internal-error banner: the backend recovered from a crash and the
+          user must save and restart. First, as the most severe ongoing condition, and
+          shown with or without a project open (see the component). */}
+      <InternalErrorBanner />
+
       {/* Integrity warning banner (corruption found on load/save) */}
       {integrityIssues.length > 0 && (integritySaveBlocked || !integrityDismissed) && !loading.isLoading && (
         <div
@@ -616,6 +663,79 @@ function App() {
         </div>
       )}
 
+      {/* [#576 B6-D1] Newer-version banner. A project saved by a newer Stalagmight is
+          open read-only (the backend refuses every edit and save, so this build can
+          never rewrite it at its older schema). An ongoing condition, so a banner
+          (docs/notifications.md), and no Dismiss: it lasts exactly as long as the
+          project is open, and it is the only place the user learns why nothing on
+          screen is editable. No action button either - the remedy is outside the
+          app. */}
+      {newerFileReadOnly && project && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="status"
+          data-testid="newer-file-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            {t('banners.newerFile.lead')}{' '}
+            <span className="text-text-secondary font-normal">{t('banners.newerFile.detail')}</span>
+          </span>
+        </div>
+      )}
+
+      {/* [#576 B35(b) review] Unreadable-link banner. The file's SpeleoDB link row
+          could not be read, so the project opened as a local one - but the backend
+          refuses every save over this file, because the rebuilt file would lose the
+          row. Without this, the first autosave failed with a message about a link the
+          user was never shown. An ongoing condition (banner, docs/notifications.md)
+          that lasts until a Save As moves the session to another file, so no
+          Dismiss, like the newer-file banner above; the remedy is in the message. */}
+      {speleoLinkUnreadable && project && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="status"
+          data-testid="speleo-link-unreadable-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            {t('banners.speleoLinkUnreadable.lead')}{' '}
+            <span className="text-text-secondary font-normal">
+              {t('banners.speleoLinkUnreadable.detail')}
+            </span>
+          </span>
+        </div>
+      )}
+
+      {/* [#576 B15] Unread-settings banner. Stored per-project settings the backend
+          could not read on open are held as defaults, and every save is refused so
+          the file keeps its stored values. An ongoing condition (until the user sets
+          them again in Project Settings, or reopens), so a banner
+          (docs/notifications.md) that names WHICH settings, and no Dismiss: it is the
+          one place the user learns why saving is off and how to turn it back on. */}
+      {unreadableProjectSettings.length > 0 && project && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="status"
+          data-testid="settings-unreadable-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            {t('banners.settingsUnreadable.lead', {
+              names: unreadableProjectSettings
+                .map((key) => t(`banners.settingsUnreadable.names.${key}`, { defaultValue: key }))
+                .join(', '),
+            })}{' '}
+            <span className="text-text-secondary font-normal">
+              {t('banners.settingsUnreadable.detail')}
+              {/* [#576 B15 follow-up] Every key the open reports today has a control
+                  in Project Settings (NF-W3-2 added the north reference's); one that
+                  has none clears only on reopen. */}
+              {unreadableProjectSettings.some(
+                (key) => !(SETTABLE_UNREADABLE_SETTINGS as readonly string[]).includes(key),
+              ) && <> {t('banners.settingsUnreadable.reopenNote')}</>}
+            </span>
+          </span>
+        </div>
+      )}
+
       {/* [#473] Discarded-history banner. A history table the backend could not read
           is replaced by an empty stack so the project still opens - the right call -
           but that silently costs the user every undo AND redo entry they had, which
@@ -645,6 +765,9 @@ function App() {
         </div>
       )}
 
+      {/* [#576 B35(h)] What opening the project reset or dropped (see the component). */}
+      <LoadRepairsBanner />
+
       {/* Autosave-failure banner (docs/notifications.md: an ongoing "your latest
           changes are not on disk" condition is banner-class, not modal and not a
           repeating toast). When saving is integrity-blocked the integrity banner
@@ -668,7 +791,7 @@ function App() {
             onClick={() => {
               void (async () => {
                 const result = await saveProject().catch((e: unknown) => {
-                  surfaceSaveFailure(getErrorMessage(e, t('banners.autosave.genericFailure')), openDialog, {
+                  surfaceSaveFailure(saveFailureOf(e, t('banners.autosave.genericFailure')), openDialog, useProjectStore.getState(), {
                     skipIntegrityRouting: true,
                   });
                   return null;
@@ -676,7 +799,7 @@ function App() {
                 // A manual retry that still fails gets the full user-initiated
                 // treatment (permission guidance / Review & Repair / error dialog).
                 if (result && !result.success) {
-                  surfaceSaveFailure(result.error, openDialog);
+                  surfaceSaveFailure(result, openDialog, useProjectStore.getState());
                 }
               })();
             }}
@@ -732,6 +855,15 @@ function App() {
               </ul>
             </div>
             <div className="px-4 py-3 border-t border-border flex justify-end gap-2">
+              {repairBlocked !== null && (
+                <span
+                  id="integrity-repair-blocked"
+                  className="mr-auto self-center text-xs text-text-secondary"
+                  data-testid="integrity-dialog-repair-blocked"
+                >
+                  {t(`integrityRepair.blocked.${repairBlocked}`)}
+                </span>
+              )}
               <button
                 onClick={() => closeIntegrityDialog()}
                 disabled={repairingIntegrity}
@@ -742,7 +874,9 @@ function App() {
               </button>
               <button
                 onClick={handleRepairIntegrity}
-                disabled={repairingIntegrity}
+                disabled={repairingIntegrity || repairBlocked !== null}
+                title={repairBlocked !== null ? t(`integrityRepair.blocked.${repairBlocked}`) : undefined}
+                aria-describedby={repairBlocked !== null ? 'integrity-repair-blocked' : undefined}
                 className="px-3 py-1.5 rounded bg-accent text-white text-sm disabled:opacity-50"
                 data-testid="integrity-dialog-repair"
               >
@@ -881,13 +1015,22 @@ function App() {
             if (newSectionIds?.length) {
               let suggestions: OrphanPlacementSuggestion[] = [];
               try {
-                suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
+                suggestions = await invokeIpc(
                   'suggest_orphan_placements',
                   { newlyImportedSectionIds: newSectionIds },
                   { purpose: 'suggest orphan placements after DMP import' }
                 );
-              } catch {
-                // Non-fatal: proceed without orphan detection
+              } catch (e) {
+                // Skipped, but not silently (#576 NF-AN4-N4): the import has
+                // landed, so it completes, and the user is told the step that
+                // offers to attach unanchored sections did not run, and why.
+                const reason = getErrorMessage(e);
+                console.warn('[dmpImport] orphan placement lookup failed:', reason);
+                useUIStore.getState().showToast(
+                  t('dmpWizard.toasts.orphanLookupFailed', { reason }),
+                  TOAST_KEYS.DMP_ORPHAN_LOOKUP_FAILED,
+                  'warning',
+                );
               }
               if (suggestions.length > 0) {
                 openDialog('orphan-placement', { suggestions, receipt });
@@ -1045,6 +1188,8 @@ function App() {
       {activeDialog === 'import-receipt' && <ImportReceiptDialog />}
       {activeDialog === 'import-as-new-project' && <ImportAsNewProjectDialog />}
       {activeDialog === 'launch-open-confirm' && <LaunchOpenConfirmDialog />}
+      {/* Not an `activeDialog`: layered over the dialog that is waiting for its answer (#576 D35). */}
+      <RewrittenPathOverwritePrompt />
 
       {onboarding.activeStep && (
         <OnboardingOverlay

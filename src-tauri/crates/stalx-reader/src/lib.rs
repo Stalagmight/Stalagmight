@@ -363,13 +363,22 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
 
     let db = Database::open_existing_untrusted(copy, max_value_bytes, remaining(expires)?)
         .map_err(invalid)?;
-    let mut project = db.load_project().map_err(invalid)?;
+    let (mut project, report) = db.load_project_with_report().map_err(invalid)?;
     // A probe interrupted by the deadline can swallow the error and report a
     // table absent, so check the clock before trusting what was loaded.
     remaining(expires)?;
     #[cfg(test)]
     tests::AFTER_LOAD.with(|hook| hook.borrow()());
     check_counts(&project, options.count_limits)?;
+    // The loader drops a zero datum with a non-finite coordinate (and counts
+    // it) rather than handing it on; it is just as impossible as one out of
+    // range, so it is refused the same way.
+    if report.repairs.gps_points > 0 {
+        return Err(ReadError::invalid(
+            InvalidKind::InvalidValue,
+            "zero datum: non-finite latitude/longitude",
+        ));
+    }
     validate_values(&project)?;
     // Before the app's steps below: the app repairs a missing or in-section
     // duplicate shot UUID with a RANDOM one, which would make the same file read

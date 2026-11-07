@@ -178,10 +178,23 @@ if [ "$DRY_RUN" = true ]; then
   exit 0
 fi
 
-# --- Check for uncommitted changes (allow staged CHANGELOG.md) ---
-CHANGED=$(git -C "$PROJECT_ROOT" diff --name-only HEAD 2>/dev/null | grep -v '^CHANGELOG.md$' || true)
+# --- Check for uncommitted changes (allow a modified CHANGELOG.md) ---
+# `git status --porcelain`, as release-tag.sh does: it lists untracked files,
+# which `git diff --name-only HEAD` never did - and a release cut with one
+# sitting there is usually a forgotten `git add`. A git FAILURE stops here: the
+# old `2>/dev/null | grep -v ... || true` turned it into "nothing changed" and
+# went on to rewrite the version files (#576 E18(f)). CHANGELOG.md is the one
+# exemption, because this script is about to commit it.
+if ! DIRT="$(git -C "$PROJECT_ROOT" status --porcelain)"; then
+  echo "Error: git status failed in $PROJECT_ROOT, so the tree cannot be checked for uncommitted changes." >&2
+  echo "Nothing was changed." >&2
+  exit 1
+fi
+CHANGED="$(printf '%s\n' "$DIRT" | awk 'NF && substr($0, 4) != "CHANGELOG.md"')"
 if [ -n "$CHANGED" ]; then
-  echo "Error: there are uncommitted changes (other than CHANGELOG.md). Commit or stash them first." >&2
+  echo "Error: the working tree has changes other than CHANGELOG.md:" >&2
+  printf '%s\n' "$CHANGED" | sed 's/^/  /' >&2
+  echo "Commit them (or 'git stash -u' - plain stash leaves '??' files behind)." >&2
   exit 1
 fi
 

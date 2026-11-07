@@ -14,7 +14,9 @@
  *   2. endpoint reference identity - activeTool + measureStart/measureEnd (:274)
  *   3. project identity - created_at|modified_at|file_path (:275)
  * The `catch` path (:281-286) re-checks ONLY the id prong (:282) before
- * painting the disconnect shape and logging a `console.warn`.
+ * painting the FAILED shape (#576 C7-MSG: `failed: true`, so the readout says
+ * the path could not be computed rather than that there is none) and logging a
+ * `console.warn`.
  *
  * Each test below holds the IPC promise pending with a manually-controlled
  * deferred (never a timer), mutates exactly the state one prong reads, then
@@ -24,16 +26,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { MapMouseEvent } from 'maplibre-gl';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown, fallback?: string) =>
-    (e as { message?: string })?.message ?? fallback ?? 'unknown error',
-}));
-
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(messageOr('unknown error'));
 
 import { useMapTools } from '../useMapTools';
 import { useUIStore } from '../../store/uiStore';
@@ -41,46 +35,16 @@ import type { MeasureEndpoint } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import type { Project, Station } from '../../types/project';
 import type { AlongLineResult } from '../../types/ipc/AlongLineResult';
+import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
+import { makeProject as projectOf, makeStation as stationOf } from '../../test/factories/survey';
+import { deferred } from '../../test/factories/async';
 
 function makeProject(overrides: Partial<Project> = {}): Project {
-  return {
-    name: 'Test Cave',
-    location: null,
-    created_at: '2026-01-01T00:00:00Z',
-    modified_at: '2026-01-01T00:00:00Z',
-    sections: [],
-    station_merges: [],
-    zero_datums: [],
-    loop_closures: [],
-    file_path: '/mock/a.stalx',
-    next_section_id: 1,
-    section_offsets: {},
-    imported_file_hashes: [],
-    imported_section_hashes: [],
-    next_closure_id: 1n,
-    validation: {
-      warn_shot_length_min: 0,
-      warn_shot_length_max: 100,
-      warn_depth_change_per_shot_max: 100,
-      warn_azimuth_deviation_max: 45,
-      azimuth_diff_threshold: 5,
-      pitch_diff_threshold: 5,
-      inclination_depth_diff_threshold: 5,
-    },
-    surface_elevation: null,
-    ...overrides,
-  };
+  return projectOf({ name: 'Test Cave', file_path: '/mock/a.stalx', next_section_id: 1, ...overrides });
 }
 
 function makeStation(section_id: number, station_index: number, x: number, y: number): Station {
-  return {
-    station_ref: { section_id, station_index },
-    coordinates: { x, y, z: 0 },
-    is_zero_datum: false,
-    gps_coordinates: null,
-    merged_with: [],
-    closures_with: [],
-  };
+  return stationOf({ station_ref: { section_id, station_index }, coordinates: { x, y, z: 0 }, closures_with: [] });
 }
 
 const STATIONS: Station[] = [
@@ -88,22 +52,6 @@ const STATIONS: Station[] = [
   makeStation(1, 1, 10, 0),
   makeStation(1, 2, 20, 0),
 ];
-
-/** A manually-resolved stand-in for the IPC reply: the test decides exactly
- *  when the response "lands" (resolve OR reject), never a timer. */
-function deferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason?: unknown) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 /** Deep-clone a measure endpoint (including its nested `coords`, where
  *  present) so the clone is structurally equal but reference-distinct -
@@ -141,6 +89,9 @@ const RESULT_B_SHAPE = {
   pathStations: RESULT_B.path_stations,
 };
 const DISCONNECTED_SHAPE = { alongLine: null, pathShots: [], pathStations: [] };
+/** A query that REJECTED: no path either, but flagged, so the readout can say
+ *  "Couldn't compute the path" instead of "No connected path" (#576 C7-MSG). */
+const FAILED_SHAPE = { ...DISCONNECTED_SHAPE, failed: true };
 
 /** Settle a deferred (resolve or reject) and flush past its continuation:
  *  first await the deferred's OWN promise (proving the hook's `await
@@ -340,7 +291,7 @@ describe('requestAlongLine stale-reply guard (#365)', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('paints the disconnected shape on a live rejection (catch-path, current contract)', async () => {
+  it('paints the failed shape, not the disconnected one, on a live rejection (#576 C7-MSG)', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const d = deferred<AlongLineResult | null>();
     invokeIpcMock.mockReturnValueOnce(d.promise);
@@ -356,8 +307,26 @@ describe('requestAlongLine stale-reply guard (#365)', () => {
 
     await settle(d, () => d.reject(new Error('along-line query failed')));
 
-    expect(useUIStore.getState().measureAlongLine).toEqual(DISCONNECTED_SHAPE);
+    // toStrictEqual: `failed` must be present, not merely absent-and-equal.
+    expect(useUIStore.getState().measureAlongLine).toStrictEqual(FAILED_SHAPE);
     expect(useUIStore.getState().measureAlongLinePending).toBe(false);
     expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('paints the disconnected shape, unflagged, for a disconnected ANSWER (null)', async () => {
+    const d = deferred<AlongLineResult | null>();
+    invokeIpcMock.mockReturnValueOnce(d.promise);
+    const { result } = renderHook(() => useMapTools());
+
+    act(() => {
+      result.current.onStationClick?.({ section_id: 1, station_index: 0 }, clickEvent);
+    });
+    act(() => {
+      result.current.onStationClick?.({ section_id: 1, station_index: 1 }, clickEvent);
+    });
+
+    await settle(d, () => d.resolve(null));
+
+    expect(useUIStore.getState().measureAlongLine).toStrictEqual(DISCONNECTED_SHAPE);
   });
 });

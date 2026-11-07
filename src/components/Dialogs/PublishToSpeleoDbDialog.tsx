@@ -8,21 +8,38 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { invokeIpc } from '../../utils/ipc';
-import { humanizeSpeleoError, speleoErrorAction } from '../../utils/speleoError';
+import { humanizeSpeleoError } from '../../utils/speleoError';
+import { errorCode } from '../../utils/commandError';
 import { USER_LEVELS } from '../../utils/speleoPermission';
 import { validateCoordinates } from '../../utils/gps';
 import { reverseGeocodeCountry } from '../../utils/reverseGeocodeCountry';
 import { COUNTRIES } from '../../data/countries';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { surfaceSaveWarnings } from '../../utils/saveFeedback';
 import type {
   Permission,
-  SpeleoCollaborators,
   SpeleoPublishParams,
+  SpeleoPublishReport,
   SpeleoPublishResult,
+  ValidationWarning,
   Visibility,
 } from '../../types/ipc.generated';
 
 const inputClass = 'w-full px-2 py-1 bg-background border border-border rounded text-sm';
+
+/**
+ * [#576 NF-W4M-2] Publish answers its outcome together with the warnings of the two
+ * saves it ran (the relocation into the SpeleoDB cache and the initial push's
+ * pre-push save): what they could not keep. One-shot, like Done's and Push's, so
+ * they are shown here like a normal save's. [#576 RV6a-6] Only that wire shape is
+ * read: a bare outcome is a broken contract and fails the publish loudly.
+ */
+function readPublishReport(raw: SpeleoPublishReport): {
+  result: SpeleoPublishResult;
+  saveLosses: ValidationWarning[];
+} {
+  return { result: raw.result, saveLosses: raw.save_warnings ?? [] };
+}
 
 /** A collaborator queued in the dialog, granted only after the project is created. */
 interface PendingCollaborator {
@@ -122,7 +139,8 @@ export default function PublishToSpeleoDbDialog() {
       longitude: bothCoords ? lonNum : null,
     };
     try {
-      const result = await invokeIpc<SpeleoPublishResult>('speleodb_publish', { params });
+      const { result, saveLosses } = readPublishReport(await invokeIpc('speleodb_publish', { params }));
+      surfaceSaveWarnings(saveLosses);
       // The project now EXISTS on the server and is linked. Reload its cache copy so the
       // app converges on the now-remote project. loadProject reports failure via
       // {success:false} (it never throws - it may have opened a recovery dialog), so a
@@ -157,7 +175,7 @@ export default function PublishToSpeleoDbDialog() {
       const failed: string[] = [];
       for (const c of collaborators) {
         try {
-          await invokeIpc<SpeleoCollaborators>('speleodb_add_collaborator', {
+          await invokeIpc('speleodb_add_collaborator', {
             email: c.email,
             permission: c.permission,
           });
@@ -176,8 +194,11 @@ export default function PublishToSpeleoDbDialog() {
       }
       closeDialog();
     } catch (e) {
+      // [#576 NF-W9BE-1-D1] No `saves` context, though publish saves into the cache
+      // first: a project a newer Stalagmight saved reads as the newer-version line,
+      // like Start editing and Update, not as "Not saved: ...".
       showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
-      if (speleoErrorAction(e) === 'ReLogin') {
+      if (errorCode(e) === 'SPELEODB_RELOGIN') {
         useSpeleoStore.getState().clearSession();
       }
     } finally {
@@ -329,11 +350,13 @@ export default function PublishToSpeleoDbDialog() {
 
           {collaborators.length > 0 && (
             <ul className="space-y-1 mb-2" data-testid="publish-to-speleodb-dialog-collaborators">
-              {collaborators.map((c) => (
+              {/* Rows are keyed by position in their test ids: a test id is printed where a
+                  run reports what it clicked, and must not carry an email (#576 RV19b-P1). */}
+              {collaborators.map((c, i) => (
                 <li
                   key={c.email}
                   className="flex items-center gap-2"
-                  data-testid={`publish-to-speleodb-dialog-collab-${c.email}`}
+                  data-testid={`publish-to-speleodb-dialog-collab-${i}`}
                 >
                   <span className="flex-1 min-w-0 truncate text-sm">{c.email}</span>
                   <Select
@@ -343,14 +366,14 @@ export default function PublishToSpeleoDbDialog() {
                     options={USER_LEVELS.map((p) => ({ value: p, label: t(`speleodb.collaborators.levels.${p}`) }))}
                     size="sm"
                     aria-label={t('speleodb.collaborators.levelFor', { name: c.email })}
-                    data-testid={`publish-to-speleodb-dialog-collab-level-${c.email}`}
+                    data-testid={`publish-to-speleodb-dialog-collab-level-${i}`}
                   />
                   <button
                     type="button"
                     disabled={publishing}
                     onClick={() => removeCollaborator(c.email)}
                     className="text-error text-xs hover:underline disabled:opacity-60"
-                    data-testid={`publish-to-speleodb-dialog-collab-remove-${c.email}`}
+                    data-testid={`publish-to-speleodb-dialog-collab-remove-${i}`}
                   >
                     {t('speleodb.collaborators.remove')}
                   </button>

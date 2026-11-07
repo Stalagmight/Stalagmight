@@ -8,6 +8,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
+import { dropStyle } from '../../../Map/surveyLayer/customRender/__tests__/styleGone';
+import { makeFakeMap } from '../../../../test/factories/fakeMap';
 import type { ProjectMetadata } from '../../../../types/project';
 import type { GeometryShot, SurveyGeometry } from '../../../../types/survey';
 import type { SystemGeometry } from '../../systemColor';
@@ -72,34 +74,6 @@ const h = vi.hoisted(() => {
 vi.mock('../globalCustomLayer', () => ({ GlobalCustomLayer: h.FakeLayer }));
 
 const CUSTOM_ID = 'global-survey-custom';
-
-/**
- * Fake map with NO stock global-survey layers (the stock-deletion stage removed
- * them). The custom layer is added at the top; `added` / `removed` record the
- * layer lifecycle so the tests can assert it without a real style.
- */
-function makeFakeMap(): { map: MaplibreMap; added: string[]; removed: string[]; existing: Set<string> } {
-  const existing = new Set<string>();
-  const added: string[] = [];
-  const removed: string[] = [];
-  const map = {
-    painter: { context: { gl: {} } },
-    getStyle: () => ({}),
-    getLayer: (id: string) => (existing.has(id) ? { id } : undefined),
-    addLayer: (layer: { id: string; onAdd?: (m: unknown, gl: unknown) => void }) => {
-      existing.add(layer.id);
-      added.push(layer.id);
-      layer.onAdd?.(map, {});
-    },
-    removeLayer: (id: string) => {
-      existing.delete(id);
-      removed.push(id);
-    },
-    project: ([lng, lat]: [number, number]) => ({ x: lng, y: lat }),
-    triggerRepaint: () => {},
-  } as unknown as MaplibreMap;
-  return { map, added, removed, existing };
-}
 
 /**
  * Fake map modelling MapLibre 6 across a style rebuild: during a context loss
@@ -237,11 +211,11 @@ describe('GlobalCustomController', () => {
   });
 
   it('reattach re-adds the same layer after a style rebuild dropped it, freeing it first', () => {
-    const { map, added, existing } = makeFakeMap();
+    const { map, added, dropLayer } = makeFakeMap();
     const c = new GlobalCustomController(map);
     c.sync(makeSystems());
     const layer = h.layerState.last!;
-    existing.clear(); // the rebuilt style holds no custom layers
+    dropLayer(CUSTOM_ID); // the rebuilt style holds no custom layers
     c.reattach();
     expect(added).toEqual([CUSTOM_ID, CUSTOM_ID]);
     expect(h.layerState.last).toBe(layer);
@@ -252,11 +226,11 @@ describe('GlobalCustomController', () => {
   });
 
   it('reattach that cannot start again routes to onFatal', () => {
-    const { map, existing, removed } = makeFakeMap();
+    const { map, dropLayer, removed } = makeFakeMap();
     const fatals: string[] = [];
     const c = new GlobalCustomController(map, undefined, { onFatal: (r) => fatals.push(r) });
     c.sync(makeSystems());
-    existing.clear();
+    dropLayer(CUSTOM_ID);
     h.layerState.disabledAfterAdd = true;
     c.reattach();
     expect(removed).toContain(CUSTOM_ID);
@@ -291,11 +265,11 @@ describe('GlobalCustomController', () => {
   });
 
   it('teardown frees the GL resources of a layer a worker restart already dropped', () => {
-    const { map, existing, removed } = makeFakeMap();
+    const { map, dropLayer, removed } = makeFakeMap();
     const c = new GlobalCustomController(map);
     c.sync(makeSystems());
     const layer = h.layerState.last!;
-    existing.clear();
+    dropLayer(CUSTOM_ID);
     c.destroy();
     expect(removed).toEqual([]);
     expect(layer.onRemoveCalls).toBe(1);
@@ -360,5 +334,31 @@ describe('GlobalCustomController', () => {
     expect(h.layerState.last!.hoverSystem).toBe(-1);
     c.setHover('missing.tml');
     expect(h.layerState.last!.hoverSystem).toBe(-1);
+  });
+});
+
+describe('GlobalCustomController deferred fatal teardown without a style (#576 NF-MAP-3)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a context loss before the deferred teardown: no throw, still latches fatal', () => {
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const fatals: string[] = [];
+    const { map } = makeFakeMap();
+    const c = new GlobalCustomController(map, undefined, {
+      scheduleRestore: (fn) => (holder.fn = fn),
+      onFatal: (r) => fatals.push(r),
+    });
+    c.sync(makeSystems());
+    h.layerState.last!.onSelfDisable?.('gl-error-0x505');
+    dropStyle(map);
+    expect(() => holder.fn?.()).not.toThrow();
+    expect(fatals).toEqual(['gl-error-0x505']);
+    expect(c.isActive()).toBe(false);
   });
 });

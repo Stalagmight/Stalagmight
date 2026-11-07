@@ -1,9 +1,4 @@
-#![expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::print_stdout,
-    clippy::print_stderr
-)]
+#![expect(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -12,7 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::Datelike;
 
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
-use crate::parsers::encoding::read_latin1;
+use crate::models::test_support::require_env_file;
+use crate::parsers::encoding::read_cp1252;
 
 use super::*;
 
@@ -701,8 +697,349 @@ fn latin1_decoding() {
     let p = dir.join("name.srv");
     // 0xE4 == 'ä' in Latin-1.
     std::fs::write(&p, [b';', b' ', 0xE4, b'\n']).unwrap();
-    let s = read_latin1(&p).unwrap();
+    let s = read_cp1252(&p).unwrap().text;
     assert!(s.contains('\u{00E4}'));
+}
+
+/// Walls is a Windows program, so a `.SRV` is Windows-1252 text and `0x85` is
+/// an ellipsis. Read as ISO-8859-1 it is U+0085 (NEXT LINE), which Rust counts
+/// as whitespace, so a station named `A1<0x85>B2` was torn into two tokens and
+/// every field after it shifted one column to the right.
+#[test]
+fn a_windows_1252_byte_in_a_station_name_does_not_split_the_name() {
+    let dir = temp_dir("cp1252name");
+    let p = dir.join("names.srv");
+    let mut bytes = b"#UNITS meters order=DAV\nA1".to_vec();
+    bytes.push(0x85);
+    bytes.extend_from_slice(b"B2 C1 10 90 0\n");
+    std::fs::write(&p, &bytes).unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    let vectors: Vec<(String, String, f64)> = parsed.surveys[0]
+        .vectors
+        .iter()
+        .map(|v| (v.from.clone(), v.to.clone(), v.length_m))
+        .collect();
+    println!("vectors (from, to, length_m): {vectors:?}");
+    println!("warnings: {:?}", parsed.warnings);
+    assert_eq!(
+        vectors,
+        [("A1\u{2026}B2".to_string(), "C1".to_string(), 10.0)],
+        "0x85 is U+2026 in Windows-1252 and part of the station name"
+    );
+}
+
+/// `0xA0` is a no-break space in Windows-1252 (U+00A0). Walls separates fields
+/// with ASCII whitespace only, so the byte belongs to the name it sits in, but
+/// `char::is_whitespace` counts U+00A0, which tore `A1<0xA0>B2` into two
+/// stations and shifted every field after it one column to the right.
+#[test]
+fn a_no_break_space_in_a_walls_station_name_does_not_split_the_name() {
+    let dir = temp_dir("cp1252nbspname");
+    let p = dir.join("names.srv");
+    std::fs::write(&p, b"#UNITS meters order=DAV\nA1\xa0B2 C1 10 90 0\n").unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    let vectors: Vec<(String, String, f64)> = parsed.surveys[0]
+        .vectors
+        .iter()
+        .map(|v| (v.from.clone(), v.to.clone(), v.length_m))
+        .collect();
+    println!("vectors (from, to, length_m): {vectors:?}");
+    println!("warnings: {:?}", parsed.warnings);
+    assert_eq!(
+        vectors,
+        [("A1\u{a0}B2".to_string(), "C1".to_string(), 10.0)],
+        "0xA0 is U+00A0 in Windows-1252 and part of the station name"
+    );
+}
+
+/// The same byte inside a `#Units Prefix=` value is part of the prefix that
+/// every station name carries, not a break between two options.
+#[test]
+fn a_no_break_space_in_a_walls_units_prefix_does_not_split_the_prefix() {
+    let dir = temp_dir("cp1252nbspprefix");
+    let p = dir.join("prefix.srv");
+    std::fs::write(
+        &p,
+        b"#UNITS meters order=DAV Prefix=X\xa0Y\nA1 A2 10 90 0\n",
+    )
+    .unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    let vectors: Vec<(String, String)> = parsed.surveys[0]
+        .vectors
+        .iter()
+        .map(|v| (v.from.clone(), v.to.clone()))
+        .collect();
+    println!("vectors (from, to): {vectors:?}");
+    println!("warnings: {:?}", parsed.warnings);
+    assert_eq!(
+        vectors,
+        [("X\u{a0}Y:A1".to_string(), "X\u{a0}Y:A2".to_string())],
+        "the prefix keeps its U+00A0"
+    );
+    assert!(
+        parsed.warnings.is_empty(),
+        "no option was split off the prefix: {:?}",
+        parsed.warnings
+    );
+}
+
+/// A U+00A0 that opens a station name belongs to it wherever the name sits.
+/// The tokenizer keeps it mid-line, but the whole-line trim and the `#Fix`
+/// argument trim stripped it, so `<0xA0>B2` was one station as a TO name and
+/// another (`B2`) at the start of a line or in a `#Fix`: the survey fell apart
+/// in two and the fix landed on the wrong station, with no warning.
+#[test]
+fn a_leading_no_break_space_names_the_same_walls_station_in_every_position() {
+    let dir = temp_dir("nbspleading");
+    let p = dir.join("lead.srv");
+    std::fs::write(
+        &p,
+        b"#UNITS meters order=DAV\nA1 \xa0B2 10 90 0\n\xa0B2 C3 10 90 0\n#Fix \xa0B2 100 200 5\n",
+    )
+    .unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    let survey = &parsed.surveys[0];
+    let vectors: Vec<(String, String)> = survey
+        .vectors
+        .iter()
+        .map(|v| (v.from.clone(), v.to.clone()))
+        .collect();
+    let fixes: Vec<String> = survey.fixes.iter().map(|f| f.name.clone()).collect();
+    println!("vectors (from, to): {vectors:?}");
+    println!("fixes: {fixes:?}");
+    println!("warnings: {:?}", parsed.warnings);
+    assert_eq!(vectors.len(), 2, "both shots are read");
+    assert_eq!(fixes.len(), 1, "the #Fix is read");
+    println!(
+        "station read as the TO name mid-line (line 2):  {:?}",
+        vectors[0].1
+    );
+    println!(
+        "station read as the FROM name at line start (line 3): {:?}",
+        vectors[1].0
+    );
+    println!(
+        "station read as the #Fix name (line 4):          {:?}",
+        fixes[0]
+    );
+    assert_eq!(vectors[0].1, "\u{a0}B2", "the tokenizer keeps the U+00A0");
+    assert_eq!(
+        vectors[1].0, vectors[0].1,
+        "line 2 TO and line 3 FROM are one station"
+    );
+    assert_eq!(fixes[0], vectors[0].1, "the #Fix names that station");
+}
+
+/// A prefix is the front of every station name under it, so a U+00A0 at the
+/// start or end of a prefix value stays in it, the same as in a station name
+/// typed out with that prefix. The prefix trims stripped it, so `#Prefix
+/// <0xA0>X` then `A1` named `X:A1` while a shot to `<0xA0>X:A1` named another
+/// station.
+#[test]
+fn a_no_break_space_at_the_edge_of_a_walls_prefix_stays_in_the_station_names() {
+    let dir = temp_dir("nbspprefixedge");
+    let p = dir.join("prefix.srv");
+    std::fs::write(
+        &p,
+        b"#UNITS meters order=DAV\n\
+          #Prefix \xa0X\nA1 A2 10 90 0\n\
+          #Units Prefix=\xa0X\nA2 A3 10 90 0\n\
+          #Prefix\nA3 \xa0X:A4 10 90 0\n\
+          #Prefix Y\xa0\nB1 B2 10 90 0\n\
+          #Units Prefix=Y\xa0\nB2 B3 10 90 0\n\
+          #Prefix\nB3 Y\xa0:B4 10 90 0\n",
+    )
+    .unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    let vectors: Vec<(String, String)> = parsed.surveys[0]
+        .vectors
+        .iter()
+        .map(|v| (v.from.clone(), v.to.clone()))
+        .collect();
+    for (label, v) in [
+        "#Prefix <0xA0>X",
+        "#Units Prefix=<0xA0>X",
+        "no prefix, <0xA0>X:A4 typed out",
+        "#Prefix Y<0xA0> (line end)",
+        "#Units Prefix=Y<0xA0> (line end)",
+        "no prefix, Y<0xA0>:B4 typed out",
+    ]
+    .iter()
+    .zip(&vectors)
+    {
+        println!("{label:34} -> {v:?}");
+    }
+    println!("warnings: {:?}", parsed.warnings);
+    let s = |name: &str| name.to_string();
+    assert_eq!(
+        vectors,
+        [
+            (s("\u{a0}X:A1"), s("\u{a0}X:A2")),
+            (s("\u{a0}X:A2"), s("\u{a0}X:A3")),
+            (s("A3"), s("\u{a0}X:A4")),
+            (s("Y\u{a0}:B1"), s("Y\u{a0}:B2")),
+            (s("Y\u{a0}:B2"), s("Y\u{a0}:B3")),
+            (s("B3"), s("Y\u{a0}:B4")),
+        ],
+        "every prefix position keeps the U+00A0 a typed-out name has"
+    );
+    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+}
+
+/// The same holds for a prefix a `.wpj` hands down in `.OPTIONS`: a U+00A0
+/// ending the line is the end of the prefix, not padding to trim.
+#[test]
+fn a_no_break_space_ending_a_wpj_options_prefix_stays_in_the_station_names() {
+    let dir = temp_dir("nbspwpjoptions");
+    std::fs::write(
+        dir.join("S.SRV"),
+        b"#UNITS meters order=DAV\nB1 B2 10 90 0\nB2 Y\xa0:B3 10 90 0\n",
+    )
+    .unwrap();
+    let wpj_path = dir.join("T.wpj");
+    std::fs::write(
+        &wpj_path,
+        b";WALLS Project File\n.BOOK Root\n.NAME ROOT\n.STATUS 8\n\
+          .SURVEY S\n.NAME S\n.OPTIONS Prefix=Y\xa0\n.STATUS 8\n.ENDBOOK\n",
+    )
+    .unwrap();
+
+    let parsed = parse_walls(&wpj_path).unwrap();
+    let vectors: Vec<(String, String)> = parsed.surveys[0]
+        .vectors
+        .iter()
+        .map(|v| (v.from.clone(), v.to.clone()))
+        .collect();
+    println!("vectors (from, to): {vectors:?}");
+    println!("warnings: {:?}", parsed.warnings);
+    assert_eq!(
+        vectors,
+        [
+            ("Y\u{a0}:B1".to_string(), "Y\u{a0}:B2".to_string()),
+            ("Y\u{a0}:B2".to_string(), "Y\u{a0}:B3".to_string()),
+        ],
+        "the .OPTIONS prefix keeps its trailing U+00A0"
+    );
+}
+
+/// The preview's and the receipt's warnings that speak about the encoding.
+fn encoding_warnings(parsed: &ParsedWalls) -> (Vec<String>, Vec<String>) {
+    let preview = build_preview(parsed).warnings;
+    let (_configs, _closures, receipt) =
+        convert_walls_to_import_configs(parsed, &WallsImportOptions::default()).unwrap();
+    println!("preview warnings: {preview:?}");
+    println!("receipt warnings: {receipt:?}");
+    let about_encoding = |ws: Vec<String>| -> Vec<String> {
+        ws.into_iter()
+            .filter(|w| w.contains("windows-1252"))
+            .collect()
+    };
+    (about_encoding(preview), about_encoding(receipt))
+}
+
+/// The five bytes Windows-1252 leaves undefined decode to U+FFFD, which loses
+/// whatever the surveyor typed. The TML reader counts that loss on the
+/// receipt; a bare `.SRV` must too, on the preview and on the receipt.
+///
+/// Without the fix the decode is silent and neither list carries it.
+#[test]
+fn an_undefined_windows_1252_byte_in_an_srv_is_counted_in_a_warning() {
+    let dir = temp_dir("cp1252undefined");
+    let p = dir.join("undefined.srv");
+    std::fs::write(&p, b"#UNITS meters order=DAV\nA1 A2 10 90 0 ;C\x81ve\n").unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    assert_eq!(parsed.surveys[0].vectors.len(), 1, "premise: the shot read");
+    let (preview, receipt) = encoding_warnings(&parsed);
+
+    let expected =
+        "The file was read as windows-1252, the encoding Walls writes; 1 character was replaced";
+    assert_eq!(preview, [expected], "one warning, for the one file read");
+    assert_eq!(
+        receipt,
+        [expected],
+        "the warning must reach the receipt too"
+    );
+}
+
+/// A `.WPJ` project reads many files, so each one that lost characters gets
+/// its own warning naming it, with its own count - the project file itself
+/// included - and a clean survey beside them gets none.
+#[test]
+fn each_walls_project_file_with_undefined_bytes_is_named_with_its_count() {
+    let dir = temp_dir("cp1252project");
+    std::fs::write(
+        dir.join("DIRTY.SRV"),
+        b"#UNITS meters order=DAV\nA1 A2 10 90 0 ;\x81 and \x90\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("CLEAN.SRV"),
+        b"#UNITS meters order=DAV\nA2 A3 10 90 0 ;caf\xe9 don\x92t\n",
+    )
+    .unwrap();
+    let wpj_path = dir.join("Test.wpj");
+    std::fs::write(
+        &wpj_path,
+        b";WALLS Project File\n\
+          .BOOK Cave\x8dA\n.NAME CAVEA\n.STATUS 8\n\
+          .SURVEY Dirty Survey\n.NAME DIRTY\n.STATUS 8\n\
+          .SURVEY Clean Survey\n.NAME CLEAN\n.STATUS 8\n\
+          .ENDBOOK\n",
+    )
+    .unwrap();
+
+    let parsed = parse_walls(&wpj_path).unwrap();
+    assert_eq!(
+        parsed.surveys.iter().filter(|s| s.resolved).count(),
+        2,
+        "premise: both surveys were read"
+    );
+    let (preview, receipt) = encoding_warnings(&parsed);
+
+    let expected = [
+        format!(
+            "'{}' was read as windows-1252, the encoding Walls writes; 1 character was replaced",
+            wpj_path.display()
+        ),
+        format!(
+            "'{}' was read as windows-1252, the encoding Walls writes; 2 characters were replaced",
+            dir.join("DIRTY.SRV").display()
+        ),
+    ];
+    assert_eq!(
+        preview, expected,
+        "one named warning per file that lost characters"
+    );
+    assert_eq!(receipt, expected, "the warnings must reach the receipt too");
+}
+
+/// The warning must stay rare enough to mean something: a `.SRV` whose high
+/// bytes are all defined in Windows-1252 lost nothing and gets no warning.
+#[test]
+fn an_srv_with_no_undefined_byte_gets_no_encoding_warning() {
+    let dir = temp_dir("cp1252clean");
+    let p = dir.join("clean.srv");
+    std::fs::write(
+        &p,
+        b"#UNITS meters order=DAV\nA1 A2 10 90 0 ;\x80 caf\xe9 don\x92t \x85\n",
+    )
+    .unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    assert_eq!(parsed.surveys[0].vectors.len(), 1, "premise: the shot read");
+    assert!(
+        parsed.warnings.is_empty(),
+        "no parser warning at all, got {:?}",
+        parsed.warnings
+    );
+    let (preview, receipt) = encoding_warnings(&parsed);
+    assert!(preview.is_empty() && receipt.is_empty());
 }
 
 #[test]
@@ -1114,6 +1451,43 @@ fn a_mid_survey_declination_change_bakes_true_north_bearings_under_a_grid() {
     );
 }
 
+/// #576 (B26): the fold-in fallback above re-wraps `reading + correction`, and a
+/// bare `rem_euclid(360.0)` returns EXACTLY `360.0` for a tiny negative sum.
+/// `360.0` trips `INVALID_AZIMUTH`, an error the user cannot dismiss. Ordinary
+/// data reaches it: `0.7 + IncA 0.1` is `0.7999999999999999` in f64, so the
+/// shot's own `Decl=-0.8` leaves about `-1.1e-16` - true north.
+#[test]
+fn a_folded_declination_that_cancels_the_reading_wraps_to_north_not_360() {
+    let srv = "#UNITS meters order=DAV Decl=2\n\
+               A B 10 100 0\n\
+               #UNITS IncA=0.1 Decl=-0.8\n\
+               B C 10 0.7 0\n";
+    let (configs, _c, warnings) = convert_one(parse_srv(srv));
+    let shots = &configs[0].shots;
+    assert_eq!(shots.len(), 2, "premise: one chain of two shots");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("more than one declination")),
+        "premise: the per-shot fold-in ran: {warnings:?}"
+    );
+    let shot = &shots[1];
+    println!(
+        "B->C imported azimuth_in = {:?}, azimuth_out = {:?}",
+        shot.azimuth_in, shot.azimuth_out
+    );
+    for (name, az) in [
+        ("azimuth_in", shot.azimuth_in),
+        ("azimuth_out", shot.azimuth_out),
+    ] {
+        assert!(
+            (0.0..360.0).contains(&az),
+            "{name} = {az:?} is outside [0, 360) and trips INVALID_AZIMUTH"
+        );
+        assert!(approx(az, 0.0), "{name} = {az:?}, expected north");
+    }
+}
+
 /// A chain whose vectors agree on the NUMBER but disagree on where it came from
 /// must not attribute the whole section to whichever vector happened to be
 /// first: the provenance is what the UI explains and what a policy change may
@@ -1261,16 +1635,7 @@ fn resolve_survey_appends_srv_for_non_srv_extension() {
         path: None,
         reference: None,
     };
-    let ctx = WpjContext {
-        dir: dir.to_path_buf(),
-        root: dir.to_path_buf(),
-        options: Vec::new(),
-        reference: None,
-        segment: String::new(),
-        derive_decl: false,
-        grid_relative: true,
-    };
-    let resolved = resolve_survey(&entry, &ctx).unwrap();
+    let resolved = resolve_survey(&entry, &dir).unwrap();
     assert_eq!(
         resolved.file_name().unwrap().to_string_lossy(),
         "FOO.OLD.SRV"
@@ -1282,15 +1647,7 @@ fn resolve_survey_rejects_path_like_name() {
     // A `.NAME` carrying a path separator / drive prefix is a traversal
     // attempt (`.NAME ../../../../etc/passwd`), not a node name - must be
     // refused (None ⇒ reported missing), never joined onto the dir.
-    let ctx = WpjContext {
-        dir: PathBuf::from("/proj"),
-        root: PathBuf::from("/proj"),
-        options: Vec::new(),
-        reference: None,
-        segment: String::new(),
-        derive_decl: false,
-        grid_relative: false,
-    };
+    let dir = PathBuf::from("/proj");
     for bad in ["../../etc/passwd", "..\\..\\secret", "/etc/shadow", "C:\\x"] {
         let entry = WpjEntry {
             is_book: false,
@@ -1302,7 +1659,7 @@ fn resolve_survey_rejects_path_like_name() {
             reference: None,
         };
         assert!(
-            resolve_survey(&entry, &ctx).is_none(),
+            resolve_survey(&entry, &dir).is_none(),
             "path-like .NAME {bad:?} must be rejected"
         );
     }
@@ -1314,27 +1671,59 @@ fn resolve_path_clamps_traversal_and_honors_absolute() {
     // A relative `..` chain cannot climb above the project root.
     assert_eq!(
         resolve_path(root, root, "../../../../etc"),
-        PathBuf::from("/proj/etc")
+        Ok(PathBuf::from("/proj/etc"))
     );
     // Relative descent works normally.
     assert_eq!(
         resolve_path(root, root, "Poligony"),
-        PathBuf::from("/proj/Poligony")
+        Ok(PathBuf::from("/proj/Poligony"))
     );
     // A `..` from a subdir pops back toward root but stops AT root.
     assert_eq!(
         resolve_path(Path::new("/proj/a/b"), root, "../../.."),
-        PathBuf::from("/proj")
+        Ok(PathBuf::from("/proj"))
     );
-    // An absolute / drive-qualified `.PATH` is honored verbatim (genuine
-    // Walls behavior), not discarded.
+    // An absolute local `.PATH` is honored verbatim (genuine Walls
+    // behavior), not discarded.
+    #[cfg(unix)]
     assert_eq!(
         resolve_path(root, root, "/data/caves"),
-        PathBuf::from("/data/caves")
+        Ok(PathBuf::from("/data/caves"))
     );
+    // A drive letter is absolute only on Windows; elsewhere it is refused
+    // rather than resolved against the working directory (#576 NF-W2C-2).
+    #[cfg(windows)]
     assert_eq!(
         resolve_path(root, root, "D:\\Caves"),
-        PathBuf::from("D:/Caves")
+        Ok(PathBuf::from("D:/Caves"))
+    );
+    #[cfg(not(windows))]
+    assert_eq!(
+        resolve_path(root, root, "D:\\Caves"),
+        Err("its drive letter cannot be resolved on this system")
+    );
+    assert_eq!(
+        resolve_path(root, root, "D:Caves"),
+        Err("its drive letter cannot be resolved on this system")
+    );
+    // Network and device paths are refused from the text (#576 SEC-1).
+    for unc in [
+        "\\\\server\\share",
+        "//server/share",
+        "\\\\?\\C:\\x",
+        "\\\\.\\COM1",
+    ] {
+        assert_eq!(
+            resolve_path(root, root, unc),
+            Err("network (UNC) and device paths are never read"),
+            "{unc}"
+        );
+    }
+    // A folder no file system could open is refused before it is stored.
+    let long = "d/".repeat(20_000);
+    assert_eq!(
+        resolve_path(root, root, &long),
+        Err("its folder path is longer than any file system allows")
     );
 }
 
@@ -1375,10 +1764,121 @@ fn absolute_path_escaping_root_warns_but_still_reads() {
         parsed
             .warnings
             .iter()
-            .any(|w| w.contains("absolute .PATH outside the project directory")),
+            .any(|w| w.contains("is read from outside the project directory")),
         "an absolute .PATH escaping the root must warn: {:?}",
         parsed.warnings
     );
+}
+
+/// One survey `S` under `.PATH {path}` in a project at `proj`, imported.
+fn parse_one_survey_under_path(proj: &Path, path: &str) -> ParsedWalls {
+    let wpj = format!(
+        ";WALLS Project File\n\
+         .BOOK Root\n.NAME ROOT\n.STATUS 8\n\
+         .PATH {path}\n\
+         .SURVEY S\n.NAME S\n.STATUS 8\n\
+         .ENDBOOK\n"
+    );
+    let wpj_path = proj.join("T.wpj");
+    std::fs::write(&wpj_path, wpj).unwrap();
+    parse_walls(&wpj_path).unwrap()
+}
+
+const ONE_SHOT_SRV: &str = "#UNITS meters order=DAV\nA B 10 90 0\n";
+
+/// #576 RV3-R-10: an absolute `.PATH` that climbs out of the project with
+/// `..` is outside it. The check compared the text as written
+/// (`<proj>/../elsewhere` "starts with" `<proj>`), so it read outside the
+/// project with no warning.
+#[test]
+fn an_absolute_path_climbing_out_with_dotdot_warns() {
+    let proj = temp_dir("dotdot_proj");
+    let outside = temp_dir("dotdot_outside");
+    std::fs::write(outside.join("S.SRV"), ONE_SHOT_SRV).unwrap();
+    let path = format!(
+        "{}/../{}",
+        proj.display(),
+        outside.file_name().unwrap().to_string_lossy()
+    );
+    let parsed = parse_one_survey_under_path(&proj, &path);
+    println!(".PATH {path}: warnings {:?}", parsed.warnings);
+    assert!(parsed
+        .surveys
+        .iter()
+        .any(|s| s.resolved && !s.vectors.is_empty()));
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("survey 'S'") && w.contains("outside the project directory")),
+        "{:?}",
+        parsed.warnings
+    );
+}
+
+/// #576 RV3-R-10: a relative `.PATH` through a folder inside the project that
+/// is a symlink to one outside it reads from outside too, so it warns.
+#[cfg(unix)]
+#[test]
+fn a_relative_path_through_a_symlinked_folder_warns() {
+    let proj = temp_dir("symlink_proj");
+    let outside = temp_dir("symlink_outside");
+    std::fs::write(outside.join("S.SRV"), ONE_SHOT_SRV).unwrap();
+    std::os::unix::fs::symlink(&*outside, proj.join("linked")).unwrap();
+    let parsed = parse_one_survey_under_path(&proj, "linked");
+    println!(".PATH linked (symlink): warnings {:?}", parsed.warnings);
+    assert!(parsed
+        .surveys
+        .iter()
+        .any(|s| s.resolved && !s.vectors.is_empty()));
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("survey 'S'") && w.contains("outside the project directory")),
+        "{:?}",
+        parsed.warnings
+    );
+}
+
+/// #576 RV2-R-10 (the `.MAK` rule, shared): a `.PATH` naming a Windows DOS
+/// device is refused from its text, and a `.NAME` that is one is never looked
+/// up. Real files of those names exist here, so only the text can refuse them.
+#[test]
+fn dos_device_names_are_never_looked_up() {
+    let proj = temp_dir("device_path");
+    std::fs::create_dir_all(proj.join("CON")).unwrap();
+    std::fs::write(proj.join("CON").join("S.SRV"), ONE_SHOT_SRV).unwrap();
+    let parsed = parse_one_survey_under_path(&proj, "CON");
+    println!(".PATH CON: warnings {:?}", parsed.warnings);
+    assert!(parsed.surveys.iter().all(|s| !s.resolved));
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("survey 'S' was skipped") && w.contains("device")),
+        "{:?}",
+        parsed.warnings
+    );
+
+    let proj = temp_dir("device_name");
+    std::fs::write(proj.join("nul.SRV"), ONE_SHOT_SRV).unwrap();
+    let wpj = ";WALLS Project File\n\
+               .BOOK Root\n.NAME ROOT\n.STATUS 8\n\
+               .SURVEY S\n.NAME nul\n.STATUS 8\n\
+               .ENDBOOK\n";
+    let wpj_path = proj.join("T.wpj");
+    std::fs::write(&wpj_path, wpj).unwrap();
+    let parsed = parse_walls(&wpj_path).unwrap();
+    println!(
+        ".NAME nul: resolved {:?}",
+        parsed
+            .surveys
+            .iter()
+            .map(|s| s.resolved)
+            .collect::<Vec<_>>()
+    );
+    assert!(parsed.surveys.iter().all(|s| !s.resolved));
 }
 
 // ----- multiple-#Fix anchoring (one zero datum per component) ----------
@@ -1554,50 +2054,78 @@ fn per_survey_fixed_station_count_dedups_and_validates() {
 
 // ----- ignored real-data validation (no project files committed) -------
 
+/// Any Walls project tree (`WALLS_WPJ`, a maintainer-held private copy): what
+/// holds for every one - it parses, the preview accounts for the parse, and the
+/// import lands what the preview promised. [#576 HFI-11] It asserted ONE
+/// project's book and survey counts and UTM zone, so it failed on every other
+/// `.wpj`; no dataset's numbers belong here.
 #[test]
-#[ignore]
-fn real_qr_project_tree() {
-    let wpj = match std::env::var_os("WALLS_WPJ") {
-        Some(p) => PathBuf::from(p),
-        None => {
-            // Maintainer-held private survey tree; point WALLS_WPJ at a local copy.
-            eprintln!("skip: WALLS_WPJ not set");
-            return;
-        }
-    };
-    if !wpj.exists() {
-        eprintln!("skip: {} not found", wpj.display());
-        return;
-    }
+#[ignore = "needs a private Walls project tree; set WALLS_WPJ to its .WPJ"]
+fn real_project_tree() {
+    let wpj = require_env_file("WALLS_WPJ");
     let parsed = parse_walls(&wpj).unwrap();
-    let resolved = parsed.surveys.iter().filter(|s| s.resolved).count();
-    println!(
-        "QR .wpj: books={} surveys={} resolved={} missing={} skipped_attachments={} warnings={}",
-        parsed.book_count,
-        parsed.surveys.len(),
-        resolved,
-        parsed.missing_files.len(),
-        parsed.skipped_attachments,
-        parsed.warnings.len(),
-    );
     let preview = build_preview(&parsed);
     println!(
-        "preview: zone={:?} datum={:?} georef={}",
-        preview.utm_zone, preview.datum, preview.has_georeference
+        ".wpj: books={} surveys={} resolved={} missing={} skipped_attachments={} shots={} \
+         splays={} fixed={} warnings={}",
+        parsed.book_count,
+        parsed.surveys.len(),
+        preview.resolved_survey_count,
+        parsed.missing_files.len(),
+        parsed.skipped_attachments,
+        preview.shot_count,
+        preview.splay_count,
+        preview.fixed_station_count,
+        parsed.warnings.len(),
     );
-    assert!(parsed.book_count >= 250);
-    assert!(parsed.surveys.len() >= 1500);
-    assert_eq!(preview.utm_zone, Some(16));
+    assert!(!parsed.surveys.is_empty(), "a project tree names surveys");
+
+    // The preview is the parse, counted.
+    assert_eq!(preview.survey_count as usize, parsed.surveys.len());
+    assert_eq!(
+        preview.resolved_survey_count as usize,
+        parsed.surveys.iter().filter(|s| s.resolved).count()
+    );
+    assert_eq!(
+        preview.missing_file_count as usize,
+        parsed.missing_files.len()
+    );
+    let per_survey =
+        |count: fn(&WallsSurveySummary) -> u32| -> u32 { preview.surveys.iter().map(count).sum() };
+    assert_eq!(per_survey(|s| s.shot_count), preview.shot_count);
+    assert_eq!(per_survey(|s| s.splay_count), preview.splay_count);
+    assert_eq!(preview.utm_zone.is_some(), preview.has_georeference);
+
+    // The import lands exactly the shots the preview counts, with and without
+    // the splays, in non-empty sections, and anchors on at most the fixes it found.
+    for include_splays in [false, true] {
+        let opts = WallsImportOptions {
+            include_splays,
+            ..WallsImportOptions::default()
+        };
+        let (configs, _closures, _warnings) =
+            convert_walls_to_import_configs(&parsed, &opts).unwrap();
+        let shots: usize = configs.iter().map(|c| c.shots.len()).sum();
+        let expected = preview.shot_count
+            + if include_splays {
+                preview.splay_count
+            } else {
+                0
+            };
+        assert_eq!(shots, expected as usize, "include_splays={include_splays}");
+        assert!(configs.iter().all(|c| !c.shots.is_empty()));
+        let zero_datums = configs
+            .iter()
+            .filter(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
+            .count();
+        assert!(zero_datums <= preview.fixed_station_count as usize);
+    }
 }
 
 #[test]
-#[ignore]
-fn real_qr_srv_dir() {
-    let Some(dir) = std::env::var_os("WALLS_SRV_DIR") else {
-        eprintln!("skip: set WALLS_SRV_DIR to a folder of real .SRV files");
-        return;
-    };
-    let dir = PathBuf::from(dir);
+#[ignore = "needs a folder of private .SRV files; set WALLS_SRV_DIR"]
+fn real_srv_dir() {
+    let dir = require_env_file("WALLS_SRV_DIR");
     let mut total_shots = 0usize;
     let mut files = 0usize;
     for entry in std::fs::read_dir(&dir).unwrap() {
@@ -1634,12 +2162,9 @@ fn real_qr_srv_dir() {
 /// under `WALLS_CORPUS`, catching panics, and report a summary. Used to
 /// sweep the public test corpus.
 #[test]
-#[ignore]
+#[ignore = "sweeps a Walls corpus kept outside the repo; set WALLS_CORPUS"]
 fn corpus_sweep() {
-    let Some(root) = std::env::var_os("WALLS_CORPUS") else {
-        eprintln!("skip: set WALLS_CORPUS to a directory tree of Walls files");
-        return;
-    };
+    let root = require_env_file("WALLS_CORPUS");
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         if let Ok(rd) = std::fs::read_dir(dir) {
             for e in rd.flatten() {
@@ -1656,7 +2181,7 @@ fn corpus_sweep() {
         }
     }
     let mut files = Vec::new();
-    walk(&PathBuf::from(root), &mut files);
+    walk(&root, &mut files);
     files.sort();
 
     let (mut wpj_ok, mut srv_ok) = (0usize, 0usize);
@@ -2475,8 +3000,8 @@ fn utf16le(text: &str) -> Vec<u8> {
     bytes
 }
 
-/// `read_latin1` maps each byte to a code point, so a BOM arrives as three
-/// Latin-1 chars glued to line 1 and its directive stops being one. Without
+/// `read_cp1252` maps each byte to one char, so a BOM arrives as three
+/// Windows-1252 chars glued to line 1 and its directive stops being one. Without
 /// the strip the `#DATE` here is dropped with no warning at all, and a file
 /// whose line 1 is `#UNITS` or `#FIX` silently imports in the wrong units or
 /// at the wrong place.
@@ -2552,5 +3077,393 @@ fn a_utf16_srv_is_refused_by_name() {
     assert!(
         err.contains("UTF-16"),
         "the error must name the encoding, got {err:?}"
+    );
+}
+
+#[test]
+fn lrud_to_end_of_chain_cross_section_is_reported() {
+    // #576 B31: with `LRUD=To` the last leg's section is measured at a station
+    // no shot leaves, so the model has nowhere to put it. It is dropped - and
+    // the receipt now says so, in the same words as the Compass importer.
+    let srv = "#UNITS meters order=DAV LRUD=To\n\
+               A B 10 90 0 <1,2,3,4>\n\
+               B C 10 90 0 <5,6,7,8>\n";
+    let (configs, _c, warnings) = convert_one(parse_srv(srv));
+    println!("warnings: {warnings:?}");
+    assert_eq!(
+        configs[0].shots[1].left,
+        Some(1.0),
+        "premise: B's section moved"
+    );
+    assert!(
+        warnings.iter().any(|w| w
+            == "Survey 'Test Survey': 1 end-of-chain cross-section had no shot to attach to \
+                and was dropped (the survey records LRUDs at each shot's To station)."),
+        "{warnings:?}"
+    );
+
+    // A From survey loses nothing and says nothing.
+    let srv = "#UNITS meters order=DAV\n\
+               A B 10 90 0 <1,2,3,4>\n\
+               B C 10 90 0 <5,6,7,8>\n";
+    let (_configs, _c, warnings) = convert_one(parse_srv(srv));
+    assert!(
+        warnings.iter().all(|w| !w.contains("cross-section")),
+        "{warnings:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_named_like_a_srv_is_refused_at_once() {
+    // #576 B27(g): Walls reads through the same capped, regular-files-only
+    // reader as Compass, so a FIFO named like a `.SRV` no longer blocks the
+    // import (and the app's main thread) forever.
+    let dir = temp_dir("fifo-srv");
+    let fifo = dir.join("pipe.srv");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(status.success(), "premise: mkfifo");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let path = fifo.clone();
+    let worker = std::thread::spawn(move || {
+        let _ = sender.send(parse_walls(&path).map(|_| ()).map_err(|e| e.to_string()));
+    });
+    let outcome = receiver
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .ok();
+    println!("parse_walls(pipe.srv) within 5 s: {outcome:?}");
+    if outcome.is_none() {
+        // Still blocked: open the FIFO for writing so the reader sees an
+        // empty file and the thread can finish.
+        drop(std::fs::OpenOptions::new().write(true).open(&fifo));
+    }
+    let _ = worker.join();
+    let err = outcome
+        .expect("the read must not block on a FIFO")
+        .expect_err("a FIFO is not a survey file");
+    assert!(err.contains("not a regular file"), "{err}");
+}
+
+// ----- LRUD closer followed by a no-break space (#576 WALLS-LRUD) ----------
+
+/// Decision WALLS-LRUD-D1 ("only trailing NBSP closes"): an LRUD closer counts
+/// when it is followed by end of line, an ASCII separator, or nothing but
+/// no-break spaces (and separators) to the end of the line. Anywhere else a
+/// U+00A0 joins the fields it sits between, as the tokenizer reads it, so a
+/// station named `*A*<NBSP>B` is one name, not LRUD `A` plus station
+/// `<NBSP>B`.
+#[test]
+fn an_lrud_closer_followed_by_a_no_break_space_closes_only_at_the_end_of_the_line() {
+    let cases: [(&str, &[&str], Option<&str>); 6] = [
+        // A name that starts with an LRUD delimiter and has a U+00A0 after
+        // its "closer" is a name.
+        (
+            "*A*\u{a0}B C 10 0 0",
+            &["*A*\u{a0}B", "C", "10", "0", "0"],
+            None,
+        ),
+        (
+            "<A>\u{a0}B C 10 0 0",
+            &["<A>\u{a0}B", "C", "10", "0", "0"],
+            None,
+        ),
+        // ... and so is one whose U+00A0 is followed by a separator.
+        (
+            "*A*\u{a0} B 10 0 0",
+            &["*A*\u{a0}", "B", "10", "0", "0"],
+            None,
+        ),
+        // An LRUD at the end of the line with a trailing U+00A0 (or a U+00A0
+        // and a space) still closes, so it is not lost.
+        (
+            "A B 10 0 0 *1 2 3 4*\u{a0}",
+            &["A", "B", "10", "0", "0"],
+            Some("1 2 3 4"),
+        ),
+        (
+            "A B 10 0 0 <1 2 3 4>\u{a0}\u{a0} ",
+            &["A", "B", "10", "0", "0"],
+            Some("1 2 3 4"),
+        ),
+        // The plain case is unchanged.
+        (
+            "A B 10 0 0 *1 2 3 4*",
+            &["A", "B", "10", "0", "0"],
+            Some("1 2 3 4"),
+        ),
+    ];
+    let outcomes: Vec<_> = cases
+        .iter()
+        .map(|&(body, tokens, lrud)| {
+            let got = extract_spans(body);
+            println!("{body:?} -> tokens={:?} lrud={:?}", got.tokens, got.lrud);
+            (body, tokens, lrud, got)
+        })
+        .collect();
+    for (body, tokens, lrud, got) in outcomes {
+        assert_eq!(got.tokens, tokens, "{body:?}");
+        assert_eq!(got.lrud.as_deref(), lrud, "{body:?}");
+    }
+}
+
+// ----- .PATH policy, the .MAK rules (#576 SEC-1, NF-AN4-6, NF-W2C-2) -------
+
+/// A one-book `.wpj` in `proj` whose book's `.PATH` is `path_line` and whose
+/// survey `S` reads `S.SRV` from there.
+fn wpj_with_path(proj: &Path, path_line: &str) -> PathBuf {
+    let wpj = format!(
+        ";WALLS Project File\n\
+         .BOOK Root\n.NAME ROOT\n.STATUS 8\n\
+         .PATH {path_line}\n\
+         .SURVEY S\n.NAME S\n.STATUS 8\n\
+         .ENDBOOK\n"
+    );
+    let wpj_path = proj.join("T.wpj");
+    std::fs::write(&wpj_path, wpj).unwrap();
+    wpj_path
+}
+
+/// Decision SEC-1 ("same as .MAK"): a network (UNC) or device-namespace
+/// `.PATH` is refused from its text alone, before anything asks the file
+/// system about it - on Windows even checking whether `\\server\share\x`
+/// exists hands the user's credentials to that server. On macOS and Linux a
+/// path starting with two slashes names the local root, so a `.PATH` of
+/// `//<local dir>` proves the point: it used to be READ (the survey
+/// imported), and is refused now, with the reason named.
+#[cfg(unix)]
+#[test]
+fn a_network_or_device_path_is_refused_before_it_is_touched() {
+    let proj = temp_dir("unc_proj");
+    let local = temp_dir("unc_local");
+    std::fs::write(
+        local.join("S.SRV"),
+        "#UNITS meters order=DAV\nA B 10 90 0\n",
+    )
+    .unwrap();
+    let local_str = local.display().to_string();
+    for path_line in [
+        format!("/{local_str}"),
+        format!("\\{}", local_str.replace('/', "\\")),
+        "\\\\server\\share\\caves".to_string(),
+        "\\\\?\\C:\\caves".to_string(),
+        "\\\\.\\COM1".to_string(),
+    ] {
+        let parsed = parse_walls(&wpj_with_path(&proj, &path_line)).unwrap();
+        let read = parsed.surveys.iter().any(|s| s.resolved);
+        println!(
+            ".PATH {path_line}: survey read={read}, missing={:?}, warnings={:?}",
+            parsed.missing_files, parsed.warnings
+        );
+        assert!(!read, ".PATH {path_line} must not be read");
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains("survey 'S' was skipped")
+                    && w.contains("network (UNC) and device paths are never read")),
+            ".PATH {path_line}: {:?}",
+            parsed.warnings
+        );
+        assert_eq!(parsed.missing_files.len(), 1, "named as not imported");
+    }
+}
+
+/// NF-W2C-2: a drive-letter `.PATH` is absolute only on Windows. Elsewhere
+/// `D:\Caves` resolved as the RELATIVE path `D:/Caves`, i.e. against the
+/// process's working directory - whatever folder the app was started from.
+/// It is refused instead, as the `.MAK` reader refuses it.
+#[cfg(not(windows))]
+#[test]
+fn a_drive_letter_path_does_not_resolve_against_the_working_directory() {
+    let proj = temp_dir("drive_proj");
+    for path_line in ["D:\\Caves", "D:Caves"] {
+        let parsed = parse_walls(&wpj_with_path(&proj, path_line)).unwrap();
+        println!(
+            ".PATH {path_line}: missing={:?}, warnings={:?}",
+            parsed.missing_files, parsed.warnings
+        );
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains("survey 'S' was skipped")
+                    && w.contains("its drive letter cannot be resolved on this system")),
+            ".PATH {path_line}: {:?}",
+            parsed.warnings
+        );
+        assert!(
+            parsed.missing_files.iter().all(|m| !m.starts_with("D:")),
+            "no working-directory-relative path may be looked up: {:?}",
+            parsed.missing_files
+        );
+    }
+}
+
+/// A refused `.PATH` covers the books and surveys under it whose own `.PATH`
+/// is relative; an absolute local `.PATH` below it replaces the base again
+/// and is read (with the outside-the-project warning).
+#[cfg(unix)]
+#[test]
+fn a_refused_path_covers_its_relative_children_only() {
+    let proj = temp_dir("refused_proj");
+    let local = temp_dir("refused_local");
+    std::fs::write(
+        local.join("S.SRV"),
+        "#UNITS meters order=DAV\nA B 10 90 0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        local.join("T.SRV"),
+        "#UNITS meters order=DAV\nC D 10 90 0\n",
+    )
+    .unwrap();
+    let wpj = format!(
+        ";WALLS Project File\n\
+         .BOOK Root\n.NAME ROOT\n.STATUS 8\n\
+         .PATH \\\\server\\share\n\
+         .BOOK Inner\n.NAME INNER\n.STATUS 8\n.PATH sub\n\
+         .SURVEY S\n.NAME S\n.STATUS 8\n\
+         .ENDBOOK\n\
+         .BOOK Local\n.NAME LOCAL\n.STATUS 8\n.PATH {}\n\
+         .SURVEY T\n.NAME T\n.STATUS 8\n\
+         .ENDBOOK\n\
+         .ENDBOOK\n",
+        local.display()
+    );
+    let wpj_path = proj.join("T.wpj");
+    std::fs::write(&wpj_path, wpj).unwrap();
+    let parsed = parse_walls(&wpj_path).unwrap();
+    let resolved: Vec<(&str, bool)> = parsed
+        .surveys
+        .iter()
+        .map(|s| (s.name.as_str(), s.resolved))
+        .collect();
+    println!("surveys read: {resolved:?}, warnings={:?}", parsed.warnings);
+    assert_eq!(
+        resolved,
+        [("S", false), ("T", true)],
+        "{:?}",
+        parsed.warnings
+    );
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("survey 'S' was skipped")
+                && w.contains("network (UNC) and device paths are never read")),
+        "the relative child inherits the refusal: {:?}",
+        parsed.warnings
+    );
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("survey 'T' is read from outside the project directory")),
+        "{:?}",
+        parsed.warnings
+    );
+}
+
+// ----- .WPJ book nesting: shared state, refused past 256 (#576 B12) --------
+
+/// A `.wpj` of `depth` nested books, each with `.NAME N<k>` (a segment level)
+/// and the `.OPTIONS` `options(k)`, around one survey `S`.
+fn nested_wpj(dir: &Path, depth: usize, options: impl Fn(usize) -> String) -> PathBuf {
+    use std::fmt::Write as _;
+    let mut wpj = String::from(";WALLS Project File\n");
+    for k in 1..=depth {
+        write!(
+            wpj,
+            ".BOOK B{k}\n.NAME N{k}\n.STATUS 8\n.OPTIONS {}\n",
+            options(k)
+        )
+        .unwrap();
+    }
+    wpj.push_str(".SURVEY S\n.NAME S\n.STATUS 8\n");
+    for _ in 0..depth {
+        wpj.push_str(".ENDBOOK\n");
+    }
+    std::fs::write(dir.join("S.SRV"), "A B 10 0 0\n").unwrap();
+    let path = dir.join("Deep.wpj");
+    std::fs::write(&path, wpj).unwrap();
+    path
+}
+
+/// Decision B12-D1: a `.WPJ` nesting books deeper than 256 levels - deeper
+/// than any real project - fails the import with a message naming the limit.
+/// Each level used to copy every ancestor's options and segment, so a few
+/// hundred kilobytes of nested books could exhaust memory.
+#[test]
+fn a_wpj_nested_deeper_than_256_books_is_refused() {
+    let dir = temp_dir("deep_refused");
+    let outcome = parse_walls(&nested_wpj(&dir, 300, |_| "decl=1".to_string()))
+        .map(|p| (p.book_count, p.surveys.len()))
+        .map_err(|e| e.to_string());
+    println!("300 nested books: {outcome:?}");
+    let err = outcome.expect_err("300 nested books must be refused");
+    assert!(
+        err.contains("more than 256 levels deep") && err.contains("'B257'"),
+        "{err}"
+    );
+
+    let dir = temp_dir("deep_accepted");
+    let parsed = parse_walls(&nested_wpj(&dir, 256, |_| "decl=1".to_string())).unwrap();
+    assert_eq!(parsed.book_count, 256, "exactly 256 levels still import");
+}
+
+/// #576 RV3-R-NITS (B12): only `.ENDBOOK` closes a book, so a malformed `.WPJ`
+/// that leaves them out nests every SIBLING book inside the one before it and
+/// is refused past 256 books - where it used to import, nested wrongly. Walls
+/// itself writes `.ENDBOOK`, so this stays refused, but the message has to name
+/// the likelier cause instead of only a nesting depth nobody wrote.
+#[test]
+fn a_wpj_missing_endbook_lines_is_refused_naming_them() {
+    use std::fmt::Write as _;
+    let dir = temp_dir("no_endbook");
+    let mut wpj = String::from(";WALLS Project File\n");
+    for k in 1..=300 {
+        write!(wpj, ".BOOK B{k}\n.NAME N{k}\n.STATUS 8\n").unwrap();
+    }
+    let path = dir.join("Flat.wpj");
+    std::fs::write(&path, wpj).unwrap();
+    let err = parse_walls(&path)
+        .map(|p| p.book_count)
+        .unwrap_err()
+        .to_string();
+    println!("300 books, no .ENDBOOK: {err}");
+    assert!(
+        err.contains("more than 256 levels deep") && err.contains(".ENDBOOK"),
+        "{err}"
+    );
+}
+
+/// Sharing the ancestors' state changes nothing about what a survey
+/// inherits: every ancestor's options apply root first (the last `decl` and
+/// the later `meters` win over the root's `feet`), and the segment is every
+/// naming level joined.
+#[test]
+fn a_deep_survey_inherits_every_ancestor_in_order() {
+    let dir = temp_dir("deep_inherit");
+    let parsed = parse_walls(&nested_wpj(&dir, 200, |k| match k {
+        1 => "feet decl=1".to_string(),
+        150 => format!("meters decl={k}"),
+        _ => format!("decl={k}"),
+    }))
+    .unwrap();
+    let survey = &parsed.surveys[0];
+    let expected_segment = (1..=200)
+        .map(|k| format!("N{k}"))
+        .chain(std::iter::once("S".to_string()))
+        .collect::<Vec<_>>()
+        .join("/");
+    assert_eq!(survey.segment, expected_segment);
+    let v = &survey.vectors[0];
+    assert_eq!(v.units_decl, Some(200.0), "the deepest decl wins");
+    assert!(
+        approx(v.length_m, 10.0),
+        "meters (level 150) beats feet (level 1)"
     );
 }

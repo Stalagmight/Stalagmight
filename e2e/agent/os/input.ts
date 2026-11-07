@@ -246,7 +246,7 @@ const ELEMENT_CENTER_BODY = `
  */
 export async function resolveTargetPoint(
   session: AgentSession,
-  target: { testid?: string; x?: number; y?: number },
+  target: { testid?: string | undefined; x?: number | undefined; y?: number | undefined },
   deps: OsDeps = defaultOsDeps,
 ): Promise<OsPoint> {
   if (target.testid !== undefined) {
@@ -269,7 +269,7 @@ export async function resolveTargetPoint(
 }
 
 /** How a result names what it aimed at. Same precedence as resolveTargetPoint. */
-function describeTarget(target: { testid?: string; x?: number; y?: number }): string {
+function describeTarget(target: { testid?: string | undefined; x?: number | undefined; y?: number | undefined }): string {
   if (target.testid !== undefined) return testIdSelector(target.testid);
   return `screen ${target.x},${target.y}`;
 }
@@ -315,12 +315,12 @@ export async function ensureAppFrontmost(appPid: number, deps: OsDeps = defaultO
 export async function osClick(
   session: AgentSession,
   opts: {
-    testid?: string;
-    x?: number;
-    y?: number;
-    button?: 'left' | 'right';
-    double?: boolean;
-    force?: boolean;
+    testid?: string | undefined;
+    x?: number | undefined;
+    y?: number | undefined;
+    button?: 'left' | 'right' | undefined;
+    double?: boolean | undefined;
+    force?: boolean | undefined;
   },
   deps: OsDeps = defaultOsDeps,
 ): Promise<{ clicked: OsPoint; target: string } & OsActionEvidence> {
@@ -359,7 +359,7 @@ export async function osKeys(
   session: AgentSession,
   spec: string,
   deps: OsDeps = defaultOsDeps,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean | undefined } = {},
 ): Promise<{ spec: string } & OsActionEvidence> {
   const permissions = await requireOsAccess(deps, false);
   const appPid = requireAppPid(session);

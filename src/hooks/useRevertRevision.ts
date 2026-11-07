@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
-import { useSpeleoStore, asDoneKind } from '../store/speleoStore';
+import { asDoneKind, doneFinished, useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { useSpeleoActions } from './useSpeleoActions';
 import { useRestoreRevision } from './useRestoreRevision';
@@ -76,7 +76,11 @@ type PublishArgs = Pick<RevertRevisionArgs, 'message' | 'shortSha'> & {
  */
 export type RevertOutcome =
   | { kind: 'reverted' }
-  | { kind: 'needs_discard'; lockHeld: boolean }
+  /** `stateUnknown` [#576 W55 NF-W53-1]: the restore was refused because the copy could
+      not be read (`UnpushedLocalEdits.state_unknown`), not because it was read dirty -
+      the dialog words the discard step for that. False for the pre-flight, which
+      refuses on a dirty bit it did read. */
+  | { kind: 'needs_discard'; lockHeld: boolean; stateUnknown: boolean }
   /** The open project holds edits that are not on DISK. Nothing was taken and
       nothing was changed - see the pre-flight for why this is its own answer and
       not a `needs_discard`. */
@@ -99,6 +103,11 @@ export type RevertOutcome =
       can only be produced from before the acquire. */
   | { kind: 'project_changed' }
   | { kind: 'push_failed' }
+  /** [#576 RV4-FE-SP4] The read-only Plan or Export workspace is active, where a
+      restore is refused (RV2-R-15). Nothing was taken and nothing was written: the
+      refusal comes before the acquire, so no lock round trip is spent on an action
+      that cannot succeed. */
+  | { kind: 'workspace_read_only' }
   /** The edit gate dropped mid-flight (usually a 401 auto-drop): nothing uploaded,
       nothing released, and - unlike `push_failed` - no lock held to retry with. */
   | { kind: 'not_editing' }
@@ -139,7 +148,7 @@ export function useRevertRevision() {
       // edits with no lock over them.
       if (result === null) return { kind: 'push_failed' };
       const kind = asDoneKind(result.kind);
-      if (kind === 'released') {
+      if (doneFinished(kind)) {
         showToast(t('speleodb.revert.done', { sha: shortSha }), TOAST_KEYS.SPELEODB_REVERT, 'success');
         return { kind: 'reverted' };
       }
@@ -195,6 +204,13 @@ export function useRevertRevision() {
       // stay behind the resume; the identity is not.
       if (resumeAtPush) return publish({ message, shortSha, onStep });
 
+      // [#576 RV4-FE-SP4] The restore below is refused in the read-only Plan and
+      // Export workspaces (RV2-R-15), and the acquire before it is not: so refuse
+      // here, before any IPC, rather than take the server lock (and possibly
+      // fast-forward) only to hand it back. Behind the resume: an upload of a restore
+      // that already landed replaces nothing.
+      if (useUIStore.getState().appMode !== 'survey') return { kind: 'workspace_read_only' };
+
       // Un-SAVED is a different loss from un-PUSHED, and this flow resolves neither:
       // the restore closes and reopens the project at the checked-out tree, so an edit
       // that exists only in memory is gone, and `useRestoreRevision` then force-clears
@@ -222,7 +238,7 @@ export function useRevertRevision() {
       // store rather than from a render snapshot - an autosave or a poll can have
       // flipped the bit since the dialog last rendered.
       if (!discardLocal && (useSpeleoStore.getState().link?.hasUnpushedEdits ?? false)) {
-        return { kind: 'needs_discard', lockHeld: false };
+        return { kind: 'needs_discard', lockHeld: false, stateUnknown: false };
       }
 
       // [#258] Ask which file BEFORE acquiring, for the same reason the un-pushed
@@ -236,7 +252,7 @@ export function useRevertRevision() {
       // about the tip while this asks about `hexsha`, so the short-circuit was answering
       // a different question than the one put to it.
       if (!entryPath) {
-        const candidates = await invokeIpc<SpeleoDumpCandidate[] | null>(
+        const candidates = await invokeIpc(
           'speleodb_dump_candidates',
           { projectId, hexsha },
         ).catch(() => null);
@@ -265,6 +281,9 @@ export function useRevertRevision() {
         return { kind: 'project_changed' };
       }
       if (useProjectStore.getState().isDirty) return { kind: 'unsaved_local' };
+      // ...and "still in Survey?", for the same reason: a switch to Plan or Export
+      // during the wait would only have the restore refused after the acquire.
+      if (useUIStore.getState().appMode !== 'survey') return { kind: 'workspace_read_only' };
 
       onStep?.('locking');
       if (!(await startEditing())) {
@@ -273,7 +292,7 @@ export function useRevertRevision() {
         // this process's lock, so unwind that provenance-scoped claim before classifying
         // the false result as ordinary contention or failure.
         if (useSpeleoStore.getState().remoteProjectId !== projectId) {
-          await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+          await invokeIpc('speleodb_release_lock_acquired_here').catch((e: unknown) => {
             console.warn(
               'revert: could not release the lock taken before the project changed',
               e,
@@ -330,7 +349,7 @@ export function useRevertRevision() {
       // name the smaller problem; a stranded lock stays visible in the held-lock
       // resume prompt.
       if (useSpeleoStore.getState().remoteProjectId !== projectId) {
-        await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+        await invokeIpc('speleodb_release_lock_acquired_here').catch((e: unknown) => {
           console.warn('revert: could not release the lock taken before the project changed', e);
         });
         return { kind: 'project_changed' };
@@ -351,7 +370,7 @@ export function useRevertRevision() {
           ...(entryPath ? { entryPath } : {}),
         });
         if (!applied) {
-          await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+          await invokeIpc('speleodb_release_lock_acquired_here').catch((e: unknown) => {
             console.warn(
               'revert: could not release the lock after the project changed during restore',
               e,
@@ -396,9 +415,17 @@ export function useRevertRevision() {
         if (!dirty) {
           const resolved = await done(null);
           const kind = resolved ? asDoneKind(resolved.kind) : null;
-          lockHeld = !(kind === 'released' || kind === 'not_editing');
+          // A lock left with another session of the account (#576 RV2-R-13) is
+          // not held by THIS one either.
+          lockHeld = !(doneFinished(kind) || kind === 'not_editing');
         }
-        if (unpushedLocalEdits(e)) return { kind: 'needs_discard', lockHeld };
+        if (refusedForLocalEdits) {
+          return {
+            kind: 'needs_discard',
+            lockHeld,
+            stateUnknown: refusedForLocalEdits.state_unknown === true,
+          };
+        }
         // [#258] After the unwind, not before it: the release must have HAPPENED, and
         // `lockHeld` being false is the evidence that a composite retry can re-acquire.
         // While the copy is dirty the lock is deliberately kept and the retry's own

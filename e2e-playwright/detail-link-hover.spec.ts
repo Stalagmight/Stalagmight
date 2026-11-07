@@ -952,7 +952,8 @@ test.describe('Detail Link Focus Highlighting', () => {
       // and doesn't interfere with DetailLink hover
       await createProjectWithSections(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
+      // Kept for its existence check (getSectionIdByName asserts); the id is unused.
+      await getSectionIdByName(page, 'Main Tunnel');
       const sideSectionId = await getSectionIdByName(page, 'Side Passage');
 
       // Initially no hover state

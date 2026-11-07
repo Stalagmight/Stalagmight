@@ -16,7 +16,8 @@ const closeMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ close: closeMock, destroy: vi.fn(async () => {}) }),
 }));
-vi.mock('../ipc', () => ({ invokeIpc: vi.fn(), getErrorMessage: (_e: unknown, f?: string) => f }));
+vi.mock('../ipc');
+stubGetErrorMessage(fallbackOr());
 
 import {
   quitApp,
@@ -28,22 +29,11 @@ import {
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
+import { stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
+import { makeSpeleoLink } from '../../test/factories/speleo';
 
-const link = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState => ({
-  permission: 'READ_AND_WRITE',
-  editState: 'editing',
-  lockHolder: null,
-  lockedByOther: false,
-  hasUnpushedEdits: true,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-  ...o,
-});
+const link = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState =>
+  makeSpeleoLink({ editState: 'editing', hasUnpushedEdits: true, ...o });
 
 const openDialog = vi.fn();
 

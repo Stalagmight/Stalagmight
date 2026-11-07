@@ -24,17 +24,15 @@ import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { act, render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 // Real copy, so the assertions below are about what the user actually reads.
 import '../../i18n';
 import SpeleoDumpPickerDialog, { shouldShowModified, visiblePath } from './SpeleoDumpPickerDialog';
 import { useSpeleoStore, type DumpPickerKind } from '../../store/speleoStore';
 import type { SpeleoDumpCandidate } from '../../types/ipc/SpeleoDumpCandidate';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
 const candidate = (over: Partial<SpeleoDumpCandidate> = {}): SpeleoDumpCandidate => ({
   entry_path: 'survey.stalx',

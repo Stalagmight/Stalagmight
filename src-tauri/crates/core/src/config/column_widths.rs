@@ -78,7 +78,7 @@ where
 /// that pushes every later column off-screen.
 pub fn normalize_column_widths(widths: &mut BTreeMap<String, u32>) {
     // Shape first, then values. Both the load path (`Config::normalize`) and the
-    // IPC write path (`update_data_table_view_impl`) come through here, so this is
+    // IPC write path (`update_data_table_view`) come through here, so this is
     // the one place that has to hold for a hand-edited file and for a caller that
     // reached `invoke()` alike.
     widths.retain(|key, _| !key.is_empty() && key.len() <= MAX_COLUMN_KEY_LEN);
@@ -110,7 +110,7 @@ pub fn normalize_column_widths(widths: &mut BTreeMap<String, u32>) {
 /// lists - the same way [`normalize_column_widths`] bounds the width maps.
 ///
 /// These four `Vec<String>` fields were the one part of the data-table view state
-/// with no ceiling at all: `update_data_table_view_impl` wrote them straight
+/// with no ceiling at all: `update_data_table_view` wrote them straight
 /// through from the renderer, and nothing on the load path pruned them either.
 /// That is the same unbounded-growth hole the width maps already close, and it
 /// bites harder here because there is no per-entry value to clamp - the entries

@@ -56,6 +56,18 @@ export function reachableStationKeySet(field: GasReachField): Set<string> {
 }
 
 /**
+ * Whether the dive reaches stage drop `i` (#576 RV8c-2-D3). A pinned drop the gas - or the scooter
+ * range - runs out before is reported by the engine at its pin, PAST the turnaround: its
+ * `stage_drop_route_indices` entry is beyond the route's last station (a route of `route.length`
+ * legs has stations 0..route.length). The stage is then carried the whole dive, so there is no
+ * pressure to leave it at. This only reads the engine's index; nothing here re-derives the gas.
+ */
+export function stageDropReached(field: GasReachField, i: number): boolean {
+  const routeIndex = (field.stage_drop_route_indices ?? [])[i];
+  return routeIndex === undefined || routeIndex <= field.route.length;
+}
+
+/**
  * Pick which of a shot's two endpoint stations is nearer the CURRENT ORIGIN (#395/#397): every
  * plan-mode point-set click that lands on a shot (not a station) anchors to whichever endpoint
  * is closer to that origin, so the resulting pin reads the same as clicking the nearer station

@@ -1,8 +1,114 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use super::{Database, SCHEMA_VERSION};
+use super::{Database, UpgradeRefusal, SCHEMA_VERSION};
+
+/// Whether `path` names a `.stalx` project file, in any letter case.
+///
+/// Case-insensitive because everything else that decides "is this a project
+/// file" is: the frontend's save dialogs accept `CaveA.STALX` as already having
+/// the extension, the open router lowercases it, and a project copied from a
+/// case-insensitive filesystem can arrive with any spelling. Comparing
+/// case-sensitively made the save pipeline rewrite `CaveA.STALX` to
+/// `CaveA.stalx` - on a case-sensitive filesystem a DIFFERENT file, which the
+/// rename then replaced without the overwrite prompt that only ever saw
+/// `CaveA.STALX` (#576 B33).
+pub fn has_stalx_extension(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("stalx"))
+}
+
+/// Every file type Stalagmight reads or writes. A trailing extension naming one
+/// of them is a mistyped format and is REPLACED; any other is part of the name.
+/// Mirrors `KNOWN_FILE_EXTENSIONS` in `src/utils/fileDialogs.ts` (#576 D35).
+const KNOWN_FILE_EXTENSIONS: &[&str] = &[
+    "stalx", "plnx", "gpx", "tml", "tmlu", "mak", "dat", "wpj", "srv", "dmp", "csv", "json", "png",
+    "svg", "pdf", "xml",
+];
+
+/// `path` with a `.stalx` extension: returned as given when it already has one
+/// in any letter case (see [`has_stalx_extension`]). Otherwise an extension that
+/// names a known file type (`CaveA.tml`) - or a bare trailing dot - is replaced,
+/// and anything else is appended to: `CaveA 1.5` becomes `CaveA 1.5.stalx`, not
+/// `CaveA 1.stalx`, a different file no overwrite prompt was shown for
+/// (#576 D35-D1, the frontend's `ensureExtension` rule).
+pub fn with_stalx_extension(path: PathBuf) -> PathBuf {
+    if has_stalx_extension(&path) {
+        return path;
+    }
+    let replace = path.extension().is_some_and(|ext| {
+        ext.is_empty()
+            || KNOWN_FILE_EXTENSIONS
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+    });
+    if replace {
+        path.with_extension("stalx")
+    } else {
+        let mut appended = path.into_os_string();
+        appended.push(".stalx");
+        PathBuf::from(appended)
+    }
+}
+
+/// [#576 W35-NF-1] A connection to the existing file at `path` for an opener
+/// that only reads it, leaving nothing beside it.
+///
+/// READ_ONLY, as before, for every file but one: a file in WAL journal mode
+/// with neither a `-wal` nor a `-journal` beside it. A read-only connection to
+/// that creates the `-wal` and `-shm` and cannot remove them when it closes
+/// (#576 RV8a-3, RV18-3), so it is opened READ_WRITE without CREATE instead,
+/// with `query_only` on: it refuses INSERT, UPDATE, DELETE and schema changes,
+/// so no statement the openers run writes through it (`query_only` does not
+/// stop `PRAGMA journal_mode`, which rewrites the header; no caller runs one,
+/// #576 RV19a-7). With no `-wal` nothing is committed outside the file, so
+/// its last close has nothing to checkpoint into the file and removes the
+/// sidecars the open made. Every other file keeps the read-only open: a
+/// rollback-journal file's creates nothing, a hot journal still fails it with
+/// `SQLITE_READONLY_ROLLBACK` (which callers of
+/// [`Database::open_for_metadata`] rely on), and a WAL-mode file whose `-wal`
+/// is there - a live writer's, or one a crash left - is read as it was, not
+/// checkpointed by a reader. The `-wal` is looked for beside the file a
+/// symlink points at, where SQLite keeps it (#576 RV19a-7).
+///
+/// One window stays open (#576 RV19a-7): a writer that starts on the file
+/// between the check and this connection's close commits into a `-wal`, and
+/// this connection, closing last, checkpoints those frames into the file. That
+/// is the writer's committed data, written where it would have gone anyway -
+/// not a corruption - but it is a write made by a reader's close.
+pub(super) fn connect_for_reading(path: &Path) -> rusqlite::Result<Connection> {
+    use rusqlite::OpenFlags;
+    if !wal_mode_with_nothing_beside(path) {
+        return Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY);
+    }
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    conn.pragma_update(None, "query_only", true)?;
+    Ok(conn)
+}
+
+/// Whether `path` is a SQLite database in WAL journal mode - the header's
+/// write and read format bytes (offsets 18 and 19) are 2 - with no `-wal` and
+/// no `-journal` beside it. Unreadable or not a database: no.
+///
+/// On unix "beside it" means beside the file a symlink resolves to: SQLite's
+/// unix VFS resolves the database path before it names the `-wal`, so looking
+/// beside the link missed a writer's `-wal` (#576 RV19a-7).
+fn wal_mode_with_nothing_beside(path: &Path) -> bool {
+    use std::io::Read as _;
+    let mut head = [0u8; 20];
+    let read = std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut head));
+    let wal_mode = read.is_ok()
+        && head.starts_with(b"SQLite format 3\0")
+        && head.get(18..20) == Some(&[2u8, 2][..]);
+    #[cfg(unix)]
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    #[cfg(not(unix))]
+    let resolved = path.to_path_buf();
+    wal_mode
+        && !super::repair::sibling(&resolved, "-wal").exists()
+        && !super::repair::sibling(&resolved, "-journal").exists()
+}
 
 impl Database {
     /// Open or create a database at the given path
@@ -25,16 +131,24 @@ impl Database {
             super::check_schema(&conn)?;
         }
 
-        let mut db = Self { conn };
+        let db = Self { conn };
         db.enable_foreign_keys()?;
 
+        // What the file is is decided BEFORE anything writes to it (#576
+        // NF-PNEWER-1): `init_schema` creates every table this build knows that
+        // the file lacks, which is exactly what a newer file (whose schema may
+        // have dropped one) and a refused pre-release file must not get.
         let prior_version = db.get_user_version().unwrap_or(0);
         if prior_version > SCHEMA_VERSION {
             tracing::warn!(
                 current = prior_version,
                 expected = SCHEMA_VERSION,
-                "Database schema version is newer than this app"
+                "Database schema version is newer than this app; leaving the file untouched"
             );
+            return Ok(db);
+        }
+        if file_existed {
+            db.refuse_pre_release_file()?;
         }
         db.init_schema()?;
 
@@ -54,8 +168,8 @@ impl Database {
         } else if prior_version < SCHEMA_VERSION {
             db.ensure_schema_version()?;
         }
-        // An existing file already at (or newer than) SCHEMA_VERSION is left
-        // untouched; a newer version was warned about above.
+        // An existing file already at SCHEMA_VERSION gets nothing more; a newer
+        // one returned above, before `init_schema`.
 
         tracing::debug!("Schema initialized");
 
@@ -64,6 +178,121 @@ impl Database {
 
     /// Open an existing database (does not create if missing)
     pub fn open_existing(path: &Path) -> Result<Self> {
+        Self::open_existing_with(path, None)
+    }
+
+    /// [#576 RV4-R-M3-OPEN] [`Self::open_existing`] for a file in a place nothing
+    /// may be written (the app's own folders, a system folder): a file this build
+    /// can read as it is opens exactly as it would anywhere, but one the open would
+    /// UPGRADE in place - the migration chain, and the pre-upgrade copy it keeps
+    /// beside the file - is refused before the first write, with
+    /// an [`UpgradeRefused`](super::UpgradeRefused) carrying the `refusal` message
+    /// that fits the file, and left as it was.
+    pub fn open_existing_refusing_upgrade(path: &Path, refusal: &UpgradeRefusal) -> Result<Self> {
+        Self::open_existing_with(path, Some(refusal))
+    }
+
+    /// [#576 RV6b-R1-D1] Open an existing project only to READ it: nothing is
+    /// written to the file or beside it, wherever it is.
+    ///
+    /// A file this build reads as it is opens exactly as [`Self::open_existing`]
+    /// opens it. One the open would upgrade in place - the migration chain, and
+    /// the `.pre-v<N>.backup` copy it keeps beside the file first - is instead
+    /// copied into memory (`VACUUM INTO`, which writes only the copy) and the
+    /// upgrade runs on that copy; the handle reads the upgraded copy and the file
+    /// is left byte-for-byte as it was. For a caller that consumes a project and
+    /// never writes it back (a merge source). The usual checks - quick_check, a
+    /// project inside, foreign keys - run either way, and a file from before the
+    /// first public release is refused as by every other open.
+    ///
+    /// The one write that can still happen is SQLite rolling back a hot journal
+    /// left by a crashed writer, which every open of such a file does to read it.
+    pub fn open_existing_to_read(path: &Path) -> Result<Self> {
+        // Never shown: the refusal only routes the file to the in-memory copy.
+        let read_only_here = UpgradeRefusal {
+            older_format: "opened only to be read (an older file)".to_owned(),
+            unstamped: "opened only to be read (an unstamped file)".to_owned(),
+        };
+        match Self::open_existing_with(path, Some(&read_only_here)) {
+            Err(e) if e.downcast_ref::<super::UpgradeRefused>().is_some() => {
+                #[cfg(test)]
+                between_opens::run(path);
+                tracing::info!(
+                    path = ?path,
+                    purpose = "read an older project without upgrading it in place (#576 RV6b-R1)",
+                    "Reading an older-format project through an upgraded copy in memory"
+                );
+                Self::upgraded_copy_in_memory(path)
+            }
+            opened => opened,
+        }
+    }
+
+    /// The file at `path`, copied into a private in-memory database and upgraded
+    /// there. See [`Self::open_existing_to_read`].
+    fn upgraded_copy_in_memory(path: &Path) -> Result<Self> {
+        use rusqlite::OpenFlags;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COPIES: AtomicU64 = AtomicU64::new(0);
+        // A shared-cache in-memory database under a name no other open uses: the
+        // handle below keeps it alive, and the source connection's `VACUUM INTO`
+        // reaches the same database by that name. Both connections parse URIs,
+        // which is what makes the name a memory database and not a file; the
+        // source path is made absolute so it can never be read as a URI itself.
+        let name = format!(
+            "file:stalagmight-read-{}-{}?mode=memory&cache=shared",
+            std::process::id(),
+            COPIES.fetch_add(1, Ordering::Relaxed)
+        );
+        let uri = OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let conn = Connection::open_with_flags(
+            &name,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | uri,
+        )
+        .context("Failed to create an in-memory copy of the project")?;
+        let source_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .context("Failed to resolve the project path")?
+                .join(path)
+        };
+        // [#576 RV8a-3] READ_WRITE, though it writes nothing: `VACUUM INTO` writes
+        // only its target. A read-only connection to a file in WAL journal mode
+        // creates the `-wal` / `-shm` beside it and cannot remove them when it
+        // closes; a read-write one removes them as every other open's last close
+        // does, so the source's folder is left as it was.
+        let source =
+            Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_WRITE | uri)
+                .context("Failed to open the project to copy it")?;
+        // Another open of an existing file: the schema guard first (#608). The
+        // refusing first open already refused a hostile schema, so this catches a
+        // file swapped in between (#576 RV18-2, tested through `between_opens`).
+        super::check_schema(&source)?;
+        source
+            .execute("VACUUM INTO ?1", [&name])
+            .context("Failed to copy the project into memory")?;
+        drop(source);
+        // The upgrade's pre-upgrade copy is keyed off the database's own file name,
+        // which an in-memory database does not have; refuse rather than let a
+        // copy land anywhere if that ever stops holding.
+        if conn.path().is_some_and(|p| !p.is_empty()) {
+            anyhow::bail!("The in-memory copy of the project unexpectedly has a file name");
+        }
+
+        let db = Self { conn };
+        db.enable_foreign_keys()?;
+        db.validate_integrity()
+            .context("Database file may be corrupted")?;
+        if !db.has_project_data()? {
+            anyhow::bail!("File does not contain a valid Stalagmight project");
+        }
+        db.ensure_schema_version()?;
+        db.validate_foreign_keys()?;
+        Ok(db)
+    }
+
+    fn open_existing_with(path: &Path, refuse_upgrade: Option<&UpgradeRefusal>) -> Result<Self> {
         // Verbose open-time logging is debug-only - it fires on every
         // project load and every recent-projects metadata read, which
         // adds up.  The error paths still log at error/warn.
@@ -77,7 +306,7 @@ impl Database {
         // Open in read-only mode first to check if it's valid
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .context("Failed to open database - file may not be a valid SQLite database")?;
-        Self::finish_open_existing(conn, false)
+        Self::finish_open_existing(conn, false, refuse_upgrade)
     }
 
     /// [`Self::open_existing`] for a file from an untrusted source, e.g. a server
@@ -116,13 +345,17 @@ impl Database {
         conn.pragma_update(None, "mmap_size", 0i64)?;
         conn.pragma_update(None, "cell_size_check", true)?;
         conn.pragma_update(None, "temp_store", "FILE")?;
-        Self::finish_open_existing(conn, true)
+        Self::finish_open_existing(conn, true, None)
     }
 
     /// The checks and migrations every existing-file open runs on `conn`.
     /// `untrusted` keeps the caller's hardened pragmas instead of the app's
-    /// performance ones.
-    fn finish_open_existing(conn: Connection, untrusted: bool) -> Result<Self> {
+    /// performance ones; `refuse_upgrade` is [`Self::open_existing_with`]'s.
+    fn finish_open_existing(
+        conn: Connection,
+        untrusted: bool,
+        refuse_upgrade: Option<&UpgradeRefusal>,
+    ) -> Result<Self> {
         // Before the integrity check, which would connect any virtual table (#608).
         super::check_schema(&conn)?;
         let db = Self { conn };
@@ -130,7 +363,7 @@ impl Database {
         if !untrusted {
             db.apply_load_performance_pragmas();
         }
-        db.run_existing_open_checks()
+        db.run_existing_open_checks(refuse_upgrade)
     }
 
     fn apply_load_performance_pragmas(&self) {
@@ -144,8 +377,8 @@ impl Database {
         // Default cache_size is 2 000 pages (~2 MB). Large projects
         // benefit from holding more pages resident so the per-section
         // shot SELECT and the integrity check don't re-fault from
-        // mmap. 32 MiB covers the 11 MB 92.stalx with headroom for
-        // the indexes; SQLite caps this against its own limits.
+        // mmap. 32 MiB holds a large project's shot tables with headroom
+        // for the indexes; SQLite caps this against its own limits.
         let _ = self.conn.pragma_update(None, "cache_size", -32_000i64); // negative = KiB
                                                                          // Skip syncing on read-only-equivalent operations.
                                                                          // (load path doesn't write - this is harmless on writes too;
@@ -153,8 +386,8 @@ impl Database {
         let _ = self.conn.pragma_update(None, "temp_store", "MEMORY");
     }
 
-    fn run_existing_open_checks(mut self) -> Result<Self> {
-        let db = &mut self;
+    fn run_existing_open_checks(self, refuse_upgrade: Option<&UpgradeRefusal>) -> Result<Self> {
+        let db = &self;
         // Run quick integrity check before reading any data (SPEC 14.4)
         let t = std::time::Instant::now();
         db.validate_integrity()
@@ -179,7 +412,7 @@ impl Database {
 
         // Run lightweight migrations to ensure newer tables exist in legacy projects
         let t = std::time::Instant::now();
-        db.ensure_schema_version()?;
+        db.ensure_schema_version_with(refuse_upgrade)?;
         tracing::debug!(
             ms = t.elapsed().as_millis() as u64,
             "open_existing: ensure_schema_version"
@@ -199,10 +432,94 @@ impl Database {
     /// ([`super::check_schema`]), without opening it as a project. For files
     /// that arrive from elsewhere before anything else touches them, e.g. a
     /// SpeleoDB download about to replace the local cache.
+    ///
+    /// Opened through `connect_for_reading` (#576 RV19a-3), so the check
+    /// leaves nothing beside the file (#576 RV18-3: no open may follow it to
+    /// remove a `-wal` / `-shm` a read-only connection to a WAL-mode file
+    /// would make) and does not replay anything into it. A missing file is an
+    /// error, not a new empty one. A journal found beside the file is NOT
+    /// rolled back into
+    /// it: the file was just written by the caller, so such a journal can only
+    /// be a stale one left by a crash under the same name, and replaying it put
+    /// the old file's pages into the new one. The read-only open fails on it
+    /// (`SQLITE_READONLY_ROLLBACK`) and the file is refused instead.
     pub fn check_schema_at(path: &Path) -> Result<()> {
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        let conn = connect_for_reading(path)
             .with_context(|| format!("open {} to check its schema", path.display()))?;
         super::check_schema(&conn)
+    }
+
+    /// [#576 B6-D1] The schema version stamped on this file when it is ABOVE the
+    /// one this build knows - the file was saved by a newer Stalagmight - else
+    /// `None`.
+    ///
+    /// Read off `PRAGMA user_version`, the same stamp `ensure_schema_version`
+    /// keys its "newer than this app" branch on, so the two can never disagree
+    /// about a file: every build stamps it on every file it writes. The project
+    /// row's `schema_version` is deliberately not consulted - on an unstamped
+    /// file it is an unverified claim (#485), and that shape is not one any
+    /// build writes.
+    pub fn newer_schema_version(&self) -> Option<i32> {
+        self.get_user_version()
+            .ok()
+            .filter(|version| *version > SCHEMA_VERSION)
+    }
+
+    /// [#576 RV4-R-S7] How many leading bytes of a file
+    /// [`Self::newer_schema_version_in_header`] reads: the SQLite database header.
+    pub const HEADER_LEN: usize = 100;
+
+    /// [#576 RV4-R-S7] [`Self::newer_schema_version`] for a project file that is
+    /// not on disk yet - a SpeleoDB download still inside its dump - read off its
+    /// first [`Self::HEADER_LEN`] bytes, `head`.
+    ///
+    /// The same stamp, not an estimate of it: SQLite keeps `PRAGMA user_version`
+    /// in the database header, as the big-endian 32-bit integer at offset 60
+    /// (sqlite.org/fileformat2.html, "The Database Header"), so the two answers
+    /// cannot disagree about a file. `None` when `head` is not a SQLite database
+    /// header at all: the open that follows reports what the file is instead.
+    pub fn newer_schema_version_in_header(head: &[u8]) -> Option<i32> {
+        const MAGIC: &[u8] = b"SQLite format 3\0";
+        if !head.starts_with(MAGIC) {
+            return None;
+        }
+        let stamp: [u8; 4] = head.get(60..64)?.try_into().ok()?;
+        Some(i32::from_be_bytes(stamp)).filter(|version| *version > SCHEMA_VERSION)
+    }
+
+    /// [#576 B6-D1] Re-open `path` - the file this handle was opened from by
+    /// [`Self::open_existing`] - through a READ-ONLY connection, consuming the
+    /// read-write one so a session cannot keep both.
+    ///
+    /// For a file a newer build wrote ([`Self::newer_schema_version`]): the
+    /// project is viewed, never written, and a read-only connection is what
+    /// makes that hold for every path that reaches the handle - including the
+    /// ones that are deliberately ungated (display settings) - instead of only
+    /// for the ones that remember to check. A write through it fails with
+    /// `SQLITE_READONLY` and leaves the file as it was.
+    ///
+    /// The checks `open_existing` ran (quick_check, project data, foreign keys)
+    /// are not repeated: they described this same file a moment ago. The read
+    /// tuning pragmas are, because they are per connection.
+    pub fn into_read_only(self, path: &Path) -> Result<Self> {
+        drop(self);
+        #[cfg(test)]
+        between_opens::run(path);
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .context("Failed to reopen the database read-only")?;
+        // Another open of an existing file: the schema guard first (#608). The
+        // open that made this handle already refused a hostile schema, so this
+        // catches a file swapped in between (#576 RV18-2, tested through
+        // `between_opens`).
+        super::check_schema(&conn)?;
+        let db = Self { conn };
+        db.enable_foreign_keys()?;
+        let _ = db
+            .conn
+            .pragma_update(None, "mmap_size", 256i64 * 1024 * 1024);
+        let _ = db.conn.pragma_update(None, "cache_size", -32_000i64);
+        let _ = db.conn.pragma_update(None, "temp_store", "MEMORY");
+        Ok(db)
     }
 
     /// Open a database for read-only metadata extraction only.
@@ -220,8 +537,9 @@ impl Database {
         if !path.exists() {
             anyhow::bail!("File does not exist: {}", path.display());
         }
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .context("Failed to open database read-only for metadata")?;
+        // [#576 W35-NF-1] Read-only, leaving nothing beside a WAL-mode file.
+        let conn =
+            connect_for_reading(path).context("Failed to open database read-only for metadata")?;
         super::check_schema(&conn)?;
         Ok(Self { conn })
     }
@@ -270,14 +588,15 @@ impl Database {
         }
 
         // Validate it's a Stalagmight project file by extension
-        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        if extension != "stalx" {
+        if !has_stalx_extension(path) {
             anyhow::bail!("Not a Stalagmight project file: {}", path.display());
         }
 
-        // Open in read-only mode - no writes possible
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .context("Failed to open database read-only")?;
+        // Open for reading - read-only, or `query_only` for a WAL-mode file
+        // with nothing beside it, which this path runs nothing past - leaving
+        // nothing beside a WAL-mode file (#576 W35-NF-1; the limits are on
+        // `connect_for_reading`, #576 RV19a-7).
+        let conn = connect_for_reading(path).context("Failed to open database read-only")?;
         super::check_schema(&conn)?;
 
         let db = Self { conn };
@@ -336,5 +655,34 @@ impl Database {
         db.init_schema()?;
         db.set_user_version(SCHEMA_VERSION)?;
         Ok(db)
+    }
+}
+
+/// Test-only seam (#576 RV18-2): a hook that runs between the two opens of one
+/// existing file - the refusing first open of [`Database::open_existing_to_read`]
+/// and its copy into memory, the handle [`Database::into_read_only`] drops
+/// and its read-only reopen, and the rename of [`Database::attempt_repair`]'s
+/// repaired copy and its verifying reopen (#576 RV19a-8) - with no connection
+/// to the file held. A test swaps
+/// the file there: the only way a file reaches the second open's schema guard,
+/// because the first open refuses a hostile one itself.
+#[cfg(test)]
+pub(super) mod between_opens {
+    use std::cell::Cell;
+    use std::path::Path;
+
+    thread_local! {
+        static HOOK: Cell<Option<fn(&Path)>> = const { Cell::new(None) };
+    }
+
+    /// The next open sequence on this thread runs `hook` between its opens, once.
+    pub(in crate::persistence::sqlite) fn set(hook: fn(&Path)) {
+        HOOK.with(|slot| slot.set(Some(hook)));
+    }
+
+    pub(in crate::persistence::sqlite) fn run(path: &Path) {
+        if let Some(hook) = HOOK.with(Cell::take) {
+            hook(path);
+        }
     }
 }

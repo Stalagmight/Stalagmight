@@ -102,7 +102,11 @@ export function makeContext(
   seed: number,
   onLog?: (message: string) => void,
 ): ScenarioContext & { metrics: Record<string, number> } {
-  const effectiveSeed = seed || 1;
+  // A number whatever the caller read it from (#576 W51): `fuzz-shrink` and a
+  // generated replay spec take the seed out of a trace or an actions.jsonl
+  // that a forged copy can fill with text, and `ctx.seed` prints in progress
+  // and reproduce lines.
+  const effectiveSeed = Number(seed) || 1;
   const rand = mulberry32(effectiveSeed);
   const metrics: Record<string, number> = {};
   const fixtureDir = target.sessionDir

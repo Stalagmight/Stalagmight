@@ -94,7 +94,7 @@ export const importTml: Journey = {
       `section_ids=${importRes.result?.section_ids?.length ?? 'absent'} expected=${expectedSections}`,
     );
     ctx.expect('an import receipt was returned', importRes.result?.import_receipt !== undefined,
-      'import_receipt absent from CommandResult');
+      'import_receipt absent from the import outcome');
 
     const after = await counts(ctx);
     ctx.expect('project gained exactly the parsed sections',

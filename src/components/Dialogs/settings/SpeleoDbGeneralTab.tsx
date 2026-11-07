@@ -111,6 +111,17 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
             disabled={!canEdit}
             onChange={(v) => update('visibility', v as Visibility)}
             options={[
+              // [#576 B16] A visibility the server added after this build shipped:
+              // shown as the current value, never offered (it is never sent back).
+              ...(form.visibility === 'UNKNOWN'
+                ? [
+                    {
+                      value: 'UNKNOWN',
+                      label: t('speleodb.projectSettings.visibilityOptions.unknown'),
+                      disabled: true,
+                    },
+                  ]
+                : []),
               { value: 'PRIVATE', label: t('speleodb.projectSettings.visibilityOptions.private') },
               { value: 'PUBLIC', label: t('speleodb.projectSettings.visibilityOptions.public') },
             ]}

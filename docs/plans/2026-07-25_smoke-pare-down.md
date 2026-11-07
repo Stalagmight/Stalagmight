@@ -89,8 +89,8 @@ seconds, and use hook % only to locate *where* the cost is charged.
 |---|---|
 | `scripts/pw-timing-reporter.mjs` | Custom Playwright reporter. Uses `onStepEnd` to capture `category: 'hook'` durations, so per-test cost splits into hook vs body. Writes `PW_TIMING_OUTPUT` (default `playwright-report/timing.json`). Collapses retries into one row, charging all attempts. |
 | `scripts/pw-timing-summary.mjs` | Renders that into a ranked markdown table (by file and by test). Accepts either the reporter's output (has hooks) or a built-in json report (reports hooks as `n/a`). Appends to `$GITHUB_STEP_SUMMARY` when set. |
-| `scripts/pw-timing-{reporter,summary}.test.mjs` | Fixture tests, in the repo's pure-Node `lint:*:test` style. `pnpm lint:pw-timing:test`, run in the smoke job before the browser install. Each pins a bug that produced a confident WRONG number rather than an error. |
-| `.github/workflows/e2e-smoke.yml` | Runs the reporter, prints the ranked table on the run summary page, uploads `timing.json` as the `smoke-timing` artifact (7-day retention). Marked **TEMPORARY**; remove when the pare-down lands. |
+| `scripts/pw-timing-{reporter,summary}.test.mjs` | Fixture tests, in the repo's pure-Node `*.test.mjs` style. `pnpm test:pw-timing` (renamed from `lint:pw-timing:test` in #576 - it is the reporter's self-test, not a lint or a time budget), run in the smoke job before the browser install. Each pins a bug that produced a confident WRONG number rather than an error. |
+| `.github/workflows/e2e-smoke.yml` | Runs the reporter, prints the ranked table on the run summary page, uploads `timing.json` as the `smoke-timing` artifact (7-day retention). Originally marked temporary; kept permanently since #576 (E5-D3), because the smoke set's time budget is managed with it. |
 
 ### Reading a CI run's timing
 
@@ -215,7 +215,10 @@ whose output decides what gets deleted.
   (300ms x2), `settings-dialog` (x3), `zoom-tool` (a shared helper),
   `toolbar-tool-groups` (25ms), plus `helpers/app.ts` (100ms in the shared
   `placeAllSections` poll loop, hit by every import-flow test). Line numbers move;
-  re-grep rather than trusting a list.
+  re-grep rather than trusting a list. **Done in #576 (E14):** the positive
+  waits became condition waits, the deliberate negative-space settles carry a
+  `// settle: <reason>` comment, `placeAllSections` (no callers since March) was
+  deleted, and `pnpm lint:e2e-no-sleep` now fails on an unannotated sleep.
 
 **Re-measure on CI after Phase A before cutting anything** - download the
 `smoke-timing` artifact and diff the hook total. Remember the ~1.9x parallelism
@@ -235,7 +238,12 @@ Parked until Phase A is done and re-measured. If it is still needed:
 - **`gas-planning.spec.ts` 21 -> ~6** is the one large cut: a third of all test
   time for a single feature. Keep: overlay renders, preset apply, cylinder edit,
   route pick, read-only guard, one readout. ⚠ ~61% of its cost is hook, so **A2
-  shrinks this prize** - sequence A2 first and re-derive.
+  shrinks this prize** - sequence A2 first and re-derive. **Done in #576 (E5),
+  from 27 (it had grown) to exactly those six**, paying for one canary per
+  uncovered critical feature (project delete, GPX import, the JSON/TML/PNG/
+  SVG-PDF exports, detail panel, move, SpeleoDB managed file): 93 -> 81 `@smoke`
+  tests, gas-planning 29% -> 7% of the set. The feature list and its gate live
+  in docs/TESTING.md ("Critical features"); re-measure the job on CI.
 - **Body-dominated files are the genuine Phase B candidates**, since A2 will not
   shrink them: `map-tools` (25% hook), `window-close-protection` (34%),
   `toolbar-tool-groups` (43%), `dmp-import` (48%).

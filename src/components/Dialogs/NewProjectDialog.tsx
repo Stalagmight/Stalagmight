@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
@@ -9,10 +10,11 @@ import { DialogWrapper } from './DialogWrapper';
 import { ensureExtension, projectSaveFilters, saveDialog, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 
 export default function NewProjectDialog() {
-  const { closeDialog } = useUIStore();
-  const { setView } = useUIStore();
+  const { t } = useTranslation();
+  const closeDialog = useUIStore((s) => s.closeDialog);
+  const setView = useUIStore((s) => s.setView);
   const openDialog = useUIStore((s) => s.openDialog);
-  const { createProject } = useProjectStore();
+  const createProject = useProjectStore((s) => s.createProject);
   // Only offer the follow-up SpeleoDB publish when signed in.
   const loggedIn = useSpeleoStore((s) => s.session?.loggedIn ?? false);
 
@@ -25,7 +27,7 @@ export default function NewProjectDialog() {
 
   const handleCreate = async () => {
     if (!name.trim()) {
-      setError('Project name is required');
+      setError(t('dialogs.newProject.errors.nameRequired'));
       return;
     }
 
@@ -36,7 +38,7 @@ export default function NewProjectDialog() {
       let explicitSavePath: string | undefined;
       if (saveImmediately) {
         const path = await saveDialog({
-          title: 'Save Project',
+          title: t('dialogs.newProject.saveDialogTitle'),
           filters: projectSaveFilters(),
           defaultPath: `${name.replace(/[^a-zA-Z0-9]/g, '_')}.stalx`,
         });
@@ -63,10 +65,10 @@ export default function NewProjectDialog() {
           closeDialog();
         }
       } else {
-        setError(result.error ?? 'Failed to create project');
+        setError(result.error ?? t('dialogs.newProject.errors.createFailed'));
       }
     } catch (e) {
-      setError(getErrorMessage(e, 'An error occurred'));
+      setError(getErrorMessage(e, t('dialogs.newProject.errors.unknown')));
     } finally {
       setIsCreating(false);
     }
@@ -76,7 +78,7 @@ export default function NewProjectDialog() {
   const isDirty = name.trim() !== '' || projectLocation.trim() !== '' || saveImmediately || alsoPublish;
 
   return (
-    <DialogWrapper title="New Project" onClose={closeDialog} size="md" isDirty={isDirty} data-testid="new-project-dialog">
+    <DialogWrapper title={t('dialogs.newProject.title')} onClose={closeDialog} size="md" isDirty={isDirty} data-testid="new-project-dialog">
       <div className="space-y-4">
         {error && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
@@ -86,28 +88,28 @@ export default function NewProjectDialog() {
 
         <div>
           <label className="block text-sm text-text-secondary mb-1">
-            Project Name *
+            {t('dialogs.newProject.nameLabel')}
           </label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="w-full"
-            placeholder="e.g., Lechuguilla Cave"
+            placeholder={t('dialogs.newProject.namePlaceholder')}
             data-testid="new-project-name-input"
           />
         </div>
 
         <div>
           <label className="block text-sm text-text-secondary mb-1">
-            Location (optional)
+            {t('dialogs.newProject.locationLabel')}
           </label>
           <input
             type="text"
             value={projectLocation}
             onChange={(e) => setProjectLocation(e.target.value)}
             className="w-full"
-            placeholder="e.g., Carlsbad Caverns National Park, NM"
+            placeholder={t('dialogs.newProject.locationPlaceholder')}
             data-testid="new-project-location-input"
           />
         </div>
@@ -122,7 +124,7 @@ export default function NewProjectDialog() {
             data-testid="new-project-save-immediately"
           />
           <label htmlFor="saveImmediately" className="text-sm">
-            Save project file immediately
+            {t('dialogs.newProject.saveImmediately')}
           </label>
         </div>
 
@@ -137,14 +139,14 @@ export default function NewProjectDialog() {
               data-testid="new-project-also-publish"
             />
             <label htmlFor="alsoPublish" className="text-sm">
-              Also create on SpeleoDB after creating
+              {t('dialogs.newProject.alsoPublish')}
             </label>
           </div>
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog} disabled={isCreating} data-testid="new-project-cancel-button">
-            Cancel
+            {t('common.actions.cancel')}
           </Button>
           <Button
             variant="primary"
@@ -152,7 +154,7 @@ export default function NewProjectDialog() {
             disabled={isCreating || !name.trim()}
             data-testid="new-project-create-button"
           >
-            {isCreating ? 'Creating...' : 'Create Project'}
+            {isCreating ? t('dialogs.newProject.creating') : t('dialogs.newProject.create')}
           </Button>
         </div>
       </div>

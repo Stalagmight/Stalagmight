@@ -11,14 +11,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-const invokeIpc = vi.fn();
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: (...args: unknown[]) => invokeIpc(...args),
-}));
+vi.mock('../../../utils/ipc');
 
 import '../../../i18n';
 import { AboutMapImagery } from '../AboutMapImagery';
 import { resetTileAttributionCache } from '../../../hooks/useTileAttribution';
+import { invokeIpcMock as invokeIpc } from '../../../test/factories/ipc';
 
 const SOURCES = 'Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community';
 

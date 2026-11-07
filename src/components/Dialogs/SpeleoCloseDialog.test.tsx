@@ -14,17 +14,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'the server said no',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('the server said no'));
 
 import SpeleoCloseDialog from './SpeleoCloseDialog';
 import SpeleoUnwoundPushDialog from './SpeleoUnwoundPushDialog';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
+import { makeSpeleoLink } from '../../test/factories/speleo';
+
+/** [#576 NF-W8FE-2] Done and Push answer the wire envelope, never a bare outcome. */
+function report<R>(result: R): { result: R; save_warnings: [] } {
+  return { result, save_warnings: [] };
+}
 
 // The real dialog actions, captured before `beforeEach` swaps in spies. The [#303]
 // hand-off at the bottom of this file moves the user BETWEEN two dialogs, so
@@ -32,20 +36,7 @@ import { useUIStore } from '../../store/uiStore';
 const REAL_OPEN_DIALOG = useUIStore.getState().openDialog;
 const REAL_CLOSE_DIALOG = useUIStore.getState().closeDialog;
 
-const LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'editing',
-  lockHolder: null,
-  lockedByOther: false,
-  hasUnpushedEdits: true,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+const LINK: SpeleoLinkState = makeSpeleoLink({ editState: 'editing', hasUnpushedEdits: true });
 
 const seedLink = (o: Partial<SpeleoLinkState> = {}) =>
   useSpeleoStore.setState({ link: { ...LINK, ...o }, banner: null, busy: false });
@@ -56,7 +47,7 @@ let closeDialog: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
-  invokeIpcMock.mockResolvedValue({ kind: 'released' });
+  invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
   closeProject = vi.fn(async () => ({ success: true }));
   saveProject = vi.fn(async () => ({ success: true }));
   closeDialog = vi.fn();

@@ -1,10 +1,12 @@
 import { useCallback, useState } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
+import { Trans, useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { isMac } from '../../utils/shortcuts';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 /** The Full Disk Access pane - step 1 of the written remediation below. The
  *  scheme is granted explicitly in `src-tauri/capabilities/default.json`
@@ -24,7 +26,10 @@ const MACOS_PRIVACY_SETTINGS_URL =
  * exists for the user who needs their hand held to the right pane.
  */
 export default function SavePermissionDialog() {
-  const { closeDialog, dialogData } = useUIStore();
+  const { t } = useTranslation();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
   const mac = isMac();
   const context = dialogData.context === 'open' ? 'open' : 'save';
 
@@ -41,55 +46,61 @@ export default function SavePermissionDialog() {
     void openUrl(MACOS_PRIVACY_SETTINGS_URL).catch(() => setSettingsOpenFailed(true));
   }, []);
 
-  const action = context === 'open' ? 'open this project' : 'save your changes';
+  const action = context === 'open' ? t('dialogs.savePermission.actionOpen') : t('dialogs.savePermission.actionSave');
 
   return (
-    <DialogWrapper title="Folder Access Needed" onClose={handleClose} size="md" data-testid="save-permission-dialog">
+    <DialogWrapper title={t('dialogs.savePermission.title')} onClose={handleClose} size="md" data-testid="save-permission-dialog">
       <div className="space-y-4">
         <p className="text-text-secondary">
-          Stalagmight couldn&apos;t {action} because the system denied access to the folder.
+          {t('dialogs.savePermission.denied', { action })}
           {' '}
           {mac
-            ? 'This usually happens after a macOS or app update, which can reset previously-granted folder permissions.'
-            : 'This usually happens when the folder is read-only, is owned by another account, or is held by security software.'}
-          {' '}<span className="text-text-primary">Your data is not corrupted.</span>
+            ? t('dialogs.savePermission.reasonMac')
+            : t('dialogs.savePermission.reasonOther')}
+          {' '}<span className="text-text-primary">{t('dialogs.savePermission.notCorrupted')}</span>
         </p>
 
         {mac ? (
           <div className="p-3 bg-surface-alt rounded text-sm text-text-secondary space-y-1">
-            <p className="text-text-primary font-medium">To fix it:</p>
+            <p className="text-text-primary font-medium">{t('dialogs.savePermission.fixHeading')}</p>
             <ol className="list-decimal list-inside space-y-1">
               <li>
-                Open <span className="text-text-primary">System Settings → Privacy &amp; Security → Full Disk Access</span>
-                {' '}(or Files and Folders).
+                <Trans
+                  i18nKey="dialogs.savePermission.macStep1"
+                  components={{ hl: <span className="text-text-primary" /> }}
+                />
               </li>
               <li>
-                Enable access for <span className="text-text-primary">Stalagmight</span>, including the folder where your
-                {' '}<code>.stalx</code> files live (often Downloads or Documents).
+                <Trans
+                  i18nKey="dialogs.savePermission.macStep2"
+                  components={{ hl: <span className="text-text-primary" />, code: <code /> }}
+                />
               </li>
-              <li>Restart Stalagmight and try again.</li>
+              <li>{t('dialogs.savePermission.macStep3')}</li>
             </ol>
           </div>
         ) : (
           <div className="p-3 bg-surface-alt rounded text-sm text-text-secondary">
-            Check that Stalagmight has permission to read and write the folder where your
-            {' '}<code>.stalx</code> files are stored, then restart the app and try again.
+            <Trans
+              i18nKey="dialogs.savePermission.otherSteps"
+              components={{ code: <code /> }}
+            />
           </div>
         )}
 
         {settingsOpenFailed && (
           <p className="text-sm text-warning" data-testid="save-permission-open-settings-failed">
-            Couldn&apos;t open System Settings - open it from the Apple menu, then follow the steps above.
+            {t('dialogs.savePermission.openSettingsFailed')}
           </p>
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           {mac && (
             <Button onClick={handleOpenSettings} data-testid="save-permission-open-settings">
-              Open System Settings
+              {t('dialogs.savePermission.openSettings')}
             </Button>
           )}
-          <Button variant="primary" onClick={handleClose} data-testid="save-permission-close">OK</Button>
+          <Button variant="primary" onClick={handleClose} data-testid="save-permission-close">{t('dialogs.savePermission.ok')}</Button>
         </div>
       </div>
     </DialogWrapper>

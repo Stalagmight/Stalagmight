@@ -65,6 +65,8 @@ export function DivePlanBar() {
   const [pending, setPending] = useState<Pending>({ kind: 'none' });
   const [saveAsName, setSaveAsName] = useState('');
   const [staleCount, setStaleCount] = useState(0);
+  // #576 NF-UI-2: span speeds the last load dropped as out of range (one notice).
+  const [droppedSpeedCount, setDroppedSpeedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -84,6 +86,7 @@ export function DivePlanBar() {
     if (prevProjectKeyRef.current !== null && prevProjectKeyRef.current !== key) {
       clearLoadedPlan();
       setStaleCount(0);
+      setDroppedSpeedCount(0);
     }
     prevProjectKeyRef.current = key;
     refresh();
@@ -110,8 +113,9 @@ export function DivePlanBar() {
       try {
         const plan = await loadDivePlan(id);
         if (projectKey() !== key) return; // project switched mid-flight
-        applyLoadedPlan(id, plan.snapshot, planAnchorsOf(plan));
+        const { droppedSpeeds } = applyLoadedPlan(id, plan.snapshot, planAnchorsOf(plan));
         setStaleCount(plan.stale_ref_count);
+        setDroppedSpeedCount(droppedSpeeds);
       } catch (e) {
         setError(String(e));
       } finally {
@@ -126,6 +130,7 @@ export function DivePlanBar() {
     setPending({ kind: 'none' });
     if (value === '') {
       setStaleCount(0);
+      setDroppedSpeedCount(0);
       return;
     }
     const id = Number(value);
@@ -190,6 +195,7 @@ export function DivePlanBar() {
       clearLoadedPlan();
       setPending({ kind: 'none' });
       setStaleCount(0);
+      setDroppedSpeedCount(0);
       refresh();
     } catch (e) {
       setError(String(e));
@@ -384,6 +390,15 @@ export function DivePlanBar() {
           data-testid="dive-plan-stale-warning"
         >
           {t('divePlanBar.staleRefs', { count: staleCount })}
+        </p>
+      )}
+
+      {droppedSpeedCount > 0 && (
+        <p
+          className="text-xs p-2 rounded bg-warning-10 border border-warning-30 text-warning"
+          data-testid="dive-plan-speeds-dropped-warning"
+        >
+          {t('divePlanBar.speedsDropped', { count: droppedSpeedCount })}
         </p>
       )}
 

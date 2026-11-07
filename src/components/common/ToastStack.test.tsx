@@ -1239,3 +1239,47 @@ describe('ToastStack - prefers-reduced-motion', () => {
     expect(toasts()).toHaveLength(2);
   });
 });
+
+describe('ToastStack - the lost-WebGL-context toast (#576 D38-LOST)', () => {
+  it('a persistent toast neither fades nor leaves until it is dismissed by key', () => {
+    render(<ToastStack />);
+    act(() => {
+      useUIStore.getState().showToast('Survey rendering unavailable (WebGL2/GPU)', 'render-context-lost', 'error', {
+        persistent: true,
+      });
+    });
+    // Far past an error's 9 s dwell + 1.5 s fade.
+    advance(60000);
+    expect(toastFor('Survey rendering unavailable (WebGL2/GPU)')?.style.opacity).toBe('1');
+
+    act(() => useUIStore.getState().dismissToastByKey('render-context-lost'));
+    advance(1000);
+    expect(toastFor('Survey rendering unavailable (WebGL2/GPU)')).toBeUndefined();
+  });
+
+  it('its action button runs the action, then dismisses the toast', () => {
+    const onAction = vi.fn();
+    render(<ToastStack />);
+    act(() => {
+      useUIStore.getState().showToast('Survey rendering unavailable (WebGL2/GPU)', 'render-context-lost', 'error', {
+        persistent: true,
+        action: { label: 'Reload map', onAction, testId: 'map-context-lost-reload' },
+      });
+    });
+    advance(100);
+    const button = screen.getByTestId('map-context-lost-reload');
+    expect(button.textContent).toBe('Reload map');
+    expect(button.getAttribute('aria-label')).toBe('Reload map: Survey rendering unavailable (WebGL2/GPU)');
+    act(() => button.click());
+    expect(onAction).toHaveBeenCalledTimes(1);
+    advance(1000);
+    expect(toastFor('Survey rendering unavailable (WebGL2/GPU)')).toBeUndefined();
+  });
+
+  it('an ordinary toast has no action button', () => {
+    render(<ToastStack />);
+    push('saved', 'k', 'success');
+    advance(100);
+    expect(within(toastFor('saved')!).getAllByRole('button')).toHaveLength(1);
+  });
+});

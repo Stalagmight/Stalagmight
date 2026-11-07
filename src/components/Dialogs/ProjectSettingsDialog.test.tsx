@@ -13,7 +13,11 @@ import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig } from '../../types/config';
 import type { Project } from '../../types/project';
-import type { CommandResult } from '../../types/commands';
+import { accepted, refusedBy, type CommandOutcome } from '../../store/commandResult';
+import type { EditOutcome } from '../../types/ipc/EditOutcome';
+
+const EDITED = (): CommandOutcome<EditOutcome> => accepted<EditOutcome>({ warnings: [], remote_link: null });
+import { beginMoveCarry, refuseMutationDuringCarry } from '../../store/moveCarry';
 
 let updateProjectSettings: ReturnType<typeof vi.fn>;
 let setSurfaceElevation: ReturnType<typeof vi.fn>;
@@ -30,8 +34,8 @@ function baseProject(overrides: Partial<Project> = {}): Project {
 }
 
 beforeEach(() => {
-  updateProjectSettings = vi.fn(async (): Promise<CommandResult> => ({ success: true, error: null }) as CommandResult);
-  setSurfaceElevation = vi.fn(async (): Promise<CommandResult> => ({ success: true, error: null }) as CommandResult);
+  updateProjectSettings = vi.fn(async (): Promise<CommandOutcome<EditOutcome>> => EDITED());
+  setSurfaceElevation = vi.fn(async (): Promise<CommandOutcome<EditOutcome>> => EDITED());
   closeDialog = vi.fn();
   useProjectStore.setState({
     project: baseProject(),
@@ -103,7 +107,8 @@ describe('ProjectSettingsDialog entrance elevation (#465)', () => {
     fireEvent.change(screen.getByTestId('project-settings-name'), { target: { value: 'Renamed' } });
     await userEvent.click(saveButton);
 
-    expect(updateProjectSettings).toHaveBeenCalledWith('Renamed', defaultConfig.validation);
+    // The default north reference rides the same save, unchanged (not recorded).
+    expect(updateProjectSettings).toHaveBeenCalledWith('Renamed', defaultConfig.validation, null);
     expect(setSurfaceElevation).not.toHaveBeenCalled();
   });
 
@@ -139,10 +144,13 @@ describe('ProjectSettingsDialog entrance elevation (#465)', () => {
     expect(setSurfaceElevation).not.toHaveBeenCalled();
   });
 
-  it('a changed draft is attempted even when editingBlocked flips true before Save; on EDIT_DISABLED it keeps the dialog open, shows the error, and keeps the staged draft', async () => {
+  it('a changed draft is attempted even when editingBlocked flips true before Save; on EDIT_DISABLED it keeps the dialog open and the staged draft, and leaves the notice to the edit path', async () => {
     setSurfaceElevation = vi.fn(
-      async (): Promise<CommandResult> =>
-        ({ success: false, error: 'EDIT_DISABLED: Set entrance elevation is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.' }) as CommandResult,
+      async (): Promise<CommandOutcome<EditOutcome>> =>
+        refusedBy({
+          code: 'EDIT_DISABLED',
+          message: 'Set entrance elevation is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
+        }),
     );
     useProjectStore.setState({ setSurfaceElevation });
     const showToast = vi.fn();
@@ -157,7 +165,30 @@ describe('ProjectSettingsDialog entrance elevation (#465)', () => {
 
     expect(setSurfaceElevation).toHaveBeenCalledWith(42.5);
     expect(closeDialog).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenCalledWith(expect.stringContaining('EDIT_DISABLED'), expect.anything(), 'error');
+    // #576 NF-W2RO-1: the store's edit path shows the friendly read-only notice for an
+    // EDIT_DISABLED refusal (ProjectSettingsDialog.refusal.test.tsx); the dialog no
+    // longer adds the raw coded string on top.
+    expect(showToast).not.toHaveBeenCalled();
+    expect(screen.getByTestId('project-settings-elevation')).toHaveValue(42.5);
+  });
+
+  it('a move-carry refusal (GHOST-2) is its own notice: no second toast, dialog and draft kept', async () => {
+    // A real refusal, as the store's chokepoint hands it out (it toasts once itself).
+    beginMoveCarry(0, { cancel: vi.fn(), restorePreview: vi.fn() });
+    const refusal = refuseMutationDuringCarry();
+    expect(refusal).not.toBeNull();
+    setSurfaceElevation = vi.fn(async (): Promise<CommandOutcome<EditOutcome>> => refusal!);
+    useProjectStore.setState({ setSurfaceElevation });
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    render(<Dialog />);
+    const input = await screen.findByTestId('project-settings-elevation');
+    fireEvent.change(input, { target: { value: '42.5' } });
+    await userEvent.click(screen.getByTestId('project-settings-save'));
+
+    expect(setSurfaceElevation).toHaveBeenCalledWith(42.5);
+    expect(closeDialog).not.toHaveBeenCalled();
+    expect(showToast).not.toHaveBeenCalled();
     expect(screen.getByTestId('project-settings-elevation')).toHaveValue(42.5);
   });
 

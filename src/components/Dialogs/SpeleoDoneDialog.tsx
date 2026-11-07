@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
+import { doneFinished } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -49,7 +50,7 @@ export default function SpeleoDoneDialog() {
       // result is truthy but must NOT close the dialog - the divergence dialog takes
       // over (fix 3); a thrown error returns null and keeps this dialog open.
       const resolved = await done(text);
-      if (resolved?.kind === 'released') closeDialog();
+      if (doneFinished(resolved?.kind)) closeDialog();
     }
   };
 

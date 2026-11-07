@@ -1,20 +1,24 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
+import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useUIStore } from '../../store/uiStore';
-import { invokeIpc } from '../../utils/ipc';
 import i18n from '../../i18n';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import type { WallsFile, OrphanPlacementSuggestion } from '../../types/commands';
+import { ImportProgress } from './ImportProgress';
+import { ImportCancelButton } from './ImportCancelButton';
+import type { WallsFile } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
 import { importButtonLabel } from '../../utils/importButtonLabel';
 import {
   finalizeDeferredSaveWarnings,
   finishImportWithoutOrphanSuggestions,
+  suggestOrphanPlacementsAfterImport,
   surfaceImportFailure,
 } from '../../utils/saveFeedback';
+import { useShallow } from 'zustand/react/shallow';
 
 interface WallsImportDialogProps {
   wallsFile: WallsFile;
@@ -23,8 +27,32 @@ interface WallsImportDialogProps {
 
 export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDialogProps) {
   const { t } = useTranslation();
-  const { executeWallsImport, calculateFileHash, checkDuplicateImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
-  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore();
+  const {
+    executeWallsImport,
+    calculateFileHash,
+    checkDuplicateImport,
+    startLoading,
+    setLoadingProgress,
+    resetLoading,
+  } = useProjectStore(
+    useShallow((s) => ({
+      executeWallsImport: s.executeWallsImport,
+      calculateFileHash: s.calculateFileHash,
+      checkDuplicateImport: s.checkDuplicateImport,
+      startLoading: s.startLoading,
+      setLoadingProgress: s.setLoadingProgress,
+      resetLoading: s.resetLoading,
+    })),
+  );
+  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      openDialog: s.openDialog,
+      setView: s.setView,
+      triggerFitToBounds: s.triggerFitToBounds,
+      showToast: s.showToast,
+    })),
+  );
 
   const [isImporting, setIsImporting] = useState(false);
   const [fileHash, setFileHash] = useState<string | null>(null);
@@ -157,7 +185,10 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
       resetLoading();
 
       if (!result.success) {
-        surfaceImportFailure('walls-import', importUi, { phase: 'command', error: result.error });
+        // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
+        // Nothing is running then, so the footer goes back to its idle Cancel.
+        if (isMoveCarryRefusal(result)) setIsImporting(false);
+        else surfaceImportFailure('walls-import', importUi, { phase: 'command', error: result.error, code: result.code });
         return;
       }
 
@@ -193,24 +224,19 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         return;
       }
 
-      // Check for orphan placement opportunities. The suggest call is the
-      // ONLY thing wrapped in try/catch here (non-fatal - a failed lookup
-      // just skips the suggestion step); `finishImportWithoutOrphanSuggestions`
-      // sits outside it and completes the import exactly once, so a throw
-      // partway through IT can never fall through to a duplicate completion.
-      let suggestions: OrphanPlacementSuggestion[] = [];
-      try {
-        suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
-          'suggest_orphan_placements',
-          { newlyImportedSectionIds: sectionIds },
-          { purpose: 'suggest orphan placements after Walls import' }
-        );
-      } catch {
-        // Non-fatal: proceed without orphan detection
-      }
+      // Check for orphan placement opportunities. Only the lookup may fail
+      // softly here (it skips the suggestion step, and says so - #576
+      // NF-DMPS-1); `finishImportWithoutOrphanSuggestions` runs outside it and
+      // completes the import exactly once, so a throw partway through IT can
+      // never fall through to a duplicate completion.
+      const suggestions = await suggestOrphanPlacementsAfterImport(
+        sectionIds,
+        'suggest orphan placements after Walls import',
+        importUi
+      );
       if (suggestions.length > 0) {
         setSource('dialog');
-        openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
+        openDialog('orphan-placement', { suggestions, receipt: result.import_receipt ?? undefined });
         return;
       }
       await finishImportWithoutOrphanSuggestions('walls-import', importUi, sectionIds, result.import_receipt);
@@ -221,8 +247,15 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
     }
   }, [executeWallsImport, filePath, fileHash, commentsOnStations, includeSplays, selectedSurveys, allSelected, wallsFile.project_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 
+  // Escape / the close button do nothing while the import runs: closing would
+  // orphan its result. The footer Cancel stops it instead (RV4-FE-MISC1).
   return (
-    <DialogWrapper title={t('dialogs.wallsImport.title')} onClose={closeDialog} size="lg" data-testid="walls-import-dialog">
+    <DialogWrapper
+      title={t('dialogs.wallsImport.title')}
+      onClose={isImporting ? () => {} : closeDialog}
+      size="lg"
+      data-testid="walls-import-dialog"
+    >
       <div className="space-y-4">
         {/* Header info */}
         <div className="space-y-1">
@@ -397,11 +430,19 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
           {t('dialogs.wallsImport.options.includeSplays')}
         </label>
 
+        {/* In-dialog progress (#576 NF-W3P-1): an import into an open project runs in
+            Single System View, where GlobalView's loading overlay is not mounted. */}
+        {isImporting && <ImportProgress testIdPrefix="walls-import" />}
+
         {/* Footer - sticky at the bottom of the scrolling body (mirrors
             TmlImportDialog's idiom; see its comment for the assumptions this
             relies on, incl. DialogWrapper's default `p-4` body padding). */}
         <div className="sticky -bottom-4 -mx-4 -mb-4 flex justify-end gap-2 px-4 py-4 border-t border-border bg-panel">
-          <Button onClick={closeDialog} data-testid="walls-import-cancel">{t('dialogs.wallsImport.cancel')}</Button>
+          {isImporting ? (
+            <ImportCancelButton data-testid="walls-import-cancel">{t('dialogs.wallsImport.cancel')}</ImportCancelButton>
+          ) : (
+            <Button onClick={closeDialog} data-testid="walls-import-cancel">{t('dialogs.wallsImport.cancel')}</Button>
+          )}
           <Button
             data-primary-action=""
             data-testid="walls-import-confirm"

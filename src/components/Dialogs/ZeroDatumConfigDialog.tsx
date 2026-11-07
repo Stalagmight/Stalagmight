@@ -10,12 +10,11 @@ import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
-import { parseGps, detectFormat, looksTransposed, looksTransposedRawDD, type GpsFormat } from '../../utils/gps';
+import { parseGps, detectFormat, gpsSwapHint, type GpsFormat } from '../../utils/gps';
 import { MAX_DEPTH_REFERENCE_M } from '../../utils/gpsBounds';
 import { formatFixed } from '../../i18n/format';
-import { convertToEditableShots } from '../../hooks/useImportState';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
-import { editableShotsToDmpSection } from '../../utils/shotConversion';
+import { convertToEditableShots, editableShotsToDmpSection } from '../../utils/shotConversion';
 import type { DmpFile, DmpSection } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { GpsCoordinates } from '../../types/project';
@@ -62,6 +61,10 @@ export interface ZeroDatumConfigDraft extends Omit<ZeroDatumConfigResult, 'gps'>
    *  `ZeroDatumConfigDraft` - `initialGpsInputRef` below reconstructs it from
    *  `gps` in that case. */
   gpsInputText?: string;
+  /** `gpsInputText` is a value the user already CONFIRMED, carried through
+   *  Back unchanged - so the advisory "may be swapped" hint stays off for it
+   *  on the next visit, as it was on this one. */
+  gpsInputConfirmed?: boolean;
   /** The raw depth/elevation box text (#524), carried for the same reason as
    *  `gpsInputText`: a depth typed while the GPS box has not parsed exists
    *  NOWHERE else, since `gps.depth_reference` only comes into being on a
@@ -274,7 +277,7 @@ function initialShotEditState({
       dirty: false,
     };
   }
-  const shots = section ? convertToEditableShots(section.shots) : [];
+  const shots = section ? convertToEditableShots(section.shots, section.version) : [];
   return { shots, stationIndex: 0, previewStationIndex: 0, nextTempId: shots.length + 1, dirty: false };
 }
 
@@ -367,10 +370,31 @@ export default function ZeroDatumConfigDialog({
           (initialConfig.gps ? `${initialConfig.gps.latitude}, ${initialConfig.gps.longitude}` : ''))
       : ''
   );
+  // The GPS text of a value the user already CONFIRMED: the wizard's carry of
+  // a confirmed result (rebuilt as decimal degrees above), or that text carried
+  // on unchanged through Back. The "may be swapped" hint is for text being
+  // entered, so it stays off while the box holds this text: a confirmed
+  // Svalbard point (78.9, 15.5) is not a swap. Null for anything else.
+  const confirmedGpsInputRef = useRef(
+    initialConfig?.gps &&
+      (initialConfig.gpsInputText === undefined || initialConfig.gpsInputConfirmed === true)
+      ? initialGpsInputRef.current
+      : null
+  );
   const [gpsInput, setGpsInput] = useState(initialGpsInputRef.current);
   const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(initialConfig?.gps ?? null);
   const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(initialConfig?.gps ? 'DD' : null);
   const [gpsError, setGpsError] = useState<string | null>(null);
+  // How an ambiguous part of the text was read (e.g. UTM "33S" as the southern
+  // hemisphere), shown under the preview so the reading is never silent.
+  const [gpsNote, setGpsNote] = useState<string | null>(null);
+  // Soft (non-blocking) heuristic (#F7): the text looks like latitude and
+  // longitude were swapped. Coexists with `gpsError` - never replaces it, and
+  // never blocks Confirm. `gpsSwapHint` also covers text that FAILED to parse
+  // (a swapped "120, 45" only ever produces a range error) and stays quiet when
+  // the text itself says which value is the latitude (letters, UTM, a link) or
+  // is a value the user already confirmed (`confirmedGpsInputRef`).
+  const [gpsTransposedWarning, setGpsTransposedWarning] = useState(false);
 
   // Depth/elevation of the zero-datum point relative to the surface (#524).
   // Optional: blank keeps today's behaviour (`depth_reference: 0`, "not
@@ -460,27 +484,15 @@ export default function ZeroDatumConfigDialog({
   const stationOptions = useMemo(() => {
     return Array.from({ length: stationCount }, (_, i) => ({
       value: String(i),
-      label: `Station ${i}`,
+      label: t('dialogs.zeroDatumConfig.stationOption', { index: i }),
     }));
-  }, [stationCount]);
+  }, [stationCount, t]);
 
   // GPS origin for map preview - only set when valid GPS coordinates are entered
   const gpsOrigin = useMemo(() => {
     if (!gpsCoords) return null;
     return { latitude: gpsCoords.latitude, longitude: gpsCoords.longitude };
   }, [gpsCoords]);
-
-  // Soft (non-blocking) heuristic (#F7): a plausibly-valid pair that still
-  // looks like the fields were swapped. Coexists with `gpsError` - never
-  // replaces it, and never blocks Confirm. Falls back to the raw-pair variant
-  // when parsing FAILED (`gpsCoords` is null): a swapped "120, 45" never
-  // produces coordinates to run the coords-based check on, so without this
-  // branch it got only the generic range error and no swap hint at all.
-  const gpsTransposedWarning = useMemo(() => {
-    if (gpsCoords) return looksTransposed(gpsCoords.latitude, gpsCoords.longitude);
-    if (gpsError) return looksTransposedRawDD(gpsInput);
-    return false;
-  }, [gpsCoords, gpsError, gpsInput]);
 
   // Dirty guard (#F9): GPS text entered, the section renamed, a metadata
   // field touched, the zero-datum STATION PICK changed, or a shot
@@ -528,6 +540,7 @@ export default function ZeroDatumConfigDialog({
       stationIndex,
       gps: gpsCoords,
       gpsInputText: gpsInput,
+      ...(gpsInput === confirmedGpsInputRef.current ? { gpsInputConfirmed: true } : {}),
       depthReferenceText: depthReferenceInput,
       metadata: {
         name,
@@ -585,18 +598,24 @@ export default function ZeroDatumConfigDialog({
       setGpsCoords(null);
       setGpsFormat(null);
       setGpsError(null);
+      setGpsNote(null);
+      setGpsTransposedWarning(false);
       return;
     }
-    const detected = detectFormat(value);
-    setGpsFormat(detected || null);
     const result = parseGps(value, depthReference);
+    // The badge names the format actually read (or, for text that did not
+    // parse, the one it was read as / looks like).
+    setGpsFormat(result.format ?? detectFormat(value) ?? null);
     if ('coordinates' in result) {
       setGpsCoords(result.coordinates);
       setGpsError(null);
+      setGpsNote(result.note ?? null);
     } else {
       setGpsCoords(null);
       setGpsError(result.message);
+      setGpsNote(null);
     }
+    setGpsTransposedWarning(value !== confirmedGpsInputRef.current && gpsSwapHint(value, result));
   }, []);
 
   // Depth-reference input handler: just stages the text. The effect below
@@ -613,7 +632,7 @@ export default function ZeroDatumConfigDialog({
     if (gpsInput.trim()) {
       handleGpsInputChange(gpsInput, depthReferenceValid ? depthReferenceParsed : 0);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-parse on a depth-reference change only; GPS keystrokes already parse in handleGpsInputChange
   }, [depthReferenceParsed, depthReferenceValid]);
 
   // Shot editing handlers. Each is one dispatch: the reducer derives the new
@@ -805,8 +824,15 @@ export default function ZeroDatumConfigDialog({
               )}
               {gpsCoords && (
                 <div className="text-xs text-success pl-1" data-testid="zero-datum-gps-parsed">
-                  Lat: {formatFixed(gpsCoords.latitude, undefined, precision.gps)}, Lon:{' '}
-                  {formatFixed(gpsCoords.longitude, undefined, precision.gps)}
+                  {t('dialogs.zeroDatumConfig.gpsParsed', {
+                    lat: formatFixed(gpsCoords.latitude, undefined, precision.gps),
+                    lon: formatFixed(gpsCoords.longitude, undefined, precision.gps),
+                  })}
+                </div>
+              )}
+              {gpsCoords && gpsNote && (
+                <div className="text-xs text-warning pl-1" data-testid="zero-datum-gps-note">
+                  {gpsNote}
                 </div>
               )}
               {gpsTransposedWarning && (

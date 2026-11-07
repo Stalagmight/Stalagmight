@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::core::{CommandResult, ValidationWarning, WarningSeverity};
 use crate::models::{Project, ProjectMetadata};
@@ -7,9 +8,67 @@ use crate::persistence::Database;
 use super::AppState;
 
 impl AppState {
-    /// Get the current project state for the frontend
+    /// [#576 A9] The open project as an O(1) snapshot: what it is now, readable
+    /// with no lock held, never changed by a later edit (see `ProjectSlot`). The
+    /// read every command that only looks at the project uses. `None` when no
+    /// project is open.
+    pub fn project_snapshot(&self) -> Option<Arc<Project>> {
+        self.project.lock().snapshot()
+    }
+
+    /// [#576 C2] The open project as it stands BETWEEN commands: a snapshot
+    /// taken under `command_lock`.
+    ///
+    /// The commands run on the blocking pool, concurrently. A command mutates
+    /// the project and then settles it (orphan conversion, frame renormalisation,
+    /// the geometry reconcile, the undo push) under ONE `command_lock` span but
+    /// several `project` acquisitions, so a plain [`Self::project_snapshot`] taken
+    /// mid-command can be a project that was mutated and not yet reconciled - a
+    /// state no user ever sees. Taking the snapshot under `command_lock` makes it
+    /// either before or after every command. The lock is held only for the O(1)
+    /// `Arc` clone; the caller reads the snapshot with no lock held.
+    ///
+    /// Every IPC read of the project goes through this or
+    /// [`Self::settled_read`] (docs/architecture.md, "Where commands run").
+    /// Never call it while holding `command_lock` - from inside `execute`, undo,
+    /// redo, a load or an import - it is not reentrant; code there reads
+    /// [`Self::project_snapshot`].
+    pub fn settled_snapshot(&self) -> Option<Arc<Project>> {
+        let _between_commands = self.hold_commands();
+        self.project_snapshot()
+    }
+
+    /// [#576 C2] Run `read` between commands: under `command_lock`, so whatever
+    /// it reads (the project, the undo stacks, the database) is never caught in
+    /// the middle of a command. For short reads that go through `AppState`'s own
+    /// query methods; a long read takes [`Self::settled_snapshot`] and computes
+    /// on that instead, so it does not hold up the next edit.
+    ///
+    /// `read` must not reach anything that takes `command_lock` itself (`execute`,
+    /// undo/redo, the imports, save, close, load, repair, the adjusted solve):
+    /// the lock is not reentrant.
+    ///
+    /// [#576 RV5-PI-4] A panic in `read` is caught, the guard released normally, and
+    /// the panic then resumed: unwinding through the guard would poison
+    /// `command_lock`, and `refuse_after_crash` would then refuse undo, redo and
+    /// every SpeleoDB push for the rest of the session over a crash that mutated
+    /// nothing. A cell `read` itself held when it panicked (the project, the
+    /// database) is still poisoned and reported by its own lock, as it should be.
+    pub fn settled_read<T>(&self, read: impl FnOnce() -> T) -> T {
+        let between_commands = self.hold_commands();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read));
+        drop(between_commands);
+        match outcome {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
+    /// A deep copy of the open project, for a caller that has to own and change
+    /// it. A caller that only reads takes [`Self::project_snapshot`] instead: this
+    /// copies the whole survey.
     pub fn get_project_state(&self) -> Option<Project> {
-        self.project.lock().ok().and_then(|p| p.clone())
+        self.project_snapshot().map(Arc::unwrap_or_clone)
     }
 
     /// Get recent projects list.
@@ -21,9 +80,9 @@ impl AppState {
     /// all away. That caused a multi-second freeze every time the user hit
     /// "back" with a large project in the recent list.
     pub fn get_recent_projects(&self) -> Vec<ProjectMetadata> {
-        let recent = match self.recent_projects.lock() {
-            Ok(r) => r.clone(),
-            Err(_) => return Vec::new(),
+        let recent = {
+            let r = self.recent_projects.lock();
+            r.clone()
         };
 
         recent
@@ -48,11 +107,33 @@ impl AppState {
             .collect()
     }
 
+    /// [#576 RV4-R-M2] Write `recent` into the live config and persist it, under
+    /// `config_write_lock` like every other write of the live config. A settings
+    /// save (`modify_config`) clones the config under that lock and writes the
+    /// clone back; a recents write taking only the `config` mutex could land in
+    /// between and be reverted, in the live config and in `config.toml`, while
+    /// the in-memory recents list kept it. With `truncate`, `recent` is first cut
+    /// to `recent_projects_max`. The caller holds the `recent_projects` mutex (and
+    /// may hold `project`): nothing holding `config_write_lock` takes either.
+    ///
+    /// Returns the save's outcome.
+    pub(super) fn persist_recent_projects(
+        &self,
+        recent: &mut Vec<PathBuf>,
+        truncate: bool,
+    ) -> anyhow::Result<()> {
+        let _guard = self.config_write_lock.lock();
+        let mut config = self.config.lock();
+        if truncate {
+            recent.truncate(config.general.recent_projects_max);
+        }
+        config.general.recent_projects.clone_from(recent);
+        config.save()
+    }
+
     /// Remove a project from the recent projects list
     pub fn remove_from_recent_projects(&self, path: PathBuf) -> CommandResult {
-        let Ok(mut recent) = self.recent_projects.lock() else {
-            return CommandResult::failure("Failed to lock recent projects".to_string());
-        };
+        let mut recent = self.recent_projects.lock();
 
         // Remove the path from the list
         let initial_len = recent.len();
@@ -76,12 +157,9 @@ impl AppState {
         }
 
         // Update config and save
-        if let Ok(mut config) = self.config.lock() {
-            config.general.recent_projects.clone_from(&recent);
-            if let Err(e) = config.save() {
-                tracing::warn!("Failed to save config after removing from recent: {}", e);
-                return CommandResult::failure(format!("Failed to save config: {e}"));
-            }
+        if let Err(e) = self.persist_recent_projects(&mut recent, false) {
+            tracing::warn!("Failed to save config after removing from recent: {}", e);
+            return CommandResult::failure(format!("Failed to save config: {e}"));
         }
 
         tracing::info!(path = ?path, "Removed project from recent list");
@@ -223,7 +301,7 @@ impl AppState {
         };
 
         // Deleting the file backing the OPEN project tears the whole session down
-        // first, for the same two reasons `close_project_if_open_at` closes before
+        // first, for the same two reasons `close_project_if_open_at_held` closes before
         // a download-replace: SQLite holds a live handle with a 256 MB mmap over
         // the file, and on Windows it opens WITHOUT `FILE_SHARE_DELETE`, so both
         // the Recycle-Bin move and the permanent-remove fallback fail with "Access
@@ -261,7 +339,7 @@ impl AppState {
         // `file_path`, which this check can never match.) `close_project` would
         // self-deadlock under the guard, so this goes through
         // `close_open_project_locked` - the same teardown with the guard passed
-        // in. (`close_project_if_open_at` still has the older
+        // in. (`close_project_if_open_at_held` still has the older
         // check-release-close shape; the same restructuring would suit it, but its
         // callers replace rather than delete, so it is left alone here.)
         //
@@ -275,7 +353,7 @@ impl AppState {
         // kept rendering a phantom project with no backend behind it.
         //
         // Matched on file identity, not `==`, for the same reason
-        // `close_project_if_open_at` does: `same_file`'s canonicalization resolves
+        // `close_project_if_open_at_held` does: `same_file`'s canonicalization resolves
         // `.`/`..`, symlinked parent directories and (on Windows) case/short-name
         // differences, so a second spelling of the open project's path still tears
         // the session down. A plain comparison was survivable while this check only
@@ -291,7 +369,11 @@ impl AppState {
         // would be a teardown for nothing. See `names_the_deleted_file` above.)
         let mut cleared_claim = None;
         let (session_closed, held_lock) = {
-            let mut open = self.project.lock().unwrap_or_else(|e| e.into_inner());
+            // [#576 A1] `command_lock` before `project`: the teardown is a slot commit,
+            // and one landing inside an edit or an undo left that command's entry on
+            // the emptied session's stacks.
+            let commands = self.hold_commands();
+            let mut open = self.project.lock();
             // A never-saved project has no `file_path` and so can never be the file
             // being deleted - same predicate `open_project_path` encodes.
             let deleting_open_project = open
@@ -312,7 +394,7 @@ impl AppState {
                 //   the `.stalx` and its link row were destroyed and the frontend
                 //   cleared its link state, while the SERVER mutex stayed held and
                 //   blocked every other diver until it timed out.
-                //   `close_project_impl` gets this right by releasing before it
+                //   the `close_project` command gets this right by releasing before it
                 //   issues `Command::CloseProject`; this path bypasses that command
                 //   entirely, so it has to do the same thing for itself.
                 // - The NETWORK half must not happen under this guard - see the
@@ -321,14 +403,18 @@ impl AppState {
                 //   read plus the session and config locks, no network at all (see
                 //   `speleodb_held_lock_release_params`). Bounded work, and the same
                 //   read every close already performs.
-                // - It is the ABANDON snapshot, not the silent one. Destroying the
+                // - It is the DELETE snapshot, not the silent one. Destroying the
                 //   file forfeits any un-pushed edits by the user's own instruction,
                 //   so the veto that protects them on close / quit / switch has
                 //   nothing left to protect here and would only strand the server
                 //   lock. Same reasoning as `speleodb_unlink`, which likewise drops
                 //   the local link and so could never release from this project
-                //   again.
-                held_lock = self.speleodb_abandon_lock_release_params();
+                //   again. Unlike unlink it keeps the claim check (#576 RV5-F4-4):
+                //   a session that only inherited the lock (a second window or
+                //   computer on the same account, gate opened by the status poll)
+                //   leaves it with the account instead of freeing the mutex the
+                //   other session is editing under (decision RV2-R-13).
+                held_lock = self.speleodb_delete_lock_release_params();
                 // End OUR claim now, while the identity decision above is still
                 // atomic under this guard. After the guard drops, a successor Start
                 // Editing on the SAME remote project can mint a claim of its own in
@@ -344,15 +430,17 @@ impl AppState {
                 // the session is closed, so the poll's catch-alls never see it,
                 // and the no-project janitor has nothing to retry. See the
                 // trash-failure return, which puts it back.
+                // [#576 A8] Under the guard by type: the clear takes its slot, and
+                // [NF-A8R-GAPS] the release below takes the proof it returns.
                 cleared_claim = held_lock
                     .as_ref()
-                    .and_then(|p| self.speleodb_forget_lock_acquired_for(&p.project_id));
+                    .map(|p| self.speleodb_forget_lock_acquired_under(&open, &p.project_id));
                 tracing::info!(
                     path = ?path,
                     purpose = "release the live handle before deleting the file",
                     "Closing the open project because its .stalx is being deleted"
                 );
-                self.close_open_project_locked(&mut open);
+                self.close_open_project_locked(&commands, &mut open);
             }
             (deleting_open_project, held_lock)
         };
@@ -388,14 +476,10 @@ impl AppState {
         let doomed: Vec<PathBuf> = self
             .recent_projects
             .lock()
-            .map(|recent| {
-                recent
-                    .iter()
-                    .filter(|entry| names_the_deleted_file(entry.as_path()))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
+            .iter()
+            .filter(|entry| names_the_deleted_file(entry.as_path()))
+            .cloned()
+            .collect();
 
         // Hand the primary `.stalx` to the OS trash FIRST. If this fails, nothing
         // on disk has changed yet, so abort cleanly - recents stay untouched and
@@ -416,7 +500,10 @@ impl AppState {
                 // closed the session, so the poll's catch-alls will never run
                 // over it, and the deferred release below is not reached from
                 // here either.
-                self.speleodb_restore_lock_claim(cleared_claim);
+                self.speleodb_restore_lock_claim(
+                    cleared_claim
+                        .and_then(super::speleodb_lock_release::ClaimClearedUnderSlot::into_claim),
+                );
                 return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()))
                     .with_session_closed(session_closed);
             }
@@ -434,23 +521,23 @@ impl AppState {
         // file above rather than re-testing the (now deleted) path. Best-effort: a
         // project that was never in recents (or already removed) leaves `doomed`
         // empty and should still delete cleanly.
-        if let Ok(mut recent) = self.recent_projects.lock() {
+        {
+            let mut recent = self.recent_projects.lock();
             let before = recent.len();
             recent.retain(|p| !doomed.contains(p));
             if recent.len() != before {
-                if let Ok(mut config) = self.config.lock() {
-                    config.general.recent_projects.clone_from(&recent);
-                    if let Err(e) = config.save() {
-                        // The `.stalx` is already trashed and the in-memory recents
-                        // are pruned; a failed persist must NOT report the whole
-                        // delete as a failure (that strands the zombie row). Warn.
-                        tracing::warn!("Failed to save config after deleting project: {}", e);
-                        warnings.push(ValidationWarning {
-                            code: "delete_project_persist_failed".to_string(),
-                            message: format!("Project deleted, but the recent-projects list could not be saved: {e}"),
-                            severity: WarningSeverity::Warning,
-                        });
-                    }
+                if let Err(e) = self.persist_recent_projects(&mut recent, false) {
+                    // The `.stalx` is already trashed and the in-memory recents
+                    // are pruned; a failed persist must NOT report the whole
+                    // delete as a failure (that strands the zombie row). Warn.
+                    tracing::warn!("Failed to save config after deleting project: {}", e);
+                    warnings.push(ValidationWarning {
+                        code: "delete_project_persist_failed".to_string(),
+                        message: format!(
+                            "Project deleted, but the recent-projects list could not be saved: {e}"
+                        ),
+                        severity: WarningSeverity::Warning,
+                    });
                 }
             }
         }
@@ -477,8 +564,8 @@ impl AppState {
         // surfaced as a warning rather than only logged because the local end of that
         // lock no longer exists - nothing will retry it from this project, and the
         // user's only remaining route to the stranded mutex is the held-lock prompt.
-        if let Some(params) = held_lock {
-            if let Err(e) = self.speleodb_release_captured_lock(&params) {
+        if let (Some(params), Some(cleared)) = (held_lock, &cleared_claim) {
+            if let Err(e) = self.speleodb_release_captured_lock(cleared, &params) {
                 tracing::warn!(
                     error = %e,
                     purpose = "surrender the write lock of a project being deleted",
@@ -506,12 +593,22 @@ impl AppState {
     /// be the open project. Used by the recent-projects metadata panel: a
     /// targeted DB update, plus keeping the open project's in-memory name in
     /// sync if it happens to be the same file.
+    ///
+    /// [#576 RV5-5] Under `command_lock`, like every other mutation of the open
+    /// project: the name is written through a second connection to the file, and a
+    /// save running concurrently on the pool replaces that file with one written
+    /// from the old in-memory name (the rename then reported success over a file
+    /// that kept the old name), or replaced it before the write (which SQLite then
+    /// refused). Held for a closed file too: deciding which one this is needs the
+    /// `project` lock, which sits below `command_lock`, and the span is one small
+    /// write.
     pub fn set_project_name_for_path(&self, path: PathBuf, name: String) -> CommandResult {
         let trimmed = name.trim();
         if trimmed.is_empty() {
             return CommandResult::failure("Project name cannot be empty".to_string());
         }
 
+        let _commands = self.hold_commands();
         let db = match Database::open_existing(&path) {
             Ok(db) => db,
             Err(e) => return CommandResult::failure(format!("Failed to open project: {e}")),
@@ -528,18 +625,27 @@ impl AppState {
         // project is a real edit. A *closed* remote file is not gated here
         // (deferred to the issue that owns closed-file remote state).
         let is_open_project = {
-            let guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
+            let guard = self.project.lock();
             guard
                 .as_ref()
                 .is_some_and(|open| open.file_path.as_deref() == Some(path.as_path()))
         };
+        // [#576 C5] On the read-only-workspace allowlist: a rename is allowed in
+        // Plan/Export like the project-settings name save.
         if is_open_project {
-            if let Err(f) = self.guard_mutation("Rename project") {
-                return f;
+            if let Err(f) = self.guard_metadata_mutation("Rename project") {
+                return CommandResult::refused(f);
             }
+        }
+        // [#576 B6-D1] A file a NEWER build saved is read-only whether or not it
+        // is the open project: renaming it is a write into a schema this build
+        // does not know. The open one was refused just above; this is the closed
+        // one the recent-projects panel can reach.
+        if let Some(version) = db.newer_schema_version() {
+            return CommandResult::refused(super::app_state::newer_file_edit_refusal(
+                "Rename project",
+                version,
+            ));
         }
 
         if let Err(e) = db.save_project_name(trimmed) {
@@ -548,10 +654,7 @@ impl AppState {
 
         // Keep the open project's in-memory state consistent if it's the same file.
         if is_open_project {
-            let mut guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
+            let mut guard = self.project.lock();
             if let Some(open) = guard.as_mut() {
                 if open.file_path.as_deref() == Some(path.as_path()) {
                     open.name = trimmed.to_string();
@@ -731,19 +834,16 @@ mod tests {
         // at it.
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000))
             .expect("lock the directory");
-        let stat_denied = std::fs::symlink_metadata(&path).is_err();
+        // Root ignores the bits, and then there is no unreadable path to test
+        // with: fail rather than pass on nothing (#576 NF-ROOT-PERM).
+        crate::models::test_support::assert_lookup_refused(&path);
         let state = AppState::new().expect("state");
-        let result = stat_denied.then(|| state.delete_project(path.clone()));
+        let result = state.delete_project(path.clone());
         // Unlocked before any assertion, so a failing assert cannot leave a
         // directory the temp-dir cleanup is unable to remove.
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
             .expect("unlock the directory");
 
-        let Some(result) = result else {
-            // Running as root, where permission bits do not apply - there is no
-            // unreadable path to be had, so there is nothing to assert.
-            return;
-        };
         assert!(
             !result.success,
             "a path we cannot read must not report a successful delete"

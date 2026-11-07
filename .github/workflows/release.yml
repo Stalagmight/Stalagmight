@@ -7,11 +7,6 @@ on:
   # bundle paths and globs can be proven without cutting a tag first.
   workflow_dispatch:
 
-# Build the bundled SQLite without FTS3/4/5, RTREE, DBSTAT and extension
-# loading, so a hostile .stalx cannot reach them (#608, docs/toolchain.md).
-env:
-  LIBSQLITE3_FLAGS: "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION"
-
 jobs:
   # Gate the release on the checks the tagged commit should already have passed.
   # Linux-only, which is what this workflow did before it grew a build matrix.
@@ -47,23 +42,21 @@ jobs:
         run: |
           node scripts/check-third-party-licenses.test.mjs
           node scripts/check-third-party-licenses.mjs
-      - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
-        env:
-          XDG_CONFIG_HOME: ${{ runner.temp }}/config
-          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
-      # The flags above only take effect if libsqlite3-sys reads them; this pins
-      # the compiled-in options. Ignored in a plain local `cargo test` (#608).
-      - name: Bundled SQLite compile options
-        run: cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib -- --ignored --exact persistence::sqlite::tests::bundled_sqlite_omits_virtual_table_modules_and_extension_loading
-      # Release-profile compile check (#541): the debug-profile test run above
+      # Release-profile compile check (#541): the debug-profile test run below
       # cannot see a call whose only target is cfg(debug_assertions)-gated
       # (debug_assert! arguments still type-check in release), and this job is
       # the last thing standing between a tag/dispatch and the paid
       # three-platform matrix. Type resolution only - codegen, LTO and link
-      # failures still surface in `build`.
+      # failures still surface in `build`. It runs BEFORE the tests (#576
+      # E18(h)): a check-mode build shares nothing with the test build, so a
+      # release-only type error fails in minutes instead of after the suite.
       - name: Release-profile compile check
         run: cargo check --release --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
+          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
 
   build:
@@ -130,13 +123,14 @@ jobs:
           fi
         env:
           TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
-      # The verify job checks the SQLite strip on Linux only, but the flags work
-      # by a later -U cancelling libsqlite3-sys's own -D, which each platform's C
-      # compiler (MSVC on Windows) must honour. Check it with this leg's
-      # compiler before anything ships (#608).
+      # The verify job's `cargo test --workspace` checks the SQLite strip
+      # (LIBSQLITE3_FLAGS, from .cargo/config.toml) on Linux only, but the
+      # flags work by a later -U cancelling libsqlite3-sys's own -D, which each
+      # platform's C compiler (MSVC on Windows) must honour. Check it with this
+      # leg's compiler before anything ships (#608).
       - name: Bundled SQLite compile options (this platform)
         shell: bash
-        run: cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib -- --ignored --exact persistence::sqlite::tests::bundled_sqlite_omits_virtual_table_modules_and_extension_loading
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib -- --exact persistence::sqlite::tests::bundled_sqlite_omits_virtual_table_modules_and_extension_loading
       # v0.5.0-rc1 shipped a .app that macOS refused to open as "damaged". The
       # cause was an absent signature rather than a corrupt download: with no
       # signing identity Tauri skips codesign entirely, leaving only the Rust

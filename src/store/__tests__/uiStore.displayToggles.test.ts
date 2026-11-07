@@ -7,9 +7,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
 // Mock Tauri invoke to prevent noisy console warnings and verify persistence calls
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 import { useUIStore, colorModeOf, colorModeFlags, type DisplayToggleKey } from '../uiStore';
 import {

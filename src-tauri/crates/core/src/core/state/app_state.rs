@@ -1,8 +1,10 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64};
+use std::sync::Arc;
+
+use crate::models::poison_policy::{PoisonMonitor, RecoveringMutex};
 
 use crate::cache::TileCache;
 use crate::config::{ClosureAdjustmentConfig, Config, GasConfig};
@@ -14,30 +16,25 @@ use crate::persistence::Database;
 use crate::tile_stats::TileFetchStats;
 use crate::tilemap_cache::TilemapCache;
 
-use crate::core::{CommandResult, UndoStack};
+use crate::core::{CommandError, CommandErrorCode, CommandResult, UndoStack};
 
 use super::project_io::reapply_heals_after_restore;
+use super::project_slot::ProjectSlot;
 
-/// Trait for types that can represent project lock errors.
-/// Enables `with_project_mut` and `with_project` to work with different return types.
+/// Trait for types that can represent "no project open" for `with_project_mut` and
+/// `with_project`, so they work with different return types. (A poisoned project
+/// lock is no longer an error here: it is recovered, #576 A11.)
 pub(super) trait FromProjectLockError {
-    fn lock_failed() -> Self;
     fn no_project() -> Self;
 }
 
 impl FromProjectLockError for CommandResult {
-    fn lock_failed() -> Self {
-        CommandResult::failure("Failed to lock project".to_string())
-    }
     fn no_project() -> Self {
         CommandResult::failure("No project open".to_string())
     }
 }
 
 impl<T> FromProjectLockError for Result<T, String> {
-    fn lock_failed() -> Self {
-        Err("Failed to lock project".to_string())
-    }
     fn no_project() -> Self {
         Err("No project open".to_string())
     }
@@ -57,7 +54,7 @@ pub(super) struct AdjustedStationsCache {
 /// Hash the closure-adjustment config fields that affect the solve, for the
 /// adjusted-stations cache key. Shared by `get_adjusted_stations` and
 /// `distance_field` so both derive the same key.
-fn adjusted_config_hash(ca: &ClosureAdjustmentConfig) -> u64 {
+pub(super) fn adjusted_config_hash(ca: &ClosureAdjustmentConfig) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     ca.base_sigma_length_m.to_bits().hash(&mut h);
@@ -66,12 +63,23 @@ fn adjusted_config_hash(ca: &ClosureAdjustmentConfig) -> u64 {
     h.finish()
 }
 
+/// [#576 RV4-R-NITS C-4] What a parked `execute` signals on and waits for (see
+/// `AppState::park_after_mutation`).
+#[cfg(test)]
+pub(super) struct ParkAfterMutation {
+    /// Sent once the command has mutated and before it pushes its undo entry.
+    pub(super) reached: std::sync::mpsc::Sender<()>,
+    /// Received before it goes on.
+    pub(super) resume: std::sync::mpsc::Receiver<()>,
+}
+
 /// Application state managed by Tauri
 pub struct AppState {
-    /// Current project (if any)
-    pub(super) project: Mutex<Option<Project>>,
+    /// Current project (if any), copy-on-write (#576 A9): readers take an O(1)
+    /// snapshot, a writer copies only while a snapshot is alive. See [`ProjectSlot`].
+    pub(super) project: RecoveringMutex<ProjectSlot>,
     /// Database connection (if project is open)
-    pub(super) database: Mutex<Option<Database>>,
+    pub(super) database: RecoveringMutex<Option<Database>>,
     /// True while the open project's initial save is still deferred - created with
     /// no save path and never written to disk, so it has no `.stalx` and no Recent
     /// Projects entry yet. Tracked explicitly rather than inferred from
@@ -80,9 +88,9 @@ pub struct AppState {
     /// persist it exactly once (#92 / PR #104).
     pub(super) initial_save_deferred: AtomicBool,
     /// Undo/redo stack
-    pub(super) undo_stack: Mutex<UndoStack>,
+    pub(super) undo_stack: RecoveringMutex<UndoStack>,
     /// Application configuration
-    pub(super) config: Mutex<Config>,
+    pub(super) config: RecoveringMutex<Config>,
     /// Serialization lock for config READ-MODIFY-WRITE, held across all three
     /// steps. `config` above is only ever held for the read or the write, never
     /// both, so it cannot serialize a partial update: every partial-update command
@@ -100,12 +108,17 @@ pub struct AppState {
     /// batch command for no benefit. Take it via [`AppState::modify_config`] rather
     /// than by hand - `update_config` takes it too, so a nested acquisition
     /// deadlocks.
-    pub(super) config_write_lock: Mutex<()>,
+    ///
+    /// The recent-projects writers take it as well
+    /// (`AppState::persist_recent_projects`, #576 RV4-R-M2), with `recent_projects`
+    /// and possibly `project` already held: a holder of this lock must therefore
+    /// never take `recent_projects`, `project` or `command_lock`.
+    pub(super) config_write_lock: RecoveringMutex<()>,
     /// Recent projects list
-    pub(super) recent_projects: Mutex<Vec<PathBuf>>,
+    pub(super) recent_projects: RecoveringMutex<Vec<PathBuf>>,
     /// SpeleoDB per-session connection state (endpoint, email, token store).
     /// Read-only spike (#183); the token never crosses into the webview.
-    pub(super) speleodb: Mutex<super::speleodb::SpeleoDbSession>,
+    pub(super) speleodb: RecoveringMutex<super::speleodb::SpeleoDbSession>,
     /// Whether the open project may be edited. TRANSIENT, never persisted,
     /// DEFAULT-TRUE; `false` ONLY for a remote SpeleoDB project opened without a
     /// write lock (#191). Reset to `true` on every open/close so a previously
@@ -120,11 +133,20 @@ pub struct AppState {
     /// as "we hold the lock": every lock-release / re-verify path checks this too.
     pub(super) force_editing: AtomicBool,
     /// In-memory display settings cache (used when no DB is open, e.g., new unsaved project)
-    pub(super) display_settings_cache: Mutex<HashMap<String, String>>,
+    pub(super) display_settings_cache: RecoveringMutex<HashMap<String, String>>,
+    /// [#576 NF-W8FE-3] The file the open project was committed from (its
+    /// `file_path` at the project-slot commit; `None` for an unsaved project or no
+    /// project). Written by every commit. Part of the identity a display-setting
+    /// write is checked against.
+    ///
+    /// [#576 RV10b-4] Followed by every file a save has moved the open project off
+    /// since that commit (`note_open_project_moved`), so it names each file this
+    /// session's project has been at; the next commit starts it again.
+    pub(super) opened_from: RecoveringMutex<Vec<Option<PathBuf>>>,
     /// Serialization lock for command execution.
     /// Held for the entire duration of execute(), undo(), and redo() to prevent
     /// concurrent commands from interleaving (especially with batch sub-commands).
-    pub(super) command_lock: Mutex<()>,
+    pub(super) command_lock: RecoveringMutex<()>,
     /// HTTP cache for map tiles, held strictly under the provider's own
     /// `Cache-Control` - imagery is never stored for offline use.
     ///
@@ -133,19 +155,20 @@ pub struct AppState {
     /// owned/cloneable access to the cache. This is a deliberate deviation from the spec
     /// for thread-safety requirements.
     ///
-    /// Note: Changes to CacheConfig at runtime (via update_config) do NOT re-initialize
-    /// this cache. Users must restart the app for cache config changes to take effect.
-    pub(super) tile_cache: Arc<Mutex<Option<TileCache>>>,
+    /// A CacheConfig change (a settings save or Reload Config) reaches this cache at
+    /// once through `sync_config_side_effects` (#576 A18(g)/(h)): it is opened,
+    /// closed, or reconfigured in place.
+    pub(super) tile_cache: Arc<RecoveringMutex<Option<TileCache>>>,
     /// In-memory cache for ArcGIS tilemap API responses.
     /// Used to efficiently check tile availability before fetching.
-    pub(super) tilemap_cache: Arc<Mutex<TilemapCache>>,
+    pub(super) tilemap_cache: Arc<RecoveringMutex<TilemapCache>>,
     /// Lock-free tile fetch statistics (in-flight count, latency, errors).
     /// Uses Arc because the protocol handler needs a cloneable reference.
     pub(super) tile_fetch_stats: Arc<TileFetchStats>,
     /// Sink for emitting events to the host application (set during app setup)
-    pub(super) event_sink: Mutex<Option<Arc<dyn crate::core::events::EventSink>>>,
+    pub(super) event_sink: RecoveringMutex<Option<Arc<dyn crate::core::events::EventSink>>>,
     /// Active loading cancellation token (if any load operation is in progress)
-    pub(super) active_loading: Mutex<Option<Arc<AtomicBool>>>,
+    pub(super) active_loading: RecoveringMutex<Option<Arc<AtomicBool>>>,
     /// Shots a load found carrying a `kind` byte this build does not recognise
     /// (#27), tagged with the `loading_id` of the load that found them. Never
     /// persisted - the fix is the user's answer, applied as an ordinary
@@ -158,7 +181,7 @@ pub struct AppState {
     /// belonging to project A, and applying that resolution would write kinds
     /// onto whatever shots in B happen to share those ids.
     pub(super) unrecognised_shot_kinds:
-        Mutex<Option<(u64, Vec<crate::models::UnrecognisedShotKind>)>>,
+        RecoveringMutex<Option<(u64, Vec<crate::models::UnrecognisedShotKind>)>>,
     /// [#473] True when the OPEN project's persisted undo/redo history could not be
     /// read and was replaced by an empty stack.
     ///
@@ -187,9 +210,35 @@ pub struct AppState {
     /// Transient, never persisted: it describes THIS read of the file, and the next save
     /// overwrites the unreadable rows anyway.
     pub(super) history_discarded: AtomicBool,
+    /// [#576 B6-D1] The schema version stamped on the open project's file when a
+    /// NEWER Stalagmight saved it; 0 when it did not (every real version is >= 1).
+    /// Such a project is open READ-ONLY: `guard_mutation` refuses every edit and
+    /// `save_project` every save, so this build can never rewrite the file at its
+    /// own, older schema and silently drop what the newer one stored.
+    ///
+    /// Transient, never persisted, and deliberately separate from `edit_enabled`:
+    /// that flag belongs to the SpeleoDB lock flows, which open it on a lock
+    /// acquire - a newer file must stay closed whatever the lock says. Written on
+    /// every project-slot commit (both loads, both creates, close), like
+    /// `history_discarded`.
+    pub(super) newer_file_schema: AtomicI32,
+    /// [#576 C5] The workspace mode the frontend last reported. Plan and Export
+    /// are read-only: `guard_mutation` refuses every guarded edit while either is
+    /// active. Transient, never persisted, reset to Survey on every project-slot
+    /// commit (both loads, both creates, close) beside `newer_file_schema`. See
+    /// `workspace_mode.rs`.
+    pub(super) workspace_mode: super::workspace_mode::WorkspaceModeCell,
+    /// [#576 B15] The stored per-project settings (`project_settings` keys) the
+    /// open project's load could not read. The project opened with defaults in
+    /// their place, so `save_project` refuses every save while this is non-empty:
+    /// a save writes these settings back from the model, and would put the
+    /// defaults over the stored values. Transient, never persisted; written on
+    /// every project-slot commit (both loads, both creates, close), like
+    /// `newer_file_schema`.
+    pub(super) unreadable_project_settings: RecoveringMutex<Vec<String>>,
     /// Memoized closure-adjusted station coordinates for the display-mode toggle.
     /// See [`AdjustedStationsCache`]. Transient; never persisted.
-    pub(super) adjusted_cache: Mutex<Option<AdjustedStationsCache>>,
+    pub(super) adjusted_cache: RecoveringMutex<Option<AdjustedStationsCache>>,
     /// Bumped on every adjusted-cache invalidation. Captured before the lock-free
     /// solve so a result computed against a since-invalidated project is not
     /// written back (covers mutations that don't bump `modified_at`, e.g. repair).
@@ -203,6 +252,30 @@ pub struct AppState {
     /// [`Self::adjusted_cache_generation`] / `unrecognised_shot_kinds`, applied to
     /// the one slot that never had it. See `core::state::speleodb_session`.
     pub(super) speleodb_session_generation: AtomicU64,
+    /// [#576 RV4-R-S1] The session generation, plus one, in which a Done finished
+    /// editing HERE while the account's lock stayed held elsewhere
+    /// (`DoneResult::LockHeldElsewhere`); 0 for none. One generation is one open
+    /// project, so the generation names the project too. The status poll's
+    /// inherited-lock reopen honours it: the poll cannot otherwise tell "finished
+    /// here by Done" from "reopened after a restart", and switched editing back on
+    /// under the other session's lock. Lapses at the next session boundary (a new
+    /// open, a close, a logout bump the generation); an explicit Start editing
+    /// clears it. Transient, never persisted; an atomic, so it is no lock cell.
+    pub(super) speleodb_finished_here: AtomicU64,
+    /// [#576 NF-W4C-3-EDIT] The session generation, plus one, an Ariane adoption
+    /// shut the edit gate in, from its local span until its hand-over push has
+    /// landed (0: not shut): the adopted project is open (and reopened editable,
+    /// before its link was stamped) through the hand-over, and an edit there could
+    /// ride the push or be lost by the adoption's final close. Read by
+    /// `guard_metadata_mutation`; lapses at the next session boundary and is
+    /// cleared when the adoption returns. Transient, never persisted; an atomic,
+    /// so it is no lock cell.
+    pub(super) speleodb_adoption_gate: AtomicU64,
+    /// [#576 RV4-R-NITS C-4] Test seam: park the next `execute` once, between its
+    /// mutation and its undo push, so a test can run a slot commit in exactly that
+    /// window (`lifecycle_park_tests.rs`).
+    #[cfg(test)]
+    pub(super) park_after_mutation: RecoveringMutex<Option<ParkAfterMutation>>,
     /// Serializes SpeleoDB lock-acquisition spans against lock releases that run
     /// detached from the session that captured them (the delete's captured
     /// release, the stranded-claim janitor). Start Editing holds this across
@@ -213,7 +286,13 @@ pub struct AppState {
     /// and code holding `project`/`database`/`undo_stack` must never block on it
     /// (decide under `project`, drop it, then take this). See
     /// `core::state::speleodb_session`.
-    pub(super) speleodb_lock_ops: Mutex<()>,
+    pub(super) speleodb_lock_ops: RecoveringMutex<()>,
+    /// [#576 A11] The poison policy's once-per-session notice for every lock cell
+    /// above: a cell found poisoned (an earlier panic unwound through its guard)
+    /// is recovered and reported here, and the first report raises the frontend's
+    /// "internal error - save your work and restart" banner through the event
+    /// sink. See `models::poison_policy` and [`AppState::refuse_after_crash`].
+    pub(super) poison: Arc<PoisonMonitor>,
 }
 
 impl AppState {
@@ -245,35 +324,82 @@ impl AppState {
             None
         };
 
+        // [#576 A11] Every lock cell below reports to this state's own monitor, so a
+        // test's poisoned cell raises that test's banner and nobody else's.
+        let poison = PoisonMonitor::new();
         Ok(Self {
-            project: Mutex::new(None),
-            database: Mutex::new(None),
+            project: RecoveringMutex::with_monitor("project", ProjectSlot::default(), &poison),
+            database: RecoveringMutex::with_monitor("database", None, &poison),
             initial_save_deferred: AtomicBool::new(false),
-            undo_stack: Mutex::new(UndoStack::new_with_limit(undo_limit)),
-            config: Mutex::new(config),
-            config_write_lock: Mutex::new(()),
-            recent_projects: Mutex::new(recent),
-            speleodb: Mutex::new(super::speleodb::SpeleoDbSession::default()),
+            undo_stack: RecoveringMutex::with_monitor(
+                "undo_stack",
+                UndoStack::new_with_limit(undo_limit),
+                &poison,
+            ),
+            config: RecoveringMutex::with_monitor("config", config, &poison),
+            config_write_lock: RecoveringMutex::with_monitor("config_write_lock", (), &poison),
+            recent_projects: RecoveringMutex::with_monitor("recent_projects", recent, &poison),
+            speleodb: RecoveringMutex::with_monitor(
+                "speleodb",
+                super::speleodb::SpeleoDbSession::default(),
+                &poison,
+            ),
             // Default-true: editing is enabled unless a remote project is opened
             // read-only (#191). Reset on open/close.
             edit_enabled: AtomicBool::new(true),
             // Default-false: force-edit (edit without the lock, #213) is opt-in and
             // per-session. Reset on open/close alongside edit_enabled.
             force_editing: AtomicBool::new(false),
-            display_settings_cache: Mutex::new(HashMap::new()),
-            command_lock: Mutex::new(()),
-            tile_cache: Arc::new(Mutex::new(tile_cache)),
-            tilemap_cache: Arc::new(Mutex::new(TilemapCache::new())),
+            display_settings_cache: RecoveringMutex::with_monitor(
+                "display_settings_cache",
+                HashMap::new(),
+                &poison,
+            ),
+            opened_from: RecoveringMutex::with_monitor("opened_from", Vec::new(), &poison),
+            command_lock: RecoveringMutex::with_monitor("command_lock", (), &poison),
+            tile_cache: Arc::new(RecoveringMutex::with_monitor(
+                "tile_cache",
+                tile_cache,
+                &poison,
+            )),
+            tilemap_cache: Arc::new(RecoveringMutex::with_monitor(
+                "tilemap_cache",
+                TilemapCache::new(),
+                &poison,
+            )),
             tile_fetch_stats: Arc::new(TileFetchStats::new()),
-            event_sink: Mutex::new(None),
-            active_loading: Mutex::new(None),
-            unrecognised_shot_kinds: Mutex::new(None),
+            event_sink: RecoveringMutex::with_monitor("event_sink", None, &poison),
+            active_loading: RecoveringMutex::with_monitor("active_loading", None, &poison),
+            unrecognised_shot_kinds: RecoveringMutex::with_monitor(
+                "unrecognised_shot_kinds",
+                None,
+                &poison,
+            ),
             // Default-false: no project is open, so no history has been discarded.
             history_discarded: AtomicBool::new(false),
-            adjusted_cache: Mutex::new(None),
+            // Default 0 (none): no project is open, so none came from a newer build.
+            newer_file_schema: AtomicI32::new(0),
+            // Survey: no project is open, and every project opens in Survey.
+            workspace_mode: super::workspace_mode::WorkspaceModeCell::default(),
+            // Empty: no project is open, so no stored setting went unread.
+            unreadable_project_settings: RecoveringMutex::with_monitor(
+                "unreadable_project_settings",
+                Vec::new(),
+                &poison,
+            ),
+            adjusted_cache: RecoveringMutex::with_monitor("adjusted_cache", None, &poison),
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
-            speleodb_lock_ops: Mutex::new(()),
+            speleodb_finished_here: AtomicU64::new(0),
+            speleodb_adoption_gate: AtomicU64::new(0),
+            #[cfg(test)]
+            park_after_mutation: RecoveringMutex::with_monitor(
+                "park_after_mutation",
+                None,
+                &poison,
+            ),
+            speleodb_lock_ops: RecoveringMutex::with_monitor("speleodb_lock_ops", (), &poison),
+            poison,
         })
     }
 
@@ -296,12 +422,12 @@ impl AppState {
     }
 
     /// Get a clone of the tile cache Arc for sharing across threads
-    pub fn tile_cache(&self) -> Arc<Mutex<Option<TileCache>>> {
+    pub fn tile_cache(&self) -> Arc<RecoveringMutex<Option<TileCache>>> {
         Arc::clone(&self.tile_cache)
     }
 
     /// Get a clone of the tilemap cache Arc for sharing across threads
-    pub fn tilemap_cache(&self) -> Arc<Mutex<TilemapCache>> {
+    pub fn tilemap_cache(&self) -> Arc<RecoveringMutex<TilemapCache>> {
         Arc::clone(&self.tilemap_cache)
     }
 
@@ -310,25 +436,60 @@ impl AppState {
         Arc::clone(&self.tile_fetch_stats)
     }
 
-    /// Set the event sink (called during app setup)
+    /// Set the event sink (called during app setup).
+    ///
+    /// [#576 A11] Also where this state's poison notice learns how to leave: the
+    /// first sink installed carries the one `internal-error` event (a crash that
+    /// poisoned a lock before now is delivered at once). A later sink replaces the
+    /// one events go to, but not the notice's - it fires once per session anyway.
     pub fn set_event_sink(&self, sink: Arc<dyn crate::core::events::EventSink>) {
-        if let Ok(mut h) = self.event_sink.lock() {
-            *h = Some(sink);
-        }
+        use crate::core::events::{self, InternalErrorEvent, InternalErrorNotice, IpcEvent};
+        let notice_sink = Arc::clone(&sink);
+        self.poison.install_hook(move |cell| {
+            let notice = InternalErrorNotice {
+                cell: cell.to_owned(),
+            };
+            match events::payload::<InternalErrorEvent>(&notice) {
+                Ok(payload) => notice_sink.emit(InternalErrorEvent::NAME, payload),
+                Err(e) => tracing::error!(
+                    error = %e,
+                    cell,
+                    purpose = "tell the user an internal error happened (#576 A11)",
+                    "Failed to serialize the internal-error notice"
+                ),
+            }
+        });
+        *self.event_sink.lock() = Some(sink);
     }
 
     /// Get the event sink
     pub fn get_event_sink(&self) -> Option<Arc<dyn crate::core::events::EventSink>> {
-        self.event_sink.lock().ok().and_then(|h| h.clone())
+        self.event_sink.lock().clone()
+    }
+
+    /// [#576 A11] The monitor behind this state's lock cells, so the app can route
+    /// the process-wide cells' notice into the same single banner (see
+    /// [`PoisonMonitor::forward_to`]).
+    pub fn poison_monitor(&self) -> &Arc<PoisonMonitor> {
+        &self.poison
+    }
+
+    /// [#576 RV5-PI-3] The first lock a crash poisoned this session - the notice
+    /// the one-shot `internal-error` event carried - or `None`. The frontend's pull
+    /// path for a banner whose event it missed (a crash during startup, before its
+    /// listener existed, or a webview reload after the event).
+    pub fn internal_error_status(&self) -> Option<crate::core::events::InternalErrorNotice> {
+        self.poison
+            .first_poisoned()
+            .map(|cell| crate::core::events::InternalErrorNotice {
+                cell: cell.to_owned(),
+            })
     }
 
     /// Start a new loading operation, cancelling any existing one.
     /// Returns the cancellation token for the new operation.
     pub fn start_new_load(&self) -> Arc<AtomicBool> {
-        let mut guard = self
-            .active_loading
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut guard = self.active_loading.lock();
 
         // Cancel any existing load
         if let Some(old_token) = guard.take() {
@@ -345,7 +506,8 @@ impl AppState {
     /// Identity-safe: only clears if the provided token matches the current active token.
     /// This prevents a stale load from clearing a newer load's token.
     pub fn clear_active_load(&self, expected_token: &Arc<AtomicBool>) {
-        if let Ok(mut guard) = self.active_loading.lock() {
+        {
+            let mut guard = self.active_loading.lock();
             if let Some(ref current) = *guard {
                 if Arc::ptr_eq(current, expected_token) {
                     *guard = None;
@@ -386,8 +548,9 @@ impl AppState {
     }
 
     /// THE mutation chokepoint (#191, D-B6). Every SURVEY-CONTENT mutation entry
-    /// (`execute` + all its `execute_*` siblings, `undo`/`redo`/`undo_to`/`redo_to`,
-    /// `set_project_name_for_path`) calls this FIRST, after
+    /// (`execute` + all its `execute_*` siblings, `undo`/`redo`/`undo_to`/`redo_to`;
+    /// `set_project_name_for_path` and `update_project_settings` through
+    /// [`Self::guard_metadata_mutation`]) calls this FIRST, after
     /// taking `command_lock` and before mutating. `Err` aborts the mutation when
     /// the open project is a remote SpeleoDB project opened read-only. No-op (`Ok`)
     /// for local-only (default-true `edit_enabled`) projects and non-mutating reads.
@@ -403,22 +566,133 @@ impl AppState {
     /// - `save_display_setting` (view prefs) stays UNGATED and that is correct:
     ///   `display_settings` is stripped from the push snapshot and re-applied locally
     ///   across pull/FF - purely local view state that never proliferates, never lost.
-    /// - `track_imported_file`/`track_section_hashes` import-dedup bookkeeping stays
-    ///   UNGATED for now: the in-import path gates + dirties, but the standalone
-    ///   `track_imported_file` command does not - a deferred follow-up, lower-impact
-    ///   than a lost annotation (re-import is the worst case, not silent data loss).
+    /// - `track_imported_file`/`track_section_hashes` import-dedup bookkeeping is
+    ///   reached only from inside an import command, which gates + dirties; there
+    ///   is no standalone IPC command for it (#576 NF-TRACK-IMPORTED removed the
+    ///   unused `track_imported_file` one).
     ///
     /// `MUTATION_ENTRYPOINTS` (tests.rs) enumerates the gated set (incl. the two
     /// warning verbs).
-    pub(super) fn guard_mutation(&self, what: &str) -> Result<(), CommandResult> {
+    ///
+    /// [#576 B6-D1] A project saved by a NEWER Stalagmight is refused FIRST, ahead
+    /// of the lock: it is read-only whatever the SpeleoDB lock state says, and the
+    /// reason the user is told must be the version, not the lock. Its own edit-gate
+    /// code (`NEWER_FILE_EDIT_DISABLED`, [`CommandErrorCode::is_edit_gate`]), so
+    /// every caller that already treats a gated refusal as "read-only, not a
+    /// failure" keeps doing so, and the frontend's notice can say which read-only
+    /// this is without trusting its own copy of the flag.
+    ///
+    /// [#576 C5] Then, while the frontend's workspace is Plan or Export, EVERY
+    /// caller is refused (`WORKSPACE_READ_ONLY`, also an edit-gate code): deny by
+    /// default, so a new entry point is read-only in those modes without anyone
+    /// remembering it. The two deliberate exceptions call
+    /// [`Self::guard_metadata_mutation`] instead.
+    ///
+    /// [#576 C4] The refusal is a [`CommandError`]: the code says which gate, the
+    /// message only what the user reads. A `CommandResult` producer returns it
+    /// through [`CommandResult::refused`].
+    pub(super) fn guard_mutation(&self, what: &str) -> Result<(), CommandError> {
+        self.guard_metadata_mutation(what)?;
+        self.guard_workspace(what)
+    }
+
+    /// [#576 A11] The REFUSING half of the poison policy, and the complete list of
+    /// where it applies. Everywhere else a poisoned lock is recovered (see
+    /// `models::poison_policy`): the user is told by the banner, and saving keeps
+    /// working so no unsaved work is trapped.
+    ///
+    /// A crash while a command held `command_lock`, `project` or `undo_stack` can
+    /// leave the survey half-way through an edit, and the history out of step with
+    /// it (the edit applied, its undo step never recorded - or the reverse). Edits
+    /// and saves of that state are allowed: it is what the user has, and they are
+    /// told to save it and restart. What is refused is anything that REPLAYS
+    /// history onto it or PUBLISHES it:
+    ///
+    /// 1. Undo, Redo, Undo to, Redo to (`undo.rs`): each applies an inverse captured
+    ///    against the state BEFORE the crash, onto the state the crash left. With a
+    ///    step missing or half-applied, that inverse lands on the wrong data and
+    ///    compounds the damage instead of reverting it.
+    /// 2. The SpeleoDB undo-chain walk (`speleodb_guard_unwind`): it is the same
+    ///    traversal carried across server revisions, gated on the stack being walked
+    ///    to its end - which a poisoned stack cannot vouch for. It used to fail closed
+    ///    for this reason already; it now says why.
+    /// 3. The SpeleoDB upload (`speleodb_upload`, behind Done, Push and the first
+    ///    publish): it ships the survey AND its undo history to a server that other
+    ///    people pull from. A half-written edit there becomes everyone's. The local
+    ///    save stays available, and after a restart the reopened file passes the
+    ///    load-time integrity checks before it can be pushed.
+    /// 4. Persisting the history (`persist_or_clear_undo_stacks_into`, #576
+    ///    RV5-PI-2): the save writes the survey with an EMPTY Undo/Redo history and
+    ///    the `UNDO_HISTORY_DROPPED` warning. The restarted session has nothing
+    ///    poisoned, so a saved history would be replayed there.
+    ///
+    /// Takes no lock (the caller may hold `command_lock`); a poisoned cell found
+    /// here is reported like any other, so the banner explains the refusal. The
+    /// refusal's code is `REFUSED_AFTER_INTERNAL_ERROR` (#576 C4).
+    pub(super) fn refuse_after_crash(&self, what: &str) -> Result<(), CommandError> {
+        for cell in [
+            self.command_lock.refuse_if_poisoned(),
+            self.project.refuse_if_poisoned(),
+            self.undo_stack.refuse_if_poisoned(),
+        ] {
+            if let Err(refused) = cell {
+                tracing::warn!(
+                    what,
+                    reason = %refused,
+                    purpose = "never replay or publish half-written data (#576 A11)",
+                    "Refused after an internal error"
+                );
+                return Err(CommandError::new(
+                    CommandErrorCode::RefusedAfterInternalError,
+                    format!(
+                        "{what} is unavailable after an internal error. Save your work and \
+                         restart Stalagmight."
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// [#576 C5] `guard_mutation` WITHOUT the read-only-workspace check: the
+    /// newer-file and SpeleoDB gates only. The allowlist of what may be edited in
+    /// Plan and Export, and it is exactly two callers - keep it that short:
+    /// - `update_project_settings` (project name + validation thresholds; the
+    ///   default north reference that rides the same save is a survey edit and
+    ///   is checked with `guard_workspace` there, #576 NF-W3-2-PLAN) and
+    /// - `set_project_name_for_path` (project rename),
+    ///
+    /// which ProjectSettingsDialog deliberately keeps enabled in every mode
+    /// (docs/app-modes.md). Everything else that mutates calls `guard_mutation`.
+    pub(super) fn guard_metadata_mutation(&self, what: &str) -> Result<(), CommandError> {
+        if let Some(version) = self.newer_file_schema() {
+            return Err(newer_file_edit_refusal(what, version));
+        }
+        // [#576 NF-W4C-3-EDIT] An Ariane adoption is handing this project over to
+        // SpeleoDB: no edit until its push has landed. `ADOPTION_IN_PROGRESS` is in
+        // the edit-gate family (`is_edit_gate`), so every caller treats it as
+        // read-only, and the frontend's notice says "being handed over" rather than
+        // inviting a Start editing that would race the adoption's lock operations
+        // (RV5-F4-5).
+        if self.speleodb_adoption_holds_gate() {
+            return Err(CommandError::new(
+                CommandErrorCode::AdoptionInProgress,
+                format!(
+                    "{what} is disabled: this project is being handed over to SpeleoDB. \
+                     Edit it once the upload has finished."
+                ),
+            ));
+        }
         if self.edit_enabled() {
             return Ok(());
         }
-        Err(CommandResult::failure(format!(
-            "{}: {what} is disabled: this SpeleoDB project is open read-only. \
-             Acquire the lock to edit.",
-            crate::core::command::EDIT_DISABLED_CODE
-        )))
+        Err(CommandError::new(
+            CommandErrorCode::EditDisabled,
+            format!(
+                "{what} is disabled: this SpeleoDB project is open read-only. \
+                 Acquire the lock to edit."
+            ),
+        ))
     }
 
     /// Flip `has_unpushed_edits` `false → true` AND refresh `last_edit_at` on a
@@ -429,9 +703,7 @@ impl AppState {
     /// mutation (not idempotent) because guardrail-7 compares it to push-start to
     /// decide whether a landed-by-ancestry push may clear the dirty bit.
     pub(super) fn mark_remote_dirty(&self) {
-        let Ok(db_guard) = self.database.lock() else {
-            return;
-        };
+        let db_guard = self.database.lock();
         let Some(db) = db_guard.as_ref() else {
             return; // no open database (e.g. unsaved project) - nothing to stamp
         };
@@ -459,9 +731,28 @@ impl AppState {
         self.speleodb_forget_unwind_position();
     }
 
+    /// [#576 D22] The open project's SpeleoDB link bits - the dirty bit and the
+    /// Unwind pointer, exactly the two `speleodb_link_status` reports - read from
+    /// local state only (no network, no lock held across the two reads).
+    ///
+    /// The IPC layer attaches this to every survey mutation's answer
+    /// (`pool::run_mutation`), so the frontend learns what [`Self::mark_remote_dirty`]
+    /// / [`Self::mark_remote_forward_edit`] did from the backend itself instead of
+    /// re-deriving it at every editing call site. `None` for a local project (no
+    /// link row) and when the link cannot be read - the frontend then leaves its
+    /// state alone, and the next status poll reports what is known.
+    pub fn remote_link_bits(&self) -> Option<crate::core::outcome::RemoteLinkBits> {
+        let link = self.speleodb_open_link().ok()?;
+        Some(crate::core::outcome::RemoteLinkBits {
+            has_unpushed_edits: link.has_unpushed_edits,
+            unwound: self.speleodb_unwound_from().is_some(),
+        })
+    }
+
     /// Cancel any active loading operation (idempotent - safe to call anytime)
     pub fn cancel_loading(&self) {
-        if let Ok(guard) = self.active_loading.lock() {
+        {
+            let guard = self.active_loading.lock();
             if let Some(token) = guard.as_ref() {
                 token.store(true, std::sync::atomic::Ordering::SeqCst);
             }
@@ -476,9 +767,7 @@ impl AppState {
         F: FnOnce(&mut Project) -> R,
         R: FromProjectLockError,
     {
-        let Ok(mut guard) = self.project.lock() else {
-            return R::lock_failed();
-        };
+        let mut guard = self.project.lock();
         let Some(project) = guard.as_mut() else {
             return R::no_project();
         };
@@ -492,9 +781,7 @@ impl AppState {
         F: FnOnce(&Project) -> R,
         R: FromProjectLockError,
     {
-        let Ok(guard) = self.project.lock() else {
-            return R::lock_failed();
-        };
+        let guard = self.project.lock();
         let Some(project) = guard.as_ref() else {
             return R::no_project();
         };
@@ -513,25 +800,37 @@ impl AppState {
     /// `modified_at` + closure-adjustment config and cleared on every
     /// command/undo/redo, so repeatedly toggling to the adjusted display view is
     /// cheap while any edit forces a fresh re-solve from intact measured data.
-    /// Returns `None` if no project is open.
+    /// Returns `None` if no project is open; the IPC boundary uses
+    /// [`Self::adjusted_stations_checked`], which keeps the fallible envelope.
     pub fn get_adjusted_stations(&self) -> Option<Vec<Station>> {
+        self.adjusted_stations_checked().ok().flatten()
+    }
+
+    /// [#576 C7] [`Self::get_adjusted_stations`] for the IPC boundary: `Ok(None)` ONLY
+    /// when no project is open. It used to answer `Err` for a poisoned project or
+    /// command lock; under the one poison policy (#576 A11) those locks are recovered
+    /// and the internal-error banner raised instead, so the adjusted view keeps
+    /// drawing from the data the lock holds. The `Result` stays: it is the envelope
+    /// the command settles a failed solve task into (`settle_blocking`), which the
+    /// frontend's fallback to the measured view still answers.
+    pub fn adjusted_stations_checked(&self) -> Result<Option<Vec<Station>>, String> {
         let config = self.get_config();
         let config_hash = adjusted_config_hash(&config.closure_adjustment);
 
         // Cheap project-version read under a short lock.
         let version = {
-            let guard = self.project.lock().ok()?;
-            guard
-                .as_ref()?
-                .modified_at
-                .timestamp_nanos_opt()
-                .unwrap_or(0)
+            let guard = self.project.lock();
+            let Some(project) = guard.as_ref() else {
+                return Ok(None);
+            };
+            project.modified_at.timestamp_nanos_opt().unwrap_or(0)
         };
 
-        if let Ok(cache) = self.adjusted_cache.lock() {
+        {
+            let cache = self.adjusted_cache.lock();
             if let Some(entry) = cache.as_ref() {
                 if entry.version == version && entry.config_hash == config_hash {
-                    return Some(entry.stations.clone());
+                    return Ok(Some(entry.stations.clone()));
                 }
             }
         }
@@ -547,18 +846,25 @@ impl AppState {
         // clone so the cache key matches exactly the data solved, and hand the
         // clone to the by-value solver so it isn't cloned a second time.
         let (project, generation) = {
-            let _cmd_guard = self.command_lock.lock().ok()?;
+            let _cmd_guard = self.command_lock.lock();
             // Capture the invalidation generation alongside the (reconciled) clone,
             // under command_lock, so it reflects exactly the data being solved.
             let generation = self
                 .adjusted_cache_generation
                 .load(std::sync::atomic::Ordering::SeqCst);
-            (self.get_project_state()?, generation)
+            let Some(project) = self.project_snapshot() else {
+                return Ok(None);
+            };
+            (project, generation)
         };
         let solved_version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
-        let stations = project.into_adjusted_station_coordinates(&config.closure_adjustment);
+        // The solve adjusts a project of its own: this is the one copy it makes
+        // (none when the slot has moved on and the snapshot is the last holder).
+        let stations = Arc::unwrap_or_clone(project)
+            .into_adjusted_station_coordinates(&config.closure_adjustment);
 
-        if let Ok(mut cache) = self.adjusted_cache.lock() {
+        {
+            let mut cache = self.adjusted_cache.lock();
             // Only store if nothing invalidated the cache while command_lock was
             // released for the heavy, lock-free solve. Otherwise an edit/open/repair
             // that ran during the solve - including a repair that doesn't bump
@@ -575,17 +881,28 @@ impl AppState {
                 });
             }
         }
-        Some(stations)
+        Ok(Some(stations))
     }
 
     /// Per-station distance field for the distance-gradient overlay (#34),
-    /// computed on the closure-adjusted geometry. Takes ONE reconciled project
-    /// snapshot under `command_lock` (so the graph topology and the adjusted
-    /// coordinates come from the same version - no read-skew between two separate
-    /// state reads), and reuses the memoized adjusted-stations cache read-only
-    /// when it matches that snapshot (keeps re-root instant in the adjusted view).
+    /// computed on the MEASURED geometry of ONE settled project snapshot (taken
+    /// under `command_lock`, so never in the middle of a command, #576 RV5-4).
     pub fn distance_field(&self, from: Option<&StationRef>) -> Option<DistanceField> {
-        let project = self.get_project_state()?;
+        self.distance_field_checked(from).ok().flatten()
+    }
+
+    /// [#576 C7] [`Self::distance_field`] for the IPC boundary: `Ok(None)` only when no
+    /// project is open. A poisoned lock is recovered (#576 A11, see
+    /// [`Self::adjusted_stations_checked`]); the `Result` is the command's envelope.
+    pub fn distance_field_checked(
+        &self,
+        from: Option<&StationRef>,
+    ) -> Result<Option<DistanceField>, String> {
+        // [#576 RV5-4] Settled: a plain snapshot taken while a command is between
+        // its mutation and its epilogue is a project no user ever sees.
+        let Some(project) = self.settled_snapshot() else {
+            return Ok(None);
+        };
         // Distance uses MEASURED geometry (surveyed shot lengths via the plain
         // coordinate walk) - instant. The closure-adjusted solve is intentionally
         // NOT used: it dominated the latency (~2s release / ~40s debug on a 6k-
@@ -596,7 +913,11 @@ impl AppState {
         // Reference ties are not swimmable, so they leave the route unless the
         // user opts them back in (#27 q13).
         let include_reference = self.get_config().gas.include_reference_legs;
-        Some(project.distance_field_from_with(&stations, from, include_reference))
+        Ok(Some(project.distance_field_from_with(
+            &stations,
+            from,
+            include_reference,
+        )))
     }
 
     /// Single-diver open-circuit gas reachability field (#38). Like [`distance_field`], the
@@ -614,7 +935,8 @@ impl AppState {
         gas_config: &GasConfig,
         stage_drop_overrides: &[Option<StationRef>],
     ) -> Option<GasReachField> {
-        let project = self.get_project_state()?;
+        // [#576 RV5-4] Settled, like every IPC read of the project.
+        let project = self.settled_snapshot()?;
         Some(project.compute_gas_reach_field_with_overrides(
             origin,
             endpoint,
@@ -639,25 +961,48 @@ impl AppState {
         a: RulerEndpoint,
         b: RulerEndpoint,
     ) -> Option<AlongLineResult> {
-        let project = self.get_project_state()?;
+        self.along_line_between_checked(a, b).ok().flatten()
+    }
+
+    /// [#576 C7] [`Self::along_line_between`] for the IPC boundary: `Ok(None)` only when
+    /// no project is open. A poisoned lock is recovered (#576 A11, see
+    /// [`Self::adjusted_stations_checked`]); the `Result` is the command's envelope.
+    /// The measured fallback stays for an adjusted view that is merely absent.
+    pub fn along_line_between_checked(
+        &self,
+        a: RulerEndpoint,
+        b: RulerEndpoint,
+    ) -> Result<Option<AlongLineResult>, String> {
+        // [#576 RV5-4] Settled: the topology is read between commands, never in the
+        // middle of one.
+        let Some(project) = self.settled_snapshot() else {
+            return Ok(None);
+        };
         // `project` (topology) and `stations` (adjusted coords) are two independent
-        // locked reads, so a concurrent edit between them could yield a slightly
+        // settled reads, so an edit landing between them could yield a slightly
         // skewed snapshot. That's safe here - `along_line_between` looks everything
         // up by `StationRef` through guarded `idx.get(..)` and indexes coords only
         // via those resolved indices, so a mismatch drops an edge at worst (never
         // panics) and the ruler re-queries. We deliberately avoid a single
         // command-locked snapshot to keep reusing the adjusted-stations cache.
-        let stations = self
-            .get_adjusted_stations()
-            .unwrap_or_else(|| project.compute_station_coordinates());
+        let stations = match self.adjusted_stations_checked()? {
+            Some(stations) => stations,
+            None => project.compute_station_coordinates(),
+        };
         let include_reference = self.get_config().gas.include_reference_legs;
-        Some(project.along_line_between_with(&stations, a, b, include_reference))
+        Ok(Some(project.along_line_between_with(
+            &stations,
+            a,
+            b,
+            include_reference,
+        )))
     }
 
     /// Drop any cached closure-adjusted coordinates. Called from every
     /// command/undo/redo path so the adjusted view never serves stale geometry.
     pub(super) fn invalidate_adjusted_cache(&self) {
-        if let Ok(mut cache) = self.adjusted_cache.lock() {
+        {
+            let mut cache = self.adjusted_cache.lock();
             // Bump the generation under the cache lock so an in-flight solve's
             // generation check (also under this lock) reliably observes it.
             self.adjusted_cache_generation
@@ -671,9 +1016,7 @@ impl AppState {
     /// Capture a JSON snapshot of the current project for undo.
     /// Returns the serialized JSON, or a `CommandResult` failure if unavailable.
     pub(super) fn capture_project_snapshot(&self) -> Result<String, CommandResult> {
-        let Ok(guard) = self.project.lock() else {
-            return Err(CommandResult::failure("Failed to lock project".to_string()));
-        };
+        let guard = self.project.lock();
         let Some(p) = guard.as_ref() else {
             return Err(CommandResult::failure("No project open".to_string()));
         };
@@ -726,7 +1069,7 @@ impl AppState {
     /// construction.
     /// Returns false and leaves `slot` untouched if the snapshot can't be parsed.
     #[must_use]
-    pub(super) fn restore_snapshot_into(slot: &mut Option<Project>, snapshot: &str) -> bool {
+    pub(super) fn restore_snapshot_into(slot: &mut ProjectSlot, snapshot: &str) -> bool {
         // A snapshot persisted by a build predating the per-project `validation`
         // field (#57) has no "validation" key, so serde (the field is
         // #[serde(default)]) fills ValidationConfig::default() - silently changing
@@ -744,6 +1087,10 @@ impl AppState {
         // edit always serializes the key, so it still restores correctly.
         let snapshot_has_surface_elevation = snapshot.contains("\"surface_elevation\":");
         let current_surface_elevation = slot.as_ref().and_then(|p| p.surface_elevation);
+        // A pre-anchor build wrote every cross-reference as a positional
+        // `StationRef` (`{section_id, station_index}`); this build writes
+        // `StationKey`s (`{section_id, anchor}`). See the canonicalization below.
+        let snapshot_is_pre_anchor = snapshot.contains("\"station_index\":");
         // [#303] Where the file lives is a property of THIS machine, not of the survey, so
         // `serialize_project_snapshot` clears it rather than write a username into every
         // pushed commit. Carry the live value across on the way back, or an undo would leave
@@ -807,28 +1154,40 @@ impl AppState {
                 restored.file_path = current_file_path;
                 restored.rebuild_section_index();
                 restored.rebuild_shot_uuid_index();
-                // A snapshot blob persisted by a PRE-ANCHOR build can carry
-                // transitional positional `Index` cross-reference anchors (undo/redo
-                // history is persisted to SQLite and reloaded across sessions, and the
-                // back-compat StationKey deserializer accepts the legacy
-                // `{section_id, station_index}` shape). The live-model invariant is
-                // "no Index anchors": a later shot insert/delete only shifts
-                // AfterShot/SectionStart refs, so a live Index ref would silently start
-                // resolving to the wrong station. Canonicalize such a snapshot - the
-                // same step the load path runs - to AfterShot/SectionStart.
+                // A snapshot blob persisted by a PRE-ANCHOR build stores every
+                // cross-reference positionally (undo/redo history is persisted to
+                // SQLite and reloaded across builds, and the back-compat StationKey
+                // deserializer reads the legacy `{section_id, station_index}` shape as
+                // a transitional `Index` anchor). A later shot insert/delete leaves an
+                // `Index` key at its position, so it would silently start naming
+                // another station. Canonicalize such a snapshot - the same step the
+                // load path runs - to AfterShot/SectionStart. The re-anchor drops no
+                // comment: two that land on one key are joined
+                // (`Project::map_station_refs`).
                 //
-                // CRITICALLY, gate this on the snapshot actually being LEGACY (an Index
-                // anchor is present). A CURRENT same-session snapshot is already
-                // canonical, so mint/reanchor would be no-ops - but ensure_unique would
-                // RE-MINT intentional duplicate UUIDs, e.g. the pre-repair state that an
-                // undo of a duplicate_shot_uuid Repair must restore EXACTLY. Skipping
-                // the block when there is no Index anchor keeps current snapshots
-                // byte-for-byte (so undo/redo is a true before/after pair) while legacy
-                // snapshots are still fully canonicalized. (For a legacy snapshot,
-                // ensure_shot_uuids runs FIRST: a pre-v6 blob can have uuid:null shots,
-                // and ensure_unique only dedups existing UUIDs - without minting nulls,
-                // reanchor can't canonicalize the Index anchor of a null-uuid station.)
-                let has_legacy_index = {
+                // CRITICALLY, gate this on the snapshot being PRE-ANCHOR, not on an
+                // `Index` anchor alone (#576 W52-1). A snapshot this build wrote can
+                // hold one too: a key that did not resolve at the open (a comment row
+                // past the end of its section) stays `Index` in the live project, and
+                // every snapshot taken while it is there records it. Re-anchoring that
+                // snapshot moved the key onto whatever shot then sat at its position -
+                // one an append had added, so undoing the append deleted the comment
+                // with the shot. And ensure_unique would RE-MINT intentional duplicate
+                // UUIDs, e.g. the pre-repair state that an undo of a duplicate_shot_uuid
+                // Repair must restore EXACTLY. So a snapshot this build wrote is
+                // restored with its keys and UUIDs exactly as recorded (undo/redo is a
+                // true before/after pair). This build never writes the positional
+                // shape - `StationKey` serializes `{section_id, anchor}`, and no other
+                // field of a `Project` is named `station_index`
+                // (`a_snapshot_this_build_writes_never_holds_the_positional_key_shape`
+                // pins it) - and a JSON string cannot fake it, as its quotes are
+                // escaped. The `Index` check stays beside it, so a pre-anchor snapshot
+                // whose refs all sit at a section start is left as before. (For a
+                // pre-anchor snapshot, ensure_shot_uuids runs FIRST: a pre-v6 blob can
+                // have uuid:null shots, and ensure_unique only dedups existing UUIDs -
+                // without minting nulls, reanchor can't canonicalize the Index anchor
+                // of a null-uuid station.)
+                let has_legacy_index = snapshot_is_pre_anchor && {
                     let mut found = false;
                     restored.for_each_station_ref(|_, key| {
                         if matches!(key.anchor, StationAnchor::Index(_)) {
@@ -868,7 +1227,7 @@ impl AppState {
                         "Dropped restored section offsets that were within dust of the origin"
                     );
                 }
-                *slot = Some(restored);
+                slot.set(Some(restored));
                 true
             }
             Err(e) => {
@@ -885,10 +1244,7 @@ impl AppState {
     /// Rollback the project to a previously captured snapshot.
     /// Handles poisoned mutex gracefully (recovery is more important than panic).
     pub(super) fn rollback_project(&self, snapshot: &str) {
-        let mut proj = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut proj = self.project.lock();
         if Self::restore_snapshot_into(&mut proj, snapshot) {
             tracing::info!(
                 purpose = "restore project after failed command",
@@ -903,16 +1259,7 @@ impl AppState {
         &self,
         before_snapshot: &str,
     ) -> Result<String, CommandResult> {
-        let mut proj_guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => {
-                tracing::warn!(
-                    purpose = "finalize undo snapshot",
-                    "Project mutex poisoned during after-snapshot; recovering"
-                );
-                poisoned.into_inner()
-            }
-        };
+        let mut proj_guard = self.project.lock();
         let Some(p) = proj_guard.as_ref() else {
             tracing::error!(
                 purpose = "restore project after mutation error",
@@ -951,7 +1298,8 @@ impl AppState {
         before: String,
         after: String,
     ) {
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+        {
+            let mut undo_stack = self.undo_stack.lock();
             undo_stack.push_with_data(
                 cmd,
                 crate::core::UndoData::ProjectSnapshotPair { before, after },
@@ -968,10 +1316,7 @@ impl AppState {
         loading_id: u64,
         found: Vec<crate::models::UnrecognisedShotKind>,
     ) {
-        let mut guard = match self.unrecognised_shot_kinds.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut guard = self.unrecognised_shot_kinds.lock();
         // Never let an OLDER load clobber a newer one's diagnostics. A cancelled
         // load runs on to its next checkpoint, so it can reach this line after
         // the project the user actually opened already stored its own.
@@ -990,10 +1335,7 @@ impl AppState {
         &self,
         loading_id: u64,
     ) -> Vec<crate::models::UnrecognisedShotKind> {
-        let mut guard = match self.unrecognised_shot_kinds.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut guard = self.unrecognised_shot_kinds.lock();
         match guard.as_ref() {
             Some((seen, _)) if *seen == loading_id => {
                 guard.take().map(|(_, found)| found).unwrap_or_default()
@@ -1022,4 +1364,101 @@ impl AppState {
         self.history_discarded
             .load(std::sync::atomic::Ordering::SeqCst)
     }
+
+    /// [#576 B6-D1] Record the schema version of the just-committed project's file
+    /// when a newer build saved it (`None` otherwise). Unconditional assignment on
+    /// every project-slot commit, like [`Self::set_history_discarded`], so a newer
+    /// project's read-only state can never leak into the next one.
+    pub(crate) fn set_newer_file_schema(&self, version: Option<i32>) {
+        self.newer_file_schema
+            .store(version.unwrap_or(0), std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// [#576 B6-D1] The open project's file schema version when a NEWER
+    /// Stalagmight saved it - the project is then open read-only - else `None`.
+    pub fn newer_file_schema(&self) -> Option<i32> {
+        match self
+            .newer_file_schema
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            0 => None,
+            version => Some(version),
+        }
+    }
+
+    /// [#576 NF-W2F-1] The open file's flags as they stand NOW: the committed
+    /// newer-file stamp, the unread-settings list (RV4-R-S5), and whether the open
+    /// database's `speleo_link` row can be read - the same read the load and every save make, so the answer always
+    /// matches what the next save would do. No project (or no database) open reads
+    /// as neither.
+    pub fn open_file_flags(&self) -> crate::core::loading::OpenFileFlags {
+        let speleo_link_unreadable = self
+            .database
+            .lock()
+            .as_ref()
+            .is_some_and(|db| db.load_speleo_link().is_err());
+        crate::core::loading::OpenFileFlags {
+            newer_schema_version: self.newer_file_schema(),
+            speleo_link_unreadable,
+            // [#576 RV4-R-S5] The list the slot commit set for the file open now.
+            unreadable_project_settings: self.unreadable_project_settings(),
+        }
+    }
+
+    /// [#576 B15] Record which stored per-project settings the just-committed
+    /// project's load could not read. Unconditional assignment on every
+    /// project-slot commit, like [`Self::set_newer_file_schema`].
+    pub(crate) fn set_unreadable_project_settings(&self, keys: Vec<String>) {
+        *self.unreadable_project_settings.lock() = keys;
+    }
+
+    /// [#576 B15 follow-up] The user set `key` again (Project Settings): the value
+    /// in memory is now theirs, not a default standing in for an unread one, so
+    /// writing it over the stored value is what they asked for and `key` no longer
+    /// refuses a save. Saves work again once nothing is left on the list.
+    pub(crate) fn lift_unreadable_project_setting(&self, key: &str) {
+        let mut keys = self.unreadable_project_settings.lock();
+        if keys.iter().any(|k| k == key) {
+            keys.retain(|k| k != key);
+            tracing::info!(
+                key,
+                remaining = keys.len(),
+                purpose = "let a save write a setting the user set again",
+                "An unread project setting was set again; it no longer refuses saves"
+            );
+        }
+    }
+
+    /// [#576 B15] The stored per-project settings the open project's load could
+    /// not read; while any are listed, every save is refused.
+    pub fn unreadable_project_settings(&self) -> Vec<String> {
+        self.unreadable_project_settings.lock().clone()
+    }
+
+    /// [#576 B6-D1] The refusal for anything that would write the open project when
+    /// a newer build saved it, or `None` when the project is this build's to write.
+    /// Shared by the save and the SpeleoDB push/lock verbs so they all say the same
+    /// thing; `guard_mutation` carries the same reason behind its own code.
+    pub(super) fn newer_file_refusal(&self) -> Option<String> {
+        self.newer_file_schema().map(newer_file_reason)
+    }
+}
+
+/// [#576 B6-D1] Why a project saved by a newer Stalagmight cannot be written here.
+/// Plain words: it reaches the log and, through the coded refusals, the user.
+fn newer_file_reason(version: i32) -> String {
+    format!(
+        "this project was saved by a newer version of Stalagmight (file format {version}) \
+         and is open read-only. Update Stalagmight to edit it."
+    )
+}
+
+/// [#576 B6-D1] The refusal of an edit (`what`) to a file a newer build saved:
+/// `NEWER_FILE_EDIT_DISABLED` (#576 C4), an edit-gate code - a refused SAVE of
+/// the same file is `NEWER_FILE_READ_ONLY` instead.
+pub(super) fn newer_file_edit_refusal(what: &str, version: i32) -> CommandError {
+    CommandError::new(
+        CommandErrorCode::NewerFileEditDisabled,
+        format!("{what} is disabled: {}", newer_file_reason(version)),
+    )
 }

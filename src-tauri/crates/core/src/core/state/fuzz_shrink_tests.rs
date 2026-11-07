@@ -152,6 +152,7 @@ use super::fuzz_undo_tests::{
 // what keeps these tests off other files; what it buys is ONE dir for the whole
 // test, whose path the test can name and hand to a worker thread
 // (`ConfigHandoff`). It is held for the whole test because the saves are.
+use crate::models::test_support::missing_prerequisite;
 use crate::test_helpers::isolated_config;
 
 // ===========================================================================
@@ -612,7 +613,7 @@ fn fuzz_shrink() {
     let _config = isolated_config();
     let Some(spec) = text("SHRINK") else {
         println!(
-            "fuzz_shrink does nothing without STALAGMIGHT_RUST_FUZZ_SHRINK=<seed|trace.json>.\n\
+            "fuzz_shrink needs STALAGMIGHT_RUST_FUZZ_SHRINK=<seed|trace.json>.\n\
              Example:\n  STALAGMIGHT_RUST_FUZZ_SHRINK=1 STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1 \
              STALAGMIGHT_RUST_FUZZ_ITERATIONS=200 \\\n    \
              STALAGMIGHT_RUST_FUZZ_SHRINK_TARGET=finding-8-stale-id-deletes-the-wrong-shot \\\n    \
@@ -620,7 +621,7 @@ fn fuzz_shrink() {
              src-tauri/Cargo.toml \\\n    -p stalagmight-core --lib fuzz_shrink -- --ignored \
              --nocapture"
         );
-        return;
+        missing_prerequisite("STALAGMIGHT_RUST_FUZZ_SHRINK=<seed|trace.json>");
     };
     let budget = number("SHRINK_PROBES", DEFAULT_PROBE_BUDGET);
     let asked = text("SHRINK_TARGET").map(Target::Classified);
@@ -771,10 +772,10 @@ fn fuzz_replay() {
     let _config = isolated_config();
     let Some(path) = text("REPLAY").map(PathBuf::from) else {
         println!(
-            "fuzz_replay does nothing without STALAGMIGHT_RUST_FUZZ_REPLAY=<trace.json>, which \
+            "fuzz_replay needs STALAGMIGHT_RUST_FUZZ_REPLAY=<trace.json>, which \
              fuzz_shrink writes."
         );
-        return;
+        missing_prerequisite("STALAGMIGHT_RUST_FUZZ_REPLAY=<trace.json>");
     };
     let file = read_trace(&path);
     println!(

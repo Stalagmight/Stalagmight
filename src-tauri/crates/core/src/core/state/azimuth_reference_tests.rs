@@ -10,23 +10,13 @@
 //! export that mislabelled it - so every assertion is written against a section
 //! whose correction is large enough (10 degrees) that no tolerance hides it.
 
+use crate::test_fixtures::{state_holding, straight_shot};
 use stalagmight_models::{
     AzimuthReference, CorrectionSource, Project, SectionData, SectionId, ShotData, StationRef,
 };
 
 /// 10 degrees east: big enough that a dropped correction cannot pass as noise.
 const TEST_CORRECTION: f64 = 10.0;
-
-fn shot(azimuth: f64, length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in: 0.0,
-        depth_out: 0.0,
-        ..Default::default()
-    }
-}
 
 fn project_with(shots: Vec<ShotData>, reference: Option<AzimuthReference>) -> (Project, SectionId) {
     let mut project = Project::new("declination".to_string(), None);
@@ -60,15 +50,17 @@ fn station_xy(project: &Project, section_id: SectionId, index: u32) -> (f64, f64
 #[test]
 fn a_station_move_lands_where_it_was_dropped_on_a_corrected_section() {
     use crate::core::command::Command;
-    use crate::core::state::AppState;
+
     use stalagmight_models::Coordinates;
 
     let reference = AzimuthReference::magnetic(TEST_CORRECTION, CorrectionSource::FileDeclared);
-    let (project, id) = project_with(vec![shot(0.0, 10.0), shot(90.0, 10.0)], Some(reference));
+    let (project, id) = project_with(
+        vec![straight_shot(0.0, 10.0), straight_shot(90.0, 10.0)],
+        Some(reference),
+    );
     let before = station_xy(&project, id, 1);
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
     let result = state.execute(Command::MoveStation {
         station_ref: StationRef::new(id, 1),
         offset: Coordinates::new(1.0, 2.0, 0.0),
@@ -101,7 +93,11 @@ fn a_split_gives_both_halves_the_same_reference() {
             color: "#ffffff".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(0.0, 10.0), shot(10.0, 10.0), shot(20.0, 10.0)],
+            shots: vec![
+                straight_shot(0.0, 10.0),
+                straight_shot(10.0, 10.0),
+                straight_shot(20.0, 10.0),
+            ],
         })
         .id;
     project.get_section_mut(id).unwrap().azimuth_reference = Some(reference);
@@ -142,7 +138,7 @@ fn the_reference_and_its_provenance_survive_save_and_load() {
 
     let recorded =
         AzimuthReference::magnetic(-2.13, CorrectionSource::IgrfAuto { epoch_year: 2024 });
-    let (mut project, id) = project_with(vec![shot(12.5, 10.0)], Some(recorded));
+    let (mut project, id) = project_with(vec![straight_shot(12.5, 10.0)], Some(recorded));
     project.default_azimuth_reference =
         Some(AzimuthReference::true_north(CorrectionSource::Manual));
     db.save_project(&project).unwrap();
@@ -174,7 +170,7 @@ fn a_project_that_declares_nothing_round_trips_as_nothing() {
     let path = temp.path().join("plain.stalx");
     let mut db = Database::open(&path).unwrap();
 
-    let (project, id) = project_with(vec![shot(12.5, 10.0)], None);
+    let (project, id) = project_with(vec![straight_shot(12.5, 10.0)], None);
     assert_eq!(project.default_azimuth_reference, None, "precondition");
     db.save_project(&project).unwrap();
 
@@ -211,7 +207,7 @@ fn azimuths_in(xml: &str) -> Vec<f64> {
 #[test]
 fn an_all_magnetic_project_exports_its_readings_and_declares_them_magnetic() {
     let reference = AzimuthReference::magnetic(TEST_CORRECTION, CorrectionSource::FileDeclared);
-    let (project, _) = project_with(vec![shot(30.0, 10.0)], Some(reference));
+    let (project, _) = project_with(vec![straight_shot(30.0, 10.0)], Some(reference));
 
     let xml = exported_xml(&project);
     assert!(
@@ -230,7 +226,7 @@ fn an_all_magnetic_project_exports_its_readings_and_declares_them_magnetic() {
 #[test]
 fn an_all_true_north_project_is_no_longer_declared_magnetic() {
     let (project, _) = project_with(
-        vec![shot(30.0, 10.0)],
+        vec![straight_shot(30.0, 10.0)],
         Some(AzimuthReference::true_north(CorrectionSource::FileDeclared)),
     );
 
@@ -256,7 +252,7 @@ fn a_mixed_project_exports_true_north_bearings_and_leaves_the_project_alone() {
             color: "#ffffff".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(30.0, 10.0)],
+            shots: vec![straight_shot(30.0, 10.0)],
         })
         .id;
     let true_north = project
@@ -267,7 +263,7 @@ fn a_mixed_project_exports_true_north_bearings_and_leaves_the_project_alone() {
             color: "#ffffff".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(200.0, 10.0)],
+            shots: vec![straight_shot(200.0, 10.0)],
         })
         .id;
     project.get_section_mut(magnetic).unwrap().azimuth_reference = Some(
@@ -320,7 +316,7 @@ fn undeclared_magnetic_sections_do_not_make_a_declared_one_mixed() {
             color: "#ffffff".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(30.0, 10.0)],
+            shots: vec![straight_shot(30.0, 10.0)],
         })
         .id;
     let undeclared = project
@@ -331,7 +327,7 @@ fn undeclared_magnetic_sections_do_not_make_a_declared_one_mixed() {
             color: "#ffffff".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(200.0, 10.0)],
+            shots: vec![straight_shot(200.0, 10.0)],
         })
         .id;
     project.get_section_mut(declared).unwrap().azimuth_reference = Some(
@@ -367,7 +363,7 @@ fn two_different_declared_corrections_are_mixed() {
             color: "#ffffff".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(30.0, 10.0)],
+            shots: vec![straight_shot(30.0, 10.0)],
         })
         .id;
     let b = project
@@ -378,7 +374,7 @@ fn two_different_declared_corrections_are_mixed() {
             color: "#ffffff".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(30.0, 10.0)],
+            shots: vec![straight_shot(30.0, 10.0)],
         })
         .id;
     project.get_section_mut(a).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
@@ -419,7 +415,7 @@ fn a_true_declaration_beside_an_unknown_one_never_claims_true_north() {
             color: "#ffffff".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(30.0, 10.0)],
+            shots: vec![straight_shot(30.0, 10.0)],
         })
         .id;
     let unknown = project
@@ -430,7 +426,7 @@ fn a_true_declaration_beside_an_unknown_one_never_claims_true_north() {
             color: "#ffffff".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(200.0, 10.0)],
+            shots: vec![straight_shot(200.0, 10.0)],
         })
         .id;
     project.get_section_mut(declared).unwrap().azimuth_reference =
@@ -467,7 +463,7 @@ fn a_disagreeing_pair_with_an_unknown_third_is_refused_rather_than_half_rotated(
                 color: "#ffffff".to_string(),
                 direction: None,
                 quality: 1.0,
-                shots: vec![shot(azimuth, 10.0)],
+                shots: vec![straight_shot(azimuth, 10.0)],
             })
             .id
     };
@@ -504,7 +500,7 @@ fn a_disagreeing_pair_with_an_unknown_third_is_refused_rather_than_half_rotated(
 /// keep producing the historical document.
 #[test]
 fn an_unreferenced_project_still_exports_the_historical_declaration() {
-    let (project, _) = project_with(vec![shot(30.0, 10.0)], None);
+    let (project, _) = project_with(vec![straight_shot(30.0, 10.0)], None);
     let xml = exported_xml(&project);
     assert!(xml.contains("<useMagneticAzimuth>true</useMagneticAzimuth>"));
     assert!(azimuths_in(&xml).contains(&30.0));
@@ -515,7 +511,7 @@ fn an_unreferenced_project_still_exports_the_historical_declaration() {
 #[test]
 fn a_grid_referenced_project_is_converted_rather_than_mislabelled() {
     let (project, _) = project_with(
-        vec![shot(30.0, 10.0)],
+        vec![straight_shot(30.0, 10.0)],
         Some(AzimuthReference::grid(2.0, CorrectionSource::FileDeclared)),
     );
     let xml = exported_xml(&project);

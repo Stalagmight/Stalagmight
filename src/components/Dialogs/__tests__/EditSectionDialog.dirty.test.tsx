@@ -18,6 +18,7 @@ import { isEditSectionDirty, type EditSectionDirtyState } from '../EditSectionDi
 import { blankEditableShot } from '../../common/editableShot';
 import type { EditableShot } from '../../common/editableShot';
 import type { Section, Shot } from '../../../types/project';
+import { makeSection, makeShot } from '../../../test/factories/survey';
 
 const shotBase = (id: number, length: number) => ({
   id,
@@ -37,11 +38,7 @@ const shotBase = (id: number, length: number) => ({
 });
 
 /** A saved shot as the section holds it. */
-const savedShot = (id: number, length = 10): Shot => ({
-  ...shotBase(id, length),
-  marker_index: null,
-  temperature: null,
-});
+const savedShot = (id: number, length = 10): Shot => makeShot(shotBase(id, length));
 
 /** The same shot as the dialog's local editable copy (no isNew flag). */
 const editableSaved = (id: number, length = 10): EditableShot => ({ ...shotBase(id, length) });
@@ -53,21 +50,8 @@ const filledNew = (tempId: number): EditableShot => ({
   isNew: true,
 });
 
-const section = (shots: Shot[], over: Partial<Section> = {}): Section => ({
-  id: 1,
-  name: null,
-  surveyor: null,
-  date: null,
-  color: '#ffffff',
-  direction: 'in',
-  quality: 1,
-  shots,
-  next_shot_id: 100,
-  reverse_parity: false,
-  gauge_shot_uuid: null,
-  gauge_neighbour_uuid: null,
-  ...over,
-});
+const section = (shots: Shot[], over: Partial<Section> = {}): Section =>
+  makeSection({ color: '#ffffff', quality: 1, shots, next_shot_id: 100, ...over });
 
 /** The form state that mirrors `section`'s saved values, i.e. nothing edited. */
 const cleanState = (

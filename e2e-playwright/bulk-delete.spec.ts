@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for bulk (contiguous-range) shot deletion (#95).
@@ -34,7 +35,7 @@ async function getRange(
   page: Page,
 ): Promise<{ sectionId: number; startShotId: number; endShotId: number; sectionName: string }> {
   const ids = await page.evaluate(() => {
-    const e2e = (window as any).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
     if (!e2e) return null;
     const section = e2e.projectStore.getState().project?.sections?.[0];
     return {
@@ -50,7 +51,7 @@ async function getRange(
 
 async function openBulkDelete(page: Page, data: Record<string, unknown>): Promise<void> {
   await page.evaluate((data) => {
-    const e2e = (window as any).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
     if (!e2e) return;
     e2e.uiStore.getState().openDialog('bulk-delete', data);
   }, data);
@@ -118,9 +119,9 @@ test.describe('Bulk delete dialog', () => {
   test('shows an error when the delete IPC fails', async ({ page }) => {
     const r = await getRange(page);
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.delete_shot_range_shift = { __throw: 'Shift geometry is not allowed for this range.' };
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openBulkDelete(page, interiorData(r));

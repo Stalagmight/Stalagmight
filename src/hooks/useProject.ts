@@ -3,13 +3,8 @@ import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { useShallow } from 'zustand/react/shallow';
-import { getErrorMessage } from '../utils/ipc';
-import { surfaceSaveFailure } from '../utils/saveFeedback';
-import {
-  ensureExtension,
-  exportSaveFilters,
-  saveDialog,
-} from '../utils/fileDialogs';
+import { refusedLocally } from '../store/commandResult';
+import { saveFailureOf, surfaceSaveFailure } from '../utils/saveFeedback';
 import { openOrImport } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
@@ -30,8 +25,6 @@ export function useProject() {
   // them stay stable; the data fields re-render only when they actually change.
   const saveProject = useProjectStore((s) => s.saveProject);
   const closeProject = useProjectStore((s) => s.closeProject);
-  const exportCsv = useProjectStore((s) => s.exportCsv);
-  const exportJson = useProjectStore((s) => s.exportJson);
   const undo = useProjectStore((s) => s.undo);
   const redo = useProjectStore((s) => s.redo);
 
@@ -65,18 +58,18 @@ export function useProject() {
     try {
       const result = await saveProject();
       if (result && !result.success) {
-        surfaceSaveFailure(result.error, openDialog);
+        surfaceSaveFailure(result, openDialog, useProjectStore.getState());
       }
       return result;
     } catch (e) {
-      // store.saveProject rejects only on an IPC-transport failure (real save
-      // failures resolve as CommandResult{success:false}, handled above). Surface
+      // store.saveProject rejects only on an IPC-transport failure (a refused save
+      // resolves as the refused outcome, handled above). Surface
       // it here rather than letting it escape as an unhandled rejection - callers
       // like the save-status retry and the menu Save invoke this without awaiting
       // or catching (`void onSave()` / `() => onSave()`).
-      const message = getErrorMessage(e, 'Failed to save');
-      surfaceSaveFailure(message, openDialog);
-      return { success: false, error: message };
+      const failure = saveFailureOf(e, 'Failed to save');
+      surfaceSaveFailure(failure, openDialog, useProjectStore.getState());
+      return refusedLocally(failure.error);
     }
   }, [saveProject, handleSaveProjectAs, openDialog]);
 
@@ -154,34 +147,6 @@ export function useProject() {
    */
   const handleOpenOrImport = useCallback(() => openOrImport(), []);
 
-  const handleExportCsv = useCallback(async () => {
-    const selected = await saveDialog({
-      filters: exportSaveFilters('CSV', 'csv'),
-    });
-
-    if (selected) {
-      try {
-        await exportCsv(ensureExtension(selected, 'csv'));
-      } catch (e) {
-        console.error('Failed to export CSV:', e);
-      }
-    }
-  }, [exportCsv]);
-
-  const handleExportJson = useCallback(async () => {
-    const selected = await saveDialog({
-      filters: exportSaveFilters('JSON', 'json'),
-    });
-
-    if (selected) {
-      try {
-        await exportJson(ensureExtension(selected, 'json'));
-      } catch (e) {
-        console.error('Failed to export JSON:', e);
-      }
-    }
-  }, [exportJson]);
-
   return {
     project,
     stats,
@@ -197,8 +162,6 @@ export function useProject() {
     handleSaveProject,
     handleSaveProjectAs,
     handleCloseProject,
-    handleExportCsv,
-    handleExportJson,
 
     undo,
     redo,

@@ -10,30 +10,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: vi.fn(),
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import { useSpeleoMenuItems } from '../useSpeleoMenuItems';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
 import type { AppMenuItem } from '../../common/AppMenu';
+import { stubGetErrorMessage, fallbackOr } from '../../../test/factories/ipc';
+import { makeSpeleoLink } from '../../../test/factories/speleo';
 
-const LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'read-only',
-  lockHolder: null,
-  lockedByOther: false,
-  hasUnpushedEdits: false,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+const LINK: SpeleoLinkState = makeSpeleoLink();
 
 function items(o: Partial<SpeleoLinkState> = {}): AppMenuItem[] {
   useSpeleoStore.setState({ link: { ...LINK, ...o } });

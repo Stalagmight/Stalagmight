@@ -6,17 +6,20 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::{Manager, Runtime, State};
 use ts_rs::TS;
 
-use crate::core::AppState;
+use crate::commands::pool;
+use crate::core::{AppState, CommandError};
 
 /// Statistics for a single tile provider
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct ProviderStats {
     /// Number of tiles from this provider
+    #[ts(type = "number")]
     pub tiles: u64,
     /// Total size in bytes for this provider
+    #[ts(type = "number")]
     pub bytes: u64,
 }
 
@@ -26,8 +29,10 @@ pub struct ProviderStats {
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct CacheStats {
     /// Total number of tiles across all providers
+    #[ts(type = "number")]
     pub total_tiles: u64,
     /// Total size in bytes across all providers
+    #[ts(type = "number")]
     pub total_bytes: u64,
     /// Per-provider statistics
     pub providers: HashMap<String, ProviderStats>,
@@ -39,44 +44,43 @@ pub struct CacheStats {
 /// Returns an error if the cache lock is poisoned.
 /// If the cache is disabled, returns zero stats (not an error).
 #[tauri::command]
-pub fn get_cache_stats(state: State<AppState>) -> Result<CacheStats, String> {
-    get_cache_stats_impl(state.inner())
-}
+pub async fn get_cache_stats<R: Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<CacheStats, CommandError> {
+    pool::run(app, |state| {
+        let tile_cache = state.tile_cache();
 
-pub(crate) fn get_cache_stats_impl(state: &AppState) -> Result<CacheStats, String> {
-    let tile_cache = state.tile_cache();
+        let guard = tile_cache.lock();
 
-    let guard = tile_cache
-        .lock()
-        .map_err(|_| "Failed to acquire tile cache lock".to_string())?;
+        let Some(cache) = guard.as_ref() else {
+            // Cache is disabled - return zero stats (this is not an error condition)
+            return Ok(CacheStats {
+                total_tiles: 0,
+                total_bytes: 0,
+                providers: HashMap::new(),
+            });
+        };
 
-    let Some(cache) = guard.as_ref() else {
-        // Cache is disabled - return zero stats (this is not an error condition)
-        return Ok(CacheStats {
-            total_tiles: 0,
-            total_bytes: 0,
-            providers: HashMap::new(),
-        });
-    };
+        // Get per-provider stats and derive totals from them for consistency
+        let provider_stats = cache.get_provider_stats();
 
-    // Get per-provider stats and derive totals from them for consistency
-    let provider_stats = cache.get_provider_stats();
+        // Derive totals from provider map to ensure internal consistency
+        let (total_tiles, total_bytes) = provider_stats
+            .values()
+            .fold((0u64, 0u64), |(tiles, bytes), (t, b)| {
+                (tiles + t, bytes + b)
+            });
 
-    // Derive totals from provider map to ensure internal consistency
-    let (total_tiles, total_bytes) = provider_stats
-        .values()
-        .fold((0u64, 0u64), |(tiles, bytes), (t, b)| {
-            (tiles + t, bytes + b)
-        });
-
-    Ok(CacheStats {
-        total_tiles,
-        total_bytes,
-        providers: provider_stats
-            .into_iter()
-            .map(|(provider, (tiles, bytes))| (provider, ProviderStats { tiles, bytes }))
-            .collect(),
+        Ok(CacheStats {
+            total_tiles,
+            total_bytes,
+            providers: provider_stats
+                .into_iter()
+                .map(|(provider, (tiles, bytes))| (provider, ProviderStats { tiles, bytes }))
+                .collect(),
+        })
     })
+    .await
 }
 
 /// Clear the tile cache.
@@ -84,39 +88,40 @@ pub(crate) fn get_cache_stats_impl(state: &AppState) -> Result<CacheStats, Strin
 /// If `provider` is specified, only clears tiles from that provider.
 /// If `provider` is None, clears all tiles.
 #[tauri::command]
-pub fn clear_tile_cache(state: State<AppState>, provider: Option<String>) -> Result<(), String> {
-    clear_tile_cache_impl(state.inner(), provider)
-}
-
-pub(crate) fn clear_tile_cache_impl(
-    state: &AppState,
+pub async fn clear_tile_cache<R: Runtime>(
+    app: tauri::AppHandle<R>,
     provider: Option<String>,
-) -> Result<(), String> {
-    let tile_cache = state.tile_cache();
+) -> Result<(), CommandError> {
+    pool::run(app, move |state| {
+        let tile_cache = state.tile_cache();
 
-    let mut guard = tile_cache
-        .lock()
-        .map_err(|_| "Failed to acquire tile cache lock".to_string())?;
+        let mut guard = tile_cache.lock();
 
-    let Some(cache) = guard.as_mut() else {
-        // Cache is disabled - nothing to clear
-        return Ok(());
-    };
+        let Some(cache) = guard.as_mut() else {
+            // Cache is disabled - nothing to clear
+            return Ok(());
+        };
 
-    if let Some(p) = provider {
-        tracing::info!(
-            provider = %p,
-            purpose = "refresh cached map tiles",
-            "Clearing tile cache for provider"
-        );
-        cache.clear_provider(&p).map_err(|e| e.to_string())
-    } else {
-        tracing::info!(
-            purpose = "free disk space or refresh cached tiles",
-            "Clearing all tile cache"
-        );
-        cache.clear_all().map_err(|e| e.to_string())
-    }
+        if let Some(p) = provider {
+            tracing::info!(
+                provider = %p,
+                purpose = "refresh cached map tiles",
+                "Clearing tile cache for provider"
+            );
+            cache
+                .clear_provider(&p)
+                .map_err(|e| CommandError::failed(e.to_string()))
+        } else {
+            tracing::info!(
+                purpose = "free disk space or refresh cached tiles",
+                "Clearing all tile cache"
+            );
+            cache
+                .clear_all()
+                .map_err(|e| CommandError::failed(e.to_string()))
+        }
+    })
+    .await
 }
 
 /// Fetch a map tile, using cache when available.
@@ -132,7 +137,7 @@ pub async fn fetch_tile(
     z: u32,
     y: u32,
     x: u32,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, CommandError> {
     fetch_tile_impl(Some(&app), state.inner(), provider, z, y, x).await
 }
 
@@ -148,7 +153,7 @@ pub(crate) async fn fetch_tile_impl(
     z: u32,
     y: u32,
     x: u32,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, CommandError> {
     use crate::tile_fetch_impl;
 
     let tile_cache = state.tile_cache();
@@ -172,9 +177,10 @@ pub(crate) async fn fetch_tile_impl(
         )
     })
     .await
-    .map_err(|e| format!("Tile fetch task failed: {e}"))?;
+    // [#576 C4] A crashed task is INTERNAL_ERROR, as on the shared pool.
+    .map_err(|e| CommandError::internal(format!("Tile fetch task failed: {e}")))?;
 
-    let (data, serve_source) = result?;
+    let (data, serve_source) = result.map_err(CommandError::failed)?;
 
     // One event per SERVED tile, tagged by where its bytes came from - the same
     // three buckets the desktop protocol handler emits. Errors are not counted,
@@ -198,8 +204,9 @@ pub(crate) async fn fetch_tile_impl(
 /// indicating whether any required API key environment variable is set.
 /// No app state access needed - the registry is static.
 #[tauri::command]
-pub fn get_tile_providers() -> Vec<crate::tile_providers::TileProviderInfo> {
-    crate::tile_providers::get_all_provider_info()
+pub async fn get_tile_providers(
+) -> Result<Vec<crate::tile_providers::TileProviderInfo>, CommandError> {
+    pool::run_stateless(|| Ok(crate::tile_providers::get_all_provider_info())).await
 }
 
 /// Get the attribution a tile provider's imagery must be displayed with.
@@ -212,26 +219,31 @@ pub fn get_tile_providers() -> Vec<crate::tile_providers::TileProviderInfo> {
 #[tauri::command]
 pub async fn get_tile_attribution(
     provider: String,
-) -> Result<crate::tile_attribution::TileAttribution, String> {
+) -> Result<crate::tile_attribution::TileAttribution, CommandError> {
     tauri::async_runtime::spawn_blocking(move || {
         crate::tile_attribution::get_attribution(&provider)
     })
     .await
-    .map_err(|e| format!("Attribution task failed: {e}"))
+    .map_err(|e| CommandError::internal(format!("Attribution task failed: {e}")))
 }
 
 /// Tile fetch statistics returned by the get_tile_fetch_stats command.
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct TileFetchStatsResponse {
     /// Number of tile requests currently in flight
+    #[ts(type = "number")]
     pub in_flight: u64,
     /// Average latency of completed tile fetches in ms
+    #[ts(type = "number")]
     pub avg_latency_ms: u64,
     /// Last tile fetch latency in ms
+    #[ts(type = "number")]
     pub last_latency_ms: u64,
     /// Total tiles successfully fetched
+    #[ts(type = "number")]
     pub total_fetched: u64,
     /// Total fetch errors (after retries exhausted)
+    #[ts(type = "number")]
     pub total_errors: u64,
 }
 
@@ -240,25 +252,26 @@ pub struct TileFetchStatsResponse {
 /// Returns real-time metrics from the native tile protocol handler including
 /// in-flight count, latency, and error counts.
 #[tauri::command]
-pub fn get_tile_fetch_stats(state: State<AppState>) -> TileFetchStatsResponse {
-    get_tile_fetch_stats_impl(state.inner())
-}
-
-pub(crate) fn get_tile_fetch_stats_impl(state: &AppState) -> TileFetchStatsResponse {
-    let stats = state.tile_fetch_stats();
-    let snap = stats.snapshot();
-    let avg_latency_ms = if snap.total_fetched > 0 {
-        snap.total_latency_ms / snap.total_fetched
-    } else {
-        0
-    };
-    TileFetchStatsResponse {
-        in_flight: snap.in_flight,
-        avg_latency_ms,
-        last_latency_ms: snap.last_latency_ms,
-        total_fetched: snap.total_fetched,
-        total_errors: snap.total_errors,
-    }
+pub async fn get_tile_fetch_stats<R: Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<TileFetchStatsResponse, CommandError> {
+    pool::run(app, |state| {
+        let stats = state.tile_fetch_stats();
+        let snap = stats.snapshot();
+        let avg_latency_ms = if snap.total_fetched > 0 {
+            snap.total_latency_ms / snap.total_fetched
+        } else {
+            0
+        };
+        Ok(TileFetchStatsResponse {
+            in_flight: snap.in_flight,
+            avg_latency_ms,
+            last_latency_ms: snap.last_latency_ms,
+            total_fetched: snap.total_fetched,
+            total_errors: snap.total_errors,
+        })
+    })
+    .await
 }
 
 /// Check network connectivity status.
@@ -361,7 +374,7 @@ mod tests {
 
     #[test]
     fn test_get_tile_providers_command() {
-        let providers = get_tile_providers();
+        let providers = tauri::async_runtime::block_on(get_tile_providers()).unwrap();
         assert!(!providers.is_empty());
         let esri = providers.iter().find(|p| p.name == "esri");
         assert!(esri.is_some());
@@ -370,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_get_tile_providers_serializes_correctly() {
-        let providers = get_tile_providers();
+        let providers = tauri::async_runtime::block_on(get_tile_providers()).unwrap();
         let json = serde_json::to_value(&providers).unwrap();
         let arr = json.as_array().unwrap();
         assert!(!arr.is_empty());

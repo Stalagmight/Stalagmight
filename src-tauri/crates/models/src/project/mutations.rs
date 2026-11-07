@@ -157,6 +157,21 @@ impl Project {
         station_a: StationRef,
         station_b: StationRef,
     ) -> Result<ClosurePreview, String> {
+        self.compute_closure_metrics_with(station_a, station_b, || {
+            self.calculate_path_length_between(station_a, station_b)
+        })
+    }
+
+    /// [`Self::compute_closure_metrics`] over a loop walk the caller supplies,
+    /// run only once both endpoints have coordinates. For a caller that has to
+    /// measure under a different graph than the live one: the adjustment
+    /// restamp leaves the closure's own edge out (#576 W36-NF1).
+    pub(super) fn compute_closure_metrics_with(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        loop_length: impl FnOnce() -> f64,
+    ) -> Result<ClosurePreview, String> {
         trace!(
             station_a = ?station_a,
             station_b = ?station_b,
@@ -173,7 +188,7 @@ impl Project {
         let horizontal_misclosure = coords_a.horizontal_distance_to(&coords_b);
         let vertical_misclosure = (coords_a.z - coords_b.z).abs();
         let misclosure_distance = coords_a.distance_to(&coords_b);
-        let path_length = self.calculate_path_length_between(station_a, station_b);
+        let path_length = loop_length();
 
         let error_percentage = if path_length > 0.0 {
             (misclosure_distance / path_length) * 100.0
@@ -600,6 +615,22 @@ impl Project {
         // re-scanned ALL `station_merges` at every BFS node - O(group × merges)
         // per call - which made a batch import that checks this once per loop
         // closure (with thousands of merges) quadratic-to-cubic.
+        //
+        // [#576 HFI-10] And a chain of merges from `a` to `b` runs through the
+        // sections those merges join, so `b`'s section is reachable from `a`'s over
+        // the merge-only SECTION adjacency (the memo `MergeTopology` keeps current
+        // per merge) - a superset of the station chain, since it also counts merges
+        // whose ends no longer resolve. When it is not, no chain exists and the
+        // station adjacency (every merge's two keys resolved) is not built. Every
+        // merge an import makes asks this first, and a merge that goes ahead joins
+        // sections that were NOT yet connected, so building it there made the
+        // import quadratic in its merges.
+        if !self
+            .get_merged_section_ids(a.section_id)
+            .contains(&b.section_id)
+        {
+            return false;
+        }
         let adjacency = self.build_station_merge_adjacency();
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
@@ -653,7 +684,7 @@ impl Project {
     /// Format a station reference for user display.
     /// Uses section name if available, otherwise "Section N" (0-indexed to match canonical IDs).
     /// Station index is displayed as 0-indexed to match UI format (e.g., "Section #0").
-    fn format_station_ref_for_display(&self, station_ref: StationRef) -> String {
+    pub(super) fn format_station_ref_for_display(&self, station_ref: StationRef) -> String {
         let section_label = self
             .sections
             .iter()
@@ -878,8 +909,22 @@ impl Project {
             return Err("Station does not exist".to_string());
         }
 
-        // Validate GPS coordinates
-        GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference)?;
+        // [#576 B35(g)] Finite, but NOT range-checked: this copies a datum out of
+        // a loaded project as it is (its one caller is Merge Projects). A loaded
+        // project can hold a finite out-of-range point - the load keeps it and the
+        // integrity check flags it for the user to correct - and refusing it here
+        // refused the whole merge over a point the source project opens with. The
+        // merged project's integrity check flags it the same way. A non-finite
+        // value would poison the geometry, so that is still refused.
+        if !(gps.latitude.is_finite()
+            && gps.longitude.is_finite()
+            && gps.depth_reference.is_finite())
+        {
+            return Err(format!(
+                "GPS coordinates must be finite, got ({}, {}, {})",
+                gps.latitude, gps.longitude, gps.depth_reference
+            ));
+        }
 
         // Stable stored identity for this datum's station.
         let datum_key = self

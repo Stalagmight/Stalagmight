@@ -6,6 +6,9 @@
 //! here even if the env var leaks. The command itself stays registered in all
 //! builds so the invoke-handler/telemetry-registry contract is build-invariant.
 
+use crate::commands::pool;
+use crate::core::CommandError;
+
 /// Trigger a deliberate backend panic on a background thread so the agent
 /// harness can self-test its crash oracle ("harness doctor"). The panic is
 /// isolated to the spawned thread, so the main app keeps running (runtime is
@@ -13,24 +16,31 @@
 /// (a no-op) unless `STALAGMIGHT_TEST_HOOKS=1`; in a release build without the
 /// `e2e` feature it returns `Err` unconditionally (the panic is compiled out).
 #[tauri::command]
-pub fn debug_trigger_panic(delay_ms: Option<u64>) -> Result<(), String> {
-    if std::env::var("STALAGMIGHT_TEST_HOOKS").as_deref() != Ok("1") {
-        return Err("test hooks disabled (set STALAGMIGHT_TEST_HOOKS=1)".to_string());
-    }
-    #[cfg(any(debug_assertions, feature = "e2e"))]
-    {
-        let delay = delay_ms.unwrap_or(50);
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(delay));
-            trigger_test_panic();
-        });
-        Ok(())
-    }
-    #[cfg(not(any(debug_assertions, feature = "e2e")))]
-    {
-        let _ = delay_ms;
-        Err("debug_trigger_panic is compiled out of release builds".to_string())
-    }
+pub async fn debug_trigger_panic(delay_ms: Option<u64>) -> Result<(), CommandError> {
+    pool::run_stateless(move || {
+        if std::env::var("STALAGMIGHT_TEST_HOOKS").as_deref() != Ok("1") {
+            return Err(CommandError::failed(
+                "test hooks disabled (set STALAGMIGHT_TEST_HOOKS=1)",
+            ));
+        }
+        #[cfg(any(debug_assertions, feature = "e2e"))]
+        {
+            let delay = delay_ms.unwrap_or(50);
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(delay));
+                trigger_test_panic();
+            });
+            Ok(())
+        }
+        #[cfg(not(any(debug_assertions, feature = "e2e")))]
+        {
+            let _ = delay_ms;
+            Err(CommandError::failed(
+                "debug_trigger_panic is compiled out of release builds",
+            ))
+        }
+    })
+    .await
 }
 
 /// The deliberate crash, isolated into its own function so the per-site

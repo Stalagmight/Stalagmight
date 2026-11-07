@@ -15,8 +15,13 @@
 const MAX_REPORTS = 30;
 const WINDOW_MS = 60_000;
 
+// Latched (#576 D27-32(g)): a second call would add a second pair of listeners
+// and report every crash twice.
+let installed = false;
+
 export function installGlobalErrorCapture(): void {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || installed) return;
+  installed = true;
 
   let stamps: number[] = [];
   const allow = (): boolean => {

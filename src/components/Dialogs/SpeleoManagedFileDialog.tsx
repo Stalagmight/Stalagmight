@@ -133,7 +133,7 @@ export default function SpeleoManagedFileDialog() {
     }
     let summary: SpeleoProjectSummary | undefined;
     try {
-      const projects = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
+      const projects = await invokeIpc('speleodb_list_projects');
       if (!stillPrompting(managed)) return;
       summary = projects.find((p) => p.id === managed.projectId);
     } catch (e) {

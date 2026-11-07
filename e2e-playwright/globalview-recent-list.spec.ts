@@ -1,6 +1,7 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
 import { setIpcOverrides } from './helpers/ipcOverrides';
+import type { MockReply } from './mocks/ipc/types';
 import {
   missingSystemCardRemoveTestId,
   missingSystemCardTestId,
@@ -147,7 +148,6 @@ test.describe('GlobalView Recent Projects - search, table view, missing files', 
       const message = 'File not found: the specified file does not exist';
       await setIpcOverrides(page, {
         load_project_full: { __throw: message },
-        load_project: { __throw: message },
       });
 
       const loadingError = page.getByTestId('loading-progress');
@@ -184,6 +184,41 @@ test.describe('GlobalView Recent Projects - search, table view, missing files', 
     await page.getByTestId('recent-density-table').click();
     await expect(page.getByTestId(missingSystemRowTestId(GHOST))).toBeVisible();
     await expect(page.getByTestId(missingSystemRowTestId(GHOST))).toContainText('File not found');
+  });
+
+  // [#576 HFI-12] The store's config copy was read before the recents were opened
+  // (the mock's recents are empty), so a project that stops loading was in neither
+  // list and its card just vanished until a config reload. Re-reading the list now
+  // re-reads the recent paths too, and the project shows as missing at once.
+  test('a recent that stops loading shows as missing on the next list read, not gone', async ({ page }) => {
+    const { config, listed } = await page.evaluate(() => {
+      const state = (window as unknown as {
+        __E2E_TEST__: { projectStore: { getState: () => {
+          config: MockReply<'get_config'>;
+          recentProjects: MockReply<'list_recent_projects'>;
+        } } };
+      }).__E2E_TEST__.projectStore.getState();
+      return { config: state.config, listed: state.recentProjects };
+    });
+    expect(config.general.recent_projects).toEqual([]);
+    // The backend's config names all four recents; BETA was moved and no longer loads.
+    await setIpcOverrides(page, {
+      get_config: { ...config, general: { ...config.general, recent_projects: [ALPHA, BETA, GAMMA, LOCAL] } },
+      list_recent_projects: listed.filter((p) => p.file_path !== BETA),
+    });
+
+    await page.evaluate(() =>
+      (window as unknown as {
+        __E2E_TEST__: { projectStore: { getState: () => { loadRecentProjects: () => Promise<void> } } };
+      }).__E2E_TEST__.projectStore.getState().loadRecentProjects(),
+    );
+
+    await expect(page.getByTestId(systemCardTestId(BETA))).toHaveCount(0);
+    const missing = page.getByTestId(missingSystemCardTestId(BETA));
+    await expect(missing).toBeVisible();
+    await expect(missing).toContainText('File not found');
+    await expect(page.getByTestId(missingSystemCardRemoveTestId(BETA))).toBeVisible();
+    await expect(page.getByTestId(systemCardTestId(ALPHA))).toBeVisible();
   });
 
   test('surfaces missing entries (not the empty state) when every recent file is missing', async ({ page }) => {

@@ -28,6 +28,7 @@ import {
   escapeCsvMirror,
   exportBaseName,
   ExportOracleError,
+  domRouteRewritesPath,
   finalizeExportPath,
   multisetDelta,
   naturalExtension,
@@ -37,11 +38,15 @@ import {
   PATH_SHAPES,
   shotKey,
   strictShotKey,
+  asExportedToTml,
+  tmlAzimuthPlan,
   type ExportAttempt,
   type ModeSnapshot,
   type OptionSnapshot,
   type PathShape,
+  type SectionAzimuthReference,
   type ShotIdentity,
+  type TmlAzimuthPlan,
 } from './exportOracles';
 
 const REPRO = 'reproduce: pnpm agent:scenario export-roundtrip-fuzz --seed 1 --iterations 1';
@@ -104,7 +109,7 @@ describe('naturalExtension', () => {
     expect(naturalExtension('png')).toBe('png');
     expect(naturalExtension('svg')).toBe('svg');
     expect(naturalExtension('pdf')).toBe('pdf');
-    // ProfileChart.onExport does ensureExtension(path, '.xml').
+    // ProfileChart.onExport does resolveSavePath(path, 'xml') (ensureExtension underneath).
     expect(naturalExtension('diveProfile')).toBe('xml');
     expect(naturalExtension('preview')).toBe('svg');
   });
@@ -114,16 +119,19 @@ describe('naturalExtension', () => {
 // Mirror 1: ensureExtension
 // ---------------------------------------------------------------------------
 
-describe('ensureExtensionMirror (src/utils/fileDialogs.ts:49-65)', () => {
+describe('ensureExtensionMirror (src/utils/fileDialogs.ts ensureExtension)', () => {
   // Transcribed from the source: the rule is "already ends in the extension ->
-  // unchanged; a dot AFTER the last separator -> REPLACE from that dot;
-  // otherwise append".
+  // unchanged; a file-name extension naming a KNOWN file type (or a bare
+  // trailing dot) -> REPLACE from that dot; otherwise append" (#576 D35).
   const table: [string, string, string][] = [
     ['/x/out.csv', 'csv', '/x/out.csv'],
     ['/x/out.CSV', 'csv', '/x/out.CSV'],
     ['/x/out', 'csv', '/x/out.csv'],
-    ['/x/out.txt', 'csv', '/x/out.csv'],
-    ['/x/out.tml.txt', 'tml', '/x/out.tml.tml'],
+    ['/x/out.svg', 'csv', '/x/out.csv'],
+    ['/x/out.txt', 'csv', '/x/out.txt.csv'],
+    ['/x/out.tml.txt', 'tml', '/x/out.tml.txt.tml'],
+    ['/x/CaveA 1.5', 'csv', '/x/CaveA 1.5.csv'],
+    ['/x/.hidden', 'csv', '/x/.hidden.csv'],
     ['/x/out.', 'csv', '/x/out.csv'],
     // The dot is in a DIRECTORY, not the file name: appended, not replaced.
     ['/a.b/out', 'csv', '/a.b/out.csv'],
@@ -131,7 +139,12 @@ describe('ensureExtensionMirror (src/utils/fileDialogs.ts:49-65)', () => {
     // A leading dot in the extension argument is stripped.
     ['/x/out', '.png', '/x/out.png'],
     // Windows separator.
-    ['C:\\x\\out.txt', 'svg', 'C:\\x\\out.svg'],
+    ['C:\\x\\out.dmp', 'svg', 'C:\\x\\out.svg'],
+    ['C:\\x\\.svg', 'png', 'C:\\x\\.svg.png'],
+    // On a POSIX path `\` is a file-name character, not a separator
+    // (src/utils/path.ts isWindowsPath), so `CaveA\.svg` has the extension svg.
+    ['/x/CaveA\\.svg', 'png', '/x/CaveA\\.png'],
+    ['/x/CaveA\\.', 'csv', '/x/CaveA\\.csv'],
     // The open project's own path, which is why the modal route never reaches
     // the backend guard.
     ['/x/cave.stalx', 'csv', '/x/cave.csv'],
@@ -141,8 +154,9 @@ describe('ensureExtensionMirror (src/utils/fileDialogs.ts:49-65)', () => {
     expect(ensureExtensionMirror(input, extension)).toBe(expected);
   });
 
-  it('REPLACES rather than appends - the mistake a from-memory mirror makes', () => {
-    expect(ensureExtensionMirror('/x/out.txt', 'csv')).not.toBe('/x/out.txt.csv');
+  it('replaces only a KNOWN extension - the mistake a from-memory mirror makes', () => {
+    expect(ensureExtensionMirror('/x/out.png', 'csv')).toBe('/x/out.csv');
+    expect(ensureExtensionMirror('/x/out.txt', 'csv')).toBe('/x/out.txt.csv');
   });
 });
 
@@ -154,7 +168,8 @@ describe('finalizeExportPath (ExportControls.handleExport)', () => {
   });
 
   it('forces .tml when the typed path has any other extension', () => {
-    expect(finalizeExportPath('/x/out.tml.txt', 'tml')).toBe('/x/out.tml.tml');
+    expect(finalizeExportPath('/x/out.tml.csv', 'tml')).toBe('/x/out.tml.tml');
+    expect(finalizeExportPath('/x/out.tml.txt', 'tml')).toBe('/x/out.tml.txt.tml');
     expect(finalizeExportPath('/x/out', 'tml')).toBe('/x/out.tml');
     expect(finalizeExportPath('/x/out.', 'tml')).toBe('/x/out.tml');
   });
@@ -165,15 +180,17 @@ describe('finalizeExportPath (ExportControls.handleExport)', () => {
     // other shape lands on `.tml`, and predicting `.tmlu` made X1 call every
     // such export a silent failure.
     expect(finalizeExportPath('/x/out', 'tmlu')).toBe('/x/out.tml');
-    expect(finalizeExportPath('/x/out.txt', 'tmlu')).toBe('/x/out.tml');
+    expect(finalizeExportPath('/x/out.json', 'tmlu')).toBe('/x/out.tml');
     expect(finalizeExportPath('/x/OUT.TMLU', 'tmlu')).toBe('/x/OUT.TMLU');
   });
 
   it('forces the data format for csv/json and the image format for png/svg/pdf', () => {
-    expect(finalizeExportPath('/x/out.txt', 'csv')).toBe('/x/out.csv');
-    expect(finalizeExportPath('/x/out.txt', 'json')).toBe('/x/out.json');
-    expect(finalizeExportPath('/x/out.txt', 'png')).toBe('/x/out.png');
-    expect(finalizeExportPath('/x/out.txt', 'pdf')).toBe('/x/out.pdf');
+    expect(finalizeExportPath('/x/out.svg', 'csv')).toBe('/x/out.csv');
+    expect(finalizeExportPath('/x/out.csv', 'json')).toBe('/x/out.json');
+    expect(finalizeExportPath('/x/out.pdf', 'png')).toBe('/x/out.png');
+    expect(finalizeExportPath('/x/out.png', 'pdf')).toBe('/x/out.pdf');
+    // An extension that names no file type the app knows is part of the name.
+    expect(finalizeExportPath('/x/out.txt', 'csv')).toBe('/x/out.txt.csv');
   });
 
   it('REDIRECTS an export aimed at the open project, which is why X2 is per-route', () => {
@@ -184,6 +201,24 @@ describe('finalizeExportPath (ExportControls.handleExport)', () => {
     // ... except for TML, where `.stalx` is neither .tml nor .tmlu, so it is
     // still rewritten. There is no shape where the modal hands the raw path on.
     expect(finalizeExportPath('/x/cave.stalx', 'tml')).toBe('/x/cave.tml');
+  });
+});
+
+// #576 NF-W2FE-2: the Replace File alert (overwriteGuard.resolveSavePath) can only
+// follow a REWRITTEN answer, and the scenario answers it in clickAndAnswerSave.
+describe('domRouteRewritesPath (when the Replace File alert can appear)', () => {
+  it('is true for every format on the project-owned shapes - the .plnx probe can always meet the alert', () => {
+    for (const format of ['csv', 'json', 'tml', 'png', 'svg', 'pdf'] as const) {
+      expect(domRouteRewritesPath('/x/cave.plnx', format), `plnx ${format}`).toBe(true);
+      expect(domRouteRewritesPath('/x/cave.stalx', format), `stalx ${format}`).toBe(true);
+    }
+  });
+
+  it('is true for an appended extension and false for a name the app keeps', () => {
+    expect(domRouteRewritesPath('/x/out.tml.txt', 'tml')).toBe(true);
+    expect(domRouteRewritesPath('/x/export-1.csv', 'csv')).toBe(false);
+    expect(domRouteRewritesPath('/x/export-1.tmlu', 'tml')).toBe(false);
+    expect(domRouteRewritesPath('/x/NAME.TMLU', 'tmlu')).toBe(false);
   });
 });
 
@@ -855,6 +890,130 @@ describe('X6 shot multiset', () => {
   });
 });
 
+describe('X6 folds the TML mixed-declination rotation (#576 HFI-8, decision HFI-8-D1)', () => {
+  const shot = (azimuthIn: number, over: Partial<ShotIdentity> = {}): ShotIdentity => ({
+    length: 5,
+    azimuthIn,
+    depthIn: 1,
+    depthOut: 2,
+    lrud: [1, 1, 1, 1],
+    ...over,
+  });
+  const magnetic = (correction: number): SectionAzimuthReference => ({ north: 'magnetic', correction, onRecord: true });
+  const unknown: SectionAzimuthReference = { north: 'magnetic', correction: 0, onRecord: false };
+  const trueNorth: SectionAzimuthReference = { north: 'true', correction: 0, onRecord: true };
+  const grid = (correction: number): SectionAzimuthReference => ({ north: 'grid', correction, onRecord: true });
+
+  // A SYNTHETIC two-declination project: section A magnetic with an IGRF
+  // correction of 3.71 (survey year 2018), section B magnetic with 4.11 (2020).
+  // That is the multi-year-IGRF shape that made X6 red on every shot.
+  const sectionA = [shot(90), shot(180.5, { length: 7 }), shot(358)];
+  const sectionB = [shot(10), shot(270, { length: 3 }), shot(357, { length: 4 })];
+  const before = [...sectionA, ...sectionB];
+  const references = [...sectionA.map(() => magnetic(3.71)), ...sectionB.map(() => magnetic(4.11))];
+  // What the re-import of the exported .tmlu reads, TRANSCRIBED BY HAND from
+  // `AzimuthReference::to_true` (normalize(bearing + correction), per SECTION)
+  // rather than computed by the function under test - so this pins the mirror
+  // against the Rust rule instead of against itself. 358 + 3.71 and 357 + 4.11
+  // wrap through north.
+  const reimported = [
+    shot(93.71),
+    shot(184.21, { length: 7 }),
+    shot(1.71),
+    shot(14.11),
+    shot(274.11, { length: 3 }),
+    shot(1.11, { length: 4 }),
+  ];
+  const uuids = ['a1', 'a2', 'a3', 'b1', 'b2', 'b3'];
+  const x6 = (deltas: ReturnType<typeof multisetDelta>, azimuthPlan?: TmlAzimuthPlan): void =>
+    checkShotMultiset(
+      {
+        deltas,
+        uuidsBefore: uuids,
+        uuidsAfter: uuids,
+        countBefore: before.length,
+        countAfter: reimported.length,
+        ...(azimuthPlan === undefined ? {} : { azimuthPlan }),
+      },
+      REPRO,
+    );
+
+  it('decides mixed-to-true for two sections that disagree on their correction', () => {
+    expect(tmlAzimuthPlan(references)).toBe('mixed-to-true');
+  });
+
+  it('passes X6 once the BEFORE side is rotated the way the exporter rotates it', () => {
+    const exported = asExportedToTml(before, references);
+    // The X6 verdict first, so a regression reports the oracle's own message.
+    expect(() => x6(multisetDelta(exported.shots, reimported), exported.plan)).not.toThrow();
+    expect(multisetDelta(exported.shots, reimported)).toEqual([]);
+    expect(exported.plan).toBe('mixed-to-true');
+    expect(exported.rotated).toBe(6);
+  });
+
+  it('is the HFI-8 false positive without the fold: every shot reads as lost and gained', () => {
+    const unfolded = multisetDelta(before, reimported);
+    expect(unfolded).toHaveLength(12);
+    expect(() => x6(unfolded)).toThrow(/X6 the shot set changed/);
+  });
+
+  it('still fails a bearing rotated by the WRONG section correction', () => {
+    // b1 rotated by section A's 3.71 instead of its own 4.11.
+    const wrong = reimported.map((s, index) => (index === 3 ? shot(13.71) : s));
+    const exported = asExportedToTml(before, references);
+    expect(() => x6(multisetDelta(exported.shots, wrong), exported.plan)).toThrow(/already rotated into true north/);
+  });
+
+  it('still fails any other change - a length that moved', () => {
+    const changed = reimported.map((s, index) => (index === 0 ? { ...s, length: 5.5 } : s));
+    const exported = asExportedToTml(before, references);
+    expect(() => x6(multisetDelta(exported.shots, changed), exported.plan)).toThrow(/X6 the shot set changed/);
+  });
+
+  it('leaves the shots untouched on every plan that writes the readings as stored', () => {
+    const cases: Array<[string, SectionAzimuthReference[], TmlAzimuthPlan]> = [
+      ['one shared magnetic correction', [magnetic(3.71), magnetic(3.71)], 'magnetic'],
+      ['nothing declared', [unknown, unknown], 'magnetic'],
+      ['every section true north', [trueNorth, trueNorth], 'true-as-stored'],
+      // An unknown section abstains: one declared magnetic correction beside it
+      // is still a uniform magnetic document (the ordinary .tml + .dmp case).
+      ['one magnetic correction plus a section with none on record', [magnetic(3.71), unknown], 'magnetic'],
+      [
+        'disagreeing corrections plus a section with none on record',
+        [magnetic(3.71), magnetic(4.11), unknown],
+        'magnetic-unresolved',
+      ],
+      ['true north plus a section with none on record', [trueNorth, unknown], 'magnetic-unresolved'],
+      ['grid plus a section with none on record', [grid(1.5), unknown], 'magnetic-unresolved'],
+    ];
+    for (const [what, refs, plan] of cases) {
+      const shots = refs.map((_ref, index) => shot(90 + index * 110));
+      const exported = asExportedToTml(shots, refs);
+      expect(exported.plan, what).toBe(plan);
+      expect(exported.rotated, what).toBe(0);
+      expect(exported.shots, what).toEqual(shots);
+    }
+  });
+
+  it('rotates a uniform GRID project, and leaves a zero correction as the identity', () => {
+    const gridded = asExportedToTml([shot(90), shot(359)], [grid(1.5), grid(1.5)]);
+    expect(gridded.plan).toBe('mixed-to-true');
+    expect(gridded.shots.map((s) => s.azimuthIn)).toEqual([91.5, 0.5]);
+
+    // True north (correction 0) beside a magnetic 3.71: the document is
+    // rotated, the true-north section's bearings go out exactly as stored.
+    const mixed = asExportedToTml([shot(90), shot(90)], [trueNorth, magnetic(3.71)]);
+    expect(mixed.plan).toBe('mixed-to-true');
+    expect(mixed.rotated).toBe(1);
+    expect(mixed.shots[0]).toEqual(shot(90));
+    expect(mixed.shots[1]?.azimuthIn).toBeCloseTo(93.71, 9);
+  });
+
+  it('refuses a reference list that is not parallel to the shots', () => {
+    expect(() => asExportedToTml([shot(90)], [])).toThrow(/1 shot\(s\) but 0 reference\(s\)/);
+  });
+});
+
 describe('X8 option independence', () => {
   const options = (over: Partial<OptionSnapshot> = {}): OptionSnapshot => ({
     exportType: 'image',
@@ -937,6 +1096,21 @@ describe('X9 export-mode invariants', () => {
         REPRO,
       ),
     ).toThrow(/closure-adjusted/);
+  });
+
+  it("prints a mode only when it is one of the store's own words (#576 W51)", () => {
+    const headline = (during: ModeSnapshot): string => {
+      try {
+        checkExportModeInvariants({ before: survey, during, after: survey }, REPRO);
+      } catch (err) {
+        return (err as Error).message.split('\n')[0] ?? '';
+      }
+      return '';
+    };
+    expect(headline({ ...exporting, appMode: 'plan' })).toBe('X9 entering Export mode left appMode at "plan"');
+    expect(headline({ ...exporting, appMode: 'qzCaveA' })).toBe('X9 entering Export mode left appMode at "7 characters"');
+    expect(headline({ ...exporting, geometryMode: 'qzCaveA' })).not.toContain('qzCaveA');
+    expect(headline({ ...exporting, geometryMode: 'measured' })).toContain('(geometryMode="measured")');
   });
 
   it('EXEMPTS a project with no eligible closure from the geometry half', () => {

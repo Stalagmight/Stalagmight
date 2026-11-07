@@ -103,23 +103,9 @@ impl PlanAnchor {
         section: &crate::Section,
         uuid: &Option<String>,
     ) -> Option<usize> {
-        let uuid = uuid.as_deref()?;
-        if let Some(&i) = project.shot_uuid_index.get(&(section.id, uuid.to_string())) {
-            // Re-check before trusting it, exactly as `Project::resolve_key` does: a stale
-            // entry then costs only the scan below and can never resolve to the wrong shot.
-            if section
-                .shots
-                .get(i as usize)
-                .and_then(|sh| sh.uuid.as_deref())
-                == Some(uuid)
-            {
-                return Some(i as usize);
-            }
-        }
-        section
-            .shots
-            .iter()
-            .position(|s| s.uuid.as_deref() == Some(uuid))
+        // The same re-checked cache-then-scan lookup `Project::resolve_key` uses: a
+        // stale entry costs only the scan and can never resolve to the wrong shot.
+        project.shot_position_by_uuid(section, uuid.as_deref()?)
     }
 }
 

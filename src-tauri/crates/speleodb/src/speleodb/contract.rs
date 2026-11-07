@@ -19,11 +19,21 @@ use ts_rs::TS;
 
 use super::models::{DumpCandidateKind, SpeleoErrorDto, UnpushedLocalEdits};
 use super::SpeleoDbError;
+use crate::models::CommandErrorCode;
 
 /// The decision the caller should take after a SpeleoDB call, derived from the
 /// HTTP status + the endpoint it came from. Crosses IPC as a ts-rs enum so the
 /// frontend branches on `err.action` rather than on message text (D-B2). Order
 /// is non-load-bearing (no `>=` comparisons - unlike [`super::Permission`]).
+///
+/// [#576 NF-AN3-4] Who reads which: the frontend branches on `ReLogin`, `Adopt`,
+/// `UnpushedLocalEdits` and `Ambiguous` (`utils/speleoError.ts`) and shows the
+/// message for the rest. `ReadOnly` / `Fence` and `StayDirty` are read by the
+/// backend - the ambiguous-403 whoami probe (`speleodb_handle_auth`) and the
+/// push's "did it land?" verdict (`speleodb_upload`) - so they are not dead
+/// outputs; `Retry` is the transport/session-moved signal. Since the endpoint
+/// table (`client::spec`) decides each row's category, these rows now hold by
+/// construction, which is what a frontend that ever branches on them needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub enum SpeleoDbAction {
@@ -33,15 +43,17 @@ pub enum SpeleoDbAction {
     ReLogin,
     /// 403 on a read-capable endpoint (list/get/download = read-only access).
     ReadOnly,
-    /// 403 on upload/acquire/release - no write permission / lock fence.
+    /// 403 on a write endpoint (upload/acquire/release/PATCH/admin writes) - no
+    /// write permission / lock fence.
     Fence,
-    /// A write surfaced without a confirmed server commit - keep dirty (g7).
+    /// A run-once write surfaced without a confirmed server commit - keep dirty
+    /// (g7).
     StayDirty,
     /// Upload-304 - the remote tree is already at this state (benign; the dirty
     /// bit is left unchanged, this is NOT an error).
     UpToDate,
-    /// An idempotent 5xx that the transport already retried + exhausted; the FE
-    /// may offer a manual retry.
+    /// A retry-safe call's 5xx that the transport already retried + exhausted (or
+    /// a transport failure); the FE may offer a manual retry.
     Retry,
     /// The opened project is an Ariane (`.tml`-only) project with no `.stalx`: the
     /// FE should offer the one-time C2 adoption flow (#214) instead of surfacing a
@@ -120,18 +132,29 @@ pub enum Endpoint {
     UploadAuto,
     // [P1] #207 speleodb_publish constructs CreateProject (auth handler + dto_for_error).
     CreateProject,
-    // [#215] Collaborator/team permission writes + project delete. A write (not
-    // read, not idempotent): a 403 is a Fence (no admin/write grant, not read-only
-    // access), a 5xx is StayDirty (never auto-retried - these are non-idempotent
-    // POST/PUT/DELETE). Falls through the `403 => Fence` / `500..=599 => StayDirty`
-    // arms of `map_status` by being absent from both `is_read` and `is_idempotent`.
+    // [#215] Collaborator/team permission writes + the metadata PATCH (#576 B5:
+    // the PATCH used to be mapped as GetProject, a read). A write (not read, not
+    // idempotent): a 403 is a Fence (no admin/write grant, not read-only access),
+    // a 5xx is StayDirty (never auto-retried - these are run-once POST/PUT/PATCH/
+    // DELETE). Falls through the `403 => Fence` / `500..=599 => StayDirty` arms of
+    // `map_status` by being absent from both `is_read` and `is_idempotent`.
     ManageProject,
+    // [#576 B5] `DELETE user/release_all_locks/`: a write whose repetition is a
+    // no-op, so it IS retried - and its exhausted 5xx says so (Retry), where the
+    // `Release` row it used to be mapped through said "never retried".
+    ReleaseAll,
+    // [#576 B5-D2] `DELETE projects/{id}/`: idempotent and retried (a 404 is
+    // "already deleted" in the client). A 403 is a Fence; an exhausted 5xx, Retry.
+    DeleteProject,
 }
 
 impl Endpoint {
-    /// Idempotent (read-like) endpoints retry a transient 5xx (D-B3); the write
-    /// endpoints never auto-retry (double-submit hazard) and surface for g7.
-    fn is_idempotent(self) -> bool {
+    /// Idempotent endpoints are retried on a transient 5xx (D-B3), so their
+    /// exhausted 5xx reads `Retry`; the run-once writes never auto-retry
+    /// (double-submit hazard) and surface for g7 as `StayDirty`. Each row of the
+    /// client's endpoint table must agree with this (`client::spec`, pinned by
+    /// `every_endpoint_row_agrees_with_its_contract_row`).
+    pub(crate) fn is_idempotent(self) -> bool {
         matches!(
             self,
             Endpoint::Login
@@ -139,12 +162,14 @@ impl Endpoint {
                 | Endpoint::ListProjects
                 | Endpoint::GetProject
                 | Endpoint::DownloadDump
+                | Endpoint::ReleaseAll
+                | Endpoint::DeleteProject
         )
     }
 
     /// `true` for the read-capable endpoints whose 403 means "read-only access"
     /// rather than a write fence.
-    fn is_read(self) -> bool {
+    pub(crate) fn is_read(self) -> bool {
         matches!(
             self,
             Endpoint::ListProjects | Endpoint::GetProject | Endpoint::DownloadDump
@@ -195,6 +220,24 @@ pub fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
     }
 }
 
+/// [#576 C4/A6] The IPC routing code for `action`: one `SPELEODB_*` code per
+/// action, so a `CommandError` built from a [`SpeleoErrorDto`] says what the old
+/// `action` field said (which is no longer sent).
+pub fn code_for_action(action: SpeleoDbAction) -> CommandErrorCode {
+    match action {
+        SpeleoDbAction::ReLogin => CommandErrorCode::SpeleodbRelogin,
+        SpeleoDbAction::ReadOnly => CommandErrorCode::SpeleodbReadOnly,
+        SpeleoDbAction::Fence => CommandErrorCode::SpeleodbFence,
+        SpeleoDbAction::StayDirty => CommandErrorCode::SpeleodbStayDirty,
+        SpeleoDbAction::UpToDate => CommandErrorCode::SpeleodbUpToDate,
+        SpeleoDbAction::Retry => CommandErrorCode::SpeleodbRetry,
+        SpeleoDbAction::Adopt => CommandErrorCode::SpeleodbAdopt,
+        SpeleoDbAction::UnpushedLocalEdits => CommandErrorCode::SpeleodbUnpushedLocalEdits,
+        SpeleoDbAction::Ambiguous => CommandErrorCode::SpeleodbAmbiguous,
+        SpeleoDbAction::Fatal => CommandErrorCode::SpeleodbFatal,
+    }
+}
+
 /// Convert a [`SpeleoDbError`] into the IPC [`SpeleoErrorDto`], deriving the
 /// typed action from the endpoint the call came from (D-B2). This is the single
 /// conversion the IPC boundary uses; it needs the `endpoint` context, so it is a
@@ -220,10 +263,12 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
             project_id,
             local_path,
             last_edit_at,
+            state_unknown,
         } => Some(UnpushedLocalEdits {
             project_id: project_id.clone(),
             local_path: local_path.clone(),
             last_edit_at: last_edit_at.clone(),
+            state_unknown: *state_unknown,
         }),
         _ => None,
     };
@@ -241,6 +286,12 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         }
         _ => (None, None),
     };
+    // [#576 A8] Exhaustive, and kept so by the compiler: a wildcard arm here is what
+    // silently routes the NEXT routing variant (like `AdoptAriane` -> Adopt or
+    // `WouldDiscardLocalEdits` -> UnpushedLocalEdits) to Fatal, so the lint denies one.
+    // A new `SpeleoDbError` variant is then a compile error until someone decides
+    // its action.
+    #[deny(clippy::wildcard_enum_match_arm)]
     let (action, status, message) = match err {
         // Status: carry the parsed human detail WITHOUT the "SpeleoDB returned HTTP
         // N:" wrapper - the frontend frames it per operation ("Login to SpeleoDB
@@ -276,6 +327,9 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         // its network window) and nothing was committed. Retryable by definition -
         // a retry runs in the successor world and does the right thing there.
         SpeleoDbError::SessionMoved => (SpeleoDbAction::Retry, None, err.to_string()),
+        // [#576 B35(e)] Done found the write lock is not ours: the lock fence, decided
+        // locally from the holder read rather than earned as a server 403.
+        SpeleoDbError::LockNotHeld { .. } => (SpeleoDbAction::Fence, None, err.to_string()),
         // Everything below fails closed; each Display is already user-facing.
         //
         // ENUMERATED, not a `_` catch-all. Two of the arms above (`AdoptAriane`,
@@ -290,12 +344,21 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         | SpeleoDbError::Parse(_)
         | SpeleoDbError::EmptyDump
         | SpeleoDbError::Io(_)
+        | SpeleoDbError::Refused { .. }
         | SpeleoDbError::InvalidProjectId
         | SpeleoDbError::InvalidRevision
         | SpeleoDbError::InsecureEndpoint { .. }
         | SpeleoDbError::NoRemoteProject => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
+    // [#576 C4] A local refusal carries the refusing gate's own code (the edit
+    // gate, a refused save, ...); `action` stays `Fatal` for the backend's own
+    // branches, and every other error's code is its action's.
+    let code = match err {
+        SpeleoDbError::Refused { code, .. } => *code,
+        _ => code_for_action(action),
+    };
     SpeleoErrorDto {
+        code,
         message,
         action,
         status,
@@ -307,10 +370,6 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "unit test fixtures fail loudly on setup errors"
-)]
 mod tests {
     use super::{dto_for_error, map_status, Endpoint, SpeleoDbAction, TransportCause};
     use crate::speleodb::SpeleoDbError;
@@ -560,40 +619,30 @@ mod tests {
         assert_eq!(adopt.status, None);
     }
 
+    /// [#576 C4] A verb refused by a core refusal reaches the frontend with that
+    /// refusal's code (the edit gate's, a refused save's, ...) instead of
+    /// `SPELEODB_FATAL`; a plain local refusal stays `SPELEODB_FATAL`. The backend's
+    /// own branches still see a local failure (`action == Fatal`) either way.
     #[test]
-    fn the_action_match_is_exhaustive_so_a_new_variant_cannot_default_to_fatal() {
-        // The fail-closed arm used to be `_ =>`, sitting directly under two arms that
-        // exist precisely because a ROUTING signal must not reach the user as `Fatal`
-        // (`AdoptAriane` → Adopt, `WouldDiscardLocalEdits` → UnpushedLocalEdits). A
-        // wildcard is what silently routes the NEXT such variant wrongly: it compiles
-        // clean, lands in Fatal, and the frontend toasts a dead end instead of offering
-        // the choice the variant was added to offer.
-        //
-        // Guarded at the source, because "this match has no wildcard" is not observable
-        // from its results - and rustc's own exhaustiveness check is the real enforcement
-        // the moment the wildcard is gone.
-        let src = include_str!("contract.rs");
-        let start = src
-            .find("let (action, status, message) = match err {")
-            .expect("the action match is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    };\n").expect("the match terminates")];
-        // Anchor the slice before trusting the absence check below. `!contains` passes
-        // vacuously on an empty or short body, so a `cargo fmt` reflow that moves the
-        // `\n    };\n` terminator would turn this test green while guarding nothing -
-        // the one failure mode a source-level tripwire must not have. These two arms
-        // are the routing signals the wildcard used to swallow, so requiring them
-        // proves we sliced the right match.
-        for arm in ["AdoptAriane", "WouldDiscardLocalEdits"] {
-            assert!(
-                body.contains(arm),
-                "sliced the wrong region: the action match must contain the `{arm}` arm"
-            );
-        }
-        assert!(
-            !body.contains("_ =>"),
-            "the action match must stay exhaustive - a wildcard lets a new SpeleoDbError \
-             variant default to Fatal without anyone deciding that it should"
+    fn a_local_refusal_carries_the_refusing_gates_code() {
+        use crate::models::CommandErrorCode;
+        let plain = dto_for_error(Endpoint::User, &SpeleoDbError::refused("not linked"));
+        assert_eq!(plain.action, SpeleoDbAction::Fatal);
+        assert_eq!(plain.code, CommandErrorCode::SpeleodbFatal);
+        assert_eq!(plain.message, "not linked");
+
+        let gated = dto_for_error(
+            Endpoint::User,
+            &SpeleoDbError::refused_with(
+                CommandErrorCode::WorkspaceReadOnly,
+                "Discard changes is disabled",
+            ),
+        );
+        assert_eq!(gated.action, SpeleoDbAction::Fatal);
+        assert_eq!(gated.code, CommandErrorCode::WorkspaceReadOnly);
+        assert_eq!(
+            gated.message, "Discard changes is disabled",
+            "shown as written"
         );
     }
 

@@ -20,31 +20,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'the server said no',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('the server said no'));
 
 import SpeleoDoneDialog from './SpeleoDoneDialog';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
+import { makeSpeleoLink } from '../../test/factories/speleo';
 
-const LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'editing',
-  lockHolder: null,
-  lockedByOther: false,
-  hasUnpushedEdits: true,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+/** [#576 NF-W8FE-2] Done and Push answer the wire envelope, never a bare outcome. */
+function report<R>(result: R): { result: R; save_warnings: [] } {
+  return { result, save_warnings: [] };
+}
+
+const LINK: SpeleoLinkState = makeSpeleoLink({ editState: 'editing', hasUnpushedEdits: true });
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
@@ -122,7 +113,7 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
     await screen.findByTestId('speleodb-push-failure-inline');
 
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
 
     await waitFor(() => expect(useUIStore.getState().activeDialog).toBeNull());

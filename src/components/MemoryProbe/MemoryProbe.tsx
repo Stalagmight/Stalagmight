@@ -3,26 +3,25 @@
  *
  * Polls the backend `get_memory_stats` IPC for /proc-derived RSS of the
  * Tauri backend and WebKit children, and combines that with frontend
- * counters published from SurveyLayer/GlobalSurveyLayer/the Zustand stores.
- * Renders a compact bottom-left panel summarizing each retention bucket.
+ * counters: the custom renderer's buffer sizes (published by its controllers)
+ * and the Zustand stores. Renders a compact bottom-left panel summarizing each
+ * retention bucket. Nothing runs while it is hidden (#576 D19).
  *
  * Visibility is driven by the hamburger menu's Debug ▸ "Memory Stats" toggle
  * (`showMemoryStats`), or forced on via `config.debug.memory_probe`.
  *
- * The "Dump" button writes a JSON snapshot to the system temp dir via the
- * Tauri fs plugin, with a console.log fallback if the user denied fs.
+ * The "Dump" button logs a JSON snapshot to the console and copies it to the
+ * clipboard.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invokeIpc } from '../../utils/ipc';
 import type { MemoryStats } from '../../types/ipc/MemoryStats';
 import {
-  getFeatureCounts,
+  getRendererBuffers,
   estimateGeometryBytes,
-  estimateMaplibreFeatureBytes,
-  estimateFeatureBytes,
   getPerfTimings,
   startLongTaskObserver,
-  type FeatureSourceKind,
+  RENDERER_BUFFER_KINDS,
 } from '../../utils/memoryProbe';
 import { useProjectStore } from '../../store/projectStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
@@ -40,15 +39,14 @@ function fmtBytes(b: number): string {
   return `${b} B`;
 }
 
-function fmtKb(kb: bigint | number): string {
-  const n = typeof kb === 'bigint' ? Number(kb) : kb;
-  return fmtBytes(n * 1024);
+function fmtKb(kb: number): string {
+  return fmtBytes(kb * 1024);
 }
 
 interface Snapshot {
   ts: number;
   memory: MemoryStats | null;
-  featureCounts: ReturnType<typeof getFeatureCounts>;
+  rendererBuffers: ReturnType<typeof getRendererBuffers>;
   geometryDataSize: number;
   geometryDataTotalShots: number;
   projectShots: number;
@@ -57,7 +55,7 @@ interface Snapshot {
 }
 
 function takeSnapshot(memory: MemoryStats | null): Snapshot {
-  const featureCounts = getFeatureCounts();
+  const rendererBuffers = getRendererBuffers();
   const project = useProjectStore.getState().project;
   const surveyData = useProjectStore.getState().surveyData;
   const stations = useProjectStore.getState().stations;
@@ -82,7 +80,7 @@ function takeSnapshot(memory: MemoryStats | null): Snapshot {
   return {
     ts: Date.now(),
     memory,
-    featureCounts,
+    rendererBuffers,
     geometryDataSize: geometryData.size,
     geometryDataTotalShots: geometryTotalShots,
     projectShots,
@@ -104,11 +102,10 @@ export function MemoryProbe(): JSX.Element | null {
   /** Last dump result shown to the user; cleared after a few seconds. */
   const [dumpStatus, setDumpStatus] = useState<string | null>(null);
 
-  // Long-task PerformanceObserver - runs even when the probe is hidden
-  // so we capture freezes the user didn't expect.
-  useEffect(() => {
-    startLongTaskObserver();
-  }, []);
+  // Freeze detector: only while the panel is shown (#576 D19). Its frame-gap
+  // chain wakes the WebView every frame, so running it in every session for a
+  // list nobody reads kept the app from ever idling; hiding the panel disposes it.
+  useEffect(() => (visible ? startLongTaskObserver() : undefined), [visible]);
 
   // Poll backend + take frontend snapshot at a fixed interval. Stop when hidden
   // to avoid the IPC churn polluting the very thing we're measuring.
@@ -118,7 +115,7 @@ export function MemoryProbe(): JSX.Element | null {
 
     async function tick() {
       try {
-        const stats = await invokeIpc<MemoryStats>('get_memory_stats', undefined, {
+        const stats = await invokeIpc('get_memory_stats', undefined, {
           purpose: 'memory probe poll',
         });
         if (cancelled) return;
@@ -159,7 +156,10 @@ export function MemoryProbe(): JSX.Element | null {
     return total;
   }, [snapshot.geometryDataSize, snapshot.geometryDataTotalShots]);
 
-  const featureBytes = useMemo(() => estimateMaplibreFeatureBytes(), [snapshot.featureCounts]);
+  const rendererBytes = useMemo(
+    () => Object.values(snapshot.rendererBuffers).reduce((sum, stat) => sum + stat.bytes, 0),
+    [snapshot.rendererBuffers]
+  );
 
   if (!visible) return null;
 
@@ -199,7 +199,7 @@ export function MemoryProbe(): JSX.Element | null {
               data-testid="memory-probe-copy-snapshot"
               onClick={(e) => {
                 e.stopPropagation();
-                void dumpSnapshot(snapshot, featureBytes, geometryBytes, setDumpStatus);
+                void dumpSnapshot(snapshot, rendererBytes, geometryBytes, setDumpStatus);
               }}
               style={btnStyle}
               title="Copy JSON snapshot to clipboard"
@@ -228,32 +228,29 @@ export function MemoryProbe(): JSX.Element | null {
           <Section title="JS heap retention (est.)">
             <Row label="GlobalView geometryData" value={fmtBytes(geometryBytes)} suffix={`${snapshot.geometryDataSize} sys · ${snapshot.geometryDataTotalShots} shots`} />
             <Row
-              label="MapLibre feature copies"
-              value={fmtBytes(featureBytes)}
-              suffix="main+worker"
-              tone={featureBytes > 200 * MB ? 'warn' : 'normal'}
+              label="renderer vertex buffers"
+              value={fmtBytes(rendererBytes)}
+              suffix="last builds, also on GPU"
+              tone={rendererBytes > 200 * MB ? 'warn' : 'normal'}
             />
           </Section>
 
-          <Section title="MapLibre source counts">
-            {(Object.keys(snapshot.featureCounts.perSource) as FeatureSourceKind[])
-              .filter((k) => snapshot.featureCounts.perSource[k] > 0)
-              .map((k) => {
-                const n = snapshot.featureCounts.perSource[k];
-                const bytes = n * estimateFeatureBytes(k);
-                const calls = snapshot.featureCounts.setDataCalls[k];
-                return (
-                  <Row
-                    key={k}
-                    label={k}
-                    value={`${n.toLocaleString()}`}
-                    suffix={`${fmtBytes(bytes)} · ${calls} calls`}
-                    tone={bytes > 50 * MB ? 'warn' : 'normal'}
-                  />
-                );
-              })}
-            {Object.values(snapshot.featureCounts.perSource).every((v) => v === 0) && (
-              <div style={{ color: '#888' }}>(no map sources active)</div>
+          <Section title="custom renderer (last build)">
+            {RENDERER_BUFFER_KINDS.filter((k) => snapshot.rendererBuffers[k].bytes > 0).map((k) => {
+              const { bytes, builds } = snapshot.rendererBuffers[k];
+              return (
+                <Row
+                  key={k}
+                  testId={`memory-probe-renderer-${k}`}
+                  label={k}
+                  value={fmtBytes(bytes)}
+                  suffix={`${builds} builds`}
+                  tone={bytes > 50 * MB ? 'warn' : 'normal'}
+                />
+              );
+            })}
+            {RENDERER_BUFFER_KINDS.every((k) => snapshot.rendererBuffers[k].bytes === 0) && (
+              <div style={{ color: '#888' }}>(no renderer active)</div>
             )}
           </Section>
 
@@ -311,16 +308,18 @@ function Row({
   suffix,
   bold,
   tone,
+  testId,
 }: {
   label: string;
   value: string;
   suffix?: string;
   bold?: boolean;
   tone?: 'normal' | 'warn';
+  testId?: string;
 }) {
   const valueColor = tone === 'warn' ? '#ff9a4a' : '#eee';
   return (
-    <div style={{ display: 'flex', gap: 6, fontWeight: bold ? 600 : 400 }}>
+    <div style={{ display: 'flex', gap: 6, fontWeight: bold ? 600 : 400 }} data-testid={testId}>
       <span style={{ flex: 1, color: '#bbb', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {label}
       </span>
@@ -339,7 +338,7 @@ function formatDelta(deltaKb: number): string {
 
 async function dumpSnapshot(
   snap: Snapshot,
-  featureBytes: number,
+  rendererBytes: number,
   geometryBytes: number,
   setStatus: (s: string | null) => void,
 ): Promise<void> {
@@ -358,10 +357,10 @@ async function dumpSnapshot(
     })),
     total_rss_kb: snap.memory?.total_rss_kb?.toString(),
     estimates: {
-      maplibre_feature_bytes: featureBytes,
+      renderer_buffer_bytes: rendererBytes,
       global_geometry_bytes: geometryBytes,
     },
-    feature_counts: snap.featureCounts,
+    renderer_buffers: snap.rendererBuffers,
     project: {
       sections: snap.projectSections,
       shots: snap.projectShots,

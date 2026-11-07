@@ -7,7 +7,8 @@ click, any zoom, any pan), every subsequent action stopped working until the
 project was closed and reopened. Linux was unaffected.
 
 **Root cause:** `SurveyLayer.handleZoomEndTelemetry` /
-`handleMoveEndTelemetry` (in `src/components/Map/SurveyLayer.tsx`) used
+`handleMoveEndTelemetry` (then in `src/components/Map/SurveyLayer.tsx`, now
+`src/components/Map/surveyLayer/navTelemetry.ts`) used
 `orig instanceof TouchEvent`. On macOS desktop Safari/WKWebView, `TouchEvent`
 is not exposed as a global by default (it's iOS-only unless touch events are
 explicitly enabled at the engine level), so the *reference* threw
@@ -26,7 +27,8 @@ and even programmatic calls like `__map.panBy()` produced no movement.
 
 **Fix:** guard the references with `typeof TouchEvent !== 'undefined' && ...`.
 Two-line change in `src/components/Map/SurveyLayer.tsx` -
-`handleZoomEndTelemetry` and `handleMoveEndTelemetry`.
+`handleZoomEndTelemetry` and `handleMoveEndTelemetry` (today
+`trackZoomEndNav` / `trackMoveEndNav` in `surveyLayer/navTelemetry.ts`).
 
 ## When to re-enable the debug toolkit
 

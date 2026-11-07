@@ -11,8 +11,12 @@ use super::physics::{
     air_z_factor, ata, avg_depth, cylinder_gas_volume, deliverable_gas, edge_gas, edge_gas_basis,
     gas_rate, sac_to_rmv,
 };
-use super::{is_swim_leg, penetration_budget, required_stages, route_metrics, usable_oc_gas};
+use super::{
+    drop_pressure_for_contribution, free_usable_bar, is_swim_leg, penetration_budget,
+    required_stages, route_metrics, stage_drop_plans, usable_oc_gas,
+};
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset, ReserveProfile};
+use crate::test_fixtures::bare_shot;
 use crate::{
     Coordinates, GpsCoordinates, Project, SectionData, ShotData, ShotKind, StationRef, ZeroDatum,
 };
@@ -165,12 +169,7 @@ fn team_holds_divers_cylinders_and_mode() {
 // ---- Phase 1: gas reachability field ------------------------------------------------
 
 fn make_shot(length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-    ShotData {
-        length,
-        depth_in,
-        depth_out,
-        ..Default::default()
-    }
+    bare_shot(length).with_depths(depth_in, depth_out)
 }
 
 /// One straight section of 3 shots descending 0 → 10 → 20 → 30 m, 100 m each (4 stations).
@@ -418,6 +417,626 @@ fn gas_free_display_clamps_to_basis_not_fill_on_overfill() {
     assert!(
         (field.backgas_turn_bar.unwrap() - 18.0).abs() < 1e-6,
         "turn = fill - basis-clamped usable = 250 - 232"
+    );
+}
+
+#[test]
+fn gas_free_overfill_under_conservative_budgets_the_window_the_gauge_turns_at() {
+    // A14. A 12 L tank rated 207 bar but filled to 250 (or 300), Free usable 100 bar, under the
+    // default conservative cap. The turn gauge says `fill - 100`, so the gas breathed before the
+    // turn is the Z-derated span [fill - 100, fill] of the REAL fill. Crediting the same 100 bar
+    // slid down to the rated window [107, 207] over-credits (7.7% at 250 bar, 20.6% at 300),
+    // because the top of a tank holds less gas per bar. The cap bounds the typed usable bar at the
+    // rated pressure; it must not move the window.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let rated_window =
+        deliverable_gas(207.0, 12.0, 207.0, false) - deliverable_gas(107.0, 12.0, 207.0, false);
+    for (fill, expected_litres) in [(250.0, 1017.96), (300.0, 908.79)] {
+        let bg = Cylinder {
+            usable_gas_bar: 100.0,
+            ..Cylinder::new(
+                12.0,
+                207.0,
+                fill,
+                TankMaterial::Steel,
+                CylRole::BackGas,
+                None,
+            )
+            .unwrap()
+        };
+        let field = |conservative| {
+            project.compute_gas_reach_field(
+                Some(&origin),
+                None,
+                &diver,
+                std::slice::from_ref(&bg),
+                &GasConfig {
+                    default_reserve: ReservePreset::Free,
+                    conservative_tank_gas: conservative,
+                    ..GasConfig::default()
+                },
+            )
+        };
+        let (cons, prec) = (field(true), field(false));
+        let window = deliverable_gas(fill, 12.0, 207.0, false)
+            - deliverable_gas(fill - 100.0, 12.0, 207.0, false);
+        assert!((window - expected_litres).abs() < 0.01, "window {window}");
+        assert!(
+            (cons.backgas_turn_bar.unwrap() - (fill - 100.0)).abs() < 1e-6,
+            "the gauge turns at fill - usable"
+        );
+        assert!(
+            (cons.budget_litres - window).abs() < 1e-6,
+            "fill {fill}: conservative Free budget {:.1} L, but breathing down to the {:.1} bar turn \
+             gauge releases {window:.1} L (the rated window [107, 207] holds {rated_window:.1} L)",
+            cons.budget_litres,
+            cons.backgas_turn_bar.unwrap()
+        );
+        assert!(
+            (cons.budget_litres - prec.budget_litres).abs() < 1e-6,
+            "fill {fill}: usable 100 is under the rated cap, so conservative ({:.1} L) and precise \
+             ({:.1} L) must credit the same window",
+            cons.budget_litres,
+            prec.budget_litres
+        );
+    }
+}
+
+#[test]
+fn gas_conservative_budget_never_exceeds_precise_for_any_strategy_or_fill() {
+    // The "call-it-an-80" switch may only ever take gas away. For an under-filled, a rated and two
+    // over-filled rigs (back gas + two stages, all at the same fill) under every strategy, the
+    // conservative budget is at most the precise one.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let mut violations = Vec::new();
+    for fill in [150.0, 207.0, 250.0, 300.0] {
+        let bg = Cylinder {
+            usable_gas_bar: 100.0,
+            ..Cylinder::new(
+                12.0,
+                207.0,
+                fill,
+                TankMaterial::Steel,
+                CylRole::BackGas,
+                None,
+            )
+            .unwrap()
+        };
+        let stage = Cylinder {
+            usable_gas_bar: 80.0,
+            ..Cylinder::new(
+                11.0,
+                207.0,
+                fill,
+                TankMaterial::Aluminium,
+                CylRole::Stage,
+                None,
+            )
+            .unwrap()
+        };
+        let rig = [bg, stage.clone(), stage];
+        for preset in [
+            ReservePreset::AllThirds,
+            ReservePreset::OneStage,
+            ReservePreset::TwoStage,
+            ReservePreset::Free,
+        ] {
+            let budget = |conservative| {
+                project
+                    .compute_gas_reach_field(
+                        Some(&origin),
+                        None,
+                        &diver,
+                        &rig,
+                        &GasConfig {
+                            default_reserve: preset,
+                            conservative_tank_gas: conservative,
+                            ..GasConfig::default()
+                        },
+                    )
+                    .budget_litres
+            };
+            let (cons, prec) = (budget(true), budget(false));
+            if cons > prec + 1e-9 {
+                violations.push(format!(
+                    "{preset:?} at fill {fill}: conservative {cons:.1} L > precise {prec:.1} L"
+                ));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "conservative credited more than precise:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn gas_free_credit_never_exceeds_precise_or_the_rated_window() {
+    // A Free tank's credit over a wide sweep, absurd inputs included (fills past the Z fit's ~714-bar
+    // turn-over, rated below its Z == 1 knee, usable past the fill, negative and NaN usable):
+    // - conservative never credits more than precise;
+    // - conservative never credits more than the same usable bar at the rated pressure (the figure
+    //   an overfilled tank was credited before A14; the fix may only ever shrink it);
+    // - at or below rated the conservative credit is bit-identical to that figure, so the reach
+    //   of a tank that is not overfilled is untouched.
+    let mut violations = Vec::new();
+    for v in [0.5, 12.0, 50.0] {
+        for rated in [50.0, 96.0, 150.0, 179.0, 207.0, 232.0, 300.0, 700.0, 1500.0] {
+            for fill in [
+                1.0, 50.0, 90.0, 96.0, 100.0, 150.0, 179.0, 200.0, 207.0, 232.0, 250.0, 300.0,
+                350.0, 450.0, 714.0, 900.0, 1250.0, 3000.0, 10000.0,
+            ] {
+                for usable in [
+                    -10.0,
+                    0.0,
+                    1.0,
+                    10.0,
+                    30.0,
+                    80.0,
+                    100.0,
+                    150.0,
+                    207.0,
+                    250.0,
+                    400.0,
+                    1000.0,
+                    20000.0,
+                    f64::NAN,
+                ] {
+                    let c = Cylinder {
+                        usable_gas_bar: usable,
+                        ..Cylinder::new(v, rated, fill, TankMaterial::Steel, CylRole::BackGas, None)
+                            .unwrap()
+                    };
+                    let free = |conservative| {
+                        penetration_budget(
+                            std::slice::from_ref(&c),
+                            ReservePreset::Free,
+                            &ReserveProfile::default(),
+                            conservative,
+                        )
+                    };
+                    let (cons, prec) = (free(true), free(false));
+                    let basis = fill.min(rated);
+                    let u = free_usable_bar(&c, true);
+                    let rated_window = (deliverable_gas(basis, v, rated, true)
+                        - deliverable_gas(basis - u, v, rated, true))
+                    .max(0.0);
+                    let tol = 1e-9 * prec.abs().max(rated_window).max(1.0);
+                    let case = format!("V {v} rated {rated} fill {fill} usable {usable}");
+                    if cons > prec + tol {
+                        violations.push(format!("{case}: cons {cons} > precise {prec}"));
+                    }
+                    if cons > rated_window + tol {
+                        violations
+                            .push(format!("{case}: cons {cons} > rated window {rated_window}"));
+                    }
+                    if fill <= rated && cons.to_bits() != rated_window.to_bits() {
+                        violations.push(format!(
+                            "{case}: cons {cons} != {rated_window} at/below rated"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "{} violations, first: {:?}",
+        violations.len(),
+        violations.iter().take(5).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gas_free_overfilled_stage_dragged_drop_reads_the_real_gauge() {
+    // NF-AN1-2 (folded into A14). Free stage 11 L rated 207 filled to 250, usable 80: its default
+    // drop reads 250 - 80 = 170 bar on the real gauge. Dragged to station 3 (1500 L along
+    // `linear_descent_project`), the stage gives 1500 L, so the readout must be the pressure the
+    // stage gauge shows after releasing 1500 L from 250 bar - not a pressure on a scale that starts
+    // at the rated 207 (that read ~61.7 bar for these litres, ~34 bar below the real gauge). The
+    // pin is deeper than the default, so it is flagged and buys no reach (#576 NF-PGAS-1): the
+    // budget stays the plain plan's.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let sec = origin.section_id;
+    let bg = Cylinder {
+        usable_gas_bar: 50.0,
+        ..Cylinder::new(
+            24.0,
+            232.0,
+            90.0,
+            TankMaterial::Steel,
+            CylRole::BackGas,
+            None,
+        )
+        .unwrap()
+    };
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::Free,
+        ..GasConfig::default() // conservative_tank_gas = true
+    };
+    // (stage water volume, litres breathed by the pin): 11 L releases the route's 1500 L; a 5 L
+    // stage clamps at its rated capacity (5 x 207 / Z(207)) and still holds the overfill above it.
+    for (v, breathed) in [
+        (11.0, 1500.0),
+        (5.0, deliverable_gas(207.0, 5.0, 207.0, false)),
+    ] {
+        let stage = Cylinder {
+            usable_gas_bar: 80.0,
+            ..Cylinder::new(
+                v,
+                207.0,
+                250.0,
+                TankMaterial::Aluminium,
+                CylRole::Stage,
+                None,
+            )
+            .unwrap()
+        };
+        let rig = [bg.clone(), stage];
+        let base = project.compute_gas_reach_field(Some(&origin), None, &diver, &rig, &cfg);
+        assert!(
+            (base.stage_drop_bars[0] - 170.0).abs() < 1e-6,
+            "default drop"
+        );
+        let f = project.compute_gas_reach_field_with_overrides(
+            Some(&origin),
+            None,
+            &[],
+            &[],
+            &diver,
+            &rig,
+            &cfg,
+            &[Some(StationRef::new(sec, 3))],
+        );
+        let bar = f.stage_drop_bars[0];
+        assert!(
+            (f.budget_litres - base.budget_litres).abs() < 1e-9,
+            "V {v}: a deeper pin buys no reach, budget {:.1} against {:.1}",
+            f.budget_litres,
+            base.budget_litres
+        );
+        let released =
+            deliverable_gas(250.0, v, 207.0, false) - deliverable_gas(bar, v, 207.0, false);
+        assert!(
+            (released - breathed).abs() < 1e-3,
+            "V {v}: dragged drop reads {bar:.2} bar, but breathing the stage from 250 bar to that \
+             releases {released:.1} L, not the {breathed:.1} L breathed to the pin"
+        );
+        assert_eq!(f.stage_drop_over_reserve, vec![true]);
+    }
+}
+
+#[test]
+fn gas_stage_drop_dragged_to_its_safe_litres_reads_its_default_bar() {
+    // Round trip for every staged strategy and fill: a drop whose contribution is exactly the
+    // strategy's safe IN gas must read the strategy's own default drop pressure. Both read the
+    // real gauge (Free since NF-AN1-2, Half Minus since A18(e) / NF-AN1-1).
+    let mut violations = Vec::new();
+    for fill in [150.0, 207.0, 250.0, 300.0] {
+        let stage = Cylinder {
+            usable_gas_bar: 80.0,
+            ..Cylinder::new(
+                11.0,
+                207.0,
+                fill,
+                TankMaterial::Aluminium,
+                CylRole::Stage,
+                None,
+            )
+            .unwrap()
+        };
+        let rig = [stage.clone(), stage];
+        for preset in [
+            ReservePreset::OneStage,
+            ReservePreset::TwoStage,
+            ReservePreset::Free,
+        ] {
+            for conservative in [true, false] {
+                for p in stage_drop_plans(&rig, preset, 30.0, conservative) {
+                    let bar = drop_pressure_for_contribution(&p, p.safe_in_litres);
+                    if (bar - p.default_bar).abs() > 1e-6 {
+                        violations.push(format!(
+                            "{preset:?} fill {fill} conservative {conservative}: default {:.2} bar, \
+                             the same litres dragged read {bar:.2} bar",
+                            p.default_bar
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+#[test]
+fn gas_all_thirds_turns_at_a_third_of_the_gauge_and_credits_that_gas() {
+    // #576 A18(e), decided "thirds of the gauge": a 12 L tank at 207 bar turns at 207 - 69 = 138
+    // bar, and the map credits exactly the gas breathed from 207 down to 138 (739.76 L). The
+    // volume rule credited a third of the Z-corrected litres (792.45 L) and converted it back to
+    // bar as if air were ideal (a 140.96-bar gauge, 706.36 L breathed), so map and gauge disagreed.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        12.0,
+        207.0,
+        207.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let f =
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &GasConfig::default());
+    let window =
+        deliverable_gas(207.0, 12.0, 207.0, false) - deliverable_gas(138.0, 12.0, 207.0, false);
+    assert!((window - 739.76).abs() < 0.01, "window {window}");
+    assert!(
+        (f.backgas_turn_bar.unwrap() - 138.0).abs() < 1e-9
+            && (f.cylinder_usable_bars[0] - 69.0).abs() < 1e-9
+            && (f.budget_litres - window).abs() < 1e-6,
+        "turn {:.2} bar, column {:.2} bar, budget {:.2} L; a third of the gauge is turn 138, \
+         column 69, budget {window:.2} L",
+        f.backgas_turn_bar.unwrap(),
+        f.cylinder_usable_bars[0],
+        f.budget_litres
+    );
+}
+
+#[test]
+fn gas_gauge_column_and_map_agree_for_every_strategy_and_fill() {
+    // #576 A18(e). Every rule is a pressure rule on the real gauge, so for every strategy, fill
+    // (under-filled, rated, over-filled, HP at rated, below the Z == 1 knee), cap setting and
+    // safety margin: the budget is exactly the gas between each budget cylinder's real fill and
+    // `fill - column`; each stage drop reads `fill - column`; and the back-gas turn gauge is the
+    // volume-weighted mean of `fill - column` over the back gas.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let mut violations = Vec::new();
+    for (rated, fill) in [
+        (207.0, 180.0),
+        (207.0, 207.0),
+        (207.0, 250.0),
+        (207.0, 300.0),
+        (232.0, 232.0),
+        (300.0, 300.0),
+        (207.0, 90.0),
+    ] {
+        let tank = |v: f64, role: CylRole, usable: f64| Cylinder {
+            usable_gas_bar: usable,
+            ..Cylinder::new(v, rated, fill, TankMaterial::Steel, role, None).unwrap()
+        };
+        let rigs = [
+            vec![tank(12.0, CylRole::BackGas, 100.0)],
+            vec![
+                tank(12.0, CylRole::BackGas, 100.0),
+                tank(11.0, CylRole::Stage, 80.0),
+            ],
+            vec![
+                tank(12.0, CylRole::BackGas, 100.0),
+                tank(12.0, CylRole::BackGas, 100.0),
+                tank(11.0, CylRole::Stage, 80.0),
+                tank(7.0, CylRole::Stage, 60.0),
+            ],
+        ];
+        for preset in [
+            ReservePreset::AllThirds,
+            ReservePreset::OneStage,
+            ReservePreset::TwoStage,
+            ReservePreset::Free,
+        ] {
+            for conservative in [true, false] {
+                for margin in [0.0, 10.0] {
+                    let mut cfg = GasConfig {
+                        default_reserve: preset,
+                        conservative_tank_gas: conservative,
+                        ..GasConfig::default()
+                    };
+                    cfg.reserve_profile.all_thirds_safety_margin_bar = margin;
+                    for rig in &rigs {
+                        let f =
+                            project.compute_gas_reach_field(Some(&origin), None, &diver, rig, &cfg);
+                        let case = format!(
+                            "{preset:?} rated {rated} fill {fill} cons {conservative} margin \
+                             {margin} tanks {}",
+                            rig.len()
+                        );
+                        let window = |c: &Cylinder, col: f64| {
+                            deliverable_gas(
+                                c.fill_bar,
+                                c.water_volume_l,
+                                c.rated_pressure_bar,
+                                false,
+                            ) - deliverable_gas(
+                                c.fill_bar - col,
+                                c.water_volume_l,
+                                c.rated_pressure_bar,
+                                false,
+                            )
+                        };
+                        let from_columns: f64 = rig
+                            .iter()
+                            .zip(&f.cylinder_usable_bars)
+                            .map(|(c, &col)| window(c, col))
+                            .sum();
+                        if (f.budget_litres - from_columns).abs() > 1e-6 {
+                            violations.push(format!(
+                                "{case}: budget {:.2} L, the columns' gas {from_columns:.2} L",
+                                f.budget_litres
+                            ));
+                        }
+                        let (mut wv, mut wv_turn) = (0.0, 0.0);
+                        for (c, &col) in rig.iter().zip(&f.cylinder_usable_bars) {
+                            if matches!(c.role, CylRole::BackGas) {
+                                wv += c.water_volume_l;
+                                wv_turn += c.water_volume_l * (c.fill_bar - col);
+                            }
+                        }
+                        let turn = f.backgas_turn_bar.unwrap();
+                        if (turn - wv_turn / wv).abs() > 1e-9 {
+                            violations.push(format!(
+                                "{case}: turn gauge {turn:.2} bar, the column says {:.2}",
+                                wv_turn / wv
+                            ));
+                        }
+                        let stage_cols: Vec<(f64, f64)> = rig
+                            .iter()
+                            .zip(&f.cylinder_usable_bars)
+                            .filter(|(c, &col)| matches!(c.role, CylRole::Stage) && col > 0.0)
+                            .map(|(c, &col)| (c.fill_bar, col))
+                            .collect();
+                        for (k, &bar) in f.stage_drop_bars.iter().enumerate() {
+                            let want = stage_cols.get(k).map(|(fl, col)| fl - col);
+                            if want.is_none_or(|w| (bar - w).abs() > 1e-9) {
+                                violations.push(format!(
+                                    "{case}: stage {k} drop {bar:.2} bar, the column says {want:?}"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "{} violations, first:\n{}",
+        violations.len(),
+        violations[..violations.len().min(6)].join("\n")
+    );
+}
+
+#[test]
+fn gas_gauge_rules_never_credit_more_than_the_volume_rules_they_replaced() {
+    // #576 A18(e). A gauge third of a tank never holds more gas than a third of its gas (the top
+    // of a tank holds less per bar), so switching every rule to the gauge may only ever SHRINK the
+    // budget. Per cylinder, against the volume rules (conservative cap applied to the litres as
+    // before): thirds = D(basis)/3 less the gas in the top `margin` bar of the basis; Half-Minus
+    // back gas = frac x D(basis); a counted Half-Minus stage = D(basis) - D((basis + reserve)/2).
+    // Bit-equal or below; identical below the Z == 1 knee, where gas is linear in pressure.
+    let d = |p: f64, v: f64| deliverable_gas(p, v, f64::INFINITY, false);
+    let mut violations = Vec::new();
+    for rated in [96.0, 150.0, 207.0, 232.0, 300.0_f64] {
+        for fill in [
+            20.0_f64, 60.0, 90.0, 96.0, 120.0, 180.0, 207.0, 232.0, 250.0, 300.0, 350.0, 450.0,
+        ] {
+            for conservative in [true, false] {
+                let basis = if conservative { fill.min(rated) } else { fill };
+                let stage = Cylinder::new(
+                    11.0,
+                    rated,
+                    fill,
+                    TankMaterial::Aluminium,
+                    CylRole::Stage,
+                    None,
+                )
+                .unwrap();
+                let bg = Cylinder {
+                    role: CylRole::BackGas,
+                    water_volume_l: 12.0,
+                    ..stage.clone()
+                };
+                let profile = |margin: f64, reserve: f64| ReserveProfile {
+                    all_thirds_safety_margin_bar: margin,
+                    stage_reserve_bar: reserve,
+                    ..ReserveProfile::default()
+                };
+                let mut check = |what: &str, new: f64, old: f64| {
+                    let tol = 1e-9 * old.abs().max(1.0);
+                    if new > old + tol || (fill <= 96.0 && (new - old).abs() > 1e-6) {
+                        violations.push(format!(
+                            "{what} rated {rated} fill {fill} cons {conservative}: gauge rule \
+                             {new} L, volume rule {old} L"
+                        ));
+                    }
+                };
+                for margin in [0.0, 10.0, 50.0] {
+                    let new = penetration_budget(
+                        std::slice::from_ref(&bg),
+                        ReservePreset::AllThirds,
+                        &profile(margin, 30.0),
+                        conservative,
+                    );
+                    let old = (d(basis, 12.0) / 3.0
+                        - (d(basis, 12.0) - d((basis - margin).max(0.0), 12.0)))
+                    .max(0.0);
+                    check(&format!("thirds margin {margin}"), new, old);
+                }
+                for reserve in [0.0, 30.0, 100.0_f64] {
+                    let drop = (0.5 * (basis + reserve)).clamp(0.0, basis);
+                    let stage_in = (d(basis, 11.0) - d(drop, 11.0)).max(0.0);
+                    // [#576 RV8c-3] TwoStage too: a sixth of the back gas and two counted stages.
+                    for (preset, frac, stages) in [
+                        (ReservePreset::OneStage, 0.25, 1),
+                        (ReservePreset::TwoStage, 1.0 / 6.0, 2),
+                    ] {
+                        let mut rig = vec![bg.clone()];
+                        rig.extend(std::iter::repeat_n(stage.clone(), stages));
+                        let new =
+                            penetration_budget(&rig, preset, &profile(0.0, reserve), conservative);
+                        let old = frac * d(basis, 12.0) + stages as f64 * stage_in;
+                        check(&format!("{preset:?} reserve {reserve}"), new, old);
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "{} violations, first:\n{}",
+        violations.len(),
+        violations[..violations.len().min(6)].join("\n")
+    );
+}
+
+#[test]
+fn gas_overfilled_half_minus_stage_drops_on_the_real_gauge() {
+    // #576 NF-AN1-1 (settled by A18(e)). An 11 L stage rated 207 bar but filled to 230, Half
+    // Minus with a 30-bar reserve under the conservative cap: the stage's IN half is
+    // (207 - 30) / 2 = 88.5 bar of its gauge, so it is dropped at 230 - 88.5 = 141.5 bar, and the
+    // map credits the gas between 230 and 141.5. The capped scale showed 118.5 bar, while the real
+    // gauge at the drop station read about 138 bar.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        12.0,
+        232.0,
+        90.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = Cylinder::new(
+        11.0,
+        207.0,
+        230.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let f = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg, stage], &cfg);
+    let stage_in =
+        deliverable_gas(230.0, 11.0, 207.0, false) - deliverable_gas(141.5, 11.0, 207.0, false);
+    // Back gas at 90 bar (Z == 1): a quarter of the gauge is 22.5 bar x 12 L = 270 L.
+    assert!(
+        (f.stage_drop_bars[0] - 141.5).abs() < 1e-9,
+        "drop {:.2} bar, the gauge rule says 141.5",
+        f.stage_drop_bars[0]
+    );
+    assert!((f.cylinder_usable_bars[1] - 88.5).abs() < 1e-9);
+    assert!(
+        (f.budget_litres - 270.0 - stage_in).abs() < 1e-6,
+        "budget {:.2} L, back gas 270 L + stage {stage_in:.2} L",
+        f.budget_litres
     );
 }
 
@@ -691,7 +1310,10 @@ fn gas_all_thirds_safety_margin_shrinks_budget_and_column() {
 }
 
 #[test]
-fn penetration_budget_all_thirds_is_usable_over_three() {
+fn penetration_budget_all_thirds_is_a_third_of_the_gauge() {
+    // #576 A18(e): thirds of the GAUGE. An 11.1 L tank at 207 bar turns at 138 bar and is credited
+    // the gas between 207 and 138 - less than a third of its gas, since the top of a tank holds
+    // less gas per bar (684.28 L against 733.02 L).
     let bg = Cylinder::new(
         11.1,
         207.0,
@@ -708,7 +1330,11 @@ fn penetration_budget_all_thirds_is_usable_over_three() {
         &ReserveProfile::default(),
         true,
     );
-    assert!((budget - usable_oc_gas(&cyls, true) / 3.0).abs() < 1e-6);
+    let window =
+        deliverable_gas(207.0, 11.1, 207.0, false) - deliverable_gas(138.0, 11.1, 207.0, false);
+    assert!((budget - window).abs() < 1e-6);
+    assert!((budget - 684.28).abs() < 0.01);
+    assert!(budget < usable_oc_gas(&cyls, true) / 3.0);
 }
 
 #[test]
@@ -1120,15 +1746,24 @@ fn gas_reach_field_override_drags_drop_shallower_shrinks_reach() {
 }
 
 #[test]
-fn gas_reach_field_override_drags_drop_deeper_is_over_reserve_and_extends_budget() {
+fn gas_reach_field_override_drags_drop_deeper_is_over_reserve_but_buys_no_reach() {
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let (bg, stage, cfg) = override_rig();
     let sec = origin.section_id;
+    let plain = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[bg.clone(), stage.clone()],
+        &cfg,
+    );
 
-    // Drag the drop DEEPER to station 3 (1500 L). Contribution 1500 > 600 safe (and < the 1800 L
-    // tank cap) ⇒ over-reserve. Budget 1500 + (1500 - 600) = 2400. Drop bar: held = 1800 - 1500 =
-    // 300 L ⇒ 15 bar - below the 30-bar reserve, which is exactly what the red flag warns about.
+    // Drag the drop DEEPER to station 3 (1500 L). The stage gives 1500 L there, more than its 600 L
+    // safe IN gas ⇒ over-reserve: the marker sits where the diver put it, red, reading the stage
+    // gauge there (held = 1800 - 1500 = 300 L ⇒ 15 bar, below the 30-bar reserve). But the plan
+    // credits the stage no more than its default 600 L (#576 NF-PGAS-1, "cap at default"), so the
+    // budget stays 1500 and the reach is the plain plan's, not 2400.
     let overrides = vec![Some(StationRef::new(sec, 3))];
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
@@ -1141,16 +1776,23 @@ fn gas_reach_field_override_drags_drop_deeper_is_over_reserve_and_extends_budget
         &overrides,
     );
     assert_eq!(f.stage_drop_refs, vec![StationRef::new(sec, 3)]);
-    assert!((f.budget_litres - 2400.0).abs() < 1e-6);
     assert!((f.stage_drop_bars[0] - 15.0).abs() < 1e-3);
     assert_eq!(f.stage_drop_over_reserve, vec![true]);
+    assert!(
+        (f.budget_litres - 1500.0).abs() < 1e-6,
+        "budget {:.1} L, the plan without the moved drop has 1500",
+        f.budget_litres
+    );
+    assert_eq!(f.reachable, plain.reachable);
+    assert_eq!(f.final_turn_ref, plain.final_turn_ref);
 }
 
 #[test]
 fn gas_reach_field_override_deeper_than_tank_empty_clamps_to_empty() {
-    // A stage that only holds 1000 L (fill 50 × water 20) dragged to station 3 (1500 L): the
-    // contribution HARD-clamps to the tank cap (1000 L), so the drop reads 0 bar (empty), is
-    // over-reserve, and the budget grows by only 1000 - 200, never crediting gas the tank lacks.
+    // A stage that only holds 700 L (fill 35 × water 20) dragged to station 2 (800 L, on the
+    // route): the gas breathed HARD-clamps to the tank cap (700 L), so the drop reads 0 bar (empty)
+    // and is over-reserve. The budget credits only the stage's 50 L safe IN gas (Half Minus,
+    // (35 - 30) / 2 = 2.5 bar x 20 L), as without the pin (#576 NF-PGAS-1).
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let bg = Cylinder::new(
@@ -1165,7 +1807,7 @@ fn gas_reach_field_override_deeper_than_tank_empty_clamps_to_empty() {
     let stage = Cylinder::new(
         20.0,
         207.0,
-        50.0,
+        35.0,
         TankMaterial::Aluminium,
         CylRole::Stage,
         None,
@@ -1176,8 +1818,18 @@ fn gas_reach_field_override_deeper_than_tank_empty_clamps_to_empty() {
         ..GasConfig::default()
     };
     let sec = origin.section_id;
-    // base budget = 900 (¼ back gas) + 200 (stage_in) = 1100.
-    let overrides = vec![Some(StationRef::new(sec, 3))];
+    // base budget = 900 (¼ back gas) + 50 (stage IN half) = 950: the route turns at station 2
+    // (800 L) and the default drop sits at station 1 (the first station past 50 L).
+    let plain = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[bg.clone(), stage.clone()],
+        &cfg,
+    );
+    assert!((plain.budget_litres - 950.0).abs() < 1e-6);
+    assert_eq!(plain.stage_drop_refs, vec![StationRef::new(sec, 1)]);
+    let overrides = vec![Some(StationRef::new(sec, 2))];
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
@@ -1188,9 +1840,10 @@ fn gas_reach_field_override_deeper_than_tank_empty_clamps_to_empty() {
         &cfg,
         &overrides,
     );
+    assert_eq!(f.stage_drop_refs, vec![StationRef::new(sec, 2)]);
     assert!(f.stage_drop_bars[0].abs() < 1e-3, "empty tank reads 0 bar");
     assert_eq!(f.stage_drop_over_reserve, vec![true]);
-    assert!((f.budget_litres - 1900.0).abs() < 1e-6); // 1100 + (1000 - 200)
+    assert!((f.budget_litres - 950.0).abs() < 1e-6);
 }
 
 #[test]
@@ -1324,7 +1977,7 @@ fn gas_reach_field_override_shifts_downstream_drop_keeping_it_safe() {
     // TwoStage default drops @ stations 1, 2 (stage_in 300 + 200; ⅙ back gas 1100 ⇒ budget 1600).
     // Drag stage 0 DEEPER to station 2 (800 L, within its 900 L cap ⇒ over-reserve, not clamped).
     // Stage 1 wasn't dragged, so it keeps its safe 200 L contribution but its drop shifts deeper
-    // (cumulative 800 + 200 = 1000 ⇒ station 3) and stays NOT over-reserve. Budget 1600 + 500 = 2100.
+    // (cumulative 800 + 200 = 1000 ⇒ station 3) and stays NOT over-reserve. Budget stays 1600.
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let bg = Cylinder::new(
@@ -1376,7 +2029,9 @@ fn gas_reach_field_override_shifts_downstream_drop_keeping_it_safe() {
         vec![StationRef::new(sec, 2), StationRef::new(sec, 3)]
     );
     assert_eq!(f.stage_drop_over_reserve, vec![true, false]);
-    assert!((f.budget_litres - 2100.0).abs() < 1e-6);
+    // The deeper pin buys no reach (#576 NF-PGAS-1): stage 0 is credited its 300 L default, so
+    // the budget stays the plain plan's 1600.
+    assert!((f.budget_litres - 1600.0).abs() < 1e-6);
 }
 
 #[test]
@@ -1497,6 +2152,121 @@ fn gas_reach_field_override_downstream_shallower_than_cumulative_drops_full() {
     );
 }
 
+/// The two-branch cave of the independent review of #576: the origin merged into a north line of
+/// 6 x 100 m legs (200 L each at 20 L/min and 10 m/min: 0/200/.../1200 L) and an east line of
+/// 2 x 205 m legs (410 L each: 0/410/820 L). Returns the project, the origin and both section ids.
+fn north_east_project() -> (Project, StationRef, u32, u32) {
+    let mut project = Project::new("Gas".to_string(), None);
+    let north = project
+        .add_section(SectionData {
+            shots: (0..6).map(|_| make_shot(100.0, 0.0, 0.0)).collect(),
+            ..Default::default()
+        })
+        .id;
+    let east = project
+        .add_section(SectionData {
+            shots: vec![make_shot(205.0, 0.0, 0.0), make_shot(205.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(north, 0), StationRef::new(east, 0))
+        .unwrap();
+    (project, StationRef::new(north, 0), north, east)
+}
+
+#[test]
+fn gas_reach_field_a_moved_drop_never_credits_more_than_the_plan_without_it() {
+    // #576 NF-PGAS-1, decided "re-check pins, cap at default": moving a stage drop may strand gas
+    // (a shallower drop) but never buys reach, wherever it is pinned - on the route, past its end,
+    // or on another branch - and whatever moved under it since. Swept over a flat line and a
+    // two-branch cave, Half Minus 1/2-stage and Free, under-filled to over-filled cylinders, cap on
+    // and off, one or both drops pinned at every station: the budget never exceeds the same plan
+    // without the pins, and no station the plain plan cannot reach becomes reachable.
+    let mut flat = Project::new("Gas".to_string(), None);
+    let flat_sec = flat
+        .add_section(SectionData {
+            shots: (0..16).map(|_| make_shot(100.0, 0.0, 0.0)).collect(),
+            ..Default::default()
+        })
+        .id;
+    let (branches, branch_origin, _, _) = north_east_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let mut violations = Vec::new();
+    let mut runs = 0usize;
+    for (project, origin) in [
+        (&flat, StationRef::new(flat_sec, 0)),
+        (&branches, branch_origin),
+    ] {
+        for preset in [
+            ReservePreset::OneStage,
+            ReservePreset::TwoStage,
+            ReservePreset::Free,
+        ] {
+            for fill in [180.0, 207.0, 250.0, 300.0] {
+                for conservative in [true, false] {
+                    let tank = |v: f64, role: CylRole, usable: f64| Cylinder {
+                        usable_gas_bar: usable,
+                        ..Cylinder::new(v, 207.0, fill, TankMaterial::Steel, role, None).unwrap()
+                    };
+                    let rig = [
+                        tank(12.0, CylRole::BackGas, 100.0),
+                        tank(11.0, CylRole::Stage, 80.0),
+                        tank(7.0, CylRole::Stage, 60.0),
+                    ];
+                    let cfg = GasConfig {
+                        default_reserve: preset,
+                        conservative_tank_gas: conservative,
+                        ..GasConfig::default()
+                    };
+                    let plain =
+                        project.compute_gas_reach_field(Some(&origin), None, &diver, &rig, &cfg);
+                    let stations = plain.station_refs.clone();
+                    let mut pin_sets: Vec<Vec<Option<StationRef>>> = Vec::new();
+                    for (i, &s) in stations.iter().enumerate() {
+                        pin_sets.push(vec![Some(s)]);
+                        pin_sets.push(vec![None, Some(s)]);
+                        let next = stations[(i + 1) % stations.len()];
+                        pin_sets.push(vec![Some(s), Some(next)]);
+                    }
+                    for pins in &pin_sets {
+                        runs += 1;
+                        let f = project.compute_gas_reach_field_with_overrides(
+                            Some(&origin),
+                            None,
+                            &[],
+                            &[],
+                            &diver,
+                            &rig,
+                            &cfg,
+                            pins,
+                        );
+                        let gained = f
+                            .reachable
+                            .iter()
+                            .zip(&plain.reachable)
+                            .any(|(&with, &without)| with && !without);
+                        if f.budget_litres > plain.budget_litres + 1e-9 || gained {
+                            violations.push(format!(
+                                "{preset:?} fill {fill} cons {conservative} pins {pins:?}: budget \
+                                 {:.2} L against {:.2} L without the pins, new stations {gained}",
+                                f.budget_litres, plain.budget_litres
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(runs > 1500, "sweep ran {runs} plans");
+    assert!(
+        violations.is_empty(),
+        "{} of {runs} pinned plans gained reach, first:\n{}",
+        violations.len(),
+        violations[..violations.len().min(4)].join("\n")
+    );
+}
+
 #[test]
 fn gas_reach_field_all_thirds_has_route_and_final_turn_but_no_drops() {
     // All-thirds has the route highlight + final turn (to the deepest reachable station) like any
@@ -1562,12 +2332,13 @@ fn gas_reach_field_gauges_use_effective_strategy_and_conservative_cap() {
         &[bg(), bg(), stage.clone()],
         &cfg,
     );
-    // avg start 90 × (1 - ¼) = 67.5 (Z=1 so usable=90·24; drop = ¼·90·24/24 = 22.5 → 90-22.5).
+    // Turn at a quarter of the back-gas gauge: 90 - 90/4 = 67.5.
     assert!((f.backgas_turn_bar.unwrap() - 67.5).abs() < 1e-6);
-    // Stage drop uses the CONSERVATIVE-capped basis min(230,207)=207 → (207+30)/2 = 118.5 (NOT
-    // (230+30)/2=130 from the raw overfill) - pins that the gauge matches the engine's drop.
+    // The stage's IN half is taken of the CONSERVATIVE-capped basis min(230,207)=207 - (207-30)/2 =
+    // 88.5 bar, not (230-30)/2 = 100 from the raw overfill - and read off its REAL gauge: dropped at
+    // 230 - 88.5 = 141.5 (#576 NF-AN1-1; the capped scale showed 118.5 while the tank read ~138).
     assert_eq!(f.stage_drop_bars.len(), 1);
-    assert!((f.stage_drop_bars[0] - 118.5).abs() < 1e-6);
+    assert!((f.stage_drop_bars[0] - 141.5).abs() < 1e-6);
 
     // TwoStage REQUESTED with only ONE stage → effective falls back to AllThirds: back-gas frac ⅓,
     // and NO stage-drop gauges (mirrors the budget/route fallback).
@@ -2323,10 +3094,11 @@ fn gas_reach_field_jump_multiplier_raises_only_jump_legs() {
 
 #[test]
 fn gas_reach_field_partial_frontier_between_interior_stations() {
-    // AllThirds budget = deliverable(250 bar, 12 L)/3 = 3000 / Z(250)≈1.0753 / 3 ≈ 929.9 L
-    // (Z-derated thirds), which sits between gas_in(station 2)=800 and gas_in(station 3)=1500 →
-    // reach {0,1,2}, turn at station 2. The budget is pinned to an INDEPENDENT hand-computed
-    // literal (catches a wrong /3, a dropped Z, or a bad fit), not re-derived from the function.
+    // AllThirds budget = the gas between 250 and 166.67 bar (a third of the gauge, #576 A18(e)) on
+    // 12 L = 12 x (250 / Z(250)=1.07525 - 166.67 / Z(166.67)=1.02294) ≈ 834.9 L (Z-derated), which
+    // sits between gas_in(station 2)=800 and gas_in(station 3)=1500 → reach {0,1,2}, turn at
+    // station 2. The budget is pinned to an INDEPENDENT hand-computed literal (catches a wrong /3,
+    // a dropped Z, or a bad fit), not re-derived from the function.
     let (project, origin) = linear_descent_project();
     let sec = origin.section_id;
     let diver = Diver::new(20.0, None).unwrap();
@@ -2341,7 +3113,7 @@ fn gas_reach_field_partial_frontier_between_interior_stations() {
     .unwrap();
     let field =
         project.compute_gas_reach_field(Some(&origin), None, &diver, &[cyl], &GasConfig::default());
-    assert!((field.budget_litres - 929.9).abs() < 1.0);
+    assert!((field.budget_litres - 834.9).abs() < 1.0);
     assert_eq!(field.reachable.iter().filter(|&&r| r).count(), 3); // stations 0,1,2
     let idx = |sr| field.station_refs.iter().position(|r| *r == sr).unwrap();
     assert!(field.reachable[idx(StationRef::new(sec, 2))]);
@@ -3276,96 +4048,6 @@ fn gas_reach_field_a_merge_twin_of_a_route_station_is_not_a_turn_candidate() {
         "the entrance's merge twin is offered as a turn candidate at a higher gas load"
     );
     assert!(!field.turn_frontier.contains(&entrance));
-}
-
-#[test]
-fn gas_reach_field_an_off_route_stage_drop_override_keeps_the_strategy_default() {
-    // A stage drop is a position ALONG the route, and the UI only ever writes route stations (the
-    // drag snaps, the nudge is index-clamped, the menu entry hides off-route). But `.plnx` PERSISTS
-    // overrides, so a plan reloaded after the survey, the endpoint or the way points moved can carry
-    // a pin the new route no longer passes - no hand-edited file required.
-    //
-    // Scoring such a pin from the station's own shortest-path gas prices a passage the plan never
-    // enters and folds the difference into the penetration budget, which EXTENDS the reach: the
-    // unsafe direction. An off-route pin has no route gas, so the only honest answer is the
-    // strategy default.
-    let (project, entrance, north, _east, north_tip, east_mid) = two_branch_project();
-    let diver = Diver::new(20.0, None).unwrap();
-    let bg = Cylinder::new(
-        13.0,
-        232.0,
-        200.0,
-        TankMaterial::Steel,
-        CylRole::BackGas,
-        None,
-    )
-    .unwrap();
-    let stage = Cylinder::new(
-        11.1,
-        207.0,
-        207.0,
-        TankMaterial::Aluminium,
-        CylRole::Stage,
-        None,
-    )
-    .unwrap();
-    let cfg = GasConfig {
-        default_reserve: ReservePreset::OneStage,
-        ..GasConfig::default()
-    };
-    let rig = [bg, stage];
-    let plan_north = |overrides: &[Option<StationRef>]| {
-        project.compute_gas_reach_field_with_overrides(
-            Some(&entrance),
-            Some(&north_tip),
-            &[],
-            &[],
-            &diver,
-            &rig,
-            &cfg,
-            overrides,
-        )
-    };
-
-    let baseline = plan_north(&[]);
-    // SETUP - the route runs down the north passage, so an east station is genuinely off it, and
-    // the rig really does have a stage slot to override.
-    assert_eq!(baseline.stage_drop_refs.len(), 1);
-    let route = route_stations(&baseline);
-    assert!(route.contains(&north_tip));
-    assert!(!route.contains(&east_mid));
-    // ...and it is not off-GRAPH: it resolves fine, which is what let it reach the scoring code.
-    assert!(baseline.station_refs.contains(&east_mid));
-    // Non-vacuity: the east station's own gas-to-reach is a real, different number, so the old
-    // `gas_in` basis had something to score and would not have coincided with the default.
-    let east_gas = field_gas(&baseline, east_mid);
-    assert!(east_gas > 0.0);
-
-    let pinned_off_route = plan_north(&[Some(east_mid)]);
-    assert!(
-        (pinned_off_route.budget_litres - baseline.budget_litres).abs() < 1e-6,
-        "an off-route pin moved the penetration budget by {} L",
-        pinned_off_route.budget_litres - baseline.budget_litres
-    );
-    assert_eq!(pinned_off_route.stage_drop_refs, baseline.stage_drop_refs);
-    assert_eq!(pinned_off_route.stage_drop_bars, baseline.stage_drop_bars);
-    assert!(!pinned_off_route.stage_drop_over_reserve[0]);
-
-    // The guard must not have been bought by disabling overrides altogether: an ON-route pin, one
-    // station deeper than the default drop, still moves the budget.
-    let default_drop = baseline.stage_drop_refs[0];
-    let deeper = route
-        .iter()
-        .skip_while(|r| **r != default_drop)
-        .find(|r| **r != default_drop && r.section_id == north)
-        .copied();
-    if let Some(deeper) = deeper {
-        let pinned_on_route = plan_north(&[Some(deeper)]);
-        assert!(
-            (pinned_on_route.budget_litres - baseline.budget_litres).abs() > 1e-6,
-            "an on-route pin at {deeper:?} left the budget unchanged - the override path is dead"
-        );
-    }
 }
 
 #[test]
@@ -4755,4 +5437,71 @@ fn gas_reach_field_riding_below_cruise_turns_the_dive_earlier() {
         "spent range should be 3x the line ridden; got {}",
         slow.scooter_distance_m
     );
+}
+
+#[test]
+fn gas_reach_field_mismatched_dpv_rig_turns_on_the_faster_units_clock() {
+    // #576 A15. Primary 45 m/min x 45 min (2025 m, the weaker unit by line), backup 30 m/min x
+    // 90 min, 10% reserve: the cap is 1822.5 m. One span ridden at 30 m/min on a flat line of
+    // 100 m shots. The primary flies in at 30 m/min and is spent after 45 x 0.9 x 30 = 1215 m, so
+    // station 12 (1200 m) is the last in range - not station 18, which the slower unit's cruise
+    // (30 / 30 = a metre per metre) admitted. Gas is unlimited, so the range is what turns it.
+    let mut project = Project::new("Gas".to_string(), None);
+    let sec = project
+        .add_section(SectionData {
+            shots: (0..30).map(|_| make_shot(100.0, 0.0, 0.0)).collect(),
+            ..Default::default()
+        })
+        .id;
+    let origin = StationRef::new(sec, 0);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        dpv: Some(DpvRig {
+            primary: DpvUnit {
+                speed_m_per_min: 45.0,
+                burn_minutes: 45.0,
+            },
+            backup: DpvUnit {
+                speed_m_per_min: 30.0,
+                burn_minutes: 90.0,
+            },
+            range_reserve_fraction: 0.1,
+        }),
+        ..GasConfig::default()
+    };
+    let plan = |speed: f64| {
+        project.compute_gas_reach_field_with_overrides(
+            Some(&origin),
+            None,
+            &[],
+            &[seg(speed, true)],
+            &diver,
+            &[unlimited_backgas()],
+            &cfg,
+            &[],
+        )
+    };
+    let deepest = |f: &GasReachField| {
+        (0..=30)
+            .filter(|&i| field_reachable(f, StationRef::new(sec, i)))
+            .max()
+            .unwrap()
+    };
+    let slow = plan(30.0);
+    assert_eq!(slow.scooter_range_limit_m, Some(1822.5));
+    assert_eq!(
+        deepest(&slow),
+        12,
+        "the primary covers 1215 m at 30 m/min; scooter range spent {}",
+        slow.scooter_distance_m
+    );
+    assert!(slow.turn_on_scooter_range);
+    assert!(
+        (slow.scooter_distance_m - 1800.0).abs() < 1e-6,
+        "1200 m of line at 1.5 m of range per metre"
+    );
+    // At the primary's cruise nothing changes: a metre of line is a metre of range.
+    let cruise = plan(45.0);
+    assert_eq!(deepest(&cruise), 18);
+    assert!((cruise.scooter_distance_m - 1800.0).abs() < 1e-6);
 }

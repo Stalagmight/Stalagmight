@@ -230,7 +230,6 @@ export async function driverScript(
     },
     log: (_m: unknown) => undefined,
   };
-  // eslint-disable-next-line no-new-func
   const fn = new Function(
     'helpers',
     `return (async () => { const { browser, ipc, evalInApp, readStore, callAction, log } = helpers; ${script} })();`,

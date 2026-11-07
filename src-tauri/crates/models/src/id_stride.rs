@@ -32,6 +32,13 @@ pub const MAX_SECTION_ID: u32 = (u32::MAX - (FEATURE_ID_STRIDE - 1)) / FEATURE_I
 /// against this constant is the whole budget check.
 pub const MAX_SECTIONS_IN_ID_SPACE: usize = MAX_SECTION_ID as usize + 1;
 
+/// The most shots one section may hold: one short of its `FEATURE_ID_STRIDE`
+/// window, so a free id always remains for a re-numbered or replayed shot.
+/// `Project::add_shot` stops there, a file holding more is refused on load
+/// (A18(d), #576), and `create_section` and the batch import gate refuse a
+/// longer section (#576 NF-AN2-8) - `Section::new` itself does not check.
+pub const MAX_SHOTS_PER_SECTION: usize = (FEATURE_ID_STRIDE - 1) as usize;
+
 // Compile-time proof of the two directions of the bound. Const arithmetic
 // overflow is a build error rather than a wrap, so evaluating the encode of the
 // last shot of the last usable section IS the proof that it fits; what is left

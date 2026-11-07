@@ -10,7 +10,7 @@ use crate::models::{
 };
 
 /// Identifies either a station or a shot as a comment holder
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommentHolder {
     Station {
@@ -38,29 +38,40 @@ impl std::fmt::Display for CommentHolder {
 }
 
 /// All persistent commands that modify project state
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Generated as the TS `Command` (#576 C3), which `execute_batch` takes and the
+/// frontend's `BatchCommand` narrows. The frontend only ever SENDS one, so every
+/// `Option` field is declared `?:` - serde reads a missing key as `None`.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
     // Project commands
     CreateProject {
         name: String,
+        #[ts(optional)]
         location: Option<String>,
     },
     OpenProject {
         path: PathBuf,
     },
     SaveProject {
+        #[ts(optional)]
         path: Option<PathBuf>,
     },
     CloseProject,
 
     // Section commands
     CreateSection {
+        #[ts(optional)]
         name: Option<String>,
+        #[ts(optional)]
         surveyor: Option<String>,
+        #[ts(type = "string")]
+        #[ts(optional)]
         date: Option<NaiveDate>,
         color: String,
         #[serde(default)]
+        #[ts(optional)]
         direction: Option<SurveyDirection>,
         shots: Vec<ShotData>,
     },
@@ -86,8 +97,10 @@ pub enum Command {
     CreateShot {
         section_id: SectionId,
         shot: ShotData,
+        #[ts(optional)]
         after_shot_id: Option<ShotId>,
         #[serde(default)]
+        #[ts(optional)]
         before_shot_id: Option<ShotId>,
     },
     UpdateShot {
@@ -140,6 +153,7 @@ pub enum Command {
         closure_strategy: ClosureStrategy,
     },
     RemoveLoopClosure {
+        #[ts(type = "number")]
         closure_id: u64,
     },
     SetZeroDatum {
@@ -153,6 +167,7 @@ pub enum Command {
     // Station comment commands
     SetStationComment {
         station_ref: StationRef,
+        #[ts(optional)]
         comment: Option<String>,
     },
 
@@ -229,24 +244,6 @@ pub enum Command {
     /// this variant only LABELS that entry and is never run through `execute()`.
     SetSurfaceElevation,
 }
-
-/// Coded-failure prefix for a mutation rejected because the open project is a
-/// remote SpeleoDB project opened without a write lock (#191, D-B7). Mirrors the
-/// `loading::PERMISSION_DENIED_CODE` string-prefix idiom: `CommandResult` has no
-/// `code` field, so the code is prefixed onto the `error` string and the FE
-/// (#204) pattern-matches `err.starts_with(EDIT_DISABLED_CODE)` to suppress the
-/// toast. Deliberately NO `edit_enabled` query command here (that IPC is
-/// #204/#209).
-pub const EDIT_DISABLED_CODE: &str = "EDIT_DISABLED";
-
-/// Coded-failure prefix for a mutation blocked by the lazy 20-min lock re-verify
-/// (#202) because a definitive server answer showed the write lock is no longer
-/// held by us. Same string-prefix idiom as [`EDIT_DISABLED_CODE`],
-/// but distinct so the FE routes it to the divergence prompt (reconcile) instead of
-/// the plain read-only notice. NOT a correctness guard - the release-time fence + a
-/// 403 on push are - so a transient re-verify failure never emits this (it lets the
-/// edit through and the fence catches any real conflict).
-pub(crate) const EDIT_REVERIFY_DIVERGED_CODE: &str = "EDIT_REVERIFY_DIVERGED";
 
 /// One section whose station numbering an operation reversed, together with the
 /// shot count `N` that was IN FORCE at that reverse - the divisor the mirror
@@ -336,12 +333,28 @@ pub fn decorate_receipt(
     receipt.cap_warnings();
 }
 
-/// Result of command execution
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+/// Result of command execution - the accumulator the `AppState` methods build
+/// their answer in.
+///
+/// [#576 A12/C4] No longer an IPC type: every command converts it at the
+/// boundary with [`CommandResult::into_outcome`] into its own success value
+/// (`EditOutcome`, `SaveOutcome`, ... in [`crate::core::outcome`]) or a
+/// [`crate::core::CommandError`]. The field docs below that speak of "the wire"
+/// describe what those outcome types carry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommandResult {
     pub success: bool,
     pub warnings: Vec<ValidationWarning>,
+    /// The failure's display message (`None` on success). Never carries a code
+    /// marker: the classification is [`Self::code`].
     pub error: Option<String>,
+    /// [#576 C4] What kind of failure this is, for the frontend to route on;
+    /// `None` on success, and on a failure nothing classified (`FAILED`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub code: Option<crate::models::CommandErrorCode>,
+    /// [#576 C4] `HISTORY_STEP_FAILED`: which step of an undo/redo jump failed.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub history_step: Option<crate::core::command_error::HistoryStepFailure>,
     /// ID of the created section (for CreateSection command)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section_id: Option<u32>,
@@ -480,7 +493,10 @@ pub struct CommandResult {
 /// they stay consistent with the integrity banner's count - unlike summing
 /// per-operation counters that mix different units. `remaining` is whatever the
 /// repair could not auto-fix (detect-only: a drifted aligned loop closure to
-/// recompute/remove, or non-finite shot geometry to correct by hand).
+/// recompute/remove, non-finite shot geometry to correct by hand, or a GPS tie
+/// point with impossible values - `invalid_zero_datum`, #576 B35(g) - which only
+/// the user can correct). The partial-result toast names all three (#576
+/// NF-W3-4).
 ///
 /// `changed` is true when the repair actually mutated the project (an undo entry
 /// was recorded). It is a STRICTLY broader signal than `fixed > 0`: the repair
@@ -493,6 +509,9 @@ pub struct IntegrityRepairResult {
     pub fixed: u32,
     pub remaining: u32,
     pub changed: bool,
+    /// [#576 D22] The open project's SpeleoDB link bits after the repair; `null`
+    /// for a local project. Filled by the IPC helper, `None` from the core.
+    pub remote_link: Option<crate::core::outcome::RemoteLinkBits>,
 }
 
 /// Result of a structural-integrity check. `messages` is the human-readable
@@ -518,36 +537,52 @@ pub struct ValidationWarning {
 
 pub use crate::models::warning::WarningSeverity;
 
+/// [#576 NF-W2SAVE-1] The `speleodb_done` answer: the Done outcome, plus the
+/// warnings of the project save Done runs before taking the upload snapshot (what
+/// that save could not keep - display settings, undo history). They are one-shot -
+/// the save after the push does not repeat them - so they ride here and the
+/// frontend shows them like a normal save's warnings. Empty when nothing was
+/// saved or nothing was lost.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoDoneReport {
+    pub result: crate::speleodb::DoneResult,
+    pub save_warnings: Vec<ValidationWarning>,
+}
+
+/// [#576 NF-W4M-2] The `speleodb_publish` answer: the publish outcome, plus the
+/// warnings of the two saves publish runs - the one that relocates the project
+/// into the SpeleoDB cache and the pre-push save of its initial push - for what
+/// they could not keep. One-shot like Done's and Push's (see
+/// [`SpeleoDoneReport`]); empty when nothing was lost.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoPublishReport {
+    pub result: crate::speleodb::SpeleoPublishResult,
+    pub save_warnings: Vec<ValidationWarning>,
+}
+
+/// [#576 NF-W2SAVE-1] The `speleodb_push` answer: the Push outcome plus the
+/// pre-push save's warnings (see [`SpeleoDoneReport`]).
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoPushReport {
+    pub result: crate::speleodb::PushResult,
+    pub save_warnings: Vec<ValidationWarning>,
+}
+
 impl CommandResult {
     pub fn success() -> Self {
         Self {
             success: true,
-            warnings: Vec::new(),
-            error: None,
-            section_id: None,
-            section_ids: Vec::new(),
-            shot_id: None,
-            saved_path: None,
-            session_closed: None,
-            unlinked_copy_path: None,
-            reversed_sections: None,
-            import_receipt: None,
+            ..Self::default()
         }
     }
 
+    /// An unclassified failure (`FAILED` at the boundary). A producer that knows
+    /// what kind of failure it is uses [`Self::refused`] instead.
     pub fn failure(error: String) -> Self {
         Self {
             success: false,
-            warnings: Vec::new(),
             error: Some(error),
-            section_id: None,
-            section_ids: Vec::new(),
-            shot_id: None,
-            saved_path: None,
-            session_closed: None,
-            unlinked_copy_path: None,
-            reversed_sections: None,
-            import_receipt: None,
+            ..Self::default()
         }
     }
 
@@ -1289,74 +1324,6 @@ mod tests {
         assert!(failure.shot_id.is_none());
     }
 
-    /// #441: a field the TYPE says is always there must always be on the wire.
-    ///
-    /// ts-rs 7 can only emit `foo?:` for an `Option<T>` (`optional` is rejected on
-    /// any other type), so `skip_serializing_if` on a `Vec` produces a REQUIRED
-    /// `Array<_>` that the wire sometimes omits - and `tsc` cannot see a single
-    /// bare `result.section_ids.length` after that. This test pins BOTH halves of
-    /// the rule: the key is present iff the declaration lacks `?`.
-    ///
-    /// Turns red if `section_ids` regains `skip_serializing_if` (key vanishes from
-    /// an empty result) or is retyped `Option<Vec<_>>` (declaration gains the `?`).
-    #[test]
-    fn omitted_fields_are_exactly_the_ones_declared_optional() {
-        use ts_rs::TS;
-
-        let empty = serde_json::to_value(CommandResult::success()).unwrap();
-        let empty = empty.as_object().unwrap();
-
-        assert_eq!(
-            empty.get("section_ids"),
-            Some(&serde_json::json!([])),
-            "section_ids generates as a required Array<number>, so an empty result \
-             must still carry the key (#441); got {empty:?}"
-        );
-
-        for absent in [
-            "section_id",
-            "shot_id",
-            "saved_path",
-            "session_closed",
-            "unlinked_copy_path",
-            "reversed_sections",
-            "import_receipt",
-        ] {
-            assert!(
-                !empty.contains_key(absent),
-                "`{absent}` is declared optional, so it must be ABSENT (not null) \
-                 when unset; got {empty:?}"
-            );
-        }
-
-        // The populated case must round-trip intact, not just be present: the
-        // empty-case assertion above would still pass if the field serialized as
-        // a constant `[]`.
-        let populated = CommandResult::success().with_section_ids(vec![4, 7, 9]);
-        let json = serde_json::to_string(&populated).unwrap();
-        assert!(
-            json.contains("\"section_ids\":[4,7,9]"),
-            "created section ids must reach the wire verbatim: {json}"
-        );
-        let back: CommandResult = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            back.section_ids,
-            vec![4, 7, 9],
-            "section_ids must survive the round-trip"
-        );
-
-        let decl = CommandResult::decl();
-        assert!(
-            decl.contains("section_ids: Array<number>"),
-            "section_ids must stay a required array to match the wire above: {decl}"
-        );
-        assert!(
-            decl.contains("reversed_sections?:"),
-            "reversed_sections is omitted from the wire, so its declaration must \
-             carry the `?`: {decl}"
-        );
-    }
-
     #[test]
     fn command_description_covers_all_variants() {
         let shot_data = ShotData {
@@ -1608,6 +1575,7 @@ mod tests {
             warnings: Vec::new(),
             info: Vec::new(),
             zero_datum_created: None,
+            hidden_warnings: 0,
         }
     }
 
@@ -1690,5 +1658,45 @@ mod tests {
         receipt.cap_warnings();
 
         assert_eq!(receipt.warnings, vec!["short warning".to_string()]);
+    }
+
+    /// #576 C17: `execute_import_sections` caps its receipt, and
+    /// `decorate_receipt` caps again after putting the converter's warnings
+    /// first. The second cap treated the first one's "... and N more" line as
+    /// an ordinary warning - dropping it, and counting only what IT cut - so
+    /// 60 execute warnings plus 3 converter ones said "4 more" when 13 were
+    /// hidden.
+    #[test]
+    fn decorate_receipt_counts_what_an_earlier_cap_hid() {
+        let mut receipt = blank_receipt();
+        receipt.warnings = (0..60).map(|i| format!("shot {i} looks odd")).collect();
+        receipt.cap_warnings();
+        let mut result = CommandResult::success().with_import_receipt(receipt);
+
+        decorate_receipt(
+            &mut result,
+            "Compass",
+            std::path::Path::new("/tmp/cave.dat"),
+            1,
+            None,
+            (0..3).map(|i| format!("converter note {i}")).collect(),
+        );
+
+        let warnings = result.import_receipt.expect("receipt").warnings;
+        assert_eq!(warnings.len(), 51);
+        assert_eq!(warnings[0], "converter note 0");
+        assert_eq!(
+            warnings.last().map(String::as_str),
+            Some("... and 13 more warnings"),
+            "63 warnings, 50 shown"
+        );
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|w| w.starts_with("... and "))
+                .count(),
+            1,
+            "one summary line"
+        );
     }
 }

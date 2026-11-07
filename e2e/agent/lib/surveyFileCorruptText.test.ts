@@ -143,8 +143,9 @@ describe('the text catalogs', () => {
         'no-closing-root',
       ],
     };
+    // `required` is keyed by exactly CATALOGS' five namespaces.
     for (const [namespace, ids] of Object.entries(required)) {
-      const present = CATALOGS[namespace].map((entry) => entry.id);
+      const present = CATALOGS[namespace]!.map((entry) => entry.id);
       for (const id of ids) expect(present).toContain(id);
     }
   });
@@ -164,7 +165,7 @@ describe('corruptionsFor', () => {
       }
       // A catalog entry whose `applies` never fires is a rejection path the
       // fuzzer believes it covers and does not.
-      for (const entry of CATALOGS[namespace]) {
+      for (const entry of CATALOGS[namespace]!) { // TEXT_FORMATS are CATALOGS' keys
         expect([...offered]).toContain(`${namespace}:${entry.id}`);
       }
     }

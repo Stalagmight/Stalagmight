@@ -241,6 +241,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::ClassifyScope;
+    use crate::test_fixtures::straight_shot;
     use crate::{
         ClosureStrategy, LoopClosure, Project, SectionData, ShotData, ShotKind, StationMerge,
         StationRef,
@@ -259,15 +260,7 @@ mod tests {
     }
 
     fn shot(kind: ShotKind) -> ShotData {
-        ShotData {
-            azimuth_in: 0.0,
-            azimuth_out: 0.0,
-            length: 10.0,
-            depth_in: 0.0,
-            depth_out: 0.0,
-            kind,
-            ..Default::default()
-        }
+        straight_shot(0.0, 10.0).with_kind(kind)
     }
 
     fn project_with(shots: Vec<ShotData>) -> Project {

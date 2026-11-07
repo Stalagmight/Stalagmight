@@ -1,15 +1,21 @@
 import type { TmlFile, TmlSection, TmlShot } from '../types/commands';
 
 /**
- * The shots the backend will actually import under the current toggles: CLOSURE
- * rows are never imported (they are loop markers, not measurements) and excluded
- * rows only when the user opts in - mirrors `convert_shots_to_shot_data`
- * (src-tauri/src/parsers/tml.rs).
+ * Whether the backend imports `shot` under the current toggle: CLOSURE rows
+ * never (they are loop markers, not measurements), excluded rows only when the
+ * user opts in. The TypeScript mirror of `survives_import`
+ * (src-tauri/crates/parsers/src/parsers/tml/mod.rs), kept here so the dialog
+ * can recompute on every toggle without a round trip; both are pinned by the
+ * same truth table - `survives_import_truth_table` there,
+ * src/utils/__tests__/tmlImportStats.test.ts here (#576 E17).
  */
+export function survivesImport(shot: TmlShot, includeExcluded: boolean): boolean {
+  return shot.shot_type !== 'Closure' && (includeExcluded || !shot.excluded);
+}
+
+/** The shots the backend will actually import under the current toggle. */
 export function importableShots(section: TmlSection, includeExcluded: boolean): TmlShot[] {
-  return section.shots.filter(
-    (shot) => shot.shot_type !== 'Closure' && (includeExcluded || !shot.excluded)
-  );
+  return section.shots.filter((shot) => survivesImport(shot, includeExcluded));
 }
 
 export interface TmlImportStats {
@@ -55,7 +61,7 @@ export function computeTmlImportStats(
     for (const shot of section.shots) {
       if (shot.shot_type === 'Closure') continue;
       if (shot.excluded) excludedCount++;
-      if (!includeExcluded && shot.excluded) continue;
+      if (!survivesImport(shot, includeExcluded)) continue;
       sectionShots++;
       totalShots++;
       totalLength += shot.length;

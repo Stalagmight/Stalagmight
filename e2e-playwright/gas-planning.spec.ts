@@ -24,6 +24,15 @@ import {
   gasWaypointRows,
   qualifiedIndexTestIds,
 } from './helpers/testIds';
+import {
+  lastGasReachCylinderRoles,
+  lastGasReachDpv,
+  lastGasReachEndpoint,
+  lastGasReachOverrides,
+  lastGasReachSegments,
+  ONE_STAGE_DROP,
+  seedGasField,
+} from './helpers/gasReach';
 
 /**
  * E2E for the gas reachable-frontier overlay, now the Plan workspace mode (#38,
@@ -42,6 +51,14 @@ import {
  * gold->purple ramp color, while the over-budget ones are painted grey".
  * `survey-gas-route` is still a stock layer, so its assertions are unchanged.
  * The IPC field is mocked (`compute_gas_reach_field`).
+ *
+ * [#576 E3] The mocked field is CANNED (mocks/ipc/gasPlan.ts): a fixed ramp over the
+ * stations, whatever the plan sent. The engine - the reserve strategies, the gauges, the
+ * stage drops and their over-reserve flag, the route metrics, the profile, the segment
+ * speeds, the scooter range and park point - is pinned by the Rust gas tests. This spec
+ * asserts what the panel sends and how it renders the answer; where a test needs the
+ * engine to answer something the canned field does not (a stage drop, a scooter range),
+ * it seeds that answer with `seedGasField`.
  */
 
 async function createProject(page: Page, name: string): Promise<void> {
@@ -286,6 +303,8 @@ async function setupOneStageDrop(page: Page): Promise<void> {
   await selectDropdownOptionAt(qualifiedIndexTestIds(page, 'gas-cylinder-role').last(), 'stage');
   const oneStage = page.locator('[data-testid="gas-reserve-one_stage"]');
   await expect(oneStage).toBeEnabled();
+  // The staged strategy's drop is the engine's answer (#576 E3: seeded, not computed).
+  await seedGasField(page, ONE_STAGE_DROP);
   await oneStage.click();
   await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
   await expect
@@ -307,64 +326,6 @@ async function stageDropOverrides(page: Page): Promise<Array<StationRefLite | nu
         }
       ).__E2E_TEST__?.gasPlanStore.getState().stageDropOverrides ?? [],
   );
-}
-
-/** The `endpoint` argument the LAST compute_gas_reach_field call was invoked with (#310). */
-async function lastGasReachEndpoint(page: Page): Promise<StationRefLite | null> {
-  return page.evaluate(() => {
-    const calls =
-      (
-        window as unknown as {
-          __MOCK_GAS_REACH_CALLS__?: Array<{ endpoint: StationRefLite | null }>;
-        }
-      ).__MOCK_GAS_REACH_CALLS__ ?? [];
-    return calls.length ? calls[calls.length - 1].endpoint : null;
-  });
-}
-
-/** The `stage_drop_overrides` argument the LAST compute_gas_reach_field call was invoked with. */
-async function lastGasReachOverrides(page: Page): Promise<Array<StationRefLite | null>> {
-  return page.evaluate(() => {
-    const calls =
-      (
-        window as unknown as {
-          __MOCK_GAS_REACH_CALLS__?: Array<{ stageDropOverrides: Array<StationRefLite | null> }>;
-        }
-      ).__MOCK_GAS_REACH_CALLS__ ?? [];
-    return calls.length ? calls[calls.length - 1].stageDropOverrides : [];
-  });
-}
-
-type PlanSegmentLite = { speed_m_per_min: number | null; on_scooter: boolean };
-
-/** The `segments` argument the LAST compute_gas_reach_field call was invoked with (#317) - the
- *  wiring guard for the Segments table: a table that only re-rendered itself would leave this
- *  stale, since only `setSegments` (which nulls `reachField`) triggers a refetch. */
-async function lastGasReachSegments(page: Page): Promise<PlanSegmentLite[]> {
-  return page.evaluate(() => {
-    const calls =
-      (
-        window as unknown as {
-          __MOCK_GAS_REACH_CALLS__?: Array<{ segments: PlanSegmentLite[] }>;
-        }
-      ).__MOCK_GAS_REACH_CALLS__ ?? [];
-    return calls.length ? calls[calls.length - 1].segments : [];
-  });
-}
-
-/** The `dpv` field the LAST compute_gas_reach_field call's `gasConfig` carried (#317) - proves a
- *  rig toggle reached the actual REQUEST, not just the client-side `hasDpvRig` flag the readout
- *  also gates on (that flag flips a render tick before any recompute round-trips). */
-async function lastGasReachDpv(page: Page): Promise<unknown> {
-  return page.evaluate(() => {
-    const calls =
-      (
-        window as unknown as {
-          __MOCK_GAS_REACH_CALLS__?: Array<{ dpv: unknown }>;
-        }
-      ).__MOCK_GAS_REACH_CALLS__ ?? [];
-    return calls.length ? calls[calls.length - 1].dpv : undefined;
-  });
 }
 
 /** Enable a DPV rig from the Plan-mode bottom panel's "DPV" tab (#317, moved out of Settings;
@@ -480,7 +441,7 @@ test.describe('Gas planning', () => {
     expect(await stationPaints(page, UNCONNECTED, grey)).toBe(false);
   });
 
-  test('R9/R10 (#395): Plan opens with the entry card - no legend, no ramp, no bottom panel until an origin is chosen @smoke', async ({
+  test('R9/R10 (#395): Plan opens with the entry card - no legend, no ramp, no bottom panel until an origin is chosen', async ({
     page,
   }) => {
     await waitForDrawnStations(page, 1);
@@ -534,7 +495,7 @@ test.describe('Gas planning', () => {
       .toBe(idlePixelKey);
   });
 
-  test('R9/R10 (#395): "Pick on map" arms a one-shot origin pick, disarmed by Escape or a second press @smoke', async ({
+  test('R9/R10 (#395): "Pick on map" arms a one-shot origin pick, disarmed by Escape or a second press', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -716,7 +677,7 @@ test.describe('Gas planning', () => {
             format: string;
             request: Record<string, unknown>;
           }>
-        )[0],
+        )[0]!, // in range: the poll above waited for exactly one export
     );
     expect(sent.format).toBe('subsurface-xml');
     expect(sent.path.endsWith('.xml')).toBe(true);
@@ -735,7 +696,7 @@ test.describe('Gas planning', () => {
     expect(Array.isArray(sent.request.cylinders)).toBe(true);
   });
 
-  test('Plan swim speed persists to the saved config @smoke', async ({ page }) => {
+  test('Plan swim speed persists to the saved config', async ({ page }) => {
     await enterPlanMode(page);
     const swim = page.locator('[data-testid="gas-swim-speed-input"]');
     await expect(swim).toBeVisible({ timeout: 3000 });
@@ -761,7 +722,7 @@ test.describe('Gas planning', () => {
       .toBe(14);
   });
 
-  test('Display menu is in Survey and Plan (not Export), without the survey-only geometry toggle @smoke', async ({
+  test('Display menu is in Survey and Plan (not Export), without the survey-only geometry toggle', async ({
     page,
   }) => {
     const openMenu = async () => {
@@ -795,7 +756,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="display-menu-button"]')).toHaveCount(0);
   });
 
-  test('adding a stage enables a pushy preset behind the advanced acknowledgment @smoke', async ({
+  test('adding a stage enables a pushy preset behind the advanced acknowledgment', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -812,6 +773,8 @@ test.describe('Gas planning', () => {
     // (it must NOT apply until acknowledged).
     const oneStage = page.locator('[data-testid="gas-reserve-one_stage"]');
     await expect(oneStage).toBeEnabled();
+    // What the staged strategy answers is the engine's (#576 E3: seeded here).
+    await seedGasField(page, ONE_STAGE_DROP);
     await oneStage.click();
     await expect(page.locator('[data-testid="gas-pushy-ack"]')).toBeVisible();
 
@@ -820,8 +783,11 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-pushy-ack"]')).toHaveCount(0);
     await expect(oneStage).toHaveClass(/ring-accent/);
 
-    // The staged strategy refetches a field with a route → a ▼ drop marker + the ◉ final-turn
-    // marker render, and the readout gains the per-stage drop gauge.
+    // The staged strategy refetches the field, and its answer renders: a ▼ drop marker, the ◉
+    // final-turn marker, and the readout's per-stage drop gauge.
+    await expect
+      .poll(async () => (await lastGasReachCylinderRoles(page)).includes('stage'), { timeout: 3000 })
+      .toBe(true);
     await expect
       .poll(() => page.locator('[data-testid="gas-drop-marker"]').count(), { timeout: 3000 })
       .toBeGreaterThan(0);
@@ -860,14 +826,14 @@ test.describe('Gas planning', () => {
                     gasPlanStore: { getState: () => { cylinders: Array<{ enabled: boolean }> } };
                   };
                 }
-              ).__E2E_TEST__.gasPlanStore.getState().cylinders[0].enabled,
+              ).__E2E_TEST__.gasPlanStore.getState().cylinders[0]!.enabled,
           ),
         { timeout: 2000 },
       )
       .toBe(false);
   });
 
-  test('disabling the only stage drops the staged reserve control (UI/backend parity #245) @smoke', async ({
+  test('disabling the only stage drops the staged reserve control (UI/backend parity #245)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -887,7 +853,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-reserve-one_stage"]')).toBeDisabled();
   });
 
-  test('the Free strategy makes the usable-gas column editable per cylinder (#245) @smoke', async ({
+  test('the Free strategy makes the usable-gas column editable per cylinder (#245)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -916,7 +882,7 @@ test.describe('Gas planning', () => {
                 gasPlanStore: { getState: () => { cylinders: Array<{ usable_gas_bar: number }> } };
               };
             }
-          ).__E2E_TEST__.gasPlanStore.getState().cylinders[idx].usable_gas_bar,
+          ).__E2E_TEST__.gasPlanStore.getState().cylinders[idx]!.usable_gas_bar,
         i,
       );
     await editGridCell(page, 'gas-cylinder', 0, 'usable', '80');
@@ -930,7 +896,7 @@ test.describe('Gas planning', () => {
     await expect.poll(() => usableOf(0), { timeout: 2000 }).toBe(0);
   });
 
-  test('readout: no Turn points row; backgas label switches; stage drops show distance (#245) @smoke', async ({
+  test('readout: no Turn points row; backgas label switches; stage drops show distance (#245)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -946,6 +912,7 @@ test.describe('Gas planning', () => {
     // stage-drop row shows both a pressure and a distance ("… @ …m").
     await selectDropdownOption(page, 'gas-add-tank', 'al80');
     await selectDropdownOptionAt(qualifiedIndexTestIds(page, 'gas-cylinder-role').last(), 'stage');
+    await seedGasField(page, ONE_STAGE_DROP); // the engine's drop (#576 E3: seeded)
     await page.locator('[data-testid="gas-reserve-one_stage"]').click();
     await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
     await expect(readout).toContainText('Backgas switch pressure');
@@ -953,7 +920,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-readout-stage1-drop"]')).toContainText('@');
   });
 
-  test('All-thirds safety margin input appears only in thirds and round-trips to config (#245) @smoke', async ({
+  test('All-thirds safety margin input appears only in thirds and round-trips to config (#245)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -1006,7 +973,7 @@ test.describe('Gas planning', () => {
           };
         }
       ).__E2E_TEST__;
-      const sec = e2e.projectStore.getState().project.sections[0];
+      const sec = e2e.projectStore.getState().project.sections[0]!;
       e2e.uiStore.getState().openDialog('context-menu', {
         target: { type: 'station', ref: { section_id: sec.id, station_index: 1 } },
         position: { x: 220, y: 220 },
@@ -1041,7 +1008,7 @@ test.describe('Gas planning', () => {
           };
         }
       ).__E2E_TEST__;
-      const sec = e2e.projectStore.getState().project.sections[0];
+      const sec = e2e.projectStore.getState().project.sections[0]!;
       e2e.uiStore.getState().openDialog('context-menu', {
         target: { type: 'station', ref: { section_id: sec.id, station_index: idx } },
         position: { x: 220, y: 220 },
@@ -1049,7 +1016,7 @@ test.describe('Gas planning', () => {
     }, stationIndex);
   }
 
-  test('a plain left-click on a station sets the ENDPOINT, not the origin @smoke', async ({
+  test('a plain left-click on a station sets the ENDPOINT, not the origin', async ({
     page,
   }) => {
     // #298 flipped this: a map click used to re-root the origin. Picking a destination is the
@@ -1078,7 +1045,7 @@ test.describe('Gas planning', () => {
     ).toBeNull();
   });
 
-  test('before an origin is chosen, a plain left-click sets the ORIGIN @smoke', async ({
+  test('before an origin is chosen, a plain left-click sets the ORIGIN', async ({
     page,
   }) => {
     // R9/R10 (#395): the entry question needs an answer before a click can mean "endpoint" -
@@ -1128,7 +1095,7 @@ test.describe('Gas planning', () => {
         };
       }).__E2E_TEST__;
       const ps = e2e!.projectStore.getState();
-      const secId = ps.project!.sections[0].id;
+      const secId = ps.project!.sections[0]!.id;
       await ps.setZeroDatum(
         { section_id: secId, station_index: 10 },
         { latitude: 24.55, longitude: -81.78, depth_reference: 0 },
@@ -1253,6 +1220,15 @@ test.describe('Gas planning', () => {
     const WRONG_OLD_BEHAVIOUR_INDEX = 8;
     const CORRECT_INDEX = 7;
 
+    // [#576 E3] Which station the anchor names after the delete is the backend's answer
+    // (core dive_plan `an_anchored_pin_follows_its_station_across_an_upstream_shot_delete`);
+    // the mock answers what this spec says it does. Asserted here: the frontend re-resolves
+    // the pin around the edit and sends the engine the answer, not its stale index.
+    await page.evaluate(() => {
+      (window as unknown as { __MOCK_SET_ANCHOR_RESOLUTION__: (r: Record<string, StationRefLite | null>) => void })
+        .__MOCK_SET_ANCHOR_RESOLUTION__({ '1:8': { section_id: 1, station_index: 7 } });
+    });
+
     await enterMode(page, 'survey');
     await deleteShotAt(page, 0);
     await enterPlanMode(page);
@@ -1269,7 +1245,7 @@ test.describe('Gas planning', () => {
     expect(sent?.station_index).not.toBe(WRONG_OLD_BEHAVIOUR_INDEX);
   });
 
-  test('way points: add, reorder, remove - order reaches the engine @smoke', async ({ page }) => {
+  test('way points: add, reorder, remove - order reaches the engine', async ({ page }) => {
     await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     // Empty state first, so the list rows below are proof of the add and not pre-existing.
@@ -1411,7 +1387,7 @@ test.describe('Gas planning', () => {
     await expect.poll(getCalls, { timeout: 2000 }).toEqual(['undo', 'redo']);
   });
 
-  test('Ctrl+I in Plan opens the picker; the DMP raises import-blocked with Stay and Switch-and-continue (#243, #407) @smoke', async ({
+  test('Ctrl+I in Plan opens the picker; the DMP raises import-blocked with Stay and Switch-and-continue (#243, #407)', async ({
     page,
   }) => {
     const openCount = () =>
@@ -1464,7 +1440,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
   });
 
-  test('the planned route renders as a highlighted overlay @smoke', async ({ page }) => {
+  test('the planned route renders as a highlighted overlay', async ({ page }) => {
     await enterPlanMode(page);
     // The default route (origin → deepest reachable) draws the solid route line over the survey.
     await expect
@@ -1507,7 +1483,7 @@ test.describe('Gas planning', () => {
     expect(opacity).toContain('0.45');
   });
 
-  test('carousel switches Survey/Plan/Export; Plan is read-only; Export has controls @smoke', async ({
+  test('carousel switches Survey/Plan/Export; Plan is read-only; Export has controls', async ({
     page,
   }) => {
     await expect(page.locator('[data-testid="mode-carousel"]')).toBeVisible();
@@ -1614,7 +1590,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="export-mode-preview"]')).toHaveCount(0);
   });
 
-  test('Plan map is read-only: Delete on a selection opens no confirm dialog @smoke', async ({
+  test('Plan map is read-only: Delete on a selection opens no confirm dialog', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -1636,16 +1612,16 @@ test.describe('Gas planning', () => {
           };
         };
       }).__E2E_TEST__;
-      const sec = e2e!.projectStore.getState().project!.sections[0];
+      const sec = e2e!.projectStore.getState().project!.sections[0]!;
       e2e!.uiStore
         .getState()
-        .setSelection({ type: 'shot', sectionId: sec.id, shotId: sec.shots[0].id });
+        .setSelection({ type: 'shot', sectionId: sec.id, shotId: sec.shots[0]!.id });
     });
     await page.keyboard.press('Delete');
     await expect(page.locator('[data-testid="confirm-dialog"]')).toHaveCount(0);
   });
 
-  test('Plan stars the zero datum; clicking the star picks it as the origin @smoke', async ({
+  test('Plan stars the zero datum; clicking the star picks it as the origin', async ({
     page,
   }) => {
     // Flag station 0 of the first section as a zero datum, then refresh so the map
@@ -1667,7 +1643,7 @@ test.describe('Gas planning', () => {
         };
       }).__E2E_TEST__;
       const ps = e2e!.projectStore.getState();
-      const secId = ps.project!.sections[0].id;
+      const secId = ps.project!.sections[0]!.id;
       await ps.setZeroDatum(
         { section_id: secId, station_index: 0 },
         { latitude: 24.55, longitude: -81.78, depth_reference: 0 },
@@ -1746,7 +1722,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible();
   });
 
-  test('a stage drop is keyboard-movable - ArrowLeft pins it, sends an override, reset clears it (#246) @smoke', async ({
+  test('a stage drop is keyboard-movable - ArrowLeft pins it, sends an override, reset clears it (#246)', async ({
     page,
   }) => {
     await setupOneStageDrop(page);
@@ -1784,12 +1760,23 @@ test.describe('Gas planning', () => {
     const to = await finalTurn.boundingBox();
     expect(from).not.toBeNull();
     expect(to).not.toBeNull();
-    // Drag the ▼ onto the deepest (final-turn) station - deeper than its computed drop => over-reserve.
+    // Not flagged before the drag.
+    await expect(page.locator('[data-testid="gas-drop-marker"][data-over-reserve="true"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="gas-readout-over-reserve-warning"]')).toHaveCount(0);
+    // Drag the ▼ onto the deepest (final-turn) station. That a drop pinned deeper than its
+    // computed one is over its reserve is the engine's rule (#576 E3, models gas tests
+    // `gas_reach_field_override_drags_drop_deeper_is_over_reserve_but_buys_no_reach`); the
+    // recompute the drop triggers answers it, seeded here.
     await page.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2);
     await page.mouse.down();
     await page.mouse.move(to!.x + to!.width / 2, to!.y + to!.height / 2, { steps: 12 });
+    await seedGasField(page, { ...ONE_STAGE_DROP, stage_drop_over_reserve: [true] });
     await page.mouse.up();
-    // The recomputed field marks the drop over-reserve → the marker turns red and the panel warns.
+    // The drop reached the engine as an override...
+    await expect
+      .poll(async () => (await lastGasReachOverrides(page)).some((r) => r != null), { timeout: 3000 })
+      .toBe(true);
+    // ...and the answer renders: the marker turns red and the panel warns.
     await expect
       .poll(
         () => page.locator('[data-testid="gas-drop-marker"][data-over-reserve="true"]').count(),
@@ -1799,7 +1786,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-readout-over-reserve-warning"]')).toBeVisible();
   });
 
-  test('Segments tab: one row per span; a way point adds a row, removing it takes it away (#317) @smoke', async ({
+  test('Segments tab: one row per span; a way point adds a row, removing it takes it away (#317)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -1827,7 +1814,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid^="segment-row-"]')).toHaveCount(2);
   });
 
-  test('editing a segment speed reaches the backend, not just a local re-render (#317) @smoke', async ({
+  test('editing a segment speed reaches the backend, not just a local re-render (#317)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -1845,7 +1832,7 @@ test.describe('Gas planning', () => {
       .poll(
         async () => {
           const segs = await lastGasReachSegments(page);
-          return segs.length === 0 ? 'no-compute-yet' : segs[0].speed_m_per_min;
+          return segs.length === 0 ? 'no-compute-yet' : segs[0]!.speed_m_per_min;
         },
         { timeout: 3000 }
       )
@@ -1876,7 +1863,7 @@ test.describe('Gas planning', () => {
       .toBeNull();
   });
 
-  test('the DPV scooter checkbox is disabled without a configured rig, and the readout has no scooter row (#317) @smoke', async ({
+  test('the DPV scooter checkbox is disabled without a configured rig, and the readout has no scooter row (#317)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -1901,18 +1888,20 @@ test.describe('Gas planning', () => {
   }) => {
     await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    // The engine's range for `src/utils/dpv.ts`'s `makeDefaultDpvRig` (primary 45 m/min x 60 min,
+    // backup 45 m/min x 45 min, range_reserve_fraction 0.1 - the toggle's "enable" default):
+    // `min(45*60, 45*45) * (1 - 0.1)` = 1822.5 m, nothing scootered yet. Computing it is the
+    // backend's (#576 E3, models scooter.rs `the_cap_is_not_halved_and_the_reserve_scales_it`);
+    // seeded here.
+    await seedGasField(page, { scooter_distance_m: 0, scooter_range_limit_m: 1822.5 });
     await enableDpvRig(page);
 
     // With a rig configured, the scooter distance/range row appears (even before anything is
     // scootered - it starts at 0 of the rig's usable range) and the checkbox is live.
     const readout = page.locator('[data-testid="gas-readout-scooter-range"]');
     await expect(readout).toBeVisible({ timeout: 3000 });
-    // Pin the mock's copy of `DpvRig::usable_range_m` (src-tauri/src/config/gas.rs) AND
-    // `src/utils/dpv.ts`'s `makeDefaultDpvRig` (primary 45 m/min x 60 min, backup 45 m/min x 45
-    // min, range_reserve_fraction 0.1 - the toggle's "enable" default): `min(45*60, 45*45) *
-    // (1 - 0.1)` = `min(2700, 2025) * 0.9` = `2025 * 0.9` = 1822.5, which the metric formatter
-    // rounds and groups to "1,823 m". Nothing is scootered yet, so the distance half reads "0 m".
-    // The editor's own readout must show the identical figure - both format the same `DpvRig`.
+    // The metric formatter rounds and groups 1822.5 to "1,823 m"; the editor's own readout
+    // (computed client-side from the same `DpvRig`) must show the identical figure.
     await expect(readout).toHaveText('0 m / 1,823 m');
     await expect(page.locator('[data-testid="dpv-usable-range-value"]')).toHaveText('1,823 m');
 
@@ -1927,6 +1916,8 @@ test.describe('Gas planning', () => {
     await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toHaveCount(0);
+    // The engine answers a range for a rig (#576 E3: seeded); the row shows while a rig is set.
+    await seedGasField(page, { scooter_distance_m: 0, scooter_range_limit_m: 1822.5 });
     await enableDpvRig(page);
     await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toBeVisible({
       timeout: 3000,
@@ -1966,8 +1957,15 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="segment-row-2"]')).toBeVisible();
 
     // Scooter the middle segment (1) only - the last (2) stays swum: the units are parked at the
-    // boundary between them, not carried all the way to the turnaround.
+    // boundary between them, not carried all the way to the turnaround. Where the engine parks
+    // them is its answer (#576 E3, models gas tests
+    // `gas_reach_field_derives_the_scooter_drop_at_the_park_way_point`): the second way point,
+    // station 4, seeded here.
+    await seedGasField(page, { scooter_drop_ref: { section_id: 1, station_index: 4 } });
     await page.locator('[data-testid="segment-scooter-1"]').check();
+    await expect
+      .poll(async () => (await lastGasReachSegments(page)).map((sg) => sg.on_scooter), { timeout: 3000 })
+      .toEqual([false, true, false]);
     await expect
       .poll(() => page.locator('[data-testid="gas-scooter-drop-marker"]').count(), { timeout: 3000 })
       .toBeGreaterThan(0);
@@ -1976,8 +1974,13 @@ test.describe('Gas planning', () => {
 
     // Scooter the last segment too - the units now run all the way to the turnaround, so there is
     // nothing left to park at. This is the ONLY way to clear the derived marker: it is never
-    // placed directly (see the Map tooltip / SegmentsTable's parkHereHint).
+    // placed directly (see the Map tooltip / SegmentsTable's parkHereHint). The engine answers no
+    // park point (seeded), and the marker goes.
+    await seedGasField(page, { scooter_drop_ref: null });
     await page.locator('[data-testid="segment-scooter-2"]').check();
+    await expect
+      .poll(async () => (await lastGasReachSegments(page)).map((sg) => sg.on_scooter), { timeout: 3000 })
+      .toEqual([false, true, true]);
     await expect
       .poll(() => page.locator('[data-testid="gas-scooter-drop-marker"]').count(), { timeout: 3000 })
       .toBe(0);

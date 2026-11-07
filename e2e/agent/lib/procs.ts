@@ -40,7 +40,6 @@ export function isPortFree(port: number): Promise<boolean> {
 /** Return the first free port in [base, base + span), or throw. */
 export async function findFreePort(base: number, span = 10): Promise<number> {
   for (let port = base; port < base + span; port++) {
-    // eslint-disable-next-line no-await-in-loop
     if (await isPortFree(port)) return port;
   }
   throw new Error(`No free port found in [${base}, ${base + span})`);
@@ -59,7 +58,6 @@ export async function waitForPortListening(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (giveUp?.()) return false;
-    // eslint-disable-next-line no-await-in-loop
     const listening = await new Promise<boolean>((resolve) => {
       const sock = net.connect({ port, host: '127.0.0.1' });
       sock.once('connect', () => {
@@ -69,7 +67,6 @@ export async function waitForPortListening(
       sock.once('error', () => resolve(false));
     });
     if (listening) return true;
-    // eslint-disable-next-line no-await-in-loop
     await new Promise((r) => setTimeout(r, 150));
   }
   return false;

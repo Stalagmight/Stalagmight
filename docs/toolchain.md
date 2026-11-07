@@ -95,8 +95,30 @@ editor settings, e.g. gitignored `.vscode/settings.json`:
 ## Bundled SQLite build flags
 
 A `.stalx` can come from anyone, so the bundled SQLite drops FTS3/4/5, RTREE,
-DBSTAT and extension loading (#608) via `LIBSQLITE3_FLAGS`, which every
-Rust-building workflow sets at the top level and the build scripts under
-`scripts/` export. A plain local `cargo test` lacks it, so the pinning test
-`bundled_sqlite_omits_virtual_table_modules_and_extension_loading` is ignored
-locally and CI runs it with `--ignored`.
+DBSTAT and extension loading (#608). The switch is `LIBSQLITE3_FLAGS`, which
+libsqlite3-sys reads when it compiles the SQLite amalgamation, and its only
+copy is the `[env]` table of the committed repo-root `.cargo/config.toml`.
+It is set with `force = true`, so a stray value in your shell cannot weaken it;
+to change the flags, edit that file.
+
+Cargo finds `.cargo/config.toml` from its **working directory** upward, not
+from `--manifest-path`. Every documented entry point runs cargo inside the
+clone, so all of them get the flags: CI, the pre-push checklist and
+`scripts/test.ps1` run from the repo root with `--manifest-path
+src-tauri/Cargo.toml`, and `pnpm tauri build` / `dev` / `android build` run
+cargo inside `src-tauri`. A cargo command started outside the clone (say
+`cargo test --manifest-path ~/src/Stalagmight/src-tauri/Cargo.toml` from your
+home directory) does not see the file and builds SQLite with every module.
+
+The pinning test `bundled_sqlite_omits_virtual_table_modules_and_extension_loading`
+(stalagmight-persistence) is not ignored: every `cargo test --workspace` runs it
+and it fails on such a build. The release workflow also runs it on each
+platform's build leg, because the strip works by a later `-U` cancelling
+libsqlite3-sys's own `-D`, which each C compiler (MSVC on Windows) must honour.
+
+Per-machine cargo settings (a target dir on another disk, a linker) do not
+belong in the committed file. Use `$CARGO_HOME/config.toml`, the
+`CARGO_TARGET_DIR` variable, or a `.cargo/config.toml` in a directory above the
+clone: cargo merges every one it finds. A clone that already keeps an untracked
+`.cargo/config.toml` of its own must move it aside before pulling the committed
+one, or git refuses to overwrite it.

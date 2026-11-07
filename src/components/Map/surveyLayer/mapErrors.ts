@@ -1,3 +1,5 @@
+import i18n from '../../../i18n';
+
 /**
  * MapLibre `error` event boundary filter.
  *
@@ -57,10 +59,12 @@ export function shouldSuppressMapError(
  * measure-path fault only the ruler tint, so neither should alarm about the
  * whole survey being gone or the GPU. Anything else (geometry, or an
  * unrecognized reason) is the survey-wide WebGL2/GPU message. There is no stock
- * fallback behind any of these, so surfacing SOMETHING is the point.
+ * fallback behind any of these, so surfacing SOMETHING is the point. Localized
+ * (`map.renderFatal.*`, #576 RV4-FE-MF-4): it is toast copy, and the lost-context
+ * toast shows the survey-wide one too.
  */
 export function renderFatalMessage(reason: string): string {
-  if (reason.includes('font')) return 'Map labels unavailable (font failed to load)';
-  if (reason.includes('measure')) return 'Measured-path highlight unavailable (GPU)';
-  return 'Survey rendering unavailable (WebGL2/GPU)';
+  if (reason.includes('font')) return i18n.t('map.renderFatal.labels');
+  if (reason.includes('measure')) return i18n.t('map.renderFatal.measurePath');
+  return i18n.t('map.renderFatal.survey');
 }

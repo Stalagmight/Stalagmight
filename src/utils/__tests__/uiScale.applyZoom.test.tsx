@@ -12,6 +12,7 @@
  * and these need `window` and `localStorage`.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { nextTimer } from '../../test/factories/async';
 
 const setZoom = vi.hoisted(() => vi.fn());
 
@@ -29,9 +30,6 @@ function setWindowSize(width: number, height: number): void {
   Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
   Object.defineProperty(window, 'innerHeight', { value: height, configurable: true });
 }
-
-/** Let the `setZoom` promise and its handlers settle. */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 // 1280x720 caps a 3.0 preference to 1.44 - height binds (720/500 vs 1280/800).
 const ZOOMED_WIDTH = Math.floor(1280 / 1.44);
@@ -51,7 +49,7 @@ describe('webview zoom bookkeeping', () => {
     setUiScale(3.0);
     expect(setZoom).toHaveBeenCalledTimes(1);
     expect(setZoom).toHaveBeenLastCalledWith(1.44);
-    await settle();
+    await nextTimer();
 
     // The zoom shrank the CSS viewport, which fires `resize`.
     setWindowSize(ZOOMED_WIDTH, ZOOMED_HEIGHT);
@@ -68,7 +66,7 @@ describe('webview zoom bookkeeping', () => {
 
     setUiScale(3.0);
     expect(setZoom).toHaveBeenLastCalledWith(1.44);
-    await settle();
+    await nextTimer();
 
     // Nothing zoomed, so the viewport is still the full window.
     refreshUiScale();
@@ -104,6 +102,6 @@ describe('webview zoom bookkeeping', () => {
     expect(setZoom).toHaveBeenCalledTimes(1);
 
     landZoom();
-    await settle();
+    await nextTimer();
   });
 });

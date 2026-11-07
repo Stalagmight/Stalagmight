@@ -17,6 +17,7 @@
  * is nothing to hide, restore, or republish.
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
+import { hasLiveStyle } from '../../Map/mapUtils';
 import type { ProjectMetadata } from '../../../types/project';
 import type { SystemGeometry } from '../systemColor';
 import { packCssColor } from '../../Map/surveyLayer/customRender/colorPack';
@@ -38,6 +39,7 @@ import {
   type Rgba01,
 } from './globalCustomLayer';
 import { GlobalHitIndex, type GlobalHit, type ProjectFn } from './globalHitIndex';
+import { clearRendererBuffers, recordRendererBuild } from '../../../utils/memoryProbe';
 
 /** Base visual weights (CSS px) for the custom global survey geometry. */
 const BASE_SHOT_WIDTH = 2;
@@ -81,7 +83,7 @@ function packStroke(css: string): Rgba01 {
 
 export class GlobalCustomController {
   private readonly map: MaplibreMap;
-  private readonly layerId: string;
+  readonly layerId: string;
   private readonly scheduleRestore: (fn: () => void) => void;
   private readonly onActiveChange: ((active: boolean) => void) | undefined;
   private readonly onFatal: ((reason: string) => void) | undefined;
@@ -151,6 +153,7 @@ export class GlobalCustomController {
       selectedIds: this.selectedIds,
     });
     this.build = build;
+    recordRendererBuild('global-geometry', build.line.byteLength + build.circle.byteLength);
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     const data: GlobalCustomRenderData = {
       anchorX: build.anchorX,
@@ -202,12 +205,20 @@ export class GlobalCustomController {
     this.map.triggerRepaint();
   }
 
-  /** Re-add the layer after MapLibre rebuilt the style without it (context
-   *  restore / worker restart, see styleRestore.ts). */
-  reattach(): void {
+  /**
+   * Re-add the live layer after MapLibre rebuilt the style without it (a WebGL
+   * context restore or a worker restart; see Map/surveyLayer/glContextRecovery.ts).
+   * The SAME layer object goes back, so MapLibre re-runs its onAdd: programs
+   * recompile and buffers re-upload from the layer's data on the live context
+   * (reAddCustomLayer first frees what a worker restart left behind). Without a
+   * `beforeId` it goes on top, as on enable. A re-add that cannot draw is the
+   * same unrecoverable state as a failed enable. No-op when nothing was drawing
+   * (#576 D38).
+   */
+  reattach(beforeId?: string): void {
     const layer = this.layer;
-    if (!this.active || !layer) return;
-    if (!reAddCustomLayer(this.map, layer)) {
+    if (!this.active || !layer || this.fatal) return;
+    if (!reAddCustomLayer(this.map, layer, beforeId)) {
       this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
       return;
     }
@@ -219,7 +230,9 @@ export class GlobalCustomController {
    *  (destroy); the fatal path uses {@link tearDownFatal}. */
   private teardown(): void {
     this.setActive(false);
-    removeCustomLayer(this.map, this.layer);
+    // Leaving the Global View (or rebuilding it) while its WebGL context is lost:
+    // the style, and the layer with it, are already gone (#576 NF-MAP-5).
+    if (hasLiveStyle(this.map)) removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.map.triggerRepaint();
   }
@@ -245,7 +258,10 @@ export class GlobalCustomController {
    */
   private tearDownFatal(reason: string): void {
     this.fatal = true;
-    removeCustomLayer(this.map, this.layer);
+    // The style is gone when the map was removed or lost its WebGL context before
+    // this deferred teardown ran: MapLibre took the layer with it (its onRemove
+    // ran), so there is nothing left to remove (#576 NF-MAP-3).
+    if (hasLiveStyle(this.map)) removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.active = false; // set directly: onActiveChange must NOT fire (no republish).
     this.map.triggerRepaint();
@@ -356,5 +372,6 @@ export class GlobalCustomController {
     this.hitIndex = null;
     this.build = null;
     this.data = null;
+    clearRendererBuffers('global-geometry');
   }
 }

@@ -32,11 +32,9 @@ vi.mock('../../common/SpreadsheetGrid', async (importOriginal) => ({
   },
 }));
 
-vi.mock('../../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-  setSource: vi.fn(),
-}));
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
+);
 
 import '../../../i18n';
 import ImportDialog from '../ImportDialog';

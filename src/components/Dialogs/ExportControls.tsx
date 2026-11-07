@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { useTranslation } from 'react-i18next';
-import { listen } from '@tauri-apps/api/event';
+import { IPC_EVENTS, listenIpc } from '../../utils/ipcEvents';
 import { saveDialog } from '../../utils/fileDialogs';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -14,16 +14,18 @@ import ExportPreview from './ExportPreview';
 import type { ExportImageOptions, ImageFormat, ColorMode } from '../../types/commands';
 import type { LoadingProgressPayload } from '../../types/loading';
 import type { ExportType, DataFormat } from '../../store/exportStore';
-import { ensureExtension, exportSaveFilters } from '../../utils/fileDialogs';
+import { exportSaveFilters } from '../../utils/fileDialogs';
+import { resolveSavePath } from '../../utils/overwriteGuard';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { ChevronRightIcon } from '../common/icons';
+import { useShallow } from 'zustand/react/shallow';
 
-/** Phase label mapping for export phases (matches backend LoadingPhase) */
+/** Phase label i18n keys for export phases (matches backend LoadingPhase) */
 const EXPORT_PHASE_LABELS: Record<string, string> = {
-  export_preparing: 'Preparing export...',
-  export_generating: 'Generating...',
-  export_writing: 'Writing file...',
-  export_complete: 'Export complete',
+  export_preparing: 'dialogs.export.phases.preparingExport',
+  export_generating: 'dialogs.export.phases.generating',
+  export_writing: 'dialogs.export.phases.writingFile',
+  export_complete: 'dialogs.export.phases.complete',
 };
 
 /** Branching-threshold slider bounds. Matches backend's u32 field. */
@@ -65,8 +67,16 @@ export default function ExportControls({
   onComplete,
   onExportingChange,
 }: ExportControlsProps) {
-  const { project, exportCsv, exportJson, exportTml, exportImage, getAnchoredSectionIds } =
-    useProjectStore();
+  const { project, exportCsv, exportJson, exportTml, exportImage, getAnchoredSectionIds } = useProjectStore(
+    useShallow((s) => ({
+      project: s.project,
+      exportCsv: s.exportCsv,
+      exportJson: s.exportJson,
+      exportTml: s.exportTml,
+      exportImage: s.exportImage,
+      getAnchoredSectionIds: s.getAnchoredSectionIds,
+    })),
+  );
   const showToast = useUIStore((s) => s.showToast);
   const { t } = useTranslation();
 
@@ -87,7 +97,7 @@ export default function ExportControls({
   const [tmlAllSectionsUnanchored, setTmlAllSectionsUnanchored] = useState(false);
   const [tmlTotalSectionCount, setTmlTotalSectionCount] = useState(0);
   // Track the loadingId we're expecting (to filter out events from other operations)
-  const exportLoadingIdRef = useRef<bigint | null>(null);
+  const exportLoadingIdRef = useRef<number | null>(null);
 
   // Track if component is mounted to prevent setState on unmounted component
   const isMountedRef = useRef(true);
@@ -113,7 +123,7 @@ export default function ExportControls({
     (section: { id: number; name: string | null }): string => {
       const trimmedName = section.name?.trim();
       return trimmedName && trimmedName.length > 0
-        ? `${trimmedName} (#${section.id})`
+        ? t('dialogs.tmlUnanchoredWarning.sectionLabel', { name: trimmedName, id: section.id })
         : t('dialogs.tmlUnanchoredWarning.sectionFallbackName', { id: section.id });
     },
     [t],
@@ -176,24 +186,17 @@ export default function ExportControls({
           options?.skipTmlAnchorCheck ? 'tml-unanchored-warning-continue' : 'export-button',
         );
 
-        if (selected) {
+        // For TML, preserve the extension the OS dialog appended: a path that
+        // already ends in .tmlu (the XML variant) stays .tmlu; anything else
+        // gets .tml.
+        const extension =
+          isTml && selected?.toLowerCase().endsWith('.tmlu') ? 'tmlu' : dataFormat;
+        // [#576 D35] `null`: the extension fix-up renamed the answer onto an
+        // existing file and the user declined to replace it. Nothing is written
+        // and the dialog stays open, exactly like a cancelled picker.
+        const finalPath = selected ? await resolveSavePath(selected, extension) : null;
+        if (finalPath) {
           pathWasChosen = true;
-          // For TML, preserve the extension the OS dialog appended.
-          // If the path already has .tmlu or .tml, keep it as-is;
-          // otherwise default to .tml.
-          let finalPath: string;
-          if (isTml) {
-            const lower = selected.toLowerCase();
-            if (lower.endsWith('.tmlu')) {
-              finalPath = selected;
-            } else if (lower.endsWith('.tml')) {
-              finalPath = selected;
-            } else {
-              finalPath = ensureExtension(selected, 'tml');
-            }
-          } else {
-            finalPath = ensureExtension(selected, dataFormat);
-          }
           // Disable button during data export (no progress events for CSV/JSON/TML)
           setExporting(true);
           try {
@@ -217,12 +220,13 @@ export default function ExportControls({
           'export-button',
         );
 
-        if (selected) {
+        // [#576 D35] see the data branch: `null` = declined to replace.
+        const finalPath = selected ? await resolveSavePath(selected, extension) : null;
+        if (finalPath) {
           pathWasChosen = true;
-          const finalPath = ensureExtension(selected, extension);
           // Register listener BEFORE starting export to avoid race condition with early events
           // Uses shared loading-progress events for consistency with LoadingProgress infrastructure
-          const unlisten = await listen<LoadingProgressPayload>('loading-progress', (event) => {
+          const unlisten = await listenIpc(IPC_EVENTS.LOADING_PROGRESS, (event) => {
             if (isMountedRef.current) {
               // Only process export-related events (filter by loadingId once we know it,
               // or accept all export_* phase events if loadingId not yet known)
@@ -304,7 +308,7 @@ export default function ExportControls({
         <div className="flex-1 space-y-4">
           {/* Export type */}
           <div>
-            <label className="block text-sm text-text-secondary mb-2">Export Type</label>
+            <label className="block text-sm text-text-secondary mb-2">{t('dialogs.export.exportType')}</label>
             <div className="flex gap-4">
               <label className="flex items-center gap-2">
                 <input
@@ -313,7 +317,7 @@ export default function ExportControls({
                   onChange={() => onExportTypeChange('data')}
                   data-testid="export-type-data"
                 />
-                <span>Survey Data</span>
+                <span>{t('dialogs.export.surveyData')}</span>
               </label>
               <label className="flex items-center gap-2">
                 <input
@@ -322,7 +326,7 @@ export default function ExportControls({
                   onChange={() => onExportTypeChange('image')}
                   data-testid="export-type-image"
                 />
-                <span>Map Image</span>
+                <span>{t('dialogs.export.mapImage')}</span>
               </label>
             </div>
           </div>
@@ -330,7 +334,7 @@ export default function ExportControls({
           {/* Data format options */}
           {exportType === 'data' && (
             <div>
-              <label className="block text-sm text-text-secondary mb-2">Format</label>
+              <label className="block text-sm text-text-secondary mb-2">{t('dialogs.export.format')}</label>
               <Select
                 value={dataFormat}
                 onChange={(v) => onDataFormatChange(v as DataFormat)}
@@ -348,7 +352,7 @@ export default function ExportControls({
           {exportType === 'image' && (
             <>
               <div>
-                <label className="block text-sm text-text-secondary mb-2">Format</label>
+                <label className="block text-sm text-text-secondary mb-2">{t('dialogs.export.format')}</label>
                 <Select
                   value={imageOptions.format}
                   onChange={(v) =>
@@ -365,15 +369,15 @@ export default function ExportControls({
 
               {imageOptions.format === 'png' && (
                 <div>
-                  <label className="block text-sm text-text-secondary mb-2">Resolution</label>
+                  <label className="block text-sm text-text-secondary mb-2">{t('dialogs.export.resolution')}</label>
                   <Select
                     value={String(imageOptions.dpi)}
                     onChange={(v) => onImageOptionsChange({ ...imageOptions, dpi: parseInt(v) })}
                     options={[
-                      { value: '72', label: 'Low (72 DPI)' },
-                      { value: '150', label: 'Medium (150 DPI)' },
-                      { value: '300', label: 'High (300 DPI)' },
-                      { value: '600', label: 'Print (600 DPI)' },
+                      { value: '72', label: t('dialogs.export.dpi.low') },
+                      { value: '150', label: t('dialogs.export.dpi.medium') },
+                      { value: '300', label: t('dialogs.export.dpi.high') },
+                      { value: '600', label: t('dialogs.export.dpi.print') },
                     ]}
                     data-testid="resolution-select"
                   />
@@ -387,7 +391,7 @@ export default function ExportControls({
                   htmlFor="branching-threshold"
                   className="block text-sm text-text-secondary mb-2"
                 >
-                  Line-weight threshold
+                  {t('dialogs.export.lineWeightThreshold')}
                 </label>
                 <div className="flex items-center gap-3">
                   <input
@@ -417,8 +421,7 @@ export default function ExportControls({
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-text-secondary">
-                  Segments connected to ≥ this many other segments via reference shots are drawn
-                  thick.
+                  {t('dialogs.export.lineWeightHelp')}
                 </p>
               </div>
 
@@ -438,7 +441,7 @@ export default function ExportControls({
                     size={12}
                     className={labelsOptionsExpanded ? 'rotate-90 transition-transform' : 'transition-transform'}
                   />
-                  <span>Comments &amp; Labels Options</span>
+                  <span>{t('dialogs.export.labelsOptions')}</span>
                 </button>
                 {labelsOptionsExpanded && (
                   <div
@@ -458,7 +461,7 @@ export default function ExportControls({
                         }
                         data-testid="export-show-section-names"
                       />
-                      <span>Section names</span>
+                      <span>{t('dialogs.export.labels.sectionNames')}</span>
                     </label>
                     <label className="flex items-center gap-2 text-sm">
                       <input
@@ -472,7 +475,7 @@ export default function ExportControls({
                         }
                         data-testid="export-show-station-labels"
                       />
-                      <span>Station labels</span>
+                      <span>{t('dialogs.export.labels.stationLabels')}</span>
                     </label>
                     <label className="flex items-center gap-2 text-sm">
                       <input
@@ -486,7 +489,7 @@ export default function ExportControls({
                         }
                         data-testid="export-show-station-comments"
                       />
-                      <span>Station comments</span>
+                      <span>{t('dialogs.export.labels.stationComments')}</span>
                     </label>
                     <label className="flex items-center gap-2 text-sm">
                       <input
@@ -500,7 +503,7 @@ export default function ExportControls({
                         }
                         data-testid="export-show-shot-comments"
                       />
-                      <span>Shot comments</span>
+                      <span>{t('dialogs.export.labels.shotComments')}</span>
                     </label>
                     <label className="flex items-center gap-2 text-sm">
                       <input
@@ -514,7 +517,7 @@ export default function ExportControls({
                         }
                         data-testid="export-show-shot-data"
                       />
-                      <span>Shot data</span>
+                      <span>{t('dialogs.export.labels.shotData')}</span>
                     </label>
                     <label className="flex items-center gap-2 text-sm">
                       <input
@@ -528,14 +531,14 @@ export default function ExportControls({
                         }
                         data-testid="export-show-labels"
                       />
-                      <span>Penetration-distance labels</span>
+                      <span>{t('dialogs.export.labels.penetration')}</span>
                     </label>
                     <div className={svgSelected ? 'opacity-50' : ''}>
                       <label
                         htmlFor="export-color-mode"
                         className="block text-sm text-text-secondary mb-1"
                       >
-                        Color
+                        {t('dialogs.export.color')}
                       </label>
                       <Select
                         value={imageOptions.color_mode}
@@ -544,18 +547,18 @@ export default function ExportControls({
                         }
                         disabled={svgSelected}
                         options={[
-                          { value: 'none', label: 'None (monochrome)' },
-                          { value: 'section', label: 'By section' },
-                          { value: 'depth', label: 'By depth' },
-                          { value: 'distance', label: 'By distance' },
+                          { value: 'none', label: t('dialogs.export.colorModes.none') },
+                          { value: 'section', label: t('dialogs.export.colorModes.section') },
+                          { value: 'depth', label: t('dialogs.export.colorModes.depth') },
+                          { value: 'distance', label: t('dialogs.export.colorModes.distance') },
                         ]}
                         data-testid="export-color-mode"
                       />
                     </div>
                     <p className="text-xs text-text-secondary">
                       {svgSelected
-                        ? 'SVG export is always monochrome. Choose PNG or PDF to color the map.'
-                        : 'Depth / distance gradients match the survey map. Color applies to PNG / PDF.'}
+                        ? t('dialogs.export.colorSvgNote')
+                        : t('dialogs.export.colorNote')}
                     </p>
                   </div>
                 )}
@@ -568,7 +571,7 @@ export default function ExportControls({
             preview in the Export-mode map area instead). */}
         {!isPanel && exportType === 'image' && (
           <div className="flex flex-col gap-2">
-            <span className="text-sm text-text-secondary">Preview</span>
+            <span className="text-sm text-text-secondary">{t('dialogs.export.preview')}</span>
             <ExportPreview options={imageOptions} />
           </div>
         )}
@@ -577,7 +580,7 @@ export default function ExportControls({
       {/* Export Progress - uses shared LoadingProgress component for consistent UI */}
       {isExporting &&
         (() => {
-          const phase = EXPORT_PHASE_LABELS[exportProgress?.phase ?? ''] ?? 'Preparing...';
+          const phase = t(EXPORT_PHASE_LABELS[exportProgress?.phase ?? ''] ?? 'dialogs.export.phases.preparing');
           const overall = exportProgress?.overallPercent ?? 0;
           const isIndeterminate = exportProgress?.isIndeterminate ?? true;
           // Compute phase progress from current/total (not overallPercent)
@@ -590,10 +593,10 @@ export default function ExportControls({
           return (
             <div className="mt-4 flex justify-center" data-testid="export-progress-container">
               {isIndeterminate || phasePercent === undefined ? (
-                <LoadingProgress title="Exporting..." phase={phase} overallProgress={overall} />
+                <LoadingProgress title={t('dialogs.export.exporting')} phase={phase} overallProgress={overall} />
               ) : (
                 <LoadingProgress
-                  title="Exporting..."
+                  title={t('dialogs.export.exporting')}
                   phase={phase}
                   phaseProgress={phasePercent}
                   overallProgress={overall}
@@ -613,7 +616,7 @@ export default function ExportControls({
       >
         {!isPanel && (
           <Button onClick={() => onComplete?.()} disabled={isExporting} data-testid="export-cancel">
-            Cancel
+            {t('common.actions.cancel')}
           </Button>
         )}
         <Button
@@ -625,7 +628,7 @@ export default function ExportControls({
           data-testid="export-button"
           className={isPanel ? 'w-full' : undefined}
         >
-          {isExporting ? 'Exporting...' : 'Export'}
+          {isExporting ? t('dialogs.export.exporting') : t('common.actions.export')}
         </Button>
       </div>
 
@@ -669,16 +672,18 @@ export default function ExportControls({
         }
       >
         <div className="space-y-3">
-          {/* `bodyAllUnanchored`/`bodyPartial` (en.json) quote "Set Zero Datum" - the literal
-              English label at ContextMenu.tsx:426, which `iconForLabel` switches on by exact
-              string. Translating that menu item later will desync these quotes; update both
-              together. */}
+          {/* `bodyAllUnanchored`/`bodyPartial` (en.json) quote the station context menu's
+              zero-datum item, read from that item's own key (#576 NF-W8FE-1), so the
+              quote follows the menu label. */}
           <p>
             {tmlAllSectionsUnanchored
-              ? t('dialogs.tmlUnanchoredWarning.bodyAllUnanchored')
+              ? t('dialogs.tmlUnanchoredWarning.bodyAllUnanchored', {
+                  menuItem: t('contextMenu.setZeroDatum'),
+                })
               : t('dialogs.tmlUnanchoredWarning.bodyPartial', {
                   count: tmlUnanchoredSections.length,
                   total: tmlTotalSectionCount,
+                  menuItem: t('contextMenu.setZeroDatum'),
                 })}
           </p>
           <div className="rounded border border-border bg-panel p-3">

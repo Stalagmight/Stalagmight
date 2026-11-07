@@ -532,7 +532,8 @@ export function AppMenu({
         disabled={disabled}
         onClick={() => {
           if (disabled) return;
-          isOpen ? closeMenu() : openMenu();
+          if (isOpen) closeMenu();
+          else openMenu();
         }}
         onKeyDown={onTriggerKeyDown}
         aria-label={ariaLabel}

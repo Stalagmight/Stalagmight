@@ -24,6 +24,7 @@
 // controller only drives the ghost geometry.
 
 import type * as maplibregl from 'maplibre-gl';
+import { canWriteStyle, hasLiveStyle } from '../mapUtils';
 import { GhostFollow } from './dragGhostFollow';
 import {
   DRAG_PREVIEW_SOURCE,
@@ -90,7 +91,7 @@ export class DragGhostController {
   constructor(
     private readonly map: maplibregl.Map,
     private readonly opts: DragGhostOptions,
-    private readonly layerId = 'survey-drag-ghost',
+    readonly layerId = 'survey-drag-ghost',
   ) {}
 
   /** True while a custom ghost layer is the live path (test / host read-back). */
@@ -112,6 +113,13 @@ export class DragGhostController {
     this.end();
     this.set = set;
     this.offset = { dx: 0, dy: 0 };
+    // A pick-up while the WebGL context is lost (#576 NF-W4MAP-1): there is no
+    // style, so neither path can add its layers - the stock one's getSource reads
+    // the missing style and throws, and MapLibre's addLayer would lazily build an
+    // EMPTY style to hold the custom one. Nothing could be drawn until the restore
+    // anyway, so the carry stays idle (as the drag preview's begin paths skip their
+    // style writes) and the next pick-up builds its ghost.
+    if (!hasLiveStyle(this.map)) return 'idle';
     if (this.startCustom(set)) {
       this.mode = 'custom';
       return 'custom';
@@ -135,19 +143,6 @@ export class DragGhostController {
     }
   }
 
-  /** Re-add the custom ghost after MapLibre rebuilt the style without it (context
-   *  restore / worker restart, see styleRestore.ts); falls back to the stock
-   *  preview if it cannot start again. */
-  reattach(): void {
-    const layer = this.layer;
-    if (this.mode !== 'custom' || !layer) return;
-    if (!reAddCustomLayer(this.map, layer)) {
-      this.handleSelfDisable(layer.getDisabledReason() ?? 'unknown');
-      return;
-    }
-    this.map.triggerRepaint();
-  }
-
   /** Tear down both paths and remove the ghost (on drag end / cancel / destroy). */
   end(): void {
     // Invalidate any pending self-disable restore and clear the coalescing guard
@@ -155,11 +150,51 @@ export class DragGhostController {
     this.dragGeneration++;
     this.selfDisableScheduled = false;
     this.disarmStock();
-    removeDragPreviewLayers(this.map);
-    removeCustomLayer(this.map, this.layer);
+    // A carry cancelled while the WebGL context is lost: the style, and every
+    // preview layer with it, is already gone (#576 NF-MAP-5).
+    if (hasLiveStyle(this.map)) {
+      removeDragPreviewLayers(this.map);
+      removeCustomLayer(this.map, this.layer);
+    }
     this.layer = null;
     this.set = null;
     this.mode = 'idle';
+  }
+
+  /**
+   * Map-free teardown for the lightweight unmount (SurveyLayer.release): drop the
+   * stock bake timer and land listener, and invalidate a pending self-disable
+   * restore, WITHOUT removing layers or resetting the translate - the map is about
+   * to be removed with everything on it. Otherwise the timer fires after the map
+   * is gone and pins the whole SurveyLayer until it does. Idempotent; a later
+   * {@link end} still removes whatever is left on a live map.
+   */
+  dispose(): void {
+    this.dragGeneration++;
+    this.selfDisableScheduled = false;
+    this.dropStockListeners();
+    this.ghostFollow = null;
+    this.layer = null;
+    this.set = null;
+    this.mode = 'idle';
+  }
+
+  /**
+   * Re-add a live custom ghost after MapLibre rebuilt the style without it (a
+   * WebGL context restore or a worker restart; see glContextRecovery.ts).
+   * reAddCustomLayer first frees what a worker restart left behind; without a
+   * `beforeId` the ghost goes on top, as on start. The stock ghost needs nothing:
+   * its source and layers are in the restored style. A re-add that cannot draw
+   * falls back to the stock ghost, as a mid-drag self-disable does.
+   */
+  reattach(beforeId?: string): void {
+    const layer = this.layer;
+    if (this.mode !== 'custom' || !layer) return;
+    if (!reAddCustomLayer(this.map, layer, beforeId)) {
+      this.handleSelfDisable(layer.getDisabledReason() ?? 'unknown');
+      return;
+    }
+    this.map.triggerRepaint();
   }
 
   /** Create + add the custom ghost layer. Returns false (so begin falls back to
@@ -184,7 +219,8 @@ export class DragGhostController {
       return true;
     } catch (e) {
       console.warn('[dragGhost] custom ghost threw on add; using stock drag preview', e);
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      // The cleanup reads the style too; a style gone by now has no layer to drop.
+      if (hasLiveStyle(this.map) && this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
       return false;
     }
   }
@@ -205,6 +241,13 @@ export class DragGhostController {
       if (gen !== this.dragGeneration) return; // superseded by a newer drag / teardown
       this.selfDisableScheduled = false;
       if (this.mode !== 'custom' || !this.set) return;
+      // The WebGL context was lost before this deferred fallback ran: there is no
+      // style to build the stock ghost in, and addSource / addLayer read the
+      // missing style and throw (#576 RV4-FE-MF-6, the NF-MAP-3 race); a rebuilt
+      // style that has not loaded yet refuses them (RV18-MAP-1). Leave the dead
+      // custom ghost in place: the restore's reattach() re-adds it, finds it
+      // disabled and runs this fallback again on a live style.
+      if (!canWriteStyle(this.map)) return;
       removeCustomLayer(this.map, this.layer);
       this.layer = null;
       this.mode = 'stock';
@@ -219,7 +262,11 @@ export class DragGhostController {
     this.armLand();
     this.ghostFollow = new GhostFollow({
       bake: (pos) => this.bakeStock(pos.dx, pos.dy),
-      translate: (t) => setDragPreviewTranslate(this.map, [t.dx, t.dy]),
+      // Not while the WebGL context is lost: the preview layers went with the
+      // style, and getLayer reads it (#576 RV4-FE-SL2).
+      translate: (t) => {
+        if (hasLiveStyle(this.map)) setDragPreviewTranslate(this.map, [t.dx, t.dy]);
+      },
     });
     this.ghostFollow.start();
   }
@@ -228,9 +275,14 @@ export class DragGhostController {
    *  arm the fallback land timer. Single-flight is enforced by {@link GhostFollow}. */
   private bakeStock(dx: number, dy: number): void {
     if (this.mode === 'idle' || !this.set) return;
-    const fc = buildDragPreviewFeatureCollection(this.set, this.opts.projector(), dx, dy);
-    const src = this.map.getSource(DRAG_PREVIEW_SOURCE);
-    if (src && 'setData' in src) (src as maplibregl.GeoJSONSource).setData(fc);
+    // While the WebGL context is lost there is no source to bake into (getSource
+    // reads the missing style, #576 RV4-FE-SL2). The fallback land timer below
+    // still runs, so the single-flight queue keeps moving until the restore.
+    if (hasLiveStyle(this.map)) {
+      const fc = buildDragPreviewFeatureCollection(this.set, this.opts.projector(), dx, dy);
+      const src = this.map.getSource(DRAG_PREVIEW_SOURCE);
+      if (src && 'setData' in src) (src as maplibregl.GeoJSONSource).setData(fc);
+    }
     if (this.bakeTimeout !== null) clearTimeout(this.bakeTimeout);
     this.bakeTimeout = setTimeout(() => this.onBakeLanded(), GHOST_BAKE_TIMEOUT_MS);
   }
@@ -260,6 +312,15 @@ export class DragGhostController {
   }
 
   private disarmStock(): void {
+    this.dropStockListeners();
+    // A stock carry cancelled while the WebGL context is lost: the preview layers
+    // went with the style, so there is no translate to reset (#576 RV4-FE-SL2).
+    if (this.ghostFollow && hasLiveStyle(this.map)) setDragPreviewTranslate(this.map, [0, 0]);
+    this.ghostFollow = null;
+  }
+
+  /** The stock path's JS-only resources: the land listener and the bake timer. */
+  private dropStockListeners(): void {
     if (this.landListener) {
       this.map.off('sourcedata', this.landListener);
       this.landListener = null;
@@ -268,7 +329,5 @@ export class DragGhostController {
       clearTimeout(this.bakeTimeout);
       this.bakeTimeout = null;
     }
-    if (this.ghostFollow) setDragPreviewTranslate(this.map, [0, 0]);
-    this.ghostFollow = null;
   }
 }

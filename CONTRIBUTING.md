@@ -94,40 +94,23 @@ A few project rules worth knowing early (full detail in
 
 ## Before you open a pull request
 
-Run the same checks CI runs. All of these must pass:
+Run the **Pre-Push Checklist in [`AGENTS.md`](AGENTS.md#pre-push-checklist)**.
+It is the one list of every gate CI runs (`ci.yml`, `e2e-smoke.yml`,
+`leak-scan.yml`), in CI's order, and a leak-scan gate
+(`pnpm lint:prepush-checklist`) fails when a workflow runs a gate that list
+lacks - so it is not copied here, where it would drift. The parts that most
+often surprise people:
 
-```bash
-pnpm tsc --noEmit                                                  # TypeScript
-pnpm typecheck:agent                                               # agent-harness typecheck (a CI gate)
-pnpm typecheck:playwright                                          # Playwright specs + IPC mock (a CI gate)
-pnpm test:mock-contract                                            # IPC mock <-> Rust command contract (a CI gate)
-pnpm exec vitest run                                               # vitest unit + component (plain "pnpm test" watches and never exits)
-pnpm test:ui                                                       # Playwright (needs a display)
-pnpm lint:e2e-parallel                                             # Playwright parallel-safety (a CI gate)
-pnpm lint:pw-timing:test                                           # Playwright timing-reporter fixtures (a CI gate)
-pnpm lint:rust-file-size                                           # Rust file-size ratchet (a CI gate)
-pnpm lint:ts-file-size                                             # TS file-size ratchet (a CI gate)
-pnpm lint:test-ids:test && pnpm lint:test-ids                      # interactive UI test-ID contract (a CI gate)
-pnpm lint:readonly-gates:test && pnpm lint:readonly-gates          # read-only gating tripwire (a CI gate)
-pnpm lint:private-leaks                                            # no internal/personal refs in the public tree (a CI gate)
-pnpm lint:no-em-dash:test && pnpm lint:no-em-dash                  # ASCII hyphens only, no Unicode dashes (a CI gate)
-pnpm lint:third-party:test && pnpm lint:third-party                # third-party attribution bundle is current (a CI gate)
-cargo fmt --manifest-path src-tauri/Cargo.toml --check             # Rust formatting (root package)
-for m in src-tauri/crates/*/Cargo.toml; do cargo fmt --manifest-path "$m" --check; done   # every workspace member
-TELEMETRY_ENDPOINT=http://localhost/dummy \
-  cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --features telemetry --all-targets   # deny-level lints
-TELEMETRY_ENDPOINT=http://localhost/dummy \
-  cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry       # Rust tests
-```
-
-(The dummy `TELEMETRY_ENDPOINT` just satisfies `build.rs` under the `telemetry`
-feature - it sends nothing.) `--workspace` is required: without it only the app
-package runs and the member crates under `src-tauri/crates/` are skipped
-entirely. For fast iteration on one crate use `-p`, e.g.
-`cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib fuzz_undo`.
-On Windows, run the Rust tests via
-`./scripts/test.ps1`. The Pre-Push Checklist in [`AGENTS.md`](AGENTS.md) is the
-canonical copy of this list - if the two drift, that one is authoritative.
+- The Rust commands set a dummy `TELEMETRY_ENDPOINT=http://localhost/dummy`.
+  It only satisfies the telemetry crate's `build.rs` under the `telemetry`
+  feature and sends nothing.
+- `--workspace` is required: without it only the app package runs and the
+  member crates under `src-tauri/crates/` are skipped entirely. For fast
+  iteration on one crate use `-p`, e.g.
+  `cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib fuzz_undo`.
+- On Windows, run the Rust tests via `./scripts/test.ps1`.
+- Playwright: run the `@smoke` set (`pnpm test:ui:smoke`, needs a display) plus
+  the specs for the feature you changed. The full suite runs nightly.
 
 Notes:
 

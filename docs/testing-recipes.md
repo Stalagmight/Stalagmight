@@ -614,10 +614,12 @@ cargo test --manifest-path src-tauri/vendor/compass_data/Cargo.toml
 
 **Trap: a plain `cargo test` can pass while CI fails, twice over.** Without
 `--workspace` only the app crate's tests run - the member crates under
-`src-tauri/crates/` are skipped entirely. And the `registry_covers_all_*`
-telemetry-registry coverage tests are gated behind the `telemetry` feature, so
-a featureless run filters them out. The telemetry member's `build.rs` also
-*requires* `TELEMETRY_ENDPOINT` to be set when building with that feature.
+`src-tauri/crates/` are skipped entirely. And the telemetry collector's own
+tests are gated behind the `telemetry` feature, so a featureless run filters
+them out. (The `registry_covers_all_*` registry-coverage tests are not: the
+event-name registry compiles with or without the feature, #576 B7.) The
+telemetry member's `build.rs` also *requires* `TELEMETRY_ENDPOINT` to be set
+when building with that feature.
 
 #### Running one crate
 
@@ -637,7 +639,7 @@ cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-export dpi
 ```
 
 `--features telemetry` only combines with the packages that define the feature -
-`stalagmight` (the app), `stalagmight-telemetry` and `stalagmight-speleodb`;
+`stalagmight` (the app) and `stalagmight-telemetry`;
 cargo rejects it for any other `-p` selection (the error lists the packages
 that have it). The formerly-`#[cfg(test)]` shared helpers (`TestDb`,
 `isolated_config`, the AppState test setters) are stalagmight-core's
@@ -651,6 +653,71 @@ Without it every `cargo test` harness binary aborts at startup with
 loader binds to comctl32 v5, which lacks `TaskDialogIndirect` (statically
 imported via rfd / tauri-plugin-dialog). The env var makes `build.rs` delay-load
 comctl32 for test binaries. The shipping app is unaffected.
+
+### Source scans (Rust)
+
+A source scan is a test that `include_str!`s production Rust and asserts
+something about its text. It is the weakest test there is: a rewording that
+keeps the behaviour fails it, and a behaviour change that keeps the words passes
+it. So it is allowed for one kind of rule only (#576 A8):
+
+- **Acceptable:** a policy the type system cannot express - a *site inventory*
+  ("BASE advances only at these triggers", "exactly one production site may keep
+  inherited undo history", "this function takes no lock-ops guard of its own").
+  Each failure message starts with `RULE (...)` and names the rule, so whoever
+  trips it knows what they are being asked to justify.
+- **Not acceptable:** an ORDERING ("X before Y", "inside this lock's span") or
+  the presence of a log line. An ordering becomes a type: the later step takes a
+  value only the earlier step can produce (token passing - `Flushed` ->
+  `PushSnapshot` in `speleodb_push.rs`, `Landed`, `Relocated`,
+  `LocalEditsCleared`, `UnwindCleared` / `ChildPolicyChecked` / `CapturedRecord`
+  / `Reloaded` in `speleodb_revisions.rs`, `EditSessionOpen`, the adoption's
+  `adopt_order` chain, Start Editing's `start_order`, the update's
+  `update_restore`, `PinnedDump`, `StoodDown`, `PrePushSave`), or a guard
+  wrapper the in-span step borrows (`LockOpsHeld`, like `CommandsHeld`; a value
+  read inside the span is an `InSpan`, which borrows the span so it cannot outlive
+  it). When two steps must share ONE span, not
+  just each hold a span, the earlier step's proof borrows the span and the later
+  step takes only that proof (`GatesDropped` in logout, `Relocated` in publish):
+  dropping the span between them is then E0505. Put the proof type and its
+  producer in a small private module so nothing else can construct it (a private
+  field), and prove the conversion by writing the forbidden reorder in a
+  throwaway copy and capturing the compile error. To keep the proof in the
+  suite, give the module its own file and a `compile_fail` doctest that
+  `include!`s it over a stand-in for what it reads, plus a compiling twin in the
+  allowed order so the first cannot pass on an unrelated error (`InSpan`:
+  `speleodb_session/lock_ops_span.rs`, #576 RV10a-3).
+- **Bypass:** a proof stops a reorder only if the raw step it guards cannot be
+  called without it. The guarded primitive takes the proof as a licence
+  argument - `client::download_dump*` (`DumpLicence`), `client::upload_auto`
+  (`UploadLicence`), `client::patch_project` (`PatchLicence`),
+  `replace_cache_stalx_with` (`ReplaceLicence`), the
+  reclaim-checked release (`ReclaimRelease`) - implemented only by the proof
+  types and by a function-local marker in each flow whose step has no
+  precondition (named for why). A `#[cfg(test)]` constructor (`for_tests`) is
+  refused by a non-test build, and under `cargo test` by the site inventory
+  `no_production_code_reaches_a_test_only_proof_constructor`.
+- **Driven instead:** behaviour a test can reach is driven, not read.
+  `do_load_project_full` and `do_create_project_full` need only an event sink
+  (`core::events::NullEventSink`), not an app handle; a check that needs the
+  process-wide app directories goes in its own integration-test binary
+  (`crates/core/tests/`) or a child process (`take_remote_success_tests.rs`). A
+  flow that needs a server runs against `routing_stub` (answers each request by
+  its first line) in `core::state::speleodb`'s tests; a decision buried in a
+  verb is extracted into a pure function and tested on its table
+  (`probe_verdict`, `unwind_keeps_lock`, `landed_despite_release_error`). A log
+  line is captured, not grepped: `logged_events(|| ..)` runs the closure under a
+  scoped `tracing` subscriber and returns the lines it logged. Exhaustiveness is
+  a lint, not a scan (`#[deny(clippy::wildcard_enum_match_arm)]` on the match).
+
+Every scan reads its file through `models::source_scan` (test-support):
+`prod_region(src, anchor)` cuts at the file's trailing test region - the
+column-0 `#[cfg(test)]` inline module with only test items after it, so a gated
+`use`, an indented test-only method, a test-only module mid-file or a comment
+quoting the attribute cannot end production early and make an absence check
+pass vacuously - and fails the test when `anchor` is not in the region.
+`fn_body(region, "fn name(")` takes one uniquely named function at its own
+indentation. Never split on the bare `#[cfg(test)]` string.
 
 ### Agent harness (real Tauri app, on-demand)
 
@@ -680,11 +747,13 @@ Some non-test files are ungoverned - `scripts/**/*.ts`, `vite.config.ts`, and
 `src-tauri/bindings/` are in no tsconfig's `include`. (The old ungated
 `tsconfig.e2e.json` went with the WDIO suite, #549.)
 
-Note the strictness difference: `tsconfig.playwright.json` is `strict`, but
-unlike the root config it does not set `noUncheckedIndexedAccess`,
-`exactOptionalPropertyTypes`, `noUnusedLocals`/`noUnusedParameters`,
-`noImplicitReturns`, or `noFallthroughCasesInSwitch`. "The specs are
-type-checked" is true but weaker than what `src/` gets.
+All three programs extend `tsconfig.base.json`, which holds the whole
+strictness set (`strict` plus `noUncheckedIndexedAccess`,
+`exactOptionalPropertyTypes`, the unused-code checks, `noImplicitReturns` and
+`noFallthroughCasesInSwitch`), so specs and harness code are checked exactly
+as strictly as `src/` (#576 E11). See
+[Linting: TypeScript, one shared base](linting.md#typescript-one-shared-base)
+for how to satisfy the two that bite in test code.
 
 The agent harness runs under `tsx`, which transpiles without type-checking, and
 it is exercised on demand only, so `typecheck:agent` (a CI `check` step) is the
@@ -747,6 +816,106 @@ early component tests on leaf components to avoid heavy setup.
 This tier mocks IPC - persistence is owned by the Rust tier, see
 [Rust patterns](#rust-patterns).
 
+### Factories and the shared IPC mock
+
+Fakes and data builders that more than one test needs live in
+`src/test/factories/` (#576 E15); a new test takes them from there instead of
+pasting a copy. Each module is imported by path (there is no barrel):
+
+| Module | What it gives you |
+|--------|-------------------|
+| `ipc.ts` | `invokeIpcMock` and the `getErrorMessage` switches for the shared `utils/ipc` mock (below) |
+| `survey.ts` | `makeShot`, `makeSection`, `makeProject`, `makeStation`, `stationRef`: the survey data the backend sends, typed against `src/types/ipc/` |
+| `speleo.ts` | `makeSpeleoLink`: the speleo store's `SpeleoLinkState` |
+| `dmp.ts` | `makeDmpShot`, `makeDmpShots`, `makeDmpSection`, `makeDmpFile`: a parsed mNemo dump |
+| `fakeMap.ts` | `makeFakeMap`: a recording MapLibre stand-in for the controller and layer tests |
+| `globalViewMap.ts` | The fake `maplibre-gl` module and `GlobalSurveyLayer` the `GlobalViewMap` component tests run against |
+| `virtualizer.ts` | A `@tanstack/react-virtual` that renders every row (jsdom has no layout) |
+| `dom.ts` | `NoopResizeObserver`, for a component that measures itself but whose test never resizes it |
+| `i18n.ts` | `react-i18next` whose `t` echoes the key: `i18nKeys()` (the real module, `useTranslation` replaced) or `translationStub()` (`useTranslation` only); `'keyAndOptions'` appends the options as JSON |
+| `telemetry.ts` | `utils/telemetry` with `trackDialogComplete` silenced: `telemetryWith({ ...stubs })` (the real module) or `telemetryStubs({ ...stubs })` (nothing else) |
+| `tauri.ts` | `@tauri-apps/api/core` for code that calls `invoke` directly: `tauriCoreResolving(answer)` or `tauriCore(yourSpy)` |
+| `components.tsx` | `dialogWrapperStub({ title, testId, spy })` (the dialog frame as a plain `<div>`) and `buttonStub()` |
+| `async.ts` / `act.ts` | `deferred<T>()`, and exact waits: `microtasks(n)`, `nextTimer()`, `timerTurns(n)`; `actMicrotasks(n)`, `actNextTimer()` inside React's `act` |
+
+**Builders** return a complete object: every required field at a neutral
+default, overridden by the argument (a shallow merge), optional fields absent
+unless given, keys in the generated type's order. Pass the fields your test is
+about, not the whole object - `makeShot({ id: 3, length: 7.5 })` - and a file
+that builds many of the same shape keeps a one-line wrapper over the factory
+(`const shot = (id: number) => makeShot({ id, azimuth_in: 10 })`). A field the
+backend adds to the generated type is then a compile error in one place.
+
+**Fakes** take their per-test differences as options rather than as a fork of
+the fake. `makeFakeMap({ layers, visibility, onAdd, omit, dom })` seeds the
+stock layers and their visibility, says how `addLayer` runs a custom layer's
+`onAdd` (`'map'`, `'bare'`, `'skip'`), and leaves out members the code probes
+for: `omit: ['on', 'off']` for a map nothing can subscribe to, `omit: ['style']`
+for one without a live style. The map is a plain object, so a member it lacks
+throws when called - a superset fake must not quietly accept a call a test
+relies on being impossible. It records `added`, `addCalls` (with `beforeId`),
+`removed`, `paintCalls`, `visibility`, `setDataCount`, `repaintCount` and the
+`on`/`off` listeners (`listeners(type)`, `emit(type, e)`). The virtualizer is a
+whole module: `vi.mock('@tanstack/react-virtual', () => import('<rel>/test/factories/virtualizer'))`,
+or `fakeVirtualizer({ headerOffset: 0 })` / `fakeVirtualizer({ renderRows: false })`
+behind an `async` factory for the other layouts. The module stand-ins in
+`i18n.ts`, `telemetry.ts`, `tauri.ts` and `components.tsx` go behind one the
+same way (E15-NF1):
+`vi.mock('react-i18next', async () => (await import('<rel>/test/factories/i18n')).i18nKeys())`.
+A spy the factory takes is the test's own `vi.hoisted` one; a spy declared
+without `vi.hoisted` is passed as a forwarding arrow
+(`spy: (props) => mockSpy(props)`), because the factory runs before the file's
+own top-level statements.
+
+**The `utils/ipc` mock.** `src/utils/__mocks__/ipc.ts` is a manual mock: a
+`vi.mock` of `utils/ipc` with no factory loads it in place of the real module,
+fresh for each test file. Fake the backend with
+
+```ts
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
+
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error')); // only if the file needs a stubbed reader
+
+beforeEach(() => {
+  invokeIpcMock.mockReset();
+  invokeIpcMock.mockImplementation(async (cmd: string) => (cmd === 'list_recent_projects' ? [] : undefined));
+});
+```
+
+- `invokeIpcMock` is the `vi.fn` the code under test calls as `invokeIpc`. It is
+  typed like a bare `vi.fn()`, so a test scripts any command's answer, and it
+  answers `undefined` until scripted. `src/test/factories/ipc.ts` throws at import
+  in a file that forgot the `vi.mock`, rather than hand out the real IPC.
+- `getErrorMessage` is the real reader unless the file calls
+  `stubGetErrorMessage(reader)`, once, at the top level. It is a plain function,
+  not a `vi.fn`, so `vi.resetAllMocks()` / `vi.restoreAllMocks()` leave a stub in
+  place. Presets cover the readers the old inline stubs used: `fallbackOr(text)`
+  (`fallback ?? text`), `messageOr(text)` (`e.message ?? fallback ?? text`),
+  `errorMessageOrString`, `stringOfError`.
+- `emptyBinaryRefresh()` answers a `get_project_state_binary` the test did not
+  script with bytes (`new ArrayBuffer(0)`, no project open) instead of a value the
+  decoder throws on; pair it with `failOnRefreshErrors()`
+  (`src/test/refreshGuard.ts`). The call is still recorded.
+- A default answer for every call (`invokeIpc: vi.fn(async () => true)` in the old
+  idiom) is `invokeIpcMock.mockImplementation(...)` at the top level - or in
+  `beforeEach` when the file calls `vi.restoreAllMocks()`, which drops it.
+- A file that calls `vi.resetModules()` mocks with
+  `vi.mock('<rel>/utils/ipc', () => import('<rel>/utils/__mocks__/ipc'))` instead.
+  The reset re-evaluates a factory-less mock, so a module the test re-imports
+  would get a fresh `vi.fn` rather than the `invokeIpcMock` it scripted; a
+  factory's result survives the reset (`storeLoadOrder.test.ts`).
+- Do not reintroduce `vi.hoisted(() => vi.fn())` plus a `vi.mock` factory for
+  `utils/ipc`. The exception on purpose:
+  `useInternalErrorEvent.pull.test.tsx`, whose `invokeIpc` is a plain function
+  because a `vi.fn` attaches a handler to the promises it returns and would hide
+  the unhandled rejection that file watches for.
+
+One-line module stubs (the identity `t` of a `react-i18next` mock, a
+`DialogWrapper` or `Button` stub, `maplibre-gl` as `{ default: {} }`, a
+`@tauri-apps/api/core` `invoke` stub) stay inline: a shared module would replace
+one line with one line plus an import.
+
 ## Playwright patterns
 
 Specs live in `e2e-playwright/`, flat, one file per feature area, alongside:
@@ -754,7 +923,8 @@ Specs live in `e2e-playwright/`, flat, one file per feature area, alongside:
 ```
 e2e-playwright/
 ├── helpers/app.ts          # shared setup + waiters (import from here)
-├── mocks/tauri-ipc.ts      # the mocked Tauri IPC backend
+├── mocks/tauri-ipc.ts      # the mocked Tauri IPC backend (its core)
+├── mocks/ipc/*.ts          # its command families (config, Plan mode, DMP, tiles, SpeleoDB, imports, exports, ...)
 ├── fixtures/coverage.ts    # the test fixture every spec imports `test` from
 ├── fixtures/*.dmp          # binary survey files. Nothing reads them: the mock
 │                           #   fabricates data and never parses a file
@@ -788,11 +958,18 @@ test.describe('Feature Name', () => {
 ```
 
 Import `test` from `./fixtures/coverage`, not from `@playwright/test` - that
-fixture is what wires up E2E coverage collection.
+fixture is what wires up E2E coverage collection and the unmocked-IPC teardown
+guard. `pnpm lint:e2e-parallel` fails a spec that takes `test` from anywhere else
+(a type-only import from `@playwright/test` is fine; #576 RV8b-E3-3).
 
 ### Waiters
 
-Use these instead of `waitForTimeout`. All from `helpers/app.ts`:
+Use these instead of `waitForTimeout` (`pnpm lint:e2e-no-sleep` rejects a bare
+one; a deliberate negative-space settle - "give a buggy handler time, then
+assert nothing changed" - carries a `// settle: <why>` comment directly above
+the call). To retry an action rather than a read, use
+`expect(async () => { ... }).toPass()`, not a sleep loop. All from
+`helpers/app.ts`:
 
 | Helper | Waits for |
 |--------|-----------|
@@ -807,7 +984,7 @@ Use these instead of `waitForTimeout`. All from `helpers/app.ts`:
 `helpers/app.ts` also has seeding helpers (`createSectionViaStore`,
 `seedProjectWithSections`), menu navigation (`openAppMenu`,
 `openSettingsFromMenu`, `openDebugFromMenu`), the DMP wizard drivers
-(`openDmpSelectionDialog`, `proceedToDmpImportWizard`, `placeAllSections`), and
+(`openDmpSelectionDialog`, `proceedToDmpImportWizard`), and
 canvas readback (`getDrawnGeometry`, `getStationScreenPositions`,
 `readCanvasPixel`, `countCanvasInk`). Read the file before writing a new
 one-off helper.
@@ -834,17 +1011,21 @@ So a spec must never introduce state that survives across pages or workers.
 |------|---------|
 | `own-server` | `createServer(` |
 | `port-listen` | `.listen(` |
-| `disk-write` | `writeFileSync`, `writeFile`, `appendFileSync`, `appendFile`, `createWriteStream`, `copyFileSync`, `cpSync`, `renameSync` |
-| `foreign-host-port` | `localhost:<port>` / `127.0.0.1:<port>` for any port but `:1420` |
+| `disk-write` | `writeFileSync`, `writeFile`, `appendFileSync`, `appendFile`, `createWriteStream`, `copyFileSync`, `copyFile`, `cpSync`, `renameSync`, and the create/delete/link calls `mkdirSync`, `mkdir`, `unlinkSync`, `unlink`, `rmSync`, `rmdirSync`, `rmdir`, `symlinkSync`, `symlink`, `truncateSync`; the short async names only as a member call (`fs.rm(`, `fsp.cp(`, `fs.rename(`, `fs.truncate(`) |
+| `foreign-host-port` | `localhost:<port>` / `127.0.0.1:<port>` for any port but `:1420`, including a template port (`localhost:${port}`) |
 | `serial` | `describe.serial` / `test.serial` / `mode: 'serial'` |
+| `symlink` | a symlinked file under `e2e-playwright/` (never followed, so it cannot be scanned) |
+| `premise` | the root `playwright.config.ts` no longer sets `fullyParallel: true` |
 
 It runs in the **smoke** CI job - the only job that runs on
-`e2e-playwright/**` changes, since `check` path-ignores them. Run it locally
-before pushing. `fixtures/coverage.ts` is the one allow-listed write; a genuinely
+`e2e-playwright/**` changes, since `check` path-ignores them - after its own
+fixture test (`pnpm lint:e2e-parallel:test`). Run both locally before pushing.
+`fixtures/coverage.ts` is the one allow-listed write; a genuinely
 necessary exception goes in the `ALLOW` list in that script *with a written
-reason*. The scanner is a line-based tripwire, not a parser: it deliberately
-ignores `page.screenshot({path})` (framework I/O with unique names) and the root
-`playwright.config.ts`.
+reason*. The scanner is a line-based tripwire, not a parser: comments are
+stripped by a string-aware scanner (a quoted `/*` or `//` is not a comment), and
+it deliberately ignores `page.screenshot({path})` (framework I/O with unique
+names) and `mkdtemp` (unique by construction).
 
 On a 2-core runner at multiple workers, bad hygiene here surfaces as flake, not
 as a clean failure.
@@ -953,7 +1134,7 @@ the two diverge by several percent.
    captured on first retry).
 4. `PW_RETRIES=0` to fail fast instead of watching a flake pass on retry.
 5. Add `console.log()` inside the relevant mock handler in
-   `mocks/tauri-ipc.ts`.
+   `mocks/tauri-ipc.ts` (or its command family under `mocks/ipc/`).
 
 `e2e-playwright/debug.spec.ts` is a minimal end-to-end sanity spec (create a
 project, assert the map canvas renders) - useful to confirm the harness itself
@@ -962,30 +1143,109 @@ works before blaming your test.
 ## Mocked IPC conventions
 
 `e2e-playwright/mocks/tauri-ipc.ts` intercepts `__TAURI_INTERNALS__.invoke()`
-and hand-simulates the Rust backend for every Playwright spec.
+and stands in for the Rust backend in every Playwright spec. It is transport
+plus canned reads: it stores what the app writes and hands it back in the
+wire's shapes, answers reads from fixed fixtures, and records calls so a spec
+can assert what reached the backend. It does not re-run the backend's
+computations (see "What the mock fakes" below); those are pinned by the Rust
+tests.
+
+Its own `switch (cmd)` handles the project lifecycle, load and edit commands.
+The command families under `mocks/ipc/` (config, Plan mode, the DMP parse, tile
+cache, SpeleoDB, history, recovery - #576 E8, E3; the recent-projects list,
+placement suggestions, the Walls / GPX / TML previews, exports, display settings
+and the read-only survey queries among others - #576 AFK-D3) each own their commands and
+the state only they use; the core asks them in turn about any command its
+switch does not handle. A family runs in the page like the core, serialized
+with `Function.prototype.toString`, so it may use only its `ctx` argument
+(`mocks/ipc/types.ts`) and browser globals, never an import. A new command goes
+into the family it belongs to, or into the core when it reads or replaces the
+open project's lifecycle state.
 
 ### A new IPC command needs a mock case
 
-Unknown commands hit `default: console.warn(...); return null`, so
-`result.success` is falsy and the UI silently takes its failure path - the spec
-fails for the wrong reason, or worse, passes vacuously.
+A command no case answers fails the test that reached it (#576 E3-D2). The
+mock still answers it `null`, so the flow under test is not derailed mid-test,
+but records it, and the auto fixture in `e2e-playwright/fixtures/coverage.ts`
+(every spec imports `test` from there) fails the test at teardown naming the
+command:
 
-```typescript
-case 'your_new_command': {
-  const param = args?.param_name as string;
-  return { success: true, data: mockData };   // shape must match the Rust return type
-}
+```text
+Error: This test reached IPC command(s) the Playwright mock does not answer:
+plugin:webview|set_webview_zoom. Add a case to e2e-playwright/mocks/tauri-ipc.ts ...
 ```
 
-`src/test/__tests__/mockContract.test.ts` (vitest) enforces this in both
-directions: it parses `generate_handler!` in `src-tauri/src/lib.rs` and the
-mock's `switch` cases and fails on drift, with reasoned allowlists and
-stale-allowlist self-checks. **Adding or removing a `#[tauri::command]` fails
-vitest until the mock and the allowlist agree.**
+Tauri plugin bridge calls (`plugin:dialog|confirm`, `plugin:opener|open_url`,
+...) count too. A command the app may call but no spec needs anything from
+goes in `mocks/ipc/inert.ts` with its fixed reply and a reason (today:
+telemetry and the console log bridge) - not into a silent default.
 
-It is gated from both sides: `check` runs it as part of the vitest suite when
-Rust or `src/` changes, and `smoke` runs it on its own (`pnpm test:mock-contract`)
-when `e2e-playwright/**` changes, which `check` path-ignores.
+The opener plugin's calls are also checked against what the real app takes
+(#576 NF-W12FE-1, `mocks/ipc/opener.ts`): arguments its Rust command would
+refuse (`reveal_item_in_dir` takes `paths`, not `path`) or a command the
+capability file does not grant (`open_path`) are rejected the way Tauri
+rejects them and fail the test at teardown, so call the plugin through its JS
+API rather than a hand-built `invoke`.
+
+```typescript
+case 'your_new_command':
+  return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'your_new_command'>;
+```
+
+Every reply is written `satisfies MockReply<'name'>`
+(`e2e-playwright/mocks/ipc/types.ts`): the command's result type from the
+generated command manifest (`src/types/ipc/IpcCommands.ts`, #576 C3), so
+`pnpm typecheck:playwright` fails when a reply drifts from what the backend
+returns. The core and every family switch on a `MockCommandName` (`keyof
+IpcCommands`), so a `case` for a command the backend does not register fails
+the typecheck too.
+
+`src/test/__tests__/mockContract.test.ts` (vitest, `pnpm test:mock-contract`)
+holds the rest of the contract against the manifest:
+
+- every registered command has a mock case, an inert entry, or a reason in
+  `UNMOCKED_COMMAND_REASONS` - and that list may hold only commands no frontend
+  code names (the test scans `src/` for the name), so a command with a UI path
+  can never be allowlisted;
+- every command the frontend names is answered (a case or an inert entry);
+- every mock case and inert entry names a registered command;
+- every `return` in a case is typed with `MockReply` (or is a rejection).
+
+**Adding or removing a `#[tauri::command]` fails vitest until the mock agrees**
+(after `pnpm gen:ipc-types`). It is gated from both sides: `check` runs it as
+part of the vitest suite when Rust or `src/` changes, and `smoke` runs it on
+its own when `e2e-playwright/**` changes, which `check` path-ignores.
+
+A spec seeds a reply the defaults do not give with `setIpcOverrides(page, {
+command: reply })` (`helpers/ipcOverrides.ts`); `{ __reject: { code, message }
+}` is a backend refusal (a `CommandError`), `{ __throw: msg }` a transport
+failure.
+
+### What the mock fakes
+
+Know these before asserting on a value the mock produced - an assertion on mock
+arithmetic tests the mock, not the app. Pin the computation in a Rust test and
+assert in Playwright only that the UI sent the right request and rendered the
+reply it got.
+
+| Area | What the mock does | Where the real behaviour is pinned |
+|------|--------------------|------------------------------------|
+| Undo/redo | Inert: `can_undo`/`can_redo` false, both stacks empty; undo, redo, undo_to and redo_to are recorded (`__MOCK_GET_UNDO_REDO_CALLS__`) and change nothing. Seed `can_undo` / `get_undo_stack` with an override to enable the UI. | Rust undo fuzz gate, history command tests |
+| Moves | `move_station`, `move_segment`, `move_section` record the call (`__MOCK_MOVE_CALLS__`) and move nothing; assert on the recorded offset, not a coordinate read-back. | Rust move tests (`docs/move-tools.md`) |
+| Station geometry and stats | Placeholder layout: station `i` of a section at `x = 10 i`, `y = 0`, `z = 0`, whatever the shots say; the stored merges, closures, datums and comments are echoed onto the stations they name. Stats are counts of what is stored; total length, depth range, penetration and loops are 0. `get_segment_geometry` is one canned line, `get_survey_geometry_for_file` two canned shots; `get_station_distances_from` answers each station's placeholder `x` as its distance, `get_along_line_distance` a fixed 12.34 m over the first two shots. | Rust geometry, load and stats tests (models `stats_*`) |
+| Reverse, split, batch | `reverse_section` and `split_shot_at_distance` are recorded and acknowledged; the project is left as it was (the reverse's reply echoes the stored shot count). `execute_batch` replays its sub-commands with no rollback. | models `project/reverse.rs` + `project/mock_narrowing_tests.rs`, core `reverse_tests.rs`, core split and batch tests |
+| Closures and merges | Stored or dropped as asked; no duplicate-closure refusal, no closure cascade on an unmerge, no refusal of an unmerged pair. | models mutations tests, core `state/mock_narrowing_tests.rs` |
+| Imports | `parse_tml` / `parse_compass` / `parse_gpx` / `parse_walls` answer canned files; the TML, GPX and Compass imports land a canned result (the default options' landing) whatever was sent, and record the options. Seed a different receipt with an override. | parsers tml / gpx / compass tests, core `command_import` tests, app `import_command_tests.rs` |
+| Plan anchors | An anchor is the ref it was taken from; re-resolving it answers that ref, unless a spec seeds the backend's answer with `__MOCK_SET_ANCHOR_RESOLUTION__({ 'sectionId:stationIndex': ref \| null })`. | core `dive_plan.rs` anchor tests |
+| Gas reach field | Canned: a fixed ramp (station `i` costs `200 i` litres, 1500 L budget, the last station unconnected), a route over the reachable stations, no stage drops, no scooter range. Inputs are recorded (`__MOCK_GAS_REACH_CALLS__`) and otherwise ignored. Seed what the engine answers with `__MOCK_SET_GAS_FIELD_PATCH__({ ... })`. | models `project/gas` and `gas/scooter.rs` tests |
+| Saving | `save_project` always succeeds unless a spec overrides it (or a newer-file / unreadable-link state refuses it). | Rust save and persistence tests (`docs/saving.md`) |
+| Recovery | No backups, nothing salvaged, a repair that changes nothing. | `src-tauri/src/commands/recovery_tests.rs` |
+| SpeleoDB | Logged out and local by default; the write workflow answers the happy path (open lands, push accepted, update up to date). | `crates/speleodb`, `core/state/speleodb*.rs`, the env-gated live tests |
+| Exports | Recorded and acknowledged; nothing is written. | The export crate's tests |
+
+Station `z` is always 0 in `get_project_state`, so any e2e reading a station
+depth sees 0 regardless of the seed: assert that a depth row renders, and pin
+the depth math in Rust.
 
 ### Do not copy backend shapes into a test
 
@@ -1042,15 +1302,10 @@ force a scenario (`__MOCK_SET_GEOMETRY_ERROR__`, `__MOCK_SET_INTEGRITY_ISSUES__`
 resets. Grep the mock for `__MOCK_` for the current list; follow the existing
 naming when you add one.
 
-The `move_*` handlers are **no-ops that do not mutate the project** (the app
-refetches generated coordinates), so assert on the *recorded* call, not on a
-coordinate read-back.
-
-The mock also hardcodes station `z = 0` in `get_project_state` - it does not
-derive station depth from the seeded shot `depth_in`/`depth_out`, even though
-the stored *shots* carry them. Any e2e reading a station `z` or a depth readout
-sees `0` regardless of the seed. Assert that a depth row *renders*; pin the depth
-math in a Rust unit test.
+For a command without a hook of its own, `recordIpcCalls(page, ['cmd'])` /
+`waitForIpcCall` (`helpers/ipcRecorder.ts`) record what the app sent at the
+invoke boundary, overrides included - prefer them to scraping the mock's
+console log.
 
 ### Common mock scenarios
 
@@ -1064,10 +1319,13 @@ case 'get_survey_geometry_for_file': {
     origin: [-81.78, 24.55],
   };
 }
+```
 
-// The undo/redo stacks
-case 'get_undo_stack': {
-  return [{
+```typescript
+// A populated undo stack, seeded from the spec (the mock's history is inert)
+await setIpcOverrides(page, {
+  can_undo: true,
+  get_undo_stack: [{
     index: 0,
     description: 'Create section "Main Line"',
     timestamp: new Date().toISOString(),
@@ -1076,8 +1334,8 @@ case 'get_undo_stack': {
       changes: [{ field: 'name', oldValue: '', newValue: 'Main Line' }],
       additionalChanges: 0,
     },
-  }];
-}
+  }] satisfies MockReply<'get_undo_stack'>,
+});
 ```
 
 Mocked specs run with a non-null `gpsOrigin`, which changes how station
@@ -1437,6 +1695,70 @@ mod tests {
 
 Async tests use `#[tokio::test]`.
 
+### Shared test fixtures
+
+The setup the Rust tests share lives in two modules (#576 E1):
+`stalagmight_models::test_fixtures` (survey data) and
+`stalagmight_core::test_fixtures` (`AppState`, plus a re-export of the models
+builders, so a core or app-crate test imports from one place). Both are
+`cfg(any(test, feature = "test-support"))`: every member's own tests and the app
+crate's tests (through its `[dev-dependencies]`) see them, production builds never
+compile them. Inside a member the path is `crate::test_fixtures` (models, core) or
+`crate::models::test_fixtures` (export, persistence); the app crate imports
+`stalagmight_core::test_fixtures`.
+
+| fixture | what the test gets |
+|---|---|
+| `state_with_project(name)` | a fresh `AppState` with an empty project made by `Command::CreateProject` (no location); fails the test if the create fails |
+| `state_holding(project)` | a fresh `AppState` holding `project` exactly as given (`set_project_for_tests`): no command runs, no history |
+| `state_with_null_sink()` | a fresh `AppState`, no project, with `NullEventSink` installed - what the progress-reporting load and create paths need |
+| `section_with_shots(&state, name, shots)` | `Command::CreateSection` with fixed defaults (color `#3388FF`, no surveyor, date or direction); the new id |
+| `shot(length)` | azimuth 45 / 225, depth 10 / 11 |
+| `straight_shot(azimuth, length)` | azimuth / azimuth, depth 0 / 0 |
+| `heading_shot(azimuth, length)` | azimuth / (azimuth + 180) mod 360, depth 10 / 10 |
+| `bare_shot(length)` | only a length |
+| `.with_length` `.with_azimuths` `.with_depths` `.with_pitches` `.with_lrud` `.with_kind` `.with_uuid` `.with_comment` `.with_marker_index` `.with_temperature` | setters on `ShotData`: each replaces exactly the fields it names |
+
+```rust
+use crate::test_fixtures::{section_with_shots, state_with_project, straight_shot};
+
+#[test]
+fn a_descending_section_keeps_its_length() {
+    let state = state_with_project("CaveA");
+    let section = section_with_shots(
+        &state,
+        "SectionA",
+        vec![straight_shot(90.0, 5.0).with_depths(0.0, 1.0)],
+    );
+    // ...
+}
+```
+
+How to use them:
+
+- Start a state test from a fixture, not from `AppState::new()` plus an inline
+  `Command::CreateProject`. Keep the inline create only when the create is what
+  the test is about (it reads the create's answer, or the project needs a
+  location).
+- Build a shot from a fixture plus setters. A file that needs its own shape many
+  times may name it in a one-line local wrapper over them; a shape a third file
+  needs belongs in `models::test_fixtures` instead. There is no private event
+  sink to write either: use `NullEventSink` (or `state_with_null_sink()`).
+- Two kinds of builder keep an exhaustive `ShotData { .. }` literal on purpose:
+  the fuzz generators (`random_shot`, `hostile_shot`) and fixtures whose point is
+  to name every field (`base_shot_data`), so a new field fails to compile there
+  until someone decides how to fill it.
+- A member's own integration tests (`crates/<name>/tests/`) link the member
+  without its `test-support` feature, so `stalagmight_core::test_fixtures` is not
+  visible to `crates/core/tests/`; the app's `src-tauri/tests` sees both modules.
+- Nothing enforces this (#576 E1-D2 chose docs and review over a gate).
+
+`core/state/tests.rs` is a module root over topic files in `core/state/tests/`
+(each a `*_tests.rs` declared `#[cfg(test)]` there, so the file-size ratchet and
+the source scans treat it as a test file). Add a test to the topic file it
+belongs with, or a new topic file; a helper more than one topic file uses lives
+in `tests.rs`, one only a single file uses lives in that file.
+
 ### Config isolation
 
 `AppState::new()` LOADS the global config and much of the state module writes it
@@ -1519,6 +1841,23 @@ let conn = rusqlite::Connection::open_in_memory()?;
 Used by the tile cache, the `.plnx` dive-plan store, and the project database
 (`src-tauri/crates/persistence/src/persistence/sqlite/open.rs`).
 
+### Find sections by name or id, not by position
+
+In new tests, reach a section with `section_named(&project, "CaveA")` or
+`section_by_id(&project, id)` from `stalagmight_models::test_support` rather
+than `project.sections[0]`: the helper says which section the test means, fails
+listing the sections when the name is missing or ambiguous, and does not tie
+the test to the order sections are stored in (#576 E9(c)). Existing positional
+sites stay; there is no plan to change section storage, so they are not worth
+the churn.
+
+### Migration tests hand-write the old schema
+
+A migration test builds the file an older build wrote, so it spells out that
+version's tables in literal `CREATE TABLE` SQL on purpose - never derive them
+from today's `schema.rs` (a derived shape describes a file no build ever wrote)
+and never update them when a column is added (#576 E9(a)).
+
 ### Fixture files
 
 Resolve fixtures from the manifest directory - they are shared with the E2E
@@ -1531,8 +1870,9 @@ up; from the app crate (`src-tauri/`) it is one.
 fn parses_v5_dmp() {
     // In a member crate (here: stalagmight-parsers). From the app crate the
     // prefix is "../e2e/fixtures/" instead.
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
-    assert!(path.exists(), "Fixture missing: {}", path.display());
+    let path = require_file(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp"),
+    );
 
     let dmp = parse_dmp(&path).expect("v5 DMP should parse");
     assert_eq!(dmp.version, 5);
@@ -1543,11 +1883,56 @@ fn parses_v5_dmp() {
 Because Rust tests read `e2e/fixtures/`, the CI `check` job must keep running on
 changes there - never path-ignore `e2e/**`.
 
+A missing committed fixture fails the test (`require_file` panics naming the
+path); it never skips. A skip there would make the test unfailable exactly
+when the fixture it guards has gone.
+
+### Opt-in tests
+
+A test that needs something the repo cannot carry - a live SpeleoDB box, a
+private survey file, a corpus directory, a tool binary - is `#[ignore]`d, and
+takes its prerequisites through the helpers in
+`stalagmight_models::test_support` (a member crate reaches them by enabling
+`stalagmight-models`' `test-support` feature in its `[dev-dependencies]`):
+
+| Helper | Use for |
+|--------|---------|
+| `require_env("VAR")` | a value: credentials, a URL, a binary name |
+| `require_env_file("VAR")` | a path the variable names, which must exist |
+| `require_file(path)` | a fixed path (an uncommitted fixture, a committed one) |
+| `missing_prerequisite(what)` | anything else - e.g. a build-time setting |
+
+Each panics naming what is missing. `#[ignore]` is the skip: a default
+`cargo test` never runs these tests, and someone who runs one on purpose must
+see a failure when a variable is unset or mistyped, not an `ok` from a test
+that returned before its first assertion (#576 E13). Never early-return from
+an opt-in test, and never hard-code a path on your own machine into one - take
+it from a variable.
+
+The consequence: a blanket `cargo test -- --ignored` fails every opt-in test
+whose prerequisites are absent. Run the ones you can feed by name, as the
+recipes above do (`--lib fuzz_shrink -- --ignored`), and leave out the rest
+with libtest's repeatable `--skip <filter>`.
+
 ### Inducing save failures must be root-safe
 
-The self-hosted CI runner executes tests as **uid 0 with `CAP_DAC_OVERRIDE`**,
-so a `chmod 0444` directory does *not* produce `EACCES` and a permissions-based
-inducer silently passes. Use uid-independent inducers instead:
+Root - or any process holding `CAP_DAC_OVERRIDE` - ignores mode bits: a
+`chmod 0444` file or `0555` directory does *not* produce `EACCES` for it. The
+self-hosted CI runner is a container running as uid 0, so the `check` job runs
+`cargo test` through `scripts/ci-cargo-test-unprivileged.sh`, which compiles as
+the job's user and runs every test binary as an unprivileged one (#576
+NF-ROOT-PERM).
+
+A test that does take a permission away with mode bits must **assert that they
+bite**, right after setting them, with `assert_dir_refuses_new_files`,
+`assert_file_refuses_writes` or `assert_lookup_refused` from
+`stalagmight_models::test_support`. They fail the test when the process can
+still write or look up the path, so a privileged run is a red test, never a
+silent pass. Never skip instead: a skip makes the test unfailable exactly where
+it would mean nothing.
+
+Where a uid-independent inducer exists, prefer it - it keeps the test
+meaningful on every machine:
 
 - **Generic "cannot save":** point `file_path` at a **missing parent directory**
   so `Database::open(temp)` fails.
@@ -1580,7 +1965,8 @@ A new command, dialog, or tool needs its event names added to the Rust registry
 *and* to the canonical lists in `src/utils/telemetry.ts`. The registry asserts
 an exact `EVENT_NAMES.len()` with a self-documenting ledger comment - keep the
 ledger updated when you change the count. The `registry_covers_all_*` coverage
-tests run **only** under `--features telemetry`. `registry_covers_all_tools`
+tests run in every `cargo test`, with or without `--features telemetry` (#576
+B7). `registry_covers_all_tools`
 parses `src/store/uiStore.ts` to diff `ToolType` against the registry, so a
 retired tool needs a `RETIRED_TOOLS` entry.
 
@@ -1662,7 +2048,7 @@ data for a specific edge case, and record what it is for in the fixtures README.
 
 | Symptom | Check |
 |---------|-------|
-| A command returns `null`, UI takes the failure path | The command has no case in `mocks/tauri-ipc.ts`. `pnpm exec vitest run src/test/__tests__/mockContract.test.ts` will say so. |
+| A command returns `null`, UI takes the failure path | The command has no case in `mocks/tauri-ipc.ts` or `mocks/ipc/`. `pnpm exec vitest run src/test/__tests__/mockContract.test.ts` will say so. |
 | A panel renders empty while stats show the right count | A reference-keyed memo froze - the mock returned the same project object twice. See the fresh-identity rule above. |
 | A new gate disables UI in every spec | The mock never initializes the state the gate reads. Fix the mock, not the gate. |
 | Settings tests fail after adding a category | The mock's **two** config objects need the new block; `focus-management.spec.ts` hardcodes the category order. |
@@ -1684,7 +2070,7 @@ data for a specific edge case, and record what it is for in the fixtures README.
 
 | Symptom | Check |
 |---------|-------|
-| Passes locally, fails in CI | Run with `--workspace`, `--features telemetry` and `TELEMETRY_ENDPOINT` set - without `--workspace` the member crates are skipped, and a featureless run filters the registry-coverage tests out |
+| Passes locally, fails in CI | Run with `--workspace`, `--features telemetry` and `TELEMETRY_ENDPOINT` set - without `--workspace` the member crates are skipped, and a featureless run filters out the telemetry collector's own tests |
 | Every test binary aborts at startup on Windows (`0xC0000139`) | Use `./scripts/test.ps1` |
-| A permission-based save-failure test passes vacuously in CI | CI runs as root. Use a root-safe inducer (above) |
+| A permission test fails with "permission precondition failed" | The process ignores mode bits (root, or `CAP_DAC_OVERRIDE`). Run the Rust tests as an unprivileged user - CI does, through `scripts/ci-cargo-test-unprivileged.sh` - or use a root-safe inducer (above) |
 | Flaky or order-dependent | Shared mutable state between tests |

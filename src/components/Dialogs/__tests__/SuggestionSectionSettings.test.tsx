@@ -10,10 +10,7 @@ import userEvent from '@testing-library/user-event';
 import { SuggestionSectionSettings } from '../SuggestionSectionSettings';
 import type { SectionEditState } from '../../../utils/batchImportHelpers';
 
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys());
 
 const editState = (overrides: Partial<SectionEditState> = {}): SectionEditState => ({
   name: 'Section A',

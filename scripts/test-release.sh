@@ -339,6 +339,65 @@ else
   assert "tree untouched" tree_clean "$D"
 fi
 
+echo "== case 10b: an untracked file refuses the bump, and is named =="
+# release.sh used `git diff --name-only HEAD`, which never lists untracked
+# files - and a release cut with one sitting there is usually a forgotten
+# `git add` (release-tag.sh refuses it for the same reason, case 14b).
+D=$(fresh_clone case10b)
+printf 'scratch\n' > "$D/forgotten-file.txt"
+if out=$("$D/scripts/release.sh" 4.4.4 --no-edit 2>&1); then
+  fail "bumped with an untracked file present"
+else
+  pass "refused an untracked file"
+  assert "message names the untracked file" \
+    bash -c 'printf "%s" "$1" | grep -q "forgotten-file.txt"' _ "$out"
+  assert "message gives advice that actually works" \
+    bash -c 'printf "%s" "$1" | grep -q -- "git stash -u"' _ "$out"
+  refute "package.json left untouched" grep -q '"version": "4.4.4"' "$D/package.json"
+fi
+
+echo "== case 10c: a dirty CHANGELOG.md alone is still accepted =="
+# The one documented exemption: release.sh is about to commit the changelog,
+# so notes written just before running it belong in the release commit.
+D=$(fresh_clone case10c)
+printf '\n- a note written just before the release\n' >> "$D/CHANGELOG.md"
+if "$D/scripts/release.sh" 4.4.5 --no-edit >/dev/null 2>&1; then
+  pass "accepted a tree whose only change is CHANGELOG.md"
+  assert "the note is in the release commit" \
+    bash -c 'git -C "$1" show HEAD:CHANGELOG.md | grep -q "a note written just before"' _ "$D"
+  assert "tree clean after release" tree_clean "$D"
+else
+  fail "refused a tree whose only change is CHANGELOG.md"
+fi
+
+echo "== case 10d: a git that cannot report the tree state refuses the bump =="
+# The old check piped `git diff ... 2>/dev/null` into `|| true`, so a FAILING
+# git read as "nothing changed" and the script went on to rewrite the version
+# files. A stand-in git that fails `status`/`diff` (and passes everything else
+# through) makes that failure deterministic.
+D=$(fresh_clone case10d)
+FAKEGIT="$WORK/fakegit"
+mkdir -p "$FAKEGIT"
+REAL_GIT="$(command -v git)"
+cat > "$FAKEGIT/git" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in status|diff) echo "fatal: simulated git failure" >&2; exit 128 ;; esac
+done
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$FAKEGIT/git"
+if out=$(PATH="$FAKEGIT:$PATH" "$D/scripts/release.sh" 4.4.6 --no-edit 2>&1); then
+  fail "bumped although git could not report the tree state"
+else
+  pass "refused when git status failed"
+  assert "message says git status failed" \
+    bash -c 'printf "%s" "$1" | grep -q "git status failed"' _ "$out"
+  refute "package.json left untouched" grep -q '"version": "4.4.6"' "$D/package.json"
+  assert "tree clean, nothing to hand-revert" tree_clean "$D"
+  refute "no tag created" has_tag "$D" v4.4.6
+fi
+
 # --- release-tag.sh: the second flow, tagging a tree that is already bumped ---
 #
 # Every case below was previously "the operator remembers", which is how four

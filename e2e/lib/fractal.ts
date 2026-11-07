@@ -109,7 +109,7 @@ interface TurtleState {
  * @returns Sections and merges to create in the backend
  */
 export function executeLSystem(lSystem: string): FractalResult {
-  const sections: SectionData[] = [{ name: 'S0', color: COLORS[0], shots: [] }];
+  const sections: SectionData[] = [{ name: 'S0', color: COLORS[0]!, shots: [] }];
   const merges: MergeData[] = [];
   const stack: TurtleState[] = [];
 
@@ -119,8 +119,9 @@ export function executeLSystem(lSystem: string): FractalResult {
   for (const char of lSystem) {
     switch (char) {
       case 'F': {
-        // Draw forward: add shot to current section
-        sections[currentSectionId].shots.push({
+        // Draw forward: add shot to current section. currentSectionId is always a
+        // pushed section: 0, a just-pushed branch, or one restored from the stack.
+        sections[currentSectionId]!.shots.push({
           azimuth_in: currentAzimuth,
           azimuth_out: (currentAzimuth + 180) % 360,
           length: SHOT_LENGTH,
@@ -144,7 +145,7 @@ export function executeLSystem(lSystem: string): FractalResult {
 
       case '[': {
         // Push state: save current position and start a new branch
-        const stationIndex = sections[currentSectionId].shots.length;
+        const stationIndex = sections[currentSectionId]!.shots.length;
         stack.push({
           sectionId: currentSectionId,
           stationIndex,
@@ -155,7 +156,7 @@ export function executeLSystem(lSystem: string): FractalResult {
         const newSectionId = sections.length;
         sections.push({
           name: `S${newSectionId}`,
-          color: COLORS[newSectionId % COLORS.length],
+          color: COLORS[newSectionId % COLORS.length]!,
           shots: [],
         });
 
@@ -198,7 +199,7 @@ function filterEmptySections(
   // Build mapping from old indices to new indices (for non-empty sections)
   const nonEmptyIndices: number[] = [];
   for (let i = 0; i < sections.length; i++) {
-    if (sections[i].shots.length > 0) {
+    if (sections[i]!.shots.length > 0) {
       nonEmptyIndices.push(i);
     }
   }

@@ -51,6 +51,7 @@ const FIRST_PARTY_CRATES = new Set([
   'stalagmight-persistence',
   'stalagmight-export',
   'stalagmight-speleodb',
+  'stalagmight-tiles',
   'stalagmight-core',
 ]);
 
@@ -60,14 +61,16 @@ const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 // checkout verifies. (A .gitattributes eol pin was tried instead and broke
 // test-release.sh's CRLF-tolerance case - release.sh must keep accepting a
 // CRLF Cargo.lock, so the gate normalises rather than the checkout.)
-const hashNormalised = (text) => sha256(text.replace(/\r\n/g, '\n'));
+// Exported: scripts/check-third-party-licenses.mjs imports this and
+// HASHED_INPUTS instead of keeping lockstep copies (#576 E18(c)).
+export const hashNormalised = (text) => sha256(text.replace(/\r\n/g, '\n'));
 const inputHash = (rel) => hashNormalised(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
 
 // Everything the output is a pure function of (given a pinned cargo-about and
 // a fresh install): the two lockfiles, this generator, and the cargo-about
 // config. Hashing the last two means a renderer or harvest-config change also
-// demands a regen - the checker verifies the same list.
-const HASHED_INPUTS = [
+// demands a regen - the checker imports this very list, so the two cannot drift.
+export const HASHED_INPUTS = [
   'src-tauri/Cargo.lock',
   'pnpm-lock.yaml',
   'scripts/gen-third-party-licenses.mjs',
@@ -349,4 +352,8 @@ bundle-body=${hashNormalised(tail)}
   console.log(`wrote THIRD-PARTY-LICENSES.md: ${rustCount} crates + ${jsCount} npm packages, ${rust.length + js.length} license blocks, ${size} KB`);
 }
 
-main();
+// Only when run as a script: importing this module (the checker does, for
+// HASHED_INPUTS) must never regenerate - or even try to regenerate - the
+// shipped bundle (#576 E18(c)).
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) main();

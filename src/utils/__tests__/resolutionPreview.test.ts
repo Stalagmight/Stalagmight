@@ -33,6 +33,15 @@ describe('horizontalLength', () => {
     expect(horizontalLength(5, 5)).toBeCloseTo(0, 6); // vertical
     expect(horizontalLength(5, 9)).toBe(0); // clamped, never NaN
   });
+
+  it('stays finite for a tape so long its square overflows (#576 NF-W4M-5)', () => {
+    // 1e200 squared is Infinity, and Infinity - Infinity is NaN. The backend's
+    // `horizontal_length_from_slope` scales both into [0, 1] first, so a
+    // 10:6 tape-to-drop ratio still projects to 8 - the ghost must agree.
+    expect(horizontalLength(1e200, 6e199) / 8e199).toBeCloseTo(1, 12);
+    expect(horizontalLength(-1e200, -6e199) / 8e199).toBeCloseTo(1, 12);
+    expect(horizontalLength(1e200, 2e200)).toBe(0); // steeper than vertical, clamped
+  });
 });
 
 describe('computeGhostEnd', () => {

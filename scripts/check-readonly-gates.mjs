@@ -43,16 +43,19 @@
 //
 // Usage:  node scripts/check-readonly-gates.mjs   (or: pnpm lint:readonly-gates)
 
-import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { listSrcFiles, symlinkProblem } from './lib/src-files.mjs';
+import { stripComments } from './lib/js-comments.mjs';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // Rule (A): file -> EXACT allowed count of a raw `=== 'closureAdjusted'` /
 // `!== 'closureAdjusted'` comparison (either operand order, i.e. including the
-// Yoda form `'closureAdjusted' === x`). Each entry is a reviewed, legitimate
+// Yoda form `'closureAdjusted' === x`), or `case 'closureAdjusted':` label,
+// counted per MATCH (two on one line count twice), outside comments. Each
+// entry is a reviewed, legitimate
 // non-mutation usage (display/coordinate-selection, or the canonical
 // definition) - not a mutation gate that should instead compose
 // useEditingBlocked() / isEditingBlockedNow().
@@ -135,81 +138,45 @@ export const DIRECT_READ_ONLY_ACCESS_EXEMPT = {
     'pre-existing RoH-safe composition, out of #275 blocker scope',
 };
 
-const SRC_PREFIX = 'src/';
-const TEST_RE = /(^|\/)__tests__\/|\.test\.[cm]?[jt]sx?$/;
+// Global: every match on a line counts (#576 E2-D2 - counting LINES let a second
+// raw gate ride along on an already-allowlisted line). A `case 'closureAdjusted':`
+// label is the same comparison spelled as a switch, so it counts too.
+// A template literal (`closureAdjusted` in backticks) is the same comparison
+// (#576 RV3-FE-12: it used to pass uncounted).
 const CLOSURE_ADJUSTED_RE =
-  /(===|!==)\s*['"]closureAdjusted['"]|['"]closureAdjusted['"]\s*(===|!==)/;
+  /(===|!==)\s*(['"`])closureAdjusted\2|(['"`])closureAdjusted\3\s*(===|!==)|\bcase\s+(['"`])closureAdjusted\5\s*:/g;
 const RAW_IS_MAP_READ_ONLY_RE = /\bisMapReadOnly\b/;
 const RAW_SELECT_SPELEO_READ_ONLY_RE = /\bselectSpeleoReadOnly\b/;
 
-function gitTrackedTsFiles() {
-  const out = execFileSync('git', ['ls-files', '-z', '--', 'src/*.ts', 'src/*.tsx', 'src/**/*.ts', 'src/**/*.tsx'], {
-    cwd: REPO_ROOT,
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  return out.toString('utf8').split('\0').filter(Boolean);
-}
-
-// Strip a trailing `//` line comment before matching, so a comment that merely
-// MENTIONS the pattern (common in this file's own docs, or explanatory code
-// comments) doesn't count as a real comparison. Tracks single/double/template
-// string state across the line so a `//` inside a string literal (e.g. a URL
-// like "http://example.com") is NOT mistaken for the start of a comment - a
-// naive `indexOf('//')` would truncate the line there and silently lose any
-// real comparison that appears later on the same line.
+// Comments are stripped before matching, so a comment that merely MENTIONS the
+// pattern (common in this file's own docs, or explanatory code comments)
+// doesn't count as a real comparison. The shared scanner
+// (scripts/lib/js-comments.mjs) is string-aware - a `//` inside a string
+// literal (e.g. a URL like "http://example.com") is NOT the start of a comment,
+// so a real comparison later on the line is not lost - and, unlike the old
+// line-only stripper here, it also removes `/* ... */` block comments, carrying
+// them across lines (#576 E2-D2: a block-comment mention used to count).
+// `stripLineComment` keeps its one-line contract for the fixture test.
 export function stripLineComment(line) {
-  let inSingle = false;
-  let inDouble = false;
-  let inTemplate = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    const prev = i > 0 ? line[i - 1] : '';
-    if (inSingle) {
-      if (c === "'" && prev !== '\\') inSingle = false;
-      continue;
-    }
-    if (inDouble) {
-      if (c === '"' && prev !== '\\') inDouble = false;
-      continue;
-    }
-    if (inTemplate) {
-      if (c === '`' && prev !== '\\') inTemplate = false;
-      continue;
-    }
-    if (c === "'") {
-      inSingle = true;
-      continue;
-    }
-    if (c === '"') {
-      inDouble = true;
-      continue;
-    }
-    if (c === '`') {
-      inTemplate = true;
-      continue;
-    }
-    if (c === '/' && line[i + 1] === '/') {
-      return line.slice(0, i);
-    }
-  }
-  return line;
+  return stripComments([line])[0];
 }
 
 // Count of raw `=== 'closureAdjusted'` / `!== 'closureAdjusted'` comparisons
-// (either operand order) in the file's code (not inside line comments).
+// (either operand order) and `case 'closureAdjusted':` labels in the file's
+// code - every match, not every matching line.
 export function countClosureAdjustedComparisons(text) {
   let count = 0;
-  for (const rawLine of text.split('\n')) {
-    if (CLOSURE_ADJUSTED_RE.test(stripLineComment(rawLine))) count++;
+  for (const line of stripComments(text.split('\n'))) {
+    count += (line.match(CLOSURE_ADJUSTED_RE) ?? []).length;
   }
   return count;
 }
 
-// Rule (B) boolean check: does any CODE line reference the raw symbol? Line
-// comments are stripped first (same treatment as Rule (A)) so a doc comment
-// that merely mentions isMapReadOnly/selectSpeleoReadOnly can't trip the gate.
+// Rule (B) boolean check: does any CODE line reference the raw symbol? Comments
+// are stripped first (same treatment as Rule (A)) so a doc comment that merely
+// mentions isMapReadOnly/selectSpeleoReadOnly can't trip the gate.
 function anyCodeLineMatches(text, re) {
-  return text.split('\n').some((line) => re.test(stripLineComment(line)));
+  return stripComments(text.split('\n')).some((line) => re.test(line));
 }
 
 export function usesIsMapReadOnly(text) {
@@ -221,26 +188,21 @@ export function usesSpeleoReadOnly(text) {
 }
 
 function main() {
-  let files;
-  try {
-    files = gitTrackedTsFiles();
-  } catch (e) {
-    console.error(`check-readonly-gates: could not list tracked files (run from a git repo): ${e.message}`);
-    return 1;
-  }
+  // The shared src/ lister (#576 E16): a filesystem walk (an unstaged file
+  // cannot dodge the gate), the same test/generated exclusions as the other
+  // src gates, and a symlink is reported instead of being read through.
+  const { files, symlinks } = listSrcFiles(REPO_ROOT);
 
   const violationsA = [];
   const violationsB = [];
 
-  for (const rel of files.sort()) {
-    if (!rel.startsWith(SRC_PREFIX)) continue;
-    if (TEST_RE.test(rel)) continue;
+  for (const rel of files) {
     const full = path.join(REPO_ROOT, rel);
     let text;
     try {
       text = fs.readFileSync(full, 'utf8');
     } catch (e) {
-      console.error(`check-readonly-gates: could not read ${rel}: ${e.message}`);
+      console.error(`check-readonly-gates: could not read ${rel}: ${e.code || e.message}`);
       return 1;
     }
 
@@ -269,9 +231,9 @@ function main() {
     }
   }
 
-  const violations = [...violationsA, ...violationsB];
+  const violations = [...symlinks.map(symlinkProblem), ...violationsA, ...violationsB];
   if (violations.length === 0) {
-    console.log(`✓ readonly-gates: ${files.length} tracked TS/TSX files checked, no new raw closureAdjusted gates or direct isMapReadOnly/selectSpeleoReadOnly access.`);
+    console.log(`✓ readonly-gates: ${files.length} production TS/TSX files under src/ checked, no new raw closureAdjusted gates or direct isMapReadOnly/selectSpeleoReadOnly access.`);
     return 0;
   }
 

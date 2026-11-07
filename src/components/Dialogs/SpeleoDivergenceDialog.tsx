@@ -80,7 +80,11 @@ export default function SpeleoDivergenceDialog() {
   const destroyAndContinue = async () => {
     setTakingRemote(true);
     try {
-      if (await takeRemote()) {
+      const outcome = await takeRemote();
+      // [#576 NF-FIX4FE-1] Refused in the read-only Plan/Export workspace: the notice
+      // is up and the remedy is the workspace switch, not a retry from here - so close
+      // as Cancel does (the divergence is left for later). A failure stays open.
+      if (outcome === 'took' || outcome === 'workspace_read_only') {
         clearDivergence();
         closeDialog();
       }

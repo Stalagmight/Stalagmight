@@ -4,12 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useProjectStore } from '../projectStore';
 import { DEFAULT_IMAGE_OPTIONS } from '../exportStore';
 import type { ExportImageOptions } from '../../types/commands';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 /**
  * #360: depth-mode PNG and PDF export drew the DARK theme's ramp whatever the

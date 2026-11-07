@@ -4,13 +4,19 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::HashMap;
 
 use crate::models::{
-    AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
-    MergeTopology, NorthReference, Project, Section, SectionData, SectionId, Shot, ShotKind,
-    StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind, ZeroDatum, FEATURE_ID_STRIDE,
-    MAX_SECTION_ID,
+    AzimuthReference, ClosureStrategy, CorrectionSource, CreationStamp, GpsCoordinates,
+    LoadedProject, LoopClosure, NorthReference, Project, Section, SectionData, SectionId, Shot,
+    ShotKind, StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind, ZeroDatum,
+    FEATURE_ID_STRIDE, MAX_SECTION_ID,
 };
 
 use super::Database;
+
+/// The most shots one section can number: its ids are `section_id * STRIDE +
+/// position`, and the app caps a section one short of the stride
+/// (`Project::add_shot`) so a free id always remains. A file holding more is
+/// refused on load (A18(d), #576).
+const MAX_SHOTS_PER_SECTION: usize = (FEATURE_ID_STRIDE - 1) as usize;
 
 impl Database {
     /// Load a project from the database
@@ -79,10 +85,24 @@ impl Database {
                     row.get::<_, f64>(2)?,
                 ))
             }) {
-                for r in rows.flatten() {
-                    // Skip rows that don't validate (matches load_project behavior).
-                    if let Ok(gps) = GpsCoordinates::new(r.0, r.1, r.2) {
-                        zero_datums.push(gps);
+                for (latitude, longitude, depth_reference) in rows.flatten() {
+                    // [#576 B35(g), RV7b-4] The load's rule: a non-finite
+                    // coordinate is dropped, and a FINITE one is kept as stored
+                    // even when it is out of range (a depth reference beyond
+                    // 11 km from a build before that bound), so a project the
+                    // load opens with its datum still gets its card position and
+                    // Global View marker. One more is left out HERE, because this
+                    // read only positions a pin: a latitude outside [-90, 90],
+                    // which no map can place (MapLibre throws on it).
+                    let finite = latitude.is_finite()
+                        && longitude.is_finite()
+                        && depth_reference.is_finite();
+                    if finite && (-90.0..=90.0).contains(&latitude) {
+                        zero_datums.push(GpsCoordinates {
+                            latitude,
+                            longitude,
+                            depth_reference,
+                        });
                     }
                 }
             }
@@ -180,6 +200,19 @@ impl Database {
     }
 
     pub fn load_project(&self) -> Result<Project> {
+        self.load_project_with_report().map(|(project, _)| project)
+    }
+
+    /// [`Self::load_project`], plus what it could not read and filled with a
+    /// default instead.
+    ///
+    /// [#576 B15] The per-project settings are the case that matters: a stored
+    /// value that cannot be READ is not "not set". The project still loads, with
+    /// the default in its place, and the report names the key - so the open path
+    /// can refuse every save while it is unread, instead of writing the default
+    /// over the stored value (`save_project` writes these settings back from the
+    /// model).
+    pub fn load_project_with_report(&self) -> Result<(Project, ProjectLoadReport)> {
         tracing::debug!("Loading project from database");
 
         // First check if project table has data and log what's there
@@ -236,8 +269,13 @@ impl Database {
             (n, l, c, m, None)
         };
 
-        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc);
+        // [#576 NF-W18-1] Kept as stored, so a save writes it back byte for byte
+        // (a `CreationStamp`, as a section's); an unreadable one refuses the open.
+        let created_at = CreationStamp::read(created_at)?;
         let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at)?.with_timezone(&Utc);
+
+        // What this load could not read, or reset because it could not use it.
+        let mut report = ProjectLoadReport::default();
 
         // Load sections
         let mut sections: Vec<Section> = Vec::new();
@@ -325,7 +363,7 @@ impl Database {
 
             let mut stmt = self.conn.prepare(&format!(
                 "SELECT id, name, surveyor, date, color, direction, {quality_expr}, {parity_expr}, \
-                 {gauge_expr}, {gauge_nb_expr}, {azimuth_exprs} FROM sections ORDER BY id"
+                 {gauge_expr}, {gauge_nb_expr}, {azimuth_exprs}, created_at FROM sections ORDER BY id"
             ))?;
 
             let mut section_rows = Vec::new();
@@ -345,6 +383,17 @@ impl Database {
                     row.get::<_, Option<f64>>(11)?,
                     row.get::<_, Option<String>>(12)?,
                     row.get::<_, Option<i32>>(13)?,
+                    // [#576 NF-W14BE-1] The creation stamp, in every schema
+                    // since the first. Only TEXT this app can parse counts: a
+                    // value of another type or shape loads as "never stamped"
+                    // (the next save stamps it) rather than failing the open.
+                    // [#576 RV14-2] Kept as the text it is, so the next save
+                    // writes it back unchanged rather than the same moment in
+                    // UTC form.
+                    row.get_ref(14)?
+                        .as_str()
+                        .ok()
+                        .and_then(CreationStamp::parse),
                 ))
             })?;
             for row in rows {
@@ -370,6 +419,7 @@ impl Database {
                     azimuth_correction,
                     azimuth_source,
                     azimuth_epoch_year,
+                    created_at,
                 ) = section_row;
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
                 let direction = direction_str
@@ -425,6 +475,7 @@ impl Database {
                 section.gauge_shot_uuid = gauge_shot_uuid;
                 section.gauge_neighbour_uuid = gauge_neighbour_uuid;
                 section.azimuth_reference = azimuth_reference;
+                section.created_at = created_at;
                 section_by_id.insert(id, sections.len());
                 // Cannot overflow once ids are bounded above; saturating keeps
                 // the counter rebuild total even if the bound ever moves.
@@ -449,20 +500,12 @@ impl Database {
                 )?;
                 let shot_rows = shot_stmt.query_map([], |row| {
                     let section_id: u32 = row.get(0)?;
-                    let seq: i64 = row.get(1)?;
+                    // Column 1 (`sequence_order`) only ORDERS the stream: the
+                    // id is the shot's position in it, assigned below.
                     Ok((
                         section_id,
                         Shot {
-                            // Saturating, like `models::shot_display_position`:
-                            // the section id comes off disk, and a file naming
-                            // a section id >= u32::MAX / FEATURE_ID_STRIDE
-                            // would panic this encode in a debug build rather
-                            // than load. What the import can create is bounded
-                            // upstream (#427's per-run cut cap); this is the
-                            // read side refusing to trust the file.
-                            id: section_id
-                                .saturating_mul(FEATURE_ID_STRIDE)
-                                .saturating_add(seq as u32),
+                            id: 0,
                             azimuth_in: row.get(2)?,
                             azimuth_out: row.get(3)?,
                             length: row.get(4)?,
@@ -525,7 +568,32 @@ impl Database {
                         sanitized_shots += 1;
                     }
                     if let Some(&idx) = section_by_id.get(&section_id) {
-                        sections[idx].shots.push(shot);
+                        let section = &mut sections[idx];
+                        // The id is `section_id * STRIDE + POSITION` in the
+                        // stored order (B35(f), A18(d), #576), not the stored
+                        // rank. The app writes ranks 0..n, so for its own files
+                        // the two agree; a foreign or hand-edited file can leave
+                        // a gap (ranks 0, 2, 3 loaded as ids 0, 2, 3 with the
+                        // counter on 3, so the next shot duplicated id 3), a rank
+                        // past the window (into the next section's ids) or a
+                        // negative one (`as u32` lands near `u32::MAX`). Station
+                        // references are positional too, so numbering by
+                        // position is what the rest of the load already assumes.
+                        let position = section.shots.len();
+                        // A position that does not fit the window would number
+                        // this shot into the NEXT section's ids. The app caps a
+                        // section at `FEATURE_ID_STRIDE - 1` shots, so refuse the
+                        // open rather than load colliding ids, as #557 does for a
+                        // section id past the encode bound.
+                        anyhow::ensure!(
+                            position < MAX_SHOTS_PER_SECTION,
+                            "This file cannot be opened: section {section_id} holds more than \
+                             {MAX_SHOTS_PER_SECTION} shots, the most one section can number."
+                        );
+                        // Cannot overflow: `section.id <= MAX_SECTION_ID`
+                        // (refused above otherwise) and `position < STRIDE`.
+                        shot.id = section.id * FEATURE_ID_STRIDE + position as u32;
+                        section.shots.push(shot);
                     }
                     // (rows for unknown sections are silently dropped -
                     // matches the legacy `WHERE section_id = ?` filter
@@ -538,6 +606,7 @@ impl Database {
                         "Replaced non-finite (NaN/inf) shot geometry with finite defaults on load"
                     );
                 }
+                report.repairs.shots = sanitized_shots;
 
                 // Advance each section's next_shot_id past its loaded
                 // shots so future appends don't collide with persisted IDs.
@@ -599,6 +668,24 @@ impl Database {
 
             for zd_row in zd_rows {
                 let (section_id, station_index, lat, lon, depth) = zd_row?;
+                // [#576 B35(g)] A NON-finite coordinate (+/-Inf: SQLite cannot
+                // store NaN) would turn every coordinate this point positions into
+                // NaN, so it is dropped here and counted for the open's notice. A
+                // FINITE one is kept exactly as stored even when it is out of range
+                // (latitude 95, a depth reference beyond 11 km from a build before
+                // that bound): dropping it would move that part of the cave and
+                // clamping would invent a position, so the integrity check flags it
+                // (`invalid_zero_datum`) for the user to correct instead.
+                if !(lat.is_finite() && lon.is_finite() && depth.is_finite()) {
+                    tracing::warn!(
+                        section_id,
+                        station_index,
+                        purpose = "block corruption at the source",
+                        "Dropped a zero datum with a non-finite coordinate on load"
+                    );
+                    report.repairs.gps_points += 1;
+                    continue;
+                }
                 zero_datums.push(ZeroDatum {
                     station_ref: StationKey::positional(section_id, station_index),
                     gps: GpsCoordinates {
@@ -652,10 +739,22 @@ impl Database {
                     "Replaced non-finite (NaN/inf) section offset with 0.0 on load"
                 );
             }
+            report.repairs.section_offsets = sanitized_offsets;
         }
 
-        // Load station offsets
-        let station_offsets = self.load_station_offsets()?;
+        // Load station offsets. [#576 B35(h)] Through the same finiteness guard as
+        // shots and section offsets: they used to be inserted verbatim, and a
+        // station offset is added straight into world coordinates.
+        let mut station_offsets = self.load_station_offsets()?;
+        let sanitized_station_offsets = Project::sanitize_station_offsets(&mut station_offsets);
+        if sanitized_station_offsets > 0 {
+            tracing::warn!(
+                sanitized_station_offsets,
+                purpose = "block corruption at the source",
+                "Replaced non-finite (inf) station offset components with 0.0 on load"
+            );
+        }
+        report.repairs.station_offsets = sanitized_station_offsets;
 
         // Load loop closures
         let loop_closures = self.load_loop_closures()?;
@@ -681,48 +780,34 @@ impl Database {
         // the global config, so legacy projects (no row) fall back to the
         // hardcoded default here; the AppState open paths re-check for absence
         // and seed from the user's global config instead (see project_io.rs).
-        let validation = self.load_project_validation()?.unwrap_or_default();
+        let validation = report
+            .setting("validation", self.load_project_validation())
+            .unwrap_or_default();
 
         // Entrance elevation (#431). Unlike `validation`, a missing row has no
         // legacy-seeding fallback - `None` genuinely means "unknown".
-        let surface_elevation = self.load_project_surface_elevation()?;
-        let default_azimuth_reference = self.load_project_default_azimuth_reference()?;
+        let surface_elevation =
+            report.setting("surface_elevation", self.load_project_surface_elevation());
+        let default_azimuth_reference = report.setting(
+            "default_azimuth_reference",
+            self.load_project_default_azimuth_reference(),
+        );
 
-        // Pre-populate the section_id → index lookup so callers get
-        // O(1) get_section without needing rebuild_section_index().
-        let mut section_index_cache = HashMap::with_capacity(sections.len());
-        for (i, s) in sections.iter().enumerate() {
-            section_index_cache.insert(s.id, i);
-        }
-        // (The merge adjacency needs no priming: `MergeTopology` builds it the
-        // first time `get_merged_section_ids` asks.)
-        // Pre-build the shot-UUID index too, so `resolve_key`'s `AfterShot` arm
-        // is O(1) right after load (mirrors the two caches above).
-        let mut shot_uuid_index = HashMap::new();
-        for s in &sections {
-            for (i, shot) in s.shots.iter().enumerate() {
-                if let Some(u) = &shot.uuid {
-                    // First occurrence wins, matching `add_section` /
-                    // `rebuild_shot_uuid_index` / the `resolve_key` cold scan; a
-                    // plain `.insert` would be last-write-wins and silently break
-                    // that invariant if a duplicate UUID ever slipped through.
-                    shot_uuid_index.entry((s.id, u.clone())).or_insert(i as u32);
-                }
-            }
-        }
-        Ok(Project {
+        // Through the loader constructor (#576 A10): the lookup caches are
+        // private to `Project`, which builds both of them up front so callers
+        // get O(1) `get_section` / `resolve_key` right after load.
+        let project = Project::from_loaded(LoadedProject {
             name,
             location,
             created_at,
             modified_at,
             sections,
-            station_merges: MergeTopology::from(station_merges),
+            station_merges,
             zero_datums,
             loop_closures,
             section_offsets,
             station_offsets,
             station_comments,
-            file_path: None,
             next_section_id,
             imported_file_hashes,
             imported_section_hashes,
@@ -730,13 +815,8 @@ impl Database {
             validation,
             surface_elevation,
             default_azimuth_reference,
-            cascade_deferred: false,
-            section_index_cache,
-            shot_uuid_index,
-            // Nothing loaded from disk is a proven solver fixpoint; the load path
-            // re-solves offsets from scratch anyway (`redrive_offsets_after_load`).
-            realign_fixpoint: None,
-        })
+        });
+        Ok((project, report))
     }
 
     /// Load loop closures from database
@@ -1139,7 +1219,10 @@ impl Database {
     /// change a signature every caller shares.
     ///
     /// `shot_id` is the in-memory id the frontend addresses shots by
-    /// (`section_id * FEATURE_ID_STRIDE + sequence_order`), not the rowid.
+    /// (`section_id * FEATURE_ID_STRIDE + position`, exactly as `load_project`
+    /// numbers them), not the rowid, and `shot_number` is that position plus
+    /// one. Position, not the stored `sequence_order`: a rank gap in a foreign
+    /// file would otherwise name a different shot than the loader did.
     pub fn unrecognised_shot_kinds(&self) -> Result<Vec<UnrecognisedShotKind>> {
         // `kind` was added in v13; an older file legitimately has no such column.
         if self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_err() {
@@ -1152,16 +1235,29 @@ impl Database {
         // TEXT)` is no good either: it can yield invalid UTF-8. `quote` is total
         // and renders every class legibly (7, 'abc', X'DEADBEEF'), which is
         // exactly what the dialog wants to show.
+        //
+        // The position is numbered over EVERY shot of the section before the
+        // filter applies (a window function runs after its own query's WHERE,
+        // hence the subquery), the same `ORDER BY sequence_order` the loader
+        // streams in.
         let mut stmt = self.conn.prepare(
-            "SELECT s.section_id, s.sequence_order, quote(s.kind), sec.name
-             FROM shots s
-             LEFT JOIN sections sec ON sec.id = s.section_id
-             WHERE s.kind NOT IN (0, 1, 2)
-             ORDER BY s.section_id, s.sequence_order",
+            "SELECT section_id, position, raw_kind, name FROM (
+                 SELECT s.section_id AS section_id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY s.section_id ORDER BY s.sequence_order
+                        ) - 1 AS position,
+                        quote(s.kind) AS raw_kind,
+                        sec.name AS name,
+                        s.kind NOT IN (0, 1, 2) AS unrecognised
+                 FROM shots s
+                 LEFT JOIN sections sec ON sec.id = s.section_id
+             )
+             WHERE unrecognised
+             ORDER BY section_id, position",
         )?;
         let rows = stmt.query_map([], |row| {
             let section_id: SectionId = row.get(0)?;
-            let sequence_order: u32 = row.get(1)?;
+            let position: u32 = row.get(1)?;
             Ok(UnrecognisedShotKind {
                 section_id,
                 // Saturating like the loader's shot encode: this diagnostic
@@ -1169,8 +1265,8 @@ impl Database {
                 // sections row (and no #557 open-refusal) ever vetted.
                 shot_id: section_id
                     .saturating_mul(FEATURE_ID_STRIDE)
-                    .saturating_add(sequence_order),
-                shot_number: sequence_order.saturating_add(1),
+                    .saturating_add(position),
+                shot_number: position.saturating_add(1),
                 section_name: row.get(3)?,
                 raw_value: row.get(2)?,
             })
@@ -1222,27 +1318,45 @@ impl Database {
     /// by this write, and the frontend keeps `isDirty: false` after load, so no
     /// save is provoked.)
     ///
-    /// Rows are addressed by `(section_id, sequence_order)` - the same tuple the
-    /// INSERT in `write.rs` writes - NOT by `Shot::id`. Those are two different
-    /// ID spaces: `shots.id` is an auto-increment rowid the INSERT never sets,
-    /// while the in-memory `Shot::id` is synthesised on load as
-    /// `section_id * FEATURE_ID_STRIDE + sequence_order`. Keying on `Shot::id`
-    /// silently writes the wrong rows in the first section and matches nothing
-    /// at all in the rest (the v7->v8 migration converts between the same two
-    /// spaces for `resolved_warnings`). Keying on `uuid` would be wrong too:
-    /// pre-v6 rows hold NULL on disk and `ensure_shot_uuids()` mints those in
-    /// memory only, so it would persist against a transient identity.
+    /// Each verdict is `(section_id, position, kind)`, `position` being the
+    /// shot's 0-based place in its section as `load_project` read it - NOT
+    /// `Shot::id`, and not the stored `sequence_order`. `shots.id` is an
+    /// auto-increment rowid the INSERT never sets, while the in-memory
+    /// `Shot::id` is synthesised on load as `section_id * FEATURE_ID_STRIDE +
+    /// position`; keying on `Shot::id` silently writes the wrong rows in the
+    /// first section and matches nothing at all in the rest (the v7->v8
+    /// migration converts between the same two spaces for `resolved_warnings`).
+    /// The stored rank equals the position for every file this app writes, but
+    /// a foreign file can have a gap, so each position is resolved to its row
+    /// through the loader's own `ORDER BY sequence_order` (B35(f), #576).
+    /// Keying on `uuid` would be wrong too: pre-v6 rows hold NULL on disk and
+    /// `ensure_shot_uuids()` mints those in memory only, so it would persist
+    /// against a transient identity.
     pub fn persist_backfilled_shot_kinds(
         &self,
         kinds: &[(SectionId, u32, ShotKind)],
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         {
-            let mut stmt = tx.prepare(
-                "UPDATE shots SET kind = ?1 WHERE section_id = ?2 AND sequence_order = ?3",
-            )?;
-            for (section_id, seq, kind) in kinds {
-                stmt.execute(params![i32::from(kind.as_u8()), *section_id, *seq])?;
+            let mut by_section: HashMap<SectionId, Vec<(u32, ShotKind)>> = HashMap::new();
+            for (section_id, position, kind) in kinds {
+                by_section
+                    .entry(*section_id)
+                    .or_default()
+                    .push((*position, *kind));
+            }
+            let mut rows_in_order = tx
+                .prepare("SELECT rowid FROM shots WHERE section_id = ?1 ORDER BY sequence_order")?;
+            let mut update = tx.prepare("UPDATE shots SET kind = ?1 WHERE rowid = ?2")?;
+            for (section_id, verdicts) in &by_section {
+                let rowids = rows_in_order
+                    .query_map([section_id], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<i64>>>()?;
+                for (position, kind) in verdicts {
+                    if let Some(rowid) = rowids.get(*position as usize) {
+                        update.execute(params![i32::from(kind.as_u8()), rowid])?;
+                    }
+                }
             }
         }
         tx.execute(
@@ -1253,18 +1367,50 @@ impl Database {
         Ok(())
     }
 
+    /// The stored text of one `project_settings` key.
+    ///
+    /// [#576 B15] "Not set" and "could not be read" are different answers, and only
+    /// the first may become a default: the save writes these settings back from the
+    /// project, so a read error taken for "not set" replaced the stored value with
+    /// the default on the next save. A missing key - or no table at all, in a file
+    /// written before it existed and opened read-only, which does not migrate - is
+    /// "not set". Every other failure is an error. A value of the wrong SQLite type
+    /// is unparseable, like a malformed one: warned about and read as not set.
+    fn project_setting_text(&self, key: &str) -> Result<Option<String>> {
+        let has_table: i64 = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='project_settings'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_table == 0 {
+            return Ok(None);
+        }
+        let value = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = ?1",
+                [key],
+                |row| row.get::<_, rusqlite::types::Value>(0),
+            )
+            .optional()?;
+        Ok(match value {
+            None => None,
+            Some(rusqlite::types::Value::Text(text)) => Some(text),
+            Some(other) => {
+                tracing::warn!(
+                    key,
+                    value_type = %other.data_type(),
+                    "stored project setting is not text; reading it as not set"
+                );
+                None
+            }
+        })
+    }
+
     pub fn load_project_validation(
         &self,
     ) -> Result<Option<crate::models::config::ValidationConfig>> {
-        let json: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT value FROM project_settings WHERE key = 'validation'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .unwrap_or(None);
+        let json = self.project_setting_text("validation")?;
         Ok(json.and_then(|s| serde_json::from_str(&s).ok()))
     }
 
@@ -1274,15 +1420,7 @@ impl Database {
     /// before this feature) - reads as `None`, which is the correct "unknown"
     /// value for those files; no migration needed.
     pub fn load_project_surface_elevation(&self) -> Result<Option<f64>> {
-        let text: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT value FROM project_settings WHERE key = 'surface_elevation'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .unwrap_or(None);
+        let text = self.project_setting_text("surface_elevation")?;
         Ok(text.and_then(|s| {
             // `"NaN"`, `"inf"` and `1e309` all parse happily; a corrupted or
             // hand-edited `.stalx` (same untrusted provenance as a `.tml`) can
@@ -1307,15 +1445,7 @@ impl Database {
     /// A row that does not parse is treated the same way and warned about,
     /// rather than defaulting to some other rotation.
     pub fn load_project_default_azimuth_reference(&self) -> Result<Option<AzimuthReference>> {
-        let json: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT value FROM project_settings WHERE key = 'default_azimuth_reference'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .unwrap_or(None);
+        let json = self.project_setting_text("default_azimuth_reference")?;
         Ok(json.and_then(|s| {
             let parsed = serde_json::from_str::<AzimuthReference>(&s).ok().map(|r| {
                 // Re-impose the type's invariants on a hand-edited row.
@@ -1329,5 +1459,63 @@ impl Database {
             }
             parsed
         }))
+    }
+}
+
+/// What [`Database::load_project_with_report`] could not read and filled with a
+/// default instead.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ProjectLoadReport {
+    /// [#576 B15] The `project_settings` keys (`validation`, `surface_elevation`,
+    /// `default_azimuth_reference`) whose stored value exists but could not be
+    /// read. Absent and merely unparseable values are not listed: those are "not
+    /// set", as before.
+    pub unreadable_settings: Vec<&'static str>,
+    /// [#576 B35(h)] The values this load reset or dropped because it could not
+    /// use them, per kind.
+    pub repairs: LoadRepairs,
+}
+
+/// [#576 B35(h)] How many stored values a load reset or dropped because it could
+/// not use them (non-finite numbers from a damaged or hand-edited file), per
+/// kind. The next save writes the reset values, so the open reports them to the
+/// user once instead of only logging them.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct LoadRepairs {
+    /// Shots with a non-finite measurement, reset to finite defaults.
+    pub shots: usize,
+    /// Section offsets with a non-finite component, reset to 0.
+    pub section_offsets: usize,
+    /// Station offsets with a non-finite component, reset to 0.
+    pub station_offsets: usize,
+    /// GPS tie points (zero datums) with a non-finite coordinate, dropped.
+    pub gps_points: usize,
+}
+
+impl LoadRepairs {
+    /// True when the load reset or dropped nothing.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl ProjectLoadReport {
+    /// The setting `key` as read, or `None` - recorded as unreadable - when the
+    /// read failed.
+    fn setting<T>(&mut self, key: &'static str, read: Result<Option<T>>) -> Option<T> {
+        match read {
+            Ok(value) => value,
+            Err(e) => {
+                tracing::warn!(
+                    key,
+                    error = %e,
+                    purpose = "keep stored project settings out of reach of a save",
+                    "A stored project setting could not be read; using the default for this \
+                     session"
+                );
+                self.unreadable_settings.push(key);
+                None
+            }
+        }
     }
 }

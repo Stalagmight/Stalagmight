@@ -14,10 +14,11 @@ workspace = true
 [features]
 # Compiles the `#[cfg(any(test, feature = "test-support"))]` helpers that used
 # to be `#[cfg(test)]` when this code lived in the root crate (the TileCache
-# in-memory/expiry/grant test hooks): the root crate's tests still call them,
-# and a dependency's `cfg(test)` items are invisible to a dependent's test
-# build. Enabled only via the root crate's [dev-dependencies] entry, so
-# production builds compile exactly what they did before the split.
+# in-memory/expiry/grant test hooks), plus the non-transactional per-stack
+# undo/redo writers that seed history fixtures: dependents' tests still call
+# them, and a dependency's `cfg(test)` items are invisible to a dependent's
+# test build. Enabled only via [dev-dependencies] entries (the root crate's and
+# stalagmight-core's), so production builds never compile them.
 test-support = []
 
 [dependencies]
@@ -38,6 +39,14 @@ ts-rs = { workspace = true, features = ["no-serde-warnings"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+# The shared test helpers (`stalagmight_models::test_support`): opt-in
+# prerequisites fail the test naming what is missing (#576 E13), and
+# `Project::set_raw_section_offset`, which the round-trip tests use to store a legacy
+# dust-zero section offset the app's own writers refuse to (#576 A10).
+stalagmight-models = { path = "../models", features = ["test-support"] }
+# `hooks` for the progress handler the tile-cache accounting tests count
+# SQLite VM steps with (#576 B19). Test builds only; no extra crate.
+rusqlite = { workspace = true, features = ["bundled", "hooks"] }
 # Test-only and acyclic: the sqlite round-trip tests import a real `.dmp`
 # through the parser to exercise a realistic project shape.
 stalagmight-parsers = { path = "../parsers" }

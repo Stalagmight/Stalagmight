@@ -36,6 +36,16 @@ import {
   zipStore,
 } from './surveyFileWriters';
 
+/**
+ * `items[index]`, throwing exactly where reading a property of a missing entry
+ * would have thrown anyway, so noUncheckedIndexedAccess needs no fallback.
+ */
+function at<T>(items: readonly T[], index: number): T {
+  const item = items[index];
+  if (item === undefined) throw new Error(`no entry ${index} (of ${items.length})`);
+  return item;
+}
+
 // ---------------------------------------------------------------------------
 // A TS mirror of parse_dmp, deliberately naive
 // ---------------------------------------------------------------------------
@@ -57,7 +67,7 @@ function tokenizeDmp(text: string): number[] {
 function splitSections(bytes: readonly number[], version: number): number[][] {
   const patterns = [endOfSectionBytes(version, 'normal')];
   if (version === 5) patterns.push(endOfSectionBytes(version, 'buggy'));
-  const patternLength = patterns[0].length;
+  const patternLength = patterns[0]!.length; // built with one entry just above
   if (patternLength === 0 || bytes.length < patternLength) return [];
 
   const sections: number[][] = [];
@@ -95,7 +105,7 @@ function parseSection(bytes: readonly number[]): MirroredSection {
   let cursor = 0;
   const read = (): number => {
     if (cursor >= bytes.length) throw new Error('read beyond buffer');
-    return bytes[cursor++];
+    return bytes[cursor++]!;
   };
   const readI16 = (): number => {
     const raw = (read() << 8) | read();
@@ -256,7 +266,7 @@ function xmlIsWellFormed(xml: string): boolean {
     if (match[1] === '/') {
       if (stack.pop() !== match[2]) return false;
     } else if (match[4] !== '/') {
-      stack.push(match[2]);
+      stack.push(match[2]!); // group 2 is non-optional
     }
   }
   if (/[<>]/.test(body.slice(lastEnd))) return false;
@@ -287,7 +297,7 @@ describe('writeDmpText framing', () => {
       const sections = parseDmp(writeDmpText(spec), version);
 
       expect(sections).toHaveLength(1);
-      const parsed = sections[0];
+      const parsed = sections[0]!; // toHaveLength(1) above
       expect(parsed.version).toBe(version);
       expect(parsed.name).toBe('TST');
       expect(parsed.direction).toBe(0);
@@ -298,14 +308,15 @@ describe('writeDmpText framing', () => {
       // Two written shots plus the terminator, which `parse_shot` reads as an
       // ordinary EndOfSurvey record rather than skipping.
       expect(parsed.shots.map((s) => s.shotType)).toEqual([2, 2, 3]);
-      expect(parsed.shots[0].values.slice(0, 7)).toEqual([450, 460, 1000, 200, 300, 50, -50]);
-      expect(parsed.shots[0].markerIndex).toBe(1);
-      expect(parsed.shots[1].values[0]).toBe(1800);
+      // Three shots: the shotType list above.
+      expect(parsed.shots[0]!.values.slice(0, 7)).toEqual([450, 460, 1000, 200, 300, 50, -50]);
+      expect(parsed.shots[0]!.markerIndex).toBe(1);
+      expect(parsed.shots[1]!.values[0]).toBe(1800);
       if (version >= 4) {
-        expect(parsed.shots[0].values.slice(7, 12)).toEqual([100, 150, 200, 80, 185]);
-        expect(parsed.shots[0].values.slice(12)).toEqual([14, 45, 30]);
+        expect(parsed.shots[0]!.values.slice(7, 12)).toEqual([100, 150, 200, 80, 185]);
+        expect(parsed.shots[0]!.values.slice(12)).toEqual([14, 45, 30]);
       } else {
-        expect(parsed.shots[0].values).toHaveLength(7);
+        expect(parsed.shots[0]!.values).toHaveLength(7);
       }
     });
   }
@@ -326,18 +337,19 @@ describe('writeDmpText framing', () => {
     const spec: DmpSpec = {
       version: 4,
       sections: [
-        { ...dmpSpec(4).sections[0], name: 'AAA' },
-        { ...dmpSpec(4).sections[0], name: 'BBB', direction: 1, day: 16 },
+        // dmpSpec builds exactly one section when no override replaces them.
+        { ...dmpSpec(4).sections[0]!, name: 'AAA' },
+        { ...dmpSpec(4).sections[0]!, name: 'BBB', direction: 1, day: 16 },
       ],
     };
     const sections = parseDmp(writeDmpText(spec), 4);
     expect(sections.map((s) => s.name)).toEqual(['AAA', 'BBB']);
     expect(sections.map((s) => s.version)).toEqual([4, 4]);
-    expect(sections[1].direction).toBe(1);
+    expect(sections[1]!.direction).toBe(1); // two sections: the name list above
   });
 
   it('sameContentAs clones the fields the content hash covers, not the date', () => {
-    const base = dmpSpec(5).sections[0];
+    const base = dmpSpec(5).sections[0]!; // dmpSpec builds exactly one section
     const spec: DmpSpec = {
       version: 5,
       sections: [
@@ -346,17 +358,17 @@ describe('writeDmpText framing', () => {
       ],
     };
     const sections = parseDmp(writeDmpText(spec), 5);
-    expect(sections[1].name).toBe('DUP');
-    expect(sections[1].direction).toBe(1);
-    expect(sections[1].shots).toEqual(sections[0].shots);
+    expect(at(sections, 1).name).toBe('DUP');
+    expect(at(sections, 1).direction).toBe(1);
+    expect(at(sections, 1).shots).toEqual(at(sections, 0).shots);
     // The date is the section's own: that is what makes it a duplicate the
     // preview shows twice while `compute_section_hash` collapses them.
-    expect(sections[0].day).toBe(15);
-    expect(sections[1].day).toBe(28);
+    expect(at(sections, 0).day).toBe(15);
+    expect(at(sections, 1).day).toBe(28);
   });
 
   it('ignores a sameContentAs that is not an earlier section', () => {
-    const base = dmpSpec(4).sections[0];
+    const base = dmpSpec(4).sections[0]!; // dmpSpec builds exactly one section
     const spec: DmpSpec = {
       version: 4,
       sections: [
@@ -406,13 +418,13 @@ describe('writeDmpText framing', () => {
 
     const noEos: DmpSpec = {
       version: 4,
-      sections: [{ ...spec.sections[0], endOfSection: 'none' }],
+      sections: [{ ...spec.sections[0]!, endOfSection: 'none' }], // dmpSpec: one section
     };
     expect(parseDmp(writeDmpText(noEos), 4)).toEqual([]);
 
     const badMagic: DmpSpec = {
       version: 4,
-      sections: [{ ...spec.sections[0], sectionMagic: [99, 99, 99] }],
+      sections: [{ ...spec.sections[0]!, sectionMagic: [99, 99, 99] }],
     };
     expect(() => parseSection(tokenizeDmp(writeDmpText(badMagic)))).toThrow(/invalid section magic/);
   });
@@ -420,11 +432,11 @@ describe('writeDmpText framing', () => {
   it('takes the v5 buggy terminator as a section end too', () => {
     const spec: DmpSpec = {
       version: 5,
-      sections: [{ ...dmpSpec(5).sections[0], endOfSection: 'buggy' }],
+      sections: [{ ...dmpSpec(5).sections[0]!, endOfSection: 'buggy' }], // dmpSpec: one section
     };
     const sections = parseDmp(writeDmpText(spec), 5);
     expect(sections).toHaveLength(1);
-    expect(sections[0].shots.map((s) => s.shotType)).toEqual([2, 2, 3]);
+    expect(sections[0]!.shots.map((s) => s.shotType)).toEqual([2, 2, 3]); // toHaveLength(1) above
   });
 
   /**
@@ -539,14 +551,15 @@ describe('writeDmpText framing', () => {
       ['ABCD', 'ABC'],
       ['', '   '],
     ] as const) {
-      const spec: DmpSpec = { version: 4, sections: [{ ...dmpSpec(4).sections[0], name }] };
-      expect(parseDmp(writeDmpText(spec), 4)[0].name).toBe(expected);
+      // dmpSpec builds exactly one section.
+      const spec: DmpSpec = { version: 4, sections: [{ ...dmpSpec(4).sections[0]!, name }] };
+      expect(at(parseDmp(writeDmpText(spec), 4), 0).name).toBe(expected);
     }
     // A non-ASCII name still occupies three bytes; the parser falls back to a
     // numeric spelling when they are not valid UTF-8 on their own.
     const highBytes: DmpSpec = {
       version: 4,
-      sections: [{ ...dmpSpec(4).sections[0], name: [0xc3, 0x28, 0xff] }],
+      sections: [{ ...dmpSpec(4).sections[0]!, name: [0xc3, 0x28, 0xff] }], // dmpSpec: one section
     };
     expect(dmpFileBytes(highBytes).slice(9, 12)).toEqual([0xc3, 0x28, 0xff]);
   });
@@ -569,7 +582,7 @@ describe('writeTmluXml', () => {
     // the field would just read as its default all the way into the import.
     const tagsIn = (xml: string, open: string, close: string): string[] =>
       [...xml.slice(xml.indexOf(open) + open.length, xml.indexOf(close)).matchAll(/<([A-Za-z]+)>/g)].map(
-        (match) => match[1],
+        (match) => match[1]!, // group 1 is non-optional
       );
 
     expect(tagsIn(writeTmluXml(tmlSpec()), '<SurveyData>', '</SurveyData>')).toEqual([

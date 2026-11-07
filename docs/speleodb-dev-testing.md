@@ -17,7 +17,7 @@ A throwaway SpeleoDB instance on the lab network. Connection details live in the
 | `DEV_SPELEODB_URL` | Base URL of the dev box (e.g. `http://10.10.0.220:8000/`). The client appends the `/api/v2/...` paths. |
 | `DEV_SPELEODB_EMAIL` | Login email for the primary (superuser) test account. |
 | `DEV_SPELEODB_PASSWORD` | Login password for the primary test account. |
-| `DEV_SPELEODB_EMAIL2` | Login email for a **second**, email-verified collaborator (for the two-account tests). Optional - those tests skip if unset. |
+| `DEV_SPELEODB_EMAIL2` | Login email for a **second**, email-verified collaborator (for the two-account tests). Needed only by those tests, which fail naming it when it is unset. |
 | `DEV_SPELEODB_PASSWORD2` | Login password for the second account. |
 
 > `cargo test` does **not** auto-load `.env`. The live tests read these from the
@@ -61,9 +61,10 @@ python manage.py shell -c "from django.contrib.auth import get_user_model; from 
 The two-account tests then **self-seed** the rest over HTTP: the superuser creates
 a throwaway project, grants `user2` a permission level
 (`POST /api/v2/projects/{id}/permission/user/detail/` `{"user","level"}`), and/or
-has `user2` hold the mutex - then deletes the project on the way out. They **skip
-cleanly** when `DEV_SPELEODB_EMAIL2`/`_PASSWORD2` are absent, so a box without the
-second account still runs the single-account suite.
+has `user2` hold the mutex - then deletes the project on the way out. Without
+`DEV_SPELEODB_EMAIL2`/`_PASSWORD2` they **fail**, naming the missing variable, so
+on a box without the second account run the single-account tier and `--skip` the
+two-account tests (see "Running the live tests").
 
 ## Test layers
 
@@ -73,9 +74,10 @@ The client follows a two-layer convention (see the plan for #183 and the epic #1
    parsing, Bearer/URL construction, the in-memory `TokenStore` fallback. These run
    in normal `cargo test` and in CI.
 2. **Env-gated live tests** - real HTTP against the dev box. Marked `#[ignore]` so
-   they never run in normal `cargo test` or CI, and they early-return (skip) if the
-   `DEV_SPELEODB_*` env vars are absent. They live in the `live_tests` module of
-   `src-tauri/crates/speleodb/src/speleodb/mod.rs`.
+   they never run in normal `cargo test` or CI. Run on purpose without the
+   `DEV_SPELEODB_*` env vars they fail, naming the missing one (#576 E13) - a
+   deliberate run must not report `ok` having tested nothing. They live in the
+   `live_tests` module of `src-tauri/crates/speleodb/src/speleodb/mod.rs`.
 
 ### Self-seeding, self-cleaning (no shared fixtures)
 
@@ -115,17 +117,21 @@ path and open it.
 DEV_SPELEODB_URL=http://10.10.0.220:8000/ \
 DEV_SPELEODB_EMAIL=dab@dab.com \
 DEV_SPELEODB_PASSWORD=dab \
-TELEMETRY_ENDPOINT=http://localhost/dummy \
-cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb --features telemetry \
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb \
   speleodb::live_tests -- --ignored
 ```
 
 - `--ignored` is required - the live tests are `#[ignore]`d by default.
-- `TELEMETRY_ENDPOINT` is needed because the telemetry member's `build.rs`
-  (`src-tauri/crates/telemetry/build.rs`) requires it under
-  `--features telemetry` (which the project's test command uses anyway).
-- Drop the `DEV_SPELEODB_*` vars and the tests skip cleanly (they print a skip line
-  and pass), so this command is safe to leave in a script.
+- No `--features telemetry` (the speleodb member has no such feature since
+  #576 B7) and so no `TELEMETRY_ENDPOINT`, which the telemetry member's
+  `build.rs` requires only under that feature.
+- Drop a `DEV_SPELEODB_*` var and every test that needs it fails, naming it. On a
+  box without the second account, leave the two-account tier out with
+  `--skip live_collaborator_sees_read_only_label --skip live_web_viewer_cannot_download
+  --skip live_lock_holder_reflects_other_user --skip live_no_permission_field_absent
+  --skip live_acquire_contended_returns_400 --skip live_acquire_no_perm_returns_403`
+  (and, for the orchestration suite, `--skip live_orch_start_editing_reports_locked_by_other_account
+  --skip live_orch_admin_collaborators_teams_and_delete_unlink`).
 - `live_bad_credentials_returns_400` needs only `DEV_SPELEODB_URL` (it sends junk
   credentials and asserts the 400 contract); the full round-trip needs all three.
 
@@ -167,6 +173,33 @@ self-heal could mistake it for our own landed push and wrongly clear the dirty b
 (dropping un-pushed edits). The single-writer lock makes this rare in practice, but
 nothing stops a determined user from running two app instances logged in as the
 same account.
+
+**Guard (the licence, #576 B32):** the self-heal only runs for a session that
+provably took the lock itself - an acquisition recorded by this process's own
+Start editing, the gate open, not force-editing, and the server naming our
+account as the holder (`speleodb_authorship_licence`). The status poll
+(`sync::poll_verdict`) and Done / Push (`sync::plan_push`) take that same
+licence, so without it a same-account commit in the gap reads as a divergence on
+the button AND on the click: the conflict dialog opens instead of the copy being
+uploaded over the other session's revision. The cost: after a restart in the
+middle of a push whose reply was lost, your own landed upload also reads as a
+conflict (the claim is in memory only); resolve it with "Take the SpeleoDB
+version" or "Save my version as a local copy".
+
+**Release (#576 RV2-R-13):** Done releases the lock only when this app session
+took it (the same in-memory claim). A session whose gate opened through the
+inherited-lock reopen - a second window or computer on the account, or this app
+after a restart - uploads its edits and ends editing locally, but leaves the lock
+with the account (`DoneResult::LockHeldElsewhere`) and says so. After a restart,
+resume through the held-lock prompt at sign-in: its "Continue editing" claims the
+lock it resumes for this session (`speleodb_start_editing` with
+`resumeHeldLock`, #576 RV2-R-13-RESTART), so Done then releases it as usual. A
+plain Start editing under the account's lock still claims nothing; such a lock is
+released from the held-lock prompt or the SpeleoDB project dialog's Admin tab.
+That claim is marked as resumed: it licenses the release only, not the
+authorship self-heal above (#576 RV4-R-S3). The prompt lists every lock the
+account holds at sign-in, so the resumed lock may be one a second session of the
+account is still editing under, and its commits must read as a divergence there.
 
 **Mitigation (the notice):** `speleodb_open_project` checks the project's
 `active_mutex` at open time; if the lock is already held by **our own** account, a
@@ -324,7 +357,7 @@ acceptance item maps to concrete tests across `speleodb::live_tests` (client) an
 
 | #212 criterion | Covering test(s) |
 |----------------|------------------|
-| Skips when the box is absent; CI/offline stay green | `#[ignore]` on every live test + `live_env()`/`orch_env()` early-return when `DEV_SPELEODB_*` is unset |
+| CI/offline stay green | `#[ignore]` on every live test; a deliberate run without `DEV_SPELEODB_*` fails in `live_env()`/`orch_env()`, naming the unset variable (#576 E13) |
 | Round-trip tree shape + 2nd-checkout pull matches | `live_round_trip_seed_pull_open` (seed → pull a fresh checkout → open self-contained), `live_orch_start_editing_edit_done_advances_base` (full start→edit→done loop, BASE advances), `live_orch_pushed_dump_is_self_contained_without_sidecars` (server dump = one `.stalx` located by suffix + `ariane.tml` at root + no sqlite sidecar; re-opens carrying the pushed edit) |
 | Render-compat: `ProjectGeoJSON` + OGC feature counts; no-anchor → no render + D2 | `live_render_compat_georef_generates_geojson` (OGC `<sha>_points`=1 / `<sha>_lines`=2), `live_render_compat_no_anchor_records_geojson_state` (0/0 START → 404 render → D2 "may be stale") |
 | Negative: 403-no-mutex | `live_upload_without_mutex_returns_403` (push while `active_mutex` is unheld → `UserOwnsProjectMutex` → 403) |
@@ -378,9 +411,10 @@ hands the mutex back if the conversion fails before the push can use it.
 
 Offline coverage: the typed-signal seams are unit-tested (`dto_for_error(
 AdoptAriane) → Adopt`; the dump classifier's adopt arm carries the `ariane.tml`
-path), the ordering above is pinned by source tripwires in `speleodb_pull.rs`
-(lock before read, guard spanning the conversion, flip after push, close last),
-the guard's arm/disarm behaviour is a unit test, and the FE
+path), the ordering above is enforced by the `adopt_order` proof types in
+`speleodb_adopt.rs` (lock before read, guard spanning the conversion, flip after
+push, close last): each step takes a value only the step before it returns, so a
+reorder does not compile. The guard's arm/disarm behaviour is a unit test, and the FE
 confirm→adopt→reload flow has a component test
 (`OpenFromSpeleoDbDialog.test.tsx`). The full create→import→push orchestration
 needs an app handle + a live box, so it is verified manually on the dev box:

@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
@@ -7,10 +9,19 @@ import { DialogWrapper } from './DialogWrapper';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import type { DeleteShotImpact } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function DeleteShotChoiceDialog() {
-  const { closeDialog, dialogData, openDialog, clearSelection } = useUIStore();
-  const { deleteShot } = useProjectStore();
+  const { t } = useTranslation();
+  const { closeDialog, dialogData, openDialog, clearSelection } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      dialogData: s.dialogData,
+      openDialog: s.openDialog,
+      clearSelection: s.clearSelection,
+    })),
+  );
+  const deleteShot = useProjectStore((s) => s.deleteShot);
 
   const sectionId = dialogData.sectionId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
@@ -25,14 +36,15 @@ export default function DeleteShotChoiceDialog() {
 
   useEffect(() => {
     if (sectionId !== undefined && shotId !== undefined) {
-      invokeIpc<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId }, { purpose: 'preview shot deletion' })
+      invokeIpc('preview_delete_shot', { sectionId, shotId }, { purpose: 'preview shot deletion' })
         .then((result) => {
           setImpact(result);
           setImpactError(null);
         })
         .catch((e) => {
           setImpact(null);
-          setImpactError(getErrorMessage(e, 'Failed to load shot impacts'));
+          // i18n.t, not the hook's t: this IPC effect must not re-fetch on a language change.
+          setImpactError(getErrorMessage(e, i18n.t('dialogs.deleteShotChoice.errors.loadImpactsFailed')));
         });
     } else {
       setImpact(null);
@@ -61,20 +73,20 @@ export default function DeleteShotChoiceDialog() {
         trackDialogComplete('delete-shot-choice');
         closeDialog();
       } else {
-        setError(result.error ?? 'Failed to delete shot');
+        setError(result.error ?? t('dialogs.deleteShotChoice.errors.deleteShot'));
       }
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to delete shot'));
+      setError(getErrorMessage(e, t('dialogs.deleteShotChoice.errors.deleteShot')));
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <DialogWrapper title="Delete Shot" onClose={isLoading ? () => {} : closeDialog} size="md" data-testid="delete-shot-choice-dialog">
+    <DialogWrapper title={t('dialogs.deleteShotChoice.title')} onClose={isLoading ? () => {} : closeDialog} size="md" data-testid="delete-shot-choice-dialog">
       <div className="space-y-4">
         <p className="text-text-secondary">
-          This shot is in the middle of the section. Choose whether to split the section or shift geometry.
+          {t('dialogs.deleteShotChoice.intro')}
         </p>
 
         {error && (
@@ -91,7 +103,7 @@ export default function DeleteShotChoiceDialog() {
 
         {shiftBlocked && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-            <p className="font-medium">Shift Geometry is not available for this shot.</p>
+            <p className="font-medium">{t('dialogs.deleteShotChoice.shiftUnavailable')}</p>
             {shiftBlockedReasons.length > 0 && (
               <ul className="list-disc list-inside">
                 {shiftBlockedReasons.map((reason, index) => (
@@ -104,15 +116,15 @@ export default function DeleteShotChoiceDialog() {
 
         <DeleteShotImpactDetails
           impact={impact}
-          title="If you choose Shift Geometry, these relationships will update:"
+          title={t('dialogs.deleteShotChoice.impactTitle')}
         />
 
         <div className="flex justify-end gap-2">
           <Button onClick={closeDialog} disabled={isLoading} data-testid="delete-shot-choice-cancel">
-            Cancel
+            {t('common.actions.cancel')}
           </Button>
           <Button onClick={handleSplit} disabled={isLoading} data-testid="delete-shot-choice-split">
-            Split Section
+            {t('dialogs.deleteShotChoice.split')}
           </Button>
           <Button
             data-testid="delete-shot-choice-shift"
@@ -121,7 +133,7 @@ export default function DeleteShotChoiceDialog() {
             disabled={isLoading || shiftBlocked}
             data-primary-action=""
           >
-            {isLoading ? 'Deleting...' : 'Shift Geometry'}
+            {isLoading ? t('dialogs.deleteShotChoice.deleting') : t('dialogs.deleteShotChoice.shift')}
           </Button>
         </div>
       </div>

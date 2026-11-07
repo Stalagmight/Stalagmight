@@ -33,6 +33,7 @@ import { builtFromFor, checkBuildFreshness, buildApp, type BuiltFrom } from './l
 import { findFreePort, isPidAlive, recordPid, reapPidsFromFile, waitForPortListening } from './lib/procs';
 import { SessionCore, gitHead, safeMtime } from './lib/sessionCore';
 import { attachBrowser, verifyReadiness, E2EHooksMissingError } from './lib/sessionShared';
+import { foldLocalPaths, valueShape, withheldAppText } from './lib/shareableFailure';
 import type { StartOptions, StartResult } from './sessionTypes';
 
 const BASE_PORT = Number.parseInt(process.env.STALAGMIGHT_AGENT_BASE_PORT ?? '4544', 10);
@@ -55,7 +56,8 @@ function windowRectFromEnv(): WindowRect | null {
   const parts = raw.split(',').map((p) => Number.parseInt(p.trim(), 10));
   if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n))) {
     process.stderr.write(
-      `[agent] WARNING: ignoring malformed STALAGMIGHT_AGENT_WINDOW_RECT=${JSON.stringify(raw)} (want "x,y,w,h")\n`,
+      // Its shape (#576 W51): the value is the user's text.
+      `[agent] WARNING: ignoring malformed STALAGMIGHT_AGENT_WINDOW_RECT, ${valueShape(raw)} (want "x,y,w,h")\n`,
     );
     return null;
   }
@@ -96,14 +98,15 @@ export class MacSession extends SessionCore {
       if (build === 'force' || !freshness.fresh) {
         this.state = 'building';
         if (build !== 'force' && freshness.reasons.length > 0) {
-          process.stderr.write(`Rebuilding: ${freshness.reasons.join('; ')}\n`);
+          // Folded (#576 W47-NF3): a reason can name the checkout a stamp came from.
+          process.stderr.write(`Rebuilding: ${foldLocalPaths(freshness.reasons.join('; '))}\n`);
           // Reported alongside the result too: the stderr line is invisible to
           // an MCP client, and "why did that take four minutes" (and, since
           // #488, "whose binary was I about to drive") is exactly what a caller
           // needs to see.
           rebuildReasons = freshness.reasons;
         }
-        buildApp((line) => process.stderr.write(`${line}\n`), buildMode);
+        await buildApp((line) => process.stderr.write(`${foldLocalPaths(line)}\n`), buildMode);
         buildAction = 'built';
         builtFrom = builtFromFor(buildMode);
       } else {
@@ -292,7 +295,8 @@ export class MacSession extends SessionCore {
       await browser.setWindowRect(rect.x, rect.y, rect.width, rect.height);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[agent] WARNING: could not position the app window: ${msg}\n`);
+      // Its length (#576 W51): a WebDriver error can quote the page.
+      process.stderr.write(`[agent] WARNING: could not position the app window: ${withheldAppText(msg)}\n`);
     }
   }
 

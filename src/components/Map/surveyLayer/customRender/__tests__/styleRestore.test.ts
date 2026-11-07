@@ -76,6 +76,64 @@ describe('onStyleRestored', () => {
     expect(count('webglcontextlost')).toBe(1);
     expect(count('webglcontextrestored')).toBe(1);
   });
+
+  it('the last unsubscribe removes the map listeners', () => {
+    const { map, count } = makeEventedMap();
+    const first = onStyleRestored(map, () => {});
+    const second = onStyleRestored(map, () => {});
+    first();
+    expect(count('webglcontextlost')).toBe(1);
+    second();
+    expect(count('webglcontextlost')).toBe(0);
+    expect(count('webglcontextrestored')).toBe(0);
+    expect(isStyleRestoring(map)).toBe(false);
+  });
+
+  // #576 RV18-MAP-3: dropping the tracker mid-restore made isStyleRestoring false
+  // while the rebuilt style was still loading, and a later subscriber never got its
+  // reattach. It stays until that style has loaded, then goes with its listeners.
+  it('the last unsubscribe during a restore keeps the tracker until the rebuilt style loads', () => {
+    const { map, fire, count } = makeEventedMap();
+    const first = onStyleRestored(map, () => {});
+    fire('webglcontextlost');
+    fire('webglcontextrestored');
+    first();
+    expect(isStyleRestoring(map)).toBe(true);
+    expect(count('style.load')).toBe(1);
+    fire('style.load');
+    expect(isStyleRestoring(map)).toBe(false);
+    expect(count('webglcontextlost')).toBe(0);
+    expect(count('webglcontextrestored')).toBe(0);
+    expect(count('style.load')).toBe(0);
+  });
+
+  it('a subscriber that joins mid-restore, after the last one left, gets the reattach', () => {
+    const { map, fire, count } = makeEventedMap();
+    const first = onStyleRestored(map, () => {});
+    fire('webglcontextlost');
+    fire('webglcontextrestored');
+    first();
+    let late = 0;
+    onStyleRestored(map, () => late++);
+    console.log('[RV18-MAP-3] isStyleRestoring after re-subscribe mid-restore:', isStyleRestoring(map));
+    expect(isStyleRestoring(map)).toBe(true);
+    fire('style.load');
+    console.log('[RV18-MAP-3] late reattach calls:', late);
+    expect(late).toBe(1);
+    // It holds the tracker now: the listeners stay for the next rebuild.
+    expect(count('webglcontextlost')).toBe(1);
+  });
+
+  it('onLoss runs on every webglcontextlost, before the reattach', () => {
+    const { map, fire } = makeEventedMap();
+    const log: string[] = [];
+    onStyleRestored(map, () => log.push('reattach'), () => log.push('loss'));
+    fire('webglcontextlost');
+    fire('webglcontextrestored');
+    fire('style.load');
+    fire('webglcontextlost');
+    expect(log).toEqual(['loss', 'reattach', 'loss']);
+  });
 });
 
 describe('isStyleRestoring', () => {

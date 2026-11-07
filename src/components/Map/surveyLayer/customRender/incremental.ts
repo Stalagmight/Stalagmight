@@ -2,7 +2,7 @@
  * Incremental-edit diff for the custom-render buffers (#customRender).
  *
  * A geometry flush after an edit normally full-rebuilds every vertex buffer
- * (~231 ms on 92.stalx) even when the edit moved a single station. When the SoA
+ * (hundreds of ms on a large project) even when the edit moved a single station. When the SoA
  * *layout* is unchanged (same section sequence + per-section shot/station
  * counts, same station→section mapping) only a handful of sections' positions /
  * colors actually changed, so the controller can re-emit just those sections'

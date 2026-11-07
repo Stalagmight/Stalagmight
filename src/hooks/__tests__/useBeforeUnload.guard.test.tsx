@@ -33,6 +33,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
 
 import { useBeforeUnload } from '../useBeforeUnload';
 import { performQuit, resetQuitConfirmationForTests } from '../../utils/quit';
+import { nextTimer } from '../../test/factories/async';
 
 function Harness({
   shouldBlock,
@@ -62,13 +63,11 @@ beforeEach(() => {
   resetQuitConfirmationForTests();
 });
 
-const flush = () => new Promise((r) => setTimeout(r, 0));
-
 describe('useBeforeUnload - the in-app exit guard', () => {
   it('destroys the window when nothing needs guarding', async () => {
     const guard = vi.fn(() => false);
     render(<Harness shouldBlock={false} guard={guard} />);
-    await flush();
+    await nextTimer();
 
     await pressWindowX();
 
@@ -79,7 +78,7 @@ describe('useBeforeUnload - the in-app exit guard', () => {
   it('aborts the close when the guard opens a dialog', async () => {
     const guard = vi.fn(() => true);
     render(<Harness shouldBlock={false} guard={guard} />);
-    await flush();
+    await nextTimer();
 
     await pressWindowX();
 
@@ -90,7 +89,7 @@ describe('useBeforeUnload - the in-app exit guard', () => {
     // The guard still reports "dirty" - a discard leaves it that way on purpose.
     const guard = vi.fn(() => true);
     render(<Harness shouldBlock={false} guard={guard} />);
-    await flush();
+    await nextTimer();
 
     performQuit(); // what the dialog's Quit button does
     await pressWindowX();
@@ -102,7 +101,7 @@ describe('useBeforeUnload - the in-app exit guard', () => {
   it('re-guards the next close request - the confirmation is one-shot', async () => {
     const guard = vi.fn(() => true);
     render(<Harness shouldBlock={false} guard={guard} />);
-    await flush();
+    await nextTimer();
 
     performQuit();
     await pressWindowX();
@@ -111,7 +110,7 @@ describe('useBeforeUnload - the in-app exit guard', () => {
     // A second X (in a hypothetical still-running window) is guarded again.
     listeners.length = 0;
     render(<Harness shouldBlock={false} guard={guard} />);
-    await flush();
+    await nextTimer();
     await pressWindowX();
 
     expect(guard).toHaveBeenCalledTimes(1);
@@ -121,7 +120,7 @@ describe('useBeforeUnload - the in-app exit guard', () => {
   it('runs the import/dive-plan confirm FIRST, then the guard', async () => {
     const guard = vi.fn(() => true);
     render(<Harness shouldBlock guard={guard} />);
-    await flush();
+    await nextTimer();
 
     await pressWindowX();
 
@@ -134,7 +133,7 @@ describe('useBeforeUnload - the in-app exit guard', () => {
     confirmMock.mockResolvedValue(false);
     const guard = vi.fn(() => false);
     render(<Harness shouldBlock guard={guard} />);
-    await flush();
+    await nextTimer();
 
     await pressWindowX();
 
@@ -148,7 +147,7 @@ describe('useBeforeUnload - the in-app exit guard', () => {
     // already asked - see the ordering suite below.)
     const guard = vi.fn(() => false);
     render(<Harness shouldBlock guard={guard} />);
-    await flush();
+    await nextTimer();
 
     performQuit();
     await pressWindowX();
@@ -173,7 +172,7 @@ describe('useBeforeUnload - every cancellable prompt precedes the irreversible a
   it('asks tier 1 before the tier-2 dialog, and not again after it', async () => {
     const guard = vi.fn(() => true);
     render(<Harness shouldBlock guard={guard} />);
-    await flush();
+    await nextTimer();
 
     // Pass 1: the quit attempt (menu Quit now arrives here too, un-confirmed).
     await pressWindowX();
@@ -193,7 +192,7 @@ describe('useBeforeUnload - every cancellable prompt precedes the irreversible a
     confirmMock.mockResolvedValue(false);
     const guard = vi.fn(() => true);
     render(<Harness shouldBlock guard={guard} />);
-    await flush();
+    await nextTimer();
 
     await pressWindowX();
 
@@ -207,7 +206,7 @@ describe('useBeforeUnload - every cancellable prompt precedes the irreversible a
     // for an attempt that never happened, so a fresh Quit must ask again.
     const guard = vi.fn(() => true);
     render(<Harness shouldBlock guard={guard} />);
-    await flush();
+    await nextTimer();
 
     await pressWindowX();
     expect(confirmMock).toHaveBeenCalledTimes(1);
@@ -223,7 +222,7 @@ describe('useBeforeUnload - every cancellable prompt precedes the irreversible a
     const onConfirm = vi.fn(async () => {});
     const guard = vi.fn(() => true);
     render(<Harness shouldBlock guard={guard} onConfirm={onConfirm} />);
-    await flush();
+    await nextTimer();
 
     await pressWindowX();
     expect(onConfirm).not.toHaveBeenCalled();
@@ -248,7 +247,7 @@ describe('useBeforeUnload - the tier-1 cleanup waits for the tier-2 guard', () =
     const onConfirm = vi.fn(async () => {});
     const guard = vi.fn(() => true);
     render(<Harness shouldBlock guard={guard} onConfirm={onConfirm} />);
-    await flush();
+    await nextTimer();
 
     await pressWindowX();
 
@@ -262,7 +261,7 @@ describe('useBeforeUnload - the tier-1 cleanup waits for the tier-2 guard', () =
     const onConfirm = vi.fn(async () => {});
     const guard = vi.fn(() => false);
     render(<Harness shouldBlock guard={guard} onConfirm={onConfirm} />);
-    await flush();
+    await nextTimer();
 
     await pressWindowX();
 
@@ -274,7 +273,7 @@ describe('useBeforeUnload - the tier-1 cleanup waits for the tier-2 guard', () =
     confirmMock.mockResolvedValue(false);
     const onConfirm = vi.fn(async () => {});
     render(<Harness shouldBlock guard={() => false} onConfirm={onConfirm} />);
-    await flush();
+    await nextTimer();
 
     await pressWindowX();
 
@@ -290,7 +289,7 @@ describe('useBeforeUnload - the tier-1 cleanup waits for the tier-2 guard', () =
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     destroyMock.mockRejectedValueOnce(new Error('capability denied'));
     render(<Harness shouldBlock={false} guard={() => false} />);
-    await flush();
+    await nextTimer();
 
     await pressWindowX();
     expect(destroyMock).toHaveBeenCalledTimes(1);
@@ -309,7 +308,7 @@ describe('useBeforeUnload - the tier-1 cleanup waits for the tier-2 guard', () =
       throw new Error('cleanup boom');
     });
     render(<Harness shouldBlock guard={() => false} onConfirm={onConfirm} />);
-    await flush();
+    await nextTimer();
 
     await pressWindowX();
 

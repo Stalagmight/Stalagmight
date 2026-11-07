@@ -11,6 +11,16 @@ export const TOAST_KEYS = {
   // Integrity / undo-redo
   INTEGRITY_REPAIR: 'integrity-repair',
   EDIT_DISABLED: 'edit-disabled',
+  /** A save refused because a newer Stalagmight saved the project (#576 B6-D1). */
+  NEWER_FILE_READ_ONLY: 'newer-file-read-only',
+  /*
+   * PREFIX for what a successful save went without (#576 A3-D2): the shown key is
+   * `save-warning:<code>`, one per warning code, so repeated autosaves collapse
+   * while two different losses never replace each other (the EXPORT_NOTE idiom).
+   */
+  SAVE_WARNING: 'save-warning',
+  /** A save refused because stored project settings could not be read on open (#576 B15). */
+  SETTINGS_UNREADABLE: 'settings-unreadable',
   /** Catch-all for a command failure no specific handler claims (docs/notifications.md). */
   COMMAND_FAILED: 'command-failed',
   UNDO_FAILED: 'undo-failed',
@@ -18,8 +28,14 @@ export const TOAST_KEYS = {
 
   // Map
   STATIONS_HIDDEN: 'stations-hidden',
+  /** The distance-gradient origin's station was deleted; the ramp is back on the entrance (#576 D39(g)). */
+  DISTANCE_ORIGIN_RESET: 'distance-origin-reset',
+  /** The distance-gradient field could not be computed (it rejected); once per failure burst (#576 C7-MSG). */
+  DISTANCE_GRADIENT_FAILED: 'distance-gradient-failed',
   SHOTS_HIDDEN: 'shots-hidden',
   RENDER_FATAL: 'render-fatal',
+  /** The map's WebGL context was lost and not restored; carries "Reload map" (#576 D38-LOST). */
+  RENDER_CONTEXT_LOST: 'render-context-lost',
   MERGE_CHECK: 'merge-check',
   MERGE_BLOCKED: 'merge-blocked',
   MERGE_ERROR: 'merge-error',
@@ -28,6 +44,8 @@ export const TOAST_KEYS = {
   GEOMETRY_COMPUTE_FAILED: 'geometry-compute-failed',
   ANCHORED_IDS_ERROR: 'anchored-ids-error',
   MOVE_COMMENT_EMPTY: 'move-comment-empty',
+  /** A carried move ghost was cancelled by another edit, a survey change or read-only (GHOST-2, src/store/moveCarry.ts). */
+  MOVE_CANCELLED: 'move-cancelled',
 
   // Global view
   SPELEODB_OPEN_REMOTE_ERROR: 'speleodb-open-remote-error',
@@ -111,6 +129,10 @@ export const TOAST_KEYS = {
   DMP_WIZARD_EMPTY_SECTIONS: 'dmp-wizard-empty-sections',
   DMP_WIZARD_INCOMPLETE: 'dmp-wizard-incomplete',
   DMP_MANUAL_PLACEMENT_HINT: 'dmp-manual-placement-hint',
+  /** A DMP import landed but the orphan-placement lookup after it failed (#576 NF-AN4-N4). */
+  DMP_ORPHAN_LOOKUP_FAILED: 'dmp-orphan-lookup-failed',
+  /** A TML / Compass / Walls import landed but the orphan-placement lookup after it failed (#576 NF-DMPS-1). */
+  ORPHAN_LOOKUP_FAILED: 'orphan-lookup-failed',
   PROJECT_SETTINGS: 'project-settings',
   DELETE_PROJECT_WARNING: 'delete-project-warning',
   /** Warning-free import receipt, surfaced as a toast instead of a modal (#411/#420). */
@@ -118,6 +140,8 @@ export const TOAST_KEYS = {
 
   // Open / import routing
   IMPORT_IN_PROGRESS: 'import-in-progress',
+  /** An import the loading overlay's Cancel stopped before it applied anything (#576 NF-FIX3A-2). */
+  IMPORT_CANCELLED: 'import-cancelled',
 
   // Debug
   DEBUG_REFRESH: 'debug-refresh',

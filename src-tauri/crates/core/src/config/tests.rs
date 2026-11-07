@@ -3337,38 +3337,16 @@ fn test_save_to_path_leaves_destination_untouched_when_write_cannot_complete() {
         let original = std::fs::metadata(dir.path()).unwrap().permissions();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
 
-        // ...unless the mode bits are advisory for us, as they are for root. The
-        // self-hosted CI runner is a container running as uid 0, so this test
-        // passes on hosted runners and fails on that one - which is how it
-        // reached master: the runner picker sent its own PR to hosted.
-        //
-        // Probe the property the test depends on - can a file be created here at
-        // all - rather than the uid behind it, matching `repair.rs`. This is not
-        // because `geteuid` is unreachable (`command_tests.rs` calls it under an
-        // `#[expect(unsafe_code)]`); it is because uid is the wrong question. A
-        // non-root process holding CAP_DAC_OVERRIDE also walks through 0o555, and
-        // a `geteuid() == 0` check would miss it and fail exactly as this did.
-        if std::fs::File::create(dir.path().join(".root-probe")).is_ok() {
-            let _ = std::fs::remove_file(dir.path().join(".root-probe"));
-            std::fs::set_permissions(dir.path(), original).unwrap();
-            // Only visible under `--nocapture`/`--show-output`: libtest captures
-            // the output of passing tests, and CI passes neither. So this is a
-            // hand-run aid, NOT the thing that makes the skip observable in CI -
-            // nothing there reports which tests self-disabled. The assertions
-            // below therefore run only on hosted (non-root) runs. Making the
-            // inducer root-safe instead is not available to this test: the temp
-            // name is deliberately unpredictable (see above), so the squat trick
-            // used elsewhere cannot apply, and a missing-parent-dir inducer would
-            // stop the destination existing - which is the very thing under test.
-            #[expect(
-                clippy::print_stderr,
-                reason = "a skipped permission test says so, or it is silent in a hand-run too"
-            )]
-            {
-                eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
-            }
-            return;
-        }
+        // ...unless the mode bits are advisory for us, as they are for root (or
+        // any process holding CAP_DAC_OVERRIDE). Probe the property the test
+        // depends on - can a file be created here at all - rather than the uid
+        // behind it, and fail when it can: a skip would make this test pass
+        // without testing anything (#576 NF-ROOT-PERM). CI runs the Rust tests
+        // unprivileged. A root-safe inducer is not available to this test: the
+        // temp name is deliberately unpredictable (see above), so the squat trick
+        // used elsewhere cannot apply, and a missing-parent-dir inducer would stop
+        // the destination existing - which is the very thing under test.
+        crate::models::test_support::assert_dir_refuses_new_files(dir.path());
 
         let mut new = Config::default();
         new.general.undo_history_limit = 99;

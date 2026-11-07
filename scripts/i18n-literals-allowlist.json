@@ -1,0 +1,17 @@
+{
+  "_README": "Literals the i18n-literals gate (scripts/check-i18n-literals.mjs) lets through in the dialog layer: text that is not language, such as a file-format or brand name. One row per (file, exact text), with the reason. A row that matches nothing fails the gate.",
+  "entries": [
+    { "file": "src/components/Dialogs/ExportControls.tsx", "text": "CSV", "reason": "file-format name in the export format picker" },
+    { "file": "src/components/Dialogs/ExportControls.tsx", "text": "JSON", "reason": "file-format name in the export format picker" },
+    { "file": "src/components/Dialogs/ExportControls.tsx", "text": "TML (Ariane)", "reason": "file-format name plus the Ariane product name" },
+    { "file": "src/components/Dialogs/ExportControls.tsx", "text": "PNG", "reason": "file-format name in the image format picker" },
+    { "file": "src/components/Dialogs/ExportControls.tsx", "text": "SVG", "reason": "file-format name in the image format picker" },
+    { "file": "src/components/Dialogs/ExportControls.tsx", "text": "PDF", "reason": "file-format name in the image format picker" },
+    { "file": "src/components/Dialogs/NewProjectForImportDialog.tsx", "text": "${normalizedBaseName}.stalx", "reason": "file-name placeholder: the project name plus the .stalx extension" },
+    { "file": "src/components/Dialogs/SectionPreview.tsx", "text": "Existing", "reason": "GeoJSON feature property of the preview map; no layer renders it as text" },
+    { "file": "src/components/Dialogs/WallsImportDialog.tsx", "text": "#Fix", "reason": "Walls survey-file directive keyword, shown as code" },
+    { "file": "src/components/Dialogs/settings/MapSettings.tsx", "text": "ESRI World Imagery", "reason": "imagery provider's product name" },
+    { "file": "src/components/Dialogs/settings/SpeleoDbSettings.tsx", "text": "https://www.speleodb.org/", "reason": "URL placeholder" },
+    { "file": "src/components/common/editableShotColumns.tsx", "text": "J", "reason": "jump-shot glyph; must match shotKindGlyph('Jump') in src/utils/shotKind.ts and the 'j' the cell parser accepts" }
+  ]
+}

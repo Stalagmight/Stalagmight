@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { useLatest } from '../../../hooks/useLatest';
 import { clampRound } from '../../../utils/clamp';
 import { DEFAULT_COL_WIDTH, type GridColumn } from './types';
 
@@ -139,10 +140,9 @@ export function useColumnWidths(
   // Held in a ref, not a dep: the hosts build `declaredKeys` inline, so it is a
   // fresh array every render and putting it in `commitWidths`'s dep list would
   // give the callback a new identity per render - which the grid passes straight
-  // down to the resize handlers. The ref is written during render so a commit
-  // always reads the columns as they are right now.
-  const declaredRef = useRef(declaredKeys);
-  declaredRef.current = declaredKeys;
+  // down to the resize handlers. useLatest refreshes the ref on every commit, so
+  // a width commit (a resize end) always reads the columns as they are on screen.
+  const declaredRef = useLatest(declaredKeys);
 
   const commitWidths = useCallback(
     (next: ColumnWidths) => {
@@ -176,7 +176,7 @@ export function useColumnWidths(
       settledRef.current = settled;
       onColumnWidthsChange?.(settled);
     },
-    [applyWidths, onColumnWidthsChange],
+    [applyWidths, onColumnWidthsChange, declaredRef],
   );
 
   // An abandoned drag has already written its in-progress width into the live map -

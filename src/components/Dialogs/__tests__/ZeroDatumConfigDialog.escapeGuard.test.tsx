@@ -15,18 +15,11 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () => [],
-    getTotalSize: () => count * 33,
-    scrollToIndex: () => {},
-  }),
-}));
+vi.mock('@tanstack/react-virtual', async () =>
+  (await import('../../../test/factories/virtualizer')).fakeVirtualizer({ renderRows: false }),
+);
 
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys());
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
 vi.mock('../SectionPreview', () => ({ default: () => null }));
@@ -37,40 +30,12 @@ vi.mock('../../../store/projectStore', () => ({
 }));
 
 import ZeroDatumConfigDialog from '../ZeroDatumConfigDialog';
-import type { DmpFile, DmpSection, DmpShot } from '../../../types/commands';
+import type { DmpFile, DmpSection } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
-
-function dmpShot(): DmpShot {
-  return {
-    shot_type: 'Standard',
-    heading_in: 10,
-    heading_out: 10,
-    length: 5,
-    depth_in: 0,
-    depth_out: 0,
-    pitch_in: 0,
-    pitch_out: 0,
-    left: 0,
-    right: 0,
-    up: 0,
-    down: 0,
-    temperature: 0,
-    hour: 0,
-    minute: 0,
-    second: 0,
-    marker_index: 0,
-  };
-}
+import { makeDmpSection, makeDmpShots } from '../../../test/factories/dmp';
 
 function dmpFile(): DmpFile {
-  const section: DmpSection = {
-    version: 1,
-    name: 'Anchor',
-    direction: 'in',
-    date: '2026-01-01',
-    shots: Array.from({ length: 2 }, dmpShot),
-    content_hash: 'hash-anchor',
-  };
+  const section: DmpSection = makeDmpSection({ shots: makeDmpShots(2) });
   return { version: 1, sections: [section] } as unknown as DmpFile;
 }
 

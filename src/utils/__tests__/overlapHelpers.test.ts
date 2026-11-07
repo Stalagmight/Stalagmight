@@ -5,6 +5,7 @@ import {
   computeActionableIds,
   computeTargetShotIndex,
   computeMergeOptions,
+  defaultMergeOffset,
   reverseTargetShot,
   applyTargetData,
   interpolateShots,
@@ -1648,7 +1649,7 @@ describe('multi-connection overlap: target shot updates', () => {
   });
 
   it('adjacent non-overlapping connections update different target shots', () => {
-    // Simulates the kb.dmp scenario:
+    // Two adjacent connections into one section:
     // Connection 1: B→A at A station 25, 2 matched, forward (updates A[25],A[26])
     // Connection 2: C→A at A station 27, 2 matched, forward (updates A[27],A[28])
     // These should be independent - no conflict.
@@ -1718,49 +1719,84 @@ describe('multi-connection overlap: target shot updates', () => {
 // These tests simulate the exact code path in DmpNewImportDialog.handleConfirm
 // that propagates overlap mode to the target section's shots for import-to-import
 // connections. This is the fix for "interpolation not applied" bug.
-// Test file: /tmp/kb.dmp (sections 018 and 003)
 
-describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () => {
+describe('handleConfirm target-shot-update: a front overlap into an existing section', () => {
   /**
-   * Actual suggestion parameters from /tmp/kb.dmp (sections 018 and 003):
-   *   Import section 018: 29 shots, importStationIndex=0, matchedShots=2
-   *   Target section 003: 107 shots, existingStationIndex=27, direction=forward
+   * Invented suggestion parameters, with no survey file behind them:
+   *   Import section: 9 shots, importStationIndex=0, matchedShots=3
+   *   Target section: 15 shots, existingStationIndex=7, direction=forward
    *   Default merge station = importStationIndex = 0
    *
    * This is a FRONT overlap (importStationIndex=0).
    *
-   * The bug: computeActionableIds(0, 2, 0) returns empty set because
-   * for Front overlap the loop is `for (i = 0; i < 0; i++)` → never executes.
+   * The bug: computeActionableIds(0, 3, 0) returns an empty set because
+   * for a Front overlap the loop is `for (i = 0; i < 0; i++)` → never executes.
    * Fix: use computeOverlapIds instead of computeActionableIds.
    *
-   * Real shot data at the overlap:
-   *   Import shot 0: az=229.9, len=5.21, depth=9.55/9.44
-   *   Import shot 1: az=204.2, len=8.84, depth=9.13/9.37
-   *   Target shot 27: az=232.1, len=5.35, depth=9.37/9.27
-   *   Target shot 28: az=194.7, len=9.22, depth=9.27/9.17
+   * The overlap pairs import shots 0..2 with target shots 7..9. Every value in
+   * a pair differs between the two sides, so a copy or an average that takes the
+   * wrong side, or the wrong shot, shows.
    */
 
   const importStationIndex = 0;
-  const matchedShots = 2;
-  const existingStationIndex = 27;
+  const matchedShots = 3;
+  const existingStationIndex = 7;
   const direction = 'forward' as const;
   const mergeImportStation = importStationIndex; // default
 
-  // Real shot values from the DMP file
+  const importOverlap = [
+    { azimuth_in: 100, azimuth_out: 101, length: 3.0, depth_in: 4.0, depth_out: 4.5 },
+    { azimuth_in: 115, azimuth_out: 116, length: 4.0, depth_in: 4.5, depth_out: 5.5 },
+    { azimuth_in: 130, azimuth_out: 131, length: 2.5, depth_in: 5.5, depth_out: 6.0 },
+  ];
+  const targetOverlap = [
+    { azimuth_in: 104, azimuth_out: 105, length: 3.4, depth_in: 4.2, depth_out: 4.8 },
+    { azimuth_in: 111, azimuth_out: 112, length: 3.6, depth_in: 4.8, depth_out: 5.2 },
+    { azimuth_in: 134, azimuth_out: 135, length: 2.9, depth_in: 5.2, depth_out: 6.4 },
+  ];
+
+  // The three overlap shots, then six past the junction.
   const importShots: EditableShotLike[] = [
-    makeEditableShot(0, { azimuth_in: 229.9, azimuth_out: 229.9, length: 5.21, depth_in: 9.55, depth_out: 9.44 }),
-    makeEditableShot(1, { azimuth_in: 204.2, azimuth_out: 204.2, length: 8.84, depth_in: 9.13, depth_out: 9.37 }),
-    ...Array.from({ length: 27 }, (_, i) =>
-      makeEditableShot(i + 2, { azimuth_in: 125 + i, azimuth_out: 125 + i, length: 5 + i * 0.1 }),
+    ...importOverlap.map((values, i) => makeEditableShot(i, values)),
+    ...Array.from({ length: 6 }, (_, i) =>
+      makeEditableShot(i + 3, { azimuth_in: 140 + i * 4, azimuth_out: 141 + i * 4, length: 2 + i * 0.5 }),
     ),
   ];
 
-  // 107 shots; we only care about shots 27 and 28 having real values
-  const targetShots: EditableShotLike[] = Array.from({ length: 107 }, (_, i) => {
-    if (i === 27) return makeEditableShot(i, { azimuth_in: 232.1, azimuth_out: 232.1, length: 5.35, depth_in: 9.37, depth_out: 9.27 });
-    if (i === 28) return makeEditableShot(i, { azimuth_in: 194.7, azimuth_out: 194.7, length: 9.22, depth_in: 9.27, depth_out: 9.17 });
-    return makeEditableShot(i, { azimuth_in: 190 + i * 0.3, azimuth_out: 191 + i * 0.3, length: 9 + i * 0.05 });
-  });
+  // 15 shots; only 7..9, the overlap, carry the chosen values.
+  const targetShots: EditableShotLike[] = Array.from({ length: 15 }, (_, i) =>
+    makeEditableShot(
+      i,
+      targetOverlap[i - existingStationIndex] ?? { azimuth_in: 60 + i * 2, azimuth_out: 61 + i * 2, length: 6 + i * 0.2 },
+    ),
+  );
+
+  /** The target section after each overlap shot is folded in by `fold` (the handleConfirm loop). */
+  function foldOverlap(fold: (target: EditableShotLike, importAsTarget: TargetShotLike) => EditableShotLike) {
+    const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
+    const shouldReverse = needsDirectionReversal(importStationIndex, direction);
+    const overlapParams: OverlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+
+    const modifiedTarget = targetShots.map(s => ({ ...s }));
+    let modified = false;
+
+    for (const overlapId of allOverlap) {
+      const importShot = importShots.find(s => s.id === overlapId);
+      if (!importShot) continue;
+
+      const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
+      if (targetShotIdx < 0 || targetShotIdx >= modifiedTarget.length) continue;
+
+      const targetShot = modifiedTarget[targetShotIdx]!;
+      const importAsTarget: TargetShotLike = shouldReverse
+        ? reverseTargetShot(importShot)
+        : importShot;
+
+      modifiedTarget[targetShotIdx] = fold(targetShot, importAsTarget);
+      modified = true;
+    }
+    return { modifiedTarget, modified, shouldReverse };
+  }
 
   it('computeActionableIds returns EMPTY with default merge station (the bug)', () => {
     const actionable = computeActionableIds(importStationIndex, matchedShots, mergeImportStation);
@@ -1769,97 +1805,56 @@ describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () 
 
   it('computeOverlapIds returns the correct overlap shots (the fix)', () => {
     const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
-    expect(allOverlap).toEqual(new Set([0, 1]));
+    expect(allOverlap).toEqual(new Set([0, 1, 2]));
   });
 
   it('Front + forward: no direction reversal needed', () => {
     expect(needsDirectionReversal(importStationIndex, direction)).toBe(false);
   });
 
-  it('target shot indices map correctly: import 0→target 27, import 1→target 28', () => {
+  it('target shot indices map correctly: import 0→target 7, 1→target 8, 2→target 9', () => {
     const overlapParams: OverlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
-    expect(computeTargetShotIndex(0, overlapParams)).toBe(27);
-    expect(computeTargetShotIndex(1, overlapParams)).toBe(28);
+    expect(computeTargetShotIndex(0, overlapParams)).toBe(7);
+    expect(computeTargetShotIndex(1, overlapParams)).toBe(8);
+    expect(computeTargetShotIndex(2, overlapParams)).toBe(9);
   });
 
-  it('import_data mode: target shots 27,28 get import values', () => {
-    const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
-    const shouldReverse = needsDirectionReversal(importStationIndex, direction);
-    const overlapParams: OverlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
-
-    const modifiedTarget = targetShots.map(s => ({ ...s }));
-    let modified = false;
-
-    for (const overlapId of allOverlap) {
-      const importShot = importShots.find(s => s.id === overlapId);
-      if (!importShot) continue;
-
-      const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
-      if (targetShotIdx < 0 || targetShotIdx >= modifiedTarget.length) continue;
-
-      const targetShot = modifiedTarget[targetShotIdx]!;
-      const importAsTarget: TargetShotLike = shouldReverse
-        ? reverseTargetShot(importShot)
-        : importShot;
-
-      modifiedTarget[targetShotIdx] = applyTargetData(targetShot, importAsTarget);
-      modified = true;
-    }
+  it('import_data mode: target shots 7..9 get import values', () => {
+    const { modifiedTarget, modified, shouldReverse } = foldOverlap(applyTargetData);
 
     expect(modified).toBe(true);
     expect(shouldReverse).toBe(false);
 
-    // Target shot 27 should now have import shot 0's values
-    expect(modifiedTarget[27]!.azimuth_in).toBe(229.9);
-    expect(modifiedTarget[27]!.length).toBe(5.21);
-    expect(modifiedTarget[27]!.depth_in).toBe(9.55);
-
-    // Target shot 28 should now have import shot 1's values
-    expect(modifiedTarget[28]!.azimuth_in).toBe(204.2);
-    expect(modifiedTarget[28]!.length).toBe(8.84);
+    // Target shot 7 + k now carries import shot k's values
+    importOverlap.forEach((values, k) => {
+      const shot = modifiedTarget[existingStationIndex + k]!;
+      expect(shot.azimuth_in).toBe(values.azimuth_in);
+      expect(shot.length).toBe(values.length);
+      expect(shot.depth_in).toBe(values.depth_in);
+    });
 
     // Non-overlap target shots should be unchanged
-    expect(modifiedTarget[26]!.azimuth_in).toBe(targetShots[26]!.azimuth_in);
-    expect(modifiedTarget[29]!.azimuth_in).toBe(targetShots[29]!.azimuth_in);
+    expect(modifiedTarget[6]!.azimuth_in).toBe(targetShots[6]!.azimuth_in);
+    expect(modifiedTarget[10]!.azimuth_in).toBe(targetShots[10]!.azimuth_in);
   });
 
-  it('interpolate mode: target shots 27,28 get averaged values', () => {
-    const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
-    const shouldReverse = needsDirectionReversal(importStationIndex, direction);
-    const overlapParams: OverlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
-
-    const modifiedTarget = targetShots.map(s => ({ ...s }));
-    let modified = false;
-
-    for (const overlapId of allOverlap) {
-      const importShot = importShots.find(s => s.id === overlapId);
-      if (!importShot) continue;
-
-      const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
-      if (targetShotIdx < 0 || targetShotIdx >= modifiedTarget.length) continue;
-
-      const targetShot = modifiedTarget[targetShotIdx]!;
-      const importAsTarget: TargetShotLike = shouldReverse
-        ? reverseTargetShot(importShot)
-        : importShot;
-
-      modifiedTarget[targetShotIdx] = interpolateShots(targetShot, importAsTarget);
-      modified = true;
-    }
+  it('interpolate mode: target shots 7..9 get averaged values', () => {
+    const { modifiedTarget, modified } = foldOverlap(interpolateShots);
 
     expect(modified).toBe(true);
 
-    // Target shot 27: average of (232.1, 5.35) and (229.9, 5.21)
-    expect(modifiedTarget[27]!.length).toBeCloseTo((5.35 + 5.21) / 2, 5);
-
-    // Target shot 28: average of (194.7, 9.22) and (204.2, 8.84)
-    expect(modifiedTarget[28]!.length).toBeCloseTo((9.22 + 8.84) / 2, 5);
+    // Target shot 7 + k: the average of its own length and import shot k's
+    importOverlap.forEach((values, k) => {
+      const own = targetOverlap[k]!;
+      expect(modifiedTarget[existingStationIndex + k]!.length).toBeCloseTo((own.length + values.length) / 2, 5);
+    });
 
     // Non-overlap target shots should be unchanged
-    expect(modifiedTarget[26]!.length).toBe(targetShots[26]!.length);
+    expect(modifiedTarget[6]!.length).toBe(targetShots[6]!.length);
+    expect(modifiedTarget[10]!.length).toBe(targetShots[10]!.length);
   });
 
-  it('import overlap shots 0,1 properly marked deleted', () => {
+  it('import overlap shots 0..2 properly marked deleted', () => {
     const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
 
     const deletedImport = importShots.map(shot =>
@@ -1870,9 +1865,32 @@ describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () 
 
     expect(deletedImport[0]!.isDeleted).toBe(true);
     expect(deletedImport[1]!.isDeleted).toBe(true);
-    expect(deletedImport[2]!.isDeleted).toBeFalsy();
+    expect(deletedImport[2]!.isDeleted).toBe(true);
+    expect(deletedImport[3]!.isDeleted).toBeFalsy();
 
     const filtered = deletedImport.filter(s => !s.isDeleted);
-    expect(filtered).toHaveLength(27);
+    expect(filtered).toHaveLength(6);
+  });
+});
+
+// #576 D12: the offset a suggestion opens with, shared by both placement dialogs.
+describe('defaultMergeOffset', () => {
+  const options = [0, 1, 2, 3].map((offset) => ({ offset, importStation: offset, existingStation: 2 + offset }));
+
+  it('opens on the preferred offset when it is on offer', () => {
+    expect(defaultMergeOffset(options, 1)).toBe(1);
+  });
+
+  it('falls back to the deepest overlap when nothing is preferred', () => {
+    expect(defaultMergeOffset(options, null)).toBe(3);
+    expect(defaultMergeOffset(options, undefined)).toBe(3);
+  });
+
+  it('falls back to the deepest overlap when the preferred offset is not on offer', () => {
+    expect(defaultMergeOffset(options, 7)).toBe(3);
+  });
+
+  it('has nothing to open with when there is no option', () => {
+    expect(defaultMergeOffset([], 1)).toBeNull();
   });
 });

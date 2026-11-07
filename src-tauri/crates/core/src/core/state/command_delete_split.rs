@@ -1,3 +1,4 @@
+use super::command_epilogue::EpilogueSteps;
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
@@ -35,12 +36,10 @@ impl AppState {
         name_b: String,
     ) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Delete shot and split section") {
-            return f;
+            return CommandResult::refused(f);
         }
         tracing::info!(
             section_id,
@@ -65,9 +64,7 @@ impl AppState {
 
         // Step 2: Get split data and perform the operation
         let new_section_id = {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
+            let mut proj_guard = self.project.lock();
 
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
@@ -161,6 +158,7 @@ impl AppState {
             };
             section_mut.name = Some(name_a);
             section_mut.shots.truncate(pos); // keep shots[0..pos], drop deleted + after
+            project.reindex_section_shot_uuids(section_id);
 
             // Step 4: Calculate offset for section B
             // Walk shots_before + deleted shot to accumulate (bx, by)
@@ -251,30 +249,16 @@ impl AppState {
                  refs than were captured in old_refs - traversal order diverged"
             );
 
-            // The split can strand a section so its only attachment is a loop
-            // closure - that is a merge, not a loop. Convert it now (issue #8)
-            // so it's fixed immediately, not only on the next reload.
-            project.convert_orphan_closures_to_merges();
-
             project.touch();
             new_id
         };
 
-        // This custom path bypasses execute()'s reconcile; re-derive offsets here
-        // (after the orphan-closure conversion above) and before the after-snapshot
-        // so undo/redo and the saved file reflect the normalized topology. The
-        // frame check runs first, in the same order as execute()'s epilogue.
-        self.renormalize_frame_if_changed(frame_before);
-        self.reconcile_geometry();
-
-        // Step 7: Take AFTER snapshot
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
-        // Step 8: Push single undo entry with ProjectSnapshotPair
-        // Use a Batch with both DeleteShot + CreateSection to accurately describe the compound op
+        // Step 7: [#576 A4] The shared forward epilogue - the split can strand a
+        // section so its only attachment is a loop closure, which is a merge (#8),
+        // and the delete can promote a datum - settled before the AFTER snapshot so
+        // undo/redo and the saved file reflect the normalized topology.
+        // Step 8: one undo entry with ProjectSnapshotPair, described as a Batch of
+        // DeleteShot + CreateSection.
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::DeleteShot {
@@ -291,11 +275,11 @@ impl AppState {
                 },
             ],
         };
-
-        self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
-        // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
-        // Set-only; no-op for local-only.
-        self.mark_remote_forward_edit();
+        if let Err(failure) =
+            self.record_snapshot_edit(frame_before, EpilogueSteps::ALL, batch_cmd, before_snapshot)
+        {
+            return failure;
+        }
 
         tracing::info!(
             section_id,
@@ -324,12 +308,10 @@ impl AppState {
         name_a: String,
         name_b: String,
     ) -> CommandResult {
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Delete shot range and split section") {
-            return f;
+            return CommandResult::refused(f);
         }
         tracing::info!(
             section_id,
@@ -348,9 +330,7 @@ impl AppState {
         let undo_section_b_name = name_b.clone();
 
         let new_section_id = {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
+            let mut proj_guard = self.project.lock();
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
@@ -460,6 +440,7 @@ impl AppState {
             };
             section_mut.name = Some(name_a);
             section_mut.shots.truncate(start_pos);
+            project.reindex_section_shot_uuids(section_id);
 
             // Section B offset = section offset + displacement of (before ++ deleted).
             let mut bx: f64 = 0.0;
@@ -522,20 +503,12 @@ impl AppState {
                  than were captured in old_refs - traversal order diverged"
             );
 
-            project.convert_orphan_closures_to_merges();
             project.touch();
             new_id
         };
 
-        // Custom path bypasses execute()'s reconcile; re-derive offsets here.
-        self.renormalize_frame_if_changed(frame_before);
-        self.reconcile_geometry();
-
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
+        // [#576 A4] The shared forward epilogue (orphan conversion, frame, reconcile)
+        // before the after-snapshot, then the record.
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::DeleteShot {
@@ -552,10 +525,11 @@ impl AppState {
                 },
             ],
         };
-        self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
-        // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
-        // Set-only; no-op for local-only.
-        self.mark_remote_forward_edit();
+        if let Err(failure) =
+            self.record_snapshot_edit(frame_before, EpilogueSteps::ALL, batch_cmd, before_snapshot)
+        {
+            return failure;
+        }
 
         tracing::info!(
             section_id,
@@ -608,12 +582,10 @@ impl AppState {
         start_shot_id: ShotId,
         end_shot_id: ShotId,
     ) -> CommandResult {
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Delete shot range and shift") {
-            return f;
+            return CommandResult::refused(f);
         }
         tracing::info!(
             section_id,
@@ -632,9 +604,7 @@ impl AppState {
         let frame_before = self.frame_datum_key();
 
         let result_section = {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
+            let mut proj_guard = self.project.lock();
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
@@ -714,6 +684,14 @@ impl AppState {
                 .iter()
                 .filter_map(|&i| project.key_for_ref(StationRef::new(section_id, i)))
                 .collect();
+            // Their comment keys, legacy ones included, taken while they still
+            // resolve (#576 RV19a-19): the per-shot delete drops only each
+            // station's canonical key.
+            let doomed_stations: Vec<StationRef> = doomed_indices
+                .iter()
+                .map(|&i| StationRef::new(section_id, i))
+                .collect();
+            let comment_keys = Self::comment_keys_naming(project, &doomed_stations);
 
             for &sid in &range_shot_ids {
                 if let Err(e) = project.remove_shot_with_rewire_excluding_anchors(
@@ -726,6 +704,9 @@ impl AppState {
                     let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                     return CommandResult::failure(e);
                 }
+            }
+            for key in &comment_keys {
+                project.station_comments.remove(key);
             }
             // Single cascade now that every range shot (and any doomed merge) is
             // gone, so a doomed station's intermediate shift never propagates into
@@ -777,14 +758,9 @@ impl AppState {
             section_id
         };
 
-        self.renormalize_frame_if_changed(frame_before);
-        self.reconcile_geometry();
-
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
+        // [#576 A4] The shared forward epilogue. Its orphan pass finds nothing here
+        // (each per-shot removal above already converted), and runs anyway: one
+        // rule for every delete entry point.
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::DeleteShot {
@@ -797,10 +773,11 @@ impl AppState {
                 },
             ],
         };
-        self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
-        // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
-        // Set-only; no-op for local-only.
-        self.mark_remote_forward_edit();
+        if let Err(failure) =
+            self.record_snapshot_edit(frame_before, EpilogueSteps::ALL, batch_cmd, before_snapshot)
+        {
+            return failure;
+        }
 
         tracing::info!(
             section_id,
@@ -820,12 +797,10 @@ impl AppState {
         shot_id: ShotId,
     ) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Delete last shot and section") {
-            return f;
+            return CommandResult::refused(f);
         }
         tracing::info!(
             section_id,
@@ -849,9 +824,7 @@ impl AppState {
         // whole call, so no other command can observe or interleave with the window
         // between this scope and the after-snapshot below.
         {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
+            let mut proj_guard = self.project.lock();
 
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
@@ -923,32 +896,6 @@ impl AppState {
                 ));
             }
 
-            // Step 5: Enforce the closures-are-loops invariant, like the two split
-            // siblings do (`execute_delete_shot_and_split`,
-            // `execute_delete_shot_range_split`) and like `execute()`'s epilogue does
-            // for every `can_orphan_closures` command. A loop closure exists only for
-            // a TRUE loop; removing the section that carried the loop's other path
-            // leaves the closure as the sole connection, which is a merge. Every
-            // delete entry point converts its orphans here so memory and disk agree
-            // and the loader's unconditional pass (`redrive_offsets_after_load`)
-            // is a no-op safety net rather than a silent reclassification on reopen
-            // (issue #413 finding 10).
-            //
-            // Undo restores this delete from its `ProjectSnapshotPair`, which
-            // legitimately puts the PRE-conversion state back: the closure existed
-            // as a true loop before the delete, so restoring it as a closure is the
-            // correct inverse, not a missed conversion.
-            let Some(project) = proj_guard.as_mut() else {
-                // Project became None -- restore.
-                tracing::error!(
-                    purpose = "restore after mutation failure",
-                    "Project became None after mutation; rolling back"
-                );
-                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
-                return CommandResult::failure("No project after mutation".to_string());
-            };
-            project.convert_orphan_closures_to_merges();
-
             tracing::info!(
                 section_id,
                 shot_id,
@@ -957,21 +904,16 @@ impl AppState {
             );
         }
 
-        // This custom path bypasses execute()'s epilogue; re-derive offsets here
-        // (after the orphan-closure conversion above) so a closure that just became
-        // a rigid merge is solved immediately, and before the after-snapshot so
-        // undo/redo and the saved file reflect the normalized topology. The frame
-        // check runs first, in the same order as execute()'s epilogue.
-        self.renormalize_frame_if_changed(frame_before);
-        self.reconcile_geometry();
-
-        // Step 6: Take the AFTER snapshot.
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
-        // Step 7: Push single undo entry with ProjectSnapshotPair
+        // Step 5: [#576 A4] The shared forward epilogue, before the AFTER snapshot.
+        // Its orphan conversion enforces the closures-are-loops invariant: removing
+        // the section that carried a loop's other path leaves the closure as the sole
+        // connection, which is a merge, and every delete entry point converts its
+        // orphans so memory and disk agree and the loader's unconditional pass
+        // (`redrive_offsets_after_load`) is a no-op safety net rather than a silent
+        // reclassification on reopen (issue #413 finding 10). Undo restores this
+        // delete from its `ProjectSnapshotPair`, which legitimately puts the
+        // PRE-conversion state back: the closure was a true loop before the delete.
+        // Then one undo entry with ProjectSnapshotPair.
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::DeleteShot {
@@ -981,11 +923,11 @@ impl AppState {
                 Command::DeleteSection { section_id },
             ],
         };
-
-        self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
-        // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
-        // Set-only; no-op for local-only.
-        self.mark_remote_forward_edit();
+        if let Err(failure) =
+            self.record_snapshot_edit(frame_before, EpilogueSteps::ALL, batch_cmd, before_snapshot)
+        {
+            return failure;
+        }
 
         CommandResult::success()
     }

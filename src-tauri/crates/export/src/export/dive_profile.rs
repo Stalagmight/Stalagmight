@@ -206,15 +206,23 @@ fn mmss(minutes: f64) -> String {
     format!("{}:{:02}", total / 60, total % 60)
 }
 
-/// One decimal, and never `-0.0` - a station a hair above the datum would otherwise export a
-/// negative depth, which some importers reject outright.
-fn depth_str(depth_m: f64) -> String {
-    let d = if depth_m.is_finite() && depth_m > 0.0 {
+/// The depth a document states for a route point: a station above the datum is AT the surface, and
+/// so is one with no usable depth. The gas engine already reads it that way (`physics::ata` uses
+/// `max(depth, 0)`), and BOTH formats go through this, so the slate and the Subsurface file of one
+/// plan cannot disagree - the slate used to print `-5.0` (and `-0.0` for a hair above) where the
+/// XML said `0.0 m` (#576 B27(c)).
+fn surface_clamped(depth_m: f64) -> f64 {
+    if depth_m.is_finite() && depth_m > 0.0 {
         depth_m
     } else {
         0.0
-    };
-    format!("{d:.1} m")
+    }
+}
+
+/// One decimal, and never `-0.0` - a station a hair above the datum would otherwise export a
+/// negative depth, which some importers reject outright.
+fn depth_str(depth_m: f64) -> String {
+    format!("{:.1} m", surface_clamped(depth_m))
 }
 
 fn max_depth(points: &[RouteProfilePoint]) -> f64 {
@@ -349,6 +357,7 @@ fn render_plain_text(
         GasUnits::Imperial => ("ft", "feet", "cuft", "cubic feet"),
     };
     let len = |metres: f64| length(metres, units);
+    let depth = |metres: f64| length(surface_clamped(metres), units);
     let vol = |litres: f64| volume(litres, units);
     // Litres are whole numbers; cubic feet are one to two orders smaller, so the same `{:.0}` would
     // round a 600 L turn volume to "21" and a small stage to "0".
@@ -388,7 +397,7 @@ fn render_plain_text(
                 "Stage {} drop: {:.0} {unit} in, {:.1} {unit} deep, {} runtime{flag}",
                 i + 1,
                 len(p.distance_m),
-                len(p.depth_m),
+                depth(p.depth_m),
                 mmss(p.elapsed_min)
             ));
         }
@@ -397,7 +406,7 @@ fn render_plain_text(
         notes.push(format!(
             "Turn: {:.0} {unit} in, {:.1} {unit} deep, {} runtime, {:.*} {gas_unit} used",
             len(turn.distance_m),
-            len(turn.depth_m),
+            depth(turn.depth_m),
             mmss(turn.elapsed_min),
             gas_dp,
             vol(turn.gas_l)
@@ -435,7 +444,7 @@ fn render_plain_text(
             out,
             "{:10.1} {:10.1} {:>10} {:11.*}  {leg}",
             len(p.distance_m),
-            len(p.depth_m),
+            depth(p.depth_m),
             mmss(p.elapsed_min),
             gas_dp,
             vol(p.gas_l)
@@ -771,6 +780,58 @@ mod tests {
         assert_eq!(depth_str(-5.0), "0.0 m");
         assert_eq!(depth_str(f64::NAN), "0.0 m");
         assert_eq!(depth_str(12.34), "12.3 m");
+    }
+
+    #[test]
+    fn the_text_slate_never_prints_a_negative_depth_either() {
+        // #576 B27(c): a station above the datum (or a hair above it) has a negative z. The XML
+        // already clamps it to the surface, and the gas engine already treats it as the surface
+        // (`physics::ata` uses max(depth, 0)); the slate printed it raw - `-5.0` in one file and
+        // `0.0 m` in the other for the same plan, and `-0.0` for a hair above.
+        let mut f = field();
+        f.route_profile[1].depth_m = -0.04;
+        f.route_profile[2].depth_m = -5.0;
+        f.route_profile[3].depth_m = f64::NAN;
+        f.stage_drop_route_indices = vec![1];
+        f.stage_drop_over_reserve = vec![false];
+        for units in [GasUnits::Metric, GasUnits::Imperial] {
+            let ctx = ProfileContext {
+                project_name: "CaveA",
+                units,
+                endpoint: None,
+            };
+            let text = render_dive_profile(&f, ProfileFormat::PlainText, &ctx).unwrap();
+            let rows: Vec<&str> = text
+                .lines()
+                .filter(|l| l.ends_with("  in") || l.ends_with("  out") || l.ends_with("  turn"))
+                .collect();
+            assert_eq!(rows.len(), 5, "{units:?}:\n{text}");
+            // Second column of every table row is the depth.
+            let depths: Vec<&str> = rows
+                .iter()
+                .map(|r| r.split_whitespace().nth(1).unwrap())
+                .collect();
+            assert_eq!(
+                depths,
+                ["0.0", "0.0", "0.0", "0.0", "0.0"],
+                "{units:?}:\n{text}"
+            );
+            let unit = if units == GasUnits::Metric { "m" } else { "ft" };
+            let stage = format!(
+                "Stage 1 drop: {:.0} {unit} in, 0.0 {unit} deep",
+                length(100.0, units)
+            );
+            let turn = format!(
+                "Turn: {:.0} {unit} in, 0.0 {unit} deep",
+                length(200.0, units)
+            );
+            assert!(text.contains(&stage), "{units:?}: no `{stage}` in\n{text}");
+            assert!(text.contains(&turn), "{units:?}: no `{turn}` in\n{text}");
+            assert!(
+                !text.contains("-0.0") && !text.contains("NaN"),
+                "{units:?}:\n{text}"
+            );
+        }
     }
 
     #[test]

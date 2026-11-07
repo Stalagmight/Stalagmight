@@ -18,10 +18,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-}));
+vi.mock('../../utils/telemetry', async () => (await import('../../test/factories/telemetry')).telemetryWith());
 
 import SectionAdjustDialog from './SectionAdjustDialog';
 import { useProjectStore } from '../../store/projectStore';
@@ -99,5 +96,19 @@ describe('SectionAdjustDialog negative / partial input (#161)', () => {
 
     fireEvent.change(dx, { target: { value: '-2e3' } }); // 'e' fails /^-?\d*\.?\d*$/
     expect(dx).toHaveValue('-2'); // rejected → field unchanged
+  });
+});
+
+// #576 D20: "Adjusting: <name>" is a <Trans> template now (`Adjusting:
+// <blob>{{name}}</blob>`). A section name that looks like markup must render as
+// typed inside the section pill, not be parsed as a tag of the template.
+describe('SectionAdjustDialog section name', () => {
+  it('renders a name that looks like markup as typed', async () => {
+    useProjectStore.setState({
+      project: { sections: [{ id: SECTION_ID, name: 'Main <A> & </blob>B' }] } as unknown as Project,
+    });
+    render(<SectionAdjustDialog />);
+    const pill = await screen.findByText('Main <A> & </blob>B');
+    expect(pill.parentElement?.textContent).toBe('Adjusting: Main <A> & </blob>B');
   });
 });

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { useUIStore } from '../../store/uiStore';
 import { classifyDeleteRun, isEndRun } from './editSectionDeletes';
 import { useProjectStore } from '../../store/projectStore';
@@ -16,15 +17,37 @@ import { EDITABLE_AZIMUTH_AVG_KEY } from '../common/editableShotColumns';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import type { Section, Shot, ShotData, ShotId } from '../../types/project';
 import type { DeleteShotImpact } from '../../types/commands';
+import type { ShotUpdates } from '../../types/ipc/ShotUpdates';
+import { changedShotFields } from '../../utils/shotUpdatesDiff';
 import { defaultConfig } from '../../types/config';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function EditSectionDialog() {
   const { t } = useTranslation();
-  const { closeDialog, dialogData, openDialog, showToast } = useUIStore();
-  const { updateSection, createShot, updateShot, deleteShot, project, isShotFrozen } = useProjectStore();
+  const { closeDialog, dialogData, openDialog, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      dialogData: s.dialogData,
+      openDialog: s.openDialog,
+      showToast: s.showToast,
+    })),
+  );
+  // `frozenShots` is picked but not destructured: isShotFrozen reads it through
+  // get(), so a change to the frozen set must still re-render this dialog.
+  const { updateSection, createShot, updateShot, deleteShot, project, isShotFrozen } = useProjectStore(
+    useShallow((s) => ({
+      updateSection: s.updateSection,
+      createShot: s.createShot,
+      updateShot: s.updateShot,
+      deleteShot: s.deleteShot,
+      project: s.project,
+      isShotFrozen: s.isShotFrozen,
+      frozenShots: s.frozenShots,
+    })),
+  );
 
   const sectionId = dialogData.sectionId as number | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);
@@ -294,14 +317,15 @@ export default function EditSectionDialog() {
 
   useEffect(() => {
     if (pendingMidDelete && sectionId !== undefined) {
-      invokeIpc<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId: pendingMidDelete.shotId }, { purpose: 'preview mid-shot deletion impact' })
+      invokeIpc('preview_delete_shot', { sectionId, shotId: pendingMidDelete.shotId }, { purpose: 'preview mid-shot deletion impact' })
         .then((result) => {
           setPendingImpact(result);
           setPendingImpactError(null);
         })
         .catch((e) => {
           setPendingImpact(null);
-          setPendingImpactError(getErrorMessage(e, 'Failed to load shot impacts'));
+          // i18n.t, not the hook's t: this IPC effect must not re-fetch on a language change.
+          setPendingImpactError(getErrorMessage(e, i18n.t('editSection.loadImpactsFailed')));
         });
     } else {
       setPendingImpact(null);
@@ -336,14 +360,14 @@ export default function EditSectionDialog() {
 
   const confirmSplitMidDelete = useCallback(() => {
     if (!pendingMidDelete || sectionId === undefined) return;
-    const targetName = section?.name ?? `Section ${sectionId}`;
+    const targetName = section?.name ?? t('editSection.sectionFallback', { id: sectionId });
     setSource('dialog');
     openDialog('split-section', {
       sectionId,
       shotId: pendingMidDelete.shotId,
       sectionName: targetName,
     });
-  }, [pendingMidDelete, sectionId, section, openDialog]);
+  }, [pendingMidDelete, sectionId, section, openDialog, t]);
 
   const handleSave = async () => {
     if (sectionId === undefined) return;
@@ -363,7 +387,7 @@ export default function EditSectionDialog() {
       });
 
       if (!sectionResult.success) {
-        setError(sectionResult.error ?? 'Failed to update section');
+        setError(sectionResult.error ?? t('editSection.updateSectionFailed'));
         return;
       }
 
@@ -375,7 +399,7 @@ export default function EditSectionDialog() {
       for (const shot of deletedShots.reverse()) {
         const result = await deleteShot(sectionId, shot.id);
         if (!result.success) {
-          setError(result.error ?? 'Failed to delete shot');
+          setError(result.error ?? t('editSection.deleteShotFailed'));
           return;
         }
       }
@@ -384,25 +408,9 @@ export default function EditSectionDialog() {
       for (const shot of shots.filter(s => !s.isNew && !s.isDeleted)) {
         const original = originalShots.find(o => o.id === shot.id);
         if (original && hasChanges(original, shot)) {
-          const result = await updateShot(sectionId, shot.id, {
-            azimuth_in: shot.azimuth_in,
-            azimuth_out: shot.azimuth_out,
-            length: shot.length,
-            depth_in: shot.depth_in,
-            depth_out: shot.depth_out,
-            pitch_in: shot.pitch_in,
-            pitch_out: shot.pitch_out,
-            left: shot.left,
-            right: shot.right,
-            up: shot.up,
-            down: shot.down,
-            comment: shot.comment,
-            kind: shot.kind ?? 'Normal',
-            marker_index: original.marker_index ?? null,
-            temperature: original.temperature ?? null,
-          });
+          const result = await updateShot(sectionId, shot.id, editedShotUpdates(original, shot));
           if (!result.success) {
-            setError(result.error ?? 'Failed to update shot');
+            setError(result.error ?? t('editSection.updateShotFailed'));
             return;
           }
         }
@@ -430,7 +438,7 @@ export default function EditSectionDialog() {
         };
         const result = await createShot(sectionId, shotData, undefined, beforeShotId);
         if (!result.success) {
-          setError(result.error ?? 'Failed to create shot');
+          setError(result.error ?? t('editSection.createShotFailed'));
           return;
         }
       }
@@ -438,7 +446,7 @@ export default function EditSectionDialog() {
       trackDialogComplete('edit-section');
       closeDialog();
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to update section'));
+      setError(getErrorMessage(e, t('editSection.updateSectionFailed')));
     } finally {
       setIsLoading(false);
     }
@@ -596,7 +604,7 @@ export default function EditSectionDialog() {
                 ? t('editSection.editingDisabled')
                 : isDirty
                   ? t('editSection.saveOrDiscardFirst')
-                  : 'Renumber this section end-to-end (the cave does not move)'
+                  : t('editSection.reverseTitle')
             }
             data-testid="edit-section-reverse"
           >
@@ -710,20 +718,34 @@ export function isEditSectionDirty(state: EditSectionDirtyState, section: Sectio
   );
 }
 
+/**
+ * [#576 F32-EDIT] The update for one edited row: only the fields that differ from
+ * the saved shot. The store holds every reading rounded through an f32 (the binary
+ * envelope), so re-sending an untouched field would write that rounding over the
+ * backend's exact value. Marker index and temperature have no column here and are
+ * never sent.
+ */
+export function editedShotUpdates(original: Shot, current: EditableShot): Partial<ShotUpdates> {
+  // [#576 NF-W7F-1] Compared in f32: a cell re-typed to the reading it already
+  // showed (1.20 over 1.2) is not an edit.
+  return changedShotFields(original, {
+    azimuth_in: current.azimuth_in,
+    azimuth_out: current.azimuth_out,
+    length: current.length,
+    depth_in: current.depth_in,
+    depth_out: current.depth_out,
+    pitch_in: current.pitch_in,
+    pitch_out: current.pitch_out,
+    left: current.left,
+    right: current.right,
+    up: current.up,
+    down: current.down,
+    comment: current.comment,
+    kind: current.kind ?? 'Normal',
+  }, 'f32');
+}
+
+/** Whether Save would send an update for this row (the dirty check and Save agree). */
 function hasChanges(original: Shot, current: EditableShot): boolean {
-  return (
-    original.azimuth_in !== current.azimuth_in ||
-    original.azimuth_out !== current.azimuth_out ||
-    original.length !== current.length ||
-    original.depth_in !== current.depth_in ||
-    original.depth_out !== current.depth_out ||
-    original.pitch_in !== current.pitch_in ||
-    original.pitch_out !== current.pitch_out ||
-    original.left !== current.left ||
-    original.right !== current.right ||
-    original.up !== current.up ||
-    original.down !== current.down ||
-    original.comment !== current.comment ||
-    original.kind !== current.kind
-  );
+  return Object.keys(editedShotUpdates(original, current)).length > 0;
 }

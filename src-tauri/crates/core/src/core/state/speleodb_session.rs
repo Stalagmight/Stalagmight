@@ -111,6 +111,15 @@ pub(super) struct LockClaim {
     /// the lock again is a new decision, and the next release is the ordinary
     /// one.
     kept: bool,
+    /// [#576 RV4-R-S3] Whether this claim records a lock the held-lock prompt's
+    /// "Continue editing" RESUMED rather than one this process acquired.
+    ///
+    /// A resumed claim licenses the release (Done hands the lock back, decision
+    /// RV2-R-13-RESTART) but NOT the authorship shortcut (#576 B32): the prompt
+    /// lists every lock the account holds at sign-in, so resuming one can happen
+    /// on a second computer while the first is still editing under it, and that
+    /// session must not explain the first one's commits away as its own push.
+    resumed: bool,
 }
 
 impl LockClaim {
@@ -125,7 +134,22 @@ impl LockClaim {
             endpoint,
             email,
             kept: false,
+            resumed: false,
         }
+    }
+
+    /// This claim, marked as a lock "Continue editing" resumed (see
+    /// [`LockClaim::resumed`]).
+    pub(super) fn into_resumed(self) -> Self {
+        Self {
+            resumed: true,
+            ..self
+        }
+    }
+
+    /// Whether this claim records a resumed lock (see [`LockClaim::resumed`]).
+    pub(super) fn is_resumed(&self) -> bool {
+        self.resumed
     }
 
     /// Whether this lock is deliberately held back (see [`LockClaim::kept`]).
@@ -173,6 +197,174 @@ impl LockClaim {
     }
 }
 
+/// [#576 A8 RV8a-5] The lock-ops span's proof and its one producer, apart: nothing
+/// outside this module can build a [`LockOpsHeld`] from a guard of its own.
+///
+/// [#576 RV10a-3] The borrow is proven by the suite, not by a captured compile
+/// error: the doctest below compiles THIS module (the file is `include!`d, over a
+/// stand-in `AppState`) and must fail to compile, because it ends the span while
+/// a value read in it is still in use (E0505). It never names the lifetime, so
+/// taking `'s` off [`InSpan`] - or tying `read_account`'s value to anything but
+/// the span's borrow - makes it compile, and the suite fails. The twin after it
+/// is the same code in the allowed order, and must compile and run: a broken
+/// stand-in or include path fails there, so the first cannot pass vacuously.
+///
+/// ```compile_fail
+/// # // The REAL module below (`include!`), over a stand-in `AppState` that has
+/// # // only what the module reads. Paths mirror the crate's, so its
+/// # // `pub(in crate::core::state)` items resolve as they do there.
+/// # mod speleodb {
+/// #     #[derive(Debug)]
+/// #     pub struct SpeleoDbError;
+/// # }
+/// # mod core {
+/// # pub mod state {
+/// #     pub struct AppState {
+/// #         speleodb_lock_ops: Ops,
+/// #     }
+/// #     struct Ops(std::sync::Mutex<()>);
+/// #     impl Ops {
+/// #         fn lock(&self) -> std::sync::MutexGuard<'_, ()> {
+/// #             self.0.lock().unwrap()
+/// #         }
+/// #     }
+/// #     impl AppState {
+/// #         pub fn stand_in() -> Self {
+/// #             Self { speleodb_lock_ops: Ops(std::sync::Mutex::new(())) }
+/// #         }
+/// #         fn speleodb_active_token(
+/// #             &self,
+/// #         ) -> Result<(String, String), crate::speleodb::SpeleoDbError> {
+/// #             Ok(("https://speleodb.example".into(), "token".into()))
+/// #         }
+/// #         fn speleodb_lock_holder_checked(
+/// #             &self,
+/// #             _: &str,
+/// #             _: &str,
+/// #             _: bool,
+/// #             _: &str,
+/// #         ) -> Result<Option<String>, crate::speleodb::SpeleoDbError> {
+/// #             Ok(None)
+/// #         }
+/// #     }
+/// #     pub mod speleodb_session {
+/// #         use super::AppState;
+/// #         mod lock_ops_span {
+/// #             include!("speleodb_session/lock_ops_span.rs");
+/// #         }
+/// #         pub fn one_span(state: &AppState) {
+/// let span = state.speleodb_lock_ops_guard();
+/// let account = span.read_account();
+/// drop(span); // ends the span while `account` is alive
+/// assert!(account.get().is_ok());
+/// #         }
+/// #     }
+/// # }
+/// # }
+/// # fn main() {
+/// #     crate::core::state::speleodb_session::one_span(&crate::core::state::AppState::stand_in());
+/// # }
+/// ```
+///
+/// ```
+/// # // The REAL module below (`include!`), over a stand-in `AppState` that has
+/// # // only what the module reads. Paths mirror the crate's, so its
+/// # // `pub(in crate::core::state)` items resolve as they do there.
+/// # mod speleodb {
+/// #     #[derive(Debug)]
+/// #     pub struct SpeleoDbError;
+/// # }
+/// # mod core {
+/// # pub mod state {
+/// #     pub struct AppState {
+/// #         speleodb_lock_ops: Ops,
+/// #     }
+/// #     struct Ops(std::sync::Mutex<()>);
+/// #     impl Ops {
+/// #         fn lock(&self) -> std::sync::MutexGuard<'_, ()> {
+/// #             self.0.lock().unwrap()
+/// #         }
+/// #     }
+/// #     impl AppState {
+/// #         pub fn stand_in() -> Self {
+/// #             Self { speleodb_lock_ops: Ops(std::sync::Mutex::new(())) }
+/// #         }
+/// #         fn speleodb_active_token(
+/// #             &self,
+/// #         ) -> Result<(String, String), crate::speleodb::SpeleoDbError> {
+/// #             Ok(("https://speleodb.example".into(), "token".into()))
+/// #         }
+/// #         fn speleodb_lock_holder_checked(
+/// #             &self,
+/// #             _: &str,
+/// #             _: &str,
+/// #             _: bool,
+/// #             _: &str,
+/// #         ) -> Result<Option<String>, crate::speleodb::SpeleoDbError> {
+/// #             Ok(None)
+/// #         }
+/// #     }
+/// #     pub mod speleodb_session {
+/// #         use super::AppState;
+/// #         mod lock_ops_span {
+/// #             include!("speleodb_session/lock_ops_span.rs");
+/// #         }
+/// #         pub fn one_span(state: &AppState) {
+/// let span = state.speleodb_lock_ops_guard();
+/// let account = span.read_account();
+/// assert!(account.get().is_ok());
+/// drop(span);
+/// #         }
+/// #     }
+/// # }
+/// # }
+/// # fn main() {
+/// #     crate::core::state::speleodb_session::one_span(&crate::core::state::AppState::stand_in());
+/// # }
+/// ```
+mod lock_ops_span;
+
+pub(super) use lock_ops_span::{InSpan, LockOpsHeld};
+
+/// [#576 A8 NF-A8-BYPASS] Why a reclaim-checked release may be decided where it is:
+/// [`AppState::speleodb_release_unless_reclaimed_locked`] takes one. The deferred
+/// release's is the stand-down's [`stand_down::StoodDown`]; the releases with no gate of
+/// their own to shut (the session-moved unwind, a captured release, the janitor) each
+/// hold a function-local marker no other flow can name. Implementing it anywhere else
+/// is the bypass it exists to stop.
+pub(super) trait ReclaimRelease {}
+
+/// [#576 A8] A deferred release's stand-down as a type: the gate closes BEFORE the
+/// reclaim decision, inside one lock-ops span, because the decision takes the proof
+/// only the stand-down makes.
+mod stand_down {
+    use super::{AppState, LockOpsHeld, ReclaimRelease};
+
+    /// Proof the releasing session has been stood down from the lock.
+    pub(super) struct StoodDown {
+        _gate_shut: (),
+    }
+
+    impl ReclaimRelease for StoodDown {}
+
+    impl AppState {
+        /// Shut the gate for the session that decided the release - if it is still
+        /// the session on screen (`entry_gen` unchanged); a successor's gate is not
+        /// this release's to touch. Under `project`, inside the caller's span.
+        pub(super) fn speleodb_stand_down(
+            &self,
+            _lock_ops: &LockOpsHeld<'_>,
+            entry_gen: u64,
+        ) -> StoodDown {
+            let _proj_guard = self.project.lock();
+            if self.speleodb_session_generation() == entry_gen {
+                self.set_edit_enabled(false);
+            }
+            StoodDown { _gate_shut: () }
+        }
+    }
+}
+
 impl AppState {
     /// Record a session boundary. Call ONLY while holding the `project` mutex
     /// (rule 1 above); every call site takes a `_proj_guard`-shaped local or
@@ -187,19 +379,64 @@ impl AppState {
         self.speleodb_session_generation.load(Ordering::SeqCst)
     }
 
+    /// [#576 RV4-R-S1] Record that a Done finished editing the open project HERE
+    /// and left the account's lock held elsewhere, for this session generation
+    /// only (see `AppState::speleodb_finished_here`).
+    pub(super) fn speleodb_mark_finished_here(&self) {
+        let generation = self.speleodb_session_generation();
+        self.speleodb_finished_here
+            .store(generation.wrapping_add(1), Ordering::SeqCst);
+    }
+
+    /// Whether a Done finished editing the open project here in the CURRENT
+    /// session generation - the inherited-lock reopen must then leave the gate shut.
+    pub(super) fn speleodb_finished_here(&self) -> bool {
+        let generation = self.speleodb_session_generation();
+        self.speleodb_finished_here.load(Ordering::SeqCst) == generation.wrapping_add(1)
+    }
+
+    /// [#576 NF-W4C-3-EDIT] Shut the edit gate for an Ariane adoption's hand-over,
+    /// in the current session generation (see `AppState::speleodb_adoption_gate`).
+    /// Called inside the adoption's `command_lock` span, so no edit can land between
+    /// the span and the gate.
+    pub(super) fn speleodb_shut_gate_for_adoption(&self) {
+        let generation = self.speleodb_session_generation();
+        self.speleodb_adoption_gate
+            .store(generation.wrapping_add(1), Ordering::SeqCst);
+    }
+
+    /// Whether an adoption's hand-over holds the edit gate shut in the current
+    /// session generation.
+    pub(super) fn speleodb_adoption_holds_gate(&self) -> bool {
+        let generation = self.speleodb_session_generation();
+        self.speleodb_adoption_gate.load(Ordering::SeqCst) == generation.wrapping_add(1)
+    }
+
+    /// Lift the adoption's hold on the edit gate: the adoption has returned.
+    pub(super) fn speleodb_open_gate_after_adoption(&self) {
+        self.speleodb_adoption_gate.store(0, Ordering::SeqCst);
+    }
+
+    /// Drop the "finished here" mark: an explicit Start editing is the user asking
+    /// to edit here again.
+    pub(super) fn speleodb_clear_finished_here(&self) {
+        self.speleodb_finished_here.store(0, Ordering::SeqCst);
+    }
+
     /// The generation and the open project's validated link, read together
     /// under the `project` mutex so they describe ONE world. Start Editing's
     /// entry point: capturing them separately is D6 from the abandoned attempt
     /// (a teardown between the two reads pairs the old world's generation with
     /// the new world's link, and the eventual refusal then unwinds the lock of
     /// the project the user actually has open).
+    ///
+    /// [#576 A8] Inside the lock-ops span, by its proof: every fact Start Editing
+    /// decides on is read after the span opens.
     pub(super) fn speleodb_session_snapshot(
         &self,
+        _lock_ops: &LockOpsHeld<'_>,
     ) -> Result<(u64, crate::models::SpeleoLink), SpeleoErrorDto> {
-        let _proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _proj_guard = self.project.lock();
         let generation = self.speleodb_session_generation();
         let link = self.speleodb_open_link().map_err(local_dto)?;
         super::speleodb::validate_project_id(&link.project_id).map_err(local_dto)?;
@@ -242,16 +479,24 @@ impl AppState {
     /// world set it, and no record is minted. The caller decides what to do
     /// with the server lock it acquired - see
     /// [`AppState::speleodb_unwind_release`].
+    ///
+    /// [#576 A8] Takes the span's proof: "Start Editing holds `speleodb_lock_ops` from
+    /// before its first read through this commit" - and the update fast-forward's
+    /// restore with it - is the type's, so a commit outside the span does not compile.
     pub(super) fn speleodb_commit_editing(
         &self,
+        _lock_ops: &LockOpsHeld<'_>,
         entry_generation: Option<u64>,
         project_id: &str,
         acquired_here: bool,
     ) -> Result<(), SpeleoDbError> {
-        let _proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // [#576 NF-W4C-2] `command_lock` first (it sits below `speleodb_lock_ops`,
+        // which every caller holds, and above `project`): the commit's link write
+        // (the re-verify stamp below) must not land inside an autosave, which copies
+        // the link at its start and renames a fresh file over the live one. No
+        // caller holds `command_lock` here, and nothing below makes a network call.
+        let _commands = self.hold_commands();
+        let _proj_guard = self.project.lock();
         if let Some(expected) = entry_generation {
             if self.speleodb_session_generation() != expected {
                 return Err(SpeleoDbError::SessionMoved);
@@ -328,9 +573,7 @@ impl AppState {
         let Ok(link) = self.speleodb_open_link() else {
             return;
         };
-        let Ok(mut session) = self.speleodb_session_lock() else {
-            return;
-        };
+        let mut session = self.speleodb.lock();
         if !self.edit_enabled() {
             // The OPEN project's claim, held by the account signed in now, and
             // nothing else. The gate is one fact about one project: this
@@ -361,6 +604,7 @@ impl AppState {
     /// self-deadlock.
     pub(super) fn speleodb_unwind_release(
         &self,
+        lock_ops: &LockOpsHeld<'_>,
         endpoint: &str,
         token: &str,
         insecure_http: bool,
@@ -371,13 +615,19 @@ impl AppState {
             self.speleodb_release_best_effort(endpoint, token, insecure_http, project_id);
             return;
         }
+        /// [#576 A8 NF-A8-BYPASS] This unwind's reclaim licence: the session moved, so
+        /// the gate is the successor's, not this release's to shut.
+        struct SessionMovedUnwind;
+        impl ReclaimRelease for SessionMovedUnwind {}
         let params = LockReleaseParams {
             endpoint: endpoint.to_owned(),
             token: token.to_owned(),
             insecure_http,
             project_id: project_id.to_owned(),
         };
-        if let Err(e) = self.speleodb_release_unless_reclaimed_locked(&params) {
+        if let Err(e) =
+            self.speleodb_release_unless_reclaimed_locked(lock_ops, &SessionMovedUnwind, &params)
+        {
             tracing::warn!(
                 error = %e,
                 project_id,
@@ -401,11 +651,12 @@ impl AppState {
         &self,
         params: &LockReleaseParams,
     ) -> Result<(), SpeleoDbError> {
-        let _lock_ops = self
-            .speleodb_lock_ops
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.speleodb_release_unless_reclaimed_locked(params)
+        /// [#576 A8 NF-A8-BYPASS] A captured release's reclaim licence: its session
+        /// is gone (closed or deleted), so there is no gate of its own to shut.
+        struct CapturedRelease;
+        impl ReclaimRelease for CapturedRelease {}
+        let lock_ops = self.speleodb_lock_ops_guard();
+        self.speleodb_release_unless_reclaimed_locked(&lock_ops, &CapturedRelease, params)
     }
 
     /// The status poll's inherited-lock gate reopen: enable editing on the open
@@ -445,7 +696,13 @@ impl AppState {
         // between, so this went on to confirm the PREVIOUS account's lock with
         // the previous account's token and opened the edit gate for the new one -
         // free to mutate a project whose mutex their credentials do not hold.
-        let _lock_ops = self.speleodb_lock_ops_guard();
+        let lock_ops = self.speleodb_lock_ops_guard();
+        // [#576 RV4-R-S1] A Done finished editing here and left the lock with the
+        // account: that session is over, whatever the server says about the
+        // account's lock. Only a new open or an explicit Start editing resumes it.
+        if self.speleodb_finished_here() {
+            return false;
+        }
         // One read, so the holder comparison below cannot pair one account's
         // endpoint with another's email (`speleodb_active_account`).
         let Ok((endpoint, token, me)) = self.speleodb_active_account() else {
@@ -472,8 +729,82 @@ impl AppState {
         if !super::speleodb::lock_held_by_me(holder.as_deref(), Some(me.as_str())) {
             return false;
         }
-        self.speleodb_commit_editing(None, &link.project_id, false)
+        self.speleodb_commit_editing(&lock_ops, None, &link.project_id, false)
             .is_ok()
+    }
+
+    /// [#576 B35(e)-D2] The other half of the poll's gate rule: CLOSE the edit gate
+    /// when the server says the lock this session is editing under is gone or held
+    /// by another account. The poll used to only ever open the gate, so a session
+    /// whose lock had been freed and taken by a colleague kept editing - for up to
+    /// the 20-minute re-verify window - edits that could not be uploaded without
+    /// taking the lock again.
+    ///
+    /// Decided exactly like [`Self::speleodb_reopen_gate_for_inherited_lock`]: the
+    /// poll's own `get_project` is one read among several and only decides whether
+    /// to ASK, so the holder is read again inside the lock-ops span and the gate
+    /// closes in that same span. A read that fails, or finds the lock ours again,
+    /// leaves the session alone - "cannot say" must not end an edit session either.
+    ///
+    /// Un-pushed edits are untouched (the dirty bit is the work); the user re-enters
+    /// through Start editing, which takes the lock properly and fences the copy.
+    pub(super) fn speleodb_close_gate_for_lost_lock(&self, link: &crate::models::SpeleoLink) {
+        // Guard first, for the reason the reopen above gives: a login or logout
+        // must not land between the account read and the gate.
+        let _lock_ops = self.speleodb_lock_ops_guard();
+        let Ok((endpoint, token, me)) = self.speleodb_active_account() else {
+            return;
+        };
+        let insecure_http = self.speleodb_insecure_http();
+        match self.speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &link.project_id)
+        {
+            Ok(holder) if !super::speleodb::lock_held_by_me(holder.as_deref(), Some(&me)) => {
+                if self.speleodb_shut_gate_over_lost_lock(&link.project_id) {
+                    tracing::info!(
+                        project_id = %link.project_id,
+                        holder = ?holder,
+                        purpose = "stop editing under a lock this session no longer holds",
+                        "speleodb: the write lock is gone or held by another account; \
+                         editing switched off"
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::debug!(
+                error = %e,
+                project_id = %link.project_id,
+                purpose = "confirm the lock is lost before switching editing off",
+                "speleodb: could not re-read the lock holder; leaving the edit session open"
+            ),
+        }
+    }
+
+    /// [#576 B35(e)] Shut the edit gate of a lock-holding session on `project_id`
+    /// because the server says the lock is not ours, and drop this account's claim
+    /// on it. Returns whether it closed anything.
+    ///
+    /// Under the `project` mutex, so the gate, the force-edit flag and the open
+    /// project's identity describe one world: a force-editor holds no lock by
+    /// design and is left alone, and a project that changed underneath the caller
+    /// is not the one whose lock was read. The claim goes with the gate: it records
+    /// a lock this process took and no longer holds, and leaving it would license
+    /// the authorship shortcut over somebody else's commit.
+    pub(super) fn speleodb_shut_gate_over_lost_lock(&self, project_id: &str) -> bool {
+        {
+            let _proj_guard = self.project.lock();
+            if !self.edit_enabled() || self.force_editing() {
+                return false;
+            }
+            if !self
+                .speleodb_open_link()
+                .is_ok_and(|open| open.project_id == project_id)
+            {
+                return false;
+            }
+            self.set_edit_enabled(false);
+        }
+        self.speleodb_forget_lock_acquired_for(project_id);
+        true
     }
 
     /// Whether a LIVE edit session currently accounts for `project_id`'s server
@@ -502,10 +833,7 @@ impl AppState {
         project_id: &str,
         endpoint: &str,
     ) -> bool {
-        let _proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _proj_guard = self.project.lock();
         if !self.edit_enabled() || self.force_editing() {
             return false;
         }
@@ -533,8 +861,15 @@ impl AppState {
     /// there answering for a mutex on a server it has never touched, so the
     /// release was never sent and that server's lock stayed held - over a file
     /// the delete may already have destroyed.
+    ///
+    /// [#576 A8 NF-A8-BYPASS] Takes the proof of why this release may be decided here
+    /// (`_why`, a [`ReclaimRelease`]): the deferred release can only reach it through
+    /// the stand-down's [`stand_down::StoodDown`], so a decision written above the
+    /// gate - or around it - does not compile.
     pub(super) fn speleodb_release_unless_reclaimed_locked(
         &self,
+        _lock_ops: &LockOpsHeld<'_>,
+        _why: &impl ReclaimRelease,
         params: &LockReleaseParams,
     ) -> Result<(), SpeleoDbError> {
         if self.speleodb_claim_on_deployment(&params.endpoint, &params.project_id)
@@ -585,17 +920,11 @@ impl AppState {
         entry_gen: u64,
         claim: Option<LockClaim>,
     ) -> Result<(), SpeleoDbError> {
-        let _lock_ops = self.speleodb_lock_ops_guard();
-        {
-            let _proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if self.speleodb_session_generation() == entry_gen {
-                self.set_edit_enabled(false);
-            }
-        }
-        let outcome = self.speleodb_release_unless_reclaimed_locked(params);
+        let lock_ops = self.speleodb_lock_ops_guard();
+        // [#576 A8] The gate, then the decision - by type: the decision takes the
+        // stand-down's proof.
+        let stood_down = self.speleodb_stand_down(&lock_ops, entry_gen);
+        let outcome = self.speleodb_release_unless_reclaimed_locked(&lock_ops, &stood_down, params);
         if outcome.is_err() {
             // The mutex is still held and now has no local pointer: put the
             // claim back so the no-project janitor can retry it, exactly as the
@@ -615,9 +944,7 @@ impl AppState {
     /// state once the project closes (a claim, no project open), so the next
     /// status poll handed the mutex back and the decision was silently undone.
     pub(super) fn speleodb_keep_lock_deliberately(&self, project_id: &str) {
-        let Ok(mut session) = self.speleodb_session_lock() else {
-            return;
-        };
+        let mut session = self.speleodb.lock();
         let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
         for claim in &mut session.locks_acquired_here {
             if claim.project_id == project_id
@@ -643,9 +970,7 @@ impl AppState {
         let Some(claim) = claim else {
             return;
         };
-        let Ok(mut session) = self.speleodb_session_lock() else {
-            return;
-        };
+        let mut session = self.speleodb.lock();
         if !session
             .locks_acquired_here
             .iter()
@@ -653,15 +978,6 @@ impl AppState {
         {
             session.locks_acquired_here.push(claim);
         }
-    }
-
-    /// The guard Start Editing holds across acquire -> commit (see the module
-    /// doc). A poisoned mutex is recovered: the guarded value is `()`, so there
-    /// is no state to protect - only the serialization matters.
-    pub(super) fn speleodb_lock_ops_guard(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.speleodb_lock_ops
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// The stranded-claim janitor: with NO project open, a surviving
@@ -696,10 +1012,7 @@ impl AppState {
     /// and drop the only pointer to the lock still held on A.
     pub(super) fn speleodb_janitor_stranded_claim(&self) {
         let params = {
-            let proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let proj_guard = self.project.lock();
             if proj_guard.is_some() {
                 return;
             }
@@ -707,9 +1020,7 @@ impl AppState {
                 // Unusable ids first, whoever they belong to: one that can never
                 // be joined into a URL can never be released either, so clearing
                 // is its only safe end and nobody's later sign-in helps.
-                let Ok(mut session) = self.speleodb_session_lock() else {
-                    return;
-                };
+                let mut session = self.speleodb.lock();
                 session.locks_acquired_here.retain(|claim| {
                     super::speleodb::validate_project_id(&claim.project_id).is_ok()
                 });
@@ -739,9 +1050,7 @@ impl AppState {
                 return;
             };
             let me = Some(me);
-            let Ok(mut session) = self.speleodb_session_lock() else {
-                return;
-            };
+            let mut session = self.speleodb.lock();
             // One claim per visit - the poll comes back for the rest.
             let Some(position) = session.locks_acquired_here.iter().position(|claim| {
                 // Deliberately kept locks are not this cleanup's business: the
@@ -785,8 +1094,14 @@ impl AppState {
         // One lock-ops span over release AND restore: a Start Editing cannot
         // mint or inherit between a failed POST and the record going back, so
         // the restore can never overwrite a successor's claim.
-        let _lock_ops = self.speleodb_lock_ops_guard();
-        if let Err(e) = self.speleodb_release_unless_reclaimed_locked(&params) {
+        /// [#576 A8 NF-A8-BYPASS] The janitor's reclaim licence: no project is open, so
+        /// there is no gate to shut.
+        struct StrandedClaim;
+        impl ReclaimRelease for StrandedClaim {}
+        let lock_ops = self.speleodb_lock_ops_guard();
+        if let Err(e) =
+            self.speleodb_release_unless_reclaimed_locked(&lock_ops, &StrandedClaim, &params)
+        {
             tracing::warn!(
                 error = %e,
                 project_id = %params.project_id,
@@ -799,12 +1114,10 @@ impl AppState {
             // decision read: with a project open the field belongs to the live
             // world (its own verbs and catch-alls own it), and this janitor
             // never runs there anyway.
-            let proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let proj_guard = self.project.lock();
             if proj_guard.is_none() {
-                if let Ok(mut session) = self.speleodb_session_lock() {
+                {
+                    let mut session = self.speleodb.lock();
                     // Only if nothing has re-claimed THIS lock meanwhile: a
                     // successor's entry is newer than ours and must stand.
                     // Compared on the full identity - project, deployment AND
@@ -890,7 +1203,7 @@ mod tests {
     /// [`sign_in_unreachable`] for a named account on a named deployment, for
     /// the tests about a claim outliving the account that made it.
     fn sign_in_as(state: &AppState, endpoint: &str, email: &str) {
-        let mut session = state.speleodb_session_lock().expect("session lock");
+        let mut session = state.speleodb.lock();
         session.endpoint = Some(endpoint.to_owned());
         session.email = Some(email.to_owned());
         session.token_store = crate::speleodb::auth::TokenStore::from_in_memory_token("tok");
@@ -905,8 +1218,8 @@ mod tests {
     /// look past to see that it survived.
     fn retained_projects(state: &AppState) -> Vec<String> {
         state
-            .speleodb_session_lock()
-            .expect("session lock")
+            .speleodb
+            .lock()
             .locks_acquired_here
             .iter()
             .map(|claim| claim.project_id.clone())
@@ -916,7 +1229,7 @@ mod tests {
     /// Sign out, WITHOUT touching the claim - what a logout that could not run
     /// its release leaves behind, and the state the janitor is written for.
     fn sign_out(state: &AppState) {
-        let mut session = state.speleodb_session_lock().expect("session lock");
+        let mut session = state.speleodb.lock();
         session.endpoint = None;
         session.email = None;
         session.token_store = crate::speleodb::auth::TokenStore::from_stores(
@@ -971,14 +1284,16 @@ mod tests {
         open_linked(&state, temp.path(), "a.stalx", ID);
 
         let (entry_gen, link) = state
-            .speleodb_session_snapshot()
+            .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
             .expect("a linked open project has a snapshot");
         assert_eq!(entry_gen, state.speleodb_session_generation());
         assert_eq!(link.project_id, ID);
 
         state.close_project();
         assert!(
-            state.speleodb_session_snapshot().is_err(),
+            state
+                .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
+                .is_err(),
             "no open project, no snapshot"
         );
     }
@@ -989,10 +1304,17 @@ mod tests {
         let state = AppState::new().expect("state");
         sign_in_unreachable(&state);
         open_linked(&state, temp.path(), "a.stalx", ID);
-        let (entry_gen, link) = state.speleodb_session_snapshot().expect("snapshot");
+        let (entry_gen, link) = state
+            .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
+            .expect("snapshot");
 
         state
-            .speleodb_commit_editing(Some(entry_gen), &link.project_id, true)
+            .speleodb_commit_editing(
+                &state.speleodb_lock_ops_guard(),
+                Some(entry_gen),
+                &link.project_id,
+                true,
+            )
             .expect("nothing moved, so the commit lands");
 
         assert!(state.edit_enabled(), "the gate is open");
@@ -1013,10 +1335,17 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("temp");
         let state = AppState::new().expect("state");
         open_linked(&state, temp.path(), "a.stalx", ID);
-        let (entry_gen, link) = state.speleodb_session_snapshot().expect("snapshot");
+        let (entry_gen, link) = state
+            .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
+            .expect("snapshot");
 
         state
-            .speleodb_commit_editing(Some(entry_gen), &link.project_id, false)
+            .speleodb_commit_editing(
+                &state.speleodb_lock_ops_guard(),
+                Some(entry_gen),
+                &link.project_id,
+                false,
+            )
             .expect("commit lands");
 
         assert!(state.edit_enabled());
@@ -1031,12 +1360,19 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("temp");
         let state = AppState::new().expect("state");
         open_linked(&state, temp.path(), "a.stalx", ID);
-        let (entry_gen, link) = state.speleodb_session_snapshot().expect("snapshot");
+        let (entry_gen, link) = state
+            .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
+            .expect("snapshot");
 
         state.close_project();
 
         let refused = state
-            .speleodb_commit_editing(Some(entry_gen), &link.project_id, true)
+            .speleodb_commit_editing(
+                &state.speleodb_lock_ops_guard(),
+                Some(entry_gen),
+                &link.project_id,
+                true,
+            )
             .expect_err("the world this flow started from is gone");
         assert!(matches!(refused, SpeleoDbError::SessionMoved));
         assert!(
@@ -1053,13 +1389,20 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("temp");
         let state = AppState::new().expect("state");
         open_linked(&state, temp.path(), "a.stalx", ID);
-        let (entry_gen, link) = state.speleodb_session_snapshot().expect("snapshot");
+        let (entry_gen, link) = state
+            .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
+            .expect("snapshot");
 
         state.close_project();
         open_linked(&state, temp.path(), "b.stalx", ID);
 
         let refused = state
-            .speleodb_commit_editing(Some(entry_gen), &link.project_id, true)
+            .speleodb_commit_editing(
+                &state.speleodb_lock_ops_guard(),
+                Some(entry_gen),
+                &link.project_id,
+                true,
+            )
             .expect_err("a successor session on the same project is not our session");
         assert!(matches!(refused, SpeleoDbError::SessionMoved));
         assert!(!state.edit_enabled(), "the successor's shut gate stands");
@@ -1081,7 +1424,7 @@ mod tests {
         open_linked(&state, temp.path(), "b.stalx", ID);
 
         state
-            .speleodb_commit_editing(None, ID, true)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, true)
             .expect("the open project is still linked to this id");
         assert!(state.edit_enabled());
         assert!(state.speleodb_lock_acquired_here(ID));
@@ -1089,13 +1432,13 @@ mod tests {
         state.close_project();
         open_linked(&state, temp.path(), "c.stalx", OTHER_ID);
         let refused = state
-            .speleodb_commit_editing(None, ID, true)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, true)
             .expect_err("a different project is open");
         assert!(matches!(refused, SpeleoDbError::SessionMoved));
 
         state.close_project();
         let refused = state
-            .speleodb_commit_editing(None, ID, true)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, true)
             .expect_err("no project is open at all");
         assert!(matches!(refused, SpeleoDbError::SessionMoved));
     }
@@ -1109,7 +1452,14 @@ mod tests {
         state.speleodb_note_lock_acquired(Some(ID));
 
         // The POST fails fast (nothing listens); best-effort is the contract.
-        state.speleodb_unwind_release("http://127.0.0.1:1/", "token", true, ID, entry_gen);
+        state.speleodb_unwind_release(
+            &state.speleodb_lock_ops_guard(),
+            "http://127.0.0.1:1/",
+            "token",
+            true,
+            ID,
+            entry_gen,
+        );
 
         assert!(
             !state.speleodb_lock_acquired_here(ID),
@@ -1130,7 +1480,14 @@ mod tests {
         // The successor's claim, minted by ITS Start Editing.
         state.speleodb_note_lock_acquired(Some(ID));
 
-        state.speleodb_unwind_release("http://127.0.0.1:1/", "token", true, ID, entry_gen);
+        state.speleodb_unwind_release(
+            &state.speleodb_lock_ops_guard(),
+            "http://127.0.0.1:1/",
+            "token",
+            true,
+            ID,
+            entry_gen,
+        );
 
         assert!(
             state.speleodb_lock_acquired_here(ID),
@@ -1300,14 +1657,14 @@ mod tests {
 
         // An earlier flow that DID acquire.
         state
-            .speleodb_commit_editing(None, ID, true)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, true)
             .expect("the first flow's commit");
 
         // A later flow that inherits: it opens its span, commits without an
         // acquisition, and must leave the unwind empty.
-        state.speleodb_begin_acquisition_flow();
+        state.speleodb_begin_acquisition_flow(&state.speleodb_lock_ops_guard());
         state
-            .speleodb_commit_editing(None, ID, false)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, false)
             .expect("the inheriting flow's commit");
 
         assert_eq!(
@@ -1368,7 +1725,7 @@ mod tests {
         // deployment.
         open_linked(&state, temp.path(), "a.stalx", ID);
         state
-            .speleodb_commit_editing(None, ID, false)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, false)
             .expect("the successor's commit");
 
         // The captured release is for the same id on ANOTHER deployment.
@@ -1603,7 +1960,7 @@ mod tests {
         let state = AppState::new().expect("state");
         open_linked(&state, temp.path(), "a.stalx", ID);
         state
-            .speleodb_commit_editing(None, ID, false)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, false)
             .expect("the inherited successor's commit");
         assert!(
             !state.speleodb_lock_acquired_here(ID),
@@ -1647,17 +2004,87 @@ mod tests {
         state.close_project();
         open_linked(&state, temp.path(), "b.stalx", OTHER_ID);
         state
-            .speleodb_commit_editing(None, OTHER_ID, false)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, OTHER_ID, false)
             .expect("the other project's session");
         assert!(state.speleodb_release_unless_reclaimed(&params).is_err());
     }
 
     // ---- tripwires -------------------------------------------------------
 
-    /// Read a sibling source file of this module at test time.
+    /// The production region of a sibling source file of this module, read at test
+    /// time and cut by the shared `models::source_scan::prod_region` (#576 A8).
     fn state_source(name: &str) -> String {
         let path = format!("{}/src/core/state/{name}", env!("CARGO_MANIFEST_DIR"));
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"))
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        crate::models::source_scan::prod_region(&src, "fn ").to_owned()
+    }
+
+    /// [#576 NF-W9E1-3] The modules `mod_rs` declares for the production build:
+    /// every top-level `mod <name>;` whose attributes carry no test cfg
+    /// (`cfg(test)`, `cfg(any(test, ..))`, `cfg(all(test, ..))`). A file no
+    /// declaration names is never compiled, so it can write no slot; one declared
+    /// under a test cfg is test code (the shared test dump, the test-fixture module
+    /// whose setters write the slot freely, every `*_tests.rs`).
+    fn production_modules(mod_rs: &str) -> Vec<String> {
+        let mut modules = Vec::new();
+        let mut attrs = String::new();
+        let mut depth = 0usize;
+        for line in mod_rs.lines() {
+            let trimmed = line.trim();
+            if depth > 0 || trimmed.starts_with("#[") {
+                // An attribute, possibly over several lines (`#[expect(\n ..\n)]`).
+                attrs.push_str(trimmed);
+                attrs.push('\n');
+                depth += trimmed.matches('[').count();
+                depth = depth.saturating_sub(trimmed.matches(']').count());
+                continue;
+            }
+            if trimmed.is_empty() || trimmed.starts_with("//") {
+                continue;
+            }
+            let declared = line
+                .strip_prefix("pub ")
+                .or_else(|| line.strip_prefix("pub(super) "))
+                .or_else(|| line.strip_prefix("pub(crate) "))
+                .unwrap_or(line)
+                .strip_prefix("mod ")
+                .and_then(|rest| rest.strip_suffix(';'));
+            if let Some(name) = declared {
+                let test_only = ["cfg(test)", "cfg(any(test", "cfg(all(test"]
+                    .iter()
+                    .any(|gate| attrs.contains(gate));
+                if !test_only {
+                    modules.push(name.trim().to_owned());
+                }
+            }
+            attrs.clear();
+        }
+        modules
+    }
+
+    #[test]
+    fn production_modules_are_the_declarations_without_a_test_cfg() {
+        let mod_rs = "mod app_state;\n\
+             pub mod dive_plan;\n\
+             // a comment between items\n\
+             #[cfg(test)]\n\
+             mod tests;\n\
+             #[cfg(test)]\n\
+             #[expect(\n\
+                 clippy::expect_used,\n\
+                 reason = \"test module\"\n\
+             )]\n\
+             mod sdb_endpoint_tests;\n\
+             #[cfg(any(test, feature = \"test-support\"))]\n\
+             mod tests_support;\n\
+             #[expect(clippy::too_many_lines, reason = \"production\")]\n\
+             mod session_commit;\n\
+             pub use app_state::AppState;\n";
+        assert_eq!(
+            production_modules(mod_rs),
+            ["app_state", "dive_plan", "session_commit"],
+            "test-gated declarations (one-line or multi-line attributes) are left out"
+        );
     }
 
     #[test]
@@ -1666,37 +2093,52 @@ mod tests {
         // inventory is invisible until the missed site re-opens the bug. Every
         // file that commits into or clears the project slot must either bump or
         // be on the classified DO-NOT-BUMP list below.
+        //
+        // [#576 NF-W9E1-3] Over the modules `mod.rs` declares for the production
+        // build, not every `.rs` in the directory: a stray file (a throwaway, a
+        // draft) is never compiled and failed this scan with a slot-write verdict
+        // about code that does not exist.
         let dir = format!("{}/src/core/state", env!("CARGO_MANIFEST_DIR"));
+        let mod_rs = std::fs::read_to_string(format!("{dir}/mod.rs")).expect("read mod.rs");
+        let modules = production_modules(&mod_rs);
+        for known in ["app_state", "session_commit", "speleodb_logout"] {
+            assert!(
+                modules.iter().any(|m| m == known),
+                "RULE (the scan must see the slot writers it classifies): `{known}` is not \
+                 among the production modules read off mod.rs: {modules:?}"
+            );
+        }
         let mut bumping: Vec<String> = Vec::new();
         let mut writing: Vec<String> = Vec::new();
-        for entry in std::fs::read_dir(&dir).expect("read state dir") {
-            let entry = entry.expect("dir entry");
-            let name = entry.file_name().into_string().expect("utf-8 name");
-            // Skip the shared test dump, THIS module (the scan needles appear
-            // in this very test's source), and the test-fixture module: its
-            // AppState setters write the slot freely and legitimately, and its
-            // `any(test, feature = "test-support")` gate (for the root crate's
-            // tests) means the truncation below no longer hides them.
-            if !name.ends_with(".rs")
-                || name == "tests.rs"
-                || name == "speleodb_session.rs"
-                || name == "tests_support.rs"
-            {
+        for module in modules {
+            let name = format!("{module}.rs");
+            // THIS module: the scan needles appear in this very test's source.
+            if name == "speleodb_session.rs" {
                 continue;
             }
-            let src = std::fs::read_to_string(entry.path()).expect("read source");
+            let src = std::fs::read_to_string(format!("{dir}/{name}"))
+                .unwrap_or_else(|e| panic!("read {name}: {e}"));
             // Production code only: this tree keeps test modules at the bottom of
             // the file, so truncating at the first test gate is enough for a
             // tripwire (fixtures write the slot freely and legitimately).
-            let src = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+            let src =
+                &src[..crate::models::source_scan::test_module_start(&src).unwrap_or(src.len())];
             if src.contains("self.bump_speleodb_session()") {
                 bumping.push(name.clone());
             }
-            // The slot-commit spellings in this tree: a load/create commit
-            // (`= Some(project`), the rollback restore (`= Some(restored`), and
-            // the close clear (`*project = None`). Space-prefixed so a
-            // `== Some(project_id)` comparison does not read as an assignment.
-            if src.contains(" = Some(project")
+            // The slot-commit spellings in this tree: the shared project-slot
+            // commit (`slot.set(project)`, #576 A5 - every load, create and close),
+            // a direct load/create commit (`.set(Some(project`), the rollback
+            // restore (`.set(Some(restored`), and a direct close clear
+            // (`.set(None)`) - the slot is a `ProjectSlot` since #576 A9 - plus the
+            // pre-A9 assignment forms. Space-prefixed where a `== Some(project_id)`
+            // comparison could otherwise read as an assignment.
+            if src.contains("slot.set(project)")
+                || src.contains(".set(Some(project")
+                || src.contains(".set(Some(restored")
+                || src.contains(".set(None)")
+                || src.contains("*slot = project")
+                || src.contains(" = Some(project")
                 || src.contains(" = Some(restored")
                 || src.contains("*project = None")
             {
@@ -1706,14 +2148,10 @@ mod tests {
         bumping.sort();
         assert_eq!(
             bumping,
-            vec![
-                "project_create.rs",
-                "project_io.rs",
-                "project_load.rs",
-                "speleodb_logout.rs",
-            ],
-            "the bump-site inventory moved; re-derive the session-boundary \
-             classification in `speleodb_session` before updating this list"
+            vec!["session_commit.rs", "speleodb_logout.rs"],
+            "RULE (sanctioned scan, #576 A8-D2 - every slot writer bumps the session or \
+             is classified exempt): the bump-site inventory moved; re-derive the \
+             session-boundary classification in `speleodb_session` before updating this list"
         );
         // Classified non-bumping slot writers: the rollback restore
         // (`restore_snapshot_into`) is the SAME session by design (footgun 5.7).
@@ -1729,243 +2167,31 @@ mod tests {
         }
     }
 
+    /// The fast-forward arm commits on identity alone, and identity cannot see a logout
+    /// (the project slot never moves). What keeps that sound is the lock-ops span:
+    /// logout is a lock operation like the acquire and the captured releases, so it
+    /// cannot run inside a Start Editing span (round 6).
+    ///
+    /// [#576 A8] guard -> gates -> credential forget, with the guard still held at the
+    /// forget, is the type's job now: both halves take the span's `LockOpsHeld` proof,
+    /// so a gate drop or a forget outside the span does not compile. What stays a
+    /// sanctioned source scan (docs/testing-recipes.md, "Source scans") is the gate
+    /// half's site rules, which no type states.
     #[test]
-    fn start_editing_holds_the_guards_in_the_right_order() {
-        let src = state_source("speleodb.rs");
-        let start = src
-            .find("fn speleodb_start_editing")
-            .expect("start editing is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-        let lock_ops = body
-            .find("self.speleodb_lock_ops_guard()")
-            .expect("the acquire span must be serialized against captured releases");
-        let snapshot = body
-            .find("self.speleodb_session_snapshot()")
-            .expect("entry must snapshot generation + link as one world (D6)");
-        let token = body
-            .find("self.speleodb_active_token()")
-            .expect("the flow resolves a token");
-        let probe = body
-            .find("self.speleodb_lock_holder_checked(")
-            .expect("the pre-acquire holder probe is present");
-        let acquire = body
-            .find("client::acquire_lock(")
-            .expect("the acquire is present");
-        assert!(
-            lock_ops < snapshot && snapshot < token && token < probe && probe < acquire,
-            "order must be: lock-ops guard FIRST, then the session snapshot, the \
-             token, the holder probe, and the acquire. Every fact after the guard \
-             is one another lock operation could invalidate: a probe outside the \
-             span reads provenance a captured release can undo before the acquire \
-             (round 5), and a token read outside it lets a logout leave this flow \
-             committing on behalf of a signed-out session (round 6)"
-        );
-        let flow_begins = body
-            .find("self.speleodb_begin_acquisition_flow()")
-            .expect("the operation must clear the previous one's unwind slot");
-        assert!(
-            lock_ops < flow_begins && flow_begins < acquire,
-            "the unwind slot is reset inside the span and before the acquire, so \
-             an inheriting or aborting flow leaves nothing behind for the \
-             stale-context unwind to release (round 10)"
-        );
-        assert_eq!(
-            body.matches("self.speleodb_commit_editing(").count(),
-            2,
-            "both success arms must commit through the session guard"
-        );
-        assert!(
-            body.contains("self.speleodb_unwind_release("),
-            "the unwind must route through the session-aware release"
-        );
-        assert!(
-            !body.contains("self.set_edit_enabled(true)"),
-            "no arm may open the gate outside the guarded commit"
-        );
-    }
-
-    #[test]
-    fn every_file_backed_installer_finalizes_under_one_project_guard() {
-        // Round 4: the delete's check-and-teardown holds the `project` mutex
-        // and reasons "strictly before the load, or strictly after it". That
-        // argument is only sound while every installer of a file-backed
-        // project commits the slot AND its companion state (database handle,
-        // undo stack, recents) inside one unbroken acquisition - a slot commit
-        // in its own span reopens the torn-middle interleaving where the
-        // delete tears down a half-built session and the loader finishes
-        // building into an empty world. `create_project` is exempt: it
-        // commits a project with no `file_path`, which the delete's identity
-        // check can never match.
-        for (file, func, database_commit, undo_commit) in [
-            (
-                "project_load.rs",
-                "fn open_project",
-                " = Some(db);",
-                "load_from_persisted_with_timestamps(",
-            ),
-            (
-                "project_load.rs",
-                "pub fn do_load_project_full",
-                " = Some(db);",
-                "load_from_persisted_with_timestamps(",
-            ),
-            (
-                "project_create.rs",
-                "fn do_create_project_full",
-                " = db;",
-                ".clear();",
-            ),
-        ] {
-            let src = state_source(file);
-            let start = src
-                .find(func)
-                .unwrap_or_else(|| panic!("{func} is present in {file}"));
-            let body = &src[start..];
-            let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-            let guard = body
-                .find("let mut proj_guard")
-                .unwrap_or_else(|| panic!("{func} takes the project guard by name"));
-            let slot = body
-                .find(" = Some(project")
-                .unwrap_or_else(|| panic!("{func} commits the project slot"));
-            let db_commit = body
-                .find(database_commit)
-                .unwrap_or_else(|| panic!("{func} commits the database handle"));
-            let undo = body
-                .find(undo_commit)
-                .unwrap_or_else(|| panic!("{func} commits the undo stack"));
-            let released = body
-                .find("drop(proj_guard)")
-                .unwrap_or_else(|| panic!("{func} releases the guard explicitly"));
-            assert!(
-                guard < slot && slot < db_commit && db_commit < undo && undo < released,
-                "{func} must commit slot, database and undo history inside one \
-                 project-guard span (guard at {guard}, slot {slot}, database \
-                 {db_commit}, undo {undo}, drop {released})"
-            );
-            assert_eq!(
-                body.matches("drop(proj_guard)").count(),
-                1,
-                "{func}: one release, at the end of the finalization"
-            );
-        }
-    }
-
-    #[test]
-    fn every_deferred_release_is_reclaim_checked() {
-        // Round 10 (P1): the project-switch and app-exit releases run on a
-        // detached thread, which is exactly the delay a successor needs - the
-        // switch is what lets the user reopen that project, and a Start Editing
-        // on it INHERITS the still-held mutex and mints no claim. An unguarded
-        // POST landing afterwards frees the lock under a live edit session. Every
-        // release that can outlive the moment it was decided goes through the
-        // reclaim check; this pins the one that had been left out.
-        let src = state_source("speleodb_lock_release.rs");
-        let src = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
-        let start = src
-            .find("fn speleodb_spawn_lock_release")
-            .expect("the detached release is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-        assert!(
-            body.contains("speleodb_stand_down_and_release(&p, entry_gen, claim)"),
-            "the detached release must go through the stand-down-and-release \
-             span, which is reclaim-checked like the delete's captured release \
-             and the janitor's"
-        );
-        // The raw POST survives only as the no-managed-state fallback.
-        assert_eq!(
-            body.matches("client::release_lock(").count(),
-            1,
-            "the only bare POST left is the fallback for when there is no app \
-             handle to reach managed state through (tests, pre-setup)"
-        );
-        assert!(
-            !body.contains("self.set_edit_enabled("),
-            "the gate transition belongs INSIDE the release's own lock-ops span \
-             (round 12): shutting it here leaves a shut gate over a mutex the \
-             server still says we hold, which is exactly what the status poll's \
-             inherited-lock reopen resurrects"
-        );
-
-        // ...and the span it routes to does all three under one guard.
-        let own = state_source("speleodb_session.rs");
-        let own = &own[..own.find("#[cfg(test)]").unwrap_or(own.len())];
-        let start = own
-            .find("fn speleodb_stand_down_and_release")
-            .expect("the deferred-release span is present");
-        let span = &own[start..];
-        let span = &span[..span.find("\n    }\n").expect("fn body terminates")];
-        let guard = span
-            .find("self.speleodb_lock_ops_guard()")
-            .expect("the span is serialized");
-        let gate = span
-            .find("self.set_edit_enabled(false)")
-            .expect("the span shuts the gate");
-        let decide = span
-            .find("self.speleodb_release_unless_reclaimed_locked(params)")
-            .expect("the span runs the reclaim-checked release");
-        assert!(
-            guard < gate && gate < decide,
-            "order must be: guard, then the gate, then the decision - the poll \
-             must have no moment between the shut gate and the verdict"
-        );
-    }
-
-    #[test]
-    fn logout_takes_the_lock_ops_guard_before_it_ends_the_session() {
-        // The fast-forward arm commits on identity alone, and identity cannot see
-        // a logout (the project slot never moves). What keeps that sound is this
-        // guard: logout is a lock operation like the acquire and the captured
-        // releases, so it cannot run inside a Start Editing span. Drop it here and
-        // the identity-only commit silently goes back to reopening the edit gate
-        // for a signed-out session (round 6).
+    fn the_logout_gate_half_inherits_its_callers_span() {
+        use crate::models::source_scan::fn_body;
         let src = state_source("speleodb_logout.rs");
-        // Production region only, like every other scan in this family - and here
-        // it also keeps the search off the test-only wrapper whose name starts
-        // with the same words.
-        let src = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
-        let start = src
-            .find("fn speleodb_logout(")
-            .expect("the logout verb is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-        let guard = body
-            .find("self.speleodb_lock_ops_guard()")
-            .expect("logout must serialize with every other SpeleoDB lock operation");
-        let gates = body
-            .find("self.speleodb_logout_drop_gates()")
-            .expect("logout drops the gates and releases the lock");
-        let forget = body
-            .find(".forget_reporting()")
-            .expect("logout forgets the credential");
+        let gate_body = fn_body(&src, "fn speleodb_logout_drop_gates<'s>(");
+        let release_body = fn_body(&src, "fn speleodb_logout_release_and_drop_gates(");
         assert!(
-            guard < gates && gates < forget,
-            "the guard has to be taken BEFORE the gates drop and still be held \
-             when the credential goes. Round 6 scoped it to the gate half alone, \
-             which left a Start Editing free to take it the instant that half \
-             returned, read the not-yet-forgotten token, and commit an edit \
-             session for an account this call was in the middle of deleting"
-        );
-        // The gate half must NOT re-take it: the span belongs to the whole verb.
-        let gate_half = src
-            .find("fn speleodb_logout_drop_gates")
-            .expect("the gate-drop half is present");
-        let gate_body = &src[gate_half..];
-        let gate_body = &gate_body[..gate_body.find("\n    }\n").expect("fn body terminates")];
-        assert!(
-            !gate_body.contains("self.speleodb_lock_ops_guard()"),
-            "the gate half must inherit its caller's span, not open a narrower \
-             one of its own (the mutex is not reentrant either)"
+            !gate_body.contains("self.speleodb_lock_ops_guard()")
+                && !release_body.contains("self.speleodb_lock_ops_guard()"),
+            "RULE (lock-ops is not reentrant): the gate half must inherit its caller's \
+             span, not open a narrower one of its own"
         );
         assert!(
             gate_body.contains("self.bump_speleodb_session()"),
-            "logout is still a session boundary"
+            "RULE (logout is a session boundary): the gate half bumps the session"
         );
     }
 
@@ -2024,24 +2250,39 @@ mod tests {
         });
     }
 
+    /// Round 10 (P1): the project-switch and app-exit releases run on a detached
+    /// thread, which is exactly the delay a successor needs - the switch is what lets
+    /// the user reopen that project, and a Start Editing on it INHERITS the still-held
+    /// mutex and mints no claim. An unguarded POST landing afterwards frees the lock
+    /// under a live edit session, so every release that can outlive the moment it was
+    /// decided goes through the reclaim check.
+    ///
+    /// [#576 A8] The stand-down's order (the gate, then the decision, in one span) is
+    /// the type's now (`stand_down::StoodDown`). What stays is a sanctioned site
+    /// inventory (docs/testing-recipes.md "Source scans") of the spawn site itself:
+    /// which release it routes to, that its one raw POST is the no-managed-state
+    /// fallback, and that it leaves the gate to the span - statements about one
+    /// function's calls no type expresses.
     #[test]
-    fn the_delete_clears_its_own_claim_before_the_guard_drops() {
-        let src = state_source("recent_projects.rs");
-        let start = src
-            .find("fn delete_project")
-            .expect("delete_project is present");
-        let body = &src[start..];
-        let forget = body
-            .find("self.speleodb_forget_lock_acquired_for(")
-            .expect("the delete must clear its own claim at snapshot time");
-        let teardown = body
-            .find("self.close_open_project_locked(")
-            .expect("the delete tears the session down");
+    fn the_detached_release_routes_through_the_reclaim_checked_span() {
+        use crate::models::source_scan::fn_body;
+        let src = state_source("speleodb_lock_release.rs");
+        let body = fn_body(&src, "fn speleodb_spawn_lock_release(");
         assert!(
-            forget < teardown,
-            "the claim clear must happen under the same guard as the snapshot, \
-             before the teardown - a later clear cannot tell our record from a \
-             successor's (F8)"
+            body.contains("speleodb_stand_down_and_release(&p, entry_gen, claim)"),
+            "RULE (every deferred release is reclaim-checked): the detached release goes \
+             through the stand-down-and-release span"
+        );
+        assert_eq!(
+            body.matches("client::release_lock(").count(),
+            1,
+            "RULE (every deferred release is reclaim-checked): the only bare POST is the \
+             fallback for when there is no app handle to reach managed state through"
+        );
+        assert!(
+            !body.contains("self.set_edit_enabled("),
+            "RULE (the gate moves inside the release's own span, round 12): shutting it \
+             at the spawn leaves a shut gate over a mutex the server still says we hold"
         );
     }
 }

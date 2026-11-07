@@ -18,8 +18,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc');
 
 import DataTable from '../DataTable';
 import { useProjectStore } from '../../../store/projectStore';
@@ -27,14 +26,8 @@ import { useUIStore } from '../../../store/uiStore';
 import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
 import type { PanelsConfig } from '../../../types/ipc/PanelsConfig';
-
-/** jsdom has no ResizeObserver; DataTable's chrome-offset measurement effect
- *  needs the constructor to exist, but this suite never depends on it firing. */
-class NoopResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
+import { invokeIpcMock } from '../../../test/factories/ipc';
+import { NoopResizeObserver } from '../../../test/factories/dom';
 
 /** A config as an older backend would answer `get_config`: the data-table view
  *  fields simply absent, not empty. `Partial` because the generated
@@ -53,6 +46,8 @@ function legacyConfig(): Config {
 }
 
 beforeEach(() => {
+  // jsdom has no ResizeObserver; DataTable's chrome-offset measurement effect
+  // needs the constructor to exist, but this suite never depends on it firing.
   vi.stubGlobal('ResizeObserver', NoopResizeObserver);
   vi.useFakeTimers();
   invokeIpcMock.mockReset();

@@ -12,9 +12,11 @@ vi.mock('../../../utils/openOrImport', () => ({
 }));
 
 const setProjectActionSourceMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/telemetry', () => ({
-  setProjectActionSource: setProjectActionSourceMock,
-}));
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryStubs({
+    setProjectActionSource: setProjectActionSourceMock,
+  }),
+);
 
 import { openRecentEntry } from '../openRecentEntry';
 

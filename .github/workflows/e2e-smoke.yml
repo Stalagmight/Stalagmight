@@ -37,8 +37,19 @@ jobs:
       # server/port, fixed-path disk write, foreign host:port, or describe.serial.
       # This is the only CI job that runs the Playwright tier on `e2e-playwright/**`
       # changes (`check` path-ignores them), so the gate lives here. See docs/TESTING.md.
+      # Its fixture test runs first, like every sibling gate's (#576 E7).
       - name: Check e2e-playwright parallel-safety
-        run: pnpm lint:e2e-parallel
+        run: |
+          pnpm lint:e2e-parallel:test
+          pnpm lint:e2e-parallel
+      # No unannotated hard sleeps (#576 E14): every page.waitForTimeout needs a
+      # `// settle: <reason>` comment above it (the negative-space waits that a
+      # poll cannot express); everything else waits for its condition. Same
+      # placement reasoning as the step above; sub-second, before the browser.
+      - name: Check e2e-playwright for unannotated sleeps
+        run: |
+          pnpm lint:e2e-no-sleep:test
+          pnpm lint:e2e-no-sleep
       # `check` path-ignores `e2e-playwright/**`, and root `tsconfig.json` includes
       # only `src`, so without this the specs and the IPC mock are type-checked by
       # nothing. This is the job that runs on `e2e-playwright/**` changes, so the
@@ -46,6 +57,21 @@ jobs:
       # only generated replay specs under e2e/agent/replays/ are ungoverned, #466.)
       - name: Typecheck Playwright specs + IPC mock
         run: pnpm typecheck:playwright
+      # The TS file-size ratchet measures e2e-playwright/ too (#576 E8-D2), and
+      # `check` - its other home - path-ignores e2e-playwright/**, so an
+      # e2e-playwright-only PR that grows the frozen IPC mock is gated here.
+      # Pure Node, sub-second; the same full-scope run as in `check`.
+      - name: TS file-size ratchet
+        run: |
+          pnpm lint:ts-file-size:test
+          pnpm lint:ts-file-size
+      # ESLint lints e2e-playwright/ too (#576 D1), and `check` - its other home -
+      # path-ignores e2e-playwright/**, so a spec-only PR is gated here. The same
+      # full-scope run (src, e2e-playwright, e2e) and baseline as in `check`.
+      - name: ESLint (hook rules, ratcheted warnings)
+        run: |
+          pnpm lint:eslint:test
+          pnpm lint:eslint
       # mockContract pins the mock against lib.rs's generate_handler! list. It lives
       # in the vitest suite, which only `check` runs - and `check` path-ignores
       # `e2e-playwright/**`, so a mock-only edit (the exact change most likely to
@@ -54,13 +80,23 @@ jobs:
       # deliberate: this is the copy that closes the gap, so do not delete it.
       - name: Mock IPC contract
         run: pnpm test:mock-contract
-      # The timing instrumentation below decides which tests get cut, so its
-      # arithmetic is pinned by fixture tests (hook attribution, Worker Cleanup
-      # exclusion, failed-run flagging, workflow-command sanitizing). Cheap, and
-      # it fails before the slow browser install. TEMPORARY, with the rest of the
-      # instrumentation.
-      - name: Timing reporter - fixture tests
-        run: pnpm lint:pw-timing:test
+      # Every critical feature in docs/TESTING.md ("Critical features") still has
+      # its named @smoke canary (#576 E5) - an untagged, renamed or skipped
+      # canary fails here, before the browser install. The list lives in docs/,
+      # which this workflow path-ignores, so leak-scan.yml runs the same check
+      # for a docs-only edit to the table.
+      - name: Critical-feature smoke canaries
+        run: |
+          pnpm lint:smoke-features:test
+          pnpm lint:smoke-features
+      # The per-test timing report below is what the @smoke set's time budget is
+      # managed with, so its arithmetic is pinned by fixture tests (hook
+      # attribution, Worker Cleanup exclusion, failed-run flagging,
+      # workflow-command sanitizing). This is the reporter's self-test, not a
+      # time budget: nothing here fails because a test got slow. Cheap, and it
+      # fails before the slow browser install.
+      - name: Timing reporter - self-test
+        run: pnpm test:pw-timing
       # Cache the Chromium browser (~120 MB) so it isn't re-downloaded each run.
       - name: Resolve Playwright version
         id: pw
@@ -77,7 +113,9 @@ jobs:
       - name: Install Playwright system deps (browser restored from cache)
         if: steps.pw-cache.outputs.cache-hit == 'true'
         run: pnpm exec playwright install-deps chromium
-      # TEMPORARY INSTRUMENTATION (remove once the @smoke pare-down lands).
+      # Per-test timing, kept permanently (#576 E5-D3): the @smoke set is held to
+      # a time budget (docs/plans/2026-07-25_smoke-pare-down.md), and this report
+      # is the only per-test cost data CI has to manage it with.
       # CI gives no per-test timing: the `github` reporter prints a line only for
       # tests that failed or flaked, so a green run tells us the suite took ~6.5
       # min but not which tests spent it. A second reporter adds a
@@ -114,7 +152,8 @@ jobs:
             || echo "⏱️ **Smoke timing** - could not parse results (see job log)." >> "$GITHUB_STEP_SUMMARY"
       # Machine-readable backup so the full per-test report can be scraped across
       # several runs (`gh run download <id> -n smoke-timing`). Short retention:
-      # this is transient pare-down data, not a durable debugging artifact.
+      # each run's numbers are superseded by the next, so a week is enough to
+      # compare a handful of runs.
       - name: Upload smoke timing report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

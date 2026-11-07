@@ -15,7 +15,8 @@ import type { Section } from '../../types/project';
 import type { SectionEditState } from '../../utils/batchImportHelpers';
 import type { SkippedSuggestionPlacement } from './DmpNewImportDialog';
 
-export type SegmentPlacementMode = 'suggestion' | 'origin' | 'fromExisting' | 'manual' | 'discard';
+/** One per radio below - a mode with no radio would leave none selected (#576 NF-AN4-N3). */
+export type SegmentPlacementMode = 'suggestion' | 'fromExisting' | 'manual' | 'discard';
 
 export interface SegmentAnchor {
   sectionIndex: number;
@@ -40,6 +41,12 @@ export interface SegmentPlacementModesProps {
   onFromExistingStationChange: (idx: number) => void;
   fromExistingStationCount: number;
   onPlaceOnMap: () => void;
+  /**
+   * [#576 RV10b-2] The id of the line saying why this segment cannot go on the
+   * map, or null when it can. While set, "Place on map" is disabled and that line
+   * is its accessible description: the click could only log a warning.
+   */
+  placeOnMapBlockedBy?: string | null;
 }
 
 export function SegmentPlacementModes({
@@ -60,13 +67,14 @@ export function SegmentPlacementModes({
   onFromExistingStationChange,
   fromExistingStationCount,
   onPlaceOnMap,
+  placeOnMapBlockedBy = null,
 }: SegmentPlacementModesProps) {
   const { t } = useTranslation();
 
   const sectionOptions = (): SelectOption[] =>
     (currentSegment ?? []).map((idx): SelectOption => ({
       value: String(idx),
-      label: sectionEdits.get(idx)?.name ?? dmpSections[idx]?.name ?? `Section ${idx}`,
+      label: sectionEdits.get(idx)?.name ?? dmpSections[idx]?.name ?? t('dialogs.dmpNewImport.sectionFallbackName', { id: idx }),
     }));
 
   const stationOptions = (): SelectOption[] => {
@@ -102,8 +110,11 @@ export function SegmentPlacementModes({
             <div className="text-sm">
               <div className="font-medium">{t('dialogs.dmpNewImport.manualPlacing.suggestion')}</div>
               <div className="text-xs text-text-secondary">
-                → {segmentSkippedSuggestion.suggestion.existingSectionName} stn {segmentSkippedSuggestion.mergeExistingStation}
-                {' · '}{segmentSkippedSuggestion.suggestion.matchedShots} shots matched
+                {t('dialogs.dmpNewImport.manualPlacing.suggestionTarget', {
+                  section: segmentSkippedSuggestion.suggestion.existingSectionName,
+                  station: segmentSkippedSuggestion.mergeExistingStation,
+                })}
+                {' · '}{t('dialogs.dmpNewImport.matchedShots', { count: segmentSkippedSuggestion.suggestion.matchedShots })}
               </div>
             </div>
           </label>
@@ -182,7 +193,7 @@ export function SegmentPlacementModes({
                           { value: '', label: '-' } as SelectOption,
                           ...projectSections.map((s): SelectOption => ({
                             value: String(s.id),
-                            label: s.name ?? `Section ${s.id}`,
+                            label: s.name ?? t('dialogs.dmpNewImport.sectionFallbackName', { id: s.id }),
                           })),
                         ]}
                         className="flex-1"
@@ -300,6 +311,8 @@ export function SegmentPlacementModes({
             variant="primary"
             size="sm"
             onClick={onPlaceOnMap}
+            disabled={placeOnMapBlockedBy !== null}
+            aria-describedby={placeOnMapBlockedBy ?? undefined}
             data-testid="segment-place-on-map-button"
           >
             {t('dialogs.dmpNewImport.manualPlacing.placeOnMap')}

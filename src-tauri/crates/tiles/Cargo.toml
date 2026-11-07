@@ -1,0 +1,31 @@
+[package]
+name = "stalagmight-tiles"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+# Opt into the workspace lint tables (see the workspace root manifest) so the
+# anti-slop policy applies here too.
+[lints]
+workspace = true
+
+# The map-tile engine (#576 C8). Tauri-free: it depends on the core member for
+# the provider registry, the fetch counters and CacheConfig, and on persistence
+# for the on-disk TileCache / TilemapCache.
+[dependencies]
+stalagmight-core = { path = "../core" }
+stalagmight-persistence = { path = "../persistence" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+# The tile fetch. The exact pin (and the `multipart` feature it exists for)
+# is explained on the speleodb member's entry (crates/speleodb).
+ureq = { workspace = true }
+http = { workspace = true }
+image = { workspace = true }
+
+[dev-dependencies]
+# `test-support` compiles TileCache::in_memory / put_granted / expire_for_test,
+# which the engine tests build their caches with.
+stalagmight-persistence = { path = "../persistence", features = ["test-support"] }

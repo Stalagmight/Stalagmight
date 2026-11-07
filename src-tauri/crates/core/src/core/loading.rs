@@ -11,7 +11,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use ts_rs::TS;
 
-use crate::core::events::EventSink;
+use crate::core::events::{self, EventSink, IpcEvent, LoadingProgressEvent};
+use crate::models::CommandErrorCode;
 use crate::persistence::RefusedSchemaObject;
 
 // ============================================================================
@@ -40,26 +41,28 @@ pub struct SpeleoManagedFile {
     pub can_open_remote: bool,
 }
 
-/// Error type for load/create operations with guaranteed valid JSON in Display impl.
-#[derive(Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
+/// Error type for load/create operations.
+///
+/// [#576 C4] No longer an IPC type: the load commands convert it into a
+/// [`crate::core::CommandError`] (`From<LoadError>`), which carries the same code
+/// and payloads. Its `Display` is the plain `message`: the JSON rendering it used
+/// to have existed for a string-typed IPC error the frontend parsed, and inside
+/// another error's message (a SpeleoDB reload failure) it put raw JSON in front of
+/// the user.
+#[derive(Debug, Clone)]
 pub struct LoadError {
-    pub code: String,
+    pub code: CommandErrorCode,
     pub message: String,
     pub details: Option<String>,
-    /// Set only by [`Self::speleodb_managed`]. The manual `Display` fallback
-    /// below drops this payload, which is acceptable: it only runs if
-    /// `serde_json::to_string` fails (it cannot for these fields), and the
-    /// degradation is the generic error UI instead of the managed-file prompt.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Set only by [`Self::speleodb_managed`].
     pub speleodb_managed: Option<SpeleoManagedFile>,
 }
 
 impl LoadError {
     /// Create a new LoadError with the given code and message.
-    pub fn new(code: &str, message: impl Into<String>) -> Self {
+    pub fn new(code: CommandErrorCode, message: impl Into<String>) -> Self {
         Self {
-            code: code.into(),
+            code,
             message: message.into(),
             details: None,
             speleodb_managed: None,
@@ -68,12 +71,12 @@ impl LoadError {
 
     /// Create a new LoadError with details.
     pub fn with_details(
-        code: &str,
+        code: CommandErrorCode,
         message: impl Into<String>,
         details: impl Into<String>,
     ) -> Self {
         Self {
-            code: code.into(),
+            code,
             message: message.into(),
             details: Some(details.into()),
             speleodb_managed: None,
@@ -82,28 +85,31 @@ impl LoadError {
 
     /// Error when a project is already open.
     pub fn already_open() -> Self {
-        Self::new("ALREADY_OPEN", "Project already open")
+        Self::new(CommandErrorCode::AlreadyOpen, "Project already open")
     }
 
     /// Error when the operation was cancelled.
     pub fn cancelled() -> Self {
-        Self::new("CANCELLED", "Operation cancelled")
+        Self::new(CommandErrorCode::Cancelled, "Operation cancelled")
     }
 
     /// Error when a file is not found.
     pub fn not_found(path: &str) -> Self {
-        Self::new("NOT_FOUND", format!("File not found: {path}"))
+        Self::new(
+            CommandErrorCode::NotFound,
+            format!("File not found: {path}"),
+        )
     }
 
     /// Internal error with a message.
     pub fn internal(message: impl Into<String>) -> Self {
-        Self::new("INTERNAL", message)
+        Self::new(CommandErrorCode::InternalError, message)
     }
 
     /// Error when the database file is corrupted.
     /// The `path` is stored in `details` so the frontend can offer recovery options.
     pub fn corrupt(message: impl Into<String>, path: &str) -> Self {
-        Self::with_details("CORRUPT", message, path)
+        Self::with_details(CommandErrorCode::Corrupt, message, path)
     }
 
     /// The open was refused because the file's database schema holds something
@@ -112,7 +118,7 @@ impl LoadError {
     /// could run its own commands if opened (#608). `path` rides in `details`.
     pub fn unsafe_file(refused: &RefusedSchemaObject, path: &str) -> Self {
         Self::with_details(
-            "UNSAFE_FILE",
+            CommandErrorCode::UnsafeFile,
             format!(
                 "This file was not opened: it contains {} named \"{}\". Stalagmight \
                  never creates these, so the file was changed by another program, and \
@@ -129,7 +135,7 @@ impl LoadError {
     /// forgot a previously-granted folder permission after an OS/app update.
     /// The `path` rides in `details` so the frontend can name the file.
     pub fn permission(message: impl Into<String>, path: &str) -> Self {
-        Self::with_details("PERMISSION", message, path)
+        Self::with_details(CommandErrorCode::FsPermissionDenied, message, path)
     }
 
     /// The open was refused: this file is a non-canonical copy of a SpeleoDB
@@ -137,7 +143,7 @@ impl LoadError {
     /// prompt instead of a dead-end error.
     pub fn speleodb_managed(managed: SpeleoManagedFile) -> Self {
         let mut err = Self::new(
-            "SPELEODB_MANAGED",
+            CommandErrorCode::SpeleodbManaged,
             format!(
                 "\"{}\" is managed by SpeleoDB (project \"{}\")",
                 managed.path, managed.project_name
@@ -147,37 +153,6 @@ impl LoadError {
         err
     }
 }
-
-/// Prefix stamped onto a save `CommandResult` error when the failure is a
-/// filesystem permission denial, so the frontend can show folder-access
-/// guidance instead of a misleading "corrupted"/raw-OS message.
-pub const PERMISSION_DENIED_CODE: &str = "FS_PERMISSION_DENIED";
-
-/// Prefix stamped onto a save `CommandResult` error when the destination is not
-/// reachable at all - the folder was deleted or renamed, or the drive it lives
-/// on is not connected. Distinct from [`PERMISSION_DENIED_CODE`] because the two
-/// have no remediation in common: no amount of granting folder access brings
-/// back a `Z:` that is not plugged in (#429).
-pub const PATH_NOT_FOUND_CODE: &str = "FS_PATH_NOT_FOUND";
-
-/// Prefix stamped onto a save `CommandResult` error when the destination path is
-/// longer than the OS will open. SQLite's win32 VFS opens files through a plain
-/// `CreateFileW` bounded by `MAX_PATH`, while Rust's own std calls go through
-/// `\\?\` verbatim paths and are not - so an over-long destination fails to open
-/// while its parent directory stats perfectly fine, which is exactly the shape
-/// that used to be answered with macOS Privacy & Security steps (#429).
-pub const PATH_TOO_LONG_CODE: &str = "FS_PATH_TOO_LONG";
-
-/// Prefix stamped onto a save `CommandResult` error when the project's ignore
-/// list could not be read, so the save was refused rather than rebuilding the
-/// file without it (#517).
-///
-/// It needs a marker of its own because the frontend's failure router
-/// (`surfaceSaveFailure`) sends any UNMARKED failure to Review & Repair
-/// whenever `integritySaveBlocked` is set - and Review & Repair cannot fix a
-/// broken `resolved_warnings` table, so on a project with both problems this
-/// refusal would never reach a surface at all.
-pub const IGNORES_UNREADABLE_CODE: &str = "IGNORES_UNREADABLE";
 
 /// How much of an underlying error may be quoted into a user-facing message.
 ///
@@ -314,52 +289,9 @@ pub(crate) fn error_chain(err: &anyhow::Error) -> String {
         .join(" <- ")
 }
 
-/// Escape a string for JSON, handling quotes, backslashes, and control characters.
-fn escape_json_string(s: &str) -> String {
-    let mut escaped = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            c if c.is_control() => {
-                // Escape other control characters as \uXXXX
-                use std::fmt::Write as _;
-                let _ = write!(escaped, "\\u{:04x}", c as u32);
-            }
-            c => escaped.push(c),
-        }
-    }
-    escaped
-}
-
 impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // ALWAYS produce valid JSON - use serde_json with fallback
-        if let Ok(json) = serde_json::to_string(self) {
-            write!(f, "{json}")
-        } else {
-            // Fallback: manually construct valid JSON with fully escaped strings
-            let escaped_code = escape_json_string(&self.code);
-            let escaped_msg = escape_json_string(&self.message);
-            match &self.details {
-                Some(details) => {
-                    let escaped_details = escape_json_string(details);
-                    write!(
-                        f,
-                        r#"{{"code":"{escaped_code}","message":"{escaped_msg}","details":"{escaped_details}"}}"#
-                    )
-                }
-                None => {
-                    write!(
-                        f,
-                        r#"{{"code":"{escaped_code}","message":"{escaped_msg}","details":null}}"#
-                    )
-                }
-            }
-        }
+        f.write_str(&self.message)
     }
 }
 
@@ -576,6 +508,7 @@ impl LoadingPhase {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct LoadingProgress {
+    #[ts(type = "number")]
     pub loading_id: u64,
     pub phase: LoadingPhase,
     pub phase_index: u8,
@@ -688,10 +621,10 @@ impl ProgressEmitter {
         Self::new(sink, weights, cancelled)
     }
 
-    /// Create a new emitter for survey-file import operations (TML, Compass)
-    /// with 4 phases summing to 100%. Import doesn't support cancellation today,
-    /// so this uses a dummy token.
-    pub fn new_for_import(sink: Arc<dyn EventSink>) -> Self {
+    /// Create a new emitter for survey-file import operations (Ariane, Compass,
+    /// Walls, GPX) with 4 phases summing to 100%. `cancelled` is the import's
+    /// active-load token (#576 NF-FIX3A-2): the runner checks it between phases.
+    pub fn new_for_import(sink: Arc<dyn EventSink>, cancelled: Arc<AtomicBool>) -> Self {
         let weights = vec![
             (LoadingPhase::ImportParsing, 15.0),
             (LoadingPhase::ImportConverting, 20.0),
@@ -702,8 +635,7 @@ impl ProgressEmitter {
             (weights.iter().map(|(_, w)| w).sum::<f32>() - 100.0).abs() < 0.01,
             "Import phase weights must sum to 100"
         );
-        let dummy_cancelled = Arc::new(AtomicBool::new(false));
-        Self::new(sink, weights, dummy_cancelled)
+        Self::new(sink, weights, cancelled)
     }
 
     /// Create a new emitter for export operations (4 phases summing to 100%).
@@ -829,8 +761,8 @@ impl ProgressEmitter {
             is_indeterminate,
         };
 
-        match serde_json::to_value(&progress) {
-            Ok(payload) => self.sink.emit("loading-progress", payload),
+        match events::payload::<LoadingProgressEvent>(&progress) {
+            Ok(payload) => self.sink.emit(LoadingProgressEvent::NAME, payload),
             Err(e) => tracing::warn!(
                 error = %e,
                 purpose = "report loading progress to UI",
@@ -872,6 +804,7 @@ impl ProgressEmitter {
 #[ts(rename_all = "camelCase")]
 pub struct LoadProjectFullResult {
     /// Unique ID for this load operation (for filtering stale events)
+    #[ts(type = "number")]
     pub loading_id: u64,
     /// The loaded project. Serialized in positional wire form (like
     /// `ProjectState`) so cross-references reach the frontend as
@@ -893,6 +826,70 @@ pub struct LoadProjectFullResult {
     /// synchronously with the load instead of waiting on a `speleodb_link_status`
     /// round trip that arrives after the project has already rendered (#270).
     pub is_remote: bool,
+    /// [#576 B6-D1] The file's schema version when a NEWER Stalagmight saved it -
+    /// the SAME value this load committed as `AppState::newer_file_schema`, which
+    /// opens the project read-only - else `None`. Handed to the frontend so its
+    /// read-only gate and banner settle with the load, exactly as `is_remote`.
+    ///
+    /// Carried on the binary envelope (`load_binary::encode`), which is what the
+    /// frontend loads through, AND on the JSON `load_project_full` (#576 P-NEWER
+    /// open question 1): that command is registered too, and without the field
+    /// it handed a client such a project with nothing saying it is read-only.
+    /// Either way the backend refuses every edit and save of such a project; the
+    /// flag only decides what the UI presents.
+    pub newer_schema_version: Option<i32>,
+    /// [#576 B35(b) review] The file carries a `speleo_link` table whose row could
+    /// not be read. The project opened as a local one (`is_remote` false), but
+    /// every save that would rewrite this file is refused, because the rebuilt file
+    /// would lose the row; the frontend says so as soon as the project opens rather
+    /// than at the first failed save. Binary envelope only, so the generated
+    /// binding does not carry it.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub speleo_link_unreadable: bool,
+    /// [#576 B15] The stored per-project settings this load could not read
+    /// (`validation`, `surface_elevation`, `default_azimuth_reference`) - the SAME
+    /// list this load committed as `AppState::unreadable_project_settings`, which
+    /// refuses every save. The project opened with defaults in their place; the
+    /// frontend names them so the user knows why saving is off. Binary envelope
+    /// only, so the generated binding does not carry it.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub unreadable_project_settings: Vec<String>,
+    /// [#576 B35(h)] What this load reset or dropped because it could not use it
+    /// (non-finite shot values, section and station offsets, GPS tie points), per
+    /// kind. The next save makes the reset permanent, so the frontend shows one
+    /// notice after the open. Binary envelope only.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub load_repairs: crate::persistence::LoadRepairs,
+}
+
+// ============================================================================
+// OpenFileFlags
+// ============================================================================
+
+/// [#576 NF-W2F-1] The open-time flags that describe the open project's FILE, as
+/// they stand now. The same values a load hands the frontend
+/// ([`LoadProjectFullResult::newer_schema_version`] /
+/// [`LoadProjectFullResult::speleo_link_unreadable`] /
+/// [`LoadProjectFullResult::unreadable_project_settings`]), re-asked after a SpeleoDB
+/// in-place tree swap (revision View/Restore, fast-forward, take remote): the
+/// backend reloads the swapped file, but the frontend does not go through
+/// `loadProject` there, so without this its read-only banner and gate kept
+/// describing the previous bytes until the next open.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct OpenFileFlags {
+    /// The file's schema version when a newer Stalagmight saved it, else `None`.
+    pub newer_schema_version: Option<i32>,
+    /// The file carries a `speleo_link` table whose row cannot be read.
+    pub speleo_link_unreadable: bool,
+    /// [#576 RV4-R-S5] The stored project settings the open could not read
+    /// ([`LoadProjectFullResult::unreadable_project_settings`]): each refuses
+    /// every save until set again. Empty when they were all read.
+    pub unreadable_project_settings: Vec<String>,
 }
 
 // ============================================================================
@@ -906,6 +903,7 @@ pub struct LoadProjectFullResult {
 #[ts(rename_all = "camelCase")]
 pub struct CreateProjectFullResult {
     /// Unique ID for this load operation (for filtering stale events)
+    #[ts(type = "number")]
     pub loading_id: u64,
     /// The created project. Serialized in positional wire form (see
     /// `LoadProjectFullResult`); harmless for a fresh project (no cross-refs yet),
@@ -925,50 +923,46 @@ pub struct CreateProjectFullResult {
 mod tests {
     use super::*;
 
+    /// [#576 C4] `Display` is the message as written: quotes and control
+    /// characters pass through, and neither the code nor a JSON wrapper is added
+    /// (a SpeleoDB reload failure quotes it inside its own message).
     #[test]
-    fn test_load_error_display_produces_valid_json() {
-        let error = LoadError::new("TEST_ERROR", "Test message");
-        let display = error.to_string();
-
-        // Should be valid JSON
-        let parsed: serde_json::Value =
-            serde_json::from_str(&display).expect("Display should produce valid JSON");
-        assert_eq!(parsed["code"], "TEST_ERROR");
-        assert_eq!(parsed["message"], "Test message");
-    }
-
-    #[test]
-    fn test_load_error_display_escapes_quotes() {
-        let error = LoadError::new("TEST", r#"Message with "quotes""#);
-        let display = error.to_string();
-
-        // Should be valid JSON even with quotes in message
-        let parsed: serde_json::Value =
-            serde_json::from_str(&display).expect("Display should produce valid JSON");
-        assert_eq!(parsed["message"], r#"Message with "quotes""#);
-    }
-
-    #[test]
-    fn test_load_error_display_escapes_control_chars() {
-        let error = LoadError::new("TEST", "Line1\nLine2\tTabbed");
-        let display = error.to_string();
-
-        // Should be valid JSON even with control characters
-        let parsed: serde_json::Value =
-            serde_json::from_str(&display).expect("Display should produce valid JSON");
-        assert_eq!(parsed["message"], "Line1\nLine2\tTabbed");
+    fn test_load_error_display_is_the_plain_message() {
+        for message in [
+            "Test message",
+            r#"Message with "quotes""#,
+            "Line1\nLine2\tTabbed",
+        ] {
+            let error = LoadError::new(CommandErrorCode::Database, message);
+            assert_eq!(error.to_string(), message);
+            assert!(!error.to_string().contains("DATABASE"));
+        }
+        let corrupt = LoadError::corrupt("broken", "/tmp/a.stalx");
+        assert_eq!(corrupt.to_string(), "broken", "details are not in the text");
     }
 
     #[test]
     fn test_load_error_constructors() {
-        assert_eq!(LoadError::already_open().code, "ALREADY_OPEN");
-        assert_eq!(LoadError::cancelled().code, "CANCELLED");
-        assert_eq!(LoadError::not_found("/path/to/file").code, "NOT_FOUND");
-        assert_eq!(LoadError::internal("error").code, "INTERNAL");
+        assert_eq!(
+            LoadError::already_open().code,
+            CommandErrorCode::AlreadyOpen
+        );
+        assert_eq!(LoadError::cancelled().code, CommandErrorCode::Cancelled);
+        assert_eq!(
+            LoadError::not_found("/path/to/file").code,
+            CommandErrorCode::NotFound
+        );
+        assert_eq!(
+            LoadError::internal("error").code,
+            CommandErrorCode::InternalError
+        );
     }
 
+    /// The managed-file prompt's payload reaches the IPC error the open rejects
+    /// with (`From<LoadError> for CommandError`), and an error without it omits
+    /// the key entirely, so the frontend's `speleodb_managed` check is reliable.
     #[test]
-    fn speleodb_managed_carries_the_link_through_the_json_display() {
+    fn speleodb_managed_carries_the_link_to_the_ipc_error() {
         let err = LoadError::speleodb_managed(SpeleoManagedFile {
             path: "/tmp/foreign.stalx".to_string(),
             project_id: "11111111-2222-3333-4444-555555555555".to_string(),
@@ -976,29 +970,25 @@ mod tests {
             endpoint: "https://sdb.example".to_string(),
             can_open_remote: true,
         });
-        let parsed: serde_json::Value =
-            serde_json::from_str(&err.to_string()).expect("Display should produce valid JSON");
+        let parsed = serde_json::to_value(crate::core::CommandError::from(err))
+            .expect("the IPC error serializes");
         assert_eq!(parsed["code"], "SPELEODB_MANAGED");
-        let managed = &parsed["speleodbManaged"];
+        let managed = &parsed["speleodb_managed"];
         assert_eq!(managed["path"], "/tmp/foreign.stalx");
         assert_eq!(managed["projectId"], "11111111-2222-3333-4444-555555555555");
         assert_eq!(managed["projectName"], "Cave");
         assert_eq!(managed["endpoint"], "https://sdb.example");
         assert_eq!(managed["canOpenRemote"], true);
-        // Errors WITHOUT the payload must omit the key entirely (skip_serializing_if),
-        // so the frontend's `error.speleodbManaged` truthiness check is reliable.
-        let plain: serde_json::Value =
-            serde_json::from_str(&LoadError::internal("x").to_string()).expect("valid JSON");
-        assert!(plain.get("speleodbManaged").is_none());
-    }
-
-    #[test]
-    fn test_escape_json_string() {
-        assert_eq!(escape_json_string("hello"), "hello");
-        assert_eq!(escape_json_string(r#"say "hi""#), r#"say \"hi\""#);
-        assert_eq!(escape_json_string("back\\slash"), "back\\\\slash");
-        assert_eq!(escape_json_string("line\nbreak"), "line\\nbreak");
-        assert_eq!(escape_json_string("tab\there"), "tab\\there");
+        let plain = serde_json::to_value(crate::core::CommandError::from(LoadError::internal("x")))
+            .expect("the IPC error serializes");
+        assert!(plain.get("speleodb_managed").is_none());
+        let corrupt = serde_json::to_value(crate::core::CommandError::from(LoadError::corrupt(
+            "broken",
+            "/tmp/a.stalx",
+        )))
+        .expect("the IPC error serializes");
+        assert_eq!(corrupt["code"], "CORRUPT");
+        assert_eq!(corrupt["details"], "/tmp/a.stalx");
     }
 
     #[test]
@@ -1287,6 +1277,10 @@ mod tests {
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
             is_remote: false,
+            newer_schema_version: None,
+            speleo_link_unreadable: false,
+            unreadable_project_settings: Vec::new(),
+            load_repairs: crate::persistence::LoadRepairs::default(),
         };
         assert_wire(
             &serde_json::to_value(&load).expect("serialize load result"),
@@ -1310,7 +1304,7 @@ mod unsafe_file_tests {
     #![expect(clippy::unwrap_used, reason = "test assertions")]
 
     use super::{refused_schema, LoadError};
-    use crate::models::Project;
+    use crate::models::{CommandErrorCode, Project};
     use crate::persistence::Database;
 
     /// A real refused open of a file carrying a view whose name hides a
@@ -1335,7 +1329,7 @@ mod unsafe_file_tests {
         let refused = refused_schema(&err).unwrap();
         let load = LoadError::unsafe_file(refused, &path.display().to_string());
 
-        assert_eq!(load.code, "UNSAFE_FILE");
+        assert_eq!(load.code, CommandErrorCode::UnsafeFile);
         assert!(
             load.message.contains("a view named \"evil?txt\""),
             "{}",

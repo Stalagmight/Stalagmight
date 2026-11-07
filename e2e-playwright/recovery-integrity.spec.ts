@@ -40,6 +40,11 @@ test.describe('Recovery Integrity Workflow', () => {
           path: '/mock/corrupt-project.stalx.bak.1',
           modifiedAt: '2026-02-11 14:30:00',
           sizeBytes: 51200,
+          // #576 C15: what the backend now says about each candidate.
+          kind: 'backup',
+          restoreNumber: null,
+          usable: true,
+          problem: null,
         },
       ];
       next.restore_from_backup = 'File restored successfully from backup.';

@@ -11,7 +11,11 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::parsers::encoding::strip_bom_owned;
+use crate::models::zip_entry_bound::{entry_count_excess, EntryExcess, MAX_END_CANDIDATES};
+use crate::parsers::encoding::{
+    cp1252_char, describe_byte_limit, describe_replaced_count, open_regular_file, read_capped,
+    strip_bom_owned, too_large, FileFamily,
+};
 
 // ============================================================================
 // XML loading
@@ -35,28 +39,67 @@ pub(super) fn load_xml(path: &Path) -> Result<LoadedXml> {
     match ext.as_str() {
         "tml" => load_xml_from_zip(path),
         "tmlu" => {
-            let bytes = fs::read(path).context("Failed to read TMLU file")?;
+            // The XML family's capped, regular-files-only reader (#576 B27(g)).
+            let bytes = read_capped(path, FileFamily::Xml)?;
             decode_xml_bytes(bytes)
         }
         _ => bail!("Unsupported file extension '.{ext}'. Expected .tml or .tmlu"),
     }
 }
 
-/// Most a `Data.xml` entry may decompress to. The largest real one seen is
-/// 57 MB, so this is a wide margin; it exists because the archive is untrusted
-/// input and a deflate stream can otherwise expand without bound.
-const MAX_DATA_XML_BYTES: u64 = 512 * 1024 * 1024;
+/// Most a `Data.xml` entry may decompress to: the XML family's ceiling, the
+/// same a `.tmlu` is read under (one table, #576 NF-W3P-3). The largest real
+/// one seen is 57 MB, so this is a wide margin; it exists because the archive
+/// is untrusted input and a deflate stream can otherwise expand without bound.
+const MAX_DATA_XML_BYTES: u64 = FileFamily::Xml.byte_limit();
+
+/// Most bytes the `.tml` archive itself may hold (#576 W30-7c): the XML
+/// family's ceiling again, refused in the words every capped reader uses.
+/// Checked before the ZIP reader sees the file, so a huge archive is not
+/// parsed at all.
+const MAX_TML_ARCHIVE_BYTES: u64 = FileFamily::Xml.byte_limit();
+
+/// Most entries a `.tml` archive may hold (#576 W30-7c). A real one holds
+/// `Data.xml` and nothing else (docs/ariane-import.md); 10 000 is the ceiling
+/// the SpeleoDB dump reader puts on an archive of a handful of files
+/// (`speleodb::dump::MAX_ENTRIES`), orders of magnitude of headroom while
+/// still bounding the walk over the entry names.
+///
+/// `ZipArchive::new` builds a record for every entry the central directory
+/// declares before it returns - 575 MB and 4 s for a million entries, and the
+/// 512 MB archive cap leaves room for ten times that (#576 RV19a-4) - and the
+/// `zip` crate exposes no hook to bound it. So the limit is enforced on the
+/// archive's raw bytes BEFORE that parse, by [`refuse_too_many_entries`]; the
+/// count after it stays as defence in depth.
+const MAX_TML_ENTRIES: usize = 10_000;
 
 /// Extract `Data.xml` from a ZIP archive.
 fn load_xml_from_zip(path: &Path) -> Result<LoadedXml> {
-    load_xml_from_zip_capped(path, MAX_DATA_XML_BYTES)
+    load_xml_from_zip_capped(path, MAX_TML_ARCHIVE_BYTES, MAX_DATA_XML_BYTES)
 }
 
-/// `load_xml_from_zip` with the decompression cap spelled out, so a test can
-/// exercise the limit without building half a gigabyte.
-fn load_xml_from_zip_capped(path: &Path, cap: u64) -> Result<LoadedXml> {
-    let file = fs::File::open(path).context("Failed to open TML file")?;
+/// `load_xml_from_zip` with the archive-size cap and the decompression cap
+/// spelled out, so a test can exercise them without building half a gigabyte.
+fn load_xml_from_zip_capped(path: &Path, archive_limit: u64, cap: u64) -> Result<LoadedXml> {
+    // Checked on the handle the archive is then read through, so a FIFO
+    // swapped in after the check cannot block the read (#576 B27(g), W30-7d).
+    let (mut file, metadata) = open_regular_file(path)?;
+    if metadata.len() > archive_limit {
+        return Err(too_large(path, FileFamily::Xml, archive_limit));
+    }
+    refuse_too_many_entries(path, &mut file)?;
     let mut archive = zip::ZipArchive::new(file).context("Failed to read TML as ZIP archive")?;
+    // Defence in depth only: the checks above bounded the parse, and this
+    // counts unique names (the `zip` crate keys its entries by name, zip
+    // 2.4.2 read.rs:72-75), so duplicates would slip past it.
+    let entries = archive.len();
+    if entries > MAX_TML_ENTRIES {
+        bail!(
+            "'{}' is a ZIP archive of {entries} entries, over the {MAX_TML_ENTRIES}-entry limit \
+             for a TML file; it was not read.",
+            path.display()
+        );
+    }
 
     let entry_name = find_data_entry(&archive)
         .ok_or_else(|| anyhow!("TML archive does not contain 'Data.xml'"))?;
@@ -82,14 +125,31 @@ fn load_xml_from_zip_capped(path: &Path, cap: u64) -> Result<LoadedXml> {
     decode_xml_bytes(bytes)
 }
 
-/// Render a byte limit the way the person reading the error thinks about it.
-/// Whole megabytes above 1 MB, exact bytes below (the test caps live there).
-fn describe_byte_limit(bytes: u64) -> String {
-    const MB: u64 = 1024 * 1024;
-    if bytes >= MB {
-        format!("{} MB", bytes / MB)
-    } else {
-        format!("{bytes} bytes")
+/// Refuse an archive of more than [`MAX_TML_ENTRIES`] entries from its raw
+/// bytes, before the ZIP reader parses its directory (#576 RV19a-4, RV19a-4b),
+/// and leave `file` at its start for that reader. The checks, and why they
+/// bound the parse, are [`entry_count_excess`]'s (shared with the SpeleoDB
+/// dump reader, #576 W52-4); this words the refusal for a TML file.
+fn refuse_too_many_entries(path: &Path, file: &mut fs::File) -> Result<()> {
+    let excess = entry_count_excess(file, MAX_TML_ENTRIES as u64)
+        .with_context(|| format!("reading {}", path.display()))?;
+    match excess {
+        None => Ok(()),
+        Some(EntryExcess::Declared(declared)) => bail!(
+            "'{}' is a ZIP archive that declares {declared} entries, over the \
+             {MAX_TML_ENTRIES}-entry limit for a TML file; it was not read.",
+            path.display()
+        ),
+        Some(EntryExcess::DirectoryRecords(records)) => bail!(
+            "'{}' is a ZIP archive with {records} central-directory records, over the \
+             {MAX_TML_ENTRIES}-entry limit for a TML file; it was not read.",
+            path.display()
+        ),
+        Some(EntryExcess::EndRecords) => bail!(
+            "'{}' is a ZIP archive with more than {MAX_END_CANDIDATES} ZIP64 end records \
+             or locators; it was not read.",
+            path.display()
+        ),
     }
 }
 
@@ -116,16 +176,6 @@ fn find_data_entry(archive: &zip::ZipArchive<fs::File>) -> Option<String> {
 /// How far into the file we look for the XML declaration's `encoding=`.
 const DECLARATION_SCAN_BYTES: usize = 256;
 
-/// The Windows-1252 code points for `0x80..=0x9F`, the only range where it
-/// differs from ISO-8859-1 (which is byte == code point). Written as escapes so
-/// the table stays ASCII in source. `U+FFFD` marks the five undefined slots.
-const CP1252_HIGH: [char; 32] = [
-    '\u{20ac}', '\u{fffd}', '\u{201a}', '\u{0192}', '\u{201e}', '\u{2026}', '\u{2020}', '\u{2021}',
-    '\u{02c6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{fffd}', '\u{017d}', '\u{fffd}',
-    '\u{fffd}', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}', '\u{2022}', '\u{2013}', '\u{2014}',
-    '\u{02dc}', '\u{2122}', '\u{0161}', '\u{203a}', '\u{0153}', '\u{fffd}', '\u{017e}', '\u{0178}',
-];
-
 /// Turn file bytes into XML text.
 ///
 /// The contract, in order:
@@ -144,10 +194,11 @@ const CP1252_HIGH: [char; 32] = [
 /// error. Either way the receipt now says what happened, including how many
 /// characters were lost - a wrong accent beats a refused file, but not silently.
 ///
-/// The Latin decode is done here rather than through a decoder crate on
-/// purpose: nothing in the dependency tree provides one (`quick-xml` is built
-/// without its `encoding` feature), and two code pages do not justify adding
-/// one.
+/// The Latin decode is done in this crate (the Windows-1252 table is shared
+/// with the Compass and Walls readers in [`crate::parsers::encoding`]) rather
+/// than through a decoder crate on purpose: nothing in the dependency tree
+/// provides one (`quick-xml` is built without its `encoding` feature), and two
+/// code pages do not justify adding one.
 ///
 /// A leading UTF-8 byte-order mark is dropped before any of that, and a UTF-16
 /// one is refused outright - see [`crate::parsers::encoding`].
@@ -199,15 +250,11 @@ fn decode_xml_bytes(bytes: Vec<u8>) -> Result<LoadedXml> {
 /// The tail of an encoding warning that accounts for undecodable input, or an
 /// empty string when nothing was lost.
 fn describe_replacements(xml: &str) -> String {
-    let replaced = xml
-        .chars()
-        .filter(|&c| c == char::REPLACEMENT_CHARACTER)
-        .count();
-    match replaced {
-        0 => String::new(),
-        1 => "; 1 character was replaced".to_string(),
-        n => format!("; {n} characters were replaced"),
-    }
+    describe_replaced_count(
+        xml.chars()
+            .filter(|&c| c == char::REPLACEMENT_CHARACTER)
+            .count(),
+    )
 }
 
 /// Read the `encoding=` value out of the XML declaration, lowercased.
@@ -235,8 +282,8 @@ fn decode_single_byte_latin(bytes: &[u8], label: &str) -> Option<(String, &'stat
     let text = bytes
         .iter()
         .map(|&b| {
-            if windows && (0x80..=0x9f).contains(&b) {
-                CP1252_HIGH[usize::from(b - 0x80)]
+            if windows {
+                cp1252_char(b)
             } else {
                 char::from(b)
             }
@@ -250,7 +297,7 @@ fn decode_single_byte_latin(bytes: &[u8], label: &str) -> Option<(String, &'stat
 // ============================================================================
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod tests {
     use super::super::test_helpers::{
         parse_synthetic_tmlu, tml_shot_xml, wrap_xml, write_tml_archive, write_tml_archive_entries,
@@ -399,6 +446,54 @@ mod tests {
             warning.contains("windows-1252") && warning.contains("1 character was replaced"),
             "the declared-encoding warning must count its own losses, got {warning:?}"
         );
+    }
+
+    /// The whole encoding warning, byte for byte, on both decode branches and
+    /// for no, one and several replaced characters. The count's wording is
+    /// shared with the Compass and Walls readers, so this pins that sharing it
+    /// left the TML receipt exactly as it was.
+    #[test]
+    fn the_encoding_warning_wording_is_pinned() {
+        let declared = |encoding: &str, name: &[u8]| -> String {
+            let mut bytes = latin1_bytes(&document_with_declaration(
+                &format!(r#"<?xml version="1.0" encoding="{encoding}"?>"#),
+                "PLACEHOLDER",
+            ));
+            let at = bytes.windows(11).position(|w| w == b"PLACEHOLDER").unwrap();
+            bytes.splice(at..at + 11, name.iter().copied());
+            decode_xml_bytes(bytes).unwrap().encoding_warning.unwrap()
+        };
+        let cases = [
+            (
+                declared("windows-1252", b"L\x92A\xe9ven"),
+                "The file is not valid UTF-8; it was read as windows-1252, the encoding its XML \
+                 header declares",
+            ),
+            (
+                declared("windows-1252", b"C\x81v\xe9"),
+                "The file is not valid UTF-8; it was read as windows-1252, the encoding its XML \
+                 header declares; 1 character was replaced",
+            ),
+            (
+                declared("windows-1252", b"C\x81v\x8d\x9d"),
+                "The file is not valid UTF-8; it was read as windows-1252, the encoding its XML \
+                 header declares; 3 characters were replaced",
+            ),
+            (
+                declared("ISO-8859-1", b"Rivi\xe8re"),
+                "The file is not valid UTF-8; it was read as ISO-8859-1, the encoding its XML \
+                 header declares",
+            ),
+            (
+                declared("UTF-8", b"C\xffv\xfe"),
+                "The file was not valid UTF-8 and its declared encoding (if any) could not be \
+                 used; 2 characters were replaced",
+            ),
+        ];
+        for (warning, expected) in &cases {
+            println!("{warning}");
+            assert_eq!(warning, expected);
+        }
     }
 
     /// A single-quoted declaration is as legal as a double-quoted one.
@@ -557,7 +652,7 @@ mod tests {
             "premise: the archive itself is smaller than the cap it blows past"
         );
 
-        let err = load_xml_from_zip_capped(&path, 1024)
+        let err = load_xml_from_zip_capped(&path, MAX_TML_ARCHIVE_BYTES, 1024)
             .unwrap_err()
             .to_string();
         assert!(
@@ -565,7 +660,7 @@ mod tests {
             "the error must name the limit, got {err:?}"
         );
 
-        let loaded = load_xml_from_zip_capped(&path, 512 * 1024).unwrap();
+        let loaded = load_xml_from_zip_capped(&path, MAX_TML_ARCHIVE_BYTES, 512 * 1024).unwrap();
         assert_eq!(loaded.xml.len(), xml.len());
     }
 
@@ -616,5 +711,385 @@ mod tests {
 
         let tml = parse_tml(&path).unwrap();
         assert_eq!(tml.cave_name, "Test Cave");
+    }
+
+    /// #576 B27(g): a path that is not a regular file - a FIFO named like a
+    /// `.tmlu` or a `.tml` - blocked the import forever, and imports run on
+    /// the app's main thread. Both are refused at once.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_like_a_tml_or_tmlu_is_refused_at_once() {
+        use crate::parsers::encoding::fifo_test_support::{make_fifo, within_five_seconds};
+        for name in ["pipe.tmlu", "pipe.tml"] {
+            let dir = tempfile::tempdir().unwrap();
+            let fifo = dir.path().join(name);
+            make_fifo(&fifo);
+            let path = fifo.clone();
+            let outcome = within_five_seconds(&fifo, move || {
+                parse_tml(&path)
+                    .map(|t| t.sections.len())
+                    .map_err(|e| format!("{e:#}"))
+            });
+            println!("parse_tml({name}): {outcome:?}");
+            assert!(
+                outcome.is_some(),
+                "the read of {name} must not block on a FIFO"
+            );
+            let err = outcome.unwrap().unwrap_err();
+            assert!(err.contains("not a regular file"), "{name}: {err}");
+        }
+    }
+
+    /// #576 RV19a-6: the zipped reader reads the archive through the handle
+    /// `open_regular_file` checked. A FIFO is swapped in at the path the
+    /// moment the check passes, so a reader that opened the path again would
+    /// block on it, and one that stopped calling `open_regular_file` would not
+    /// swap at all: the archive that was checked must be the one read.
+    #[cfg(unix)]
+    #[test]
+    fn the_tml_reader_reads_the_checked_handle_not_a_fifo_swapped_in_after() {
+        use crate::parsers::encoding::fifo_test_support::{
+            swap_in_a_fifo_after_the_check, within_five_seconds,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.tml");
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        write_tml_archive(&path, "Data.xml", xml.as_bytes());
+
+        let checked = path.clone();
+        let outcome = within_five_seconds(&path, move || {
+            let swapped = swap_in_a_fifo_after_the_check();
+            let read = load_xml(&checked)
+                .map(|loaded| loaded.xml)
+                .map_err(|e| format!("{e:#}"));
+            (swapped.get(), read)
+        });
+        println!(
+            "load_xml(.tml): (FIFO swapped in, XML bytes read) = {:?}",
+            outcome
+                .as_ref()
+                .map(|(swapped, read)| (swapped, read.as_ref().map(String::len)))
+        );
+        assert_eq!(outcome, Some((true, Ok(xml))));
+    }
+
+    /// What a zipped load produced, in words for the test log.
+    fn describe(outcome: Result<LoadedXml>) -> String {
+        match outcome {
+            Ok(loaded) => format!("Ok: read {} bytes of XML", loaded.xml.len()),
+            Err(e) => format!("Err: {e}"),
+        }
+    }
+
+    /// #576 W30-7c: the archive itself is capped before the ZIP reader parses
+    /// it - at the XML family's ceiling, refused in the words every capped
+    /// reader uses. One byte over a (test-sized) cap is refused; at the cap
+    /// the archive is read.
+    #[test]
+    fn a_tml_archive_over_the_size_cap_is_refused_before_it_is_parsed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.tml");
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        write_tml_archive(&path, "Data.xml", xml.as_bytes());
+        let size = fs::metadata(&path).unwrap().len();
+
+        let over = describe(load_xml_from_zip_capped(
+            &path,
+            size - 1,
+            MAX_DATA_XML_BYTES,
+        ));
+        println!("{size}-byte archive, {}-byte cap: {over}", size - 1);
+        let limit = format!(
+            "larger than the {} bytes limit for XML survey files (.tml",
+            size - 1
+        );
+        assert!(
+            over.contains(&limit),
+            "the refusal must name the limit and the family, got {over:?}"
+        );
+
+        let at = load_xml_from_zip_capped(&path, size, MAX_DATA_XML_BYTES).unwrap();
+        assert_eq!(at.xml.len(), xml.len());
+        assert_eq!(MAX_TML_ARCHIVE_BYTES, FileFamily::Xml.byte_limit());
+    }
+
+    /// #576 W30-7c: an archive holding more entries than a `.tml` ever does
+    /// is refused with the limit named - through the production reader and
+    /// its real ceiling, although it holds a perfectly good `Data.xml`.
+    #[test]
+    fn a_tml_archive_with_more_entries_than_the_cap_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.tml");
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        let names: Vec<String> = (0..MAX_TML_ENTRIES).map(|i| format!("pad/{i}")).collect();
+        let mut entries: Vec<(&str, &[u8])> = vec![("Data.xml", xml.as_bytes())];
+        entries.extend(names.iter().map(|name| (name.as_str(), &b""[..])));
+        write_tml_archive_entries(&path, &entries);
+
+        let outcome = describe(load_xml_from_zip(&path));
+        println!("{} entries: {outcome}", entries.len());
+        assert!(
+            outcome.contains("10001 entries") && outcome.contains("10000-entry limit"),
+            "the refusal must name the count and the limit, got {outcome:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // The entry limit holds before the ZIP reader parses (#576 RV19a-4)
+    // -------------------------------------------------------------------
+
+    /// A one-entry `Data.xml` archive as the `zip` crate writes it, cut into
+    /// what precedes its central directory (the entry's local header and
+    /// data) and the directory's one record, so a test can repeat the record
+    /// and end the archive with records of its own.
+    fn one_entry_archive_parts() -> (Vec<u8>, Vec<u8>) {
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer
+            .start_file("Data.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut writer, xml.as_bytes()).unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        let end = bytes.len() - 22;
+        assert!(
+            bytes[end..].starts_with(b"PK\x05\x06"),
+            "premise: a plain 22-byte end record closes the archive"
+        );
+        let directory = u32::from_le_bytes(bytes[end + 16..end + 20].try_into().unwrap()) as usize;
+        (bytes[..directory].to_vec(), bytes[directory..end].to_vec())
+    }
+
+    /// A 22-byte end-of-central-directory record without a comment.
+    fn end_record(entries: u16, directory_len: u32, directory_at: u32) -> Vec<u8> {
+        let mut record = b"PK\x05\x06".to_vec();
+        record.extend_from_slice(&[0; 4]); // this disk, the directory's disk
+        record.extend_from_slice(&entries.to_le_bytes()); // on this disk
+        record.extend_from_slice(&entries.to_le_bytes()); // in all
+        record.extend_from_slice(&directory_len.to_le_bytes());
+        record.extend_from_slice(&directory_at.to_le_bytes());
+        record.extend_from_slice(&[0; 2]);
+        record
+    }
+
+    /// The ZIP64 end of an archive whose directory ends at `at`: the ZIP64
+    /// end record, the locator pointing at it, and a 32-bit end record whose
+    /// every field defers to it.
+    fn zip64_end(entries: u64, directory_len: u64, directory_at: u64, at: u64) -> Vec<u8> {
+        let mut end = b"PK\x06\x06".to_vec();
+        end.extend_from_slice(&44u64.to_le_bytes()); // the record's size after this field
+        end.extend_from_slice(&45u16.to_le_bytes()); // made by version 4.5
+        end.extend_from_slice(&45u16.to_le_bytes()); // needs version 4.5
+        end.extend_from_slice(&[0; 8]); // this disk, the directory's disk
+        end.extend_from_slice(&entries.to_le_bytes()); // on this disk
+        end.extend_from_slice(&entries.to_le_bytes()); // in all
+        end.extend_from_slice(&directory_len.to_le_bytes());
+        end.extend_from_slice(&directory_at.to_le_bytes());
+        end.extend_from_slice(b"PK\x06\x07");
+        end.extend_from_slice(&[0; 4]); // the ZIP64 record's disk
+        end.extend_from_slice(&at.to_le_bytes());
+        end.extend_from_slice(&1u32.to_le_bytes()); // disks in all
+        end.extend(end_record(u16::MAX, u32::MAX, u32::MAX));
+        end
+    }
+
+    /// A ZIP64 archive of `records` copies of the one `Data.xml` record whose
+    /// end record declares `entries`.
+    fn zip64_archive(entries: u64, records: usize) -> Vec<u8> {
+        let (mut archive, record) = one_entry_archive_parts();
+        let directory_at = archive.len() as u64;
+        archive.extend(record.repeat(records));
+        let at = archive.len() as u64;
+        archive.extend(zip64_end(entries, at - directory_at, directory_at, at));
+        archive
+    }
+
+    /// Write `bytes` as `synthetic.tml` in `dir`.
+    fn write_synthetic_tml(dir: &tempfile::TempDir, bytes: &[u8]) -> std::path::PathBuf {
+        let path = dir.path().join("synthetic.tml");
+        fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// An end record declaring 10 001 entries is refused on what it declares,
+    /// before `ZipArchive::new` builds a record per declared entry. This one
+    /// holds a single real entry, so the ZIP reader fails on its own; without
+    /// the fix that parse failure, not the limit, is what the user is told.
+    #[test]
+    fn an_end_record_declaring_more_entries_than_the_cap_is_refused_before_the_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut archive, record) = one_entry_archive_parts();
+        let directory_at = archive.len() as u32;
+        archive.extend_from_slice(&record);
+        archive.extend(end_record(10_001, record.len() as u32, directory_at));
+        let path = write_synthetic_tml(&dir, &archive);
+
+        let outcome = describe(load_xml_from_zip(&path));
+        println!("end record declaring 10001 entries, 1 real: {outcome}");
+        assert!(
+            outcome.contains("declares 10001 entries") && outcome.contains("10000-entry limit"),
+            "the refusal must name the declared count and the limit, got {outcome:?}"
+        );
+    }
+
+    /// The same through ZIP64, where the count is 64 bits wide: the 5.5
+    /// million entries a 493 MB archive held when it cost 3.2 GB and 25 s
+    /// before the old check refused it. Here the archive is a few hundred
+    /// bytes, so the ZIP reader rejects it as inconsistent; without the fix
+    /// the user is told that, not the limit.
+    #[test]
+    fn a_zip64_end_record_declaring_millions_of_entries_is_refused_before_the_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_synthetic_tml(&dir, &zip64_archive(5_500_001, 1));
+
+        let outcome = describe(load_xml_from_zip(&path));
+        println!("ZIP64 end record declaring 5500001 entries, 1 real: {outcome}");
+        assert!(
+            outcome.contains("declares 5500001 entries") && outcome.contains("10000-entry limit"),
+            "the refusal must name the declared count and the limit, got {outcome:?}"
+        );
+    }
+
+    /// The ZIP reader searches the whole file backwards for end records and
+    /// falls back on an earlier one whenever the last fails, so the last
+    /// record's count alone bounds nothing: here it declares one entry and
+    /// points its directory at itself, the reader rejects it and parses the
+    /// earlier record's 10 001 entries instead - all named `Data.xml`, so the
+    /// count of names it keeps is 1 and the old check let the archive
+    /// through. Counting the directory records in the file refuses it.
+    #[test]
+    fn entries_behind_an_earlier_end_record_are_counted_before_the_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut archive, record) = one_entry_archive_parts();
+        let records = MAX_TML_ENTRIES + 1;
+        let directory_at = archive.len() as u32;
+        archive.extend(record.repeat(records));
+        let directory_len = archive.len() as u32 - directory_at;
+        archive.extend(end_record(records as u16, directory_len, directory_at));
+        let last = archive.len() as u32;
+        archive.extend(end_record(1, record.len() as u32, last));
+        let path = write_synthetic_tml(&dir, &archive);
+
+        let parsed = zip::ZipArchive::new(fs::File::open(&path).unwrap()).unwrap();
+        println!(
+            "premise: the ZIP reader falls back on the earlier end record and keeps {} name(s)",
+            parsed.len()
+        );
+        assert_eq!(parsed.len(), 1);
+
+        let outcome = describe(load_xml_from_zip(&path));
+        println!("{records} records behind a last end record declaring 1: {outcome}");
+        assert!(
+            outcome.contains("10001 central-directory records")
+                && outcome.contains("10000-entry limit"),
+            "the refusal must name the record count and the limit, got {outcome:?}"
+        );
+    }
+
+    /// The checks refuse nothing a real archive holds: a plain one-entry
+    /// archive, the same entry under a ZIP64 end, and an archive at exactly
+    /// the limit all load.
+    #[test]
+    fn archives_within_the_entry_limit_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        let load = |label: &str, path: &Path| {
+            let loaded = load_xml_from_zip(path)
+                .map(|loaded| loaded.xml)
+                .map_err(|e| format!("{e:#}"));
+            println!("{label}: {:?}", loaded.as_ref().map(String::len));
+            assert_eq!(loaded.as_ref(), Ok(&xml), "{label}");
+        };
+
+        let path = dir.path().join("synthetic.tml");
+        write_tml_archive(&path, "Data.xml", xml.as_bytes());
+        load("one entry", &path);
+
+        load(
+            "one entry under a ZIP64 end",
+            &write_synthetic_tml(&dir, &zip64_archive(1, 1)),
+        );
+
+        let names: Vec<String> = (1..MAX_TML_ENTRIES).map(|i| format!("pad/{i}")).collect();
+        let mut entries: Vec<(&str, &[u8])> = vec![("Data.xml", xml.as_bytes())];
+        entries.extend(names.iter().map(|name| (name.as_str(), &b""[..])));
+        write_tml_archive_entries(&path, &entries);
+        load(&format!("{} entries", entries.len()), &path);
+    }
+
+    /// [#576 RV19a-4b] The ZIP reader does not take the ZIP64 end record the
+    /// locator points at: it searches forward from there for one that ends
+    /// where the locator starts, and reserves room for every entry that one
+    /// declares before it reads a directory record (11 million entries: 2 GB).
+    /// Here the locator points at the archive's first byte, the record sits
+    /// 460 100 bytes in - past what 10 001 directory records would fill, the
+    /// reader's one check of the count against the file - and the file holds
+    /// no directory record. The end-record check reads only where the locator
+    /// points and the record count is 0, so without the fix the ZIP reader
+    /// parsed it and the user was told that parse failed.
+    #[test]
+    fn a_zip64_end_record_away_from_where_the_locator_points_is_refused_before_the_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut archive = vec![0u8; 460_100];
+        archive.extend(zip64_end(10_001, 0, 0, 0));
+        let path = write_synthetic_tml(&dir, &archive);
+
+        let outcome = describe(load_xml_from_zip(&path));
+        println!(
+            "ZIP64 end record declaring 10001 entries 460100 bytes in, locator pointing at 0: \
+             {outcome}"
+        );
+        assert!(
+            outcome.contains("declares 10001 entries") && outcome.contains("10000-entry limit"),
+            "the refusal must name the declared count and the limit, got {outcome:?}"
+        );
+    }
+
+    /// The file is read in chunks; a ZIP64 end record or its locator that
+    /// straddles the seam between two reads is seen all the same. The record
+    /// is moved across the first seam (65 537 bytes in) a byte at a time.
+    #[test]
+    fn a_zip64_end_record_across_a_read_seam_is_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let seam = 64 * 1024 + 1;
+        for pad in seam - 80..=seam + 2 {
+            let mut archive = vec![0u8; pad];
+            archive.extend(zip64_end(10_001, 0, 0, 0));
+            let path = write_synthetic_tml(&dir, &archive);
+            let outcome = describe(load_xml_from_zip(&path));
+            assert!(
+                outcome.contains("declares 10001 entries"),
+                "record {pad} bytes in: got {outcome:?}"
+            );
+        }
+    }
+
+    /// A ZIP64 end signature can turn up in an entry's data, with counts read
+    /// past it far over the limit. Its size field does not end it at a
+    /// locator, so the ZIP reader would never take it, and the archive loads.
+    #[test]
+    fn a_zip64_signature_inside_an_entrys_data_refuses_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        let mut lookalike = b"PK\x06\x06".to_vec();
+        lookalike.extend_from_slice(&[0xFF; 60]);
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("Data.xml", stored).unwrap();
+        std::io::Write::write_all(&mut writer, xml.as_bytes()).unwrap();
+        writer.start_file("pad/blob", stored).unwrap();
+        std::io::Write::write_all(&mut writer, &lookalike).unwrap();
+        let archive = writer.finish().unwrap().into_inner();
+        assert!(
+            archive.windows(4).any(|w| w == b"PK\x06\x06"),
+            "premise: the signature is in the archive's bytes"
+        );
+        let path = write_synthetic_tml(&dir, &archive);
+
+        let loaded = load_xml_from_zip(&path)
+            .map(|loaded| loaded.xml)
+            .map_err(|e| format!("{e:#}"));
+        println!("ZIP64 end signature with saturated counts in a stored entry: {loaded:?}");
+        assert_eq!(loaded, Ok(xml));
     }
 }

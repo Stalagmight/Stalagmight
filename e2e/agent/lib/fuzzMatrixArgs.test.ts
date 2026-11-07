@@ -201,12 +201,42 @@ describe('the other flags still parse as they did', () => {
     expect(() => parse('positional')).toThrow(MatrixArgError);
   });
 
+  it('prints what the user typed as its length, never its text (#576 W51)', () => {
+    const refusal = (...argv: string[]): string => {
+      try {
+        parse(...argv);
+      } catch (err) {
+        return (err as Error).message;
+      }
+      return '';
+    };
+    const refusals = [
+      refusal('/home/qzCaveA/survey.tml'),
+      refusal('--qzCaveA'),
+      refusal('--seeds', '1,qzCaveA'),
+      refusal('--workers', 'qzCaveA'),
+      refusal('--release=qzCaveA'),
+      refusal('--axis', 'qzCaveA'),
+      refusal('--axis', 'qzCaveA=1'),
+      refusal('--fixtures', 'qzCaveA/x.stalx'),
+      refusal('--fixtures', 'qzCaveA.tml'),
+      refusal('--fixtures', 'qzCaveA.stalx'),
+      refusal('--scenario', 'qzCaveA'),
+    ];
+    for (const message of refusals) {
+      expect(message).not.toBe('');
+      expect(message).not.toContain('qzCaveA');
+    }
+    expect(refusals[0]).toBe('unexpected argument, a value of 24 character(s)');
+    expect(refusal('--workers', '0')).toBe('--workers needs a positive integer, got 0');
+  });
+
   it('takes fixture BASENAMES that exist', () => {
     // Whatever the tracked tree actually holds - naming one here would break the
     // day somebody adds or renames a fixture, which is not what this asserts.
     const known = parse().fixtures[0];
     expect(known).toMatch(/\.stalx$/);
-    expect(parse('--fixtures', known).fixtures).toEqual([known]);
+    expect(parse('--fixtures', known!).fixtures).toEqual([known]); // toMatch above: a string
     expect(() => parse('--fixtures', `sub/${known}`)).toThrow(MatrixArgError);
     expect(() => parse('--fixtures', 'anything.tml')).toThrow(MatrixArgError);
     expect(() => parse('--fixtures', 'no-such-fixture.stalx')).toThrow(MatrixArgError);

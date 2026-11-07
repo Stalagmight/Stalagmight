@@ -5,6 +5,7 @@
  * to escape stacking contexts (e.g. sticky table headers).
  */
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useId, useMemo, type ReactNode } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { createPortal } from 'react-dom';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 
@@ -191,19 +192,19 @@ export function Select({
   const scrollAncestorRef = useRef<HTMLElement | null>(null);
 
   // Refs to avoid stale closures in unmount cleanup
-  const onOptionHoverRef = useRef(onOptionHover);
-  onOptionHoverRef.current = onOptionHover;
-  const isOpenRef = useRef(isOpen);
-  isOpenRef.current = isOpen;
+  const onOptionHoverRef = useLatest(onOptionHover);
+  const isOpenRef = useLatest(isOpen);
 
   // Unmount cleanup: fire onOptionHover(null) if dropdown was open
   useEffect(() => {
     return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- the last committed value is the one unmount needs
       if (isOpenRef.current) {
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- as above
         onOptionHoverRef.current?.(null);
       }
     };
-  }, []);
+  }, [isOpenRef, onOptionHoverRef]);
 
   // Generate unique IDs for ARIA
   const baseId = useId();

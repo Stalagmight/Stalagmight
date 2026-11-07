@@ -11,6 +11,7 @@
 // webdriver's undici. See the module comment for the Node >= 26 failure it fixes.
 import './lib/undici-dispatcher-pin';
 import { targetPlatform } from './lib/platform';
+import { valueShape } from './lib/shareableFailure';
 import { AppSession } from './session';
 import { MacSession } from './sessionMac';
 import type { AgentSession } from './sessionTypes';
@@ -21,8 +22,10 @@ export function createSession(): AgentSession {
   const plat = targetPlatform();
   if (plat === 'linux') return new AppSession();
   if (plat === 'darwin') return new MacSession();
+  // Node's own platform name, or the override's shape (#576 W51): STALAGMIGHT_AGENT_PLATFORM is the user's text.
+  const named = plat === process.platform ? `"${process.platform}"` : `${valueShape(plat)} (STALAGMIGHT_AGENT_PLATFORM)`;
   throw new Error(
-    `the agent harness has no session backend for platform "${plat}": it requires Linux ` +
+    `the agent harness has no session backend for platform ${named}: it requires Linux ` +
       '(tauri-driver: `cargo install tauri-driver --locked`, plus webkit2gtk-driver) or macOS ' +
       '(tauri-wd: `cargo install --git https://github.com/FumblingBarbell/tauri-webdriver ' +
       `tauri-webdriver-automation\` - see issue #421 and ${DESIGN_DOC}).`,

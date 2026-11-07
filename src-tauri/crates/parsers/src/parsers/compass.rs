@@ -8,7 +8,9 @@
 //! - declination + UTM convergence + per-survey correction factors are baked
 //!   into the stored azimuth/length so the imported geometry matches what
 //!   Compass plots;
-//! - feet are converted to meters;
+//! - feet are converted to meters (a `.DAT` stores lengths and LRUDs in decimal
+//!   feet and inclinations in decimal degrees whatever its FORMAT line says;
+//!   FORMAT only describes the surveyor's notebook);
 //! - station elevations are integrated from `length * sin(inclination)` along the
 //!   station graph (anchored at the `.MAK` fixed station's UTM elevation, or 0)
 //!   and stored as Stalagmight absolute depth (positive = down);
@@ -16,27 +18,37 @@
 //!   `FromImporting` merges + loop closures;
 //! - a `.MAK` fixed station becomes a GPS zero datum (UTM → WGS84 via `proj4rs`).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use compass_data::{
-    BackSightCorrectionFactors, CorrectionFactors, Datum, DeclinationMode, InclinationUnits,
-    LengthUnits, Project, Shot, Survey,
+    BackSightCorrectionFactors, CorrectionFactors, Datum, DeclinationMode, LRUDAssociation,
+    Project, Shot, Survey,
 };
 
 use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource};
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
-use crate::parsers::encoding::{read_latin1, reject_bom};
+use crate::parsers::encoding::{
+    cp1252_replacement_warning, describe_byte_limit, read_cp1252, Cp1252Text,
+};
 use crate::parsers::geo::{non_empty, FEET_TO_METERS};
+use crate::parsers::linked_files::{
+    outside_root, resolve_link, Admission, LinkBudget, MAX_LINKED_BYTES,
+};
+use crate::parsers::station_graph::{
+    build_closures, place_chains, split_into_chains, topological_sort_configs, Anchor, ConfigOrder,
+    PlacementPolicy,
+};
 
-/// Distances/LRUD at or above this are Compass "missing data" sentinels.
+/// LRUDs and angles at or above this are Compass "missing data" sentinels. Not
+/// lengths: a length has no missing marker (see `length_missing`).
 const MISSING_VALUE_THRESHOLD: f64 = 990.0;
 /// Angles at or below this are Compass "missing data" sentinels.
 const MISSING_ANGLE_THRESHOLD: f64 = -900.0;
@@ -76,10 +88,12 @@ pub struct CompassFile {
     pub utm_zone: Option<i32>,
     pub has_georeference: bool,
     pub declination_mode: String,
-    /// Length unit declared by the file's surveys: `"feet"`, `"meters"`,
-    /// `"mixed"` (surveys disagree), or `null` (no surveys / unknown).
-    /// Drives the unit blurb on the import dialog so we don't tell a
-    /// metric survey we're converting feet.
+    /// Length unit the file's surveys STORE their numbers in: always
+    /// `"feet"`, or `null` when there are no surveys. A `.DAT` stores decimal
+    /// feet whatever unit its FORMAT says the notebook used (#576 B28), so
+    /// every import converts from feet. Drives the unit blurb on the import
+    /// dialog; the `"meters"` / `"mixed"` labels it also understands are no
+    /// longer produced.
     pub length_unit: Option<String>,
     pub surveys: Vec<CompassSurveySummary>,
     pub warnings: Vec<String>,
@@ -153,6 +167,11 @@ struct CompassFileState {
     convergence: f64,
     convergence_applied: bool,
     declination_mode: DeclinationMode,
+    /// The `.MAK`'s LRUD association override: `Some(true)` puts every
+    /// survey's LRUDs at the To station (`!OT`), `Some(false)` at the From
+    /// station (`!Ot`), `None` leaves each survey's FORMAT flag in charge
+    /// (#576 B31).
+    lrud_on_to_override: Option<bool>,
 }
 
 impl Default for CompassFileState {
@@ -163,6 +182,7 @@ impl Default for CompassFileState {
             convergence: 0.0,
             convergence_applied: false,
             declination_mode: DeclinationMode::default(),
+            lrud_on_to_override: None,
         }
     }
 }
@@ -210,25 +230,40 @@ pub fn parse_compass(path: &Path) -> Result<ParsedCompass> {
 }
 
 fn parse_mak(path: &Path) -> Result<ParsedCompass> {
-    // The `.MAK` and every `.DAT` it links are read inside the vendored crate,
-    // from their paths - so unlike `parse_dat` there is no boundary here at
-    // which a byte-order mark could be stripped. Name the mark instead of
-    // letting the vendored lexer report an invisible character (#429). A `.DAT`
-    // reached through a `.MAK` keeps the residue: a mark there lands in that
-    // file's cave name, which is only reachable by fixing the vendored reader.
-    reject_bom(path)?;
-    let project =
-        Project::read(path).map_err(|e| anyhow!("Failed to read Compass project: {e}"))?;
+    // Stalagmight reads the `.MAK` and every `.DAT` it links itself and hands
+    // the vendored parser text (#576 B35i-3, B8): the same Windows-1252 decode,
+    // byte-order-mark strip and replacement warning as a bare `.DAT`, plus the
+    // Walls importer's rules for which linked paths may be read.
+    let Cp1252Text { text, replaced } = read_cp1252(path)?;
+    // A project reads many files, so each warning about one names it.
+    let mut warnings: Vec<String> = cp1252_replacement_warning(Some(path), "Compass", replaced)
+        .into_iter()
+        .collect();
+    let project = Project::from_text(path, &text)
+        .map_err(|e| anyhow!("Failed to read Compass project: {e}"))?;
+    let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let linked = project.survey_files.len();
+    let mut skipped: Vec<String> = Vec::new();
+    let mut budget = LinkBudget::new(MAX_LINKED_BYTES);
     let loaded = project
-        .load_survey_files()
+        .load_survey_files_with(|file| {
+            read_linked_dat(&folder, file, &mut budget, &mut warnings, &mut skipped)
+        })
         .map_err(|e| anyhow!("Failed to load Compass survey files: {e}"))?;
+    // A skipped file costs only its own surveys; with nothing read at all
+    // there is nothing to import.
+    if linked > 0 && loaded.survey_files.is_empty() {
+        bail!(
+            "None of the survey files this project lists could be read. {}",
+            skipped.join(" ")
+        );
+    }
 
     let mut datum = None;
     let mut utm_zone = None;
     let mut declination_mode = DeclinationMode::default();
     let mut fixed_stations = Vec::new();
     let mut surveys: Vec<SurveyWithState> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
 
     for (i, dat) in loaded.survey_files.iter().enumerate() {
         // Each linked `.DAT` is parsed on its own, so each can stop part-way
@@ -251,6 +286,7 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
             convergence: raw_state.base_location.convergence_angle,
             convergence_applied: false,
             declination_mode: DeclinationMode::default(),
+            lrud_on_to_override: None,
         };
         if let Some(fc) = &raw_state.file_convergence {
             file_state.convergence = fc.angle;
@@ -259,6 +295,11 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
         if let Some(pp) = &raw_state.project_parameters {
             file_state.declination_mode = pp.declination_mode;
             file_state.convergence_applied = pp.utm_convergence_applied;
+            // "If the flag is set to capital "O." all other methods of
+            // controlling the LRUD associations are overridden" (Compass
+            // Project Manager help, "Parameters").
+            file_state.lrud_on_to_override =
+                pp.override_lrud_association.then_some(pp.lrud_to_station);
         }
         if i == 0 {
             // Mirror the first-file state into the project-wide fields
@@ -350,6 +391,74 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
     })
 }
 
+/// Read one `.DAT` a `.MAK` links, for `Project::load_survey_files_with`:
+/// its text, or `None` - with the reason in `warnings` - when it is refused,
+/// missing, unreadable, already read, or over the project's `budget`. The
+/// rest of the project still imports (#576 B8, decision B8-D2: the Walls
+/// importer's rule); a refused, missing or unreadable one is also listed in
+/// `skipped`.
+///
+/// Where it lives follows the Walls `.PATH` rules ([`resolve_link`], #576
+/// B8-D1 and RV3-R-18): backslashes are separators, a relative link resolves
+/// inside the `.MAK`'s `folder` with `..` clamped there, an absolute local
+/// path is honoured, and network, device-namespace, DOS device and
+/// unresolvable drive-letter links are refused from their text before
+/// anything touches them. A file read from outside the folder - by an
+/// absolute link or through a symlink - is said out loud.
+fn read_linked_dat(
+    folder: &Path,
+    link: &Path,
+    budget: &mut LinkBudget,
+    warnings: &mut Vec<String>,
+    skipped: &mut Vec<String>,
+) -> Option<String> {
+    let shown = link.display();
+    let reason = match resolve_link(folder, folder, &link.to_string_lossy()) {
+        Err(reason) => format!("'{shown}' was skipped: {reason}. Its surveys were not imported."),
+        Ok(resolved) if !resolved.exists() => format!(
+            "'{shown}' was not found (looked for {}); it was skipped and its surveys were not \
+             imported.",
+            resolved.display()
+        ),
+        Ok(resolved) => match budget.admit(&resolved) {
+            Admission::AlreadyRead => {
+                warnings.push(format!(
+                    "'{shown}' is listed more than once in the .MAK; the file was read once, and \
+                     this listing (with any fixed stations it declares) was skipped so its \
+                     surveys are not imported twice."
+                ));
+                return None;
+            }
+            Admission::OverLimit { limit } => format!(
+                "'{shown}' was skipped: with it, the files this .MAK links would add up to \
+                 more than the {} limit for one project. Its surveys were not imported.",
+                describe_byte_limit(limit)
+            ),
+            Admission::Fits(ticket) => match read_cp1252(&resolved) {
+                Ok(Cp1252Text { text, replaced }) => {
+                    if let Some(real) = outside_root(&resolved, folder) {
+                        warnings.push(format!(
+                            "'{shown}' is outside the .MAK's folder (it is {}); it was read \
+                             from there.",
+                            real.display()
+                        ));
+                    }
+                    warnings.extend(cp1252_replacement_warning(Some(link), "Compass", replaced));
+                    budget.record(ticket);
+                    return Some(text);
+                }
+                Err(e) => format!(
+                    "'{shown}' could not be read ({e:#}); it was skipped and its surveys \
+                     were not imported."
+                ),
+            },
+        },
+    };
+    warnings.push(reason.clone());
+    skipped.push(reason);
+    None
+}
+
 /// What a `.DAT` legitimately leaves behind once every survey has been read:
 /// Compass ends each survey with a form feed (0x0C) and a DOS editor may park
 /// an end-of-file marker (0x1A) after the last one.  Anything else in the tail
@@ -401,15 +510,25 @@ fn dat_truncation_warning(
 }
 
 fn parse_dat(path: &Path) -> Result<ParsedCompass> {
-    let contents = read_latin1(path)?;
+    let Cp1252Text {
+        text: contents,
+        replaced,
+    } = read_cp1252(path)?;
     let (raw_surveys, remainder) = Survey::parse_dat_file_with_remainder(&contents)
         .map_err(|e| anyhow!("Failed to parse Compass .DAT file: {e}"))?;
-    // `read_latin1` maps one file byte to one `char`, so the chars ahead of
+    // `read_cp1252` maps one file byte to one `char`, so the chars ahead of
     // the remainder count the bytes consumed - the offset into the file, past
     // any byte-order mark (stripped before parsing).
     let offset = contents.chars().count() - remainder.chars().count();
-    let warnings: Vec<String> = dat_truncation_warning(None, remainder, offset, raw_surveys.len())
+    // A bare `.DAT` is the one file the user picked, so neither warning names it.
+    let warnings: Vec<String> = cp1252_replacement_warning(None, "Compass", replaced)
         .into_iter()
+        .chain(dat_truncation_warning(
+            None,
+            remainder,
+            offset,
+            raw_surveys.len(),
+        ))
         .collect();
     let cave_name = raw_surveys
         .first()
@@ -443,30 +562,12 @@ fn parse_dat(path: &Path) -> Result<ParsedCompass> {
 /// warnings, work an import that already parsed and converted the file has
 /// no use for.
 pub fn preview_scalars(parsed: &ParsedCompass) -> (u32, Option<String>) {
-    // Collapse per-survey length units to a single project-wide label.
-    // Compass `D` (decimal feet) → "feet"; `M` → "meters".  Multi-survey
-    // files where the unit isn't uniform get "mixed" so the dialog can
-    // surface the discrepancy instead of silently picking one.
-    let length_unit = {
-        let mut iter = parsed
-            .surveys
-            .iter()
-            .map(|s| s.survey.parameters.format_parameters.length_units());
-        match iter.next() {
-            None => None,
-            Some(first) => {
-                let uniform = iter.all(|u| u == first);
-                if !uniform {
-                    Some("mixed".to_string())
-                } else {
-                    Some(match first {
-                        Some(LengthUnits::Meters) => "meters".to_string(),
-                        _ => "feet".to_string(),
-                    })
-                }
-            }
-        }
-    };
+    // The unit the numbers are STORED in, which is what the import converts
+    // from: a `.DAT` keeps decimal feet even for a survey whose FORMAT says the
+    // notebook was metric (#576 B28), so there is no "meters" or "mixed" case
+    // to report. Reporting the notebook unit here would tell the user a metric
+    // survey's lengths were "kept as-is" while they are converted from feet.
+    let length_unit = (!parsed.surveys.is_empty()).then(|| "feet".to_string());
     (parsed.surveys.len() as u32, length_unit)
 }
 
@@ -527,7 +628,15 @@ pub struct InvalidShotCounts {
 /// `build_ctx` would emit are scratch - `build_preview` already carries the
 /// parser's own warnings and must not duplicate conversion-time ones it
 /// isn't otherwise running.
-fn invalid_shot_counts(survey: &Survey, file_state: &CompassFileState) -> InvalidShotCounts {
+///
+/// The shots it counts are also named in `dropped`, a line per corrections
+/// case (#576 RVF-d-2), so the preview says which legs will not land, not only
+/// how many.
+fn invalid_shot_counts(
+    survey: &Survey,
+    file_state: &CompassFileState,
+    dropped: &mut Vec<String>,
+) -> InvalidShotCounts {
     let opts_corrected = CompassImportOptions {
         include_excluded: false,
         apply_corrections: true,
@@ -543,10 +652,13 @@ fn invalid_shot_counts(survey: &Survey, file_state: &CompassFileState) -> Invali
     let ctx_uncorrected = build_ctx(survey, file_state, None, &opts_uncorrected, &mut scratch);
 
     let mut counts = InvalidShotCounts::default();
+    let mut dropped_either_way = Vec::new();
+    let mut dropped_corrected_only = Vec::new();
+    let mut dropped_uncorrected_only = Vec::new();
     for shot in &survey.shots {
         let excluded = parse_flags(shot.flags.as_ref()).exclude_all;
-        let (_, length_corrected, _) = shot_geometry(shot, &ctx_corrected);
-        let (_, length_uncorrected, _) = shot_geometry(shot, &ctx_uncorrected);
+        let length_corrected = shot_length_m(shot, &ctx_corrected);
+        let length_uncorrected = shot_length_m(shot, &ctx_uncorrected);
         if excluded {
             if length_corrected <= 0.0 {
                 counts.excluded_corrected += 1;
@@ -562,8 +674,79 @@ fn invalid_shot_counts(survey: &Survey, file_state: &CompassFileState) -> Invali
                 counts.non_excluded_uncorrected += 1;
             }
         }
+        match (length_corrected <= 0.0, length_uncorrected <= 0.0) {
+            (true, true) => dropped_either_way.push(shot_label(shot)),
+            (true, false) => dropped_corrected_only.push(shot_label(shot)),
+            (false, true) => dropped_uncorrected_only.push(shot_label(shot)),
+            (false, false) => {}
+        }
     }
+    let name = &survey.name;
+    dropped.extend(dropped_length_line(
+        name,
+        &dropped_either_way,
+        "",
+        "will not be imported",
+    ));
+    dropped.extend(dropped_length_line(
+        name,
+        &dropped_corrected_only,
+        " once the survey's length correction is applied",
+        "will not be imported while corrections are applied",
+    ));
+    dropped.extend(dropped_length_line(
+        name,
+        &dropped_uncorrected_only,
+        " without the survey's length correction",
+        "will not be imported while corrections are not applied",
+    ));
     counts
+}
+
+/// How many shots one preview line names before it only counts the rest: a
+/// project ties its surveys together with zero-length connector shots, so one
+/// survey can drop many (#576 RVF-d-2).
+const MAX_NAMED_DROPPED_SHOTS: usize = 10;
+
+fn shot_label(shot: &Shot) -> String {
+    format!("{} -> {}", shot.from, shot.to)
+}
+
+/// The preview line naming a survey's shots the import drops for their length
+/// (#576 RVF-d-2), or `None` when there are none. True under every toggle: a
+/// shot dropped either way is not imported whatever the dialog says (an
+/// `X`-flagged one is not imported unless excluded shots are included, and then
+/// it is dropped for its length), and one that only the survey's length
+/// correction decides says under which corrections setting it is dropped.
+fn dropped_length_line(
+    survey: &str,
+    shots: &[String],
+    cause: &str,
+    outcome: &str,
+) -> Option<String> {
+    match shots {
+        [] => None,
+        [shot] => Some(format!(
+            "Survey '{survey}': shot {shot} has no usable length{cause}, so it {outcome}."
+        )),
+        _ => {
+            let named = shots
+                .iter()
+                .take(MAX_NAMED_DROPPED_SHOTS)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = match shots.len().saturating_sub(MAX_NAMED_DROPPED_SHOTS) {
+                0 => String::new(),
+                n => format!(" and {n} more"),
+            };
+            Some(format!(
+                "Survey '{survey}': {} shots have no usable length{cause}, so they {outcome}: \
+                 {named}{more}.",
+                shots.len()
+            ))
+        }
+    }
 }
 
 fn add_invalid_shot_counts(a: InvalidShotCounts, b: InvalidShotCounts) -> InvalidShotCounts {
@@ -586,10 +769,12 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
         .iter()
         .map(|s| excluded_shot_count(&s.survey))
         .sum::<u32>();
+    // The parser's own warnings, then one line per shot dropped for its length.
+    let mut warnings = parsed.warnings.clone();
     let per_survey_invalid_counts: Vec<InvalidShotCounts> = parsed
         .surveys
         .iter()
-        .map(|s| invalid_shot_counts(&s.survey, &s.state))
+        .map(|s| invalid_shot_counts(&s.survey, &s.state, &mut warnings))
         .collect();
     let invalid_shot_counts_total = per_survey_invalid_counts
         .iter()
@@ -629,7 +814,7 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
         declination_mode: format!("{:?}", parsed.declination_mode),
         length_unit,
         surveys,
-        warnings: parsed.warnings.clone(),
+        warnings,
     }
 }
 
@@ -649,16 +834,12 @@ struct SurveyCtx {
     /// reported as a warning instead of being folded in, because geometry is
     /// drawn in true north and Compass's own display frame is the grid.
     azimuth_reference: AzimuthReference,
-    length_to_m: f64,
     apply_corrections: bool,
     corrections: Option<CorrectionFactors>,
     backsight_corrections: Option<BackSightCorrectionFactors>,
-    /// Inclination unit used by this survey.  Compass supports five
-    /// (Degrees, PercentGrade, DegreesAndMinutes, Grads, DepthGauge);
-    /// `shot_geometry` converts each to plain degrees before feeding
-    /// the trig in elevation_gain.  `None` (= unrecognized) is treated
-    /// as Degrees with a warning at parse time.
-    inclination_units: InclinationUnits,
+    /// Each row's LRUDs were measured at its TO station, not its FROM (#576
+    /// B31): the FORMAT's last character is `T`, or the `.MAK` overrides it.
+    lrud_on_to: bool,
 }
 
 /// Resolved georeference anchor for the project.
@@ -697,18 +878,23 @@ fn angle_missing(raw: f64) -> bool {
     !raw.is_finite() || raw <= MISSING_ANGLE_THRESHOLD || raw >= MISSING_VALUE_THRESHOLD
 }
 
-/// Length variant of the sentinel test: lengths (and DepthGauge depth
-/// readings) use only the "+999" half of the sentinel range, plus the
-/// shared non-finite guard.
+/// A length is missing only when it is not a number: the shared non-finite
+/// guard, and no sentinel. Compass's "Survey Data File Format" page gives a
+/// missing marker for a bearing or inclination with backsights (-999) and for
+/// an LRUD (negative), but none for a length, "a single floating point number"
+/// in decimal feet. Reading 990 ft and above as missing dropped real long legs
+/// (#576 RVF-d-2).
 fn length_missing(raw: f64) -> bool {
-    !raw.is_finite() || raw >= MISSING_VALUE_THRESHOLD
+    !raw.is_finite()
 }
 
-fn lrud_meters(raw: f64, length_to_m: f64) -> Option<f64> {
+/// A stored LRUD in meters. A `.DAT` stores LRUDs in decimal feet whatever the
+/// FORMAT's passage unit says (#576 B28).
+fn lrud_meters(raw: f64) -> Option<f64> {
     if !raw.is_finite() || raw <= -1.0 || raw >= MISSING_VALUE_THRESHOLD {
         return None;
     }
-    let value = raw * length_to_m;
+    let value = raw * FEET_TO_METERS;
     if value.abs() < f64::EPSILON {
         None
     } else {
@@ -716,39 +902,146 @@ fn lrud_meters(raw: f64, length_to_m: f64) -> Option<f64> {
     }
 }
 
-/// Corrected azimuth (grid, 0..360), slope length (m), inclination (deg, +up),
-/// and elevation gain (m, +up) for a shot.
-fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
-    // A missing or non-finite bearing collapses to 0.0 (due north); the shot
-    // keeps its finite length and still participates in the closure solve as a
-    // due-north leg rather than being dropped. The corruption is surfaced to the
-    // user by the pass-1 per-shot warning (#275).
-    let mut azimuth = if angle_missing(shot.azimuth) {
-        0.0
-    } else {
-        shot.azimuth
-    };
-    // For Degrees / Grads / PercentGrade / DegreesAndMinutes the raw
-    // value is sentinel-tested as an angle.  For DepthGauge the field
-    // is a depth reading whose absolute value can equal the missing-
-    // threshold, so only the "+ infinity" half of the sentinel applies
-    // - pass the raw through.
-    let mut inclination = match ctx.inclination_units {
-        InclinationUnits::DepthGauge => {
-            if length_missing(shot.inclination) {
-                0.0
+/// A cross-section in meters; `None` for a dimension that was not measured.
+#[derive(Clone, Copy, Default)]
+struct Lrud {
+    left: Option<f64>,
+    right: Option<f64>,
+    up: Option<f64>,
+    down: Option<f64>,
+}
+
+impl Lrud {
+    fn of(shot: &Shot) -> Self {
+        Self {
+            left: lrud_meters(shot.left),
+            right: lrud_meters(shot.right),
+            up: lrud_meters(shot.up),
+            down: lrud_meters(shot.down),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.left.is_none() && self.right.is_none() && self.up.is_none() && self.down.is_none()
+    }
+}
+
+/// A To-associated survey's cross-sections, by the station they were measured
+/// at (#576 B31).
+///
+/// A shot stores the cross-section of its FROM station. When a survey records
+/// each row's LRUDs at the row's TO station, that section belongs on the shot
+/// that LEAVES the station: the next shot in the chain, or - for a chain that
+/// starts there, such as a branch - the first row of the survey that ends
+/// there. A section measured at a station no shot of the survey leaves has
+/// nowhere to go and is counted for the receipt; so is one measured where a
+/// shot does leave, when every such shot took another row's section at that
+/// station instead (#576 RV2-R-NITS).
+struct ToStationLruds<'a> {
+    /// The first kept row ending at each station that measured a section, as
+    /// an index into the survey's kept shots.
+    by_station: HashMap<&'a str, usize>,
+    /// Sections measured at a station no kept shot leaves.
+    stranded: usize,
+    /// Sections measured at a station a kept shot leaves that no shot
+    /// carries.
+    superseded: usize,
+}
+
+impl<'a> ToStationLruds<'a> {
+    /// `chains` is how the survey's kept `shots` split into sections.
+    fn new(shots: &[&'a Shot], chains: &[Vec<usize>]) -> Self {
+        let starts: HashSet<&str> = shots.iter().map(|s| s.from.as_str()).collect();
+        let mut by_station: HashMap<&'a str, usize> = HashMap::new();
+        let mut stranded = 0;
+        // Rows whose section some shot could carry.
+        let mut placeable: Vec<usize> = Vec::new();
+        for (row, shot) in shots.iter().enumerate() {
+            if Lrud::of(shot).is_empty() {
+                continue;
+            }
+            if starts.contains(shot.to.as_str()) {
+                by_station.entry(shot.to.as_str()).or_insert(row);
+                placeable.push(row);
             } else {
-                shot.inclination
+                stranded += 1;
             }
         }
-        _ => {
-            if angle_missing(shot.inclination) {
-                0.0
-            } else {
-                shot.inclination
+        let mut lruds = Self {
+            by_station,
+            stranded,
+            superseded: 0,
+        };
+        let mut carried = vec![false; shots.len()];
+        for chain in chains {
+            for pos in 0..chain.len() {
+                if let Some(row) = lruds.source(shots, chain, pos) {
+                    carried[row] = true;
+                }
             }
         }
+        lruds.superseded = placeable.iter().filter(|&&row| !carried[row]).count();
+        lruds
+    }
+
+    /// The kept row whose section the shot at `chain[pos]` carries: the row
+    /// ahead of it in its chain (which ends at the shot's From station) when
+    /// that row measured one, else the first row ending at that station.
+    fn source(&self, shots: &[&Shot], chain: &[usize], pos: usize) -> Option<usize> {
+        pos.checked_sub(1)
+            .map(|p| chain[p])
+            .filter(|&row| !Lrud::of(shots[row]).is_empty())
+            .or_else(|| {
+                self.by_station
+                    .get(shots[chain[pos]].from.as_str())
+                    .copied()
+            })
+    }
+
+    /// The section the shot at `chain[pos]` carries.
+    fn at(&self, shots: &[&Shot], chain: &[usize], pos: usize) -> Lrud {
+        self.source(shots, chain, pos)
+            .map_or_else(Lrud::default, |row| Lrud::of(shots[row]))
+    }
+}
+
+/// The receipt line for `stranded` To-station cross-sections of one survey
+/// that no shot could carry (#576 B31), or `None` when there were none. The
+/// Walls importer words its own line the same way.
+fn end_of_chain_lrud_note(survey: &str, stranded: usize) -> Option<String> {
+    let counted = match stranded {
+        0 => return None,
+        1 => "1 end-of-chain cross-section had no shot to attach to and was dropped".to_string(),
+        n => format!("{n} end-of-chain cross-sections had no shot to attach to and were dropped"),
     };
+    Some(to_station_lrud_line(survey, &counted))
+}
+
+/// The receipt line for `superseded` To-station cross-sections of one survey
+/// that lost to another row's section at the same station (#576
+/// RV2-R-NITS), or `None` when there were none.
+fn superseded_lrud_note(survey: &str, superseded: usize) -> Option<String> {
+    let counted = match superseded {
+        0 => return None,
+        1 => "1 cross-section was superseded by another measured at the same station and was \
+              dropped"
+            .to_string(),
+        n => format!(
+            "{n} cross-sections were superseded by others measured at the same stations and \
+             were dropped"
+        ),
+    };
+    Some(to_station_lrud_line(survey, &counted))
+}
+
+fn to_station_lrud_line(survey: &str, counted: &str) -> String {
+    format!("Survey '{survey}': {counted} (the survey records LRUDs at each shot's To station).")
+}
+
+/// Slope length (m) of a shot with the survey's length correction applied; 0.0
+/// for a missing or non-finite length, which the converter drops as a
+/// zero-length connector.
+fn shot_length_m(shot: &Shot, ctx: &SurveyCtx) -> f64 {
     let mut length = if length_missing(shot.length) {
         0.0
     } else {
@@ -756,38 +1049,14 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     };
     if ctx.apply_corrections {
         if let Some(cf) = &ctx.corrections {
-            azimuth += cf.azimuth;
-            // Corrections live in the survey's declared inclination
-            // unit; they apply naturally for Degrees/Grads/Percent/DM.
-            // For DepthGauge the field is a depth in length units;
-            // adding the inclination-correction (also a length under
-            // the DepthGauge convention per the Compass spec) is
-            // dimensionally consistent.
-            inclination += cf.inclination;
+            // CORRECTIONS are feet, like the lengths they adjust.
             length += cf.length;
         }
     }
-    // #438: measured, not corrected. The survey's declination and convergence
-    // live on `ctx.azimuth_reference` and are applied when geometry is computed.
-    let azimuth_final = azimuth.rem_euclid(360.0);
-    let length_m = length * ctx.length_to_m;
-    // Single normalisation point: convert whatever Compass unit the
-    // survey declared into degrees so the rest of the pipeline
-    // (elevation_gain, shot_to_shot_data's pitch sign flip) stays
-    // unit-agnostic.  DepthGauge needs the slope length to resolve
-    // asin(depth / length) - pass the raw length (same units as the
-    // depth reading) so the ratio is dimensionless.
-    let inclination_deg = inclination_to_degrees(inclination, &ctx.inclination_units, length);
-    // Backstop only: build_ctx sanitizes declination/convergence/corrections
-    // and inclination_to_degrees clamps the DepthGauge asin ratio, so with
-    // finite raw inputs these are already finite. 0.0 carries the same
-    // missing semantics the raw sentinel guards above produce; the per-shot
-    // corruption warning fires at the pass-1 scan, not here.
-    (
-        finite_or_zero(azimuth_final),
-        finite_or_zero(length_m),
-        finite_or_zero(inclination_deg),
-    )
+    // A `.DAT` stores lengths in decimal feet whatever the FORMAT's length
+    // unit says (#576 B28). Backstop only: build_ctx sanitizes the
+    // corrections, so with a finite raw length this is already finite.
+    finite_or_zero(length * FEET_TO_METERS)
 }
 
 /// See `angle_missing`: the no-non-finite-output contract for file-controlled
@@ -801,82 +1070,187 @@ fn finite_or_zero(v: f64) -> f64 {
     }
 }
 
-/// Process a back-sight pair (`back_azimuth`, `back_inclination`) and return
-/// values comparable to the fore-sight after the same pipeline - i.e. in the
-/// forward (FROM → TO) direction, Stalagmight's `+down` pitch convention.
-///
-/// Compass records back-sight as the raw instrument reading from the TO
-/// station looking back at the FROM station, so for a well-calibrated survey
-/// of a shot with fore-azimuth `a` and fore-inclination `i` (Compass +up):
-///
-///   * `back_azimuth`     ≈ a + 180°
-///   * `back_inclination` ≈ -i   (uphill from FROM is downhill from TO)
-///
-/// We need to turn the back-sight around to FROM → TO:
-///   * Azimuth: add 180° after declination/convergence.
-///   * Inclination: convert through `inclination_to_degrees` first (the raw
-///     reading is in the survey's declared unit - Grads / DDD.MM / Percent
-///     Grade / DepthGauge - and only the Degrees case is pass-through).
-///     Then flip sign to undo the TO-side reading direction (yielding
-///     fore-direction in Compass's +up convention), and flip again to land
-///     in Stalagmight's +down - the two flips cancel, so the final stored
-///     `pitch_out` equals the degree-converted back-inclination.  Without
-///     the unit conversion, Grads / DDD.MM / Percent surveys with
-///     back-sights store `pitch_out` in the wrong units.
-///
-/// Returns `(azimuth_out_grid_deg, pitch_out_deg_positive_down)` if both
-/// back-sight readings are present and non-sentinel, else `None`.
-fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
-    let back_az_raw = shot.back_azimuth?;
-    let back_inc_raw = shot.back_inclination?;
-    if angle_missing(back_az_raw) {
-        return None;
+/// An angle reading, or `None` when it was not taken: a -999 sentinel, or a
+/// non-finite value (see `angle_missing`).
+fn angle_reading(raw: f64) -> Option<f64> {
+    (!angle_missing(raw)).then_some(raw)
+}
+
+/// One sight of a shot, turned to point FROM → TO: the bearing in degrees
+/// [0, 360) and the inclination in Compass's `+up` degrees, each `None` when
+/// that reading was not taken. Measured, not corrected (#438): the survey's
+/// declination rides on `SurveyCtx::azimuth_reference`; only the survey's
+/// instrument CORRECTIONS are applied. Every inclination is stored in decimal
+/// degrees whatever unit the FORMAT says the notebook used - depth gauge
+/// (`W`) included (#576 B28).
+#[derive(Clone, Copy)]
+struct Sight {
+    bearing: Option<f64>,
+    inclination: Option<f64>,
+}
+
+fn foresight(shot: &Shot, ctx: &SurveyCtx) -> Sight {
+    let (bearing_correction, inclination_correction) =
+        match (ctx.apply_corrections, &ctx.corrections) {
+            (true, Some(cf)) => (cf.azimuth, cf.inclination),
+            _ => (0.0, 0.0),
+        };
+    Sight {
+        bearing: angle_reading(shot.azimuth)
+            .map(|a| crate::models::normalize_azimuth(a + bearing_correction))
+            .filter(|a| a.is_finite()),
+        inclination: angle_reading(shot.inclination)
+            .map(|i| i + inclination_correction)
+            .filter(|i| i.is_finite()),
     }
-    let mut back_az = back_az_raw;
-    let mut back_inc = if angle_missing(back_inc_raw) {
-        0.0
-    } else {
-        back_inc_raw
-    };
-    // Same raw-length-with-fore-sight-corrections that `shot_geometry`
-    // computes; needed by `inclination_to_degrees` for the DepthGauge
-    // depth/length ratio.  Survey-level CORRECTIONS apply to the
-    // physical slope distance regardless of sighting direction, so the
-    // fore-sight `cf.length` is the right offset for the back-sight too.
-    let mut slope_length_raw = if length_missing(shot.length) {
-        0.0
-    } else {
-        shot.length
-    };
-    if ctx.apply_corrections {
-        if let Some(bcf) = &ctx.backsight_corrections {
-            back_az += bcf.azimuth;
-            back_inc += bcf.inclination;
+}
+
+/// The redundant backsight, turned around to point FROM → TO.
+///
+/// Compass records it as the instrument reading from the TO station looking
+/// back at the FROM station, so for a shot with fore-azimuth `a` and
+/// fore-inclination `i` (Compass +up) a well-calibrated backsight reads
+/// `a + 180°` and `-i` (uphill from FROM is downhill from TO). Turning it
+/// around adds 180° to the bearing and negates the inclination. Each half is
+/// its own reading: a missing back bearing says nothing about the back
+/// inclination, and vice versa.
+fn backsight(shot: &Shot, ctx: &SurveyCtx) -> Sight {
+    let (bearing_correction, inclination_correction) =
+        match (ctx.apply_corrections, &ctx.backsight_corrections) {
+            (true, Some(bcf)) => (bcf.azimuth, bcf.inclination),
+            _ => (0.0, 0.0),
+        };
+    Sight {
+        bearing: shot
+            .back_azimuth
+            .and_then(angle_reading)
+            .map(|a| {
+                let measured = crate::models::normalize_azimuth(a + bearing_correction);
+                crate::models::normalize_azimuth(measured + 180.0)
+            })
+            .filter(|a| a.is_finite()),
+        inclination: shot
+            .back_inclination
+            .and_then(angle_reading)
+            .map(|i| -(i + inclination_correction))
+            .filter(|i| i.is_finite()),
+    }
+}
+
+/// A shot's readings in Stalagmight's slots, after Compass's missing-data
+/// rule: a shot is processed "as long as there is at least one compass reading
+/// and one inclinometer reading" (Compass Editor help, "Backsights and
+/// Redundant Backsights"), so a foresight reading that was not taken is the
+/// reversed backsight. The slots follow the Walls importer's convention
+/// (`walls/srv.rs` `combine_azimuth` / `combine_inclination`): with one
+/// bearing both azimuth slots carry it; with one inclination it sits in
+/// `pitch_in` and `pitch_out` stays empty.
+struct Readings {
+    azimuth_in: f64,
+    azimuth_out: f64,
+    /// `+down` degrees.
+    pitch_in: Option<f64>,
+    /// `+down` degrees; only a backsight inclination that was taken.
+    pitch_out: Option<f64>,
+    /// The inclination the leg's depth change follows, Compass `+up` degrees:
+    /// the mean of the two sights when both were taken.
+    inclination: f64,
+    /// Foresight readings that were not taken and came from the backsight.
+    reconstructed: u32,
+    /// No sight has a bearing: `azimuth_in` / `azimuth_out` are a 0.0
+    /// placeholder (due north).
+    bearing_missing: bool,
+    /// No sight has an inclination: the leg is kept level.
+    inclination_missing: bool,
+}
+
+fn resolve_readings(shot: &Shot, ctx: &SurveyCtx) -> Readings {
+    let fore = foresight(shot, ctx);
+    let back = backsight(shot, ctx);
+    let mut reconstructed = 0;
+    let (azimuth_in, azimuth_out) = match (fore.bearing, back.bearing) {
+        (Some(f), Some(b)) => (f, b),
+        (Some(f), None) => (f, f),
+        (None, Some(b)) => {
+            reconstructed += 1;
+            (b, b)
         }
-        if let Some(cf) = &ctx.corrections {
-            slope_length_raw += cf.length;
+        // Compass's editor refuses this and its help does not say what
+        // processing does with it, so the leg keeps its length and points due
+        // north, as it always has; the caller names the shot (#576 B30).
+        (None, None) => (0.0, 0.0),
+    };
+    let (inclination, pitch_in, pitch_out) = match (fore.inclination, back.inclination) {
+        // Both taken: the depth follows their mean, as Compass and Survex
+        // compute it and as the bearings already are (`average_azimuth_of` on
+        // the two azimuth slots); the slots keep what each sight read
+        // (#576 NF-AN4-1).
+        (Some(f), Some(b)) => (f64::midpoint(f, b), Some(-f), Some(-b)),
+        (Some(f), None) => (f, Some(-f), None),
+        (None, Some(b)) => {
+            reconstructed += 1;
+            (b, Some(-b), None)
         }
+        // As for the bearing: kept level, named by the caller.
+        (None, None) => (0.0, Some(0.0), None),
+    };
+    Readings {
+        azimuth_in,
+        azimuth_out,
+        pitch_in,
+        pitch_out,
+        inclination,
+        reconstructed,
+        bearing_missing: fore.bearing.is_none() && back.bearing.is_none(),
+        inclination_missing: fore.inclination.is_none() && back.inclination.is_none(),
     }
-    // Measured, like the fore-sight (#438): no declination or convergence here.
-    let back_az_measured = back_az.rem_euclid(360.0);
-    // Flip 180° so the bearing points FROM → TO, matching azimuth_in.
-    let azimuth_out_fore_direction = (back_az_measured + 180.0).rem_euclid(360.0);
-    // Convert the back-inclination into degrees first - Grads / DDD.MM /
-    // PercentGrade / DepthGauge are NOT pass-through.  After conversion,
-    // back_inc_deg is the TO→FROM slope in Compass +up; the double sign
-    // flip (TO→FROM ⇒ FROM→TO, then +up ⇒ +down) cancels, so the value
-    // we store IS that degree-converted reading.
-    let back_inc_deg = inclination_to_degrees(back_inc, &ctx.inclination_units, slope_length_raw);
-    let pitch_out_down_positive = back_inc_deg;
-    // Backstop: a computed non-finite backsight must become "no backsight"
-    // (the caller mirrors the fore-sight, which is a no-op in the fore/back
-    // circular mean), NEVER a fabricated due-north Some(0.0) that would
-    // silently rotate every affected shot via average_azimuth (#275).
-    // build_ctx sanitizes the header factors, so this should be unreachable.
-    if !azimuth_out_fore_direction.is_finite() || !pitch_out_down_positive.is_finite() {
-        return None;
-    }
-    Some((azimuth_out_fore_direction, pitch_out_down_positive))
+}
+
+/// The receipt line for a shot that has a field in no sight at all, kept
+/// with a placeholder (#576 B30). A plumb leg's bearing does not matter, so
+/// only its inclination can earn one.
+fn missing_reading_warning(
+    shot: &Shot,
+    readings: &Readings,
+    has_backsights: bool,
+) -> Option<String> {
+    let plumb = readings.inclination.abs() >= 89.5;
+    let bearing = readings.bearing_missing && !plumb;
+    let (fields, are, recorded, them) = match (bearing, readings.inclination_missing) {
+        (true, true) => (
+            "bearing and inclination",
+            "are",
+            "0 (due north) and level",
+            "them",
+        ),
+        (true, false) => ("bearing", "is", "0 (due north)", "it"),
+        (false, true) => ("inclination", "is", "level", "it"),
+        (false, false) => return None,
+    };
+    let source = if has_backsights {
+        format!("{are} missing from both the foresight and the backsight")
+    } else {
+        format!("{are} missing and the survey has no backsight to take {them} from")
+    };
+    Some(format!(
+        "Shot {} -> {}: {fields} {source}; recorded as {recorded}.",
+        shot.from, shot.to
+    ))
+}
+
+/// The receipt line counting a survey's foresight readings that came from the
+/// reversed backsight (#576 B30), or `None` when there were none.
+fn reconstructed_readings_note(survey: &Survey, reconstructed: u32) -> Option<String> {
+    let counted = match reconstructed {
+        0 => return None,
+        1 => "1 missing foresight reading was".to_string(),
+        n => format!("{n} missing foresight readings were"),
+    };
+    Some(format!(
+        "Survey '{}': {counted} taken from the backsight (bearing + 180, inclination \
+         negated), as Compass does.",
+        survey.name
+    ))
 }
 
 fn elevation_gain(length_m: f64, inclination_deg: f64) -> f64 {
@@ -888,35 +1262,26 @@ fn elevation_gain(length_m: f64, inclination_deg: f64) -> f64 {
 fn shot_to_shot_data(
     shot: &Shot,
     ctx: &SurveyCtx,
+    lrud: Lrud,
     depth_in: f64,
     depth_out: f64,
     is_virtual: bool,
 ) -> ShotData {
-    let (azimuth, length_m, inclination) = shot_geometry(shot, ctx);
-    // If the survey took back-sight readings (separate from the fore-sight),
-    // store them in the `_out` slots as forward-direction equivalents so
-    // Stalagmight has both legs of the measurement available for averaging
-    // and warnings.  When no back-sight is present, mirror the fore-sight
-    // into the `_out` slot - matching the TML importer's convention.
-    let (azimuth_out, pitch_out) = match shot_backsight_geometry(shot, ctx) {
-        Some((back_az, back_pitch)) => (back_az, Some(back_pitch)),
-        None => (azimuth, None),
-    };
+    let readings = resolve_readings(shot, ctx);
     ShotData {
         // Compass files carry no shot identity; every shot gets a fresh mint.
         uuid: None,
-        azimuth_in: azimuth,
-        azimuth_out,
-        length: length_m,
+        azimuth_in: readings.azimuth_in,
+        azimuth_out: readings.azimuth_out,
+        length: shot_length_m(shot, ctx),
         depth_in,
         depth_out,
-        // Stalagmight pitch is positive downward; Compass inclination is positive up.
-        pitch_in: Some(-inclination),
-        pitch_out,
-        left: lrud_meters(shot.left, ctx.length_to_m),
-        right: lrud_meters(shot.right, ctx.length_to_m),
-        up: lrud_meters(shot.up, ctx.length_to_m),
-        down: lrud_meters(shot.down, ctx.length_to_m),
+        pitch_in: readings.pitch_in,
+        pitch_out: readings.pitch_out,
+        left: lrud.left,
+        right: lrud.right,
+        up: lrud.up,
+        down: lrud.down,
         comment: shot.comment.as_deref().and_then(non_empty),
         // Compass `X` (exclude-all) marks a leg the surveyor pulled out of
         // the computed cave. The chain classifier decides Jump vs Reference
@@ -938,23 +1303,12 @@ fn build_ctx(
     opts: &CompassImportOptions,
     warnings: &mut Vec<String>,
 ) -> SurveyCtx {
-    let format = &survey.parameters.format_parameters;
-    let length_to_m = match format.length_units() {
-        Some(LengthUnits::Meters) => 1.0,
-        _ => FEET_TO_METERS,
-    };
-    let inclination_units = format
-        .inclination_units()
-        .unwrap_or(InclinationUnits::Degrees);
-    if matches!(inclination_units, InclinationUnits::DepthGauge) {
-        warnings.push(format!(
-            "Survey '{}': inclination unit is DepthGauge (W); each shot's inclination \
-             is interpreted as a vertical depth delta and converted to a slope angle \
-             via asin(depth / length).  Depth-gauge surveys with zero-length shots \
-             can't produce a slope and will be treated as horizontal.",
-            survey.name
-        ));
-    }
+    // The FORMAT's length and inclination units describe the surveyor's
+    // NOTEBOOK, not the file: Compass stores every length and LRUD in decimal
+    // feet and every inclination in decimal degrees ("Survey Data File Format",
+    // Compass Editor help), and Survex reads them that way - for a depth-gauge
+    // (`W`) survey too, which Survex only marks as diving style. So nothing
+    // here depends on those units (#576 B28).
     let (mut declination, declination_source) = survey_declination(
         file_state.declination_mode,
         survey,
@@ -1018,71 +1372,20 @@ fn build_ctx(
             survey.name, convergence_angle
         ));
     }
+    // FORMAT `T` = "To Station" (Compass "Survey Data File Format"); the
+    // 11/12-character formats carry no flag and mean From.
+    let lrud_on_to = file_state.lrud_on_to_override.unwrap_or_else(|| {
+        matches!(
+            survey.parameters.format_parameters.lrud_association(),
+            Some(LRUDAssociation::ToStation)
+        )
+    });
     SurveyCtx {
         azimuth_reference,
-        length_to_m,
         apply_corrections: opts.apply_corrections,
         corrections,
         backsight_corrections,
-        inclination_units,
-    }
-}
-
-/// Convert a Compass-format inclination value to plain degrees.
-///
-/// Compass stores inclinations in one of five units (declared in the
-/// survey's format parameters).  The whole rest of `shot_geometry` /
-/// `elevation_gain` operates in degrees, so this is the single
-/// normalisation point.
-///
-/// * `Degrees` (D)              - pass through
-/// * `Grads` (R)                - × 0.9 (400 grads / 360°)
-/// * `PercentGrade` (G)         - atan(percent / 100)
-/// * `DegreesAndMinutes` (M)    - DDD.MM packed, minutes in the
-///                                fractional part (e.g. 12.34 → 12 + 34/60)
-/// * `DepthGauge` (W)           - `raw` is a vertical depth reading
-///                                (in the survey's length units), not an
-///                                angle.  Convert to a slope via
-///                                `asin(depth / slope_length)`.  The two
-///                                values must be in the SAME units so
-///                                the ratio is dimensionless; callers
-///                                pass the raw (pre-meter-conversion)
-///                                slope length to satisfy this.  If the
-///                                length is zero we fall back to 0° (a
-///                                parse-time warning has already fired
-///                                for DepthGauge surveys).
-fn inclination_to_degrees(raw: f64, units: &InclinationUnits, slope_length_raw: f64) -> f64 {
-    match units {
-        InclinationUnits::Degrees => raw,
-        InclinationUnits::Grads => raw * 0.9,
-        InclinationUnits::PercentGrade => (raw / 100.0).atan().to_degrees(),
-        InclinationUnits::DegreesAndMinutes => {
-            // DDD.MM format: integer part is degrees, fractional part *
-            // 100 is minutes (so 12.34 means 12° 34').  Preserve sign.
-            let sign = raw.signum();
-            let abs = raw.abs();
-            let degrees = abs.trunc();
-            let minutes = (abs - degrees) * 100.0;
-            sign * (degrees + minutes / 60.0)
-        }
-        InclinationUnits::DepthGauge => {
-            if slope_length_raw.abs() < f64::EPSILON {
-                0.0
-            } else {
-                // `raw` is a depth reading in the survey's length units
-                // (feet for `D` length, meters for `M`).  `shot_geometry`
-                // and `shot_backsight_geometry` deliberately pass the
-                // pre-meter-conversion `length` so the ratio is
-                // dimensionless regardless of which length unit the
-                // survey declared.  Compass convention: positive depth =
-                // down (target below origin); Compass inclination is +up;
-                // hence a +5 ft depth reading corresponds to a negative
-                // (downward) inclination.
-                let depth = raw;
-                let ratio = (depth / slope_length_raw).clamp(-1.0, 1.0);
-                -ratio.asin().to_degrees()
-            }
-        }
+        lrud_on_to,
     }
 }
 
@@ -1295,26 +1598,6 @@ struct KeptSurvey<'a> {
     shots: Vec<&'a Shot>,
 }
 
-/// Split a survey's kept shots into head-to-tail connected chains, breaking
-/// whenever a shot's `from` station doesn't continue the previous shot's `to`.
-fn split_into_chains(shots: &[&Shot]) -> Vec<Vec<usize>> {
-    let mut chains: Vec<Vec<usize>> = Vec::new();
-    let mut current: Vec<usize> = Vec::new();
-    let mut prev_to: Option<&str> = None;
-    for (i, shot) in shots.iter().enumerate() {
-        let continues = prev_to == Some(shot.from.as_str());
-        if !continues && !current.is_empty() {
-            chains.push(std::mem::take(&mut current));
-        }
-        current.push(i);
-        prev_to = Some(shot.to.as_str());
-    }
-    if !current.is_empty() {
-        chains.push(current);
-    }
-    chains
-}
-
 /// Walk the station graph (built from elevation gains) assigning each station an
 /// absolute elevation. The anchor (if any) seeds its component; other components
 /// seed at zero.
@@ -1390,7 +1673,6 @@ pub fn convert_compass_to_import_configs(
     let anchor_name = anchor.as_ref().map(|a| a.name.clone());
     let anchor_elevation = anchor.as_ref().map_or(0.0, |a| a.elevation);
     let anchor_lat_lng = anchor.as_ref().map(|a| a.lat_lng);
-    let anchor_coordinates = anchor.as_ref().map(|a| a.coordinates);
 
     // Pass 1: per-survey contexts, kept shots, and elevation graph edges.
     let mut kept: Vec<KeptSurvey> = Vec::new();
@@ -1404,6 +1686,8 @@ pub fn convert_compass_to_import_configs(
             opts,
             &mut warnings,
         );
+        let has_backsights = survey.parameters.format_parameters.has_backsights();
+        let mut reconstructed = 0;
         let mut shots = Vec::new();
         for shot in &survey.shots {
             let flags = parse_flags(shot.flags.as_ref());
@@ -1411,9 +1695,10 @@ pub fn convert_compass_to_import_configs(
                 continue;
             }
             // One warning per shot naming every corrupt (non-finite) raw
-            // reading. Sentinel-coded missing values (-999/+999) stay
-            // silent: they are the format's intended "no reading" markers,
-            // not corruption. Absent backsights read as finite 0.0 here.
+            // reading. Sentinel-coded missing values (-999/+999) are not
+            // corruption but the format's "no reading" marker; what becomes
+            // of them is reported below, once the readings are resolved
+            // (#576 B30). Absent backsights read as finite 0.0 here.
             let mut corrupt: Vec<&str> = Vec::new();
             for (name, value) in [
                 ("length", shot.length),
@@ -1438,7 +1723,7 @@ pub fn convert_compass_to_import_configs(
                     corrupt.join(", ")
                 ));
             }
-            let (_, length_m, inclination) = shot_geometry(shot, &ctx);
+            let length_m = shot_length_m(shot, &ctx);
             if length_m <= 0.0 {
                 // Zero-length connectors can't be stored as section shots.
                 // Dropping a shot removes its connectivity, so never do it
@@ -1455,13 +1740,17 @@ pub fn convert_compass_to_import_configs(
                 ));
                 continue;
             }
+            let readings = resolve_readings(shot, &ctx);
+            reconstructed += readings.reconstructed;
+            warnings.extend(missing_reading_warning(shot, &readings, has_backsights));
             edges.push((
                 shot.from.clone(),
                 shot.to.clone(),
-                elevation_gain(length_m, inclination),
+                elevation_gain(length_m, readings.inclination),
             ));
             shots.push(shot);
         }
+        warnings.extend(reconstructed_readings_note(survey, reconstructed));
         kept.push(KeptSurvey { survey, ctx, shots });
     }
 
@@ -1478,9 +1767,7 @@ pub fn convert_compass_to_import_configs(
     // by a spanning-tree walk over chain connectivity, so it doesn't depend on
     // survey/file order (the previous one-pass first-occurrence registration
     // mis-placed every chain whose shared station was first defined in a
-    // later-processed survey, dumping ~280 shots at origin in the
-    // private real-cave corpus the spanning-tree placement was first
-    // validated against).
+    // later-processed survey, leaving those chains' shots at the origin).
     struct PendingChain {
         section_index: u32,
         names: Vec<String>,
@@ -1495,7 +1782,16 @@ pub fn convert_compass_to_import_configs(
     }
     let mut chains: Vec<PendingChain> = Vec::new();
     for kept_survey in &kept {
-        let split = split_into_chains(&kept_survey.shots);
+        let split = split_into_chains(&kept_survey.shots, |s| (s.from.as_str(), s.to.as_str()));
+        let to_station_lruds = kept_survey
+            .ctx
+            .lrud_on_to
+            .then(|| ToStationLruds::new(&kept_survey.shots, &split));
+        if let Some(lruds) = &to_station_lruds {
+            let survey = &kept_survey.survey.name;
+            warnings.extend(end_of_chain_lrud_note(survey, lruds.stranded));
+            warnings.extend(superseded_lrud_note(survey, lruds.superseded));
+        }
         let multi = split.len() > 1;
         for (chain_idx, chain) in split.iter().enumerate() {
             if chain.is_empty() {
@@ -1508,12 +1804,17 @@ pub fn convert_compass_to_import_configs(
                 names.push(kept_survey.shots[idx].to.clone());
             }
             let mut shots_data = Vec::with_capacity(chain.len());
-            for &idx in chain {
+            for (pos, &idx) in chain.iter().enumerate() {
                 let shot = kept_survey.shots[idx];
                 let flags = parse_flags(shot.flags.as_ref());
+                let lrud = match &to_station_lruds {
+                    Some(lruds) => lruds.at(&kept_survey.shots, chain, pos),
+                    None => Lrud::of(shot),
+                };
                 shots_data.push(shot_to_shot_data(
                     shot,
                     &kept_survey.ctx,
+                    lrud,
                     depth_of(&shot.from),
                     depth_of(&shot.to),
                     flags.exclude_all,
@@ -1546,171 +1847,29 @@ pub fn convert_compass_to_import_configs(
         }
     }
 
-    // Pass 2b: index all station-name occurrences across every chain, then
-    // build the chain adjacency (two chains are neighbors iff they share a
-    // station name) and BFS from the anchor chain to assign a spanning-tree
-    // placement: anchor -> ZeroDatum, each reached chain -> FromImporting to
-    // its discovering neighbor. Unreachable components are seeded at Origin
-    // exactly once each (their members chain into them via FromImporting too).
-    let mut occurrences: HashMap<String, Vec<(usize, u32)>> = HashMap::new();
-    for (ci, chain) in chains.iter().enumerate() {
-        for (k, name) in chain.names.iter().enumerate() {
-            occurrences
-                .entry(name.clone())
-                .or_default()
-                .push((ci, k as u32));
-        }
-    }
-    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); chains.len()];
-    for occs in occurrences.values() {
-        for a in 0..occs.len() {
-            for b in (a + 1)..occs.len() {
-                let (ia, _) = occs[a];
-                let (ib, _) = occs[b];
-                if ia != ib {
-                    adjacency[ia].push(ib);
-                    adjacency[ib].push(ia);
-                }
-            }
-        }
-    }
-    for nbrs in adjacency.iter_mut() {
-        nbrs.sort_unstable();
-        nbrs.dedup();
-    }
-
-    // Find a station shared between two chains, returning (child_idx, parent_idx).
-    let shared_station = |child: &PendingChain, parent: &PendingChain| -> Option<(u32, u32)> {
-        for (ci, cname) in child.names.iter().enumerate() {
-            if let Some(pi) = parent.names.iter().position(|pn| pn == cname) {
-                return Some((ci as u32, pi as u32));
-            }
-        }
-        None
+    // Pass 2b: a spanning-tree placement over chain connectivity (anchor ->
+    // ZeroDatum, each reached chain -> FromImporting onto its discoverer,
+    // every other component seeded at Origin once), then 2c: loop closures
+    // for the shared stations the tree did not merge. Compass's own
+    // connection rule keeps every re-import where it was (#576 B3).
+    let names: Vec<&[String]> = chains.iter().map(|c| c.names.as_slice()).collect();
+    let policy = PlacementPolicy::Compass {
+        anchor: anchor.as_ref().map(|a| Anchor {
+            station: &a.name,
+            coordinates: a.coordinates,
+        }),
     };
-
-    let anchor_chain_idx = anchor_name
-        .as_deref()
-        .and_then(|a| chains.iter().position(|ch| ch.names.iter().any(|n| n == a)));
-
-    let mut placement: Vec<Option<ImportPlacement>> = vec![None; chains.len()];
-    let mut placement_merge_station: Vec<Option<u32>> = vec![None; chains.len()];
-    let mut placement_parent: Vec<Option<usize>> = vec![None; chains.len()];
-    let mut visited = vec![false; chains.len()];
-    let mut creation_order: Vec<usize> = Vec::with_capacity(chains.len());
-    let mut queue: VecDeque<usize> = VecDeque::new();
-
-    if let (Some(ac), Some(coords)) = (anchor_chain_idx, anchor_coordinates) {
-        let aname = anchor_name.as_deref().unwrap_or("");
-        let aidx = chains[ac]
-            .names
-            .iter()
-            .position(|n| n == aname)
-            .unwrap_or(0) as u32;
-        placement[ac] = Some(ImportPlacement::ZeroDatum {
-            coordinates: coords,
-            station_index: aidx,
-        });
-        visited[ac] = true;
-        creation_order.push(ac);
-        queue.push_back(ac);
-    }
-
-    let mut next_root_warns = anchor_chain_idx.is_some();
-    loop {
-        while let Some(parent_idx) = queue.pop_front() {
-            // Borrow-checker dance: copy the neighbor list before iterating.
-            let neighbors = adjacency[parent_idx].clone();
-            for nb in neighbors {
-                if visited[nb] {
-                    continue;
-                }
-                if let Some((child_st, parent_st)) =
-                    shared_station(&chains[nb], &chains[parent_idx])
-                {
-                    placement[nb] = Some(ImportPlacement::FromImporting {
-                        import_station: child_st,
-                        target_section_index: chains[parent_idx].section_index,
-                        target_station_index: parent_st,
-                    });
-                    placement_merge_station[nb] = Some(child_st);
-                    placement_parent[nb] = Some(parent_idx);
-                }
-                visited[nb] = true;
-                creation_order.push(nb);
-                queue.push_back(nb);
-            }
-        }
-        // Seed the next disconnected component (if any) at Origin.
-        let next = (0..chains.len()).find(|&i| !visited[i]);
-        match next {
-            Some(seed) => {
-                placement[seed] = Some(ImportPlacement::Origin);
-                if next_root_warns {
-                    warnings.push(format!(
-                        "Section '{}' starts a separate component not connected to the georeferenced survey; placed at origin",
-                        chains[seed].label
-                    ));
-                }
-                next_root_warns = true;
-                visited[seed] = true;
-                creation_order.push(seed);
-                queue.push_back(seed);
-            }
-            None => break,
-        }
-    }
-
-    // Pass 2c: emit loop closures for shared stations that aren't the
-    // spanning-tree merge edge - pin each chain's other shared station to the
-    // canonical (earliest by section_index) occurrence.
-    let mut canonical: HashMap<&str, (u32, u32)> = HashMap::new();
-    for chain in &chains {
-        for (k, name) in chain.names.iter().enumerate() {
-            canonical
-                .entry(name.as_str())
-                .and_modify(|prev| {
-                    if chain.section_index < prev.0 {
-                        *prev = (chain.section_index, k as u32);
-                    }
-                })
-                .or_insert((chain.section_index, k as u32));
-        }
-    }
-    let mut closures: Vec<ImportClosure> = Vec::new();
-    let mut closure_keys: std::collections::HashSet<(u32, u32, u32, u32)> =
-        std::collections::HashSet::new();
-    for (ci, chain) in chains.iter().enumerate() {
-        let merge_st = placement_merge_station[ci];
-        let parent_section = placement_parent[ci].map(|p| chains[p].section_index);
-        for (k, name) in chain.names.iter().enumerate() {
-            if let Some(&(canon_sec, canon_st)) = canonical.get(name.as_str()) {
-                if canon_sec == chain.section_index {
-                    continue; // This chain owns the canonical occurrence.
-                }
-                // Skip the spanning-tree merge edge for THIS chain.
-                if Some(k as u32) == merge_st && parent_section == Some(canon_sec) {
-                    continue;
-                }
-                let key = (chain.section_index, k as u32, canon_sec, canon_st);
-                if closure_keys.insert(key) {
-                    closures.push(ImportClosure {
-                        from_section_index: chain.section_index,
-                        from_station_index: k as u32,
-                        to_section_index: canon_sec,
-                        to_station_index: canon_st,
-                    });
-                }
-            }
-        }
-    }
+    let placements = place_chains(&names, &policy, &mut warnings, |i| chains[i].label.clone());
+    let closures = build_closures(&names, &placements);
 
     // Emit configs in BFS creation order so FromImporting targets always
     // precede their dependents at create time.
     let mut configs: Vec<ImportSectionConfig> = Vec::with_capacity(chains.len());
-    for ci in creation_order {
+    for &ci in &placements.creation_order {
         let chain = &chains[ci];
-        let p = placement[ci].clone().unwrap_or(ImportPlacement::Origin);
+        let p = placements.placement[ci]
+            .clone()
+            .unwrap_or(ImportPlacement::Origin);
         configs.push(ImportSectionConfig {
             reverse: false,
             section_index: chain.section_index,
@@ -1727,7 +1886,7 @@ pub fn convert_compass_to_import_configs(
         });
     }
 
-    topological_sort_configs(&mut configs);
+    topological_sort_configs(&mut configs, ConfigOrder::Rebuild);
 
     Ok((configs, closures, warnings))
 }
@@ -1755,79 +1914,8 @@ fn section_label(survey: &Survey, multi: bool, chain_idx: usize) -> String {
     }
 }
 
-/// Reorder configs so that any section referenced by a `FromImporting` placement
-/// is created before its dependent (Kahn's algorithm; cycles fall back to
-/// original order).
-fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
-    if configs.len() <= 1 {
-        return;
-    }
-    let pos_of: HashMap<u32, usize> = configs
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.section_index, i))
-        .collect();
-    let dep: Vec<Option<usize>> = configs
-        .iter()
-        .map(|c| match &c.placement {
-            ImportPlacement::FromImporting {
-                target_section_index,
-                ..
-            } => pos_of.get(target_section_index).copied(),
-            _ => None,
-        })
-        .collect();
-
-    // Ready-queue Kahn's: build a reverse-dependency adjacency list so
-    // each placed config can directly enqueue the configs that were
-    // waiting on it.  Replaces an outer-loop-scan-everything version
-    // that ran O(N²) for deeply-chained surveys (one section per pass
-    // dependency).
-    //
-    // children[i] = indices of configs whose `dep` is Some(i).
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); configs.len()];
-    let mut placed = vec![false; configs.len()];
-    let mut order: Vec<usize> = Vec::with_capacity(configs.len());
-    let mut ready: VecDeque<usize> = VecDeque::new();
-    for (i, d) in dep.iter().enumerate() {
-        match d {
-            Some(target) if *target < configs.len() => children[*target].push(i),
-            // Root: no dependency, immediately ready.
-            None => ready.push_back(i),
-            // Dependency points outside the slice - treat as ready (the
-            // legacy fallback was the same).
-            Some(_) => ready.push_back(i),
-        }
-    }
-    while let Some(i) = ready.pop_front() {
-        if placed[i] {
-            continue;
-        }
-        placed[i] = true;
-        order.push(i);
-        for &child in &children[i] {
-            if !placed[child] {
-                ready.push_back(child);
-            }
-        }
-    }
-    // Append any remaining (cyclic) configs in original order.
-    for i in 0..configs.len() {
-        if !placed[i] {
-            order.push(i);
-        }
-    }
-
-    let mut reordered: Vec<Option<ImportSectionConfig>> = configs.drain(..).map(Some).collect();
-    for idx in order {
-        if let Some(config) = reordered[idx].take() {
-            configs.push(config);
-        }
-    }
-}
-
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
@@ -1844,14 +1932,23 @@ mod tests {
 
     // The private_cave_* tests below exercise the importer end-to-end against
     // a real-cave Compass corpus.  That corpus is private survey data and is
-    // not committed; place `PrivateCave.MAK` (and the .DAT files it
-    // references) under `src-tauri/tests/fixtures/compass/` locally and
-    // re-run with `cargo test -- --ignored` to enable them.
+    // not committed; point `COMPASS_PRIVATE_MAK` at a `.MAK` (its .DAT files
+    // beside it), or place it as `PrivateCave.MAK` under
+    // `src-tauri/tests/fixtures/compass/`, and re-run with
+    // `cargo test -- --ignored` to enable them. Run without it, each fails
+    // naming the missing file (#576 E13). [#576 HFI-11] They hold for ANY
+    // Compass project - no dataset's numbers or names belong in them.
+    fn private_cave_mak() -> PathBuf {
+        match std::env::var_os("COMPASS_PRIVATE_MAK") {
+            Some(_) => crate::models::test_support::require_env_file("COMPASS_PRIVATE_MAK"),
+            None => crate::models::test_support::require_file(fixture("PrivateCave.MAK")),
+        }
+    }
 
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_mak_reads_georeference() {
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         assert!(!parsed.surveys.is_empty());
         assert!(parsed.datum.is_some());
         assert!(parsed.utm_zone.is_some());
@@ -1861,49 +1958,73 @@ mod tests {
         );
     }
 
+    /// The geometry is inclination-based, +down (#576 B28: the inclination
+    /// column is an ordinary angle, negative = down, whatever the survey FORMAT
+    /// says about how the notebook was kept - a `W` format once read it as a
+    /// depth difference with the sign reversed). [#576 HFI-11] Was one dataset's
+    /// first shot, to the centimetre; now what holds for any project:
+    /// - depth is a function of the station: consecutive shots of a section
+    ///   agree on the station they share, and the anchor station is the datum;
+    /// - each station's depth comes from the shot that first reached it from
+    ///   the anchor, as `length x sin(mean pitch)`, so every shot except those
+    ///   closing a loop carries exactly that change. A survey network with as
+    ///   many loop-closing shots as the rest would be a grid, not a cave: MORE
+    ///   than half of the shots must match.
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_first_shot_geometry_is_depth_based() {
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         let (configs, _closures, _warnings) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         assert!(!configs.is_empty());
 
-        // The private corpus uses a survey FORMAT whose 4th character is `W`
-        // (DepthGauge), so each shot's "inclination" column is actually a
-        // vertical depth offset in the shot's length units, not a slope
-        // angle in degrees.  The pipeline converts it via
-        // `-asin(depth / length)` into a Compass +up slope which Stalagmight
-        // then stores as +down pitch.
-        let anchor_config = configs
-            .iter()
-            .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
-            .expect("a section anchored by zero datum");
-        if let ImportPlacement::ZeroDatum { station_index, .. } = anchor_config.placement {
-            assert_eq!(station_index, 0);
+        for c in &configs {
+            for pair in c.shots.windows(2) {
+                assert!(
+                    (pair[0].depth_out - pair[1].depth_in).abs() < 1e-9,
+                    "section {:?}: consecutive shots disagree on their station's depth",
+                    c.name
+                );
+            }
         }
-        let shot = &anchor_config.shots[0];
-        // DepthGauge surveys produce a finite, non-trivial pitch out of a
-        // raw "inclination" column that would otherwise be near-zero.
-        assert!(shot.depth_in.abs() < 0.01, "depth_in {}", shot.depth_in);
-        assert!(
-            shot.pitch_in.is_some_and(|p| p.abs() > 0.5),
-            "expected a meaningful DepthGauge-derived pitch, got {:?}",
-            shot.pitch_in
-        );
+        for c in &configs {
+            if let ImportPlacement::ZeroDatum { station_index, .. } = c.placement {
+                let k = station_index as usize;
+                let depth = match c.shots.get(k) {
+                    Some(shot) => shot.depth_in,
+                    None => c.shots[k - 1].depth_out,
+                };
+                assert!(depth.abs() < 1e-9, "the anchor station sits at {depth}");
+            }
+        }
 
-        // Exactly one zero datum for the whole project.
-        let zero_datums = configs
+        let shots: Vec<&ShotData> = configs.iter().flat_map(|c| &c.shots).collect();
+        let own_pitch = shots
             .iter()
-            .filter(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
+            .filter(|s| {
+                let pitch_in = s.pitch_in.unwrap_or(0.0);
+                let mean = s
+                    .pitch_out
+                    .map_or(pitch_in, |out| f64::midpoint(pitch_in, out));
+                let change = s.length * mean.to_radians().sin();
+                (s.depth_out - s.depth_in - change).abs() < 1e-6
+            })
             .count();
-        assert_eq!(zero_datums, 1);
+        println!(
+            "{own_pitch} of {} shots carry the depth change of their own pitch",
+            shots.len()
+        );
+        assert!(
+            own_pitch * 2 > shots.len(),
+            "{own_pitch} of {} shots carry the depth change of their own +down pitch",
+            shots.len()
+        );
     }
 
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_zero_datum_projects_to_plausible_coords() {
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         let (configs, _closures, _warnings) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         let coords = configs
@@ -1928,35 +2049,57 @@ mod tests {
         );
     }
 
+    /// `X`-flagged (excluded) shots land only when asked for, and then as
+    /// reference shots - by the preview's own accounting (#437), exact for
+    /// both toggles. [#576 HFI-11] Was "the fixture has an all-excluded
+    /// survey", one dataset's shape; this holds for any project, including one
+    /// with no excluded shot at all.
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_excluded_shots_are_filtered_by_default() {
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
-        let (default_configs, _, _) = convert_compass_to_import_configs(
-            &parsed,
-            &CompassImportOptions {
-                include_excluded: false,
-                apply_corrections: true,
-                comments_on_stations: true,
-            },
-        )
-        .unwrap();
-        let (included_configs, _, _) = convert_compass_to_import_configs(
-            &parsed,
-            &CompassImportOptions {
-                include_excluded: true,
-                apply_corrections: true,
-                comments_on_stations: true,
-            },
-        )
-        .unwrap();
-        // The fixture contains at least one survey that is entirely
-        // `#|X#`-flagged; including excluded shots must add shots, which
-        // are imported as reference shots.
-        assert!(total_shots(&included_configs) > total_shots(&default_configs));
-        assert!(included_configs
-            .iter()
-            .any(|c| c.shots.iter().any(|s| s.kind.is_virtual())));
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
+        let convert = |include_excluded| {
+            convert_compass_to_import_configs(
+                &parsed,
+                &CompassImportOptions {
+                    include_excluded,
+                    apply_corrections: true,
+                    comments_on_stations: true,
+                },
+            )
+            .unwrap()
+            .0
+        };
+        let (default_configs, included_configs) = (convert(false), convert(true));
+        let preview = build_preview(&parsed);
+        let invalid = &preview.invalid_shot_counts;
+        println!(
+            "shots={} excluded={} default import={} with excluded={}",
+            preview.shot_count,
+            preview.excluded_shot_count,
+            total_shots(&default_configs),
+            total_shots(&included_configs)
+        );
+        assert_eq!(
+            total_shots(&default_configs) as u32,
+            preview.shot_count - preview.excluded_shot_count - invalid.non_excluded_corrected
+        );
+        assert_eq!(
+            total_shots(&included_configs) as u32,
+            preview.shot_count - invalid.non_excluded_corrected - invalid.excluded_corrected
+        );
+        let virtual_shots = |configs: &[ImportSectionConfig]| {
+            configs
+                .iter()
+                .flat_map(|c| &c.shots)
+                .filter(|s| s.kind.is_virtual())
+                .count() as u32
+        };
+        assert_eq!(virtual_shots(&default_configs), 0);
+        assert_eq!(
+            virtual_shots(&included_configs),
+            preview.excluded_shot_count - invalid.excluded_corrected
+        );
     }
 
     /// #393 item 1: `execute_compass_import` now reads `(survey_count,
@@ -2399,61 +2542,49 @@ mod tests {
         assert!(lat > 55.0 && lat < 65.0, "expected lat ≈ +60°, got {lat}");
     }
 
+    /// Compass convention: a shot comment describes the FROM station (where the
+    /// surveyor stood). With comments_on_stations on (the default) every
+    /// non-empty shot comment becomes a station comment at station_index = shot
+    /// index and leaves the shot; off, nothing moves. [#576 HFI-11] Was "the
+    /// anchor section's first shot carries a comment", one dataset's shape; this
+    /// compares the two imports section by section, for any project.
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_comments_promoted_to_from_station_by_default() {
-        // Compass convention: a shot comment describes the FROM station (the
-        // point the surveyor was standing at).  With comments_on_stations on
-        // (the default), each non-empty shot comment should become a
-        // station_comment at station_index = shot index, and the shot's own
-        // comment should be cleared.  The private fixture's first shot
-        // carries an entrance note on its FROM station; this test asserts
-        // that note migrates to station 0 of the anchor section.
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         let (promoted, _, _) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
-        let anchor = promoted
-            .iter()
-            .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
-            .expect("zero datum section");
-        assert!(
-            anchor.shots[0].comment.is_none(),
-            "first shot's comment should be promoted off the shot, got {:?}",
-            anchor.shots[0].comment
-        );
-        let station_zero_comment = anchor
-            .station_comments
-            .iter()
-            .find_map(|(idx, text)| (*idx == 0).then_some(text.as_str()));
-        assert!(
-            station_zero_comment.is_some_and(|s| !s.is_empty()),
-            "station 0 should carry a non-empty promoted comment, got {:?}",
-            station_zero_comment
-        );
-
-        // With the option off, comments stay on the shot and station_comments
-        // is empty for the section.
         let (kept_on_shots, _, _) = convert_compass_to_import_configs(
             &parsed,
             &CompassImportOptions {
-                include_excluded: false,
-                apply_corrections: true,
                 comments_on_stations: false,
+                ..CompassImportOptions::default()
             },
         )
         .unwrap();
-        let anchor_raw = kept_on_shots
-            .iter()
-            .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
-            .expect("zero datum section");
-        assert!(anchor_raw.station_comments.is_empty());
-        assert!(
-            anchor_raw.shots[0]
-                .comment
-                .as_deref()
-                .is_some_and(|s| !s.is_empty()),
-            "first shot should retain its non-empty comment when promotion is off"
-        );
+        assert_eq!(promoted.len(), kept_on_shots.len());
+        let mut moved = 0;
+        for kept in &kept_on_shots {
+            let on = promoted
+                .iter()
+                .find(|c| c.section_index == kept.section_index)
+                .expect("the same sections either way");
+            assert!(kept.station_comments.is_empty(), "off: nothing moves");
+            assert!(
+                on.shots.iter().all(|s| s.comment.is_none()),
+                "on: every comment leaves its shot"
+            );
+            let expected: Vec<(u32, String)> = kept
+                .shots
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| s.comment.clone().map(|c| (i as u32, c)))
+                .collect();
+            assert!(expected.iter().all(|(_, c)| !c.is_empty()));
+            assert_eq!(on.station_comments, expected, "section {:?}", kept.name);
+            moved += expected.len();
+        }
+        println!("{moved} shot comments promoted to their FROM station");
     }
 
     #[test]
@@ -2463,10 +2594,10 @@ mod tests {
         // section in the private corpus must attach to the network through a
         // station-name path back to the zero datum (1 ZeroDatum + the rest
         // FromImporting), with no chains stranded at origin.  A one-pass
-        // first-occurrence placement previously left ~20 sections detached
+        // first-occurrence placement previously left sections detached
         // because their connection station was first defined in a
         // later-processed survey.
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         let (configs, _closures, warnings) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         let mut zero = 0;
@@ -2489,7 +2620,7 @@ mod tests {
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_corpus_converts_without_error() {
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         let preview = build_preview(&parsed);
         assert!(preview.has_georeference);
         assert!(preview.survey_count >= 3);
@@ -2502,14 +2633,32 @@ mod tests {
 
     #[test]
     fn multi_file_mak_warns_on_per_file_divergence() {
-        // multi_zone.mak declares two `#file` entries; file 0 uses
+        // A `.MAK` with two `#file` entries, built below: file 0 uses
         // NAD-1983 / UTM 13 / declination=Entered (default), file 1
         // switches to WGS 1984 / UTM 14 / declination=Auto.  parse_mak
         // mirrors file 0's values into the project-wide preview fields
         // and emits one warning per divergence so the user knows the
         // preview only reflects file 0.  Geometry is resolved per-file
         // through `SurveyWithState.state` regardless of these warnings.
-        let parsed = parse_compass(&fixture("multi_zone.mak")).unwrap();
+        //
+        // The two files are two DISTINCT synthetic `.DAT`s: a second listing
+        // of one file is skipped (#576 RV2-R-12). This test used to read the
+        // tracked fixture `tests/fixtures/compass/multi_zone.mak`, which listed
+        // one `.DAT` twice; nothing reads that fixture any more (it is unused,
+        // left for the maintainer to delete by hand - #576 RV4-R-P3).
+        let dir = tempfile::tempdir().unwrap();
+        for (name, survey) in [("a.dat", "A"), ("b.dat", "B")] {
+            std::fs::write(
+                dir.path().join(name),
+                synthetic_survey_record("Synthetic Cave", survey, "7 10 1979"),
+            )
+            .unwrap();
+        }
+        let mak = "&North American 1983;\r\n$13;\r\n@500000.000,4000000.000,1000.000,13,0.000;\r\n\
+                   !E;\r\n#a.dat;\r\n\r\n\
+                   &WGS 1984;\r\n$14;\r\n@500000.000,4000000.000,1000.000,14,0.000;\r\n\
+                   !A;\r\n#b.dat;\r\n";
+        let parsed = parse_mak_text(dir.path(), mak.as_bytes()).unwrap();
         // Project-wide fields take file 0 values for preview.
         assert_eq!(parsed.datum, Some(Datum::NorthAmerican1983));
         assert_eq!(parsed.utm_zone, Some(13));
@@ -2553,47 +2702,6 @@ mod tests {
         // build_preview output: it must surface file 0's UTM zone (13).
         let preview = build_preview(&parsed);
         assert_eq!(preview.utm_zone, Some(13));
-    }
-
-    #[test]
-    fn backsight_inclination_converted_to_degrees_for_grads() {
-        // backsight_grads.dat declares FORMAT inclination unit `R` (Grads)
-        // and carries one shot with a backsight column.  Compass Grads:
-        // 400 grads = 360°, so `100 grads = 90°` and `-100 grads = -90°`.
-        //
-        // Forward: BEARING=90, INC=+100 grads (= +90° up).
-        // Back   : BEARING=270 (= 90+180), INC=-100 grads (B looking back
-        //          at A which is below - back-inc is the down-reading).
-        //
-        // The two-sign-flip in `shot_backsight_geometry` (TO→FROM ⇒ FROM→TO,
-        // then Compass +up ⇒ Stalagmight +down) collapses to identity on
-        // the VALUE - so pitch_out should equal the degree-converted
-        // back_inc, i.e. -100 grads * 0.9 = -90°.  Before the unit-
-        // conversion fix the function returned the raw -100 (a grads
-        // reading stored as if it were degrees), which is the regression
-        // this test pins.
-        let parsed = parse_compass(&fixture("backsight_grads.dat")).unwrap();
-        let (configs, _, _) =
-            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
-        let shot = configs
-            .iter()
-            .flat_map(|c| c.shots.iter())
-            .next()
-            .expect("at least one shot");
-        let pitch_out = shot.pitch_out.expect("backsight should yield pitch_out");
-        assert!(
-            (pitch_out + 90.0).abs() < 0.01,
-            "pitch_out should be -90° after Grads→degrees + back-to-fore + +down; got {pitch_out}"
-        );
-        // Sanity: pitch_in is also degree-converted on the fore-sight
-        // path.  +100 grads → +90° up; Stalagmight stores as -90° (+down).
-        let pitch_in = shot
-            .pitch_in
-            .expect("fore inclination should populate pitch_in");
-        assert!(
-            (pitch_in + 90.0).abs() < 0.01,
-            "pitch_in should be -90° after Grads→degrees + +down; got {pitch_in}"
-        );
     }
 
     /// One survey record - cave name first line - in the smallest shape the
@@ -2911,6 +3019,39 @@ mod tests {
         );
     }
 
+    /// #576 (B26): `shot_geometry` wrapped the bearing with a bare
+    /// `rem_euclid(360.0)`, which returns EXACTLY `360.0` for a tiny negative
+    /// reading. `360.0` trips `INVALID_AZIMUTH`, an error the user cannot
+    /// dismiss.
+    #[test]
+    fn a_tiny_negative_bearing_imports_as_north_not_360() {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = dir.path().join("tiny-negative-bearing.dat");
+        let text = synthetic_dat("Synthetic Cave")
+            .replace("A1 A2 10.00 90.00 ", "A1 A2 10.00 -0.0000000000000001 ");
+        assert!(
+            text.contains("-0.0000000000000001"),
+            "premise: bearing replaced"
+        );
+        std::fs::write(&dat, text).unwrap();
+
+        let parsed = parse_compass(&dat).unwrap();
+        let (configs, _closures, _warnings) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+
+        let shot = &configs[0].shots[0];
+        for (name, az) in [
+            ("azimuth_in", shot.azimuth_in),
+            ("azimuth_out", shot.azimuth_out),
+        ] {
+            assert!(
+                (0.0..360.0).contains(&az) && az.abs() < 1e-9,
+                "{name} = {az:?}: expected north in [0, 360), not a value that trips \
+                 INVALID_AZIMUTH"
+            );
+        }
+    }
+
     /// An ENTERED zero is a declaration: the surveyor wrote `DECLINATION: 0.00`
     /// in the book, which says the readings need no correction. It votes in the
     /// export's uniformity test like any other declared value.
@@ -3053,47 +3194,1376 @@ mod tests {
         assert_eq!(parsed.surveys.len(), expected.surveys.len());
     }
 
-    /// A `.MAK` is read from its path inside the vendored crate, so the mark
-    /// cannot be stripped for it. What we can do is say so: the vendored lexer
-    /// otherwise reports an unexpected character that renders as nothing.
+    /// Compass is a Windows program and writes its `.DAT` text in
+    /// Windows-1252, where `0x92` is the right single quote a word processor
+    /// types for an apostrophe. Read as ISO-8859-1 it is U+0092, an invisible
+    /// C1 control, so the comment the user sees reads "dont" with a hole in it.
     #[test]
-    fn a_utf8_bom_on_a_mak_is_refused_by_name() {
+    fn a_windows_1252_apostrophe_in_a_dat_comment_survives_the_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = synthetic_survey_record("Synthetic Cave", "A", "7 10 1979");
+        // The record ends on its one shot line; give that shot a comment.
+        let mut bytes = record.trim_end().as_bytes().to_vec();
+        bytes.extend_from_slice(b" don\x92t\r\n");
+        let path = dir.path().join("apostrophe.dat");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let parsed = parse_compass(&path).unwrap();
+        let comment = parsed.surveys[0].survey.shots[0]
+            .comment
+            .clone()
+            .unwrap_or_default();
+        let code_points: Vec<String> = comment
+            .chars()
+            .map(|c| format!("U+{:04X}", u32::from(c)))
+            .collect();
+        println!("shot comment: {comment:?} = {}", code_points.join(" "));
+        assert_eq!(
+            comment,
+            "don\u{2019}t",
+            "0x92 is U+2019 in Windows-1252, got {}",
+            code_points.join(" ")
+        );
+    }
+
+    /// A one-survey `.DAT` whose shot line carries `comment` as raw bytes,
+    /// written into `dir`.
+    fn dat_with_comment_bytes(dir: &Path, comment: &[u8]) -> PathBuf {
+        let record = synthetic_survey_record("Synthetic Cave", "A", "7 10 1979");
+        let mut bytes = record.trim_end().as_bytes().to_vec();
+        bytes.push(b' ');
+        bytes.extend_from_slice(comment);
+        bytes.extend_from_slice(b"\r\n");
+        let path = dir.join("synthetic.dat");
+        std::fs::write(&path, &bytes).unwrap();
+        path
+    }
+
+    /// The five bytes Windows-1252 leaves undefined (0x81, 0x8D, 0x8F, 0x90,
+    /// 0x9D) decode to U+FFFD, which loses whatever the surveyor typed. The
+    /// TML reader counts that loss on the receipt; a bare `.DAT` must too, on
+    /// the preview and on the receipt, rather than hand back a comment with
+    /// holes in it and no word about them.
+    ///
+    /// Without the fix the decode is silent and neither list carries it.
+    #[test]
+    fn undefined_windows_1252_bytes_in_a_dat_are_counted_in_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        // Two undefined bytes, and one defined one (0x92) that costs nothing.
+        let path = dat_with_comment_bytes(dir.path(), b"C\x81v\x9de don\x92t");
+
+        let parsed = parse_compass(&path).unwrap();
+        let comment = parsed.surveys[0].survey.shots[0]
+            .comment
+            .clone()
+            .unwrap_or_default();
+        assert_eq!(
+            comment, "C\u{fffd}v\u{fffd}e don\u{2019}t",
+            "premise: the bytes reached the comment"
+        );
+        let preview = build_preview(&parsed).warnings;
+        let (_configs, _closures, receipt) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        println!("preview warnings: {preview:?}");
+        println!("receipt warnings: {receipt:?}");
+
+        let expected =
+            "The file was read as windows-1252, the encoding Compass writes; 2 characters were \
+             replaced";
+        assert_eq!(preview, [expected], "one warning, for the one file read");
+        assert_eq!(
+            receipt
+                .iter()
+                .filter(|w| w.contains("windows-1252"))
+                .collect::<Vec<_>>(),
+            [expected],
+            "the warning must reach the import receipt too"
+        );
+    }
+
+    /// The warning must stay rare enough to mean something: a `.DAT` whose
+    /// high bytes are all defined in Windows-1252 lost nothing and gets no
+    /// warning at all.
+    #[test]
+    fn a_dat_with_no_undefined_byte_gets_no_encoding_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dat_with_comment_bytes(dir.path(), b"\x80 don\x92t caf\xe9 \x85");
+
+        let parsed = parse_compass(&path).unwrap();
+        let comment = parsed.surveys[0].survey.shots[0]
+            .comment
+            .clone()
+            .unwrap_or_default();
+        assert_eq!(
+            comment, "\u{20ac} don\u{2019}t caf\u{e9} \u{2026}",
+            "premise: the high bytes reached the comment"
+        );
+        let preview = build_preview(&parsed).warnings;
+        let (_configs, _closures, receipt) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        println!("preview warnings: {preview:?}");
+        println!("receipt warnings: {receipt:?}");
+        assert!(preview.is_empty(), "got {preview:?}");
+        assert!(
+            receipt.iter().all(|w| !w.contains("windows-1252")),
+            "got {receipt:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #576 W2-COMPASS: in-memory synthetic surveys (no file on disk).
+    // -----------------------------------------------------------------------
+
+    /// One survey's header lines for `format`, with or without the backsight
+    /// columns. Synthetic - no fixture data.
+    fn synthetic_header(survey_name: &str, format: &str, backsights: bool) -> String {
+        let columns = if backsights {
+            "FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT AZM2 INC2 FLAGS COMMENTS"
+        } else {
+            "FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS"
+        };
+        format!(
+            "Synthetic Cave\r\n\
+             SURVEY NAME: {survey_name}\r\n\
+             SURVEY DATE: 7 10 1979\r\n\
+             SURVEY TEAM:\r\n\
+             Nobody\r\n\
+             DECLINATION: 0.00  FORMAT: {format}  CORRECTIONS: 0.00 0.00 0.00\r\n\
+             \r\n\
+             {columns}\r\n\
+             \r\n"
+        )
+    }
+
+    /// One survey record: the header for `format` plus `rows`, ended with the
+    /// form feed Compass writes after every survey.
+    pub(super) fn synthetic_survey_text(survey_name: &str, format: &str, rows: &[&str]) -> String {
+        // The backsight flag is the 12th FORMAT character in the 12- and
+        // 13-character forms and the 14th in the 15-character form.
+        let flag = match format.len() {
+            12 | 13 => format.chars().nth(11),
+            15 => format.chars().nth(13),
+            _ => None,
+        };
+        let mut text = synthetic_header(survey_name, format, flag == Some('B'));
+        for row in rows {
+            text.push_str(row);
+            text.push_str("\r\n");
+        }
+        text.push_str("\x0c\r\n");
+        text
+    }
+
+    /// Parse `.DAT` text the way `parse_dat` does once it has read the file,
+    /// so a test can build its surveys in memory.
+    pub(super) fn parse_dat_text(text: &str) -> ParsedCompass {
+        let (surveys, remainder) = Survey::parse_dat_file_with_remainder(text).unwrap();
+        assert!(
+            only_record_separators(remainder),
+            "premise: the synthetic text parses to the end, left {remainder:?}"
+        );
+        ParsedCompass {
+            cave_name: String::new(),
+            datum: None,
+            utm_zone: None,
+            declination_mode: DeclinationMode::default(),
+            fixed_stations: Vec::new(),
+            surveys: surveys
+                .into_iter()
+                .map(|survey| SurveyWithState {
+                    survey,
+                    state: CompassFileState::default(),
+                })
+                .collect(),
+            warnings: Vec::new(),
+        }
+    }
+
+    /// Convert one synthetic survey named `A` with the default options.
+    fn convert_text(
+        format: &str,
+        rows: &[&str],
+    ) -> (Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>) {
+        let parsed = parse_dat_text(&synthetic_survey_text("A", format, rows));
+        convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap()
+    }
+
+    fn all_shots(configs: &[ImportSectionConfig]) -> Vec<&ShotData> {
+        configs.iter().flat_map(|c| c.shots.iter()).collect()
+    }
+
+    /// #576 B28: a `.DAT` stores every length and LRUD in decimal feet - the
+    /// FORMAT line only records how the surveyor wrote them in the notebook
+    /// (Compass's "Survey Data File Format" page; Survex reads them the same
+    /// way). A metric-notebook survey storing `32.81` is a 10 m leg, not a
+    /// 32.81 m one, and its `3.28` LRUD is 1 m.
+    #[test]
+    fn a_metric_format_survey_still_stores_feet() {
+        let rows = ["A1 A2 32.81 90.00 -10.00 3.28 3.28 3.28 3.28"];
+        let (configs, _, _) = convert_text("DMMDLRUDLADN", &rows);
+        let shot = all_shots(&configs)[0];
+        println!(
+            "FORMAT DMMDLRUDLADN, stored 32.81 / LRUD 3.28 -> length {:.3} m, left {:?} m",
+            shot.length, shot.left
+        );
+        assert!(
+            (shot.length - 32.81 * FEET_TO_METERS).abs() < 1e-9,
+            "the stored 32.81 is decimal feet, got {} m",
+            shot.length
+        );
+        for (name, v) in [
+            ("left", shot.left),
+            ("up", shot.up),
+            ("down", shot.down),
+            ("right", shot.right),
+        ] {
+            let v = v.unwrap();
+            assert!(
+                (v - 3.28 * FEET_TO_METERS).abs() < 1e-9,
+                "{name}: the stored 3.28 is decimal feet, got {v} m"
+            );
+        }
+
+        // The import dialog and the receipt say what was done to the numbers:
+        // they were converted from feet, whatever the notebook used.
+        let parsed = parse_dat_text(&synthetic_survey_text("A", "DMMDLRUDLADN", &rows));
+        assert_eq!(preview_scalars(&parsed).1.as_deref(), Some("feet"));
+        assert_eq!(build_preview(&parsed).length_unit.as_deref(), Some("feet"));
+    }
+
+    /// #576 B28: a `.DAT` stores every inclination in decimal degrees, whatever
+    /// unit the FORMAT says the notebook used (degrees `D`, percent grade `G`,
+    /// degrees-and-minutes `M`, grads `R`, depth gauge `W`). Each stored value
+    /// below is a downward angle, so it imports as a `+down` pitch of the same
+    /// size and the leg descends by `length * sin(angle)`.
+    #[test]
+    fn every_inclination_unit_stores_decimal_degrees() {
+        let mut wrong: Vec<String> = Vec::new();
+        for (unit, stored) in [
+            ('D', -45.0_f64),
+            ('G', -45.0),
+            ('M', -12.5),
+            ('R', -45.0),
+            ('W', -30.0),
+        ] {
+            let format = format!("DDD{unit}LRUDLADN");
+            let row = format!("A1 A2 32.81 90.00 {stored:.2} 1.00 1.00 1.00 1.00");
+            let (configs, _, _) = convert_text(&format, &[&row]);
+            let shot = all_shots(&configs)[0];
+            let pitch = shot.pitch_in.unwrap();
+            let drop = shot.depth_out - shot.depth_in;
+            let expected_drop = 32.81 * FEET_TO_METERS * (-stored).to_radians().sin();
+            println!(
+                "FORMAT {format}: stored {stored:.2} -> pitch_in {pitch:.3} (+down), \
+                 depth change {drop:+.3} m (expected {:.3}, {expected_drop:+.3} m)",
+                -stored
+            );
+            if (pitch + stored).abs() > 1e-9 || (drop - expected_drop).abs() > 1e-6 {
+                wrong.push(format);
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "every stored inclination is decimal degrees; read otherwise for {wrong:?}"
+        );
+    }
+
+    /// #576 B28 (decision D-8): a depth-gauge (`W`) survey's inclination field
+    /// is an ordinary angle in degrees, negative = down, exactly as Survex
+    /// reads it (it only marks the survey as diving style). A stored `-5.86`
+    /// on a 49 ft leg is a 1.525 m DESCENT; 19b3cb53 read it as a depth
+    /// difference with the sign backwards and made the leg climb 1.79 m.
+    #[test]
+    fn a_depth_gauge_survey_descends_on_a_negative_inclination() {
+        let (configs, _, warnings) = convert_text(
+            "DDDWLRUDLADN",
+            &[
+                "A1 A2 49.00 0.00 -5.86 1.00 1.00 1.00 1.00",
+                "A2 A3 20.00 0.00 -30.00 1.00 1.00 1.00 1.00",
+            ],
+        );
+        let shots = all_shots(&configs);
+        for (i, s) in shots.iter().enumerate() {
+            println!(
+                "W shot {i}: pitch_in {:?}, depth {:.3} -> {:.3}",
+                s.pitch_in, s.depth_in, s.depth_out
+            );
+        }
+        let first_drop = shots[0].depth_out - shots[0].depth_in;
+        assert!(
+            (first_drop - 1.5249).abs() < 1e-3,
+            "-5.86 deg over 49 ft descends 1.525 m, got {first_drop:+.3} m"
+        );
+        let second_drop = shots[1].depth_out - shots[1].depth_in;
+        assert!(
+            (second_drop - 20.0 * FEET_TO_METERS * 0.5).abs() < 1e-6,
+            "-30 deg over 20 ft descends 3.048 m, got {second_drop:+.3} m"
+        );
+        assert!((shots[0].pitch_in.unwrap() - 5.86).abs() < 1e-9);
+        assert!(
+            warnings.iter().all(|w| !w.contains("DepthGauge")),
+            "no warning describes a depth-difference reading any more: {warnings:?}"
+        );
+    }
+
+    /// #576 B28: the backsight inclination is decimal degrees too, so a grads
+    /// FORMAT no longer scales it (this replaces the dababa5c test that pinned
+    /// the x0.9 conversion on `backsight_grads.dat`).
+    #[test]
+    fn a_grads_format_backsight_inclination_stores_degrees() {
+        let (configs, _, _) = convert_text(
+            "DDDRLRUDLADBF",
+            &["A1 A2 32.81 90.00 -45.00 1.00 1.00 1.00 1.00 270.00 45.00"],
+        );
+        let shot = all_shots(&configs)[0];
+        println!(
+            "FORMAT DDDRLRUDLADBF, fore -45.00 back 45.00 -> pitch_in {:?} pitch_out {:?}",
+            shot.pitch_in, shot.pitch_out
+        );
+        assert!((shot.pitch_in.unwrap() - 45.0).abs() < 1e-9);
+        assert!((shot.pitch_out.unwrap() - 45.0).abs() < 1e-9);
+    }
+
+    /// Print a converted survey's shots, one line each, for test captures.
+    fn print_shots(label: &str, configs: &[ImportSectionConfig], warnings: &[String]) {
+        println!("{label}");
+        for (i, s) in all_shots(configs).iter().enumerate() {
+            println!(
+                "  shot {i}: az_in {:.2} az_out {:.2} pitch_in {:?} pitch_out {:?} depth {:.3} -> {:.3}",
+                s.azimuth_in, s.azimuth_out, s.pitch_in, s.pitch_out, s.depth_in, s.depth_out
+            );
+        }
+        for w in warnings {
+            println!("  warning: {w}");
+        }
+    }
+
+    /// #576 B30: with backsights, -999 marks a reading that was not taken, and
+    /// Compass processes the shot from the reading that WAS taken ("Compass can
+    /// still process the shot as long as there is at least one compass reading
+    /// and one inclinometer reading" - Compass Editor help, "Backsights and
+    /// Redundant Backsights"). A 10 m leg at 90 deg, 30 deg down, whose
+    /// foresight is missing, used to import pointing north and level, with
+    /// nothing said.
+    #[test]
+    fn a_missing_foresight_is_taken_from_the_reversed_backsight() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADBF",
+            &["A1 A2 32.81 -999.00 -999.00 1.00 1.00 1.00 1.00 270.00 30.00"],
+        );
+        print_shots("fore -999/-999, back 270/+30", &configs, &warnings);
+        let shot = all_shots(&configs)[0];
+        assert!(
+            (shot.azimuth_in - 90.0).abs() < 1e-9 && (shot.azimuth_out - 90.0).abs() < 1e-9,
+            "bearing = back bearing + 180 in both slots, got {} / {}",
+            shot.azimuth_in,
+            shot.azimuth_out
+        );
+        assert_eq!(
+            shot.pitch_in,
+            Some(30.0),
+            "inclination = the negated backsight (+30 back is 30 down)"
+        );
+        assert_eq!(shot.pitch_out, None, "only one inclination was taken");
+        let drop = shot.depth_out - shot.depth_in;
+        assert!(
+            (drop - 32.81 * FEET_TO_METERS * 0.5).abs() < 1e-6,
+            "the leg descends 5 m, got {drop:+.3} m"
+        );
+        let notes: Vec<&String> = warnings
+            .iter()
+            .filter(|w| w.contains("taken from the backsight"))
+            .collect();
+        assert_eq!(
+            notes,
+            [
+                "Survey 'A': 2 missing foresight readings were taken from the backsight \
+              (bearing + 180, inclination negated), as Compass does."
+            ],
+            "one receipt line per survey counts the reconstructed readings"
+        );
+    }
+
+    /// #576 B30, mirror case: a missing BACK inclination is no reading, not a
+    /// level one. `Some(0.0)` was averaged with the 30 deg foresight into a
+    /// 15 deg "recorded" inclination that disagrees with the shot's own depth.
+    #[test]
+    fn a_missing_back_inclination_is_absent_not_level() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADBF",
+            &["A1 A2 32.81 90.00 -30.00 1.00 1.00 1.00 1.00 270.00 -999.00"],
+        );
+        print_shots("fore 90/-30, back 270/-999", &configs, &warnings);
+        let shot = all_shots(&configs)[0];
+        assert_eq!(shot.pitch_in, Some(30.0));
+        assert_eq!(shot.pitch_out, None, "no back inclination was taken");
+        assert!(
+            (shot.azimuth_out - 90.0).abs() < 1e-9,
+            "the back bearing stays"
+        );
+        assert!(
+            warnings.iter().all(|w| !w.contains("backsight")),
+            "nothing was reconstructed: {warnings:?}"
+        );
+    }
+
+    /// #576 B30: the two halves of a backsight are independent readings. A
+    /// missing back BEARING used to throw away a valid back inclination.
+    #[test]
+    fn a_missing_back_bearing_keeps_the_back_inclination() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADBF",
+            &["A1 A2 32.81 90.00 -30.00 1.00 1.00 1.00 1.00 -999.00 30.00"],
+        );
+        print_shots("fore 90/-30, back -999/+30", &configs, &warnings);
+        let shot = all_shots(&configs)[0];
+        assert!(
+            (shot.azimuth_out - 90.0).abs() < 1e-9,
+            "mirrors the foresight"
+        );
+        assert_eq!(shot.pitch_out, Some(30.0), "the back inclination was taken");
+    }
+
+    /// #576 B30: a field missing from BOTH sights has nothing to reconstruct
+    /// from. Compass's editor refuses to let it be entered ("The program will
+    /// flag an error if you try enter missing data for both the fore and
+    /// backsight item"), and its help does not say what processing does with
+    /// one, so the leg keeps today's placeholder (north, level) and the
+    /// receipt names it. A plumb leg's bearing does not matter, so it is not
+    /// named for that.
+    #[test]
+    fn a_reading_missing_from_both_sights_keeps_the_leg_and_names_it() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADBF",
+            &[
+                "A1 A2 32.81 -999.00 -999.00 1.00 1.00 1.00 1.00 -999.00 -999.00",
+                "A2 A3 10.00 -999.00 -90.00 1.00 1.00 1.00 1.00 -999.00 90.00",
+            ],
+        );
+        print_shots("both sights -999, then a plumb leg", &configs, &warnings);
+        let shots = all_shots(&configs);
+        assert_eq!(shots.len(), 2, "both legs are kept");
+        assert!(shots[0].azimuth_in.abs() < 1e-12, "{}", shots[0].azimuth_in);
+        assert_eq!(shots[0].pitch_in, Some(0.0));
+        assert!(
+            warnings.iter().any(|w| w
+                == "Shot A1 -> A2: bearing and inclination are missing from both the \
+                    foresight and the backsight; recorded as 0 (due north) and level."),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().all(|w| !w.contains("A2 -> A3")),
+            "a plumb leg needs no bearing: {warnings:?}"
+        );
+
+        // Without backsight columns the foresight is the only sight.
+        let (_, _, warnings) = convert_text(
+            "DDDDLRUDLADN",
+            &["A1 A2 10.00 -999.00 0.00 1.00 1.00 1.00 1.00"],
+        );
+        println!("no backsight columns, bearing -999: {warnings:?}");
+        assert!(
+            warnings.iter().any(|w| w
+                == "Shot A1 -> A2: bearing is missing and the survey has no backsight to \
+                    take it from; recorded as 0 (due north)."),
+            "{warnings:?}"
+        );
+    }
+
+    /// #576 NF-AN4-1: with both inclinations taken, Compass averages them ("When
+    /// you process the data, the two numbers are averaged" - Compass Editor
+    /// help, "Backsights and Redundant Backsights"; Survex does the same), and
+    /// the bearings already were. Depth used the foresight alone, so a 28 deg
+    /// foresight with a 32 deg backsight dropped 4.70 m instead of the 5.00 m
+    /// of the 30 deg mean - and disagreed with the shot's own pitch pair.
+    #[test]
+    fn depth_follows_the_mean_of_fore_and_back_inclination() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADBF",
+            &["A1 A2 32.81 90.00 -28.00 1.00 1.00 1.00 1.00 270.00 32.00"],
+        );
+        print_shots("fore 90/-28, back 270/+32", &configs, &warnings);
+        let shot = all_shots(&configs)[0];
+        assert_eq!(shot.pitch_in, Some(28.0), "the foresight is kept as read");
+        assert_eq!(shot.pitch_out, Some(32.0), "the backsight is kept as read");
+        let drop = shot.depth_out - shot.depth_in;
+        let mean = 32.81 * FEET_TO_METERS * 30.0_f64.to_radians().sin();
+        assert!(
+            (drop - mean).abs() < 1e-6,
+            "the leg descends by the 30 deg mean, {mean:.3} m, got {drop:+.3} m"
+        );
+    }
+
+    /// The four LRUDs of a shot, in meters, rounded for printing.
+    fn lrud_of(shot: &ShotData) -> [Option<f64>; 4] {
+        [shot.left, shot.right, shot.up, shot.down]
+            .map(|v| v.map(|m| (m * 10_000.0).round() / 10_000.0))
+    }
+
+    /// The receipt line for `n` LRUDs a To-associated survey `A` could not place.
+    fn end_of_chain_line(n: usize) -> String {
+        if n == 1 {
+            "Survey 'A': 1 end-of-chain cross-section had no shot to attach to and was dropped \
+             (the survey records LRUDs at each shot's To station)."
+                .to_string()
+        } else {
+            format!(
+                "Survey 'A': {n} end-of-chain cross-sections had no shot to attach to and were \
+                 dropped (the survey records LRUDs at each shot's To station)."
+            )
+        }
+    }
+
+    /// #576 B31: a FORMAT ending in `T` records each row's LRUD at the shot's
+    /// TO station (Compass "Survey Data File Format": "LRUD Association:
+    /// F=From Station, T=To Station"; Survex `compass_lrud_on_to`). A shot
+    /// carries the LRUD of its FROM station, so a row's cross-section belongs
+    /// on the NEXT shot - it used to land one station early.
+    #[test]
+    fn a_to_associated_survey_puts_each_lrud_one_station_later() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADNT",
+            &[
+                "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00",
+                "A2 A3 10.00 90.00 0.00 5.00 5.00 5.00 5.00",
+            ],
+        );
+        let shots = all_shots(&configs);
+        for (i, s) in shots.iter().enumerate() {
+            println!("To survey shot {i}: LRUD (L, R, U, D) {:?}", lrud_of(s));
+        }
+        for w in &warnings {
+            println!("  warning: {w}");
+        }
+        let one_foot = Some(0.3048);
+        assert_eq!(lrud_of(shots[0]), [None; 4], "A1 has no measured section");
+        assert_eq!(
+            lrud_of(shots[1]),
+            [one_foot; 4],
+            "the 1 ft section measured at A2 rides on A2 -> A3"
+        );
+        assert!(
+            warnings.contains(&end_of_chain_line(1)),
+            "the 5 ft section at A3 has no shot from A3: {warnings:?}"
+        );
+
+        // The default (From) association is untouched.
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADNF",
+            &[
+                "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00",
+                "A2 A3 10.00 90.00 0.00 5.00 5.00 5.00 5.00",
+            ],
+        );
+        let shots = all_shots(&configs);
+        assert_eq!(lrud_of(shots[0]), [one_foot; 4]);
+        assert_eq!(lrud_of(shots[1]), [Some(1.524); 4]);
+        assert!(warnings.iter().all(|w| !w.contains("cross-section")));
+    }
+
+    /// #576 B31: a To LRUD belongs to a STATION, so a chain that starts at a
+    /// station another row ended at (a branch) picks up that station's
+    /// section; only a section whose station starts no shot at all is lost.
+    #[test]
+    fn a_to_associated_lrud_reaches_a_branch_that_starts_at_its_station() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADNT",
+            &[
+                "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00",
+                "A2 A3 10.00 90.00 0.00 2.00 2.00 2.00 2.00",
+                "A2 B1 10.00 0.00 0.00 3.00 3.00 3.00 3.00",
+                "B1 B2 10.00 0.00 0.00 4.00 4.00 4.00 4.00",
+            ],
+        );
+        assert_eq!(configs.len(), 2, "premise: the branch is its own section");
+        let shots = all_shots(&configs);
+        for (i, s) in shots.iter().enumerate() {
+            println!("To survey shot {i}: LRUD {:?}", lrud_of(s));
+        }
+        let ft = |n: f64| [Some((n * FEET_TO_METERS * 10_000.0).round() / 10_000.0); 4];
+        // Chain 1: A1 -> A2 -> A3; chain 2 (branch): A2 -> B1 -> B2.
+        assert_eq!(lrud_of(shots[0]), [None; 4], "A1 -> A2");
+        assert_eq!(lrud_of(shots[1]), ft(1.0), "A2 -> A3 carries A2's section");
+        assert_eq!(
+            lrud_of(shots[2]),
+            ft(1.0),
+            "A2 -> B1 carries A2's section too"
+        );
+        assert_eq!(lrud_of(shots[3]), ft(3.0), "B1 -> B2 carries B1's section");
+        assert!(
+            warnings.contains(&end_of_chain_line(2)),
+            "A3's and B2's sections have no shot: {warnings:?}"
+        );
+    }
+
+    /// #576 B31: the `.MAK` can override every survey's association (`!O` with
+    /// `T` or `t` - Compass Project Manager help, "Parameters": "If the flag is
+    /// set to capital "O." all other methods of controlling the LRUD
+    /// associations are overridden").
+    #[test]
+    fn a_mak_lrud_override_beats_the_survey_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = [
+            "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00",
+            "A2 A3 10.00 90.00 0.00 5.00 5.00 5.00 5.00",
+        ];
+        std::fs::write(
+            dir.path().join("from.dat"),
+            synthetic_survey_text("A", "DDDDLRUDLADNF", &rows),
+        )
+        .unwrap();
+        let shots_for = |flags: &str| {
+            let mak = dir.path().join(format!("p{flags}.mak"));
+            std::fs::write(
+                &mak,
+                format!(
+                    "@100.0,200.0,300.0,13,0.5;\r\n&North American 1983;\r\n!{flags};\r\n\
+                     #from.dat;\r\n"
+                ),
+            )
+            .unwrap();
+            let parsed = parse_compass(&mak).unwrap();
+            let (configs, _, _) =
+                convert_compass_to_import_configs(&parsed, &CompassImportOptions::default())
+                    .unwrap();
+            all_shots(&configs)
+                .iter()
+                .map(|s| lrud_of(s))
+                .collect::<Vec<_>>()
+        };
+        let overridden = shots_for("OT");
+        println!("!OT on an F survey: {overridden:?}");
+        assert_eq!(
+            overridden[0], [None; 4],
+            "!OT puts every LRUD at the To station"
+        );
+        assert_eq!(overridden[1], [Some(0.3048); 4]);
+        let not_overridden = shots_for("oT");
+        println!("!oT on an F survey: {not_overridden:?}");
+        assert_eq!(
+            not_overridden[0],
+            [Some(0.3048); 4],
+            "without O the survey's own F applies"
+        );
+    }
+
+    /// #576 NF-W2C-1: three surveys share J and E3 - two independent loops, so
+    /// exactly two closures. The spanning tree merges Main's J onto Side's J
+    /// and Loop's E3 onto Side's E3. Closures were decided per occurrence
+    /// against each chain's OWN merge edge, so Side's J (merged onto the
+    /// canonical J by Main's edge) got a closure to the point it already is
+    /// (zero misclosure), and Side's E3 and Loop's E3 - one merged point - got
+    /// one closure each, counting that loop twice in the least-squares solve.
+    #[test]
+    fn each_loop_gets_one_closure_and_merged_points_none() {
+        let text = [
+            synthetic_survey_text(
+                "Main",
+                "DDDDLRUDLADN",
+                &[
+                    "E1 E2 10.00 90.00 0.00 1 1 1 1",
+                    "E2 J 10.00 90.00 0.00 1 1 1 1",
+                    "J E3 10.00 90.00 0.00 1 1 1 1",
+                ],
+            ),
+            synthetic_survey_text(
+                "Side",
+                "DDDDLRUDLADN",
+                &[
+                    "J S1 10.00 0.00 0.00 1 1 1 1",
+                    "S1 S2 10.00 0.00 0.00 1 1 1 1",
+                    "S2 E3 14.50 135.00 0.00 1 1 1 1",
+                ],
+            ),
+            synthetic_survey_text(
+                "Loop",
+                "DDDDLRUDLADN",
+                &[
+                    "E3 L1 10.00 180.00 0.00 1 1 1 1",
+                    "L1 J 14.00 315.00 0.00 1 1 1 1",
+                    "J X1 10.00 200.00 0.00 1 1 1 1",
+                ],
+            ),
+        ]
+        .concat();
+        let mut parsed = parse_dat_text(&text);
+        parsed.fixed_stations.push(FixedStation {
+            name: "S1".to_string(),
+            easting: 500_000.0,
+            northing: 2_200_000.0,
+            elevation: 0.0,
+            datum: Some(Datum::WGS1984),
+            utm_zone: Some(16),
+        });
+        parsed.utm_zone = Some(16);
+        parsed.datum = Some(Datum::WGS1984);
+        let (configs, closures, _) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        for config in &configs {
+            println!(
+                "section {} {:?}: {:?}",
+                config.section_index, config.name, config.placement
+            );
+        }
+        let mut pairs: Vec<String> = closures
+            .iter()
+            .map(|c| {
+                format!(
+                    "{}:{}->{}:{}",
+                    c.from_section_index,
+                    c.from_station_index,
+                    c.to_section_index,
+                    c.to_station_index
+                )
+            })
+            .collect();
+        pairs.sort();
+        println!("closures: {pairs:?}");
+        assert_eq!(pairs, ["1:3->0:3", "2:2->0:2"]);
+    }
+
+    /// #576 B3: a survey that closes a loop on itself (A1 -> A2 -> A3 -> A1)
+    /// is one chain whose last station repeats its first. That repeat is the
+    /// same physical station, so it needs a closure; the Compass converter
+    /// skipped every station of the chain owning the canonical occurrence and
+    /// emitted none, so the misclosure was never reported or distributed. The
+    /// Walls converter had the same bug, fixed and pinned by
+    /// `contiguous_self_loop_emits_closure`.
+    #[test]
+    fn a_loop_inside_one_survey_gets_a_closure() {
+        let (configs, closures, warnings) = convert_text(
+            "DDDDLRUDLADN",
+            &[
+                "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00",
+                "A2 A3 10.00 0.00 0.00 1.00 1.00 1.00 1.00",
+                "A3 A1 14.14 225.00 0.00 1.00 1.00 1.00 1.00",
+            ],
+        );
+        println!(
+            "sections {}, shots {}, closures {closures:?}, warnings {warnings:?}",
+            configs.len(),
+            all_shots(&configs).len()
+        );
+        assert_eq!(configs.len(), 1, "premise: one chain, one section");
+        let ties: Vec<(u32, u32, u32, u32)> = closures
+            .iter()
+            .map(|c| {
+                (
+                    c.from_section_index,
+                    c.from_station_index,
+                    c.to_section_index,
+                    c.to_station_index,
+                )
+            })
+            .collect();
+        assert_eq!(
+            ties,
+            [(0, 3, 0, 0)],
+            "the revisited A1 (station 3) ties to its first occurrence (station 0)"
+        );
+    }
+
+    /// The `@` base location and `&` datum every `#file` entry needs ahead of
+    /// it, then one `#` line per linked file.
+    fn synthetic_mak(links: &[&str]) -> String {
+        let files: String = links.iter().flat_map(|link| ["#", link, ";\r\n"]).collect();
+        format!("@100.0,200.0,300.0,13,0.5;\r\n&North American 1983;\r\n{files}")
+    }
+
+    /// Write `mak` as `project.mak` in `dir` and import it.
+    fn parse_mak_text(dir: &Path, mak: &[u8]) -> Result<ParsedCompass> {
+        let path = dir.join("project.mak");
+        std::fs::write(&path, mak)?;
+        parse_compass(&path)
+    }
+
+    fn survey_names(parsed: &ParsedCompass) -> Vec<&str> {
+        parsed
+            .surveys
+            .iter()
+            .map(|s| s.survey.name.as_str())
+            .collect()
+    }
+
+    /// #576 B35i-3 / B35(i): a `.DAT` opened through its `.MAK` was decoded
+    /// byte == code point inside the vendored reader, so the same comment
+    /// imported differently from the same file opened directly: 0x92 became
+    /// the invisible C1 control U+0092 instead of U+2019, and an undefined
+    /// byte was lost without a word. Stalagmight now reads every linked file
+    /// itself, like a bare `.DAT`, and names the file in the warning.
+    #[test]
+    fn a_linked_dat_decodes_as_windows_1252_and_names_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = synthetic_survey_record("Synthetic Cave", "A", "7 10 1979");
+        let mut bytes = record.trim_end().as_bytes().to_vec();
+        bytes.extend_from_slice(b" C\x81ve don\x92t\r\n");
+        std::fs::write(dir.path().join("cave.dat"), &bytes).unwrap();
+
+        let parsed = parse_mak_text(dir.path(), synthetic_mak(&["cave.dat"]).as_bytes()).unwrap();
+        let comment = parsed.surveys[0].survey.shots[0]
+            .comment
+            .clone()
+            .unwrap_or_default();
+        let code_points: Vec<String> = comment
+            .chars()
+            .map(|c| format!("U+{:04X}", u32::from(c)))
+            .collect();
+        println!(
+            "linked .DAT comment: {comment:?} = {}",
+            code_points.join(" ")
+        );
+        println!("warnings: {:?}", parsed.warnings);
+        assert_eq!(
+            comment,
+            "C\u{fffd}ve don\u{2019}t",
+            "{}",
+            code_points.join(" ")
+        );
+        assert!(
+            parsed.warnings.iter().any(|w| w
+                == "'cave.dat' was read as windows-1252, the encoding Compass writes; 1 \
+                    character was replaced"),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// #576 B35i-3: a byte-order mark on a linked `.DAT` landed in its cave
+    /// name (and so in the imported project's name).
+    #[test]
+    fn a_linked_dat_with_a_utf8_bom_keeps_its_cave_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(synthetic_dat("Synthetic Cave").as_bytes());
+        std::fs::write(dir.path().join("cave.dat"), &bytes).unwrap();
+        let parsed = parse_mak_text(dir.path(), synthetic_mak(&["cave.dat"]).as_bytes()).unwrap();
+        println!("cave name: {:?}", parsed.cave_name);
+        assert_eq!(parsed.cave_name, "Synthetic Cave");
+    }
+
+    /// #576 NF-AN4-2: the `.MAK` itself was read as strict UTF-8, so one
+    /// Windows-1252 byte anywhere in it - an accented word in a comment, a file
+    /// name - refused the whole project.
+    #[test]
+    fn a_mak_with_a_windows_1252_byte_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("cave.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+        let mut mak = b"/ Caf\xe9 survey notes\r\n".to_vec();
+        mak.extend_from_slice(synthetic_mak(&["cave.dat"]).as_bytes());
+        let result = parse_mak_text(dir.path(), &mak);
+        println!(
+            "MAK with 0xE9 in a comment: {:?}",
+            result
+                .as_ref()
+                .map(|p| survey_names(p).join(","))
+                .map_err(ToString::to_string)
+        );
+        assert_eq!(survey_names(&result.unwrap()), ["A"]);
+    }
+
+    /// #576 B35i-3: a "UTF-8 with BOM" `.MAK` used to be refused by name; now
+    /// that Stalagmight reads the file itself, the mark is simply dropped, as
+    /// it is for every other text format.
+    #[test]
+    fn a_utf8_bom_on_a_mak_is_dropped() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("s.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+        let mut marked = vec![0xEF, 0xBB, 0xBF];
+        marked.extend_from_slice(synthetic_mak(&["s.dat"]).as_bytes());
+        let parsed = parse_mak_text(dir.path(), &marked).unwrap();
+        assert_eq!(parsed.cave_name, "Synthetic Cave");
+    }
 
-        // A `#file` entry needs a base location and a datum ahead of it.
-        let mak = "@100.0,200.0,300.0,13,0.5;\r\n&North American 1983;\r\n#s.dat;\r\n";
-        let plain = dir.path().join("plain.mak");
-        std::fs::write(&plain, mak).unwrap();
-        let marked = dir.path().join("bom.mak");
-        let mut bytes = vec![0xEF, 0xBB, 0xBF];
-        bytes.extend_from_slice(mak.as_bytes());
-        std::fs::write(&marked, bytes).unwrap();
+    /// #576 B8 (decision B8-D2): one missing `.DAT` used to fail the whole
+    /// project. It is skipped and named; the rest imports.
+    #[test]
+    fn a_missing_linked_dat_is_skipped_and_named() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("here.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+        let result = parse_mak_text(
+            dir.path(),
+            synthetic_mak(&["here.dat", "absent.dat"]).as_bytes(),
+        );
+        println!(
+            "MAK linking here.dat + absent.dat: {:?}",
+            result
+                .as_ref()
+                .map(|p| (survey_names(p).join(","), p.warnings.clone()))
+                .map_err(ToString::to_string)
+        );
+        let parsed = result.unwrap();
+        assert_eq!(survey_names(&parsed), ["A"], "here.dat still imports");
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.starts_with("'absent.dat' was not found") && w.contains("skipped")),
+            "{:?}",
+            parsed.warnings
+        );
+    }
 
+    /// #576 B8: with no readable file at all there is nothing to import, so
+    /// the project is refused - naming every file and why.
+    #[test]
+    fn a_mak_whose_every_link_fails_is_refused_with_the_reasons() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = parse_mak_text(dir.path(), synthetic_mak(&["a.dat", "b.dat"]).as_bytes())
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        println!("every link missing: {err}");
+        assert!(
+            err.contains("'a.dat' was not found") && err.contains("'b.dat' was not found"),
+            "{err}"
+        );
+    }
+
+    /// #576 B8 (decision B8-D1, the Walls rules): a relative link resolves
+    /// inside the `.MAK`'s folder, with `..` clamped there. A link climbing out
+    /// of the folder used to read whatever it named.
+    #[test]
+    fn a_dotdot_link_cannot_leave_the_mak_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        // Outside the project folder: must not be reachable through `..`.
+        std::fs::write(
+            dir.path().join("outside.dat"),
+            synthetic_survey_record("Synthetic Cave", "OUT", "7 10 1979"),
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("inner.dat"),
+            synthetic_survey_record("Synthetic Cave", "IN", "7 10 1979"),
+        )
+        .unwrap();
+        let result = parse_mak_text(
+            &project,
+            synthetic_mak(&["../outside.dat", "inner.dat"]).as_bytes(),
+        );
+        println!(
+            "links ../outside.dat + inner.dat: {:?}",
+            result
+                .as_ref()
+                .map(|p| (survey_names(p).join(","), p.warnings.clone()))
+                .map_err(ToString::to_string)
+        );
+        let parsed = result.unwrap();
         assert_eq!(
-            parse_compass(&plain).unwrap().cave_name,
-            "Synthetic Cave",
-            "premise: the same project without a mark imports"
+            survey_names(&parsed),
+            ["IN"],
+            "the .. link resolves inside the folder, where there is no such file"
         );
-
-        // Premise for the pre-flight: left to the vendored reader, the mark is
-        // an unexpected character whose name is an empty-looking glyph.
-        let vendor = Project::read(&marked)
-            .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
         assert!(
-            vendor.contains("Unexpected character"),
-            "the vendored lexer is expected to choke on the mark, got {vendor:?}"
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.starts_with("'../outside.dat' was not found")),
+            "{:?}",
+            parsed.warnings
         );
+    }
 
-        let err = parse_compass(&marked)
-            .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
+    /// #576 B8: Compass is a Windows program and writes a backslash between
+    /// folders; on macOS and Linux that was read as part of the file name.
+    #[test]
+    fn a_backslash_link_resolves_on_every_platform() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        std::fs::write(
+            dir.path().join("sub").join("inner.dat"),
+            synthetic_survey_record("Synthetic Cave", "IN", "7 10 1979"),
+        )
+        .unwrap();
+        let link = "sub\\inner.dat";
+        let result = parse_mak_text(dir.path(), synthetic_mak(&[link]).as_bytes());
+        println!(
+            "link {link}: {:?}",
+            result
+                .as_ref()
+                .map(|p| survey_names(p).join(","))
+                .map_err(ToString::to_string)
+        );
+        assert_eq!(survey_names(&result.unwrap()), ["IN"]);
+    }
+
+    /// #576 B8: an absolute local path is honoured, as the Walls importer
+    /// honours an absolute `.PATH`, but said out loud.
+    #[test]
+    fn an_absolute_link_outside_the_folder_is_read_with_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let target = elsewhere.join("far.dat");
+        std::fs::write(&target, synthetic_dat("Synthetic Cave")).unwrap();
+        let link = target.display().to_string();
+        let parsed = parse_mak_text(&project, synthetic_mak(&[&link]).as_bytes()).unwrap();
+        println!("absolute link warnings: {:?}", parsed.warnings);
+        assert_eq!(survey_names(&parsed), ["A"]);
         assert!(
-            err.contains("byte-order mark"),
-            "the error must name the mark, got {err:?}"
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains(&link) && w.contains("outside the .MAK's folder")),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// #576 B8: a network (UNC) or device-namespace path is refused without
+    /// being touched: on Windows even checking whether `\\server\share\x`
+    /// exists hands the user's credentials to that server.
+    #[test]
+    fn network_and_device_links_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("here.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+        let refused = [
+            "\\\\server\\share\\cave.dat",
+            "//server/share/cave.dat",
+            "\\\\?\\C:\\caves\\cave.dat",
+            "\\\\.\\COM1",
+        ];
+        let mut links = vec!["here.dat"];
+        links.extend(refused);
+        let result = parse_mak_text(dir.path(), synthetic_mak(&links).as_bytes());
+        println!(
+            "network/device links: {:?}",
+            result
+                .as_ref()
+                .map(|p| (survey_names(p).join(","), p.warnings.clone()))
+                .map_err(ToString::to_string)
+        );
+        let parsed = result.unwrap();
+        assert_eq!(survey_names(&parsed), ["A"]);
+        for link in refused {
+            assert!(
+                parsed
+                    .warnings
+                    .iter()
+                    .any(|w| w.starts_with(&format!("'{link}' was skipped"))
+                        && w.contains("network")),
+                "{link}: {:?}",
+                parsed.warnings
+            );
+        }
+    }
+
+    /// #576 RV2-R-9 / RV3-R-10: an absolute link that climbs out of the
+    /// `.MAK`'s folder with `..` is still outside it. The check compared the
+    /// link as written (`<folder>/../outside.dat` "starts with" `<folder>`), so
+    /// the file was read with no warning.
+    #[test]
+    fn an_absolute_link_climbing_out_with_dotdot_is_read_with_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            dir.path().join("outside.dat"),
+            synthetic_survey_record("Synthetic Cave", "OUT", "7 10 1979"),
+        )
+        .unwrap();
+        let link = format!("{}/../outside.dat", project.display());
+        let parsed = parse_mak_text(&project, synthetic_mak(&[&link]).as_bytes()).unwrap();
+        println!(
+            "link {link}: surveys {:?}, warnings {:?}",
+            survey_names(&parsed),
+            parsed.warnings
+        );
+        assert_eq!(survey_names(&parsed), ["OUT"], "absolute links are read");
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains(&link) && w.contains("outside the .MAK's folder")),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// #576 RV2-R-9: a link inside the folder that is a symlink to a file
+    /// outside it is read from outside, so it is said out loud too.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_in_the_folder_pointing_out_is_read_with_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let outside = dir.path().join("outside.dat");
+        std::fs::write(
+            &outside,
+            synthetic_survey_record("Synthetic Cave", "OUT", "7 10 1979"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("link.dat")).unwrap();
+        let parsed = parse_mak_text(&project, synthetic_mak(&["link.dat"]).as_bytes()).unwrap();
+        println!(
+            "symlinked link: surveys {:?}, warnings {:?}",
+            survey_names(&parsed),
+            parsed.warnings
+        );
+        assert_eq!(survey_names(&parsed), ["OUT"]);
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.starts_with("'link.dat' is outside the .MAK's folder")),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// #576 RV2-R-10: a Windows DOS device name - with or without an
+    /// extension, in any case - is refused from the link's text, before
+    /// anything asks whether it exists (on Windows that opens the device).
+    /// Files of those names exist here, so only the text can refuse them; a
+    /// name that merely starts like one is an ordinary file.
+    #[test]
+    fn dos_device_names_are_refused_from_the_text() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        let devices = [
+            "NUL.dat",
+            "con",
+            "Com1.txt",
+            "sub\\LPT9.dat",
+            "aux .dat",
+            "PRN.",
+        ];
+        for (i, name) in devices.iter().enumerate() {
+            std::fs::write(
+                dir.path().join(name.replace('\\', "/")),
+                synthetic_survey_record("Synthetic Cave", &format!("D{i}"), "7 10 1979"),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            dir.path().join("COM10.dat"),
+            synthetic_survey_record("Synthetic Cave", "C10", "7 10 1979"),
+        )
+        .unwrap();
+        let mut links = vec!["COM10.dat"];
+        links.extend(devices);
+        let parsed = parse_mak_text(dir.path(), synthetic_mak(&links).as_bytes()).unwrap();
+        println!(
+            "device-name links: surveys {:?}, warnings {:?}",
+            survey_names(&parsed),
+            parsed.warnings
+        );
+        assert_eq!(survey_names(&parsed), ["C10"]);
+        for link in devices {
+            assert!(
+                parsed.warnings.iter().any(
+                    |w| w.starts_with(&format!("'{link}' was skipped")) && w.contains("device")
+                ),
+                "{link}: {:?}",
+                parsed.warnings
+            );
+        }
+    }
+
+    /// #576 RV2-R-12: a `.MAK` listing the same `.DAT` again (under any
+    /// spelling) read and held it once per listing, importing its surveys
+    /// twice. It is read once; each further listing is skipped with a warning.
+    #[test]
+    fn a_file_linked_twice_is_read_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+        let parsed = parse_mak_text(
+            dir.path(),
+            synthetic_mak(&["a.dat", "a.dat", "./sub/../a.dat"]).as_bytes(),
+        )
+        .unwrap();
+        println!(
+            "a.dat linked three times: surveys {:?}, warnings {:?}",
+            survey_names(&parsed),
+            parsed.warnings
+        );
+        assert_eq!(survey_names(&parsed), ["A"]);
+        assert_eq!(
+            parsed
+                .warnings
+                .iter()
+                .filter(|w| w.contains("is listed more than once"))
+                .count(),
+            2,
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// #576 RV2-R-12: the files one `.MAK` links are capped in TOTAL, not only
+    /// one by one. A link that would take the project past the limit is
+    /// skipped and named; the ones before it are read. (The real limit is
+    /// 512 MB; the budget here is two files' worth.)
+    #[test]
+    fn the_linked_files_share_one_byte_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut size = 0;
+        for name in ["a.dat", "b.dat", "c.dat"] {
+            let record = synthetic_survey_record("Synthetic Cave", name, "7 10 1979");
+            size = record.len() as u64;
+            std::fs::write(dir.path().join(name), record).unwrap();
+        }
+        assert_eq!(MAX_LINKED_BYTES, 512 * 1024 * 1024);
+        let mut budget = LinkBudget::new(2 * size + 1);
+        let mut warnings = Vec::new();
+        let mut skipped = Vec::new();
+        let read: Vec<bool> = ["a.dat", "b.dat", "c.dat"]
+            .iter()
+            .map(|link| {
+                read_linked_dat(
+                    dir.path(),
+                    Path::new(link),
+                    &mut budget,
+                    &mut warnings,
+                    &mut skipped,
+                )
+                .is_some()
+            })
+            .collect();
+        println!(
+            "read {read:?} with a {} byte budget: {warnings:?}",
+            2 * size + 1
+        );
+        assert_eq!(read, [true, true, false]);
+        assert!(
+            skipped.len() == 1
+                && skipped[0].starts_with("'c.dat' was skipped")
+                && skipped[0].contains("limit for one project"),
+            "{skipped:?}"
+        );
+    }
+
+    /// A named pipe at `path`, made with the system's `mkfifo`.
+    #[cfg(unix)]
+    fn make_fifo(path: &Path) {
+        let status = std::process::Command::new("mkfifo")
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "premise: mkfifo made {}", path.display());
+    }
+
+    /// Run `f` on its own thread and give it five seconds. Reading a FIFO
+    /// nobody writes blocks forever, so on a timeout the FIFO at `release` is
+    /// opened for writing and closed again - the reader then sees an empty file
+    /// and the thread can finish - and the result is `None`.
+    #[cfg(unix)]
+    fn within_five_seconds<T: Send + 'static>(
+        release: &Path,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = sender.send(f());
+        });
+        let started = std::time::Instant::now();
+        let outcome = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .ok();
+        println!(
+            "  returned after {:.1} s{}",
+            started.elapsed().as_secs_f64(),
+            if outcome.is_some() {
+                ""
+            } else {
+                " (still blocked; released by the test)"
+            }
+        );
+        if outcome.is_none() {
+            drop(std::fs::OpenOptions::new().write(true).open(release));
+        }
+        let _ = worker.join();
+        outcome
+    }
+
+    /// #576 B27(g): a path that is not a regular file - here a FIFO named like
+    /// a `.DAT` - blocked the import forever, and imports run on the app's
+    /// main thread. It is refused at once.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_like_a_dat_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.dat");
+        make_fifo(&fifo);
+        let path = fifo.clone();
+        let outcome = within_five_seconds(&fifo, move || {
+            parse_compass(&path)
+                .map(|p| p.surveys.len())
+                .map_err(|e| e.to_string())
+        });
+        println!("parse_compass(pipe.dat): {outcome:?}");
+        let err = outcome
+            .expect("the read must not block on a FIFO")
+            .expect_err("a FIFO is not a survey file");
+        assert!(err.contains("not a regular file"), "{err}");
+    }
+
+    /// #576 B27(g): the same for a FIFO a `.MAK` links - it is skipped and
+    /// named, and the rest of the project imports.
+    #[cfg(unix)]
+    #[test]
+    fn a_mak_linking_a_fifo_skips_it_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("here.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+        let fifo = dir.path().join("pipe.dat");
+        make_fifo(&fifo);
+        let mak = dir.path().join("project.mak");
+        std::fs::write(&mak, synthetic_mak(&["here.dat", "pipe.dat"])).unwrap();
+        let outcome = within_five_seconds(&fifo, move || {
+            parse_compass(&mak)
+                .map(|p| (p.surveys.len(), p.warnings))
+                .map_err(|e| e.to_string())
+        });
+        println!("parse_compass(project.mak): {outcome:?}");
+        let (surveys, warnings) = outcome
+            .expect("the read must not block on a FIFO")
+            .expect("here.dat still imports");
+        assert_eq!(surveys, 1);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.starts_with("'pipe.dat' could not be read")
+                    && w.contains("not a regular file")),
+            "{warnings:?}"
+        );
+    }
+
+    /// #576 B27(g): survey text files (`.DAT`, `.MAK` and every `.DAT` it
+    /// links, `.SRV`, `.WPJ`) are read up to 128 MB; a larger one is refused
+    /// before it is read, naming the limit. The file here is sparse, so it
+    /// costs no disk.
+    #[test]
+    fn a_dat_over_the_survey_text_limit_is_refused_naming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("huge.dat");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(128 * 1024 * 1024 + 1).unwrap();
+        drop(file);
+        let result = parse_compass(&path).map(|p| p.surveys.len());
+        let shown = result.as_ref().map_err(ToString::to_string);
+        println!("parse_compass(128 MB + 1 byte .dat): {shown:?}");
+        let err = result.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            err.contains("128 MB"),
+            "the refusal names the limit: {err:?}"
         );
     }
 }
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod graph_tests;
+
+// #576 RV2-R-NITS: To-station cross-sections superseded at a station.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod lrud_tests;
+
+// #576 RVF-d-2: a length has no missing marker; a dropped leg is on the preview.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod length_tests;

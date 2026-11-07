@@ -12,14 +12,16 @@ use super::AppState;
 impl AppState {
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_project_for_tests(&self, project: Project) {
-        if let Ok(mut guard) = self.project.lock() {
-            *guard = Some(project);
+        {
+            let mut guard = self.project.lock();
+            guard.set(Some(project));
         }
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_database_for_tests(&self, db: Database) {
-        if let Ok(mut guard) = self.database.lock() {
+        {
+            let mut guard = self.database.lock();
             *guard = Some(db);
         }
     }
@@ -28,6 +30,14 @@ impl AppState {
     pub fn set_initial_save_deferred_for_tests(&self, deferred: bool) {
         self.initial_save_deferred
             .store(deferred, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The edit gate as a Start editing that took the lock leaves it (#191), with
+    /// no server round trip: the app crate's tests of what the IPC answers on a
+    /// remote project in an edit session (#576 D22).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_edit_enabled_for_tests(&self, enabled: bool) {
+        self.set_edit_enabled(enabled);
     }
 }
 
@@ -39,10 +49,11 @@ impl AppState {
 /// spread across the family - a scan that stops seeing a file stops guarding it, and
 /// an absence assertion goes on passing while it does.
 #[cfg(test)]
-fn speleodb_prod_sources() -> [(&'static str, &'static str); 13] {
+fn speleodb_prod_sources() -> [(&'static str, &'static str); 14] {
     [
         ("speleodb.rs", include_str!("speleodb.rs")),
         ("speleodb_admin.rs", include_str!("speleodb_admin.rs")),
+        ("speleodb_adopt.rs", include_str!("speleodb_adopt.rs")),
         ("speleodb_cache.rs", include_str!("speleodb_cache.rs")),
         (
             "speleodb_credentials.rs",
@@ -65,13 +76,26 @@ fn speleodb_prod_sources() -> [(&'static str, &'static str); 13] {
             "speleodb_revisions.rs",
             include_str!("speleodb_revisions.rs"),
         ),
-        ("speleodb_session.rs", include_str!("speleodb_session.rs")),
+        // [#576 RV10a-3] The lock-ops span module lives in its own file (a doctest
+        // `include!`s it) but is `speleodb_session.rs`'s child: scanned as part of it,
+        // ahead of it, so the session file's test module still ends the region.
+        (
+            "speleodb_session.rs",
+            concat!(
+                include_str!("speleodb_session/lock_ops_span.rs"),
+                include_str!("speleodb_session.rs")
+            ),
+        ),
     ]
     .map(|(name, src)| {
-        // Only the top-level test module ends production. `speleodb_push.rs` also has
-        // a test-only method, whose indented attribute must not truncate every source
-        // scan before the real push implementation.
-        (name, src.split("\n#[cfg(test)]").next().unwrap_or(src))
+        // [#576 A8 / E9(b)] Only the top-level test MODULE ends production: a gated
+        // `use`, the test-only method in `speleodb_push.rs`, or the attribute's text
+        // in a comment must not truncate every scan built on this before the real
+        // orchestration (`crate::models::source_scan::prod_region`).
+        (
+            name,
+            crate::models::source_scan::prod_region(src, "impl AppState {"),
+        )
     })
 }
 
@@ -96,9 +120,10 @@ mod tests {
     /// The array above must list EVERY `speleodb*.rs` in the family, and nothing
     /// enforced that but a doc comment.
     ///
-    /// It matters because of what rides on it. One of the tripwires it feeds is an
-    /// ABSENCE assertion - `replace_cache_stalx_abandoning` must have no caller outside
-    /// its own file - and an absence assertion over a scan that has stopped seeing a
+    /// It matters because of what rides on it. One of the inventories it feeds is an
+    /// ABSENCE assertion - no production region may call a test-only proof
+    /// constructor (`::for_tests(`, `no_production_code_reaches_a_test_only_proof_
+    /// constructor`) - and an absence assertion over a scan that has stopped seeing a
     /// file goes on passing while the thing it forbids walks in through that file. A
     /// forgotten line is loud for the counting tripwires and completely silent for that
     /// one, which is the wrong way round. Not hypothetical: every module the #275 plan

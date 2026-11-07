@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -10,12 +11,18 @@ import { EntityBlob } from '../common/EntityBlob';
 import { formatStationId } from '../../utils/formatters';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef, ShotData, ShotKind } from '../../types/project';
-import { SHOT_KIND_CYCLE, SHOT_KIND_MENU_LABEL } from '../../utils/shotKind';
+import { SHOT_KIND_CYCLE, SHOT_KIND_LABEL_KEY } from '../../utils/shotKind';
 import { reverseTargetShot, type TargetShotLike } from '../../utils/overlapHelpers';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function DrawShotDialog() {
-  const { closeDialog, dialogData, setSelection } = useUIStore();
-  const { createShot, project, stations } = useProjectStore();
+  const { t } = useTranslation();
+  const { closeDialog, dialogData, setSelection } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData, setSelection: s.setSelection })),
+  );
+  const { createShot, project, stations } = useProjectStore(
+    useShallow((s) => ({ createShot: s.createShot, project: s.project, stations: s.stations })),
+  );
 
   const fromStation = dialogData.fromStation as StationRef | undefined;
   const allowZeroLength = dialogData.allowZeroLength as boolean | undefined;
@@ -57,7 +64,7 @@ export default function DrawShotDialog() {
     return project?.sections.find((s) => s.id === fromStation.section_id);
   }, [fromStation, project]);
 
-  const sectionName = section?.name ?? `Section ${fromStation?.section_id}`;
+  const sectionName = section?.name ?? t('dialogs.drawShot.sectionFallback', { id: fromStation?.section_id });
 
   // Get current station depth for default
   const currentStationDepth = useMemo(() => {
@@ -87,16 +94,16 @@ export default function DrawShotDialog() {
   const validateForm = (): boolean => {
     const lengthVal = parseFloat(length);
     if (!length || isNaN(lengthVal) || (allowZeroLength ? lengthVal < 0 : lengthVal <= 0)) {
-      setError(allowZeroLength ? 'Length must be 0 or greater' : 'Length must be greater than 0');
+      setError(allowZeroLength ? t('dialogs.drawShot.lengthNonNegative') : t('dialogs.drawShot.lengthPositive'));
       return false;
     }
     const azVal = parseFloat(azimuthIn);
     if (!azimuthIn || isNaN(azVal)) {
-      setError('Azimuth In is required');
+      setError(t('dialogs.drawShot.azimuthInRequired'));
       return false;
     }
     if (azVal < -360 || azVal > 360) {
-      setError('Azimuth must be between -360 and 360');
+      setError(t('dialogs.drawShot.azimuthRange'));
       return false;
     }
     return true;
@@ -170,10 +177,10 @@ export default function DrawShotDialog() {
         trackDialogComplete('draw-shot');
         closeDialog();
       } else {
-        setError(result.error ?? 'Failed to create shot');
+        setError(result.error ?? t('dialogs.drawShot.createFailed'));
       }
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to create shot'));
+      setError(getErrorMessage(e, t('dialogs.drawShot.createFailed')));
     } finally {
       setIsLoading(false);
     }
@@ -205,7 +212,7 @@ export default function DrawShotDialog() {
   }
 
   return (
-    <DialogWrapper title={prependMode ? 'Add Shot Before Section' : appendMode ? `Add Shot After Station #${fromStation.station_index}` : 'Draw New Shot'} onClose={handleClose} size="md" isDirty={isDirty} data-testid="draw-shot-dialog">
+    <DialogWrapper title={prependMode ? t('dialogs.drawShot.titlePrepend') : appendMode ? t('dialogs.drawShot.titleAppend', { index: fromStation.station_index }) : t('dialogs.drawShot.title')} onClose={handleClose} size="md" isDirty={isDirty} data-testid="draw-shot-dialog">
       <div className="space-y-4">
         {error && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">{error}</div>
@@ -213,7 +220,7 @@ export default function DrawShotDialog() {
 
         {/* From station info */}
         <div className="p-3 bg-background rounded">
-          <span className="text-text-secondary">From:</span>{' '}
+          <span className="text-text-secondary">{t('dialogs.drawShot.from')}</span>{' '}
           <span className="inline-flex items-center gap-1.5 align-middle font-medium">
             <EntityBlob entity="station">{formatStationId(fromStation.section_id, fromStation.station_index)}</EntityBlob>
             <EntityBlob entity="section">{sectionName}</EntityBlob>
@@ -224,7 +231,7 @@ export default function DrawShotDialog() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm text-text-secondary mb-1">
-              Azimuth In (degrees) <span className="text-error">*</span>
+              {t('dialogs.drawShot.azimuthIn')} <span className="text-error">*</span>
             </label>
             <input
               type="number" inputMode="decimal"
@@ -239,7 +246,7 @@ export default function DrawShotDialog() {
             />
           </div>
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Azimuth Out (degrees)</label>
+            <label className="block text-sm text-text-secondary mb-1">{t('dialogs.drawShot.azimuthOut')}</label>
             <input
               type="number" inputMode="decimal"
               min="0"
@@ -248,7 +255,7 @@ export default function DrawShotDialog() {
               value={azimuthOut}
               onChange={(e) => setAzimuthOut(e.target.value)}
               className="w-full"
-              placeholder="Same as in"
+              placeholder={t('dialogs.drawShot.sameAsIn')}
               data-testid="draw-shot-azimuth-out-input"
             />
           </div>
@@ -267,15 +274,15 @@ export default function DrawShotDialog() {
             onChange={(e) => setReverseDirection(e.target.checked)}
             data-testid="draw-shot-reverse-direction"
           />
-          <span>Reverse shot direction</span>
+          <span>{t('dialogs.drawShot.reverseDirection')}</span>
           <span className="text-text-secondary text-sm">
-            (you measured this leg from the far end: swaps both ends of the shot)
+            {t('dialogs.drawShot.reverseDirectionHint')}
           </span>
         </label>
 
         <div>
           <label className="block text-sm text-text-secondary mb-1">
-            Length (meters) <span className="text-error">*</span>
+            {t('dialogs.drawShot.length')} <span className="text-error">*</span>
           </label>
           <input
             type="number" inputMode="decimal"
@@ -284,14 +291,14 @@ export default function DrawShotDialog() {
             value={length}
             onChange={(e) => { lengthAutoInitialized.current = false; setLength(e.target.value); }}
             className="w-full"
-            placeholder="Shot distance"
+            placeholder={t('dialogs.drawShot.lengthPlaceholder')}
             data-testid="draw-shot-length-input"
           />
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Depth In (meters)</label>
+            <label className="block text-sm text-text-secondary mb-1">{t('dialogs.drawShot.depthIn')}</label>
             <input
               type="number" inputMode="decimal"
               step="0.1"
@@ -303,14 +310,14 @@ export default function DrawShotDialog() {
             />
           </div>
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Depth Out (meters)</label>
+            <label className="block text-sm text-text-secondary mb-1">{t('dialogs.drawShot.depthOut')}</label>
             <input
               type="number" inputMode="decimal"
               step="0.1"
               value={depthOut}
               onChange={(e) => setDepthOut(e.target.value)}
               className="w-full"
-              placeholder="Same as in"
+              placeholder={t('dialogs.drawShot.sameAsIn')}
               data-testid="draw-shot-depth-out-input"
             />
           </div>
@@ -322,11 +329,11 @@ export default function DrawShotDialog() {
             className="px-3 py-2 cursor-pointer text-text-secondary hover:text-text-primary"
             data-testid="draw-shot-lrud-toggle"
           >
-            LRUD (optional)
+            {t('dialogs.drawShot.lrudOptional')}
           </summary>
           <div className="p-3 pt-0 grid grid-cols-4 gap-2">
             <div>
-              <label className="block text-xs text-text-secondary mb-1">Left</label>
+              <label className="block text-xs text-text-secondary mb-1">{t('dialogs.drawShot.left')}</label>
               <input
                 type="number" inputMode="decimal"
                 min="0"
@@ -338,7 +345,7 @@ export default function DrawShotDialog() {
               />
             </div>
             <div>
-              <label className="block text-xs text-text-secondary mb-1">Right</label>
+              <label className="block text-xs text-text-secondary mb-1">{t('dialogs.drawShot.right')}</label>
               <input
                 type="number" inputMode="decimal"
                 min="0"
@@ -350,7 +357,7 @@ export default function DrawShotDialog() {
               />
             </div>
             <div>
-              <label className="block text-xs text-text-secondary mb-1">Up</label>
+              <label className="block text-xs text-text-secondary mb-1">{t('dialogs.drawShot.up')}</label>
               <input
                 type="number" inputMode="decimal"
                 min="0"
@@ -362,7 +369,7 @@ export default function DrawShotDialog() {
               />
             </div>
             <div>
-              <label className="block text-xs text-text-secondary mb-1">Down</label>
+              <label className="block text-xs text-text-secondary mb-1">{t('dialogs.drawShot.down')}</label>
               <input
                 type="number" inputMode="decimal"
                 min="0"
@@ -380,27 +387,27 @@ export default function DrawShotDialog() {
             the user knows whether they swam it, so offer the choice outright
             rather than leaving it to the classifier. */}
         <label className="flex items-center gap-2">
-          <span>Shot kind</span>
+          <span>{t('dialogs.drawShot.shotKind')}</span>
           <Select
             data-testid="draw-shot-kind"
             value={shotKind}
             onChange={(v) => setShotKind(v as ShotKind)}
-            options={SHOT_KIND_CYCLE.map((kind) => ({ value: kind, label: SHOT_KIND_MENU_LABEL[kind] }))}
+            options={SHOT_KIND_CYCLE.map((kind) => ({ value: kind, label: t(SHOT_KIND_LABEL_KEY[kind]) }))}
             size="sm"
-            aria-label="Shot kind"
+            aria-label={t('dialogs.drawShot.shotKind')}
           />
           <span className="text-text-secondary text-sm">
-            (a jump is swum; a reference is a survey tie)
+            {t('dialogs.drawShot.shotKindHint')}
           </span>
         </label>
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={handleClose} disabled={isLoading} data-testid="draw-shot-cancel">
-            Cancel
+            {t('common.actions.cancel')}
           </Button>
           <Button variant="primary" onClick={handleCreate} disabled={isLoading} data-testid="draw-shot-create">
-            {isLoading ? 'Creating...' : 'Create Shot'}
+            {isLoading ? t('dialogs.drawShot.creating') : t('dialogs.drawShot.create')}
           </Button>
         </div>
       </div>

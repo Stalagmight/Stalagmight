@@ -10,11 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(errorMessageOrString);
 
 import { SpeleoDbGeneralTab } from './SpeleoDbGeneralTab';
 import { useSpeleoProjectMetadata } from '../../../hooks/useSpeleoProjectMetadata';
@@ -22,6 +19,7 @@ import { useSpeleoStore } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import type { Permission, SpeleoProjectMetadata } from '../../../types/ipc.generated';
+import { invokeIpcMock, stubGetErrorMessage, errorMessageOrString } from '../../../test/factories/ipc';
 
 const META: SpeleoProjectMetadata = {
   name: 'Cave A',

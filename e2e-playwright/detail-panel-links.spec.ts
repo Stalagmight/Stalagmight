@@ -18,6 +18,7 @@ import {
   waitForMapIdle,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * Test data with multiple sections, shots, and stations.
@@ -298,7 +299,7 @@ async function createDirectClosure(
             createLoopClosure: (left: typeof a, right: typeof b, strategy: string) => Promise<unknown>;
             project: {
               loop_closures: Array<{
-                id: bigint;
+                id: number;
                 station_a: { section_id: number; station_index: number };
                 station_b: { section_id: number; station_index: number };
               }>;
@@ -342,7 +343,7 @@ test.describe('Detail Panel Links', () => {
   });
 
   test.describe('Shot Detail Links', () => {
-    test('clicking Start Station link changes selection to station', async ({ page }) => {
+    test('clicking Start Station link changes selection to station @smoke', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
@@ -656,9 +657,9 @@ test.describe('Detail Panel Links', () => {
 
       await expect.poll(async () => {
         return page.evaluate(({ a, b }) => {
-          const state = (window as any).__E2E_TEST__.projectStore.getState();
+          const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
           const merges = state.project?.station_merges ?? [];
-          return merges.some((merge: any) => {
+          return merges.some((merge) => {
             const direct =
               merge.station_a.section_id === a.section_id &&
               merge.station_a.station_index === a.station_index &&
@@ -698,9 +699,9 @@ test.describe('Detail Panel Links', () => {
 
       await expect.poll(async () => {
         return page.evaluate((removedClosureId) => {
-          const state = (window as any).__E2E_TEST__.projectStore.getState();
+          const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
           const closures = state.project?.loop_closures ?? [];
-          return closures.some((closure: any) => closure.id.toString() === removedClosureId);
+          return closures.some((closure) => closure.id.toString() === removedClosureId);
         }, closureId);
       }).toBe(false);
     });

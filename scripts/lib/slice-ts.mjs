@@ -28,7 +28,9 @@ const mode = args[1];
 const target = args[2];
 
 if (!fs.existsSync(filePath)) {
-  console.error(`File not found: ${filePath}`);
+  // Not the path itself: it is the caller's, and can name their own
+  // directories outside the checkout (#576 W51).
+  console.error('File not found: <file>');
   process.exit(1);
 }
 

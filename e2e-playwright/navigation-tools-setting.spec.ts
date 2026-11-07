@@ -129,7 +129,7 @@ test.describe('Navigation tools setting (#409)', () => {
 
     // And the shortcut is inert again.
     await page.keyboard.press('p');
-    // A settle rather than a poll: this proves the tool does NOT change back.
+    // settle: proves the tool does NOT change back, which a poll cannot show.
     await page.waitForTimeout(200);
     await expect(page.getByTestId('map-canvas')).toHaveAttribute('data-active-tool', 'select');
   });

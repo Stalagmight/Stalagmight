@@ -358,7 +358,7 @@ impl Survey {
             schema_version,
             name: project.name.clone(),
             location: project.location.clone(),
-            created_at: project.created_at.to_rfc3339(),
+            created_at: project.created_at.utc().to_rfc3339(),
             modified_at: project.modified_at.to_rfc3339(),
             sections: sections
                 .into_iter()
@@ -430,6 +430,8 @@ fn georeference(
         if p.anchor.is_none() {
             continue;
         }
+        // Longitude in [-180, 180], as stored fixes have it. Beyond the horizon
+        // (`None`, no survey reaches it) the station is left without coordinates.
         if let Some((lat, lon)) =
             stalagmight_models::geo::local_to_gps(p.x - fx, p.y - fy, frame_gps)
         {

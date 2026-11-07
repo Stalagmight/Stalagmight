@@ -25,8 +25,8 @@
 #   ./scripts/slice.sh src-tauri/src/core/state.rs --toc
 #   ./scripts/slice.sh src-tauri/src/core/state.rs --fn execute_command
 #   ./scripts/slice.sh src-tauri/src/core/state.rs --impl AppState
-#   ./scripts/slice.sh src/components/Map/SurveyLayer.tsx --toc
-#   ./scripts/slice.sh src/components/Map/SurveyLayer.tsx --component SurveyLayer
+#   ./scripts/slice.sh src/components/Map/SurveyLayer.ts --toc
+#   ./scripts/slice.sh src/components/Map/SurveyLayer.ts --component SurveyLayer
 #   ./scripts/slice.sh src/store/surveyStore.ts --fn useStore
 #   ./scripts/slice.sh src/types/survey.ts --interface SurveyData
 
@@ -89,10 +89,10 @@ EXAMPLES:
     ./scripts/slice.sh src-tauri/src/core/state.rs --impl AppState
 
     # Show contents of a TypeScript file
-    ./scripts/slice.sh src/components/Map/SurveyLayer.tsx --toc
+    ./scripts/slice.sh src/components/Map/SurveyLayer.ts --toc
 
     # Extract a React component
-    ./scripts/slice.sh src/components/Map/SurveyLayer.tsx --component SurveyLayer
+    ./scripts/slice.sh src/components/Map/SurveyLayer.ts --component SurveyLayer
 
     # Extract a specific interface
     ./scripts/slice.sh src/types/survey.ts --interface Station

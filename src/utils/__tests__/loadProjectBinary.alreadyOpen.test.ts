@@ -12,7 +12,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const invoke = vi.fn();
-vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
+vi.mock('@tauri-apps/api/core', async () =>
+  (await import('../../test/factories/tauri')).tauriCore((...args: unknown[]) => invoke(...args)),
+);
 
 const { loadProjectFullBinary } = await import('../loadProjectBinary');
 

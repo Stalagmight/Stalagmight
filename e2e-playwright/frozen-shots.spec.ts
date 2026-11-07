@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for frozen shot display and edit enforcement.
@@ -42,13 +43,13 @@ async function getProjectIds(page: Page): Promise<{
   shotIds: number[];
 }> {
   const ids = await page.evaluate(() => {
-    const e2e = (window as any).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
     if (!e2e) return null;
     const state = e2e.projectStore.getState();
     const section = state.project?.sections?.[0];
     return {
       sectionId: section?.id ?? 0,
-      shotIds: (section?.shots ?? []).map((s: any) => s.id),
+      shotIds: (section?.shots ?? []).map((s) => s.id),
     };
   });
   if (!ids) throw new Error('Could not retrieve section/shot IDs');
@@ -65,14 +66,17 @@ async function injectFrozenShots(
 ): Promise<void> {
   await page.evaluate(
     (frozen) => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return;
       e2e.projectStore.setState({ frozenShots: frozen });
     },
     frozenShots,
   );
-  // Wait for React to re-render with new frozen state
-  await page.waitForTimeout(300);
+  // Wait for the re-render itself: every frozen row of the shown section carries
+  // the frozen tint (the injected shots all belong to it).
+  for (const { shot_index } of frozenShots) {
+    await expect(page.getByTestId(`grid-row-${shot_index}`)).toHaveClass(/sg-row-frozen/);
+  }
 }
 
 /** Open the DataTable via keyboard shortcut. */
@@ -139,6 +143,8 @@ test.describe('Frozen Shots', () => {
 
     // Frozen row: double-clicking the length cell must NOT open the editor
     await page.getByTestId('grid-cell-0-length').dblclick();
+    // settle: proves the editor does NOT open; a poll for its absence would pass
+    // on the first read, before a buggy dblclick handler had rendered it.
     await page.waitForTimeout(300);
     await expect(editor).toHaveCount(0);
   });

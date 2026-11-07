@@ -13,8 +13,8 @@ pub use project::{
     ProjectParameters, Unloaded,
 };
 pub use survey::{
-    BackSightCorrectionFactors, BearingUnits, CorrectionFactors, InclinationUnits, LengthUnits,
-    Shot, Survey, SurveyFormat, SurveyParameters,
+    BackSightCorrectionFactors, BearingUnits, CorrectionFactors, InclinationUnits, LRUDAssociation,
+    LengthUnits, Shot, Survey, SurveyFormat, SurveyParameters,
 };
 
 #[cfg(test)]

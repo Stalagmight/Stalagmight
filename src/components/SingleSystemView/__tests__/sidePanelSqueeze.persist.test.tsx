@@ -5,11 +5,11 @@ import { useSidePanelSqueeze, resolveResize } from '../sidePanelSqueeze';
 import { MAP_MIN_WIDTH, PANEL_SIZE_BOUNDS } from '../layoutConstants';
 import { BAR } from '../Dock';
 import { useUIStore } from '../../../store/uiStore';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 // `.tsx` so this runs in the jsdom tier (vite.config environmentMatchGlobs).
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc');
 
 /**
  * The single most dangerous way to get #260 wrong: routing the viewport-driven

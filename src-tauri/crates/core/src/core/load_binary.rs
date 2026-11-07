@@ -98,6 +98,28 @@ pub struct LoadProjectFullBinaryResult {
     /// (the same value the backend edit gate was set from), so the frontend can
     /// settle its read-only gate before the project renders (#270).
     pub is_remote: bool,
+    /// [#576 B6-D1] The file's schema version when a NEWER Stalagmight saved it,
+    /// else `None`. Mirrors `LoadProjectFullResult::newer_schema_version` (the
+    /// same value the backend's read-only state was committed from), so the
+    /// frontend's gate and banner settle with the load like `is_remote`. A
+    /// top-level key of the map-encoded envelope: a reader that predates it finds
+    /// it absent rather than misaligned, so no format bump.
+    pub newer_schema_version: Option<i32>,
+    /// [#576 B35(b) review] Mirrors `LoadProjectFullResult::speleo_link_unreadable`:
+    /// the file's SpeleoDB link row could not be read, so saving over the file is
+    /// refused. A top-level key like `newer_schema_version`, so no format bump.
+    pub speleo_link_unreadable: bool,
+    /// [#576 B15] The stored per-project settings the load could not read (saves
+    /// are refused while they are unread). Mirrors
+    /// `LoadProjectFullResult::unreadable_project_settings`. A top-level key, like
+    /// `newer_schema_version`: absent to a reader that predates it.
+    pub unreadable_project_settings: Vec<String>,
+    /// [#576 B35(h)] What the load reset or dropped because it could not use it,
+    /// per kind (`shots`, `section_offsets`, `station_offsets`, `gps_points`).
+    /// Mirrors `LoadProjectFullResult::load_repairs`; the frontend shows one notice
+    /// after the open when any count is non-zero. A top-level key, like
+    /// `newer_schema_version`: absent to a reader that predates it.
+    pub load_repairs: crate::persistence::LoadRepairs,
     pub project_header: ProjectHeaderBinary,
 
     pub shot_count: u32,
@@ -190,11 +212,22 @@ pub struct SectionHeaderBinary {
     pub azimuth_reference: Option<AzimuthReference>,
 }
 
+/// What an envelope carries beside the project: the load's own verdicts.
+struct EnvelopeExtras {
+    loading_id: u64,
+    is_remote: bool,
+    newer_schema_version: Option<i32>,
+    speleo_link_unreadable: bool,
+    unreadable_project_settings: Vec<String>,
+    load_repairs: crate::persistence::LoadRepairs,
+    warnings: Vec<ProjectWarning>,
+    display_settings: DisplaySettings,
+}
+
 /// Convert a `LoadProjectFullResult` into the binary-friendly layout.
 /// All bulk fields are written as packed little-endian bytes; the rest is
 /// passed through into the msgpack envelope.
 pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
-    let start = std::time::Instant::now();
     let LoadProjectFullResult {
         loading_id,
         project,
@@ -203,10 +236,79 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         warnings,
         display_settings,
         is_remote,
+        newer_schema_version,
+        speleo_link_unreadable,
+        unreadable_project_settings,
+        load_repairs,
     } = result;
+    encode_project(
+        &project,
+        stations,
+        stats,
+        EnvelopeExtras {
+            loading_id,
+            is_remote,
+            newer_schema_version,
+            speleo_link_unreadable,
+            unreadable_project_settings,
+            load_repairs,
+            warnings,
+            display_settings,
+        },
+    )
+}
 
-    // Compute the frozen shots while the whole project is still in scope (its
-    // fields are moved into project_header below). The binary envelope used to
+/// [#576 A9-D2] The state refresh after an edit, in the load's binary layout:
+/// the open project, its measured stations and its stats, with the frozen shots
+/// computed here as on a load. Replaces the JSON `get_project_state` payload
+/// (about 50 MB at 75,000 shots) on the frontend's refresh path.
+///
+/// Borrows the project, so the caller encodes its settled snapshot without
+/// copying it. The load-only fields sit at their no-news values (`loading_id`
+/// 0, not remote, no newer schema, nothing unreadable or repaired, no warnings,
+/// default display settings): they describe a load, the refresh decoder reads
+/// none of them, and the open project's verdicts stay what its load committed.
+pub fn encode_refresh(
+    project: &crate::models::Project,
+    stations: Vec<crate::models::Station>,
+    stats: ProjectStats,
+) -> Result<Vec<u8>> {
+    encode_project(
+        project,
+        stations,
+        stats,
+        EnvelopeExtras {
+            loading_id: 0,
+            is_remote: false,
+            newer_schema_version: None,
+            speleo_link_unreadable: false,
+            unreadable_project_settings: Vec::new(),
+            load_repairs: crate::persistence::LoadRepairs::default(),
+            warnings: Vec::new(),
+            display_settings: DisplaySettings::default(),
+        },
+    )
+}
+
+fn encode_project(
+    project: &crate::models::Project,
+    stations: Vec<crate::models::Station>,
+    stats: ProjectStats,
+    extras: EnvelopeExtras,
+) -> Result<Vec<u8>> {
+    let start = std::time::Instant::now();
+    let EnvelopeExtras {
+        loading_id,
+        is_remote,
+        newer_schema_version,
+        speleo_link_unreadable,
+        unreadable_project_settings,
+        load_repairs,
+        warnings,
+        display_settings,
+    } = extras;
+
+    // Compute the frozen shots for the envelope. The binary envelope used to
     // ship an empty list, leaving the frontend's frozen-shot gating stale on a
     // binary load until the next get_project_state refresh (issue #57 / Codex).
     let frozen_shots = project.compute_frozen_shots();
@@ -338,8 +440,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     }
 
     // Resolve the stored StationKey-based cross-references to their positional wire
-    // form (the frontend reasons by station_index) before moving the rest of
-    // `project` out. A dangling ref (its anchoring shot was deleted) is OMITTED
+    // form (the frontend reasons by station_index). A dangling ref (its anchoring shot was deleted) is OMITTED
     // rather than collapsed to a phantom station-0 relationship; the integrity
     // banner surfaces it and offers repair.
     let station_merges = project
@@ -367,11 +468,17 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         .iter()
         .filter_map(|(k, v)| Some((project.resolve_key(k)?, v.clone())))
         .collect();
+    // #576 A10: the map is reached through its accessor.
+    let section_offsets = hashmap_to_pairs(project.section_offsets().clone());
 
+    // The project is borrowed (a refresh encodes a shared snapshot), so the
+    // header copies the small owned fields; the bulk was packed from references.
     let project_header = ProjectHeaderBinary {
-        name: project.name,
-        location: project.location,
-        created_at: project.created_at,
+        name: project.name.clone(),
+        location: project.location.clone(),
+        // [#576 NF-W18-1] The moment, as the JSON project state carries it: the
+        // frontend's project identity must not depend on which one it read.
+        created_at: project.created_at.utc(),
         modified_at: project.modified_at,
         file_path: project
             .file_path
@@ -383,12 +490,12 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         station_merges,
         zero_datums,
         loop_closures,
-        section_offsets: hashmap_to_pairs(project.section_offsets),
+        section_offsets,
         station_offsets,
         station_comments_map,
-        imported_file_hashes: project.imported_file_hashes,
-        imported_section_hashes: project.imported_section_hashes,
-        validation: project.validation,
+        imported_file_hashes: project.imported_file_hashes.clone(),
+        imported_section_hashes: project.imported_section_hashes.clone(),
+        validation: project.validation.clone(),
         surface_elevation: project.surface_elevation,
         default_azimuth_reference: project.default_azimuth_reference,
     };
@@ -397,6 +504,10 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         version: BINARY_FORMAT_VERSION,
         loading_id,
         is_remote,
+        newer_schema_version,
+        speleo_link_unreadable,
+        unreadable_project_settings,
+        load_repairs,
         project_header,
         shot_count: shot_count as u32,
         shots_floats: ByteBuf::from(shots_floats),
@@ -566,6 +677,10 @@ mod tests {
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
             is_remote: false,
+            newer_schema_version: None,
+            speleo_link_unreadable: false,
+            unreadable_project_settings: Vec::new(),
+            load_repairs: crate::persistence::LoadRepairs::default(),
         };
 
         let bytes = encode(result).unwrap();
@@ -638,6 +753,10 @@ mod tests {
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
             is_remote: false,
+            newer_schema_version: None,
+            speleo_link_unreadable: false,
+            unreadable_project_settings: Vec::new(),
+            load_repairs: crate::persistence::LoadRepairs::default(),
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
@@ -705,6 +824,10 @@ mod tests {
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
             is_remote: false,
+            newer_schema_version: None,
+            speleo_link_unreadable: false,
+            unreadable_project_settings: Vec::new(),
+            load_repairs: crate::persistence::LoadRepairs::default(),
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
@@ -743,6 +866,10 @@ mod tests {
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
             is_remote: false,
+            newer_schema_version: None,
+            speleo_link_unreadable: false,
+            unreadable_project_settings: Vec::new(),
+            load_repairs: crate::persistence::LoadRepairs::default(),
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
@@ -751,5 +878,59 @@ mod tests {
         assert!(decoded.shots_floats.is_empty());
         assert!(decoded.stations_floats.is_empty());
         assert!(decoded.project_header.sections.is_empty());
+    }
+
+    /// [#576 A9-D2] The refresh envelope carries the project exactly as a load
+    /// envelope does - the same header and the same bulk bytes - from a borrowed
+    /// project, with the load-only fields at their no-news values.
+    #[test]
+    fn a_refresh_envelope_carries_the_project_a_load_envelope_does() {
+        let mut project = new_project("CaveA");
+        let mut section = new_section(1, "A", "#ff0000");
+        section.shots.push(shot(101, 0.0, 10.0, 0.0, -1.0));
+        section.shots.push(shot(102, 90.0, 5.0, -1.0, -2.0));
+        section.next_shot_id = 103;
+        project.sections.push(section);
+        project.next_section_id = 2;
+        let stations = vec![
+            Station::with_coordinates(StationRef::new(1, 0), Coordinates::new(0.0, 0.0, 0.0)),
+            Station::with_coordinates(StationRef::new(1, 1), Coordinates::new(10.0, 0.0, -1.0)),
+            Station::with_coordinates(StationRef::new(1, 2), Coordinates::new(10.0, 5.0, -2.0)),
+        ];
+
+        let refresh: DecodedResult = rmp_serde::from_slice(
+            &encode_refresh(&project, stations.clone(), empty_stats()).unwrap(),
+        )
+        .unwrap();
+        let load: DecodedResult = rmp_serde::from_slice(
+            &encode(LoadProjectFullResult {
+                loading_id: 7,
+                project: project.clone(),
+                stations,
+                stats: empty_stats(),
+                warnings: Vec::new(),
+                display_settings: DisplaySettings::default(),
+                is_remote: false,
+                newer_schema_version: None,
+                speleo_link_unreadable: false,
+                unreadable_project_settings: Vec::new(),
+                load_repairs: crate::persistence::LoadRepairs::default(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(refresh.version, BINARY_FORMAT_VERSION);
+        assert_eq!(refresh.loading_id, 0, "a refresh is no load");
+        assert_eq!(refresh.project_header.name, load.project_header.name);
+        assert_eq!(refresh.shot_count, 2);
+        assert_eq!(refresh.shots_floats, load.shots_floats);
+        assert_eq!(refresh.shots_uints, load.shots_uints);
+        assert_eq!(refresh.shots_flags, load.shots_flags);
+        assert_eq!(refresh.station_count, load.station_count);
+        assert_eq!(refresh.stations_floats, load.stations_floats);
+        assert_eq!(refresh.stations_uints, load.stations_uints);
+        assert_eq!(refresh.stations_flags, load.stations_flags);
+        assert_eq!(project.name, "CaveA", "the project was only borrowed");
     }
 }

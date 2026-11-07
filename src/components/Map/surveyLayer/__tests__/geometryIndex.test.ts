@@ -18,6 +18,7 @@ import { metersToMapCoords } from '../../../../utils/coordinates';
 import { encodeFeatureId } from '../../../../utils/ids';
 import type { Section } from '../../../../types/ipc/Section';
 import type { Station } from '../../../../types/ipc/Station';
+import { makeStation } from '../../../../test/factories/survey';
 
 /** #27: both virtual kinds drawn (the default) / neither drawn. */
 const ALL_KINDS = { jump: true, reference: true } as const;
@@ -65,14 +66,8 @@ function fixture(): { sections: Section[]; stations: Station[] } {
       shots: [shot(201), shot(202)],
     },
   ];
-  const st = (section_id: number, station_index: number, x: number, y: number): Station => ({
-    station_ref: { section_id, station_index },
-    coordinates: { x, y, z: 0 },
-    is_zero_datum: false,
-    gps_coordinates: null,
-    merged_with: [],
-    closures_with: [],
-  });
+  const st = (section_id: number, station_index: number, x: number, y: number): Station =>
+    makeStation({ station_ref: { section_id, station_index }, coordinates: { x, y, z: 0 }, closures_with: [] });
   const stations: Station[] = [
     st(1, 0, 0, 0),
     st(1, 1, 30, 0),
@@ -429,11 +424,8 @@ describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
       shots: [mkShot(100000), mkShot(100001, true)],
     },
   ];
-  const st = (section_id: number, station_index: number, x: number, y: number): Station => ({
-    station_ref: { section_id, station_index },
-    coordinates: { x, y, z: 0 },
-    is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
-  });
+  const st = (section_id: number, station_index: number, x: number, y: number): Station =>
+    makeStation({ station_ref: { section_id, station_index }, coordinates: { x, y, z: 0 }, closures_with: [] });
   const stations: Station[] = [
     st(0, 0, 0, 0), st(0, 1, 10, 0), st(0, 2, 10, 10),
     st(1, 0, 100, 0), st(1, 1, 110, 0), st(1, 2, 110, 10),

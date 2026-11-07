@@ -35,9 +35,14 @@ function formatArgs(args: unknown[]): string {
  * Call this once at app startup, before React renders.
  * Original console behaviour is fully preserved.
  */
+// Latched (#576 D27-32(g)): a second call would wrap the console again and push
+// every message to the backend twice.
+let installed = false;
+
 export function installConsoleCapture(): void {
   // Guard: only patch if invoke is available (not in plain browser tests)
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || installed) return;
+  installed = true;
 
   for (const method of METHODS) {
     const original = console[method].bind(console);

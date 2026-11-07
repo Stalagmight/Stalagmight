@@ -10,8 +10,8 @@ import type { TmlFile, TmlSection, TmlShot } from '../../types/commands';
 
 function shot(id: number, fromId: number, over: Partial<TmlShot> = {}): TmlShot {
   return {
-    id: BigInt(id),
-    from_id: BigInt(fromId),
+    id,
+    from_id: fromId,
     shot_type: 'Real',
     azimuth: 90,
     length: 10,
@@ -29,7 +29,7 @@ function shot(id: number, fromId: number, over: Partial<TmlShot> = {}): TmlShot 
     excluded: false,
     latitude: 0,
     longitude: 0,
-    closure_to_id: -1n,
+    closure_to_id: -1,
     section: '',
     ...over,
   };
@@ -43,8 +43,8 @@ function section(name: string, startArianeId: number, shots: TmlShot[]): TmlSect
     date: null,
     color: '#ff0000',
     is_branch_split: false,
-    start_ariane_id: BigInt(startArianeId),
-    end_ariane_id: shots.length > 0 ? shots[shots.length - 1]!.id : -1n,
+    start_ariane_id: startArianeId,
+    end_ariane_id: shots.length > 0 ? shots[shots.length - 1]!.id : -1,
     start_depth: 0,
   };
 }
@@ -182,7 +182,7 @@ describe('computeTmlPreviewLayout', () => {
 
   it('keeps CLOSURE rows out of the drawn geometry', () => {
     const tml = file([
-      section('A', 0, [shot(1, 0), shot(9, 1, { shot_type: 'Closure', closure_to_id: 1n })]),
+      section('A', 0, [shot(1, 0), shot(9, 1, { shot_type: 'Closure', closure_to_id: 1 })]),
     ]);
     const layout = computeTmlPreviewLayout(tml, all);
     expect(layout.sections[0]!.section.shots).toHaveLength(1);
@@ -227,6 +227,27 @@ describe('computeTmlPreviewLayout agrees with the backend about placement', () =
     });
     const c = layout.sections.find((s) => s.index === 2)!;
     expect(c.reanchored).toBe(false);
+    expect(layout.reanchoredCount).toBe(0);
+  });
+
+  it('reads the GPS off the raw first shot even when that shot is excluded (#576 D39(j))', () => {
+    // An unconnected entrance whose first leg carries the propagated START GPS
+    // and is excluded. The backend keeps the GPS and carries the datum past the
+    // excluded leg (`gps_placement`), so the section is placed, not
+    // re-anchored - the preview used to test the first IMPORTED shot instead
+    // and badge it.
+    const tml = file([
+      section('Root', 0, [shot(1, 0)]),
+      section('Entrance', 50, [
+        shot(51, 50, { excluded: true, latitude: 20.5, longitude: -87.3 }),
+        shot(52, 51),
+      ]),
+    ]);
+    const layout = computeTmlPreviewLayout(tml, all);
+
+    const entrance = layout.sections.find((s) => s.index === 1)!;
+    expect(entrance.section.shots).toHaveLength(1);
+    expect(entrance.reanchored).toBe(false);
     expect(layout.reanchoredCount).toBe(0);
   });
 
@@ -302,53 +323,26 @@ describe('computeTmlPreviewLayout agrees with the backend about placement', () =
 });
 
 /**
- * The shape the layout ACTUALLY receives in the shipped app.
+ * The shape the layout receives in the shipped app (#566, #576 C6).
  *
  * `parse_tml` crosses Tauri's JSON IPC, and serde writes an `i64` as a JSON
- * number - so every field ts-rs types as `bigint` arrives as a plain `number`
- * at runtime. The e2e mock encodes the same truth in its own `TmlWire<T>`
- * helper (e2e-playwright/mocks/tauri-ipc.ts), and `loadProjectBinary.ts`
- * normalizes `bigint | number` for the one path where bigints are real.
- *
- * Every fixture above builds `BigInt` ids, which is the shape the TYPES promise
- * and not the shape the wire delivers - so a lookup that only works for one of
- * them stayed green here and was dead in the app.
+ * number, so the Ariane ids arrive as plain numbers. The generated types used to
+ * declare them `bigint` and every fixture here built `BigInt` ids - a shape the
+ * wire never delivers - so a lookup that worked only for one of them stayed green
+ * here and was dead in the app. The types and the fixtures now say `number`.
  */
-function toWire<T>(value: T): T {
-  if (typeof value === 'bigint') return Number(value) as unknown as T;
-  if (Array.isArray(value)) return value.map(toWire) as unknown as T;
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, toWire(v)])
-    ) as T;
-  }
-  return value;
-}
-
 describe('computeTmlPreviewLayout reads the ids the wire actually delivers', () => {
   it('links the chain when the ids are plain numbers', () => {
-    const wire = toWire(chainOfThree());
+    const wire = chainOfThree();
 
-    // Premise: this really is the other runtime shape.
+    // Premise: this really is the wire's runtime shape.
     expect(typeof wire.sections[1]!.start_ariane_id).toBe('number');
     expect(typeof wire.sections[0]!.shots[0]!.id).toBe('number');
 
     const layout = computeTmlPreviewLayout(wire, all);
-    // Identical to the bigint fixture's expectations: each section starts where
-    // the previous one ended. A dropped lookup shows up as every section stacked
-    // at the origin and flagged as connecting to nothing.
-    expect(offsets(layout)).toEqual([
-      [0, 0],
-      [20, 0],
-      [40, 0],
-    ]);
-    expect(layout.reanchoredCount).toBe(0);
-  });
-
-  it('still links the chain when the ids are bigints', () => {
-    // The types' shape, kept pinned so a normalization that only handles the
-    // wire shape cannot silently break the other one.
-    const layout = computeTmlPreviewLayout(chainOfThree(), all);
+    // Each section starts where the previous one ended. A dropped lookup shows
+    // up as every section stacked at the origin and flagged as connecting to
+    // nothing.
     expect(offsets(layout)).toEqual([
       [0, 0],
       [20, 0],
@@ -358,10 +352,9 @@ describe('computeTmlPreviewLayout reads the ids the wire actually delivers', () 
   });
 
   it('keeps the selection semantics on wire-shaped ids', () => {
-    // The re-anchor rules are what the dialog draws its badges from, so they
-    // have to survive the id shape too: deselecting the middle section strands
-    // the one that hung off it.
-    const layout = computeTmlPreviewLayout(toWire(chainOfThree()), {
+    // The re-anchor rules are what the dialog draws its badges from:
+    // deselecting the middle section strands the one that hung off it.
+    const layout = computeTmlPreviewLayout(chainOfThree(), {
       includeExcluded: false,
       selected: new Set([0, 2]),
     });
@@ -369,7 +362,7 @@ describe('computeTmlPreviewLayout reads the ids the wire actually delivers', () 
     expect(layout.reanchoredCount).toBe(1);
 
     // ...and deselecting the head promotes its child without stranding anything.
-    const promoted = computeTmlPreviewLayout(toWire(chainOfThree()), {
+    const promoted = computeTmlPreviewLayout(chainOfThree(), {
       includeExcluded: false,
       selected: new Set([1, 2]),
     });
@@ -380,10 +373,8 @@ describe('computeTmlPreviewLayout reads the ids the wire actually delivers', () 
     ]);
   });
 
-  it('treats a negative wire id as "names nothing", like a negative bigint', () => {
-    const orphan = toWire(
-      file([section('A', 0, [shot(1, 0)]), section('Orphan', -1, [shot(2, -1)])])
-    );
+  it('treats a negative wire id as "names nothing"', () => {
+    const orphan = file([section('A', 0, [shot(1, 0)]), section('Orphan', -1, [shot(2, -1)])]);
     const layout = computeTmlPreviewLayout(orphan, all);
     expect(layout.sections.find((s) => s.index === 1)!.reanchored).toBe(true);
   });

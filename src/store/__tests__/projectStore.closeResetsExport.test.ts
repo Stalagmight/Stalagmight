@@ -10,15 +10,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => String(e),
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(stringOfError);
 
 import { useProjectStore } from '../projectStore';
 import { useExportStore, DEFAULT_IMAGE_OPTIONS } from '../exportStore';
+import { invokeIpcMock, stubGetErrorMessage, stringOfError } from '../../test/factories/ipc';
 
 describe('closeProject resets the Export-mode options', () => {
   beforeEach(() => {
@@ -28,7 +25,7 @@ describe('closeProject resets the Export-mode options', () => {
   });
 
   it('restores every slice when the close succeeds', async () => {
-    invokeIpcMock.mockResolvedValue({ success: true });
+    invokeIpcMock.mockResolvedValue({ warnings: [] });
     const s = useExportStore.getState();
     s.setExportType('data');
     s.setDataFormat('tml');
@@ -43,7 +40,7 @@ describe('closeProject resets the Export-mode options', () => {
   });
 
   it('leaves them alone when the close is REFUSED - the project is still open', async () => {
-    invokeIpcMock.mockResolvedValue({ success: false, error: 'unsaved changes' });
+    invokeIpcMock.mockRejectedValue({ code: 'FAILED', message: 'unsaved changes' });
     useExportStore.getState().setDataFormat('tml');
 
     await useProjectStore.getState().closeProject();

@@ -1,12 +1,10 @@
-import { render } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+// The real English strings (not a stub `t`), so the label and aria-label checks
+// below read what a user and a screen reader get.
+import '../../i18n';
 import { DepthLegend } from './DepthLegend';
 import { getDepthColor } from '../../utils/colors';
-
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string, opts?: Record<string, unknown>) => opts?.min ? `${opts.min}-${opts.max}` : key }),
-  initReactI18next: { type: '3rdParty', init: () => undefined },
-}));
 
 /**
  * Guard against the legend drifting from the map: a CSS/SVG gradient with only
@@ -46,5 +44,34 @@ describe('DepthLegend', () => {
       const expected = getDepthColor(depth, shallowColor, deepColor, minDepth, maxDepth);
       expect(stop.getAttribute('stop-color')).toBe(expected);
     }
+  });
+
+  // Ported from e2e-playwright/depth-gradient.spec.ts (#576 E17-D1): the labels and the
+  // accessible name are the component's own rendering, so they are pinned here, exactly,
+  // where the browser spec could only pattern-match them. The spec keeps the in-app
+  // show/hide and the painted-pixel checks.
+  it('labels the shallow and the deep end with their depths in metres', () => {
+    render(<DepthLegend minDepth={2} maxDepth={12.5} shallowColor="#a89060" deepColor="#b85048" visible />);
+
+    expect(screen.getByTestId('depth-legend-min')).toHaveTextContent(/^2\.0m$/);
+    expect(screen.getByTestId('depth-legend-max')).toHaveTextContent(/^12\.5m$/);
+    // A non-flat range has no "Flat" note between the two.
+    expect(screen.getByTestId('depth-legend')).not.toHaveTextContent('Flat');
+  });
+
+  it('is an image whose accessible name states the depth range', () => {
+    render(<DepthLegend minDepth={2} maxDepth={12.5} shallowColor="#a89060" deepColor="#b85048" visible />);
+
+    expect(screen.getByRole('img')).toHaveAccessibleName('Depth scale from 2.0m (shallow) to 12.5m (deep)');
+  });
+
+  it('marks a flat range and renders nothing while hidden', () => {
+    const { rerender } = render(
+      <DepthLegend minDepth={4} maxDepth={4} shallowColor="#a89060" deepColor="#b85048" visible />
+    );
+    expect(screen.getByTestId('depth-legend')).toHaveTextContent('Flat');
+
+    rerender(<DepthLegend minDepth={4} maxDepth={4} shallowColor="#a89060" deepColor="#b85048" visible={false} />);
+    expect(screen.queryByTestId('depth-legend')).toBeNull();
   });
 });

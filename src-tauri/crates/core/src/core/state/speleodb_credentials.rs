@@ -148,7 +148,7 @@ impl AppState {
         // token behind this call, so run it before reading the session's identity.
         self.speleodb_ensure_rehydrated();
 
-        let mut session = self.speleodb_session_lock().map_err(local_dto)?;
+        let mut session = self.speleodb.lock();
         let (Some(endpoint), Some(email)) = (session.endpoint.clone(), session.email.clone())
         else {
             return Err(local_dto(SpeleoDbError::NotAuthenticated));
@@ -222,10 +222,7 @@ impl AppState {
     /// session lock is acquired: `speleodb_ensure_rehydrated` documents the
     /// config-then-session lock order, and inverting it here would be the deadlock.
     fn speleodb_plaintext_allowed(&self) -> bool {
-        self.config
-            .lock()
-            .ok()
-            .is_some_and(|c| c.speleodb.token_fallback == TokenFallback::Plaintext)
+        self.config.lock().speleodb.token_fallback == TokenFallback::Plaintext
     }
 
     /// Persist the pair the login-time choice settles: where the key goes, and the
@@ -249,10 +246,7 @@ impl AppState {
     /// the key HAS moved and the session must keep honouring that, and a fresh login
     /// is the one thing that re-opens the keychain to it anyway.
     fn speleodb_persist_storage_choice(&self, fallback: TokenFallback) -> Result<(), String> {
-        let mut config = self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut config = self.config.lock();
         if config.speleodb.token_fallback == fallback && config.speleodb.keychain_declined {
             return Ok(()); // no write, no disk churn on a repeated choice
         }
@@ -373,7 +367,7 @@ mod tests {
         plaintext: Option<Box<dyn SecretStore>>,
     ) -> AppState {
         let state = AppState::new().expect("state");
-        let mut session = state.speleodb.lock().expect("session");
+        let mut session = state.speleodb.lock();
         session.endpoint = Some(EP.to_owned());
         session.email = Some(EMAIL.to_owned());
         session.token_store = TokenStore::from_stores_holding("tok-1", keychain, plaintext);
@@ -383,7 +377,7 @@ mod tests {
 
     /// The persisted `(token_fallback, keychain_declined)` pair.
     fn persisted(state: &AppState) -> (TokenFallback, bool) {
-        let config = state.config.lock().expect("config");
+        let config = state.config.lock();
         (
             config.speleodb.token_fallback,
             config.speleodb.keychain_declined,
@@ -400,7 +394,6 @@ mod tests {
         state
             .speleodb
             .lock()
-            .expect("session")
             .token_store
             .note_keychain_has_token(true);
         state.speleodb_persist_keychain_belief(Some(account_key(EP, EMAIL)));
@@ -408,12 +401,7 @@ mod tests {
 
     /// Whether the config still records a keyring entry for this account.
     fn believed_in_keyring(state: &AppState) -> bool {
-        state
-            .config
-            .lock()
-            .expect("config")
-            .speleodb
-            .keychain_has_token
+        state.config.lock().speleodb.keychain_has_token
     }
 
     #[test]
@@ -734,7 +722,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = AppState::new().expect("state");
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 session.endpoint = Some("https://sdb.example".to_owned());
                 session.email = Some("u@x".to_owned());
                 // Identity present, but NO token held - `restore` returns None.
@@ -744,7 +732,7 @@ mod tests {
 
             assert!(state.speleodb_retry_keychain().is_err(), "no token to move");
 
-            let session = state.speleodb.lock().expect("session");
+            let session = state.speleodb.lock();
             assert!(
                 session.token_store.keychain_declined(),
                 "a failed move must not leave the refusal silently lifted"

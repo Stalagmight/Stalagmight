@@ -116,7 +116,7 @@ export interface DmpSectionSpec {
    * Ignored when it does not name an earlier section (no cycles, no forward
    * references - the resolution is a single left-to-right pass).
    */
-  sameContentAs?: number;
+  sameContentAs?: number | undefined;
 }
 
 /** Token-stream mangling applied after the byte stream has been rendered. */
@@ -147,7 +147,7 @@ export interface DmpSpec {
    * mNemo exports are signed, which makes this the higher-fidelity shape.
    */
   signedTokens?: boolean;
-  tokens?: DmpTokenTweaks;
+  tokens?: DmpTokenTweaks | undefined;
 }
 
 function byte(value: number): number {
@@ -231,7 +231,8 @@ export function endOfSectionBytes(version: number, kind: DmpEndOfSection = 'norm
 }
 
 function sectionBytes(spec: DmpSpec, index: number): number[] {
-  const section = spec.sections[index];
+  // In range: the only caller, dmpFileBytes, loops index over spec.sections.
+  const section = spec.sections[index]!;
   const cloneIndex = section.sameContentAs;
   const clone =
     cloneIndex !== undefined && cloneIndex >= 0 && cloneIndex < index
@@ -290,7 +291,7 @@ export function writeDmpText(spec: DmpSpec): string {
   const doubled = tweaks.doubledSemicolonAt;
   const parts: string[] = [];
   for (let index = 0; index < tokens.length; index++) {
-    parts.push(tokens[index]);
+    parts.push(tokens[index]!);
     if (index === tokens.length - 1) break;
     parts.push(doubled !== undefined && doubled === index ? `${separator};` : separator);
   }
@@ -615,7 +616,7 @@ export function zipStore(entries: readonly { name: string; data: Uint8Array }[])
 
   const central = new ByteSink();
   for (let index = 0; index < prepared.length; index++) {
-    const entry = prepared[index];
+    const entry = prepared[index]!;
     central.u32(0x02014b50); // central directory header signature
     central.u16(20); // version made by
     central.u16(20); // version needed to extract
@@ -632,7 +633,7 @@ export function zipStore(entries: readonly { name: string; data: Uint8Array }[])
     central.u16(0); // disk number start
     central.u16(0); // internal file attributes
     central.u32(0); // external file attributes
-    central.u32(offsets[index]);
+    central.u32(offsets[index]!); // the loop above pushed one offset per prepared entry
     central.raw(entry.nameBytes);
   }
 

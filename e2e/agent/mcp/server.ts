@@ -17,6 +17,8 @@ import { LogCursor, type LogLevel } from '../lib/logs';
 import { invokeInApp, evalInApp, capJson } from '../lib/page';
 import { newOracleState, runSweep, type OracleState } from '../lib/oracles';
 import { listScenarios, runScenario } from '../scenarios';
+import { publishableErrorMessage, redactCorpusValue } from '../lib/fixtureCorpus';
+import { shareableErrorText } from '../lib/shareableFailure';
 import { DEFAULT_FIXTURE, materializeFixture } from '../lib/fixtures';
 import {
   waitForAppReady,
@@ -45,14 +47,30 @@ let oracleState: OracleState = newOracleState();
 
 type ToolResult = { content: Array<Record<string, unknown>>; isError?: boolean };
 
+/**
+ * A tool's answer, folded through the corpus redaction like every error the server
+ * returns (`asMessage`): the `logs` tool, for one, returns the backend's line for a
+ * failed parse, which quotes the corpus copy it was handed (#576 RV13-4).
+ */
 function textResult(value: unknown): ToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(value ?? null) }] };
+  return { content: [{ type: 'text', text: JSON.stringify(redactCorpusValue(value) ?? null) }] };
 }
 function errorResult(message: string): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }], isError: true };
 }
+/**
+ * A tool's result capped at 16 KB, folded through the corpus redaction FIRST
+ * (#576 RV18-W23-6), as `record` folds before its own cap. `textResult` folds
+ * the answer again, but a cut through a corpus name leaves a stub no fold
+ * recognises, and the agent was handed its start. (The action log was not:
+ * `record` keeps the first 4 KB of a result.)
+ */
+function capFolded(value: unknown): { value: unknown; truncated: boolean } {
+  return capJson(redactCorpusValue(value), 16384);
+}
+/** Every error the server records or returns, worded publishably (#576 RV12-F1). */
 function asMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return publishableErrorMessage(err);
 }
 
 interface RunOutput<T> {
@@ -66,7 +84,7 @@ async function record<T>(
   tool: string,
   params: unknown,
   fn: (seq: number) => Promise<RunOutput<T>>,
-  opts: { digest?: boolean; mutates?: boolean } = {},
+  opts: { digest?: boolean | undefined; mutates?: boolean } = {},
 ): Promise<T> {
   const start = Date.now();
   const seq = session.hasRecorder ? session.recorder.nextSeq() : 0;
@@ -88,7 +106,9 @@ async function record<T>(
         params,
         resolved,
         outcome: { ok: true, durationMs: Date.now() - start },
-        result: capJson(result, 4096).value,
+        // Folded BEFORE the cap: a cut through a corpus name would leave a stub the
+        // recorder's own folding cannot recognise (#576 RV13-4).
+        result: capJson(redactCorpusValue(result), 4096).value,
         artifacts,
         post,
       });
@@ -211,7 +231,7 @@ function define<S extends z.ZodRawShape>(
           toolChain = run.catch(() => undefined);
           return run;
         };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- registerTool infers its callback type from a concrete schema; a generic S cannot satisfy it
   server.registerTool(name, { description, inputSchema: schema }, wrapped as any);
 }
 
@@ -691,7 +711,7 @@ define(
   { testid: z.string().optional(), selector: z.string().optional() },
   (args) =>
     run('element_state', args, async () => ({
-      result: capJson(await session.exclusive(() => queryElementState(session.browser, args)), 16384),
+      result: capFolded(await session.exclusive(() => queryElementState(session.browser, args))),
     })),
 );
 
@@ -732,7 +752,7 @@ define('eval', 'Run an async function body in the webview (page context) and ret
     'eval',
     args,
     async () => ({
-      result: capJson(await session.exclusive(() => evalInApp(session.browser, args.script, args.args ?? [])), 16384),
+      result: capFolded(await session.exclusive(() => evalInApp(session.browser, args.script, args.args ?? []))),
     }),
     { sweep: true },
   ),
@@ -746,7 +766,7 @@ define('ipc', 'Invoke a Tauri command from the webview (e.g. get_recent_logs_sin
     'ipc',
     args,
     async () => ({
-      result: capJson(await session.exclusive(() => invokeInApp(session.browser, args.command, args.args)), 16384),
+      result: capFolded(await session.exclusive(() => invokeInApp(session.browser, args.command, args.args))),
     }),
     { sweep: true },
   ),
@@ -940,7 +960,6 @@ define(
               if (session.hasRecorder) session.recorder.event('driver-log', { message: String(m) });
             },
           };
-          // eslint-disable-next-line no-new-func
           const fn = new Function(
             'helpers',
             `return (async () => { const { browser, ipc, evalInApp, readStore, callAction, log } = helpers; ${args.script} })();`,
@@ -977,7 +996,7 @@ define(
           }
           return raced;
         });
-        return { result: capJson(value, 16384) };
+        return { result: capFolded(value) };
       },
       { sweep: true },
     ),
@@ -1145,6 +1164,9 @@ define(
         full: true,
         recorder: session.hasRecorder ? session.recorder : undefined,
       });
+      // The findings quote the app's error log, which quotes the path of a
+      // corpus copy it failed to import (#576 HFI-13): runSweep hands them over
+      // folded, and textResult folds the whole answer again.
       return textResult({
         scenario: args.name,
         metrics,
@@ -1223,6 +1245,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`[agent-mcp] fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W33-NF6): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`[agent-mcp] fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });

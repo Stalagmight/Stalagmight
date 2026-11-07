@@ -25,142 +25,27 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::models::comment_split;
-use crate::models::{normalize_azimuth, Project, SectionId, Shot, StationRef};
+use crate::models::project::join_station_comment;
+use crate::models::{
+    normalize_azimuth, AzimuthReference, Project, SectionId, Shot, StationKey, StationRef,
+};
+use crate::parsers::tml::schema::{
+    self, color_to_ariane, element as el, pitch_to_inclination, ElementName, Spelling,
+};
 
+use super::atomic::{write_atomic, write_atomic_bytes};
 use super::tml_azimuth::AzimuthExport;
 use super::tml_topology::{
     build_parent_map, choose_default_root_section_id, section_datum, station_depth,
 };
 
 // ============================================================================
-// Element-name map (long vs. short)
+// Schema
 // ============================================================================
-
-/// Provides XML element names matching the target format.
-struct Names {
-    cave_file: &'static str,
-    cave_name: &'static str,
-    unit: &'static str,
-    use_magnetic_azimuth: &'static str,
-    first_start_absolute_elevation: &'static str,
-    data: &'static str,
-    survey_data: &'static str,
-    id: &'static str,
-    from_id: &'static str,
-    shot_type: &'static str,
-    section: &'static str,
-    azimuth: &'static str,
-    length: &'static str,
-    depth: &'static str,
-    depth_in: &'static str,
-    inclination: &'static str,
-    left: &'static str,
-    right: &'static str,
-    up: &'static str,
-    down: &'static str,
-    comment: &'static str,
-    explorer: &'static str,
-    date: &'static str,
-    color: &'static str,
-    excluded: &'static str,
-    latitude: &'static str,
-    longitude: &'static str,
-    closure_to_id: &'static str,
-    locked: &'static str,
-    name: &'static str,
-    profiletype: &'static str,
-    uuid: &'static str,
-}
-
-/// Long names (used by `.tml` ZIP files).
-const LONG: Names = Names {
-    cave_file: "CaveFile",
-    cave_name: "caveName",
-    unit: "unit",
-    use_magnetic_azimuth: "useMagneticAzimuth",
-    first_start_absolute_elevation: "firstStartAbsoluteElevation",
-    data: "Data",
-    survey_data: "SurveyData",
-    id: "ID",
-    from_id: "FromID",
-    shot_type: "Type",
-    section: "Section",
-    azimuth: "Azimut",
-    length: "Length",
-    depth: "Depth",
-    depth_in: "DepthIn",
-    inclination: "Inclination",
-    left: "Left",
-    right: "Right",
-    up: "Up",
-    down: "Down",
-    comment: "Comment",
-    explorer: "Explorer",
-    date: "Date",
-    color: "Color",
-    excluded: "Excluded",
-    latitude: "Latitude",
-    longitude: "Longitude",
-    closure_to_id: "ClosureToID",
-    locked: "Locked",
-    name: "Name",
-    profiletype: "Profiletype",
-    uuid: "UUID",
-};
-
-/// Short names (used by `.tmlu` plain-XML files).
-const SHORT: Names = Names {
-    cave_file: "CaveFile",
-    cave_name: "caveName",
-    unit: "unit",
-    use_magnetic_azimuth: "useMagneticAzimuth",
-    first_start_absolute_elevation: "firstStartAbsoluteElevation",
-    data: "Data",
-    survey_data: "SRVD",
-    id: "ID",
-    from_id: "FRID",
-    shot_type: "TY",
-    section: "SC",
-    azimuth: "AZ",
-    length: "LG",
-    depth: "DP",
-    depth_in: "DPI",
-    inclination: "INC",
-    left: "L",
-    right: "R",
-    up: "U",
-    down: "D",
-    comment: "CM",
-    explorer: "EX",
-    date: "DT",
-    color: "CL",
-    excluded: "EXC",
-    latitude: "LT",
-    longitude: "LGT",
-    closure_to_id: "CID",
-    locked: "LCK",
-    name: "NM",
-    profiletype: "PT",
-    uuid: "UU",
-};
-
-/// Convert a model pitch into Ariane's `<Inclination>`.
-///
-/// The model is +down (positive descends, matching `depth_in` / `depth_out`).
-/// Ariane is taken to be +up, like every other survey format we read: Walls
-/// and Compass both store +up in-file, and the mNemo device reports +up. That
-/// could not be confirmed from data. Across every Ariane file available, all
-/// 5,686 shots carry `Inclination` 0, because these surveys are depth-gauge
-/// based and Ariane never populates the field. So this is an inference from the
-/// surrounding ecosystem, not a measurement, and it is unobservable on real
-/// files; it only changes what we emit. `None` and `0` both export as a plain
-/// `0.0` rather than `-0.0`. Inverse of `parsers::tml::inclination_to_pitch`.
-fn pitch_to_inclination(pitch: Option<f64>) -> f64 {
-    match pitch {
-        Some(p) if p != 0.0 => -p,
-        _ => 0.0,
-    }
-}
+//
+// Element names, shot-type strings, the `DepthIn` sentinel and the inclination
+// and colour conversions all come from `parsers::tml::schema`, the one table
+// the importer reads with too (#576 B4). Nothing here spells an element.
 
 /// Pitch for a synthesized reverse leg (the reversed and pre-zero-datum
 /// duplicates Ariane needs, since it carries a single forward azimuth per shot).
@@ -184,14 +69,14 @@ fn reversed_leg_pitch(shot: &Shot) -> Option<f64> {
 #[derive(Debug)]
 struct ExportShot {
     id: i64,
-    /// Persistent Stalagmight shot UUID, emitted as `<UUID>`. `None` for the
-    /// synthesized shots (START, CLOSURE, reversed / pre-zero-datum legs) that
-    /// have no 1:1 Stalagmight shot behind them. This cannot be derived from
-    /// `shot_type`: a reversed leg re-exports a REAL shot in the opposite
-    /// direction, so it carries a real type but no identity of its own.
+    /// Persistent Stalagmight shot UUID, emitted as `<UUID>`. Carried by every
+    /// row that stands for a real project shot - forward legs AND the reversed /
+    /// pre-zero-datum legs, each a shot's only appearance in the document (see
+    /// `write_shot`). `None` only for the rows this exporter synthesizes: START,
+    /// CLOSURE and the sidecar's VIRTUAL padding shot.
     uuid: Option<String>,
     from_id: i64,
-    shot_type: &'static str, // "START", "REAL", "VIRTUAL", "CLOSURE"
+    shot_type: &'static str, // one of the `schema::TYPE_*` values
     section: String,
     azimuth: f64,
     length: f64,
@@ -218,6 +103,194 @@ struct ExportShot {
     locked: bool,
 }
 
+/// What every row one section emits shares: its trip (surveyor and date), its
+/// colour, and the north reference its bearings are written in (#438).
+struct RowContext {
+    explorer: Option<String>,
+    date: Option<String>,
+    color: String,
+    emit_reference: AzimuthReference,
+}
+
+/// The Ariane `<Type>` of a project shot: one virtual category (#27 q9).
+fn ariane_shot_type(shot: &Shot) -> &'static str {
+    if shot.kind.is_virtual() {
+        schema::TYPE_VIRTUAL
+    } else {
+        schema::TYPE_REAL
+    }
+}
+
+/// The one place each kind of row is built (#576 B27(a)). The shot loops used
+/// to spell all 23 fields out ten times over, restating the reversed-leg rules
+/// in each of the three reversing blocks; one missed copy of exactly that shape
+/// once cost 78 shots their identity.
+impl ExportShot {
+    /// A row with no identity and every measurement at Ariane's zero - the base
+    /// of the rows this exporter synthesizes.
+    fn synthesized(
+        id: i64,
+        from_id: i64,
+        shot_type: &'static str,
+        section: String,
+        color: String,
+        (depth_in, depth): (f64, f64),
+    ) -> Self {
+        Self {
+            id,
+            uuid: None,
+            from_id,
+            shot_type,
+            section,
+            azimuth: 0.0,
+            length: 0.0,
+            depth,
+            depth_in,
+            depth_in_same_as_prev: false,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color,
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            locked: false,
+        }
+    }
+
+    /// The START row of an entrance whose station stands at `depth`. Its GPS
+    /// is stamped later, by the pass that resolves each entrance's datum.
+    fn start(id: i64, section: &str, depth: f64, rows: &RowContext) -> Self {
+        Self {
+            comment: Some("START".to_string()),
+            explorer: rows.explorer.clone(),
+            date: rows.date.clone(),
+            locked: true,
+            ..Self::synthesized(
+                id,
+                -1,
+                schema::TYPE_START,
+                section.to_string(),
+                rows.color.clone(),
+                (depth, depth),
+            )
+        }
+    }
+
+    /// `shot` walked the way it was surveyed. `prev_depth` is where the chain
+    /// it hangs off ends, which decides whether `DepthIn` can be the
+    /// same-as-previous sentinel.
+    fn forward(
+        id: i64,
+        from_id: i64,
+        section: &str,
+        shot: &Shot,
+        prev_depth: f64,
+        rows: &RowContext,
+    ) -> Self {
+        Self {
+            id,
+            uuid: Some(shot_export_uuid(shot)),
+            from_id,
+            shot_type: ariane_shot_type(shot),
+            section: section.to_string(),
+            azimuth: rows.emit_reference.to_true(shot.average_azimuth_measured()),
+            length: shot.length,
+            depth: shot.depth_out,
+            depth_in: shot.depth_in,
+            depth_in_same_as_prev: (shot.depth_in - prev_depth).abs() < 1e-9,
+            inclination: pitch_to_inclination(shot.pitch_in),
+            left: shot.left.unwrap_or(0.0),
+            right: shot.right.unwrap_or(0.0),
+            up: shot.up.unwrap_or(0.0),
+            down: shot.down.unwrap_or(0.0),
+            comment: shot.comment.clone(),
+            explorer: rows.explorer.clone(),
+            date: rows.date.clone(),
+            color: rows.color.clone(),
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            locked: false,
+        }
+    }
+
+    /// `shot` walked backwards - the reversed and pre-zero-datum legs Ariane
+    /// needs because it carries one forward azimuth per shot. The rules of
+    /// turning round, stated once: the bearing turns through 180 degrees, the
+    /// pitch negates, the two depths swap and so do left and right (up and down
+    /// do not - turning round does not turn you over). It keeps the shot's
+    /// identity: a reversed leg is that shot's only appearance in the document.
+    fn reversed(
+        id: i64,
+        from_id: i64,
+        section: &str,
+        shot: &Shot,
+        prev_depth: f64,
+        rows: &RowContext,
+    ) -> Self {
+        let forward = Self::forward(id, from_id, section, shot, prev_depth, rows);
+        Self {
+            azimuth: reverse_pre_zero_azimuth(forward.azimuth),
+            depth: shot.depth_in,
+            depth_in: shot.depth_out,
+            depth_in_same_as_prev: (shot.depth_out - prev_depth).abs() < 1e-9,
+            inclination: pitch_to_inclination(reversed_leg_pitch(shot)),
+            left: forward.right,
+            right: forward.left,
+            ..forward
+        }
+    }
+
+    /// A CLOSURE row tying Ariane node `from_id` to `to_id`, whose emitted
+    /// depths are `depth_a` and `depth_b`. The two ends are the same physical
+    /// point surveyed twice, so the connector's length IS the vertical part of
+    /// the closure error: exactly that keeps `|depth - origin_depth| <= length`
+    /// true by construction, and stays honest - a perfectly closed loop still
+    /// gets 0.
+    fn closure(
+        id: i64,
+        (from_id, to_id): (i64, i64),
+        section: String,
+        color: String,
+        (depth_a, depth_b): (f64, f64),
+    ) -> Self {
+        Self {
+            length: (depth_b - depth_a).abs(),
+            closure_to_id: to_id,
+            ..Self::synthesized(
+                id,
+                from_id,
+                schema::TYPE_CLOSURE,
+                section,
+                color,
+                (depth_a, depth_b),
+            )
+        }
+    }
+
+    /// The sidecar's padding row: a parentless VIRTUAL standing on `anchor`,
+    /// so it can displace nothing (see `harden_for_speleodb`).
+    fn padding(id: i64, anchor: &ExportShot) -> Self {
+        Self {
+            date: Some(schema::UNDATED_PLACEHOLDER.to_owned()),
+            ..Self::synthesized(
+                id,
+                -1,
+                schema::TYPE_VIRTUAL,
+                anchor.section.clone(),
+                anchor.color.clone(),
+                (anchor.depth, anchor.depth),
+            )
+        }
+    }
+}
+
 /// Which consumer the emitted document is written for.
 ///
 /// Ariane reads the file as a survey; SpeleoDB feeds it to `openspeleo_lib`,
@@ -227,8 +300,9 @@ struct ExportShot {
 /// exists so those concessions cannot leak into the file a user asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TmlProfile {
-    /// The user-facing "Export to Ariane" output. Byte-for-byte what we have
-    /// always written; nothing below may change it.
+    /// The user-facing "Export to Ariane" output. Its bytes change only
+    /// deliberately: `tml_golden_tests` pins the whole document, so a change
+    /// lands together with its golden.
     User,
     /// The throwaway `ariane.tml` pushed alongside a SpeleoDB commit, which the
     /// server converts to GeoJSON for the map preview.
@@ -240,8 +314,9 @@ enum TmlProfile {
 // ============================================================================
 
 /// Export a project to Ariane TML (`.tml` = ZIP) or TMLU (`.tmlu` = plain XML).
-/// Returns the notes the user has to be told about THIS document - today only
-/// the azimuth compromises (#438), which are empty for an ordinary project.
+/// Returns the notes the user has to be told about THIS document - the azimuth
+/// compromises (#438), GPS anchors no START could carry, and text characters
+/// XML could not carry (#576 B11) - all empty for an ordinary project.
 /// Notes, not warnings: nothing failed, but something about the file is not
 /// what the reader would assume, and the export command is the only moment the
 /// user is looking.
@@ -259,21 +334,21 @@ pub fn export_tml_for_speleodb(project: &Project, path: &Path) -> Result<()> {
 }
 
 fn export_with_profile(project: &Project, path: &Path, profile: TmlProfile) -> Result<Vec<String>> {
-    let (xml, notes) = build_xml(project, names_for_path(path), profile)?;
+    let (xml, notes) = build_xml(project, spelling_for_path(path), profile)?;
     write_output(path, &xml)?;
     Ok(notes)
 }
 
-fn names_for_path(path: &Path) -> &'static Names {
+fn spelling_for_path(path: &Path) -> Spelling {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_lowercase)
         .unwrap_or_default();
     if ext == "tml" {
-        &LONG
+        Spelling::Long
     } else {
-        &SHORT
+        Spelling::Short
     }
 }
 
@@ -285,8 +360,8 @@ fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
         .unwrap_or_default();
     match ext.as_str() {
         "tml" => write_zip(path, xml),
-        "tmlu" => std::fs::write(path, xml).context("Failed to write TMLU file"),
-        _ => std::fs::write(path, xml).context("Failed to write TML export file"),
+        "tmlu" => write_atomic_bytes(path, xml).context("Failed to write TMLU file"),
+        _ => write_atomic_bytes(path, xml).context("Failed to write TML export file"),
     }
 }
 
@@ -294,7 +369,11 @@ fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
 // XML generation
 // ============================================================================
 
-fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u8>, Vec<String>)> {
+fn build_xml(
+    project: &Project,
+    sp: Spelling,
+    profile: TmlProfile,
+) -> Result<(Vec<u8>, Vec<String>)> {
     let azimuth_export = AzimuthExport::decide(project);
     // The two azimuth compromises are decisions the FILE carries and the
     // project does not, so they are stated rather than done quietly (#438):
@@ -322,41 +401,38 @@ fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u
     ensure_rooted_chain(&shots, profile)?;
 
     let mut buf = Vec::new();
-    let mut writer = Writer::new_with_indent(Cursor::new(&mut buf), b' ', 4);
+    let mut out = TmlWriter {
+        xml: Writer::new_with_indent(Cursor::new(&mut buf), b' ', 4),
+        sp,
+        replaced_chars: 0,
+    };
 
     // <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    writer.write_event(Event::Decl(BytesDecl::new(
+    out.xml.write_event(Event::Decl(BytesDecl::new(
         "1.0",
         Some("UTF-8"),
         Some("yes"),
     )))?;
 
-    // <CaveFile>
-    writer.write_event(Event::Start(BytesStart::new(n.cave_file)))?;
+    out.start(el::cave_file::NAME)?;
 
     // Metadata elements
-    write_text_element(&mut writer, n.cave_name, &project.name)?;
-    write_text_element(
-        &mut writer,
-        n.first_start_absolute_elevation,
+    out.field(el::cave_name::NAME, &project.name)?;
+    out.field(
+        el::first_start_absolute_elevation::NAME,
         &format_f64(project.surface_elevation.unwrap_or(0.0)),
     )?;
 
-    // <Data>
-    writer.write_event(Event::Start(BytesStart::new(n.data)))?;
-
+    out.start(el::data::NAME)?;
     for shot in &shots {
-        write_shot(&mut writer, n, shot)?;
+        write_shot(&mut out, shot)?;
     }
-
-    // </Data>
-    writer.write_event(Event::End(BytesEnd::new(n.data)))?;
+    out.end(el::data::NAME)?;
 
     // Remaining metadata after Data (matching Ariane's ordering)
-    write_text_element(&mut writer, n.unit, "m")?;
-    write_text_element(
-        &mut writer,
-        n.use_magnetic_azimuth,
+    out.field(el::unit::NAME, "m")?;
+    out.field(
+        el::use_magnetic_azimuth::NAME,
         if azimuth_export.is_magnetic() {
             "true"
         } else {
@@ -364,72 +440,129 @@ fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u
         },
     )?;
 
-    // </CaveFile>
-    writer.write_event(Event::End(BytesEnd::new(n.cave_file)))?;
+    out.end(el::cave_file::NAME)?;
 
-    drop(writer);
+    // A character XML cannot carry was replaced rather than written (#576
+    // B11): the file opens, but its text is not exactly the project's, so the
+    // user hears about it like any other fact the file carries and the project
+    // does not.
+    if out.replaced_chars > 0 {
+        tracing::warn!(
+            replaced = out.replaced_chars,
+            note = XML_CHARS_REPLACED_NOTE,
+            "Ariane export: replaced characters XML 1.0 cannot carry with U+FFFD"
+        );
+        notes.push(XML_CHARS_REPLACED_NOTE.to_string());
+    }
+
+    drop(out);
     Ok((buf, notes))
 }
 
-fn write_text_element<W: std::io::Write>(
-    writer: &mut Writer<W>,
-    tag: &str,
-    text: &str,
-) -> Result<()> {
-    writer.write_event(Event::Start(BytesStart::new(tag)))?;
-    writer.write_event(Event::Text(BytesText::new(text)))?;
-    writer.write_event(Event::End(BytesEnd::new(tag)))?;
-    Ok(())
+/// The export note for text that lost characters XML cannot carry (#576 B11).
+const XML_CHARS_REPLACED_NOTE: &str = "xml-chars-replaced";
+
+/// The document being written: the XML writer, the spelling its element names
+/// take, and how many characters had to be replaced on the way in.
+///
+/// Every element's text goes through [`TmlWriter::text_element`], so there is
+/// exactly one place where project text meets the file - which is where the
+/// XML 1.0 gate lives (#576 B11).
+struct TmlWriter<W: std::io::Write> {
+    xml: Writer<W>,
+    sp: Spelling,
+    replaced_chars: usize,
 }
 
-fn write_shot<W: std::io::Write>(
-    writer: &mut Writer<W>,
-    n: &Names,
-    shot: &ExportShot,
-) -> Result<()> {
-    writer.write_event(Event::Start(BytesStart::new(n.survey_data)))?;
+impl<W: std::io::Write> TmlWriter<W> {
+    fn start(&mut self, element: ElementName) -> Result<()> {
+        let tag = element.spelled(self.sp);
+        self.xml.write_event(Event::Start(BytesStart::new(tag)))?;
+        Ok(())
+    }
+
+    fn end(&mut self, element: ElementName) -> Result<()> {
+        let tag = element.spelled(self.sp);
+        self.xml.write_event(Event::End(BytesEnd::new(tag)))?;
+        Ok(())
+    }
+
+    /// `<tag>text</tag>`, with every character XML 1.0 cannot carry replaced
+    /// by U+FFFD (`BytesText::new` escapes only `<>&"'`; anything else would be
+    /// written raw and make the document unreadable) and counted.
+    fn text_element(&mut self, tag: &str, text: &str) -> Result<()> {
+        let (safe, replaced) = schema::xml_text(text);
+        self.replaced_chars += replaced;
+        self.xml.write_event(Event::Start(BytesStart::new(tag)))?;
+        self.xml.write_event(Event::Text(BytesText::new(&safe)))?;
+        self.xml.write_event(Event::End(BytesEnd::new(tag)))?;
+        Ok(())
+    }
+
+    /// `<!--text-->`. The text is ours and fixed, never project data.
+    fn comment(&mut self, text: &'static str) -> Result<()> {
+        self.xml
+            .write_event(Event::Comment(BytesText::from_escaped(text)))?;
+        Ok(())
+    }
+
+    /// [`Self::text_element`] for a schema element, in the document's spelling.
+    fn field(&mut self, element: ElementName, text: &str) -> Result<()> {
+        self.text_element(element.spelled(self.sp), text)
+    }
+}
+
+fn write_shot<W: std::io::Write>(out: &mut TmlWriter<W>, shot: &ExportShot) -> Result<()> {
+    out.start(el::survey_data::NAME)?;
 
     // Write fields in alphabetical order (matching Ariane's output)
-    write_text_element(writer, n.azimuth, &format_f64(shot.azimuth))?;
-    write_text_element(writer, n.closure_to_id, &shot.closure_to_id.to_string())?;
-    write_text_element(writer, n.color, &shot.color)?;
-
-    let comment_str = shot.comment.as_deref().unwrap_or("");
-    write_text_element(writer, n.comment, comment_str)?;
-
-    let date_str = shot.date.as_deref().unwrap_or(DEFAULT_EXPORT_DATE);
-    write_text_element(writer, n.date, date_str)?;
-
-    write_text_element(writer, n.depth, &format_f64(shot.depth))?;
-    write_text_element(writer, n.depth_in, &format_f64(emitted_depth_in(shot)))?;
-    write_text_element(writer, n.down, &format_f64(shot.down))?;
-    write_text_element(writer, n.excluded, "false")?;
-
-    let explorer_str = shot.explorer.as_deref().unwrap_or("unknown");
-    write_text_element(writer, n.explorer, explorer_str)?;
-
-    write_text_element(writer, n.from_id, &shot.from_id.to_string())?;
-    write_text_element(writer, n.id, &shot.id.to_string())?;
-    write_text_element(writer, n.inclination, &format_f64(shot.inclination))?;
-    write_text_element(writer, n.latitude, &format_f64(shot.latitude))?;
-    write_text_element(writer, n.left, &format_f64(shot.left))?;
-    write_text_element(writer, n.length, &format_f64(shot.length))?;
-    write_text_element(writer, n.locked, if shot.locked { "true" } else { "false" })?;
-    write_text_element(writer, n.longitude, &format_f64(shot.longitude))?;
+    out.field(el::azimuth::NAME, &format_f64(shot.azimuth))?;
+    out.field(el::closure_to_id::NAME, &shot.closure_to_id.to_string())?;
+    out.field(el::color::NAME, &shot.color)?;
+    out.field(el::comment::NAME, shot.comment.as_deref().unwrap_or(""))?;
+    if let Some(date) = shot.date.as_deref() {
+        out.field(el::date::NAME, date)?;
+    } else {
+        // No survey date. The placeholder keeps the file readable everywhere;
+        // our reader takes it as "no date" (#576 B2), so a re-import neither
+        // shows 1 January 2000 nor derives a declination for it, and the
+        // marker says the same to a person reading the file. Only ever reached
+        // in the user profile: the sidecar has already replaced every date by
+        // `speleodb_date`.
+        out.field(el::date::NAME, schema::UNDATED_PLACEHOLDER)?;
+        out.comment(schema::UNDATED_MARKER)?;
+    }
+    out.field(el::depth::NAME, &format_f64(shot.depth))?;
+    out.field(el::depth_in::NAME, &format_f64(emitted_depth_in(shot)))?;
+    out.field(el::down::NAME, &format_f64(shot.down))?;
+    out.field(el::excluded::NAME, "false")?;
+    let explorer = shot.explorer.as_deref();
+    out.field(
+        el::explorer::NAME,
+        explorer.unwrap_or(schema::EXPLORER_PLACEHOLDER),
+    )?;
+    out.field(el::from_id::NAME, &shot.from_id.to_string())?;
+    out.field(el::id::NAME, &shot.id.to_string())?;
+    out.field(el::inclination::NAME, &format_f64(shot.inclination))?;
+    out.field(el::latitude::NAME, &format_f64(shot.latitude))?;
+    out.field(el::left::NAME, &format_f64(shot.left))?;
+    out.field(el::length::NAME, &format_f64(shot.length))?;
+    out.field(el::locked::NAME, if shot.locked { "true" } else { "false" })?;
+    out.field(el::longitude::NAME, &format_f64(shot.longitude))?;
 
     // Ariane conventions: START has START name, CLOSURE uses CLOSURE:CLOSURE.
     let name_str = match shot.shot_type {
-        "START" => "START",
-        "CLOSURE" => "CLOSURE:CLOSURE",
+        schema::TYPE_START => schema::NAME_START,
+        schema::TYPE_CLOSURE => schema::NAME_CLOSURE,
         _ => "",
     };
-    write_text_element(writer, n.name, name_str)?;
+    out.field(el::name::NAME, name_str)?;
 
-    write_text_element(writer, n.profiletype, "VERTICAL")?;
-    write_text_element(writer, n.right, &format_f64(shot.right))?;
-    write_text_element(writer, n.section, &shot.section)?;
-    write_text_element(writer, n.shot_type, shot.shot_type)?;
-    write_text_element(writer, n.up, &format_f64(shot.up))?;
+    out.field(el::profiletype::NAME, schema::PROFILE_TYPE_VERTICAL)?;
+    out.field(el::right::NAME, &format_f64(shot.right))?;
+    out.field(el::section::NAME, &shot.section)?;
+    out.field(el::shot_type::NAME, shot.shot_type)?;
+    out.field(el::up::NAME, &format_f64(shot.up))?;
 
     // Stable per-shot UUID. Emitted for every block that stands for a REAL
     // PROJECT SHOT - the forward blocks and the reversed "(pre-zero-datum)" /
@@ -452,20 +585,11 @@ fn write_shot<W: std::io::Write>(
     // cannot see a forward/reverse pair as a duplicate - pinned by
     // `a_reversed_leg_is_a_shots_only_appearance_so_nothing_is_reminted`.
     if let Some(uuid) = &shot.uuid {
-        write_text_element(writer, n.uuid, uuid)?;
+        out.field(el::uuid::NAME, uuid)?;
     }
 
-    writer.write_event(Event::End(BytesEnd::new(n.survey_data)))?;
-    Ok(())
+    out.end(el::survey_data::NAME)
 }
-
-/// Stand-in for a section with no survey date. `<Date>` is not optional to every
-/// consumer - SpeleoDB rejects the whole file when it is missing or empty - so a
-/// dateless section still gets a parseable one.
-const DEFAULT_EXPORT_DATE: &str = "2000-01-01";
-
-/// Ariane's `DepthIn` sentinel: "this shot starts where the previous one ended".
-const DEPTH_IN_SENTINEL: f64 = -1.0;
 
 /// The `DepthIn` value to write for `shot`.
 ///
@@ -483,13 +607,13 @@ const DEPTH_IN_SENTINEL: f64 = -1.0;
 /// them.
 fn emitted_depth_in(shot: &ExportShot) -> f64 {
     if shot.depth_in_same_as_prev {
-        return DEPTH_IN_SENTINEL;
+        return schema::DEPTH_IN_SAME_AS_PREVIOUS;
     }
     // `round_as_written` lands on a multiple of 1e-6, so the nearest value that is
     // NOT the sentinel is a full micrometre away - an epsilon compare here is an
     // exact-equality test on the written value, without tripping `float_cmp`.
-    if (round_as_written(shot.depth_in) - DEPTH_IN_SENTINEL).abs() < f64::EPSILON {
-        return DEPTH_IN_SENTINEL - 1e-6;
+    if (round_as_written(shot.depth_in) - schema::DEPTH_IN_SAME_AS_PREVIOUS).abs() < f64::EPSILON {
+        return schema::DEPTH_IN_SAME_AS_PREVIOUS - 1e-6;
     }
     shot.depth_in
 }
@@ -516,19 +640,19 @@ fn format_f64(v: f64) -> String {
 // ============================================================================
 
 fn write_zip(path: &Path, xml: &[u8]) -> Result<()> {
-    let file = std::fs::File::create(path).context("Failed to create TML file")?;
-    let mut zip = zip::ZipWriter::new(file);
+    write_atomic(path, |file| {
+        let mut zip = zip::ZipWriter::new(file);
 
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
 
-    zip.start_file("Data.xml", options)
-        .context("Failed to start Data.xml in ZIP")?;
-    zip.write_all(xml)
-        .context("Failed to write Data.xml to ZIP")?;
-    zip.finish().context("Failed to finalize TML ZIP")?;
-
-    Ok(())
+        zip.start_file("Data.xml", options)
+            .context("Failed to start Data.xml in ZIP")?;
+        zip.write_all(xml)
+            .context("Failed to write Data.xml to ZIP")?;
+        zip.finish().context("Failed to finalize TML ZIP")?;
+        Ok(())
+    })
 }
 
 /// Refuse to write a chain Ariane would draw as an empty map.
@@ -556,7 +680,7 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
 
     let orphans: Vec<&ExportShot> = shots
         .iter()
-        .filter(|s| s.from_id == -1 && s.shot_type != "START")
+        .filter(|s| s.from_id == -1 && s.shot_type != schema::TYPE_START)
         .collect();
 
     let Some(first) = orphans.first() else {
@@ -573,7 +697,7 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
 
     // Without a closure Ariane never runs the loop solve, so the orphan is inert and
     // the file draws. Say so once and let the export through.
-    if !shots.iter().any(|s| s.shot_type == "CLOSURE") {
+    if !shots.iter().any(|s| s.shot_type == schema::TYPE_CLOSURE) {
         tracing::warn!(
             orphan_count = orphans.len(),
             sections = listed,
@@ -691,16 +815,6 @@ fn remint_duplicate_uuids(shots: &mut [ExportShot]) {
     }
 }
 
-/// The shot list alone; see [`build_export_shots_with_report`] for the variant
-/// `build_xml` uses to surface unwritten GPS anchors as an export note.
-fn build_export_shots(
-    project: &Project,
-    profile: TmlProfile,
-    azimuth_export: AzimuthExport,
-) -> Vec<ExportShot> {
-    build_export_shots_with_report(project, profile, azimuth_export).0
-}
-
 /// Returns the shots plus how many of the project's GPS anchors ended up on no
 /// START (the count behind the `gps-anchors-not-written` note).
 fn build_export_shots_with_report(
@@ -758,8 +872,8 @@ fn build_export_shots_with_report(
 
         // A section that never merges into the tree is a separate entrance, not a
         // child of anything - two unconnected galleries in one project is an ordinary
-        // state. Ariane represents those as additional START shots and its own files
-        // do exactly that (`chanchemuyil_sur.tml` ships two). Leaving the first shot
+        // state. Ariane represents those as additional START shots, and files Ariane
+        // writes for a survey with two entrances carry two. Leaving the first shot
         // parentless instead produces an orphan root, which makes Ariane abandon the
         // loop solve and draw an empty map for the WHOLE survey once any closure
         // exists. Zero-datum splitting below applies to every entrance (#378 item
@@ -783,9 +897,12 @@ fn build_export_shots_with_report(
             .as_deref()
             .unwrap_or(&format!("Section {}", section.id))
             .to_string();
-        let color = color_to_ariane(&section.color);
-        let explorer = section.surveyor.clone();
-        let date = section.date.map(|d| d.format("%Y-%m-%d").to_string());
+        let rows = RowContext {
+            explorer: section.surveyor.clone(),
+            date: section.date.map(|d| d.format("%Y-%m-%d").to_string()),
+            color: color_to_ariane(&section.color),
+            emit_reference,
+        };
 
         // Which datum this entrance's START sits on. The root uses the FRAME datum
         // (see `root_section_id` above); any other entrance uses its own section's
@@ -830,32 +947,12 @@ fn build_export_shots_with_report(
             let start_depth = station_depth(section, split_idx);
             start_anchors.push((start_id, section.id, split_idx as u32));
 
-            let mut root_shots = Vec::new();
-            root_shots.push(ExportShot {
-                id: start_id,
-                uuid: None,
-                from_id: -1,
-                shot_type: "START",
-                section: section_name.clone(),
-                azimuth: 0.0,
-                length: 0.0,
-                depth: start_depth,
-                depth_in: start_depth,
-                depth_in_same_as_prev: false,
-                inclination: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                comment: Some("START".to_string()),
-                explorer: explorer.clone(),
-                date: date.clone(),
-                color: color.clone(),
-                latitude: 0.0,
-                longitude: 0.0,
-                closure_to_id: -1,
-                locked: true,
-            });
+            let mut root_shots = vec![ExportShot::start(
+                start_id,
+                &section_name,
+                start_depth,
+                &rows,
+            )];
             station_to_ariane.insert((section.id, split_idx as u32), start_id);
 
             // Forward segment: datum station -> original section end.
@@ -870,39 +967,16 @@ fn build_export_shots_with_report(
                 } else {
                     shot_ariane_id - 1
                 };
-                let prev_depth = cumulative_depth;
-                cumulative_depth = shot.depth_out;
-                let depth_in_same_as_prev = (shot.depth_in - prev_depth).abs() < 1e-9;
-
-                root_shots.push(ExportShot {
-                    id: shot_ariane_id,
-                    uuid: Some(shot_export_uuid(shot)),
-                    from_id: prev_id,
-                    shot_type: if shot.kind.is_virtual() {
-                        "VIRTUAL"
-                    } else {
-                        "REAL"
-                    },
-                    section: section_name.clone(),
-                    azimuth: emit_reference.to_true(shot.azimuth_in),
-                    length: shot.length,
-                    depth: shot.depth_out,
-                    depth_in: shot.depth_in,
-                    depth_in_same_as_prev,
-                    inclination: pitch_to_inclination(shot.pitch_in),
-                    left: shot.left.unwrap_or(0.0),
-                    right: shot.right.unwrap_or(0.0),
-                    up: shot.up.unwrap_or(0.0),
-                    down: shot.down.unwrap_or(0.0),
-                    comment: shot.comment.clone(),
-                    explorer: explorer.clone(),
-                    date: date.clone(),
-                    color: color.clone(),
-                    latitude: 0.0,
-                    longitude: 0.0,
-                    closure_to_id: -1,
-                    locked: false,
-                });
+                let leg = ExportShot::forward(
+                    shot_ariane_id,
+                    prev_id,
+                    &section_name,
+                    shot,
+                    cumulative_depth,
+                    &rows,
+                );
+                cumulative_depth = leg.depth;
+                root_shots.push(leg);
 
                 station_to_ariane.insert((section.id, (shot_idx + 1) as u32), shot_ariane_id);
             }
@@ -930,47 +1004,16 @@ fn build_export_shots_with_report(
                     } else {
                         shot_ariane_id - 1
                     };
-
-                    let reversed_depth_in = shot.depth_out;
-                    let reversed_depth_out = shot.depth_in;
-                    let prev_depth = cumulative_depth;
-                    cumulative_depth = reversed_depth_out;
-                    let depth_in_same_as_prev = (reversed_depth_in - prev_depth).abs() < 1e-9;
-
-                    reverse_shots.push(ExportShot {
-                        id: shot_ariane_id,
-                        // The reversed leg IS this shot's only appearance in the
-                        // document (the forward block covers a DISJOINT index range),
-                        // so it carries the shot's identity. See `write_shot`.
-                        uuid: Some(shot_export_uuid(shot)),
-                        from_id: prev_id,
-                        shot_type: if shot.kind.is_virtual() {
-                            "VIRTUAL"
-                        } else {
-                            "REAL"
-                        },
-                        section: split_name.clone(),
-                        // Ariane carries a single forward azimuth per shot. The reverse
-                        // pre-zero leg must therefore be synthesized as reciprocal heading.
-                        azimuth: reverse_pre_zero_azimuth(emit_reference.to_true(shot.azimuth_in)),
-                        length: shot.length,
-                        depth: reversed_depth_out,
-                        depth_in: reversed_depth_in,
-                        depth_in_same_as_prev,
-                        inclination: pitch_to_inclination(reversed_leg_pitch(shot)),
-                        left: shot.right.unwrap_or(0.0),
-                        right: shot.left.unwrap_or(0.0),
-                        up: shot.up.unwrap_or(0.0),
-                        down: shot.down.unwrap_or(0.0),
-                        comment: shot.comment.clone(),
-                        explorer: explorer.clone(),
-                        date: date.clone(),
-                        color: color.clone(),
-                        latitude: 0.0,
-                        longitude: 0.0,
-                        closure_to_id: -1,
-                        locked: false,
-                    });
+                    let leg = ExportShot::reversed(
+                        shot_ariane_id,
+                        prev_id,
+                        &split_name,
+                        shot,
+                        cumulative_depth,
+                        &rows,
+                    );
+                    cumulative_depth = leg.depth;
+                    reverse_shots.push(leg);
 
                     // Reversed shot from station (shot_idx + 1) to shot_idx:
                     // it ends at the original station shot_idx.
@@ -1010,40 +1053,16 @@ fn build_export_shots_with_report(
                         } else {
                             shot_ariane_id - 1
                         };
-
-                        let prev_depth = cumulative_depth;
-                        cumulative_depth = shot.depth_out;
-                        let depth_in_same_as_prev = (shot.depth_in - prev_depth).abs() < 1e-9;
-
-                        fwd_shots.push(ExportShot {
-                            id: shot_ariane_id,
-                            uuid: Some(shot_export_uuid(shot)),
-                            from_id: prev_id,
-                            shot_type: if shot.kind.is_virtual() {
-                                "VIRTUAL"
-                            } else {
-                                "REAL"
-                            },
-                            section: section_name.clone(),
-                            azimuth: emit_reference.to_true(shot.azimuth_in),
-                            length: shot.length,
-                            depth: shot.depth_out,
-                            depth_in: shot.depth_in,
-                            depth_in_same_as_prev,
-                            inclination: pitch_to_inclination(shot.pitch_in),
-                            left: shot.left.unwrap_or(0.0),
-                            right: shot.right.unwrap_or(0.0),
-                            up: shot.up.unwrap_or(0.0),
-                            down: shot.down.unwrap_or(0.0),
-                            comment: shot.comment.clone(),
-                            explorer: explorer.clone(),
-                            date: date.clone(),
-                            color: color.clone(),
-                            latitude: 0.0,
-                            longitude: 0.0,
-                            closure_to_id: -1,
-                            locked: false,
-                        });
+                        let leg = ExportShot::forward(
+                            shot_ariane_id,
+                            prev_id,
+                            &section_name,
+                            shot,
+                            cumulative_depth,
+                            &rows,
+                        );
+                        cumulative_depth = leg.depth;
+                        fwd_shots.push(leg);
 
                         station_to_ariane
                             .insert((section.id, (shot_idx + 1) as u32), shot_ariane_id);
@@ -1071,47 +1090,16 @@ fn build_export_shots_with_report(
                         } else {
                             shot_ariane_id - 1
                         };
-
-                        let reversed_depth_in = shot.depth_out;
-                        let reversed_depth_out = shot.depth_in;
-                        let prev_depth = cumulative_depth;
-                        cumulative_depth = reversed_depth_out;
-                        let depth_in_same_as_prev = (reversed_depth_in - prev_depth).abs() < 1e-9;
-
-                        rev_shots.push(ExportShot {
-                            id: shot_ariane_id,
-                            // The reversed leg IS this shot's only appearance in the
-                            // document (the forward block covers a DISJOINT index range),
-                            // so it carries the shot's identity. See `write_shot`.
-                            uuid: Some(shot_export_uuid(shot)),
-                            from_id: prev_id,
-                            shot_type: if shot.kind.is_virtual() {
-                                "VIRTUAL"
-                            } else {
-                                "REAL"
-                            },
-                            section: rev_name.clone(),
-                            azimuth: reverse_pre_zero_azimuth(
-                                emit_reference.to_true(shot.azimuth_in),
-                            ),
-                            length: shot.length,
-                            depth: reversed_depth_out,
-                            depth_in: reversed_depth_in,
-                            depth_in_same_as_prev,
-                            inclination: pitch_to_inclination(reversed_leg_pitch(shot)),
-                            left: shot.right.unwrap_or(0.0),
-                            right: shot.left.unwrap_or(0.0),
-                            up: shot.up.unwrap_or(0.0),
-                            down: shot.down.unwrap_or(0.0),
-                            comment: shot.comment.clone(),
-                            explorer: explorer.clone(),
-                            date: date.clone(),
-                            color: color.clone(),
-                            latitude: 0.0,
-                            longitude: 0.0,
-                            closure_to_id: -1,
-                            locked: false,
-                        });
+                        let leg = ExportShot::reversed(
+                            shot_ariane_id,
+                            prev_id,
+                            &rev_name,
+                            shot,
+                            cumulative_depth,
+                            &rows,
+                        );
+                        cumulative_depth = leg.depth;
+                        rev_shots.push(leg);
 
                         // Reversed shot ends at original station shot_idx.
                         station_to_ariane.insert((section.id, shot_idx as u32), shot_ariane_id);
@@ -1141,47 +1129,16 @@ fn build_export_shots_with_report(
                         } else {
                             shot_ariane_id - 1
                         };
-
-                        let reversed_depth_in = shot.depth_out;
-                        let reversed_depth_out = shot.depth_in;
-                        let prev_depth = cumulative_depth;
-                        cumulative_depth = reversed_depth_out;
-                        let depth_in_same_as_prev = (reversed_depth_in - prev_depth).abs() < 1e-9;
-
-                        rev_shots.push(ExportShot {
-                            id: shot_ariane_id,
-                            // The reversed leg IS this shot's only appearance in the
-                            // document (the forward block covers a DISJOINT index range),
-                            // so it carries the shot's identity. See `write_shot`.
-                            uuid: Some(shot_export_uuid(shot)),
-                            from_id: prev_id,
-                            shot_type: if shot.kind.is_virtual() {
-                                "VIRTUAL"
-                            } else {
-                                "REAL"
-                            },
-                            section: rev_name.clone(),
-                            azimuth: reverse_pre_zero_azimuth(
-                                emit_reference.to_true(shot.azimuth_in),
-                            ),
-                            length: shot.length,
-                            depth: reversed_depth_out,
-                            depth_in: reversed_depth_in,
-                            depth_in_same_as_prev,
-                            inclination: pitch_to_inclination(reversed_leg_pitch(shot)),
-                            left: shot.right.unwrap_or(0.0),
-                            right: shot.left.unwrap_or(0.0),
-                            up: shot.up.unwrap_or(0.0),
-                            down: shot.down.unwrap_or(0.0),
-                            comment: shot.comment.clone(),
-                            explorer: explorer.clone(),
-                            date: date.clone(),
-                            color: color.clone(),
-                            latitude: 0.0,
-                            longitude: 0.0,
-                            closure_to_id: -1,
-                            locked: false,
-                        });
+                        let leg = ExportShot::reversed(
+                            shot_ariane_id,
+                            prev_id,
+                            &rev_name,
+                            shot,
+                            cumulative_depth,
+                            &rows,
+                        );
+                        cumulative_depth = leg.depth;
+                        rev_shots.push(leg);
 
                         // Reversed shot ends at original station shot_idx.
                         station_to_ariane.insert((section.id, shot_idx as u32), shot_ariane_id);
@@ -1207,46 +1164,18 @@ fn build_export_shots_with_report(
             next_id += 1;
             start_anchors.push((start_id, section.id, 0));
 
-            let start_depth = if let Some(first_shot) = section.shots.first() {
-                first_shot.depth_in
-            } else {
-                0.0
-            };
-
-            shots.push(ExportShot {
-                id: start_id,
-                uuid: None,
-                from_id: -1,
-                shot_type: "START",
-                section: section_name.clone(),
-                azimuth: 0.0,
-                length: 0.0,
-                depth: start_depth,
-                depth_in: start_depth,
-                depth_in_same_as_prev: false,
-                inclination: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                comment: Some("START".to_string()),
-                explorer: explorer.clone(),
-                date: date.clone(),
-                color: color.clone(),
-                latitude: 0.0,
-                longitude: 0.0,
-                closure_to_id: -1,
-                locked: true,
-            });
+            let start_depth = section.shots.first().map_or(0.0, |first| first.depth_in);
+            shots.push(ExportShot::start(
+                start_id,
+                &section_name,
+                start_depth,
+                &rows,
+            ));
 
             station_to_ariane.insert((section.id, 0), start_id);
         }
 
-        let mut cumulative_depth: f64 = if let Some(first_shot) = section.shots.first() {
-            first_shot.depth_in
-        } else {
-            0.0
-        };
+        let mut cumulative_depth = section.shots.first().map_or(0.0, |first| first.depth_in);
 
         for (i, shot) in section.shots.iter().enumerate() {
             let shot_ariane_id = next_id;
@@ -1264,40 +1193,16 @@ fn build_export_shots_with_report(
             } else {
                 shot_ariane_id - 1
             };
-
-            let prev_depth = cumulative_depth;
-            cumulative_depth = shot.depth_out;
-            let depth_in_same_as_prev = (shot.depth_in - prev_depth).abs() < 1e-9;
-
-            shots.push(ExportShot {
-                id: shot_ariane_id,
-                uuid: Some(shot_export_uuid(shot)),
-                from_id: prev_id,
-                shot_type: if shot.kind.is_virtual() {
-                    "VIRTUAL"
-                } else {
-                    "REAL"
-                },
-                section: section_name.clone(),
-                azimuth: emit_reference.to_true(shot.azimuth_in),
-                length: shot.length,
-                depth: shot.depth_out,
-                depth_in: shot.depth_in,
-                depth_in_same_as_prev,
-                inclination: pitch_to_inclination(shot.pitch_in),
-                left: shot.left.unwrap_or(0.0),
-                right: shot.right.unwrap_or(0.0),
-                up: shot.up.unwrap_or(0.0),
-                down: shot.down.unwrap_or(0.0),
-                comment: shot.comment.clone(),
-                explorer: explorer.clone(),
-                date: date.clone(),
-                color: color.clone(),
-                latitude: 0.0,
-                longitude: 0.0,
-                closure_to_id: -1,
-                locked: false,
-            });
+            let leg = ExportShot::forward(
+                shot_ariane_id,
+                prev_id,
+                &section_name,
+                shot,
+                cumulative_depth,
+                &rows,
+            );
+            cumulative_depth = leg.depth;
+            shots.push(leg);
 
             // Station (i+1) is after this shot
             station_to_ariane.insert((section.id, (i + 1) as u32), shot_ariane_id);
@@ -1398,14 +1303,18 @@ fn build_export_shots_with_report(
     //
     // ariane_id -> list of (StationRef, comment), in a deterministic order
     // (sorted by section_id then station_index) so the joined output is
-    // reproducible across exports.
-    let mut comments_by_ariane: HashMap<i64, Vec<(StationRef, &str)>> = HashMap::new();
-    let mut entries: Vec<(StationRef, &str)> = project
+    // reproducible across exports. [#576 W30-NF3] Two stored keys naming one
+    // station (a legacy positional key beside the canonical one) are joined
+    // as the save joins them - `Project::one_row_per_station` with
+    // `join_station_comment`, the canonical key's first - not in the map's
+    // iteration order, which differs between runs.
+    let mut comments_by_ariane: HashMap<i64, Vec<(StationRef, String)>> = HashMap::new();
+    let resolved: Vec<(&StationKey, StationRef, String)> = project
         .station_comments
         .iter()
         .filter(|(_, v)| !v.is_empty())
         .filter_map(|(k, v)| match project.resolve_key(k) {
-            Some(sr) => Some((sr, v.as_str())),
+            Some(sr) => Some((k, sr, v.clone())),
             None => {
                 tracing::debug!(
                     key = ?k,
@@ -1415,8 +1324,7 @@ fn build_export_shots_with_report(
             }
         })
         .collect();
-    entries.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
-    for (sr, text) in entries {
+    for (sr, text) in project.one_row_per_station(resolved, join_station_comment) {
         let Some(&ariane_id) = station_to_ariane.get(&(sr.section_id, sr.station_index)) else {
             tracing::debug!(
                 section_id = sr.section_id,
@@ -1448,14 +1356,14 @@ fn build_export_shots_with_report(
     // used to run before the lookup and say nothing.
     for block in &mut blocks {
         for shot in &mut block.shots {
-            if shot.shot_type != "REAL" && shot.shot_type != "VIRTUAL" {
+            if shot.shot_type != schema::TYPE_REAL && shot.shot_type != schema::TYPE_VIRTUAL {
                 continue;
             }
             let joined_station: Option<String> =
                 comments_by_ariane.remove(&shot.id).map(|attachments| {
                     attachments
                         .iter()
-                        .map(|(_, t)| *t)
+                        .map(|(_, t)| t.as_str())
                         .collect::<Vec<_>>()
                         .join("\n")
                 });
@@ -1555,7 +1463,7 @@ fn build_export_shots_with_report(
             .iter()
             .find(|s| s.id == closure.station_a.section_id)
             .map(|s| color_to_ariane(&s.color))
-            .unwrap_or_else(|| "0x4ecdc4ff".to_string());
+            .unwrap_or_else(|| schema::FALLBACK_ARIANE_COLOR.to_string());
 
         // The depths of the two Ariane NODES the closure ties together. A closure
         // carrying `depth: 0.0` is not merely cosmetic: a reader takes the chain as
@@ -1593,37 +1501,13 @@ fn build_export_shots_with_report(
         //   would mean rebuilding the closures after the repair - for a phantom.
         let depth_a = node_depth.get(&from_id).copied().unwrap_or(0.0);
         let depth_b = node_depth.get(&to_id).copied().unwrap_or(0.0);
-        // The two endpoints are the same physical point surveyed twice, so the
-        // connector's length IS the vertical part of the closure error. Emitting
-        // exactly that keeps `|depth - origin_depth| <= length` true by
-        // construction, and stays honest: a perfectly closed loop still gets 0.
-        let closure_length = (depth_b - depth_a).abs();
-
-        closure_shots.push(ExportShot {
-            id: closure_id,
-            uuid: None,
-            from_id,
-            shot_type: "CLOSURE",
-            section: section_name,
-            azimuth: 0.0,
-            length: closure_length,
-            depth: depth_b,
-            depth_in: depth_a,
-            depth_in_same_as_prev: false,
-            inclination: 0.0,
-            left: 0.0,
-            right: 0.0,
-            up: 0.0,
-            down: 0.0,
-            comment: None,
-            explorer: None,
-            date: None,
+        closure_shots.push(ExportShot::closure(
+            closure_id,
+            (from_id, to_id),
+            section_name,
             color,
-            latitude: 0.0,
-            longitude: 0.0,
-            closure_to_id: to_id,
-            locked: false,
-        });
+            (depth_a, depth_b),
+        ));
     }
 
     // Flatten all blocks + closure shots
@@ -1656,7 +1540,7 @@ fn build_export_shots_with_report(
         let start_index_by_id: HashMap<i64, usize> = all_shots
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.shot_type == "START")
+            .filter(|(_, s)| s.shot_type == schema::TYPE_START)
             .map(|(i, s)| (s.id, i))
             .collect();
 
@@ -2081,7 +1965,7 @@ fn speleodb_date(raw: Option<&str>) -> String {
         .filter(|s| !s.is_empty())
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
     else {
-        return DEFAULT_EXPORT_DATE.to_owned();
+        return schema::UNDATED_PLACEHOLDER.to_owned();
     };
     if parsed.year() < SPELEODB_MIN_YEAR {
         return format!("{SPELEODB_MIN_YEAR}-01-01");
@@ -2172,32 +2056,7 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
     // ignores as an orphan, so it changes nothing but the element count.
     if shots.len() == 1 {
         let pad_id = shots.iter().map(|s| s.id).max().unwrap_or(-1) + 1;
-        let anchor = &shots[0];
-        let pad = ExportShot {
-            id: pad_id,
-            uuid: None,
-            from_id: -1,
-            shot_type: "VIRTUAL",
-            section: anchor.section.clone(),
-            azimuth: 0.0,
-            length: 0.0,
-            depth: anchor.depth,
-            depth_in: anchor.depth,
-            depth_in_same_as_prev: false,
-            inclination: 0.0,
-            left: 0.0,
-            right: 0.0,
-            up: 0.0,
-            down: 0.0,
-            comment: None,
-            explorer: None,
-            date: Some(DEFAULT_EXPORT_DATE.to_owned()),
-            color: anchor.color.clone(),
-            latitude: 0.0,
-            longitude: 0.0,
-            closure_to_id: -1,
-            locked: false,
-        };
+        let pad = ExportShot::padding(pad_id, &shots[0]);
         shots.push(pad);
     }
 
@@ -2211,22 +2070,16 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
     }
 }
 
-/// Compute azimuth for the generated pre-zero-datum reverse segment.
+/// The bearing of a leg walked backwards: the reciprocal of the forward one.
 ///
-/// Ariane does not provide a backsight field, so `azimuth_out` from Stalagmight
-/// must not be interpreted as an Ariane backsight during export.
-fn reverse_pre_zero_azimuth(azimuth_in: f64) -> f64 {
-    normalize_azimuth(azimuth_in + 180.0)
-}
-
-/// Convert `#RRGGBB` to Ariane's `0xRRGGBBff` format.
-fn color_to_ariane(hex: &str) -> String {
-    let hex = hex.trim_start_matches('#');
-    if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        format!("0x{hex}ff")
-    } else {
-        "0x4ecdc4ff".to_string()
-    }
+/// `forward` is the bearing the app draws - the circular mean of the shot's
+/// two forward readings, `azimuth_in` and `azimuth_out` (SPEC: they are two
+/// readings of the SAME forward line, not a foresight/backsight pair). Ariane
+/// carries a single forward azimuth per shot, so the reversed and
+/// pre-zero-datum legs are synthesized as its reciprocal; `azimuth_out` is
+/// never a backsight to read a reverse bearing from.
+fn reverse_pre_zero_azimuth(forward: f64) -> f64 {
+    normalize_azimuth(forward + 180.0)
 }
 
 // ============================================================================
@@ -2237,11 +2090,24 @@ fn color_to_ariane(hex: &str) -> String {
 #[expect(clippy::unwrap_used, clippy::approx_constant)]
 mod tests {
     use super::*;
+    use crate::models::test_support::require_env_file;
     use crate::models::{
         ClosureStrategy, GpsCoordinates, LoopClosure, SectionData, ShotData, ShotKind,
         StationAnchor, StationKey, StationMerge, ZeroDatum,
     };
     use tempfile::NamedTempFile;
+
+    /// The shot list alone, for the tests that inspect it; production goes
+    /// through [`build_export_shots_with_report`] (via `build_xml`), which
+    /// also counts the GPS anchors no START could carry. Test-only, so it
+    /// lives here rather than as dead code in every non-test build.
+    fn build_export_shots(
+        project: &Project,
+        profile: TmlProfile,
+        azimuth_export: AzimuthExport,
+    ) -> Vec<ExportShot> {
+        build_export_shots_with_report(project, profile, azimuth_export).0
+    }
 
     /// The model is +down and Ariane is treated as +up, so the two must be
     /// mirror images and a round-trip must land back on the original value
@@ -2371,10 +2237,13 @@ mod tests {
             surveyor: Some("Alice".to_string()),
             date: chrono::NaiveDate::from_ymd_opt(2025, 6, 15),
             color: "#ff0000".to_string(),
+            // `azimuth_in`/`azimuth_out` are two forward readings of one line
+            // (SPEC), so a plain fixture repeats the bearing; a backsight-shaped
+            // 45/225 pair is a gross blunder whose mean the app draws at 315.
             shots: vec![
                 ShotData {
                     azimuth_in: 45.0,
-                    azimuth_out: 225.0,
+                    azimuth_out: 45.0,
                     length: 10.0,
                     depth_in: 0.0,
                     depth_out: 3.0,
@@ -2388,7 +2257,7 @@ mod tests {
                 },
                 ShotData {
                     azimuth_in: 90.0,
-                    azimuth_out: 270.0,
+                    azimuth_out: 90.0,
                     length: 8.0,
                     depth_in: 3.0,
                     depth_out: 5.0,
@@ -2572,6 +2441,193 @@ mod tests {
         }
     }
 
+    /// #576 B11: a character XML 1.0 cannot carry - it arrives in names and
+    /// comments from imported files and pasted text - used to be written as a
+    /// raw byte, and one such byte makes Ariane and SpeleoDB reject the WHOLE
+    /// document. It is replaced with U+FFFD and the export says so; line
+    /// breaks and the U+200B shot-comment marker are legal and survive.
+    #[test]
+    fn text_xml_cannot_carry_is_replaced_and_noted() {
+        let mut project = Project::new("Cave\u{1}A".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main\u{B}".to_string()),
+            surveyor: Some("Diver\u{FFFE}A".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![ShotData {
+                length: 3.0,
+                comment: Some("line one\nline two\u{0}".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let key = project.key_for_ref(StationRef::new(0, 1)).unwrap();
+        project
+            .station_comments
+            .insert(key, "station\u{1F}note".to_string());
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("illegal.tmlu");
+        let notes = export_tml(&project, &path).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+
+        let illegal: Vec<char> = content
+            .chars()
+            .filter(|&c| !schema::is_xml_char(c))
+            .collect();
+        assert!(
+            illegal.is_empty(),
+            "the document must be well-formed XML; still carries {illegal:?}"
+        );
+        assert_eq!(
+            content.matches('\u{FFFD}').count(),
+            // name, section (on the START and the shot), surveyor (both rows),
+            // the shot comment and the station comment
+            1 + 2 + 2 + 1 + 1,
+            "{content}"
+        );
+        assert!(
+            notes.contains(&"xml-chars-replaced".to_string()),
+            "the user must be told the text changed: {notes:?}"
+        );
+        assert!(content.contains("<caveName>Cave\u{FFFD}A</caveName>"));
+        assert!(
+            content.contains("\u{200B}line one\n\u{200B}line two\u{FFFD}\nstation\u{FFFD}note"),
+            "line breaks and the shot-comment markers survive: {content}"
+        );
+
+        // Our own reader takes the file back with the replacement in place.
+        let reparsed = crate::parsers::tml::parse_tml(&path).unwrap();
+        assert_eq!(reparsed.cave_name, "Cave\u{FFFD}A");
+        assert_eq!(reparsed.sections[0].name, "Main\u{FFFD}");
+
+        // The sidecar gets the same treatment (its notes go to the log).
+        let sidecar = dir.path().join("sidecar.tmlu");
+        export_tml_for_speleodb(&project, &sidecar).unwrap();
+        let sidecar_content = std::fs::read_to_string(&sidecar).unwrap();
+        assert!(sidecar_content.chars().all(schema::is_xml_char));
+
+        // And an ordinary project says nothing.
+        let ordinary = dir.path().join("ordinary.tmlu");
+        assert!(export_tml(&simple_project(), &ordinary).unwrap().is_empty());
+    }
+
+    /// A georeferenced, magnetic project whose sections carry the given dates.
+    fn dated_project(dates: &[Option<chrono::NaiveDate>]) -> Project {
+        let mut project = Project::new("CaveA".to_string(), None);
+        for (i, date) in dates.iter().enumerate() {
+            project.add_section(SectionData {
+                name: Some(format!("Section{i}")),
+                date: *date,
+                color: "#ff0000".to_string(),
+                shots: vec![ShotData {
+                    azimuth_in: 90.0,
+                    azimuth_out: 90.0,
+                    length: 4.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef::new(0, 0).into(),
+            gps: GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+        });
+        project
+    }
+
+    /// Export to `.tmlu`, re-import, and return what the import records.
+    fn reimport(project: &Project) -> Vec<crate::models::ImportSectionConfig> {
+        let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+        export_tml(project, file.path()).unwrap();
+        let tml = crate::parsers::tml::parse_tml(file.path()).unwrap();
+        crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
+            .unwrap()
+            .0
+    }
+
+    /// #576 B2: an UNDATED section went out with the 2000-01-01 placeholder
+    /// and came back dated 1 January 2000, so a magnetic, georeferenced file
+    /// derived an IGRF declination for the year 2000 and rotated the survey.
+    /// The placeholder stays (SpeleoDB rejects a missing date, and Ariane's
+    /// handling of an empty one is unverified) and reads back as "no date".
+    #[test]
+    fn an_undated_section_round_trips_undated_and_unrotated() {
+        let configs = reimport(&dated_project(&[None]));
+        assert_eq!(configs.len(), 1);
+        assert_eq!(
+            configs[0].date, None,
+            "the placeholder is not a survey date"
+        );
+        let reference = configs[0].azimuth_reference.unwrap();
+        assert_eq!(
+            reference,
+            AzimuthReference::magnetic(0.0, crate::models::CorrectionSource::Unknown),
+            "no date means no epoch to evaluate a declination at"
+        );
+    }
+
+    /// The placeholder no longer displaces a REAL earliest date when the file
+    /// mixes dated and undated sections: the epoch is the real date's year.
+    #[test]
+    fn an_undated_section_does_not_move_the_declination_epoch() {
+        let configs = reimport(&dated_project(&[
+            chrono::NaiveDate::from_ymd_opt(2024, 5, 1),
+            None,
+        ]));
+        let reference = configs[0].azimuth_reference.unwrap();
+        assert_eq!(
+            reference.source,
+            crate::models::CorrectionSource::IgrfAuto { epoch_year: 2024 },
+            "{reference:?}"
+        );
+        assert_eq!(configs[1].date, None);
+    }
+
+    /// #576 B2-MARKER fallback: ANY 2000-01-01 reads back as undated, marker
+    /// or not, so a section genuinely surveyed that day imports undated. That
+    /// is the accepted cost of reading every unmarked placeholder (a file
+    /// Ariane re-saved, an export from before the marker) as what it is.
+    #[test]
+    fn a_first_of_january_2000_reads_back_undated() {
+        let new_year = chrono::NaiveDate::from_ymd_opt(2000, 1, 1);
+        let configs = reimport(&dated_project(&[new_year]));
+        assert_eq!(configs[0].date, None);
+        assert_eq!(
+            configs[0].azimuth_reference.unwrap(),
+            AzimuthReference::magnetic(0.0, crate::models::CorrectionSource::Unknown),
+            "no date means no epoch to evaluate a declination at"
+        );
+    }
+
+    /// The SpeleoDB sidecar never carries the marker (`speleodb_date` writes
+    /// the bare placeholder) and SpeleoDB adoption re-imports it through the
+    /// same reader, so an undated section must come back undated from it too.
+    #[test]
+    fn an_undated_section_comes_back_undated_from_the_speleodb_sidecar() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sidecar = dir.path().join("sidecar.tmlu");
+        export_tml_for_speleodb(&dated_project(&[None]), &sidecar).unwrap();
+        let content = std::fs::read_to_string(&sidecar).unwrap();
+        assert!(
+            !content.contains(schema::UNDATED_MARKER),
+            "the sidecar is the unmarked shape this test is about"
+        );
+
+        let tml = crate::parsers::tml::parse_tml(&sidecar).unwrap();
+        let configs = crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
+            .unwrap()
+            .0;
+        let section = configs
+            .iter()
+            .find(|c| c.name.as_deref() == Some("Section0"))
+            .unwrap();
+        assert_eq!(section.date, None);
+        assert_eq!(
+            section.azimuth_reference.unwrap(),
+            AzimuthReference::magnetic(0.0, crate::models::CorrectionSource::Unknown)
+        );
+    }
+
     #[test]
     fn export_tml_is_byte_stable_across_calls() {
         // #196 render-on-push: two renders of the same project must be
@@ -2704,6 +2760,76 @@ mod tests {
     fn test_reverse_pre_zero_azimuth_is_reciprocal() {
         assert!((reverse_pre_zero_azimuth(42.0) - 222.0).abs() < 1e-9);
         assert!((reverse_pre_zero_azimuth(350.0) - 170.0).abs() < 1e-9);
+    }
+
+    /// #576 NF-AN5-1: `azimuth_in` and `azimuth_out` are two readings of the
+    /// same forward line and the app draws their circular mean, but the export
+    /// wrote `azimuth_in` alone - so a shot drawn at 15 degrees went out at 10
+    /// and a re-import moved the cave. Every leg, forward and reversed, now
+    /// carries the bearing the app draws, wraparound included.
+    #[test]
+    fn every_leg_exports_the_bearing_the_app_draws() {
+        let mut project = Project::new("CaveA".to_string(), None);
+        let readings = [(10.0, 20.0), (350.0, 10.0), (100.0, 100.0)];
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: readings
+                .iter()
+                .map(|&(azimuth_in, azimuth_out)| ShotData {
+                    azimuth_in,
+                    azimuth_out,
+                    length: 5.0,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        // Datum on station 2: shots 0-1 go out reversed, shot 2 forward.
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef::new(0, 2).into(),
+            gps: GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+        });
+
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
+        let azimuth_of = |uuid: &str| {
+            shots
+                .iter()
+                .find(|s| s.uuid.as_deref() == Some(uuid))
+                .unwrap()
+                .azimuth
+        };
+        let drawn: Vec<f64> = project.sections[0]
+            .shots
+            .iter()
+            .map(Shot::average_azimuth_measured)
+            .collect();
+        let uuids: Vec<String> = project.sections[0]
+            .shots
+            .iter()
+            .map(|s| s.uuid.clone().unwrap())
+            .collect();
+        // Reversed legs: the reciprocal of the drawn bearing.
+        assert!((azimuth_of(&uuids[0]) - 195.0).abs() < 1e-9, "{shots:?}");
+        assert!((azimuth_of(&uuids[1]) - 180.0).abs() < 1e-9, "{shots:?}");
+        // Forward leg.
+        assert!((azimuth_of(&uuids[2]) - 100.0).abs() < 1e-9);
+        assert!((drawn[0] - 15.0).abs() < 1e-9 && drawn[1].abs() < 1e-9);
+
+        // And the round trip keeps the geometry: what comes back is the mean.
+        let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+        export_tml(&project, file.path()).unwrap();
+        let tml = crate::parsers::tml::parse_tml(file.path()).unwrap();
+        let reimported: Vec<f64> = tml
+            .sections
+            .iter()
+            .flat_map(|s| &s.shots)
+            .map(|s| (s.azimuth + 180.0).rem_euclid(360.0))
+            .collect();
+        assert!(
+            reimported.iter().any(|a| (a - 15.0).abs() < 1e-6),
+            "the 10/20 shot comes back at 15: {reimported:?}"
+        );
     }
 
     #[test]
@@ -3422,8 +3548,8 @@ mod tests {
 
     /// Round-trip a REAL `.tml` through the importer and back out, then assert the
     /// emitted chain is representable. Env-gated in the same spirit as the SpeleoDB
-    /// live tests: it needs a file we cannot commit (someone's survey), so it skips
-    /// cleanly when `TML_ROUNDTRIP_IN` is unset.
+    /// live tests: it needs a file we cannot commit (someone's survey), so a run
+    /// without `TML_ROUNDTRIP_IN` fails naming it (#576 E13).
     ///
     /// ```text
     /// TML_ROUNDTRIP_IN=/path/in.tml TML_ROUNDTRIP_OUT=/path/out.tml \
@@ -3436,10 +3562,8 @@ mod tests {
         reason = "a hand-run diagnostic tool; the shot count and output path are its result"
     )]
     fn reexport_of_a_real_tml_keeps_the_chain_representable() {
-        let Ok(input) = std::env::var("TML_ROUNDTRIP_IN") else {
-            return;
-        };
-        let tml = crate::parsers::tml::parse_tml(Path::new(&input)).unwrap();
+        let input = require_env_file("TML_ROUNDTRIP_IN");
+        let tml = crate::parsers::tml::parse_tml(&input).unwrap();
         let (sections, _closures, _warnings) =
             crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true).unwrap();
 
@@ -3474,7 +3598,7 @@ mod tests {
         }
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
-        println!("re-exported {} shots from {input}", shots.len());
+        println!("re-exported {} shots from {}", shots.len(), input.display());
         assert_ariane_chain_is_representable(&shots);
 
         if let Ok(out) = std::env::var("TML_ROUNDTRIP_OUT") {
@@ -3487,7 +3611,8 @@ mod tests {
     /// project side: exports a real `.stalx` and checks Ariane can root every shot.
     /// A parentless non-START shot plus any closure blanks Ariane's map entirely, and
     /// the shape that produces one needs a real merge topology (a station shared by
-    /// three sections) that is tedious to hand-build. Skips when the var is unset.
+    /// three sections) that is tedious to hand-build. Fails, naming the var, when it
+    /// is unset (#576 E13).
     ///
     /// ```text
     /// STALX_EXPORT_IN=/path/project.stalx \
@@ -3500,13 +3625,9 @@ mod tests {
         reason = "a hand-run diagnostic tool; the orphan list is its result"
     )]
     fn export_of_a_real_stalx_roots_every_shot() {
-        let Ok(input) = std::env::var("STALX_EXPORT_IN") else {
-            return;
-        };
-        let db = stalagmight_persistence::persistence::sqlite::Database::open_readonly(Path::new(
-            &input,
-        ))
-        .unwrap();
+        let input = require_env_file("STALX_EXPORT_IN");
+        let db =
+            stalagmight_persistence::persistence::sqlite::Database::open_readonly(&input).unwrap();
         let project = db.load_project().unwrap();
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
@@ -3521,9 +3642,10 @@ mod tests {
             );
         }
         println!(
-            "{} shots, {} orphan(s) from {input}",
+            "{} shots, {} orphan(s) from {}",
             shots.len(),
-            orphans.len()
+            orphans.len(),
+            input.display()
         );
 
         assert!(
@@ -4008,17 +4130,16 @@ mod tests {
             .filter(|s| s.shot_type != "START" && s.from_id == start.id)
             .collect();
         assert_eq!(from_start.len(), 2);
+        // Both legs carry the bearing the app DRAWS, the circular mean of the
+        // two forward readings (#576 NF-AN5-1): 30/230 is drawn at 310, and
+        // `azimuth_out` is never read as a backsight.
         assert!(
-            from_start
-                .iter()
-                .any(|s| (s.azimuth - 30.0).abs() < f64::EPSILON),
-            "forward branch should keep original azimuth at datum"
+            from_start.iter().any(|s| (s.azimuth - 310.0).abs() < 1e-9),
+            "forward branch should carry the drawn bearing at the datum: {from_start:?}"
         );
         assert!(
-            from_start
-                .iter()
-                .any(|s| (s.azimuth - 200.0).abs() < f64::EPSILON),
-            "reverse branch should invert forward azimuth of prefix shot"
+            from_start.iter().any(|s| (s.azimuth - 197.5).abs() < 1e-9),
+            "reverse branch should invert the drawn bearing (mean of 20/15) of the prefix shot"
         );
     }
 
@@ -4326,9 +4447,9 @@ mod tests {
 
     /// Two galleries with no merge between them is an ordinary project, not an error.
     /// Each is an entrance and gets its own START, which is how Ariane stores them
-    /// (`chanchemuyil_sur.tml` ships two). Before this, the second gallery's first
-    /// shot was left parentless - harmless until the survey gained a closure, at
-    /// which point Ariane drew nothing at all.
+    /// (a file Ariane writes for two entrances carries two). Before this, the second
+    /// gallery's first shot was left parentless - harmless until the survey gained a
+    /// closure, at which point Ariane drew nothing at all.
     #[test]
     fn a_detached_section_exports_as_its_own_entrance() {
         let mut project = Project::new("Detached".to_string(), None);
@@ -4515,11 +4636,13 @@ mod tests {
                 ShotData {
                     length: 5.0,
                     azimuth_in: 90.0,
+                    azimuth_out: 90.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 5.0,
                     azimuth_in: 90.0,
+                    azimuth_out: 90.0,
                     ..Default::default()
                 },
             ],
@@ -4534,21 +4657,25 @@ mod tests {
                 ShotData {
                     length: 3.0,
                     azimuth_in: 10.0,
+                    azimuth_out: 10.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 4.0,
                     azimuth_in: 20.0,
+                    azimuth_out: 20.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 5.0,
                     azimuth_in: 30.0,
+                    azimuth_out: 30.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 6.0,
                     azimuth_in: 40.0,
+                    azimuth_out: 40.0,
                     ..Default::default()
                 },
             ],
@@ -4622,11 +4749,13 @@ mod tests {
                 ShotData {
                     length: 5.0,
                     azimuth_in: 90.0,
+                    azimuth_out: 90.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 5.0,
                     azimuth_in: 90.0,
+                    azimuth_out: 90.0,
                     ..Default::default()
                 },
             ],
@@ -4641,16 +4770,19 @@ mod tests {
                 ShotData {
                     length: 3.0,
                     azimuth_in: 10.0,
+                    azimuth_out: 10.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 4.0,
                     azimuth_in: 20.0,
+                    azimuth_out: 20.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 5.0,
                     azimuth_in: 30.0,
+                    azimuth_out: 30.0,
                     ..Default::default()
                 },
             ],
@@ -5409,10 +5541,13 @@ mod tests {
         // A missing, empty or non-ISO `<Date>` fails validation for the ENTIRE
         // file, and a year outside IGRF's [1900, 2035] silently drops the
         // magnetic declination to 0.0, rotating the map.
-        assert_eq!(speleodb_date(None), DEFAULT_EXPORT_DATE);
-        assert_eq!(speleodb_date(Some("")), DEFAULT_EXPORT_DATE);
-        assert_eq!(speleodb_date(Some("   ")), DEFAULT_EXPORT_DATE);
-        assert_eq!(speleodb_date(Some("15/06/2025")), DEFAULT_EXPORT_DATE);
+        assert_eq!(speleodb_date(None), schema::UNDATED_PLACEHOLDER);
+        assert_eq!(speleodb_date(Some("")), schema::UNDATED_PLACEHOLDER);
+        assert_eq!(speleodb_date(Some("   ")), schema::UNDATED_PLACEHOLDER);
+        assert_eq!(
+            speleodb_date(Some("15/06/2025")),
+            schema::UNDATED_PLACEHOLDER
+        );
         assert_eq!(speleodb_date(Some("2025-06-15")), "2025-06-15");
         assert_eq!(speleodb_date(Some("1850-06-01")), "1900-01-01");
         assert_eq!(speleodb_date(Some("2999-01-01")), "2035-12-31");
@@ -5581,12 +5716,16 @@ mod tests {
         // was surveyed in.
         let mut project = simple_project();
         project.sections[0].shots[0].azimuth_in = -10.0;
+        project.sections[0].shots[0].azimuth_out = -10.0;
         project.sections[0].shots[0].kind = ShotKind::Jump;
         project.sections[0].shots[1].azimuth_in = 400.0;
+        project.sections[0].shots[1].azimuth_out = 400.0;
 
+        // Both profiles write the bearing the app draws, which the circular
+        // mean already puts in [0, 360) (#576 NF-AN5-1).
         let user = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
-        assert!((user[1].azimuth + 10.0).abs() < f64::EPSILON);
-        assert!((user[2].azimuth - 400.0).abs() < f64::EPSILON);
+        assert!((user[1].azimuth - 350.0).abs() < 1e-9);
+        assert!((user[2].azimuth - 40.0).abs() < 1e-9);
 
         let sidecar = build_export_shots(
             &project,
@@ -5594,8 +5733,8 @@ mod tests {
             AzimuthExport::decide(&project),
         );
         assert_eq!(sidecar[1].shot_type, "VIRTUAL");
-        assert!((sidecar[1].azimuth - 350.0).abs() < f64::EPSILON);
-        assert!((sidecar[2].azimuth - 40.0).abs() < f64::EPSILON);
+        assert!((sidecar[1].azimuth - 350.0).abs() < 1e-9);
+        assert!((sidecar[2].azimuth - 40.0).abs() < 1e-9);
     }
 
     #[test]

@@ -30,7 +30,7 @@ stalagmight/
 │   │   └── webkit_memory.rs      # Linux WebKit memory-pressure env setup
 │   ├── examples/                 # gen_ipc_types (dev-only, feature-gated)
 │   ├── tests/                    # App-crate integration tests
-│   ├── crates/                   # The 7 workspace member crates
+│   ├── crates/                   # The 8 workspace member crates
 │   │   ├── models/               # Data structures (Project, Section, Shot, geo, app_dirs)
 │   │   ├── telemetry/            # Anonymous counters + event registry, logging/ (tracing setup)
 │   │   ├── parsers/              # Import parsers: dmp (mNemo, versions 2-5),
@@ -38,6 +38,7 @@ stalagmight/
 │   │   ├── persistence/          # SQLite operations (.stalx, .plnx), tile caches
 │   │   ├── export/               # CSV, JSON, image, TML export
 │   │   ├── speleodb/             # SpeleoDB integration (auth, dump, sync)
+│   │   ├── tiles/                # Map-tile engine (fetch, HTTP caching, overzoom)
 │   │   └── core/                 # Business logic (AppState, command executors, undo,
 │   │                             #   config/ I/O, tile_providers)
 │   ├── capabilities/             # Tauri 2.x permissions
@@ -57,7 +58,7 @@ stalagmight/
 │   │   ├── SingleSystemView/     # Main editing view
 │   │   ├── Map/                  # MapLibre integration
 │   │   │   ├── MapCanvas.tsx         # MapLibre map initialization
-│   │   │   ├── SurveyLayer.tsx       # Survey rendering on map
+│   │   │   ├── SurveyLayer.ts        # Survey rendering on map
 │   │   │   └── GridOverlay.tsx       # Theme-aware coordinate grid overlay
 │   │   ├── Dialogs/              # All dialog components
 │   │   │   ├── KeyboardShortcutsDialog.tsx  # Shortcuts overlay (? key)
@@ -75,7 +76,6 @@ stalagmight/
 │   │   └── globalViewStore.ts        # Global View state
 │   ├── hooks/                    # Custom React hooks
 │   │   ├── useFocusTrap.ts           # Focus trap for modal dialogs
-│   │   ├── useFpsMonitor.ts          # FPS monitoring for throttle
 │   │   └── ...
 │   ├── utils/                    # Coordinate/color utilities
 │   │   ├── dialogStack.ts            # Nested dialog stack manager
@@ -88,7 +88,8 @@ stalagmight/
 │
 ├── e2e-playwright/               # Playwright E2E tests (mocked IPC, 100+ spec files)
 │   ├── mocks/                    # Tauri IPC mocks
-│   │   └── tauri-ipc.ts          # Mock command handlers
+│   │   ├── tauri-ipc.ts          # Mock command handlers (the core)
+│   │   └── ipc/                  # Its command families (config, Plan mode, DMP, tiles, SpeleoDB)
 │   ├── fixtures/                 # Test data
 │   ├── dmp-import.spec.ts        # Import DMP dialog tests
 │   ├── project-crud.spec.ts      # Project operations tests

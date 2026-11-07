@@ -557,10 +557,7 @@ impl AppState {
     /// `Err` (user-facing) if no project is open or it has never been saved (no path
     /// to sit a sibling beside).
     fn plnx_context(&self) -> Result<PlnxContext, String> {
-        let guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
+        let guard = self.project.lock();
         let Some(p) = guard.as_ref() else {
             return Err("No project open.".to_string());
         };
@@ -584,7 +581,9 @@ impl AppState {
         };
         Ok(PlnxContext {
             path,
-            project_created_at: p.created_at.to_rfc3339(),
+            // [#576 NF-W18-1] The UTC form every `.plnx` was stamped with, not
+            // the stored text: a plan stays its project's whatever form that has.
+            project_created_at: p.created_at.utc().to_rfc3339(),
             project_name: p.name.clone(),
         })
     }
@@ -649,10 +648,7 @@ impl AppState {
         refs: Vec<StationRef>,
     ) -> Result<Vec<Option<StoredAnchor>>, String> {
         validate_anchor_batch(refs.len())?;
-        let guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
+        let guard = self.project.lock();
         let Some(project) = guard.as_ref() else {
             return Err("No project open.".to_string());
         };
@@ -671,10 +667,7 @@ impl AppState {
         anchors: Vec<StoredAnchor>,
     ) -> Result<Vec<Option<StationRef>>, String> {
         validate_anchor_batch(anchors.len())?;
-        let guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
+        let guard = self.project.lock();
         let Some(project) = guard.as_ref() else {
             return Err("No project open.".to_string());
         };
@@ -766,10 +759,7 @@ impl AppState {
     /// Canonicalize an IPC snapshot's positional refs to stable keys against the open
     /// project (for on-disk persistence).
     fn to_persisted(&self, snap: &DivePlanSnapshot) -> Result<PersistedDivePlanSnapshot, String> {
-        let guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
+        let guard = self.project.lock();
         let Some(project) = guard.as_ref() else {
             return Err("No project open.".to_string());
         };
@@ -848,10 +838,7 @@ impl AppState {
         &self,
         p: PersistedDivePlanSnapshot,
     ) -> Result<(DivePlanSnapshot, PlanAnchorSet, u32), String> {
-        let guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
+        let guard = self.project.lock();
         let Some(project) = guard.as_ref() else {
             return Err("No project open.".to_string());
         };
@@ -936,15 +923,9 @@ mod tests {
         reason = "tests build from known-valid literals; a failed unwrap should fail the test"
     )]
     use super::*;
-    use crate::models::{SectionData, ShotData};
+    use crate::models::SectionData;
+    use crate::test_fixtures::{bare_shot, state_holding};
     use tempfile::TempDir;
-
-    fn make_shot() -> ShotData {
-        ShotData {
-            length: 10.0,
-            ..Default::default()
-        }
-    }
 
     /// A one-section project with 3 shots (stations 0..=3) and minted shot UUIDs so
     /// `key_for_ref` can anchor to `AfterShot(uuid)`.
@@ -952,7 +933,7 @@ mod tests {
         let mut project = Project::new("Test".to_string(), None);
         let sec = project
             .add_section(SectionData {
-                shots: vec![make_shot(), make_shot(), make_shot()],
+                shots: vec![bare_shot(10.0), bare_shot(10.0), bare_shot(10.0)],
                 ..Default::default()
             })
             .id;
@@ -968,12 +949,12 @@ mod tests {
         let sec = project
             .add_section(SectionData {
                 shots: vec![
-                    make_shot(),
-                    make_shot(),
-                    make_shot(),
-                    make_shot(),
-                    make_shot(),
-                    make_shot(),
+                    bare_shot(10.0),
+                    bare_shot(10.0),
+                    bare_shot(10.0),
+                    bare_shot(10.0),
+                    bare_shot(10.0),
+                    bare_shot(10.0),
                 ],
                 ..Default::default()
             })
@@ -1065,7 +1046,7 @@ mod tests {
         project.file_path = Some(stalx);
         // Project::new stamps a fresh created_at (now), which differs from the
         // "2020-01-01T00:00:00Z" stamped above => Foreign.
-        *state.project.lock().unwrap() = Some(project);
+        *state.project.lock() = Some(project).into();
 
         let list = state.list_dive_plans().unwrap();
         assert!(
@@ -1095,6 +1076,33 @@ mod tests {
         );
     }
 
+    /// [#576 NF-W18-1] A project's creation time is kept as its file stored it
+    /// (`+05:00` here), but the `.plnx` identity stays the UTC form every plan file
+    /// was stamped with: the plans beside such a project are still its own.
+    #[test]
+    fn a_plnx_stays_owned_by_a_project_whose_created_at_is_stored_in_another_offset() {
+        let temp = TempDir::new().unwrap();
+        let plnx_path = temp.path().join("cave.plnx");
+        {
+            let store = PlnxStore::open(&plnx_path).unwrap();
+            store
+                .ensure_identity("2020-01-01T22:04:05+00:00", "Mine")
+                .unwrap();
+            store
+                .insert("Mine's plan", "2020-01-01T00:00:00Z", 1, "{}")
+                .unwrap();
+        }
+        let state = AppState::new().unwrap();
+        let mut project = Project::new("Mine".to_string(), None);
+        project.created_at =
+            crate::models::CreationStamp::parse("2020-01-02T03:04:05+05:00").unwrap();
+        project.file_path = Some(temp.path().join("cave.stalx"));
+        *state.project.lock() = Some(project).into();
+
+        let listed = state.list_dive_plans().unwrap();
+        assert_eq!(listed.len(), 1, "its own plan is listed: {listed:?}");
+    }
+
     /// #275 B3: a deferred new project has a RESERVED file_path that was never
     /// written. Its first implicit save may auto-rename the .stalx on collision,
     /// which would strand any .plnx created beside the reserved name. So while
@@ -1110,7 +1118,7 @@ mod tests {
         let state = AppState::new().unwrap();
         let mut project = Project::new("Mine".to_string(), None);
         project.file_path = Some(stalx);
-        *state.project.lock().unwrap() = Some(project);
+        *state.project.lock() = Some(project).into();
         state.set_initial_save_deferred_for_tests(true);
 
         let snapshot: DivePlanSnapshot = serde_json::from_str("{}").unwrap();
@@ -1215,7 +1223,7 @@ mod tests {
         let end = to_anchor(&project, Some(StationRef::new(sec, 3))).unwrap();
         let mid = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
 
-        project.add_shot(sec, make_shot()).unwrap();
+        project.add_shot(sec, bare_shot(10.0)).unwrap();
 
         let mut stale = 0;
         assert_eq!(
@@ -1257,7 +1265,7 @@ mod tests {
         let mut project = Project::new("Test".to_string(), None);
         let sec = project
             .add_section(SectionData {
-                shots: (0..n).map(|_| make_shot()).collect(),
+                shots: (0..n).map(|_| bare_shot(10.0)).collect(),
                 ..Default::default()
             })
             .id;
@@ -1312,7 +1320,7 @@ mod tests {
 
         let head = project.get_section(sec).unwrap().shots[0].id;
         project.remove_shot(sec, head).unwrap();
-        project.add_shot(sec, make_shot()).unwrap();
+        project.add_shot(sec, bare_shot(10.0)).unwrap();
 
         let mut stale = 0;
         assert_eq!(
@@ -1331,7 +1339,7 @@ mod tests {
 
         let first = project.get_section(sec).unwrap().shots[0].id;
         project
-            .insert_shot_before(sec, first, make_shot(), None, None)
+            .insert_shot_before(sec, first, bare_shot(10.0), None, None)
             .unwrap();
 
         let mut stale = 0;
@@ -1378,7 +1386,7 @@ mod tests {
 
         let first = project.get_section(sec).unwrap().shots[0].id;
         project
-            .insert_shot_before(sec, first, make_shot(), None, None)
+            .insert_shot_before(sec, first, bare_shot(10.0), None, None)
             .unwrap();
 
         let mut stale = 0;
@@ -1428,8 +1436,7 @@ mod tests {
                 ..Default::default()
             })
             .id;
-        let state = AppState::new().unwrap();
-        *state.project.lock().unwrap() = Some(project);
+        let state = state_holding(project);
 
         let only = StationRef::new(sec, 0);
         let snapshot = DivePlanSnapshot {
@@ -1469,7 +1476,7 @@ mod tests {
         let mut project = Project::new("Test".to_string(), None);
         let sec = project
             .add_section(SectionData {
-                shots: vec![make_shot()],
+                shots: vec![bare_shot(10.0)],
                 ..Default::default()
             })
             .id;
@@ -1564,7 +1571,7 @@ mod tests {
         let (mut project, sec) = project_3_shots();
         let state = AppState::new().unwrap();
         let persisted = {
-            *state.project.lock().unwrap() = Some(project.clone());
+            *state.project.lock() = Some(project.clone()).into();
             state
                 .to_persisted(&snapshot_with_route_points(sec))
                 .unwrap()
@@ -1572,7 +1579,7 @@ mod tests {
 
         // Delete shot 0: the physical station that was at index 2 is now at index 1.
         project.sections[0].shots.remove(0);
-        *state.project.lock().unwrap() = Some(project);
+        *state.project.lock() = Some(project).into();
         let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
 
         // The plan's ORIGIN was the section's first station, and deleting the first shot deletes
@@ -1599,14 +1606,13 @@ mod tests {
     #[test]
     fn a_reverse_leaves_a_saved_plan_pointing_at_the_same_stations() {
         let (mut project, sec) = project_3_shots();
-        let state = AppState::new().unwrap();
-        *state.project.lock().unwrap() = Some(project.clone());
+        let state = state_holding(project.clone());
         let persisted = state
             .to_persisted(&snapshot_with_route_points(sec))
             .unwrap();
 
         assert!(project.reverse_section(sec, false));
-        *state.project.lock().unwrap() = Some(project);
+        *state.project.lock() = Some(project).into();
 
         let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
         assert_eq!(stale, 0);
@@ -1629,8 +1635,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let (mut project, sec) = project_3_shots();
         project.file_path = Some(temp.path().join("cave.stalx"));
-        let state = AppState::new().unwrap();
-        *state.project.lock().unwrap() = Some(project);
+        let state = state_holding(project);
 
         let saved = state
             .save_dive_plan(None, "Plan".to_string(), snapshot_with_route_points(sec))
@@ -1685,14 +1690,13 @@ mod tests {
         // as a hard stall that would blank the whole field on load. It still counts as stale so the
         // UI can warn that the loaded plan is not what was saved.
         let (mut project, sec) = project_3_shots();
-        let state = AppState::new().unwrap();
-        *state.project.lock().unwrap() = Some(project.clone());
+        let state = state_holding(project.clone());
         let persisted = state
             .to_persisted(&snapshot_with_route_points(sec))
             .unwrap();
 
         project.sections.clear(); // every anchoring shot is gone
-        *state.project.lock().unwrap() = Some(project);
+        *state.project.lock() = Some(project).into();
         let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
 
         assert!(snapshot.waypoints.is_empty());
@@ -1714,7 +1718,7 @@ mod tests {
         // A way point on a section that is then deleted cannot be anchored at save time.
         let mut snapshot = snapshot_with_route_points(sec);
         snapshot.waypoints = vec![StationRef::new(sec + 99, 1)];
-        *state.project.lock().unwrap() = Some(project.clone());
+        *state.project.lock() = Some(project.clone()).into();
         let err = state
             .save_dive_plan(None, "Plan".to_string(), snapshot)
             .unwrap_err();
@@ -1735,7 +1739,7 @@ mod tests {
         // Sanity: the same snapshot with anchorable points saves fine, so the refusals above are
         // about the dangling ref and not about some unrelated guard.
         project.ensure_shot_uuids();
-        *state.project.lock().unwrap() = Some(project);
+        *state.project.lock() = Some(project).into();
         assert!(state
             .save_dive_plan(None, "Plan".to_string(), snapshot_with_route_points(sec))
             .is_ok());
@@ -1747,8 +1751,7 @@ mod tests {
         // path - so the LOAD path has to enforce them too. Way points are the expensive one: each
         // costs the engine a full extra Dijkstra on every recompute.
         let (project, sec) = project_3_shots();
-        let state = AppState::new().unwrap();
-        *state.project.lock().unwrap() = Some(project.clone());
+        let state = state_holding(project.clone());
         let key = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
 
         let persisted = PersistedDivePlanSnapshot {
@@ -1835,8 +1838,7 @@ mod tests {
             "a legacy row must be recognised as legacy, not silently read as an empty pair"
         );
 
-        let state = AppState::new().unwrap();
-        *state.project.lock().unwrap() = Some(project);
+        let state = state_holding(project);
         let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
         assert_eq!(stale, 0, "an upgrade must not strand anyone's route");
         assert_eq!(snapshot.origin, Some(StationRef::new(sec, 0)));
@@ -1861,8 +1863,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let (mut project, sec) = project_3_shots();
         project.file_path = Some(temp.path().join("cave.stalx"));
-        let state = AppState::new().unwrap();
-        *state.project.lock().unwrap() = Some(project);
+        let state = state_holding(project);
 
         let mut snapshot = snapshot_with_route_points(sec);
         snapshot.marked_points[0].label = Some("x".repeat(MAX_MARKED_LABEL_CHARS + 1));
@@ -1884,8 +1885,7 @@ mod tests {
         // the model doc comment), so with nothing dangling there is nothing to merge: the list
         // must pass through save+load unchanged.
         let (project, sec) = project_3_shots();
-        let state = AppState::new().unwrap();
-        *state.project.lock().unwrap() = Some(project);
+        let state = state_holding(project);
 
         let mut snapshot = snapshot_with_route_points(sec);
         snapshot.segments = vec![
@@ -1952,7 +1952,7 @@ mod tests {
             ],
         };
 
-        *state.project.lock().unwrap() = Some(project.clone());
+        *state.project.lock() = Some(project.clone()).into();
         let persisted = state.to_persisted(&snapshot).unwrap();
 
         // Make way point 1's anchor unplaceable. Since #24 an anchor stores the PAIR of shots it
@@ -1961,7 +1961,7 @@ mod tests {
         // Way points 0 and 2 keep at least one of their own neighbours and still place.
         project.sections[0].shots.remove(3);
         project.sections[0].shots.remove(2);
-        *state.project.lock().unwrap() = Some(project);
+        *state.project.lock() = Some(project).into();
         let (resolved, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
 
         assert_eq!(stale, 1, "only way point 1's anchor should dangle");
@@ -2077,8 +2077,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let (mut project, sec) = project_3_shots();
         project.file_path = Some(temp.path().join("cave.stalx"));
-        let state = AppState::new().unwrap();
-        *state.project.lock().unwrap() = Some(project);
+        let state = state_holding(project);
 
         let mut long_list = vec![inherited_segment(), inherited_segment()];
         long_list.extend(std::iter::repeat_n(
@@ -2131,8 +2130,7 @@ mod tests {
     #[test]
     fn a_plan_saved_before_segments_existed_loads_one_segment_per_span() {
         let (project, sec) = project_6_shots();
-        let state = AppState::new().unwrap();
-        *state.project.lock().unwrap() = Some(project.clone());
+        let state = state_holding(project.clone());
 
         let anchor = |i| to_anchor(&project, Some(StationRef::new(sec, i))).unwrap();
         let persisted = PersistedDivePlanSnapshot {
@@ -2170,8 +2168,7 @@ mod tests {
     #[test]
     fn a_short_segment_list_is_padded_rather_than_left_misaligned() {
         let (project, sec) = project_6_shots();
-        let state = AppState::new().unwrap();
-        *state.project.lock().unwrap() = Some(project.clone());
+        let state = state_holding(project.clone());
 
         let anchor = |i| to_anchor(&project, Some(StationRef::new(sec, i))).unwrap();
         let persisted = PersistedDivePlanSnapshot {
@@ -2197,17 +2194,10 @@ mod tests {
         assert!(resolved.segments[3].speed_m_per_min.is_none());
     }
 
-    /// An `AppState` holding `project`, for the #310 command-level tests.
-    fn state_with(project: Project) -> AppState {
-        let state = AppState::new().unwrap();
-        *state.project.lock().unwrap() = Some(project);
-        state
-    }
-
     #[test]
     fn plan_anchor_round_trip_is_identity_on_an_untouched_project() {
         let (project, sec) = project_3_shots();
-        let state = state_with(project);
+        let state = state_holding(project);
 
         let refs: Vec<_> = (0..=3).map(|i| StationRef::new(sec, i)).collect();
         let anchors = state.plan_anchors_for_refs(refs.clone()).unwrap();
@@ -2232,13 +2222,13 @@ mod tests {
     fn an_anchored_pin_follows_its_station_across_an_upstream_shot_delete() {
         let (mut project, sec) = project_3_shots();
         let pinned = StationRef::new(sec, 2);
-        let state = state_with(project.clone());
+        let state = state_holding(project.clone());
         let anchors = state.plan_anchors_for_refs(vec![pinned]).unwrap();
         let anchor = anchors[0].clone().expect("station 2 anchors");
 
         // Delete shot 0: the physical station that was station 2 is now station 1.
         project.sections[0].shots.remove(0);
-        let state = state_with(project);
+        let state = state_holding(project);
 
         let back = state.plan_refs_for_anchors(vec![anchor]).unwrap();
         assert_eq!(back, vec![Some(StationRef::new(sec, 1))]);
@@ -2255,16 +2245,16 @@ mod tests {
     fn an_anchored_pin_follows_its_station_across_an_upstream_insert() {
         let (mut project, sec) = project_3_shots();
         let pinned = StationRef::new(sec, 2);
-        let state = state_with(project.clone());
+        let state = state_holding(project.clone());
         let anchor = state.plan_anchors_for_refs(vec![pinned]).unwrap()[0]
             .clone()
             .expect("station 2 anchors");
 
         let first = project.get_section(sec).unwrap().shots[0].id;
         project
-            .insert_shot_before(sec, first, make_shot(), None, None)
+            .insert_shot_before(sec, first, bare_shot(10.0), None, None)
             .unwrap();
-        let state = state_with(project);
+        let state = state_holding(project);
 
         let back = state.plan_refs_for_anchors(vec![anchor]).unwrap();
         assert_eq!(back, vec![Some(StationRef::new(sec, 3))]);
@@ -2278,7 +2268,7 @@ mod tests {
     fn anchored_pins_survive_a_section_reverse() {
         let (mut project, sec) = project_3_shots();
         let refs: Vec<_> = (0..=3).map(|i| StationRef::new(sec, i)).collect();
-        let state = state_with(project.clone());
+        let state = state_holding(project.clone());
         let anchors: Vec<_> = state
             .plan_anchors_for_refs(refs.clone())
             .unwrap()
@@ -2288,7 +2278,7 @@ mod tests {
         assert_eq!(anchors.len(), 4);
 
         assert!(project.reverse_section(sec, false));
-        let state = state_with(project);
+        let state = state_holding(project);
 
         let back = state.plan_refs_for_anchors(anchors).unwrap();
         let expected: Vec<_> = (0..=3).map(|i| Some(StationRef::new(sec, 3 - i))).collect();
@@ -2307,7 +2297,7 @@ mod tests {
     #[test]
     fn a_pin_whose_both_neighbouring_shots_are_deleted_no_longer_places() {
         let (mut project, sec) = project_3_shots();
-        let state = state_with(project.clone());
+        let state = state_holding(project.clone());
         let anchor = state
             .plan_anchors_for_refs(vec![StationRef::new(sec, 2)])
             .unwrap()[0]
@@ -2318,7 +2308,7 @@ mod tests {
         // earlier index stays valid.
         project.sections[0].shots.remove(2);
         project.sections[0].shots.remove(1);
-        let state = state_with(project);
+        let state = state_holding(project);
 
         assert_eq!(
             state.plan_refs_for_anchors(vec![anchor]).unwrap(),
@@ -2331,7 +2321,7 @@ mod tests {
     #[test]
     fn an_unanchorable_ref_is_none_without_failing_the_batch() {
         let (project, sec) = project_3_shots();
-        let state = state_with(project);
+        let state = state_holding(project);
         let anchors = state
             .plan_anchors_for_refs(vec![
                 StationRef::new(sec, 1),
@@ -2352,7 +2342,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let (mut project, sec) = project_6_shots();
         project.file_path = Some(temp.path().join("cave.stalx"));
-        let state = state_with(project);
+        let state = state_holding(project);
 
         let snapshot = DivePlanSnapshot {
             origin: Some(StationRef::new(sec, 0)),
@@ -2424,7 +2414,7 @@ mod tests {
         // survives losing either one, so both have to go.
         project.sections[0].shots.remove(3);
         project.sections[0].shots.remove(2);
-        let state = state_with(project);
+        let state = state_holding(project);
 
         let (resolved, anchors, stale) = state.resolve_persisted(persisted).unwrap();
         assert_eq!(stale, 1);
@@ -2460,7 +2450,7 @@ mod tests {
             project.get_section(sec).unwrap().reverse_parity,
             "the fixture must actually carry a non-default parity"
         );
-        let state = state_with(project);
+        let state = state_holding(project);
         for i in 0..=3 {
             let anchor = state
                 .plan_anchors_for_refs(vec![StationRef::new(sec, i)])
@@ -2499,7 +2489,7 @@ mod tests {
     #[test]
     fn an_anchor_survives_the_round_trip_through_javascript() {
         let (mut project, sec) = project_n_shots(2);
-        let state = state_with(project.clone());
+        let state = state_holding(project.clone());
         let anchor = state
             .plan_anchors_for_refs(vec![StationRef::new(sec, 0)])
             .unwrap()[0]
@@ -2524,9 +2514,9 @@ mod tests {
         // fingerprint at all, and it must resolve: nothing was split.
         let first = project.get_section(sec).unwrap().shots[0].id;
         project
-            .insert_shot_before(sec, first, make_shot(), None, None)
+            .insert_shot_before(sec, first, bare_shot(10.0), None, None)
             .unwrap();
-        let state = state_with(project);
+        let state = state_holding(project);
 
         assert_eq!(
             state.plan_refs_for_anchors(vec![returned]).unwrap(),
@@ -2541,7 +2531,7 @@ mod tests {
     #[test]
     fn the_terminal_length_guard_still_catches_a_split_after_a_javascript_round_trip() {
         let (mut project, sec) = project_n_shots(2);
-        let state = state_with(project.clone());
+        let state = state_holding(project.clone());
         let anchor = state
             .plan_anchors_for_refs(vec![StationRef::new(sec, 0)])
             .unwrap()[0]
@@ -2556,7 +2546,7 @@ mod tests {
 
         let first = project.get_section(sec).unwrap().shots[0].id;
         project.split_shot_at_distance(sec, first, 0.5).unwrap();
-        let state = state_with(project);
+        let state = state_holding(project);
 
         assert_eq!(
             state.plan_refs_for_anchors(vec![returned]).unwrap(),
@@ -2583,7 +2573,7 @@ mod tests {
     fn the_anchor_commands_refuse_an_over_long_batch() {
         let (project, sec) = project_3_shots();
         let anchor = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
-        let state = state_with(project);
+        let state = state_holding(project);
         let station = StationRef::new(sec, 2);
 
         // Exactly at the cap is fine - the boundary is inclusive, and every entry is answered.

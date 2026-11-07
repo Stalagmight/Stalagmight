@@ -13,6 +13,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { shareableFinding } from './lib/shareable-finding.mjs';
+import { shareableSelector, shareableTestId } from './lib/shareable-selector.mjs';
+
 const args = process.argv.slice(2);
 if (args.length === 0 || args[0].startsWith('--')) {
   process.stderr.write('usage: node scripts/generate-repro-report.mjs <sessionDir> [--title ...] [--summary ...]\n');
@@ -25,18 +28,27 @@ const getFlag = (name) => {
 };
 const jsonlPath = path.join(sessionDir, 'actions.jsonl');
 if (!fs.existsSync(jsonlPath)) {
-  process.stderr.write(`no actions.jsonl at ${jsonlPath}\n`);
+  // Not the path itself: it is the one the caller gave, which can sit outside
+  // the checkout and name the user's own directories (#576 W51).
+  process.stderr.write('no actions.jsonl in <sessionDir>\n');
   process.exit(1);
 }
 
 const home = process.env.HOME || '';
 const absSession = path.resolve(sessionDir);
+// A fuzz run copies each private corpus entry it draws into
+// `fuzz-files/corpus-<n>/` and keeps its real names there; the app quotes that
+// path when an import fails. The harness redacts what it records (#576 RV12-F1),
+// but this script only sees the log and cannot know the names, so it also folds
+// everything after such a directory - up to the closing quote of the quoted path
+// a log line carries, else to the end of the line - to a placeholder.
+const CORPUS_COPY = /(fuzz-files[\\/]corpus-\d+)[\\/][^"'`\n]*/g;
 const scrub = (s) => {
   if (typeof s !== 'string') return s;
   let out = s;
   if (absSession) out = out.split(absSession).join('<artifacts>');
   if (home) out = out.split(home).join('$HOME');
-  return out;
+  return out.replace(CORPUS_COPY, '$1/<corpus file>');
 };
 
 /**
@@ -64,16 +76,137 @@ const redactPath = (value) => {
 };
 
 /**
- * Neutralize a caller-supplied string for a markdown list item. Tool params are
- * bare strings, and a newline or a backtick in a testid or selector escapes the
- * step and injects arbitrary markdown into a report headed for a public issue.
- * Also capped: nothing here is worth unbounded width.
+ * An argument's SHAPE, never its value (#576 RV18-W23-3). The arguments of an
+ * `ipc` / `store_action` call are the project's own data - a station, section
+ * or project name - and this report goes to public issues, which keep only
+ * codes, counts and code locations (docs/agent-harness.md). A string is its
+ * length. A number is its type: it spells no text, but a coordinate, depth or
+ * length is survey data all the same. A boolean or null stays - one bit picked
+ * by the caller cannot name anything. An object keeps the keys that read as
+ * field names (a lowercase-led identifier, the camelCase / snake_case of a
+ * command parameter or struct field); any other key - a map keyed by station
+ * names - is only counted. An array is its length and element types. Bounded:
+ * two levels of keys, at most 12 per object.
  */
-const mdInline = (s, max = 80) => {
-  const flat = String(s).replace(/[\r\n]+/g, ' ');
-  const clipped = flat.length > max ? `${flat.slice(0, max)}...` : flat;
-  return clipped.replace(/[`<>|]/g, (c) => ({ '`': "'", '<': '&lt;', '>': '&gt;', '|': '\\|' })[c]);
+const FIELD_NAME = /^[a-z][A-Za-z0-9_]{0,63}$/;
+const MAX_KEYS = 12;
+const kindOf = (v) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
+const argShape = (value, depth = 0) => {
+  const kind = kindOf(value);
+  if (kind === 'null' || kind === 'boolean') return String(value);
+  if (kind === 'string') return `string(${value.length})`;
+  if (kind === 'array') {
+    const kinds = [...new Set(value.map(kindOf))];
+    return value.length ? `array(${value.length}) of ${kinds.join('|')}` : 'array(0)';
+  }
+  if (kind !== 'object') return kind;
+  const keys = Object.keys(value);
+  if (depth >= 2) return `object(${keys.length} keys)`;
+  const named = keys.filter((k) => FIELD_NAME.test(k));
+  const parts = named.slice(0, MAX_KEYS).map((k) => `${k}: ${argShape(value[k], depth + 1)}`);
+  if (named.length > MAX_KEYS) parts.push(`+${named.length - MAX_KEYS} more`);
+  if (keys.length > named.length) parts.push(`${keys.length - named.length} key(s) withheld`);
+  return `{${parts.join(', ')}}`;
 };
+
+/**
+ * A value this report reads back from actions.jsonl or a finding.json, printed
+ * only in the form the harness writes it (#576 W49-NF1). The tool's schema or
+ * the recorder gives it a number, an integer, a word of a fixed set or a name,
+ * but a forged or hand-edited copy can put any string there - a newline and a
+ * `## heading` start a markdown line of their own, as a map_feature_click id
+ * did (#576 W47-NF2) - or a name of the user's data. Any other value is given
+ * as its shape (see argShape). A real session's values print as they always did.
+ */
+const id = (v) => (Number.isInteger(v) ? String(v) : argShape(v));
+const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(v) : argShape(v));
+const word = (words, v) => (words.has(v) ? v : argShape(v));
+/**
+ * A name the harness writes: a tool, an IPC command, a store or its action, a
+ * scenario, a session id, a screenshot label (`os_screenshot`'s schema allows
+ * `[\w.-]{1,64}`). Identifier characters only, as `logFindingCode` keeps a code.
+ */
+const NAME = /^[\w.:-]{1,80}$/;
+const code = (v, shape = NAME) => (typeof v === 'string' && shape.test(v) ? v : argShape(v));
+/** `git rev-parse --short HEAD`, or `unknown` (e2e/agent/lib/build.ts `gitHeadFor`). */
+const GIT_HEAD = /^(?:[0-9a-f]{4,64}|unknown)$/;
+/** An X display (`:89`, `:0.0`) or macOS's `aqua`; a host-prefixed DISPLAY is the user's env. */
+const DISPLAY = /^(?::\d{1,5}(?:\.\d{1,3})?|aqua)?$/;
+const VERSION = /^(?:\d+\.\d+\.\d+[\w.+-]*|\?)$/;
+const BUTTONS = new Set(['left', 'right', 'middle']);
+const DIALOG_KINDS = new Set(['open', 'save']);
+
+/**
+ * A `press_keys` step's keys (#576 W39-NF2). `browser.keys` presses a WebDriver
+ * key NAME as that key and types any other string grapheme by grapheme, so a
+ * run of single characters - or one longer string - spells text, a station or
+ * project name, as surely as `type_text` does. A key name is a code and stays;
+ * a WebDriver key code point (U+E000..U+E05D) stays as its code point; every
+ * run of other keys is only counted, in characters, as `type_text`'s text is.
+ * The names are `UNICODE_CHARACTERS` of @wdio/utils, less `" "`, which types a
+ * space between words.
+ */
+const WEBDRIVER_KEY_NAMES = new Set([
+  'NULL', 'Unidentified', 'Cancel', 'Help', 'Backspace', 'Back space', 'Tab', 'Clear', 'Return', 'Enter',
+  'Shift', 'Control', 'Control Left', 'Control Right', 'Alt', 'Pause', 'Escape', 'Space',
+  'PageUp', 'Pageup', 'Page_Up', 'PageDown', 'Pagedown', 'Page_Down', 'End', 'Home',
+  'ArrowLeft', 'Left arrow', 'Arrow_Left', 'ArrowUp', 'Up arrow', 'Arrow_Up',
+  'ArrowRight', 'Right arrow', 'Arrow_Right', 'ArrowDown', 'Down arrow', 'Arrow_Down',
+  'Insert', 'Delete', 'Semicolon', 'Equals',
+  'Numpad 0', 'Numpad 1', 'Numpad 2', 'Numpad 3', 'Numpad 4', 'Numpad 5', 'Numpad 6', 'Numpad 7', 'Numpad 8', 'Numpad 9',
+  'Multiply', 'Add', 'Separator', 'Subtract', 'Decimal', 'Divide',
+  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+  'Command', 'Meta', 'ZenkakuHankaku', 'Zenkaku_Hankaku',
+]);
+const WEBDRIVER_KEY_CODE = /^[\uE000-\uE05D]$/;
+const describeKeys = (keys) => {
+  const parts = [];
+  let typed = 0;
+  const flush = () => {
+    if (typed > 0) parts.push(`${typed} character${typed === 1 ? '' : 's'}`);
+    typed = 0;
+  };
+  for (const key of Array.isArray(keys) ? keys : keys == null ? [] : [keys]) {
+    if (typeof key === 'string' && WEBDRIVER_KEY_NAMES.has(key)) {
+      flush();
+      parts.push(JSON.stringify(key));
+    } else if (typeof key === 'string' && WEBDRIVER_KEY_CODE.test(key)) {
+      flush();
+      parts.push(`U+${key.charCodeAt(0).toString(16).toUpperCase()}`);
+    } else {
+      typed += String(key).length;
+    }
+  }
+  flush();
+  return `[${parts.join(', ')}]`;
+};
+
+/**
+ * An `os_keys` step's chord (#576 RV19b-P6), by `describeKeys`' rule. Each step
+ * presses one chord, so a run of them spells text a key at a time as a run of
+ * `press_keys` keys does. A modifier and a named key of the chord grammar
+ * (e2e/agent/os/README.md, `helper/src/keyspec.rs`) stay, lower-cased as the
+ * grammar reads them; any other key - a letter, a digit - is counted in
+ * characters.
+ */
+const OS_KEY_NAMES = new Set([
+  'cmd', 'command', 'meta', 'super', 'win', 'shift', 'alt', 'opt', 'option', 'ctrl', 'control', 'fn',
+  'return', 'enter', 'escape', 'esc', 'tab', 'space', 'delete', 'backspace', 'forwarddelete',
+  'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'help', 'keypadenter',
+  'minus', 'equal', 'comma', 'period', 'slash', 'backslash', 'semicolon', 'quote',
+  'leftbracket', 'rightbracket', 'grave', 'backtick',
+  'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12',
+]);
+const describeChord = (spec) =>
+  `[${String(spec ?? '')
+    .split('+')
+    .map((part) => {
+      const key = part.trim().toLowerCase();
+      if (OS_KEY_NAMES.has(key)) return JSON.stringify(key);
+      const typed = part.trim().length;
+      return `${typed} character${typed === 1 ? '' : 's'}`;
+    })
+    .join(', ')}]`;
 
 const records = fs
   .readFileSync(jsonlPath, 'utf8')
@@ -119,7 +252,7 @@ try {
   // Best-effort.
 }
 
-const title = getFlag('--title') || `Agent-found issue in session ${start.sessionId ?? path.basename(sessionDir)}`;
+const title = getFlag('--title') || `Agent-found issue in session ${code(start.sessionId ?? path.basename(sessionDir))}`;
 const summary = getFlag('--summary') || '_Describe the bug in one or two sentences._';
 
 // Compact step list: mutating actions only.
@@ -144,7 +277,7 @@ const steps = actions
   .map((a) => {
     const detail = describeAction(a);
     const flag = a.outcome?.ok === false ? ' **(failed)**' : '';
-    return `${a.seq}. \`${a.tool}\` ${detail}${flag}`;
+    return `${id(a.seq)}. \`${code(a.tool)}\` ${detail}${flag}`;
   });
 
 const md = [];
@@ -156,12 +289,12 @@ P(summary);
 P('');
 P('## Environment');
 P('');
-P(`- Commit: \`${start.gitHead ?? '?'}\``);
-P(`- App version: \`${version}\``);
+P(`- Commit: \`${start.gitHead == null ? '?' : code(start.gitHead, GIT_HEAD)}\``);
+P(`- App version: \`${code(version, VERSION)}\``);
 P(`- Platform: \`${process.platform}\``);
-P(`- Display: \`${start.display ?? '?'}\`  headed: \`${Boolean(start.headed)}\``);
+P(`- Display: \`${start.display == null ? '?' : code(start.display, DISPLAY)}\`  headed: \`${Boolean(start.headed)}\``);
 P(`- Fresh profile: \`${Boolean(start.freshProfile)}\``);
-P(`- Session: \`${start.sessionId ?? path.basename(sessionDir)}\`  actions: \`${end?.actions ?? actions.length}\``);
+P(`- Session: \`${code(start.sessionId ?? path.basename(sessionDir))}\`  actions: \`${id(end?.actions ?? actions.length)}\``);
 P('');
 P('## Steps to reproduce');
 P('');
@@ -182,17 +315,32 @@ P('- Actual: _what happened (see findings below)._');
 P('');
 P('## Oracle findings');
 P('');
-const allFindings = capturedFindings.length ? capturedFindings : findingEvents.map((e) => e.detail);
+// Every finding goes through the shareable projection (#576 HFI2-F2, W21-NF2):
+// codes, counts and code locations. A log line, a panic message, the error
+// boundary's text, integrity messages and leftover file names all quote the
+// app, which names the data it is about - a section, a project, a station -
+// and neither scrub above can know that. This report is pasted into public
+// issues; the full finding is the `finding` event in the session's
+// actions.jsonl, which is not shared. A log finding is named by its target
+// (`oracles.logLineCode`), read off the line for a session older than `code`.
+const LOG_FINDING_KINDS = new Set(['log-warn', 'log-error']);
+const LOG_TARGET = /^(?:ERROR|WARN)\s+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*):\s/;
+const logFindingCode = (f) => {
+  if (typeof f.code === 'string' && /^[\w:.-]{1,120}$/.test(f.code)) return f.code;
+  return LOG_TARGET.exec(String(f.message ?? ''))?.[1] ?? 'unattributed';
+};
+const allFindings = (capturedFindings.length ? capturedFindings : findingEvents.map((e) => e.detail)).filter(Boolean);
 if (allFindings.length) {
-  for (const f of allFindings) {
-    if (!f) continue;
-    P(`- **[${f.severity ?? '?'}] ${f.kind ?? '?'}** ${scrub(f.message ?? '')}`);
+  for (const raw of allFindings) {
+    const f = shareableFinding(LOG_FINDING_KINDS.has(raw.kind) ? { ...raw, code: logFindingCode(raw) } : raw);
+    P(`- **[${f.severity}] ${f.kind}**${f.code ? ` from \`${f.code}\`` : ''} ${scrub(f.message)}`);
     if (f.detail !== undefined) {
       P('  ```json');
       P('  ' + scrub(JSON.stringify(f.detail, null, 2)).split('\n').join('\n  '));
       P('  ```');
     }
-    if (f.dir) P(`  evidence: \`findings/${f.dir}/\``);
+    // The directory's name, or a `dir` a finding.json or a forged log carries.
+    if (raw.dir) P(`  evidence: \`findings/${code(raw.dir)}/\``);
   }
 } else {
   P('_No findings recorded (add the failure detail manually)._');
@@ -200,91 +348,114 @@ if (allFindings.length) {
 P('');
 P('## Evidence');
 P('');
-P('- Action log: `actions.jsonl`');
-P('- Screenshots: `screenshots/`');
-if (capturedFindings.length) P('- Findings (screenshot + finding.json + crash markers): `findings/`');
-P('- Driver log: `tauri-driver.log`');
+// The two logs hold the full text this report withholds (docs/agent-harness.md
+// "Not for sharing"); the withheld findings above point at actions.jsonl, so
+// they stay listed for whoever triages the run, labelled (#576 RV18-W23-7).
+P('- Action log: `actions.jsonl` (local triage only, not for sharing: it holds the full text this report withholds)');
+// Images of the app: they show its text and corpus file names, and nothing can
+// fold an image (#576 W33-NF5).
+P('- Screenshots: `screenshots/` (local triage only, not for sharing: they show the app\'s text)');
+if (capturedFindings.length) {
+  P('- Findings: `findings/` (each `finding.json` is shareable; the screenshot and crash-marker copies beside it are not)');
+}
+P('- Driver log: `tauri-driver.log` (local triage only, not for sharing)');
 P('');
 P('## Notes');
 P('');
-P('_Paths above are relative to the session artifact directory. Attach it or the relevant files when filing._');
+P('_Paths above are relative to the session artifact directory. Attach this report and only files docs/agent-harness.md lists as shareable (a `finding.json`, a fuzz trace); not a file marked local triage only, and not the whole directory, which holds corpus copies, screenshots and logs that name private files._');
 P('');
 
 const outPath = path.join(sessionDir, 'report.md');
 fs.writeFileSync(outPath, md.join('\n'));
-process.stdout.write(`wrote ${outPath}\n`);
+process.stdout.write('wrote <sessionDir>/report.md\n');
 
 function describeAction(a) {
   const p = a.params ?? {};
   switch (a.tool) {
     case 'click':
     case 'map_click':
-      return p.testid ? `testid=${mdInline(p.testid)}` : p.selector ? `selector=${mdInline(p.selector)}` : p.lngLat ? `lngLat=${JSON.stringify(p.lngLat)}` : `coords=(${p.x},${p.y})`;
+      // A geographic point is where the cave is: its shape only (#576 W33-NF2).
+      // Screen coordinates stay - they place a pointer, not a cave.
+      return p.testid ? `testid=${shareableTestId(p.testid)}` : p.selector ? `selector=${shareableSelector(p.selector)}` : p.lngLat ? `lngLat=${argShape(p.lngLat)}` : `coords=(${num(p.x)},${num(p.y)})`;
     case 'map_feature_click': {
+      // The ids are integers in the tool's schema, but this reads whatever
+      // actions.jsonl holds: anything else - a forged or hand-edited log - is
+      // given as its shape, so a newline cannot start a heading (#576 W47-NF2).
       const which =
         p.featureType === 'station'
-          ? `station index=${p.stationIndex}`
-          : `shot id=${p.shotId}`;
-      return `${which} in section ${p.sectionId}${p.button === 'right' ? ' (right)' : ''}`;
+          ? `station index=${id(p.stationIndex)}`
+          : `shot id=${id(p.shotId)}`;
+      return `${which} in section ${id(p.sectionId)}${p.button === 'right' ? ' (right)' : ''}`;
     }
     case 'type_text':
-      return `"${mdInline(p.text ?? '', 40)}"${p.testid ? ` into ${mdInline(p.testid)}` : ''}`;
+      // The typed text is data the user would enter: its length only - see argShape.
+      return `${argShape(String(p.text ?? ''))}${p.testid ? ` into ${shareableTestId(p.testid)}` : ''}`;
     case 'hover':
-      return p.testid ? `testid=${mdInline(p.testid)}` : `selector=${mdInline(p.selector)}`;
+      return p.testid ? `testid=${shareableTestId(p.testid)}` : `selector=${shareableSelector(p.selector)}`;
     case 'drag': {
       const end = (kindTestid, kindSelector, x, y) =>
         kindTestid
-          ? `testid=${mdInline(kindTestid)}`
+          ? `testid=${shareableTestId(kindTestid)}`
           : kindSelector
-            ? `selector=${mdInline(kindSelector)}`
-            : `(${x},${y})`;
+            ? `selector=${shareableSelector(kindSelector)}`
+            : `(${num(x)},${num(y)})`;
       const from = end(p.fromTestid, p.fromSelector, p.fromX, p.fromY);
       const to = end(p.toTestid, p.toSelector, p.toX, p.toY);
-      return `${from} -> ${to}${p.button && p.button !== 'left' ? ` (${p.button})` : ''}`;
+      return `${from} -> ${to}${p.button && p.button !== 'left' ? ` (${word(BUTTONS, p.button)})` : ''}`;
     }
     case 'scroll': {
       const target = p.testid
-        ? `testid=${mdInline(p.testid)}`
+        ? `testid=${shareableTestId(p.testid)}`
         : p.selector
-          ? `selector=${mdInline(p.selector)}`
+          ? `selector=${shareableSelector(p.selector)}`
           : 'window';
       // Two modes on one tool: a pixel delta, or scroll-into-view.
       return p.deltaX != null || p.deltaY != null
-        ? `${target} by (${p.deltaX ?? 0},${p.deltaY ?? 0})`
+        ? `${target} by (${num(p.deltaX ?? 0)},${num(p.deltaY ?? 0)})`
         : `${target} into view`;
     }
     case 'select_option':
-      return `${p.testid ? `testid=${mdInline(p.testid)}` : `selector=${mdInline(p.selector)}`} = "${mdInline(p.value)}"`;
+      // The chosen option can be a section or a station: its length only (#576 W33-NF2).
+      return `${p.testid ? `testid=${shareableTestId(p.testid)}` : `selector=${shareableSelector(p.selector)}`} = ${argShape(String(p.value ?? ''))}`;
     case 'file_dialog_answer':
       // The chosen path is redacted to its extension - see redactPath.
       return p.cancel
-        ? `${p.kind} dialog cancelled (trigger ${mdInline(p.triggerTestid)})`
-        : `${p.kind} dialog answered ${redactPath(p.paths ?? p.path)} (trigger ${mdInline(p.triggerTestid)})`;
+        ? `${word(DIALOG_KINDS, p.kind)} dialog cancelled (trigger ${shareableTestId(p.triggerTestid)})`
+        : `${word(DIALOG_KINDS, p.kind)} dialog answered ${redactPath(p.paths ?? p.path)} (trigger ${shareableTestId(p.triggerTestid)})`;
     case 'press_keys':
-      return JSON.stringify(p.keys ?? []);
+      // Named keys stay, typed text is counted - see describeKeys (#576 W39-NF2).
+      return describeKeys(p.keys);
     case 'eval':
     case 'driver_script':
-      return `\`${String(p.script ?? '').slice(0, 60).replace(/\n/g, ' ')}\``;
+      // A script can name what it acts on - a station, a section: its length only (#576 W33-NF2).
+      return `script ${argShape(String(p.script ?? ''))}`;
     case 'seed':
+      // The project's name is the user's; a fixture is a survey file, named by its
+      // extension only - see redactPath (#576 W33-NF2).
       return p.mode === 'basic'
-        ? `basic project "${p.projectName ?? 'harness-project'}"`
-        : `open ${p.mode === 'fractal' ? 'fractal ' : ''}fixture ${p.name ?? '(default)'}`;
+        ? `basic project ${p.projectName == null ? '(default name)' : `named ${argShape(String(p.projectName))}`}`
+        : `open ${p.mode === 'fractal' ? 'fractal ' : ''}fixture ${p.name == null ? '(default)' : redactPath(p.name)}`;
     case 'run_scenario':
-      return `${p.name} (seed=${p.seed ?? 1}${p.iterations != null ? `, iterations=${p.iterations}` : ''})`;
+      return `${code(p.name)} (seed=${num(p.seed ?? 1)}${p.iterations != null ? `, iterations=${num(p.iterations)}` : ''})`;
+    // Argument shapes, not values - see argShape. store_action args are positional.
     case 'ipc':
-      return `${p.command}(${JSON.stringify(p.args ?? {})})`;
-    case 'store_action':
-      return `${p.store}.${p.action}(${JSON.stringify(p.args ?? [])})`;
+      return `${code(p.command)}(${argShape(p.args ?? {})})`;
+    case 'store_action': {
+      const list = p.args ?? [];
+      return `${code(p.store)}.${code(p.action)}(${Array.isArray(list) ? list.map((v) => argShape(v)).join(', ') : argShape(list)})`;
+    }
     case 'map_view':
-      return p.set ? JSON.stringify(p.set) : 'read';
+      // The camera's center is where the cave is: the shape only (#576 W33-NF2).
+      return p.set ? `set ${argShape(p.set)}` : 'read';
     case 'os_grant':
       return 'OS input granted for this session';
     case 'os_click':
-      return `${p.testid ? `testid=${p.testid}` : `screen ${p.x},${p.y}`}${p.button === 'right' ? ' (right)' : ''}${p.double ? ' (double)' : ''}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
+      return `${p.testid ? `testid=${shareableTestId(p.testid)}` : `screen ${num(p.x)},${num(p.y)}`}${p.button === 'right' ? ' (right)' : ''}${p.double ? ' (double)' : ''}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
     case 'os_keys':
-      return `${p.spec}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
+      // Named keys stay, a typed key is counted - see describeChord (#576 RV19b-P6).
+      return `${describeChord(p.spec)}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
     case 'os_screenshot':
-      return `${p.name ?? 'os-shot'} [OS-level, real pixels]`;
+      return `${code(p.name ?? 'os-shot')} [OS-level, real pixels]`;
     default:
       return '';
   }

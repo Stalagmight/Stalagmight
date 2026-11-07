@@ -34,7 +34,7 @@ export const UNPUSHED_ACCENT = 'var(--sh-comment)';
  */
 export async function fetchSpeleoLocalStates(projectIds: string[]): Promise<SpeleoLocalStateMap> {
   if (projectIds.length === 0) return {};
-  const reply = await invokeIpc<SpeleoLocalStateMap | null>(
+  const reply = await invokeIpc(
     'speleodb_local_project_states',
     { projectIds },
     { purpose: 'find which projects have changes only on this computer' },

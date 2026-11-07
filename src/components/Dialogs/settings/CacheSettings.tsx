@@ -19,8 +19,7 @@ const MAX_CACHE_SIZE_MB = 10000;
 /**
  * Format bytes to human-readable string (e.g., "12.5 MB")
  */
-function formatBytes(bytes: number | bigint): string {
-  const value = typeof bytes === 'bigint' ? Number(bytes) : bytes;
+function formatBytes(value: number): string {
   if (value === 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB'];
@@ -93,7 +92,7 @@ export function CacheSettings({
     if (!mountedRef.current) return;
     setIsLoadingStats(true);
     try {
-      const stats = await invokeIpc<CacheStats>('get_cache_stats', undefined, {
+      const stats = await invokeIpc('get_cache_stats', undefined, {
         purpose: 'load tile cache statistics',
       });
       if (mountedRef.current) {
@@ -103,8 +102,8 @@ export function CacheSettings({
       console.error('[CacheSettings] Failed to load cache stats:', error);
       if (mountedRef.current) {
         setCacheStats({
-          total_tiles: 0n,
-          total_bytes: 0n,
+          total_tiles: 0,
+          total_bytes: 0,
           providers: {},
         });
       }
@@ -198,11 +197,11 @@ export function CacheSettings({
             <>
               <div className="flex justify-between">
                 <span className="text-text-secondary">{t('settings.cache.stats.cachedTiles')}</span>
-                <span data-testid="cache-tile-count">{formatNumber(Number(cacheStats.total_tiles))}</span>
+                <span data-testid="cache-tile-count">{formatNumber(cacheStats.total_tiles)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-text-secondary">{t('settings.cache.stats.cacheSize')}</span>
-                <span data-testid="cache-size">{formatBytes(Number(cacheStats.total_bytes))}</span>
+                <span data-testid="cache-size">{formatBytes(cacheStats.total_bytes)}</span>
               </div>
               {Object.entries(cacheStats.providers).length > 0 && (
                 <div className="pt-2 border-t border-border">
@@ -212,7 +211,7 @@ export function CacheSettings({
                       <span className="text-text-secondary capitalize">{provider}:</span>
                       <span>
                         {t('settings.cache.stats.providerTiles', {
-                          tiles: formatNumber(Number(stats.tiles)),
+                          tiles: formatNumber(stats.tiles),
                           size: formatBytes(stats.bytes),
                         })}
                       </span>
@@ -231,7 +230,9 @@ export function CacheSettings({
           <Button
             variant="danger"
             onClick={handleClearCache}
-            disabled={isClearing || (cacheStats?.total_tiles ?? 0n) === 0n}
+            // A plain number, as the JSON invoke() delivers it (#576 C6: the
+            // generated type said bigint, and `=== 0n` never matched).
+            disabled={isClearing || (cacheStats?.total_tiles ?? 0) === 0}
             data-testid="clear-cache-button"
           >
             {isClearing ? t('settings.cache.clear.clearing') : t('settings.cache.clear.button')}

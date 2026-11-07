@@ -1,26 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from '../dataTableEdits';
 import type { Shot } from '../../../types/project';
+import { makeShot } from '../../../test/factories/survey';
 
-const shot = (over: Partial<Shot> = {}): Shot => ({
-  id: 1,
-  azimuth_in: 90,
-  azimuth_out: 90,
-  length: 10,
-  depth_in: 0,
-  depth_out: 1,
-  pitch_in: null,
-  pitch_out: null,
-  left: null,
-  right: null,
-  up: null,
-  down: null,
-  comment: null,
-  kind: 'Normal' as const,
-  marker_index: null,
-  temperature: null,
-  ...over,
-});
+const shot = (over: Partial<Shot> = {}): Shot =>
+  makeShot({ azimuth_in: 90, azimuth_out: 90, depth_out: 1, ...over });
 
 describe('buildShotUpdates', () => {
   it('maps real column keys straight through', () => {
@@ -42,6 +26,17 @@ describe('buildShotUpdates', () => {
     expect(u.azimuth_out).toBeCloseTo(105, 6);
   });
 
+  it('rotates opposite legs from the backend mean, not the unit-vector one (#576 D14)', () => {
+    // Legs 100/280 are a blunder pair whose backend mean is 10 (the tie goes to
+    // in - 90). The unit-vector mean put it at 198.43, so typing 12 into the Avg
+    // cell moved both legs by -186.43 instead of +2.
+    const u = buildShotUpdates(shot({ azimuth_in: 100, azimuth_out: 280 }), [
+      { colKey: AZIMUTH_AVG_KEY, value: 12 },
+    ]);
+    expect(u.azimuth_in).toBeCloseTo(102, 9);
+    expect(u.azimuth_out).toBeCloseTo(282, 9);
+  });
+
   it('skips a non-finite azimuth average', () => {
     expect(buildShotUpdates(shot(), [{ colKey: AZIMUTH_AVG_KEY, value: NaN }])).toEqual({});
   });
@@ -53,6 +48,16 @@ describe('buildShotUpdates', () => {
     ]);
     expect(u.azimuth_in).toBeCloseTo(355, 6);
     expect(u.azimuth_out).toBeCloseTo(15, 6);
+  });
+
+  it('stores due north as 0, not 360, when the typed mean is 0', () => {
+    // circularMeanDegrees(1.1, 1.1) is 1.1000000000000005, so the delta leaves
+    // each leg at about -4.4e-16, which `+ 360` rounded to exactly 360: an
+    // out-of-range bearing the backend flags as a non-ignorable INVALID_AZIMUTH.
+    const u = buildShotUpdates(shot({ azimuth_in: 1.1, azimuth_out: 1.1 }), [
+      { colKey: AZIMUTH_AVG_KEY, value: 0 },
+    ]);
+    expect(u).toEqual({ azimuth_in: 0, azimuth_out: 0 });
   });
 
   it('shifts both pitch legs by the delta when both are present', () => {

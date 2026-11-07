@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+import { listSrcFiles, symlinkProblem } from './lib/src-files.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SOURCE_ROOT = path.join(REPO_ROOT, 'src');
 
 export const INTERACTIVE_TAGS = new Set([
   'a',
@@ -74,8 +74,19 @@ function hasAttribute(node, names) {
   );
 }
 
-function isInteractive(node, tag) {
+export function isInteractive(node, tag) {
   if (INTERACTIVE_TAGS.has(tag)) return true;
+  // Deliberate exemption (#576 E2-D1): a capitalized tag that is NOT in
+  // INTERACTIVE_TAGS is a custom component, and its call sites are not checked
+  // even with a click handler or an interactive role (`<SectionRow onClick>`,
+  // `<Card role="button">`). The gate checks each component's own definition
+  // instead - the JSX that finally reaches the DOM - and every such call site
+  // audited in #576 renders a tagged inner control (ToolButton -> tool-${tool},
+  // SectionRow -> section-row-${id}, ...). Gating call sites would demand a
+  // redundant testId on each, or an allowlist row per wrapper. What this cannot
+  // see - a wrapper spreading props onto an untagged element - is left to review
+  // (docs/TESTING.md, UI component testability). A wrapper that IS a plain
+  // control belongs in INTERACTIVE_TAGS. Pinned by check-test-ids.test.mjs.
   if (tag[0] !== tag[0]?.toLowerCase()) return false;
   const role = literalAttribute(node, ['role']);
   if (role && INTERACTIVE_ROLES.has(role)) return true;
@@ -175,26 +186,23 @@ export function analyzeSource(fileName, sourceText) {
   return findings;
 }
 
-function productionTsxFiles(root) {
-  const files = [];
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    const fullPath = path.join(root, entry.name);
-    if (entry.isDirectory()) files.push(...productionTsxFiles(fullPath));
-    else if (
-      entry.name.endsWith('.tsx') &&
-      !entry.name.includes('.test.') &&
-      !fullPath.includes(`${path.sep}__tests__${path.sep}`)
-    ) {
-      files.push(fullPath);
-    }
-  }
-  return files;
-}
-
-export function scan(root = SOURCE_ROOT) {
-  return productionTsxFiles(root).flatMap((fileName) =>
-    analyzeSource(fileName, fs.readFileSync(fileName, 'utf8')),
-  );
+// Production .tsx under <repoRoot>/src, via the shared lister (#576 E16): the
+// same test/generated exclusions as the other src gates, and a symlink is
+// reported as a finding instead of being followed (it used to be read through).
+export function scan(repoRoot = REPO_ROOT) {
+  const { files, symlinks } = listSrcFiles(repoRoot, { exts: ['.tsx'] });
+  const linkFindings = symlinks.map((link) => ({
+    fileName: path.join(repoRoot, link.rel),
+    line: 0,
+    message: symlinkProblem(link),
+  }));
+  return [
+    ...linkFindings,
+    ...files.flatMap((rel) => {
+      const fileName = path.join(repoRoot, rel);
+      return analyzeSource(fileName, fs.readFileSync(fileName, 'utf8'));
+    }),
+  ];
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

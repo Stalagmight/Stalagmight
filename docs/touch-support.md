@@ -20,7 +20,7 @@ It is not built, run, or tested in CI.
 | `src/hooks/useTouchContextMenu.ts` | `useTouchContextMenu` | Container-level touch path into a right-click-only context menu: on fire it dispatches a synthetic `contextmenu` on whatever the finger landed on |
 | `src/components/common/SpreadsheetGrid/SpreadsheetGrid.tsx` | the `useTouchContextMenu(scrollRef)` call (`:1911`) | Long-press a grid cell, gutter or header -> the grid's own context menu |
 | `src/utils/longPressTouch.ts` | `attachLongPressTouch` | The raw-element long-press machine (500 ms hold, 10 px cancel, swallowed lift), shared by both map layers and the grid |
-| `src/components/Map/SurveyLayer.tsx` | `initializeEventHandlers` (the `attachLongPressTouch` call), gated by `modalInteractionActive` | Long-press the survey canvas -> survey context menu |
+| `src/components/Map/SurveyLayer.ts` | `initializeEventHandlers` (the `attachLongPressTouch` call), gated by `modalInteractionActive` | Long-press the survey canvas -> survey context menu |
 | `src/components/GlobalView/GlobalSurveyLayer.ts` | `initializeEventHandlers` (the `attachLongPressTouch` call) | Long-press the global canvas -> system context menu |
 | `src/components/GlobalView/GlobalViewMap.tsx` | per-marker `touch*` listeners, inline in the marker builder; the handler block at `:376-381` | Long-press a project marker -> marker context menu (its own copy - see Long press). The handler block disables `dragRotate`, `touchPitch` and, since #338, the rotation half of the pinch (`:381`) |
 | `src/components/Dialogs/SectionPreview.tsx` | the handler block at `:281-286` | The third MapLibre surface: same `dragRotate` / `touchPitch` / `disableRotation` set as the other two |
@@ -42,8 +42,9 @@ There is no single rule. Three patterns coexist:
   touch, with `e.pointerType` consulted only where the behavior must differ.
 - **Mouse-only, deliberately.** The custom Ctrl+drag / middle-drag map pan uses
   raw `mousedown`/`mousemove`/`mouseup` capture listeners on the map container
-  (`MapCanvas.tsx:2880-3105`) and its pointer-capture guard explicitly requires
-  `e.pointerType === 'mouse'` (`MapCanvas.tsx:3044`). There is no modifier key on
+  (`useModifierPan.ts`) and its pointer-capture guards explicitly require
+  `e.pointerType === 'mouse'` (`handlePointerDownCapture` / `handlePointerUpCapture`
+  there). There is no modifier key on
   touch, so this is intentional - and since #409 no loss either, because plain
   one-finger drag pans.
 - **Mouse-only, by omission.** Most of the app was never converted. The
@@ -78,7 +79,7 @@ scroll container serves every cell (see `useTouchContextMenu` below).
 |---|---|---|
 | Delay | `delay` option, default 500 ms (`useLongPress.ts:121`) | `LONG_PRESS_MS` = 500 ms |
 | Move cancel | `moveThreshold` option, default 10 px | `MOVE_CANCEL_PX` = 10 px, compared squared |
-| Multi-touch | not checked | armed only at `e.touches.length === 1`, and a second finger cancels a press already pending |
+| Multi-touch | a second finger restarts the hold from that finger (`useLongPress.ts:152`), so the press can still fire - the opposite of `attachLongPressTouch` | armed only at `e.touches.length === 1`, and a second finger cancels a press already pending |
 | Events | pointer events, spread onto an element | raw `touch*` listeners on the element |
 
 The canvas constants used to be inline literals in a state machine each map
@@ -115,7 +116,7 @@ and the user's genuine tap on the menu is well inside 700 ms. A real gesture
 always begins with a `pointerdown` and a compat sequence synthesized from a lift
 never does, so that signal cannot fire ahead of the events the window exists to
 eat. The suppressor is also torn down when the consumer unmounts
-(`useLongPress.ts:200`), since the menu a press opens can take the row
+(`useLongPress.ts:204`), since the menu a press opens can take the row
 underneath it away.
 
 Two details there are load-bearing. The suppressor is armed at the LIFT, not
@@ -223,20 +224,20 @@ treatment minus the box zoom - the global view (`GlobalViewMap.tsx:376-381`, the
 (`SectionPreview.tsx:281-286`, at `:286`). Both were missing that line until
 #338, so a twist on either used to leave the plan sitting at an angle. The survey is a top-down plan,
 so a bearing means nothing here, and a non-zero one would drop the `axisAligned`
-fast path in the hit-test/geometry index (`SurveyLayer.cameraSnapshot`, ~:1315)
+fast path in the hit-test/geometry index (`cameraSnapshot` in `surveyLayer/surveyHitTester.ts`)
 with no way to reset it from the touch UI.
 
 **Custom WebGL renderer.** Touch needs nothing renderer-specific. The survey is
 drawn by the custom WebGL layer, and the stock bulk layers were deleted rather
 than hidden, so hit-testing does not use `queryRenderedFeatures`; it goes through the SoA
 geometry index (`SurveyLayer.hitCandidateSections`, `resolveStationAt` /
-`resolveShotAt`, documented at `SurveyLayer.tsx:1263`). Long-press hit-testing
+`resolveShotAt`, documented in `surveyLayer/surveyHitTester.ts`). Long-press hit-testing
 calls the same `handleContextMenu` as right-click, so it inherits that path for
 free. `GlobalSurveyLayer` likewise resolves via its own `pickSystemAt` index.
 
 **Placement mode** is the one map interaction explicitly written for touch:
 `handlePlacementClick` recomputes the cursor position from the event because
-`pointerdown` precedes any `pointermove` on touch (`MapCanvas.tsx:3949`), and
+`pointerdown` precedes any `pointermove` on touch (`usePlacement.ts`), and
 `PlacementOverlay` shows a Cancel button when `navigator.maxTouchPoints > 0`
 because right-click-to-cancel is unavailable.
 

@@ -2,22 +2,29 @@
 //!
 //! Always compiled, but the real implementation is behind the `telemetry` Cargo
 //! feature flag. When disabled, all public methods are empty no-ops that the
-//! compiler eliminates entirely - zero runtime cost.
+//! compiler eliminates entirely - zero runtime cost. The event-name
+//! [`registry`] is plain data and compiles either way, so its coverage tests run
+//! in a plain `cargo test` too (#576 B7).
 //!
 //! Design:
 //! - Session-level anonymous counters only - no PII
 //! - Opt-in via config (`general.telemetry_enabled`)
 //! - Buffers to disk when offline, retries on next flush
-//! - Periodic flush every 60s (low-frequency-only batches every 10 min) + flush on app close
+//! - Periodic flush every 60s (low-frequency-only batches every 10 min)
+//! - On app close the pending counts go to the disk buffer, never the network,
+//!   so quitting cannot wait on the server; the next launch sends them
+//! - The buffer is drained on the flush thread (at its start, then after
+//!   failures), within [`DRAIN_BUDGET`] per pass, so startup never waits either
 //! - On network failure, retries every 60s until success
 
 use std::collections::HashMap;
 
-#[cfg(feature = "telemetry")]
 pub mod registry;
 
 // ── Feature-gated imports ────────────────────────────────────────────
 
+#[cfg(feature = "telemetry")]
+use stalagmight_models::poison_policy::RecoveringMutex;
 #[cfg(feature = "telemetry")]
 use std::fs;
 #[cfg(feature = "telemetry")]
@@ -25,7 +32,7 @@ use std::io::{Read, Write};
 #[cfg(feature = "telemetry")]
 use std::path::{Path, PathBuf};
 #[cfg(feature = "telemetry")]
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 #[cfg(feature = "telemetry")]
 use std::time::Instant;
 
@@ -43,6 +50,17 @@ const ENDPOINT_URL: &str = env!("TELEMETRY_ENDPOINT");
 
 #[cfg(feature = "telemetry")]
 const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Wall-clock budget for one pass over the disk buffer (#576 B17).
+///
+/// Stopping at the first retryable failure bounds an UNREACHABLE endpoint to
+/// one `HTTP_TIMEOUT`, but a slow endpoint that still answers fails nothing:
+/// up to [`MAX_BUFFERED_FILES`] sends of up to `HTTP_TIMEOUT` each, 500 s. The
+/// pass runs on the flush thread, so this no longer holds up startup; it keeps
+/// that thread from being tied up for minutes, and what is left waits for the
+/// next pass.
+#[cfg(feature = "telemetry")]
+const DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Upper bound on a buffered payload file `send_buffered` will read back. Real
 /// payloads are a few KB of gzipped-JSON source; anything near this is foreign.
@@ -98,7 +116,7 @@ struct TelemetryInner {
 #[cfg(feature = "telemetry")]
 #[derive(Debug, Clone)]
 pub struct TelemetryCollector {
-    inner: Arc<Mutex<TelemetryInner>>,
+    inner: Arc<RecoveringMutex<TelemetryInner>>,
 }
 
 #[cfg(feature = "telemetry")]
@@ -116,18 +134,22 @@ impl TelemetryCollector {
                 Ok("1") | Ok("true")
             );
         Self {
-            inner: Arc::new(Mutex::new(TelemetryInner {
-                events: HashMap::new(),
-                session_id: generate_session_id(),
-                session_start: Instant::now(),
-                enabled,
-            })),
+            inner: Arc::new(RecoveringMutex::new(
+                "telemetry",
+                TelemetryInner {
+                    events: HashMap::new(),
+                    session_id: generate_session_id(),
+                    session_start: Instant::now(),
+                    enabled,
+                },
+            )),
         }
     }
 
     /// Track a single event by name (Rust-originated, always project_seq 0).
     pub fn track(&self, event: &str) {
-        if let Ok(mut inner) = self.inner.lock() {
+        {
+            let mut inner = self.inner.lock();
             if !inner.enabled {
                 return;
             }
@@ -142,7 +164,8 @@ impl TelemetryCollector {
 
     /// Track multiple events at once (batch from frontend), bucketed by project_seq.
     pub fn track_batch(&self, events: &HashMap<String, u64>, project_seq: u32) {
-        if let Ok(mut inner) = self.inner.lock() {
+        {
+            let mut inner = self.inner.lock();
             if !inner.enabled {
                 return;
             }
@@ -155,49 +178,46 @@ impl TelemetryCollector {
 
     /// Set whether telemetry is enabled (user toggled in settings).
     pub fn set_enabled(&self, enabled: bool) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.enabled = enabled;
-        }
+        self.inner.lock().enabled = enabled;
     }
 
     /// Check if telemetry is currently enabled.
     pub fn is_enabled(&self) -> bool {
-        self.inner.lock().map_or(false, |inner| inner.enabled)
+        self.inner.lock().enabled
+    }
+
+    /// Take every pending bucket as a payload, leaving the collector empty.
+    /// Nothing when disabled or idle.
+    fn take_payloads(&self) -> Vec<TelemetryPayload> {
+        let mut inner = self.inner.lock();
+        if !inner.enabled || inner.events.is_empty() {
+            return Vec::new();
+        }
+        let app_version = env!("APP_VERSION").to_string();
+        let os = std::env::consts::OS.to_string();
+        let session_id = inner.session_id.clone();
+        let duration_secs = inner.session_start.elapsed().as_secs();
+
+        inner
+            .events
+            .drain()
+            .map(|(project_seq, events)| TelemetryPayload {
+                v: PAYLOAD_VERSION,
+                app_version: app_version.clone(),
+                os: os.clone(),
+                session_id: session_id.clone(),
+                duration_secs,
+                project_seq,
+                events,
+            })
+            .collect()
     }
 
     /// Flush current events to the telemetry backend as self-describing JSON +
     /// gzip. On network failure, buffers the same payload to disk for retry.
     pub fn flush(&self) {
-        let payloads = {
-            let Ok(mut inner) = self.inner.lock() else {
-                return;
-            };
-            if !inner.enabled || inner.events.is_empty() {
-                return;
-            }
-            let app_version = env!("APP_VERSION").to_string();
-            let os = std::env::consts::OS.to_string();
-            let session_id = inner.session_id.clone();
-            let duration_secs = inner.session_start.elapsed().as_secs();
-
-            let payloads: Vec<TelemetryPayload> = inner
-                .events
-                .drain()
-                .map(|(project_seq, events)| TelemetryPayload {
-                    v: PAYLOAD_VERSION,
-                    app_version: app_version.clone(),
-                    os: os.clone(),
-                    session_id: session_id.clone(),
-                    duration_secs,
-                    project_seq,
-                    events,
-                })
-                .collect();
-            payloads
-        };
-
-        for payload in &payloads {
-            match send_payload(payload) {
+        for payload in &self.take_payloads() {
+            match send_payload(payload, HTTP_TIMEOUT) {
                 Ok(()) => {}
                 Err(e) if e.retryable => {
                     tracing::debug!(error = %e, "telemetry flush failed, buffering for retry");
@@ -212,9 +232,33 @@ impl TelemetryCollector {
         }
     }
 
-    /// Send any payloads buffered from previous failed flushes.
+    /// Write every pending bucket to the disk buffer, with no network call -
+    /// the app-close path (#576 B17).
+    ///
+    /// Sending on close made quitting wait on the server: one POST per
+    /// project bucket, up to `HTTP_TIMEOUT` each, on the main thread. The
+    /// buffer exists for exactly this - deferred sending - and the next launch's
+    /// drain picks it up. Usage counts from a final session are worth
+    /// milliseconds of quit time, not seconds.
+    pub fn buffer_pending(&self) {
+        let Some(dir) = telemetry_buffer_dir() else {
+            return;
+        };
+        self.buffer_pending_to(&dir);
+    }
+
+    /// `buffer_pending` into a directory the caller names, so a test can own
+    /// it (the real one is resolved from the environment; see #510).
+    fn buffer_pending_to(&self, dir: &Path) {
+        for payload in &self.take_payloads() {
+            buffer_payload_in_dir(dir, payload);
+        }
+    }
+
+    /// Send any payloads buffered from previous failed flushes (or left by the
+    /// last app close), for at most [`DRAIN_BUDGET`].
     pub fn send_buffered(&self) {
-        let enabled = self.inner.lock().map_or(false, |inner| inner.enabled);
+        let enabled = self.inner.lock().enabled;
         if !enabled {
             return;
         }
@@ -222,56 +266,78 @@ impl TelemetryCollector {
         let Some(buffer_dir) = telemetry_buffer_dir() else {
             return;
         };
-        if buffer_dir_is_symlink(&buffer_dir) {
-            return;
-        }
+        drain_buffer_dir(&buffer_dir, Instant::now() + DRAIN_BUDGET, send_payload);
+    }
+}
 
-        let entries = match fs::read_dir(&buffer_dir) {
-            Ok(entries) => entries,
-            Err(_) => return,
+/// Send the payloads buffered in `dir` (in directory order) until `deadline`;
+/// return how many were sent.
+///
+/// Each send gets the smaller of `HTTP_TIMEOUT` and the time left, so the
+/// pass as a whole ends by `deadline` however slow the endpoint is - what
+/// stopping on a retryable failure alone could not promise, since a slow
+/// endpoint that still answers never fails (#576 B17). The sender is a
+/// parameter so a test can play that slow endpoint.
+#[cfg(feature = "telemetry")]
+fn drain_buffer_dir(
+    dir: &Path,
+    deadline: Instant,
+    mut send: impl FnMut(&TelemetryPayload, std::time::Duration) -> Result<(), SendError>,
+) -> usize {
+    if buffer_dir_is_symlink(dir) {
+        return 0;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+
+    let mut sent = 0;
+    for entry in entries.flatten() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            tracing::debug!(
+                sent,
+                "telemetry drain budget spent; the rest stays buffered"
+            );
+            break;
+        }
+        let Some(path) = admit_payload_entry(&entry) else {
+            continue;
         };
 
-        for entry in entries.flatten() {
-            let Some(path) = admit_payload_entry(&entry) else {
-                continue;
-            };
+        // `admit_payload_entry` already vouched for a non-empty regular
+        // file within the size bound, so a read or parse failure now means
+        // the bytes are corrupt (e.g. non-UTF-8), not transient - remove
+        // it rather than re-examine it every tick and hold a cap slot
+        // forever. (A zero-length file is a mid-write payload; admit skips
+        // it WITHOUT removing, so it is never seen here.)
+        let payload = read_payload_bounded(&path)
+            .and_then(|content| serde_json::from_str::<TelemetryPayload>(&content).ok());
+        let Some(payload) = payload else {
+            let _ = fs::remove_file(&path);
+            continue;
+        };
 
-            // `admit_payload_entry` already vouched for a non-empty regular
-            // file within the size bound, so a read or parse failure now means
-            // the bytes are corrupt (e.g. non-UTF-8), not transient - remove
-            // it rather than re-examine it every tick and hold a cap slot
-            // forever. (A zero-length file is a mid-write payload; admit skips
-            // it WITHOUT removing, so it is never seen here.)
-            let payload = read_payload_bounded(&path)
-                .and_then(|content| serde_json::from_str::<TelemetryPayload>(&content).ok());
-            let Some(payload) = payload else {
+        match send(&payload, left.min(HTTP_TIMEOUT)) {
+            Ok(()) => {
                 let _ = fs::remove_file(&path);
-                continue;
-            };
-
-            match send_payload(&payload) {
-                Ok(()) => {
-                    let _ = fs::remove_file(&path);
-                }
-                // Stop at the first RETRYABLE failure: the endpoint is
-                // unreachable and the rest of the buffer will time out too, so
-                // draining on bounds the retry to a single `HTTP_TIMEOUT` -
-                // load bearing because `send_buffered` runs synchronously on
-                // the Tauri setup thread (`lib.rs`), where an unbounded drain
-                // of a full buffer would stall app startup by up to
-                // cap x timeout. (Moving that call onto the flush thread is the
-                // fuller fix, #520 follow-up.)
-                Err(e) if e.retryable => break,
-                // A permanently rejected payload fails fast, not on a timeout,
-                // so it does NOT contribute to the stall - and breaking on it
-                // would wedge every later buffered file behind one file that
-                // can never leave. Drop it and drain the rest.
-                Err(_) => {
-                    let _ = fs::remove_file(&path);
-                }
+                sent += 1;
+            }
+            // Stop at the first RETRYABLE failure: the endpoint is
+            // unreachable and the rest of the buffer would time out too.
+            // The deadline above covers the other slow case, an endpoint
+            // that answers, but slowly.
+            Err(e) if e.retryable => break,
+            // A permanently rejected payload fails fast, not on a timeout,
+            // so it does NOT contribute to the stall - and breaking on it
+            // would wedge every later buffered file behind one file that
+            // can never leave. Drop it and drain the rest.
+            Err(_) => {
+                let _ = fs::remove_file(&path);
             }
         }
     }
+    sent
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -294,14 +360,16 @@ impl TelemetryCollector {
         false
     }
     pub fn flush(&self) {}
+    pub fn buffer_pending(&self) {}
     pub fn send_buffered(&self) {}
 }
 
 // ── Helper functions (feature-gated) ─────────────────────────────────
 
-/// Serialize the payload as JSON, gzip it, and POST to the telemetry endpoint.
+/// Serialize the payload as JSON, gzip it, and POST to the telemetry endpoint,
+/// giving up after `timeout`.
 #[cfg(feature = "telemetry")]
-fn send_payload(payload: &TelemetryPayload) -> Result<(), SendError> {
+fn send_payload(payload: &TelemetryPayload, timeout: std::time::Duration) -> Result<(), SendError> {
     // A payload that cannot be serialized or gzipped is broken, not transient -
     // it will never encode, so drop it rather than retry.
     let encode_err = |e: &dyn std::fmt::Display| SendError {
@@ -315,7 +383,7 @@ fn send_payload(payload: &TelemetryPayload) -> Result<(), SendError> {
     let body = encoder.finish().map_err(|e| encode_err(&e))?;
 
     let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(HTTP_TIMEOUT))
+        .timeout_global(Some(timeout))
         .build()
         .new_agent();
 
@@ -680,6 +748,10 @@ fn format_session_id(bytes: &[u8; 16]) -> String {
 /// Start a background thread that periodically flushes telemetry.
 ///
 /// Flush policy:
+/// - At thread start: one budgeted pass over the disk buffer - what the last
+///   session left on close, or failed to send. Here rather than in Tauri's
+///   setup, where it held up startup by up to cap x timeout on a slow
+///   endpoint (#576 B17).
 /// - Every 60s: flush if there are action events to send
 /// - Every 10 min: flush even if only low-frequency events are pending
 ///   (dwell timers, `get_network_status` polling)
@@ -694,7 +766,13 @@ pub fn start_periodic_flush(collector: TelemetryCollector) {
                 const TICK_SECS: u64 = 60;
                 const DWELL_ONLY_TICKS: u64 = 10; // 10 * 60s = 10 min
                 let mut ticks_since_flush: u64 = 0;
-                let mut has_buffered_failure = false;
+
+                collector.send_buffered();
+                // Whatever the budget or a failure left behind is retried on
+                // the next tick, exactly like a failed flush's payload.
+                let mut has_buffered_failure = telemetry_buffer_dir()
+                    .and_then(|d| fs::read_dir(d).ok())
+                    .is_some_and(|mut entries| entries.next().is_some());
 
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(TICK_SECS));
@@ -706,9 +784,7 @@ pub fn start_periodic_flush(collector: TelemetryCollector) {
                     }
 
                     let should_flush = {
-                        let Ok(inner) = collector.inner.lock() else {
-                            continue;
-                        };
+                        let inner = collector.inner.lock();
                         if !inner.enabled || inner.events.is_empty() {
                             false
                         } else {
@@ -756,6 +832,10 @@ pub fn is_feature_enabled() -> bool {
 // ── Tests (only with feature enabled) ────────────────────────────────
 
 #[cfg(all(test, feature = "telemetry"))]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod drain_tests;
+
+#[cfg(all(test, feature = "telemetry"))]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
@@ -768,7 +848,7 @@ mod tests {
         collector.track("command.create_project");
         collector.track("command.save_project");
 
-        let inner = collector.inner.lock().unwrap();
+        let inner = collector.inner.lock();
         let bucket = inner.events.get(&0).expect("project_seq 0 bucket");
         assert_eq!(bucket.get("command.create_project"), Some(&2));
         assert_eq!(bucket.get("command.save_project"), Some(&1));
@@ -779,7 +859,7 @@ mod tests {
         let collector = TelemetryCollector::new(false);
         collector.track("command.create_project");
 
-        let inner = collector.inner.lock().unwrap();
+        let inner = collector.inner.lock();
         assert!(inner.events.is_empty());
     }
 
@@ -795,7 +875,7 @@ mod tests {
         batch.insert("command.undo".to_string(), 5);
         collector.track_batch(&batch, 0);
 
-        let inner = collector.inner.lock().unwrap();
+        let inner = collector.inner.lock();
         let bucket = inner.events.get(&0).expect("project_seq 0 bucket");
         assert_eq!(bucket.get("command.save_project"), Some(&4));
         assert_eq!(bucket.get("command.undo"), Some(&5));
@@ -813,7 +893,7 @@ mod tests {
         batch2.insert("command.create_shot".to_string(), 3);
         collector.track_batch(&batch2, 2);
 
-        let inner = collector.inner.lock().unwrap();
+        let inner = collector.inner.lock();
         assert_eq!(
             inner
                 .events
@@ -834,11 +914,11 @@ mod tests {
     fn set_enabled_toggles_tracking() {
         let collector = TelemetryCollector::new(false);
         collector.track("event.a");
-        assert!(collector.inner.lock().unwrap().events.is_empty());
+        assert!(collector.inner.lock().events.is_empty());
 
         collector.set_enabled(true);
         collector.track("event.a");
-        let inner = collector.inner.lock().unwrap();
+        let inner = collector.inner.lock();
         let bucket = inner.events.get(&0).expect("project_seq 0 bucket");
         assert_eq!(bucket.get("event.a"), Some(&1));
     }
@@ -861,7 +941,7 @@ mod tests {
         // Flush will fail (no real server) but should still clear events
         collector.flush();
 
-        let inner = collector.inner.lock().unwrap();
+        let inner = collector.inner.lock();
         assert!(inner.events.is_empty());
     }
 

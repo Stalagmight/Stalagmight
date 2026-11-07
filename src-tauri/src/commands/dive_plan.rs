@@ -5,33 +5,42 @@
 
 use tauri::Manager;
 
-use crate::core::AppState;
+use crate::core::{AppState, CommandError};
 use crate::models::{DivePlan, DivePlanMeta, DivePlanSnapshot, StationRef, StoredAnchor};
 
 /// List the dive plans stored next to the open project (newest first). Empty when
 /// there is no saved project or no `.plnx` yet.
 #[tauri::command]
-pub async fn list_dive_plans(app_handle: tauri::AppHandle) -> Result<Vec<DivePlanMeta>, String> {
+pub async fn list_dive_plans(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<DivePlanMeta>, CommandError> {
     match tauri::async_runtime::spawn_blocking(move || {
         app_handle.state::<AppState>().inner().list_dive_plans()
     })
     .await
     {
-        Ok(res) => res,
-        Err(e) => Err(format!("list dive plans failed: {e}")),
+        Ok(res) => res.map_err(CommandError::from),
+        Err(e) => Err(CommandError::internal(format!(
+            "list dive plans failed: {e}"
+        ))),
     }
 }
 
 /// Load one plan, degrading stale station refs against the live survey.
 #[tauri::command]
-pub async fn load_dive_plan(app_handle: tauri::AppHandle, id: i64) -> Result<DivePlan, String> {
+pub async fn load_dive_plan(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> Result<DivePlan, CommandError> {
     match tauri::async_runtime::spawn_blocking(move || {
         app_handle.state::<AppState>().inner().load_dive_plan(id)
     })
     .await
     {
-        Ok(res) => res,
-        Err(e) => Err(format!("load dive plan failed: {e}")),
+        Ok(res) => res.map_err(CommandError::from),
+        Err(e) => Err(CommandError::internal(format!(
+            "load dive plan failed: {e}"
+        ))),
     }
 }
 
@@ -43,7 +52,7 @@ pub async fn save_dive_plan(
     id: Option<i64>,
     name: String,
     snapshot: DivePlanSnapshot,
-) -> Result<DivePlanMeta, String> {
+) -> Result<DivePlanMeta, CommandError> {
     match tauri::async_runtime::spawn_blocking(move || {
         app_handle
             .state::<AppState>()
@@ -52,8 +61,10 @@ pub async fn save_dive_plan(
     })
     .await
     {
-        Ok(res) => res,
-        Err(e) => Err(format!("save dive plan failed: {e}")),
+        Ok(res) => res.map_err(CommandError::from),
+        Err(e) => Err(CommandError::internal(format!(
+            "save dive plan failed: {e}"
+        ))),
     }
 }
 
@@ -72,7 +83,7 @@ pub async fn save_dive_plan(
 pub async fn plan_anchors_for_refs(
     app_handle: tauri::AppHandle,
     refs: Vec<StationRef>,
-) -> Result<Vec<Option<StoredAnchor>>, String> {
+) -> Result<Vec<Option<StoredAnchor>>, CommandError> {
     match tauri::async_runtime::spawn_blocking(move || {
         app_handle
             .state::<AppState>()
@@ -81,8 +92,10 @@ pub async fn plan_anchors_for_refs(
     })
     .await
     {
-        Ok(res) => res,
-        Err(e) => Err(format!("plan anchors for refs failed: {e}")),
+        Ok(res) => res.map_err(CommandError::from),
+        Err(e) => Err(CommandError::internal(format!(
+            "plan anchors for refs failed: {e}"
+        ))),
     }
 }
 
@@ -93,7 +106,7 @@ pub async fn plan_anchors_for_refs(
 pub async fn plan_refs_for_anchors(
     app_handle: tauri::AppHandle,
     anchors: Vec<StoredAnchor>,
-) -> Result<Vec<Option<StationRef>>, String> {
+) -> Result<Vec<Option<StationRef>>, CommandError> {
     match tauri::async_runtime::spawn_blocking(move || {
         app_handle
             .state::<AppState>()
@@ -102,20 +115,24 @@ pub async fn plan_refs_for_anchors(
     })
     .await
     {
-        Ok(res) => res,
-        Err(e) => Err(format!("plan refs for anchors failed: {e}")),
+        Ok(res) => res.map_err(CommandError::from),
+        Err(e) => Err(CommandError::internal(format!(
+            "plan refs for anchors failed: {e}"
+        ))),
     }
 }
 
 /// Delete a plan next to the open project.
 #[tauri::command]
-pub async fn delete_dive_plan(app_handle: tauri::AppHandle, id: i64) -> Result<(), String> {
+pub async fn delete_dive_plan(app_handle: tauri::AppHandle, id: i64) -> Result<(), CommandError> {
     match tauri::async_runtime::spawn_blocking(move || {
         app_handle.state::<AppState>().inner().delete_dive_plan(id)
     })
     .await
     {
-        Ok(res) => res,
-        Err(e) => Err(format!("delete dive plan failed: {e}")),
+        Ok(res) => res.map_err(CommandError::from),
+        Err(e) => Err(CommandError::internal(format!(
+            "delete dive plan failed: {e}"
+        ))),
     }
 }

@@ -90,7 +90,7 @@ export function overlayApplyAction(
  * than `Section[].shots[]`: the overlay only needs each shot's stable id and its
  * section's shot count, so touching the lazy `section.shots` getter here would
  * force-materialize every `Shot` object at load whenever the overlay is enabled
- * (~75k objects / ~1.3 GB for 92.stalx). The SoA path stays typed-array-only.
+ * (one object per shot, over a GB on a large project). The SoA path stays typed-array-only.
  */
 export function buildDistanceFeatureState(
   data: Pick<SurveyData, 'sections' | 'shotIds'>,

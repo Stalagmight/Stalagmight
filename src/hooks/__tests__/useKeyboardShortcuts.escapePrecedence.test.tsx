@@ -5,17 +5,11 @@
  * must not swallow Escape while a dialog is open - the dialog's own close wins,
  * and the picker stays armed underneath it.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { useUIStore } from '../../store/uiStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
-
-// useKeyboardShortcuts pulls in telemetry/save helpers that ultimately call the
-// Tauri IPC bridge; stub it so importing the real hook here stays offline.
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
 
 function pressEscape(): void {
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));

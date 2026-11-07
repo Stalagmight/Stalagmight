@@ -6,10 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-}));
+vi.mock('../../utils/telemetry', async () => (await import('../../test/factories/telemetry')).telemetryWith());
 
 import InsertStationDialog from './InsertStationDialog';
 import { useProjectStore } from '../../store/projectStore';

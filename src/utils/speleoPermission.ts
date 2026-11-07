@@ -6,8 +6,12 @@ import type { Permission } from '../types/ipc.generated';
  * READ_ONLY, upload/lock ≥ READ_AND_WRITE, delete/admin = ADMIN. The wire value
  * is the label string, so this map - not lexical comparison - is the source of
  * truth for thresholds.
+ *
+ * `UNKNOWN` (#576 B16) is a tier the server added after this build shipped: it ranks
+ * below every known tier, so every capability check denies it (the fail-safe way).
  */
 const PERMISSION_ORDER: Record<Permission, number> = {
+  UNKNOWN: -1,
   WEB_VIEWER: 0,
   READ_ONLY: 1,
   READ_AND_WRITE: 2,

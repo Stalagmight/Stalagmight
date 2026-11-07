@@ -354,3 +354,53 @@ describe('toast stack - removal', () => {
     expect(useUIStore.getState().toasts).toEqual([]);
   });
 });
+
+describe('toast stack - persistent toasts and the cap (#576 RV4-FE-MF1)', () => {
+  // The lost-WebGL-context "Reload map" toast is persistent and raised ONCE per
+  // loss; if the cap evicted it, nothing would offer the reload again.
+  const persistentLive = () =>
+    useUIStore.getState().toasts.find((t) => t.key === 'persist' && !t.leaving);
+
+  it.each([MAX_VISIBLE_TOASTS, MIN_VISIBLE_TOASTS])(
+    'keeps a persistent toast live through a burst of ordinary ones (capacity %s)',
+    (capacity) => {
+      const { showToast, setToastCapacity } = useUIStore.getState();
+      setToastCapacity(capacity);
+      showToast('reload me', 'persist', 'error', { persistent: true });
+      for (let i = 0; i < capacity + 6; i += 1) showToast(`m${i}`, `k${i}`, 'info');
+
+      expect(persistentLive()?.message).toBe('reload me');
+      // It still counts toward the cap: the ordinary ones fill the rest.
+      expect(live()).toHaveLength(capacity);
+    },
+  );
+
+  it('keeps it when the window shrinks, evicting the ordinary ones instead', () => {
+    const { showToast, setToastCapacity } = useUIStore.getState();
+    showToast('reload me', 'persist', 'error', { persistent: true });
+    for (let i = 0; i < 4; i += 1) showToast(`m${i}`, `k${i}`, 'info');
+
+    setToastCapacity(MIN_VISIBLE_TOASTS);
+
+    expect(live().map((t) => t.message)).toEqual(['reload me', 'm3']);
+  });
+
+  it('survives the hard array ceiling while the leavers pile up unreaped', () => {
+    const { showToast } = useUIStore.getState();
+    showToast('reload me', 'persist', 'error', { persistent: true });
+    for (let i = 0; i < 50; i += 1) showToast(`m${i}`, `k${i}`, 'info');
+
+    expect(persistentLive()).toBeDefined();
+    expect(useUIStore.getState().toasts.length).toBeLessThanOrEqual(MAX_VISIBLE_TOASTS + 4);
+  });
+
+  it('still goes when only persistent toasts are left to evict', () => {
+    const { showToast, setToastCapacity } = useUIStore.getState();
+    setToastCapacity(MIN_VISIBLE_TOASTS);
+    showToast('p0', 'p0', 'error', { persistent: true });
+    showToast('p1', 'p1', 'error', { persistent: true });
+    showToast('p2', 'p2', 'error', { persistent: true });
+
+    expect(live().map((t) => t.message)).toEqual(['p1', 'p2']);
+  });
+});

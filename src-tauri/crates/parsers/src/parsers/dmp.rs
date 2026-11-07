@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use ts_rs::TS;
 
-use crate::parsers::encoding::read_utf8;
+use crate::parsers::encoding::{read_utf8, FileFamily};
 
 // ============================================================================
 // Constants
@@ -123,6 +123,11 @@ impl IntBuffer {
     fn has_remaining(&self, n: usize) -> bool {
         self.cursor + n <= self.data.len()
     }
+
+    /// Bytes not read yet
+    fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.cursor)
+    }
 }
 
 // ============================================================================
@@ -136,6 +141,14 @@ pub struct DmpFile {
     pub version: u8,
     /// Sections in the file
     pub sections: Vec<DmpSection>,
+    /// What could not be read, one sentence each (#576 B13): a section that
+    /// failed to parse, a section that stops at a damaged record, a last section
+    /// with no end-of-section marker. Empty for a clean file. The import wizard
+    /// shows them before import and hands them to `import_sections`, where they
+    /// lead the receipt like the other importers' converter warnings. At most
+    /// [`MAX_DMP_WARNINGS`], then one "and N more" line.
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 /// A section from a DMP file
@@ -212,9 +225,9 @@ impl TryFrom<u8> for DmpShotType {
 /// positive-UP frame to the model's positive-DOWN one by `parse_section`, so a
 /// `DmpShot` that has left the parser is already in the same frame as
 /// `ShotData` and as the `depth_in` / `depth_out` beside it.  That single
-/// normalisation point is what keeps the TypeScript import dialog, the overlap
-/// merge against existing project shots, and [`DmpShot::to_shot_data`] from
-/// disagreeing about the sign.
+/// normalisation point is what keeps the TypeScript import dialog (which copies
+/// the parsed pitch into `ShotData` verbatim) and the overlap merge against
+/// existing project shots from disagreeing about the sign.
 ///
 /// [`compute_section_hash`] runs *before* the flip, over the device's own
 /// bytes, so re-import deduplication still recognises sections imported before
@@ -237,7 +250,10 @@ pub struct DmpShot {
     pub pitch_in: f64,
     /// Pitch when exiting (degrees), model frame: positive is DOWN
     pub pitch_out: f64,
-    /// Left passage dimension (meters), v4+
+    /// Left passage dimension (meters), v4+. A v2/v3 record has no LRUD and
+    /// all four read 0.0 there; the import wizard checks
+    /// `DmpSection::version` and imports them as not measured (#576
+    /// NF-AN4-3), as it does a v2 temperature.
     pub left: f64,
     /// Right passage dimension (meters), v4+
     pub right: f64,
@@ -247,11 +263,11 @@ pub struct DmpShot {
     pub down: f64,
     /// Water temperature (celsius), v3+
     pub temperature: f64,
-    /// Time: hour, v4+
+    /// Time: hour, v3+
     pub hour: u8,
-    /// Time: minute, v4+
+    /// Time: minute, v3+
     pub minute: u8,
-    /// Time: second, v4+
+    /// Time: second, v3+
     pub second: u8,
     /// Physical marker index
     pub marker_index: u8,
@@ -320,18 +336,28 @@ fn compute_section_hash(name: &str, direction: DmpDirection, shots: &[DmpShot]) 
 // Parsing Functions
 // ============================================================================
 
+/// DMP data cut at its end-of-section markers.
+struct SplitSections<'a> {
+    /// Every slice that ends in an end-of-section marker, in file order.
+    sections: Vec<Vec<u8>>,
+    /// Whatever follows the last marker: the trailer a device writes after its
+    /// last section (an ASCII `MN2Over`, or a lone zero byte, in the dumps seen
+    /// so far), or a last section whose marker never arrived.
+    tail: &'a [u8],
+}
+
 /// Split DMP data into sections by end-of-section markers
-fn split_into_sections(data: &[u8], version: u8) -> Vec<Vec<u8>> {
+fn split_into_sections(data: &[u8], version: u8) -> SplitSections<'_> {
     let patterns = end_of_section_patterns(version);
-    if patterns.is_empty() {
-        return vec![];
-    }
+    let pattern_len = patterns.first().map_or(0, Vec::len);
 
-    let pattern_len = patterns[0].len();
-
-    // If data is shorter than pattern, no sections can be found
-    if data.len() < pattern_len {
-        return vec![];
+    // No patterns (unsupported version), or data shorter than a pattern: no
+    // section can end in this data.
+    if pattern_len == 0 || data.len() < pattern_len {
+        return SplitSections {
+            sections: vec![],
+            tail: data,
+        };
     }
 
     let mut sections = Vec::new();
@@ -348,7 +374,28 @@ fn split_into_sections(data: &[u8], version: u8) -> Vec<Vec<u8>> {
         }
     }
 
-    sections
+    SplitSections {
+        sections,
+        tail: &data[start_idx..],
+    }
+}
+
+/// Whether `tail` (the bytes after the last end-of-section marker) begins a
+/// section - a version byte, then the section magic for v3+ - rather than being
+/// a device trailer. A dump cut short inside its last section looks like this;
+/// a clean one never does.
+fn starts_a_section(tail: &[u8], version: u8) -> bool {
+    let Some((&first, rest)) = tail.split_first() else {
+        return false;
+    };
+    if first != version {
+        return false;
+    }
+    if version <= 2 {
+        return true;
+    }
+    let seen = rest.len().min(SECTION_MAGIC.len());
+    rest[..seen] == SECTION_MAGIC[..seen]
 }
 
 /// Parse a shot from buffer based on version
@@ -385,8 +432,12 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
         (0.0, 0.0, 0.0, 0.0)
     };
 
-    // Temperature and time (version >= 4 for time, >= 3 for temp in _generate but >= 4 in from_dmp)
-    let (temperature, hour, minute, second) = if version >= 4 {
+    // Temperature and time (version >= 3). They are the 5 bytes a v3 shot
+    // (21) has over a v2 one (16), and the reference writer emits them from
+    // v3 on (pytool_mnemo_lib `Shot._generate_dmp`, `if version >= 3`). Its
+    // reader gates them on `>= 4` and so takes the temperature's high byte as
+    // a v3 marker; the writer layout is the one that accounts for every byte.
+    let (temperature, hour, minute, second) = if version >= 3 {
         (
             f64::from(buffer.read_int16_be()?) / 10.0,
             buffer.read()?,
@@ -395,6 +446,16 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
         )
     } else {
         (0.0, 0, 0, 0)
+    };
+    // That v3 layout has no device dump behind it, so a v3 time that is not a
+    // time of day reads as absent: 0:00:00, what v2 records and what the
+    // temporal rerank skips, instead of a time that rolls into another day.
+    // The hour and minute bounds are the ones `parse_section` holds the
+    // section's own time to.
+    let (hour, minute, second) = if version == 3 && (hour >= 24 || minute >= 60 || second >= 60) {
+        (0, 0, 0)
+    } else {
+        (hour, minute, second)
     };
 
     // Marker index (all versions)
@@ -430,8 +491,32 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
     })
 }
 
+/// Why reading a section's shots stopped before its bytes ran out.
+enum SectionStop {
+    /// A record failed to parse; the parse error.
+    DamagedRecord(String),
+    /// Fewer bytes than one whole record were left over at the end.
+    PartialRecord,
+}
+
+/// A parsed section, and whether reading it stopped before its bytes ran out
+/// (then the section holds only the shots read before that point).
+struct ParsedSection {
+    section: DmpSection,
+    stopped_early: Option<SectionStop>,
+}
+
+/// Standard shots in `section` - the legs an import creates.
+fn standard_shot_count(section: &DmpSection) -> usize {
+    section
+        .shots
+        .iter()
+        .filter(|shot| shot.shot_type == DmpShotType::Standard)
+        .count()
+}
+
 /// Parse a section from raw section data
-fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
+fn parse_section(data: Vec<u8>) -> Result<ParsedSection> {
     let mut buffer = IntBuffer::new(data);
 
     // Version byte
@@ -485,12 +570,21 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
     // Direction
     let direction = DmpDirection::try_from(buffer.read()?)?;
 
-    // Parse shots
+    // Parse shots. Each one is read from its own `shot_len`-byte record, as
+    // the reference reader does, so the cursor always lands on the next record
+    // boundary whatever `parse_shot` reads out of the current one.
+    //
+    // A record that does not parse ends the section there rather than being
+    // skipped: a DMP section is a chain of legs, so dropping one would hang every
+    // later shot off the wrong station. Where it stopped is returned, so
+    // `parse_dmp` can say so (#576 B13).
     let shot_len = shot_size(version);
     let mut shots = Vec::new();
+    let mut damaged_record = None;
 
     while buffer.has_remaining(shot_len) {
-        match parse_shot(&mut buffer, version) {
+        let mut record = IntBuffer::new(buffer.read_n(shot_len)?);
+        match parse_shot(&mut record, version) {
             Ok(shot) => shots.push(shot),
             Err(e) => {
                 tracing::debug!(
@@ -498,10 +592,16 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
                     purpose = "parse section shots for import",
                     "Stopping shot parsing after terminal or invalid data"
                 );
+                damaged_record = Some(e.to_string());
                 break;
             }
         }
     }
+    let stopped_early = match damaged_record {
+        Some(reason) => Some(SectionStop::DamagedRecord(reason)),
+        None if buffer.remaining() > 0 => Some(SectionStop::PartialRecord),
+        None => None,
+    };
 
     if shots.is_empty() {
         bail!("Section has no shots");
@@ -512,8 +612,8 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
     // The mNemo records pitch positive-UP; every other frame in the codebase
     // (and the `depth_in` / `depth_out` carried beside it) is positive-DOWN.
     // Normalise here, once, so that every consumer of a `DmpShot` sees the
-    // model frame: the import preview table, the overlap merge against existing
-    // project shots, and `to_shot_data` alike.  This runs *after*
+    // model frame: the import preview table, the `ShotData` the wizard sends,
+    // and the overlap merge against existing project shots alike.  This runs *after*
     // `compute_section_hash` deliberately, so the hash keeps being taken over
     // the device's own bytes and re-import deduplication still recognises
     // sections imported before issue #296.
@@ -522,19 +622,37 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
         shot.pitch_out = negate_pitch(shot.pitch_out);
     }
 
-    Ok(DmpSection {
-        version,
-        name,
-        direction,
-        date,
-        shots,
-        content_hash,
+    Ok(ParsedSection {
+        section: DmpSection {
+            version,
+            name,
+            direction,
+            date,
+            shots,
+            content_hash,
+        },
+        stopped_early,
     })
 }
 
-/// Maximum DMP file size (50 MB). DMP files are text-based semicolon-separated
-/// integers and should never be this large for legitimate survey data.
-const MAX_DMP_FILE_SIZE: u64 = 50 * 1024 * 1024;
+/// Most warnings a [`DmpFile`] carries before folding the rest into one line -
+/// the import receipt's own cap, so a file that breaks every section cannot
+/// flood the preview either.
+const MAX_DMP_WARNINGS: usize = 50;
+
+/// A section name as it may appear in a warning: the three bytes are file
+/// content, so control characters and bidi overrides are dropped.
+fn display_name(section: &DmpSection) -> String {
+    crate::models::sanitize_display_text(&section.name, 16)
+}
+
+fn shots_phrase(count: usize) -> String {
+    if count == 1 {
+        "1 shot".to_string()
+    } else {
+        format!("{count} shots")
+    }
+}
 
 /// Parse a DMP file
 ///
@@ -552,21 +670,9 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
         bail!("File is not a DMP file: {}", path.display());
     }
 
-    // Check file size before reading into memory
-    let file_size = std::fs::metadata(path)
-        .context("Failed to read DMP file metadata")?
-        .len();
-    if file_size > MAX_DMP_FILE_SIZE {
-        bail!(
-            "DMP file is too large ({:.1} MB, max {:.0} MB): {}",
-            file_size as f64 / (1024.0 * 1024.0),
-            MAX_DMP_FILE_SIZE as f64 / (1024.0 * 1024.0),
-            path.display()
-        );
-    }
-
-    // Read and parse file content
-    let content = read_utf8(path)?;
+    // Read through the shared capped reader (#576 B27(g)): a regular file of
+    // at most the `.dmp` family's 50 MB, checked before anything is read.
+    let content = read_utf8(path, FileFamily::Dmp)?;
 
     // Parse semicolon-separated integers
     let data: Vec<u8> = content
@@ -599,16 +705,32 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
     );
 
     // Split into sections
-    let section_data = split_into_sections(&data, version);
-    if section_data.is_empty() {
+    let split = split_into_sections(&data, version);
+    // A last section whose end marker never arrived (a download cut short) is
+    // read like any other, up to its last whole record, and said so (#576 B13).
+    let unterminated = starts_a_section(split.tail, version).then(|| split.tail.to_vec());
+    if split.sections.is_empty() && unterminated.is_none() {
         bail!("No sections found in DMP file");
     }
 
-    // Parse each section
+    // Parse each section. Nothing that fails to read is dropped silently: every
+    // loss becomes a warning the wizard shows before import and the receipt
+    // carries after it (#576 B13). Sections are named by their 1-based position
+    // in the file as well as their name, which may be part of what is damaged.
     let mut sections = Vec::new();
-    for (i, section_bytes) in section_data.into_iter().enumerate() {
+    let mut warnings = Vec::new();
+    let candidates = split
+        .sections
+        .into_iter()
+        .map(|bytes| (bytes, true))
+        .chain(unterminated.map(|bytes| (bytes, false)));
+    for (i, (section_bytes, terminated)) in candidates.enumerate() {
+        let position = i + 1;
         match parse_section(section_bytes) {
-            Ok(section) => {
+            Ok(ParsedSection {
+                section,
+                stopped_early,
+            }) => {
                 tracing::debug!(
                     section_index = i,
                     section_name = %section.name,
@@ -616,6 +738,24 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
                     purpose = "build import preview",
                     "Parsed section for import preview"
                 );
+                let name = display_name(&section);
+                let read = shots_phrase(standard_shot_count(&section));
+                if !terminated {
+                    warnings.push(format!(
+                        "Section \"{name}\" (#{position} in the file) has no end-of-section \
+                         marker, so the download may have been cut short: {read} were read, \
+                         the rest of the file was not."
+                    ));
+                } else if let Some(stop) = stopped_early {
+                    let why = match stop {
+                        SectionStop::DamagedRecord(e) => format!("a damaged record ({e})"),
+                        SectionStop::PartialRecord => "an incomplete record".to_string(),
+                    };
+                    warnings.push(format!(
+                        "Section \"{name}\" (#{position} in the file) stops at {why} after \
+                         {read}; the rest of that section was not read."
+                    ));
+                }
                 sections.push(section);
             }
             Err(e) => {
@@ -625,12 +765,33 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
                     reason = %e,
                     "Failed to parse section for import preview"
                 );
+                warnings.push(if terminated {
+                    format!(
+                        "Section #{position} in the file could not be read and was left out: {e}."
+                    )
+                } else {
+                    format!(
+                        "The file ends with a section (#{position} in the file) that has no \
+                         end-of-section marker and could not be read: {e}. The download may \
+                         have been cut short."
+                    )
+                });
             }
         }
     }
-
     if sections.is_empty() {
-        bail!("No valid sections found in DMP file");
+        bail!(
+            "No valid sections found in DMP file. {}",
+            warnings.join(" ")
+        );
+    }
+    if warnings.len() > MAX_DMP_WARNINGS {
+        let more = warnings.len() - MAX_DMP_WARNINGS;
+        warnings.truncate(MAX_DMP_WARNINGS);
+        warnings.push(format!(
+            "... and {more} more warning{}",
+            if more == 1 { "" } else { "s" }
+        ));
     }
 
     tracing::info!(
@@ -640,84 +801,11 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
         "DMP file parsed for import preview"
     );
 
-    Ok(DmpFile { version, sections })
-}
-
-// ============================================================================
-// Conversions to internal types
-// ============================================================================
-
-impl DmpShot {
-    /// Convert to our internal `ShotData` format.
-    ///
-    /// Pitch is copied straight across: `parse_section` already normalised it
-    /// to the model's positive-DOWN frame, so there is nothing left to flip
-    /// here.  See `docs/inclination.md`.
-    ///
-    /// Headings ARE normalised into `[0, 360)` here, matching what the Compass and TML
-    /// importers already do. A DMP heading is a raw `i16 * 0.1`, so the file format admits
-    /// `-3276.8..3276.7`, and `Validator::validate_shot` only REPORTS a reading outside the
-    /// range (as `INVALID_AZIMUTH` - error severity, so not even ignorable, but still not a
-    /// gate) - so an out-of-range pair used to reach the model and persist. Two such
-    /// readings more than 540 degrees apart hit the truncated-`%` wrap that
-    /// `average_azimuth_of` fixed (schema v14 normalises the ones already stored); keeping
-    /// the class out of the model at the seam means an import can never recreate it.
-    /// `DmpShot` itself still holds the verbatim value, so the raw-data view is unaffected.
-    ///
-    /// `normalize_azimuth` leaves a non-finite reading alone: it has no canonical form, and
-    /// `ShotData::all_finite` plus the integrity banner are what surface those.
-    pub fn to_shot_data(&self) -> crate::models::ShotData {
-        crate::models::ShotData {
-            // mNemo dumps carry no shot identity; every shot gets a fresh mint.
-            uuid: None,
-            azimuth_in: crate::models::normalize_azimuth(self.heading_in),
-            azimuth_out: crate::models::normalize_azimuth(self.heading_out),
-            length: self.length,
-            depth_in: self.depth_in,
-            depth_out: self.depth_out,
-            pitch_in: Some(self.pitch_in),
-            pitch_out: Some(self.pitch_out),
-            left: Some(self.left),
-            right: Some(self.right),
-            up: Some(self.up),
-            down: Some(self.down),
-            comment: self.comment.clone(),
-            // DMP has no virtual-shot concept: every leg is a real survey shot.
-            kind: crate::models::ShotKind::Normal,
-            marker_index: Some(u32::from(self.marker_index)),
-            temperature: Some(self.temperature),
-        }
-    }
-}
-
-impl DmpDirection {
-    /// Convert to internal SurveyDirection
-    pub fn to_survey_direction(&self) -> crate::models::SurveyDirection {
-        match self {
-            DmpDirection::In => crate::models::SurveyDirection::In,
-            DmpDirection::Out => crate::models::SurveyDirection::Out,
-        }
-    }
-}
-
-impl DmpSection {
-    /// Convert to our internal SectionData format
-    pub fn to_section_data(&self, color: String) -> crate::models::SectionData {
-        crate::models::SectionData {
-            name: Some(self.name.clone()),
-            surveyor: None,
-            date: Some(self.date.date()),
-            color,
-            direction: Some(self.direction.to_survey_direction()),
-            quality: 1.0,
-            shots: self
-                .shots
-                .iter()
-                .filter(|s| s.shot_type == DmpShotType::Standard)
-                .map(DmpShot::to_shot_data)
-                .collect(),
-        }
-    }
+    Ok(DmpFile {
+        version,
+        sections,
+        warnings,
+    })
 }
 
 // ============================================================================
@@ -730,11 +818,11 @@ impl DmpSection {
     clippy::print_stdout,
     clippy::float_cmp,
     clippy::expect_used,
-    clippy::panic,
-    clippy::print_stderr
+    clippy::panic
 )]
 mod tests {
     use super::*;
+    use crate::models::test_support::require_file;
     use crate::models::ShotKind;
     use chrono::Datelike;
     use std::io::Write;
@@ -896,7 +984,7 @@ mod tests {
         data.extend(vec![0u8; 20]); // padding/header
         data.extend(vec![3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // end marker
 
-        let sections = split_into_sections(&data, 2);
+        let sections = split_into_sections(&data, 2).sections;
         assert_eq!(sections.len(), 1);
     }
 
@@ -1122,6 +1210,8 @@ mod tests {
 
     /// Helper to build v3 format section data as semicolon-separated string
     /// V3 format: version(1) + magic(3) + date(5) + name(3) + direction(1) + shots(21 bytes each) + EOS marker
+    /// A v3 shot, as the reference writer (pytool_mnemo_lib `Shot._generate_dmp`)
+    /// lays it out: type(1) + 7*int16(14) + int16 temperature(2) + hour/minute/second(3) + marker(1)
     fn build_v3_section_data() -> String {
         let mut values: Vec<i32> = Vec::new();
 
@@ -1140,10 +1230,10 @@ mod tests {
         // Direction: 0 = In
         values.push(0);
 
-        // Shot 1 (v3 = 21 bytes: type + 7*int16 + marker)
+        // Shot 1 (v3 = 21 bytes: type + 7*int16 + int16 temp + hour/minute/second + marker)
         // type=2 (standard), heading_in=450 (45.0°), heading_out=460 (46.0°)
         // length=1000 (10.00m), depth_in=200 (2.00m), depth_out=300 (3.00m)
-        // pitch_in=0, pitch_out=0, marker=1
+        // pitch_in=0, pitch_out=0, temperature=185 (18.5 C), time 10:30:15, marker=1
         // int16 BE format: (val >> 8, val & 0xFF)
         values.push(2); // shot type
         values.extend(&[1, 194]); // heading_in 450: (1 << 8) + 194 = 450
@@ -1153,6 +1243,8 @@ mod tests {
         values.extend(&[1, 44]); // depth_out 300: (1 << 8) + 44 = 300
         values.extend(&[0, 0]); // pitch_in 0
         values.extend(&[0, 0]); // pitch_out 0
+        values.extend(&[0, 185]); // temperature 185 (18.5 C)
+        values.extend(&[10, 30, 15]); // hour, minute, second
         values.push(1); // marker_index
 
         // End-of-section marker for v3 (type=3 followed by zeros, total 21 bytes)
@@ -1273,6 +1365,222 @@ mod tests {
         // But basic shot data should be parsed
         assert!(shot.heading_in > 0.0, "Should have heading_in");
         assert!(shot.length > 0.0, "Should have length");
+    }
+
+    /// A v3 section of three Standard shots plus the EOS record, each shot in
+    /// the 21-byte layout `build_v3_section_data` documents. Every shot
+    /// carries the same `temperature_tenths`; headings, lengths, depths,
+    /// minutes and markers differ per shot so a drifted read shows up.
+    fn build_v3_three_shot_section(temperature_tenths: i16) -> String {
+        fn push_i16(v: &mut Vec<i32>, val: i16) {
+            let bytes = val.to_be_bytes(); // [hi, lo]
+            v.push(i32::from(bytes[0]));
+            v.push(i32::from(bytes[1]));
+        }
+
+        let mut values: Vec<i32> = vec![3, 68, 89, 101]; // version + section magic
+        values.extend(&[24, 6, 15, 10, 30]); // date: 2024-06-15 10:30
+        values.extend(&[65, 65, 65]); // name "AAA"
+        values.push(0); // direction In
+
+        for i in 0..3_i16 {
+            values.push(2); // Standard
+            push_i16(&mut values, 450 + 10 * i); // heading_in
+            push_i16(&mut values, 455 + 10 * i); // heading_out
+            push_i16(&mut values, 1000 + 100 * i); // length
+            push_i16(&mut values, 200 + 10 * i); // depth_in
+            push_i16(&mut values, 210 + 10 * i); // depth_out
+            push_i16(&mut values, 0); // pitch_in
+            push_i16(&mut values, 0); // pitch_out
+            push_i16(&mut values, temperature_tenths);
+            values.extend(&[10, 31 + i32::from(i), 5]); // hour, minute, second
+            values.push(i32::from(i) + 1); // marker_index
+        }
+
+        values.push(3); // EOS
+        values.extend(vec![0; 20]);
+
+        values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// Every v3 shot must consume its whole 21-byte record (#576 B29). The parser
+    /// read only 16 bytes of it (temperature and time were gated on v4), so the
+    /// next shot started on the temperature's low byte: at 24.5 C (raw 245)
+    /// that is not a shot type and the section stopped after one shot, and at
+    /// 25.6 C (raw 256) it decoded as a run of garbage shots.
+    fn assert_v3_three_shot_section_parses(temperature_tenths: i16) {
+        let temperature = f64::from(temperature_tenths) / 10.0;
+        let content = build_v3_three_shot_section(temperature_tenths);
+        let (_file, path) = create_dmp_file(&content);
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+
+        let dmp = result.expect("synthetic v3 section must parse");
+        assert_eq!(dmp.sections.len(), 1, "one section expected");
+        let shots = &dmp.sections[0].shots;
+
+        println!(
+            "v3 section at {temperature} C: parsed shots: {} (expected 4: 3 Standard + EndOfSurvey)",
+            shots.len()
+        );
+        for (i, s) in shots.iter().enumerate() {
+            println!(
+                "  shot {i}: type={:?} heading_in={} heading_out={} length={} depth_in={} \
+                 depth_out={} temperature={} time={:02}:{:02}:{:02} marker={}",
+                s.shot_type,
+                s.heading_in,
+                s.heading_out,
+                s.length,
+                s.depth_in,
+                s.depth_out,
+                s.temperature,
+                s.hour,
+                s.minute,
+                s.second,
+                s.marker_index
+            );
+        }
+
+        assert_eq!(
+            shots.len(),
+            4,
+            "parsed shots: {} (expected 4: 3 Standard + EndOfSurvey)",
+            shots.len()
+        );
+        // Expected values are decoded exactly as the parser decodes them.
+        for (i, shot) in (0_u8..).zip(shots.iter().take(3)) {
+            let k = i16::from(i);
+            assert_eq!(shot.shot_type, DmpShotType::Standard, "shot {i} type");
+            assert_eq!(shot.heading_in, f64::from(450 + 10 * k) / 10.0, "shot {i}");
+            assert_eq!(shot.heading_out, f64::from(455 + 10 * k) / 10.0, "shot {i}");
+            assert_eq!(shot.length, f64::from(1000 + 100 * k) / 100.0, "shot {i}");
+            assert_eq!(shot.depth_in, f64::from(200 + 10 * k) / 100.0, "shot {i}");
+            assert_eq!(shot.depth_out, f64::from(210 + 10 * k) / 100.0, "shot {i}");
+            assert_eq!(shot.temperature, temperature, "shot {i} temperature");
+            assert_eq!(
+                (shot.hour, shot.minute, shot.second),
+                (10, 31 + i, 5),
+                "shot {i} time"
+            );
+            assert_eq!(shot.marker_index, i + 1, "shot {i} marker_index");
+        }
+        assert_eq!(shots[3].shot_type, DmpShotType::EndOfSurvey, "last record");
+    }
+
+    #[test]
+    fn v3_shots_at_24_5_c_each_consume_the_whole_21_byte_record() {
+        assert_v3_three_shot_section_parses(245);
+    }
+
+    #[test]
+    fn v3_shots_at_25_6_c_each_consume_the_whole_21_byte_record() {
+        assert_v3_three_shot_section_parses(256);
+    }
+
+    /// The v3 per-shot layout is inferred from the reference writer alone, so
+    /// a v3 hour/minute/second that is not a time of day must read as absent
+    /// (0:00:00, what v2 records and what `deriveDmpTiming` skips) rather than
+    /// feed the temporal rerank a time that rolls into another day.
+    #[test]
+    fn a_v3_shot_time_outside_the_day_is_read_as_absent() {
+        // (hour, minute, second) per Standard shot, and what parsing must give.
+        let cases: [((u8, u8, u8), (u8, u8, u8)); 6] = [
+            ((10, 31, 5), (10, 31, 5)),
+            ((23, 59, 59), (23, 59, 59)),
+            ((24, 0, 0), (0, 0, 0)),
+            ((10, 60, 0), (0, 0, 0)),
+            ((10, 31, 60), (0, 0, 0)),
+            ((200, 7, 9), (0, 0, 0)),
+        ];
+        let mut data: Vec<u8> = vec![3, 68, 89, 101]; // version + section magic
+        data.extend([24, 6, 15, 10, 30]); // date: 2024-06-15 10:30
+        data.extend(b"AAA"); // name
+        data.push(0); // direction In
+        for ((hour, minute, second), _) in cases {
+            data.push(2); // Standard
+            data.extend([1, 194, 1, 204, 3, 232, 0, 200, 1, 44, 0, 0, 0, 0]); // 7 * int16
+            data.extend([0, 185]); // temperature 18.5 C
+            data.extend([hour, minute, second]);
+            data.push(1); // marker_index
+        }
+        data.push(3); // EndOfSurvey
+        data.extend([0; 20]);
+
+        let section = parse_section(data)
+            .expect("synthetic v3 section must parse")
+            .section;
+        let times: Vec<(u8, u8, u8)> = section
+            .shots
+            .iter()
+            .filter(|s| s.shot_type == DmpShotType::Standard)
+            .map(|s| (s.hour, s.minute, s.second))
+            .collect();
+        for (((raw_h, raw_m, raw_s), _), &(h, m, s)) in cases.iter().zip(&times) {
+            let used = if (h, m, s) == (0, 0, 0) {
+                "absent"
+            } else {
+                "used"
+            };
+            println!(
+                "v3 shot raw time {raw_h:02}:{raw_m:02}:{raw_s:02} -> parsed {h:02}:{m:02}:{s:02} ({used})"
+            );
+        }
+        let expected: Vec<(u8, u8, u8)> = cases.iter().map(|&(_, want)| want).collect();
+        assert_eq!(times, expected);
+        // Only the time is dropped; the rest of each shot reads as before.
+        assert!(section
+            .shots
+            .iter()
+            .filter(|s| s.shot_type == DmpShotType::Standard)
+            .all(|s| s.temperature == 18.5 && s.length == 10.0 && s.marker_index == 1));
+    }
+
+    /// The out-of-day clamp above is for v3 only, whose layout has no device
+    /// dump behind it. A v4 shot's time is read as recorded, even when it is not
+    /// a time of day.
+    #[test]
+    fn a_v4_shot_time_outside_the_day_keeps_its_raw_time() {
+        let cases: [(u8, u8, u8); 5] = [
+            (10, 31, 5),
+            (24, 0, 0),
+            (10, 60, 0),
+            (10, 31, 60),
+            (200, 7, 9),
+        ];
+        let mut data: Vec<u8> = vec![4, 68, 89, 101]; // version + section magic
+        data.extend([24, 6, 15, 10, 30]); // date: 2024-06-15 10:30
+        data.extend(b"AAA"); // name
+        data.push(0); // direction In
+        for (hour, minute, second) in cases {
+            data.push(2); // Standard
+            data.extend([1, 194, 1, 204, 3, 232, 0, 200, 1, 44, 0, 0, 0, 0]); // 7 * int16
+            data.extend([0, 100, 0, 150, 0, 200, 0, 80]); // LRUD 4 * int16
+            data.extend([0, 185]); // temperature 18.5 C
+            data.extend([hour, minute, second]);
+            data.push(1); // marker_index
+        }
+        data.push(3); // EndOfSurvey
+        data.extend([0; 28]);
+
+        let section = parse_section(data)
+            .expect("synthetic v4 section must parse")
+            .section;
+        let times: Vec<(u8, u8, u8)> = section
+            .shots
+            .iter()
+            .filter(|s| s.shot_type == DmpShotType::Standard)
+            .map(|s| (s.hour, s.minute, s.second))
+            .collect();
+        for ((raw_h, raw_m, raw_s), &(h, m, s)) in cases.iter().zip(&times) {
+            println!(
+                "v4 shot raw time {raw_h:02}:{raw_m:02}:{raw_s:02} -> parsed {h:02}:{m:02}:{s:02}"
+            );
+        }
+        assert_eq!(times, cases.to_vec());
     }
 
     /// A `.dmp` is semicolon-separated integers, and the version is the first
@@ -1624,13 +1932,13 @@ mod tests {
 
     #[test]
     fn test_split_into_sections_empty_data() {
-        let sections = split_into_sections(&[], 2);
+        let sections = split_into_sections(&[], 2).sections;
         assert!(sections.is_empty());
     }
 
     #[test]
     fn test_split_into_sections_data_shorter_than_pattern() {
-        let sections = split_into_sections(&[2, 0, 0], 2);
+        let sections = split_into_sections(&[2, 0, 0], 2).sections;
         assert!(
             sections.is_empty(),
             "data shorter than pattern = no sections"
@@ -1639,216 +1947,8 @@ mod tests {
 
     #[test]
     fn test_split_into_sections_unsupported_version() {
-        let sections = split_into_sections(&[1, 0, 0, 0, 0], 99);
+        let sections = split_into_sections(&[1, 0, 0, 0, 0], 99).sections;
         assert!(sections.is_empty(), "unsupported version = no patterns");
-    }
-
-    #[test]
-    fn test_dmp_direction_to_survey_direction() {
-        let d_in = DmpDirection::In;
-        let d_out = DmpDirection::Out;
-        assert_eq!(
-            d_in.to_survey_direction(),
-            crate::models::SurveyDirection::In
-        );
-        assert_eq!(
-            d_out.to_survey_direction(),
-            crate::models::SurveyDirection::Out
-        );
-    }
-
-    /// The mNemo records inclination positive-UP, but `depth_in` / `depth_out`
-    /// are positive-DOWN.  Left unreconciled the two disagree, and every
-    /// downstream consumer has to guess which frame a pitch is in.
-    /// `parse_section` normalises the device frame once, so a `DmpShot` that has
-    /// left the parser is already +down and `to_shot_data` must carry that sign
-    /// through untouched: the pitch that comes out has to agree in sign with the
-    /// depth change that came out beside it.  A stray second flip here would
-    /// fail this test.
-    #[test]
-    fn to_shot_data_pitch_agrees_with_depth_geometry() {
-        // Real shot from 9_20260522-naharon.dmp: a 12.50 m slope descending
-        // 3.64 m, which the depth fields already describe as +16.9° in the
-        // +down frame.  The device wrote -16.9° (+up); this is the shot as
-        // `parse_section` hands it on.
-        let dmp_shot = DmpShot {
-            shot_type: DmpShotType::Standard,
-            heading_in: 0.0,
-            heading_out: 0.0,
-            length: 12.50,
-            depth_in: 14.51,
-            depth_out: 18.15,
-            pitch_in: 16.9,
-            pitch_out: 16.9,
-            left: 0.0,
-            right: 0.0,
-            up: 0.0,
-            down: 0.0,
-            temperature: 0.0,
-            hour: 0,
-            minute: 0,
-            second: 0,
-            marker_index: 0,
-            comment: None,
-        };
-
-        let shot_data = dmp_shot.to_shot_data();
-
-        let dz = shot_data.depth_out - shot_data.depth_in;
-        let horizontal = (shot_data.length * shot_data.length - dz * dz)
-            .max(0.0)
-            .sqrt();
-        let implied = crate::models::pitch_from_components(horizontal, dz);
-        assert!(
-            implied > 0.0,
-            "sanity: a descending shot is positive in the +down frame, got {implied}"
-        );
-
-        for (leg, pitch) in [
-            ("in", shot_data.pitch_in.expect("pitch_in")),
-            ("out", shot_data.pitch_out.expect("pitch_out")),
-        ] {
-            assert!(
-                (pitch - implied).abs() < 1.0,
-                "pitch_{leg} {pitch} disagrees with the {implied} implied by depth \
-                 and length; to_shot_data must not re-flip the parser's +down pitch"
-            );
-        }
-    }
-
-    #[test]
-    fn test_dmp_shot_to_shot_data() {
-        let dmp_shot = DmpShot {
-            shot_type: DmpShotType::Standard,
-            heading_in: 90.0,
-            heading_out: 270.0,
-            length: 10.0,
-            depth_in: 2.0,
-            depth_out: 3.0,
-            pitch_in: 5.0,
-            pitch_out: -5.0,
-            left: 1.5,
-            right: 2.0,
-            up: 3.0,
-            down: 0.5,
-            temperature: 18.0,
-            hour: 14,
-            minute: 30,
-            second: 0,
-            marker_index: 7,
-            comment: Some("test".to_string()),
-        };
-
-        let shot_data = dmp_shot.to_shot_data();
-        assert_eq!(shot_data.azimuth_in, 90.0);
-        assert_eq!(shot_data.azimuth_out, 270.0);
-        assert_eq!(shot_data.length, 10.0);
-        assert_eq!(shot_data.depth_in, 2.0);
-        assert_eq!(shot_data.depth_out, 3.0);
-        // Pitch is copied straight across: `parse_section` already normalised
-        // the device's +up reading, so this boundary must not flip it again.
-        assert_eq!(shot_data.pitch_in, Some(5.0));
-        assert_eq!(shot_data.pitch_out, Some(-5.0));
-        assert_eq!(shot_data.left, Some(1.5));
-        assert_eq!(shot_data.right, Some(2.0));
-        assert_eq!(shot_data.up, Some(3.0));
-        assert_eq!(shot_data.down, Some(0.5));
-        assert_eq!(shot_data.temperature, Some(18.0));
-        assert_eq!(shot_data.marker_index, Some(7));
-        assert_eq!(shot_data.comment.as_deref(), Some("test"));
-        assert_eq!(shot_data.kind, ShotKind::Normal);
-    }
-
-    #[test]
-    fn test_dmp_section_to_section_data_filters_non_standard_shots() {
-        let shots = vec![
-            DmpShot {
-                shot_type: DmpShotType::CsA,
-                heading_in: 0.0,
-                heading_out: 0.0,
-                length: 1.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                pitch_in: 0.0,
-                pitch_out: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                temperature: 0.0,
-                hour: 0,
-                minute: 0,
-                second: 0,
-                marker_index: 0,
-                comment: None,
-            },
-            DmpShot {
-                shot_type: DmpShotType::Standard,
-                heading_in: 90.0,
-                heading_out: 270.0,
-                length: 5.0,
-                depth_in: 0.0,
-                depth_out: 1.0,
-                pitch_in: 0.0,
-                pitch_out: 0.0,
-                left: 1.0,
-                right: 1.0,
-                up: 2.0,
-                down: 0.5,
-                temperature: 18.0,
-                hour: 10,
-                minute: 30,
-                second: 0,
-                marker_index: 1,
-                comment: None,
-            },
-            DmpShot {
-                shot_type: DmpShotType::EndOfSurvey,
-                heading_in: 0.0,
-                heading_out: 0.0,
-                length: 0.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                pitch_in: 0.0,
-                pitch_out: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                temperature: 0.0,
-                hour: 0,
-                minute: 0,
-                second: 0,
-                marker_index: 0,
-                comment: None,
-            },
-        ];
-        let hash = compute_section_hash("TST", DmpDirection::Out, &shots);
-        let section = DmpSection {
-            version: 4,
-            name: "TST".to_string(),
-            direction: DmpDirection::Out,
-            date: NaiveDate::from_ymd_opt(2024, 6, 15)
-                .unwrap()
-                .and_hms_opt(10, 30, 0)
-                .unwrap(),
-            shots,
-            content_hash: hash,
-        };
-
-        let section_data = section.to_section_data("#ff0000".to_string());
-        // Only Standard shots should be included
-        assert_eq!(
-            section_data.shots.len(),
-            1,
-            "only Standard shots should be included"
-        );
-        assert_eq!(section_data.shots[0].length, 5.0);
-        assert_eq!(section_data.name.as_deref(), Some("TST"));
-        assert_eq!(
-            section_data.direction,
-            Some(crate::models::SurveyDirection::Out)
-        );
     }
 
     #[test]
@@ -1877,71 +1977,6 @@ mod tests {
         // Invalid version has no patterns
         let invalid = end_of_section_patterns(99);
         assert!(invalid.is_empty());
-    }
-
-    #[test]
-    fn test_section_data_filters_non_standard_shots_via_to_section_data() {
-        // A DmpSection with only EOS/CsA shots should produce empty shot list in SectionData
-        let shots = vec![
-            DmpShot {
-                shot_type: DmpShotType::EndOfSurvey,
-                heading_in: 0.0,
-                heading_out: 0.0,
-                length: 0.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                pitch_in: 0.0,
-                pitch_out: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                temperature: 0.0,
-                hour: 0,
-                minute: 0,
-                second: 0,
-                marker_index: 0,
-                comment: None,
-            },
-            DmpShot {
-                shot_type: DmpShotType::CsA,
-                heading_in: 0.0,
-                heading_out: 0.0,
-                length: 1.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                pitch_in: 0.0,
-                pitch_out: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                temperature: 0.0,
-                hour: 0,
-                minute: 0,
-                second: 0,
-                marker_index: 0,
-                comment: None,
-            },
-        ];
-        let hash = compute_section_hash("TST", DmpDirection::In, &shots);
-        let section = DmpSection {
-            version: 3,
-            name: "TST".to_string(),
-            direction: DmpDirection::In,
-            date: NaiveDate::from_ymd_opt(2024, 6, 15)
-                .unwrap()
-                .and_hms_opt(10, 30, 0)
-                .unwrap(),
-            shots,
-            content_hash: hash,
-        };
-
-        let section_data = section.to_section_data("#ff0000".to_string());
-        assert!(
-            section_data.shots.is_empty(),
-            "only non-Standard shots → empty shot list"
-        );
     }
 
     // ========================================================================
@@ -2085,13 +2120,38 @@ mod tests {
     }
 
     // ========================================================================
-    // kb5.dmp regression tests (skip by default - requires fixture file)
+    // kb5.dmp regression tests. The fixture is committed (e2e/fixtures/kb5.dmp),
+    // so these run in every `cargo test`.
+
+    /// The `ShotData` these regression tests feed the matcher, built exactly as
+    /// the deleted `DmpShot::to_shot_data` did (#576 B24), so their inputs are
+    /// unchanged: headings wrapped into `[0, 360)` (the core import gate does
+    /// that now), pitch as parsed, LRUD/temperature/marker as read.
+    fn kb5_shot_data(shot: &DmpShot) -> crate::models::ShotData {
+        crate::models::ShotData {
+            uuid: None,
+            azimuth_in: crate::models::normalize_azimuth(shot.heading_in),
+            azimuth_out: crate::models::normalize_azimuth(shot.heading_out),
+            length: shot.length,
+            depth_in: shot.depth_in,
+            depth_out: shot.depth_out,
+            pitch_in: Some(shot.pitch_in),
+            pitch_out: Some(shot.pitch_out),
+            left: Some(shot.left),
+            right: Some(shot.right),
+            up: Some(shot.up),
+            down: Some(shot.down),
+            comment: shot.comment.clone(),
+            kind: ShotKind::Normal,
+            marker_index: Some(u32::from(shot.marker_index)),
+            temperature: Some(shot.temperature),
+        }
+    }
     // ========================================================================
 
     /// Parse kb5.dmp and validate section structure, shot counts, and key shot data.
-    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_parse_regression -- --ignored --nocapture
+    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_parse_regression -- --nocapture
     #[test]
-    #[ignore]
     fn kb5_parse_regression() {
         let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/kb5.dmp");
         assert!(
@@ -2217,13 +2277,30 @@ mod tests {
 
     /// Run cross-section suggestions on kb5.dmp sections (with 002 as existing)
     /// and validate the overlap detection results.
-    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_suggestions_regression -- --ignored --nocapture
+    ///
+    /// Re-blessed for #576 NF-KB5-ROT (decision E13-D3): the 2026-06-11
+    /// placement tuning removed the two-shot overlaps of 001's back and 004's
+    /// back against existing 002 on purpose, and the test was skipped at the time,
+    /// so nothing noticed; it now pins the stricter outcome. Measured by reverting
+    /// each tuning step at the tip (#576 RV5-RL-2), more than one cutoff rejects
+    /// each, so a suggestion reappearing there means several loosened at once:
+    ///
+    /// - 001 -> 002 (002 station 182, reverse) is refused by each of three steps on
+    ///   its own: the depth cutoff 0.50 -> 0.30 m (5570de8d6; the second shot's
+    ///   depth differs by 0.47 m), the length cutoff's floor 2.0 -> 0.4 m
+    ///   (d93f93b2; the second shot's length differs by 1.71 m), and the
+    ///   shallow-crossing veto (9a4889dfe / 14c412b8e; every merge offset fails
+    ///   it). Only with all three reverted does it come back.
+    /// - 004 -> 002 (002 station 257, forward) is refused by the depth cutoff and
+    ///   by the length floor, each on its own; the crossing veto passes it.
+    ///
+    /// (The re-bless first credited d93f93b2 alone; restoring that cutoff by itself
+    /// brings neither back.)
+    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_suggestions_regression -- --nocapture
     #[test]
-    #[ignore]
     fn kb5_suggestions_regression() {
         use crate::models::placement_suggest::{
-            suggest_all_placements, ExistingSection, ImportSectionForSuggestion, MatchDirection,
-            TargetType,
+            suggest_all_placements, ExistingSection, ImportSectionForSuggestion, TargetType,
         };
         use crate::models::shot::{Shot, ShotKind};
 
@@ -2283,7 +2360,7 @@ mod tests {
                     .shots
                     .iter()
                     .filter(|sh| sh.shot_type == DmpShotType::Standard)
-                    .map(DmpShot::to_shot_data)
+                    .map(kb5_shot_data)
                     .collect(),
                 // The mNemo measures magnetic and declares no declination.
                 azimuth_reference: Some(stalagmight_models::AzimuthReference::magnetic(
@@ -2319,26 +2396,19 @@ mod tests {
         // 1. import=4(005) impStn=7 → target=importing:0(001) exStn=25 matched=2 dir=forward
         // 2. import=3(004) impStn=0 → target=importing:0(001) exStn=28 matched=2 dir=reverse
         // 3. import=2(003) impStn=0 → target=importing:0(001) exStn=27 matched=2 dir=forward
-        // 4. import=0(001) impStn=107 → target=existing:0(002) exStn=182 matched=2 dir=reverse
-
-        // Verify the import→existing suggestion exists: 001 → 002
+        // Before the 2026-06-11 tuning there was a fourth, import=0(001)
+        // impStn=107 → target=existing:0(002) exStn=182 matched=2 dir=reverse;
+        // the depth cutoff, the length floor and the crossing veto each refuse it
+        // now (see the doc comment).
         let s001_to_002 = suggestions.iter().find(|s| {
             s.import_section_index == 0
                 && s.target_type == TargetType::Existing
                 && s.existing_section_id == Some(0)
         });
         assert!(
-            s001_to_002.is_some(),
-            "should find 001→002 existing suggestion"
+            s001_to_002.is_none(),
+            "001 has no placement onto existing 002 under the tuned cutoffs, got {s001_to_002:?}"
         );
-        let s = s001_to_002.unwrap();
-        assert_eq!(
-            s.import_station_index, 107,
-            "001 connects at its last station"
-        );
-        assert_eq!(s.existing_station_index, 182, "connects to 002 station 182");
-        assert_eq!(s.matched_shots, 2);
-        assert_eq!(s.direction, MatchDirection::Reverse);
 
         // Verify import→import suggestions exist
         // 005 → 001
@@ -2401,8 +2471,9 @@ mod tests {
             "003 connects to 001 station 27"
         );
 
-        // Verify section 004 also has an overlap against existing 002
-        // (This was the source of the double-treatment bug)
+        // Section 004's back used to overlap existing 002 too (two shots at 002
+        // station 257 - the source of the double-treatment bug); under the
+        // tuned depth and length cutoffs it is not offered either.
         let s004_to_existing = suggestions.iter().find(
             |s| {
                 s.import_section_index == 3
@@ -2410,13 +2481,10 @@ mod tests {
                     && s.import_station_index == 4
             }, // back of 004
         );
-        assert!(s004_to_existing.is_some(),
-            "section 004 should have a back-end overlap with existing 002 (double-treatment regression)");
-        let s = s004_to_existing.unwrap();
-        assert_eq!(s.matched_shots, 2, "004→002 overlap should be 2 shots");
-        assert_eq!(
-            s.existing_station_index, 257,
-            "004 back connects to 002 station 257"
+        assert!(
+            s004_to_existing.is_none(),
+            "004's back has no placement onto existing 002 under the tuned cutoffs, got \
+             {s004_to_existing:?}"
         );
     }
 
@@ -2432,9 +2500,16 @@ mod tests {
     /// - treatedShots guard: a shot already treated by a prior suggestion is skipped
     /// - Suggestions targeting importing:1 (section 002) are skipped (002 is existing, not imported)
     ///
-    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_overlap_treatment_regression -- --ignored --nocapture
+    ///
+    /// Re-blessed for #576 NF-KB5-ROT (decision E13-D3): since the 2026-06-11
+    /// tuning there is no 001→002 suggestion (the depth cutoff, the length floor
+    /// and the crossing veto each refuse it - see `kb5_suggestions_regression`),
+    /// so nothing deletes 001's two overlap shots and 001 keeps all 107. Nor is
+    /// there a 004→002 one, so the treated-shots guard is no longer driven
+    /// through an import-to-import plus import-to-existing overlap on the same
+    /// shots (the double-treatment case) by any kb5 test.
+    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_overlap_treatment_regression -- --nocapture
     #[test]
-    #[ignore]
     fn kb5_overlap_treatment_regression() {
         use crate::models::placement_suggest::{
             suggest_all_placements, CrossSectionSuggestion, ExistingSection,
@@ -2505,7 +2580,7 @@ mod tests {
                     .shots
                     .iter()
                     .filter(|sh| sh.shot_type == DmpShotType::Standard)
-                    .map(DmpShot::to_shot_data)
+                    .map(kb5_shot_data)
                     .collect(),
                 // The mNemo measures magnetic and declares no declination.
                 azimuth_reference: Some(stalagmight_models::AzimuthReference::magnetic(
@@ -2628,8 +2703,8 @@ mod tests {
         );
 
         assert_eq!(
-            alive_001, 105,
-            "001: 107 raw - 2 deleted (confirmed import-to-existing with 002) = 105"
+            alive_001, 107,
+            "001: 107 raw, nothing deleted - no import-to-existing placement with 002 is offered"
         );
         assert_eq!(
             alive_005, 5,
@@ -2678,29 +2753,20 @@ mod tests {
             "004 attaches to 001 station 28"
         );
 
-        // 001 connects to existing 002 at station 182
-        let s001 = suggestions
-            .iter()
-            .find(|s| {
-                s.import_section_index == 0
-                    && s.target_type == TargetType::Existing
-                    && s.existing_section_id == Some(0)
-            })
-            .expect("001 should have an existing suggestion to 002");
-        assert_eq!(
-            s001.import_station_index, 107,
-            "001 connects at its back (station 107)"
-        );
-        assert_eq!(
-            s001.existing_station_index, 182,
-            "001 attaches to 002 station 182"
-        );
+        // 001 no longer gets a placement onto existing 002 (it used to attach at
+        // its back, station 107, to 002 station 182).
+        let s001 = suggestions.iter().find(|s| {
+            s.import_section_index == 0
+                && s.target_type == TargetType::Existing
+                && s.existing_section_id == Some(0)
+        });
+        assert!(s001.is_none(), "no 001→002 suggestion, got {s001:?}");
 
-        // Overlap shot raw data for 001→002 connection.
-        // Import overlap shots 105, 106 are deleted from 001.
-        // Target shots 180, 181 on existing section 002 get interpolated values.
-        // Post-import interpolated values are verified in the integration test
-        // kb5_import_overlap_interpolation_integration (core/state/tests.rs).
+        // Overlap shot raw data for the 001→002 connection a user places by hand:
+        // import overlap shots 105, 106 of 001 and target shots 180, 181 of
+        // existing section 002. The integration test
+        // kb5_import_overlap_interpolation_integration (core/state/tests.rs)
+        // imports that manual placement and checks the interpolated values.
         let std_001: Vec<_> = dmp.sections[0]
             .shots
             .iter()
@@ -2945,12 +3011,13 @@ mod tests {
         assert_eq!(shot.heading_out, 359.0);
     }
 
-    /// End-to-end: pitch magnitude survives to ShotData, negated into the
-    /// model's +down frame.  The device's negative (descending) readings come
-    /// out positive, matching the depth increase on the same shot, and the flip
-    /// happens exactly once: `DmpShot` and `ShotData` agree.
+    /// End-to-end through the file reader: pitch magnitude survives, negated
+    /// into the model's +down frame.  The device's negative (descending)
+    /// readings come out positive, matching the depth increase on the same
+    /// shot.  The import wizard copies this parsed pitch into `ShotData`
+    /// verbatim (`editableShotToShotData`), so the flip happens exactly once.
     #[test]
-    fn test_negative_device_pitch_through_to_shot_data() {
+    fn test_negative_device_pitch_leaves_the_parser_positive_down() {
         let content = build_v4_shot_section(
             *b"E2E", 900, 910, 500, 100, 150, -200, // pitch_in -20.0° (device, +up)
             -350, // pitch_out -35.0° (device, +up)
@@ -2959,16 +3026,10 @@ mod tests {
         let dmp = parse_dmp(&path).expect("should parse");
         std::fs::remove_file(&path).ok();
 
-        // The parser is where the device frame is normalised...
+        // The parser is where the device frame is normalised.
         let shot = &dmp.sections[0].shots[0];
         assert_eq!(shot.pitch_in, 20.0, "DmpShot leaves the parser in +down");
         assert_eq!(shot.pitch_out, 35.0, "DmpShot leaves the parser in +down");
-
-        // ...and the conversion boundary passes it through unchanged.
-        let section_data = dmp.sections[0].to_section_data(String::new());
-        let shot_data = &section_data.shots[0];
-        assert_eq!(shot_data.pitch_in, Some(20.0), "ShotData pitch_in");
-        assert_eq!(shot_data.pitch_out, Some(35.0), "ShotData pitch_out");
     }
 
     /// Cross-validate CaveChef's parser against known values from pytool_mnemo_lib's
@@ -2977,10 +3038,7 @@ mod tests {
     fn test_parse_v5_fixture_pitch_values() {
         let test_file =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
-        if !test_file.exists() {
-            eprintln!("Skipping: fixture not found at {}", test_file.display());
-            return;
-        }
+        let test_file = require_file(test_file);
 
         let dmp = parse_dmp(&test_file).expect("should parse v5 fixture");
 
@@ -3013,10 +3071,7 @@ mod tests {
     fn section_hash_is_unchanged_by_the_pitch_normalisation() {
         let test_file =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
-        if !test_file.exists() {
-            eprintln!("Skipping: fixture not found at {}", test_file.display());
-            return;
-        }
+        let test_file = require_file(test_file);
 
         let dmp = parse_dmp(&test_file).expect("should parse v5 fixture");
         let s0 = &dmp.sections[0];
@@ -3042,10 +3097,7 @@ mod tests {
     fn test_parse_v2_fixture_pitch_values() {
         let test_file =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v2.dmp");
-        if !test_file.exists() {
-            eprintln!("Skipping: fixture not found at {}", test_file.display());
-            return;
-        }
+        let test_file = require_file(test_file);
 
         let dmp = parse_dmp(&test_file).expect("should parse v2 fixture");
 
@@ -3089,10 +3141,7 @@ mod tests {
             let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../../e2e/fixtures")
                 .join(fixture);
-            if !test_file.exists() {
-                eprintln!("Skipping: fixture not found at {}", test_file.display());
-                continue;
-            }
+            let test_file = require_file(test_file);
 
             let dmp = parse_dmp(&test_file).expect("should parse fixture");
             for (si, section) in dmp.sections.iter().enumerate() {
@@ -3137,57 +3186,277 @@ mod tests {
             "should reconstruct -17"
         );
     }
-    /// #24: a DMP heading is a raw `i16 * 0.1`, so the format admits `-3276.8..3276.7`,
-    /// and validation only WARNS about an out-of-range reading - so an out-of-range pair
-    /// used to reach the model and persist. Two readings more than 540 degrees apart hit
-    /// the truncated-`%` wrap `average_azimuth_of` fixed, so the conversion normalises
-    /// them (as the Compass and TML importers already did). `DmpShot` keeps the verbatim
-    /// value for the raw-data view.
+
+    // ========================================================================
+    // #576 B13: what the parser could not read is reported, not dropped
+    // ========================================================================
+
+    /// A v5 section header: version, section magic, 2025-01-15 09:00, name,
+    /// direction In.
+    fn v5_header(name: &[u8; 3]) -> Vec<u8> {
+        let mut bytes = vec![5, 68, 89, 101, 25, 1, 15, 9, 0];
+        bytes.extend_from_slice(name);
+        bytes.push(0);
+        bytes
+    }
+
+    /// One 35-byte v5 record as the device lays it out: start magic, type,
+    /// seven core i16s, LRUD, temperature, h/m/s, marker, end magic.
+    fn v5_record(shot_type: u8, heading_tenths: i16, length_cm: i16) -> Vec<u8> {
+        let mut bytes = SHOT_START_MAGIC.to_vec();
+        bytes.push(shot_type);
+        for value in [
+            heading_tenths,
+            heading_tenths,
+            length_cm,
+            500,
+            520,
+            -30,
+            -30,
+        ] {
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+        for value in [100i16, 120, 80, 60, 245] {
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+        bytes.extend_from_slice(&[10, 30, 0, 1]);
+        bytes.extend_from_slice(&SHOT_END_MAGIC);
+        assert_eq!(bytes.len(), shot_size(5));
+        bytes
+    }
+
+    fn v5_shot(heading_tenths: i16) -> Vec<u8> {
+        v5_record(2, heading_tenths, 500)
+    }
+
+    /// The normal v5 end-of-section record.
+    fn v5_end_marker() -> Vec<u8> {
+        let mut bytes = vec![57, 67, 77, 3];
+        bytes.extend(vec![0u8; 28]);
+        bytes.extend_from_slice(&[95, 25, 35]);
+        bytes
+    }
+
+    /// Write `bytes` as a `.dmp` (semicolon-separated integers) and parse it.
+    fn parse_bytes(bytes: &[u8]) -> Result<DmpFile> {
+        let content = bytes
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(";");
+        let (_file, path) = create_dmp_file(&content);
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+        result
+    }
+
+    fn standard_counts(dmp: &DmpFile) -> Vec<(String, usize)> {
+        dmp.sections
+            .iter()
+            .map(|s| {
+                let standard = s
+                    .shots
+                    .iter()
+                    .filter(|shot| shot.shot_type == DmpShotType::Standard)
+                    .count();
+                (s.name.clone(), standard)
+            })
+            .collect()
+    }
+
+    /// Section AAA is whole; section BBB has three shots and then the dump
+    /// stops inside its fourth record - no end-of-section marker after it.
+    fn cut_short_dump() -> Vec<u8> {
+        let mut bytes = v5_header(b"AAA");
+        bytes.extend(v5_shot(900));
+        bytes.extend(v5_shot(910));
+        bytes.extend(v5_end_marker());
+        bytes.extend(v5_header(b"BBB"));
+        bytes.extend(v5_shot(1800));
+        bytes.extend(v5_shot(1810));
+        bytes.extend(v5_shot(1820));
+        bytes.extend(v5_shot(1830).iter().take(20));
+        bytes
+    }
+
+    /// Section AAA: two shots, then a record whose shot type (9) does not
+    /// exist, then one more shot, then the end marker.
+    fn damaged_record_dump() -> Vec<u8> {
+        let mut bytes = v5_header(b"AAA");
+        bytes.extend(v5_shot(900));
+        bytes.extend(v5_shot(910));
+        bytes.extend(v5_record(9, 920, 500));
+        bytes.extend(v5_shot(930));
+        bytes.extend(v5_end_marker());
+        bytes
+    }
+
+    /// Three sections; the second's header says month 13.
+    fn unreadable_section_dump() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for (name, month) in [(b"AAA", 1u8), (b"BBB", 13), (b"CCC", 1)] {
+            let mut header = v5_header(name);
+            header[5] = month;
+            bytes.extend(header);
+            bytes.extend(v5_shot(900));
+            bytes.extend(v5_end_marker());
+        }
+        bytes
+    }
+
+    /// A dump cut short inside its last section: the section is read up to its
+    /// last whole record and imported, and the file says so. A v5 record
+    /// carries start and end magic, so a record torn mid-way (or whole-length
+    /// but with a broken end magic) is never read as a shot.
     #[test]
-    fn to_shot_data_normalises_out_of_range_headings_without_moving_the_bearing() {
-        let mut shot = DmpShot {
-            shot_type: DmpShotType::Standard,
-            heading_in: 600.0,
-            heading_out: 0.0,
-            length: 10.0,
-            depth_in: 0.0,
-            depth_out: 0.0,
-            pitch_in: 0.0,
-            pitch_out: 0.0,
-            left: 1.0,
-            right: 1.0,
-            up: 1.0,
-            down: 1.0,
-            temperature: 18.0,
-            hour: 0,
-            minute: 0,
-            second: 0,
-            marker_index: 0,
-            comment: None,
-        };
-        let data = shot.to_shot_data();
-        assert_eq!(shot.heading_in, 600.0, "the raw record stays verbatim");
-        assert!((data.azimuth_in - 240.0).abs() < 1e-9);
-        assert!((data.azimuth_out - 0.0).abs() < 1e-9);
-        // Normalising is a no-op for geometry: the pair walks the same bearing either way
-        // (600 and 240 are the same reading), which is what makes the rewrite safe.
-        let raw = crate::models::ShotData {
-            azimuth_in: 600.0,
-            azimuth_out: 0.0,
-            ..data.clone()
-        };
-        assert!((data.average_azimuth_measured() - raw.average_azimuth_measured()).abs() < 1e-9);
+    fn a_last_section_without_an_end_marker_is_read_up_to_its_last_whole_record() {
+        let dmp = parse_bytes(&cut_short_dump()).unwrap();
+        assert_eq!(
+            standard_counts(&dmp),
+            vec![("AAA".to_string(), 2), ("BBB".to_string(), 3)],
+            "the unterminated BBB is read up to its last whole record"
+        );
+        assert_eq!(dmp.warnings.len(), 1, "warnings: {:?}", dmp.warnings);
+        let warning = &dmp.warnings[0];
+        assert!(
+            warning.contains("\"BBB\"")
+                && warning.contains("no end-of-section marker")
+                && warning.contains("3 shots"),
+            "the warning names the section, the missing marker and what was read: {warning}"
+        );
 
-        // A negative reading wraps the same way.
-        shot.heading_in = -30.0;
-        shot.heading_out = -20.0;
-        let data = shot.to_shot_data();
-        assert!((data.azimuth_in - 330.0).abs() < 1e-9);
-        assert!((data.azimuth_out - 340.0).abs() < 1e-9);
+        // Same dump, but the fourth record is whole and its end magic is broken.
+        let mut bytes = cut_short_dump();
+        let torn_len = 20;
+        bytes.truncate(bytes.len() - torn_len);
+        let mut broken = v5_shot(1830);
+        let last = broken.len() - 1;
+        broken[last] = 0;
+        bytes.extend(broken);
+        let dmp = parse_bytes(&bytes).unwrap();
+        assert_eq!(
+            standard_counts(&dmp),
+            vec![("AAA".to_string(), 2), ("BBB".to_string(), 3)],
+            "a whole record with a broken end magic is not a shot"
+        );
+        assert_eq!(dmp.warnings.len(), 1, "warnings: {:?}", dmp.warnings);
+    }
 
-        // A non-finite reading has no canonical form and is left for the finiteness guards.
-        shot.heading_in = f64::INFINITY;
-        shot.heading_out = 0.0;
-        assert!(shot.to_shot_data().azimuth_in.is_infinite());
+    /// A dump whose only section is unterminated still parses, with the warning.
+    #[test]
+    fn a_dump_that_is_one_unterminated_section_still_parses() {
+        let mut bytes = v5_header(b"BBB");
+        bytes.extend(v5_shot(1800));
+        bytes.extend(v5_shot(1810));
+        let dmp = parse_bytes(&bytes).unwrap();
+        assert_eq!(standard_counts(&dmp), vec![("BBB".to_string(), 2)]);
+        assert_eq!(dmp.warnings.len(), 1, "warnings: {:?}", dmp.warnings);
+    }
+
+    /// Reading stops at a damaged record - skipping it would hang every later
+    /// shot off the wrong station - and the stop is reported.
+    #[test]
+    fn a_section_that_stops_at_a_damaged_record_is_reported() {
+        let dmp = parse_bytes(&damaged_record_dump()).unwrap();
+        assert_eq!(standard_counts(&dmp), vec![("AAA".to_string(), 2)]);
+        assert_eq!(dmp.warnings.len(), 1, "warnings: {:?}", dmp.warnings);
+        let warning = &dmp.warnings[0];
+        assert!(
+            warning.contains("\"AAA\"")
+                && warning.contains("damaged record")
+                && warning.contains("2 shots"),
+            "the warning names the section and where it stopped: {warning}"
+        );
+    }
+
+    /// A section that cannot be read at all is left out and named by position
+    /// (its name may be part of what is unreadable).
+    #[test]
+    fn a_section_that_cannot_be_read_is_reported_by_position() {
+        let dmp = parse_bytes(&unreadable_section_dump()).unwrap();
+        assert_eq!(
+            standard_counts(&dmp),
+            vec![("AAA".to_string(), 1), ("CCC".to_string(), 1)]
+        );
+        assert_eq!(dmp.warnings.len(), 1, "warnings: {:?}", dmp.warnings);
+        let warning = &dmp.warnings[0];
+        assert!(
+            warning.contains("#2") && warning.contains("month"),
+            "the warning names the position and the reason: {warning}"
+        );
+    }
+
+    /// When nothing can be read the parse still fails, and says why.
+    #[test]
+    fn a_dump_with_no_readable_section_fails_with_the_reasons() {
+        let mut bytes = v5_header(b"AAA");
+        bytes[5] = 13;
+        bytes.extend(v5_shot(900));
+        bytes.extend(v5_end_marker());
+        let err = parse_bytes(&bytes).unwrap_err().to_string();
+        assert!(
+            err.contains("No valid sections found") && err.contains("month"),
+            "{err}"
+        );
+    }
+
+    /// The bytes a device writes after its last section - an ASCII `MN2Over`,
+    /// or a single zero byte - are not a section and raise nothing.
+    #[test]
+    fn a_clean_dump_has_no_warnings_whatever_trails_its_last_section() {
+        let mut clean = v5_header(b"AAA");
+        clean.extend(v5_shot(900));
+        clean.extend(v5_end_marker());
+        for trailer in [&b""[..], &b"MN2Over"[..], &[0u8][..]] {
+            let mut bytes = clean.clone();
+            bytes.extend_from_slice(trailer);
+            let dmp = parse_bytes(&bytes).unwrap();
+            assert_eq!(standard_counts(&dmp), vec![("AAA".to_string(), 1)]);
+            assert!(
+                dmp.warnings.is_empty(),
+                "trailer {trailer:?} raised {:?}",
+                dmp.warnings
+            );
+        }
+    }
+
+    /// A file that breaks every section cannot flood the preview: the list is
+    /// capped like the import receipt's.
+    #[test]
+    fn the_warning_list_is_capped() {
+        let mut bytes = Vec::new();
+        for _ in 0..(MAX_DMP_WARNINGS + 10) {
+            bytes.extend(damaged_record_dump());
+        }
+        let dmp = parse_bytes(&bytes).unwrap();
+        assert_eq!(dmp.warnings.len(), MAX_DMP_WARNINGS + 1);
+        assert!(
+            dmp.warnings[MAX_DMP_WARNINGS].contains("10 more"),
+            "{:?}",
+            dmp.warnings.last()
+        );
+    }
+
+    /// #576 B27(g): a FIFO named like a `.dmp` passed the size check (a pipe
+    /// reports length 0) and then blocked the read forever. It is refused at
+    /// once, by the capped reader every importer shares.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_like_a_dmp_is_refused_at_once() {
+        use crate::parsers::encoding::fifo_test_support::{make_fifo, within_five_seconds};
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.dmp");
+        make_fifo(&fifo);
+        let path = fifo.clone();
+        let outcome = within_five_seconds(&fifo, move || {
+            parse_dmp(&path)
+                .map(|d| d.sections.len())
+                .map_err(|e| e.to_string())
+        });
+        println!("parse_dmp(pipe.dmp): {outcome:?}");
+        let err = outcome
+            .expect("the read must not block on a FIFO")
+            .expect_err("a FIFO is not a DMP file");
+        assert!(err.contains("not a regular file"), "{err}");
     }
 }

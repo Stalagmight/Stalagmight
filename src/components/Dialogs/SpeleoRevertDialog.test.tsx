@@ -8,32 +8,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown, f?: string) =>
-    (e as { message?: string })?.message ?? f ?? 'error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(messageOr('error'));
 
 import SpeleoRevertDialog from './SpeleoRevertDialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
+import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
+import { makeSpeleoLink } from '../../test/factories/speleo';
 
-const LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'read-only',
-  lockHolder: null,
-  lockedByOther: false,
-  hasUnpushedEdits: false,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+/** [#576 NF-W8FE-2] Done and Push answer the wire envelope, never a bare outcome. */
+function report<R>(result: R): { result: R; save_warnings: [] } {
+  return { result, save_warnings: [] };
+}
+
+const LINK: SpeleoLinkState = makeSpeleoLink();
 
 const RESTORED = { local_path: '/cache/p1.stalx', concurrent_session: false };
 
@@ -102,7 +92,7 @@ describe('SpeleoRevertDialog', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     render(<SpeleoRevertDialog />);
 
@@ -234,7 +224,7 @@ describe('SpeleoRevertDialog - a failed upload is actionable from the dialog', (
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     await userEvent.click(retry);
 
@@ -262,7 +252,7 @@ describe('SpeleoRevertDialog - a failed upload is actionable from the dialog', (
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     await userEvent.click(retry);
 
@@ -282,7 +272,7 @@ describe('SpeleoRevertDialog - a failed upload is actionable from the dialog', (
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'push_unconfirmed' }),
+      speleodb_done: ok(report({ kind: 'push_unconfirmed' })),
     });
     render(<SpeleoRevertDialog />);
     await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
@@ -297,7 +287,7 @@ describe('SpeleoRevertDialog - a failed upload is actionable from the dialog', (
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     await userEvent.click(retry);
 
@@ -342,7 +332,7 @@ describe('SpeleoRevertDialog - the armed discard', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     render(<SpeleoRevertDialog />);
 
@@ -389,7 +379,7 @@ describe('SpeleoRevertDialog - the armed discard', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     await userEvent.click(screen.getByTestId('speleodb-revert-retry-upload-btn'));
 
@@ -403,7 +393,7 @@ describe('SpeleoRevertDialog - the armed discard', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'push_unconfirmed' }),
+      speleodb_done: ok(report({ kind: 'push_unconfirmed' })),
     });
     render(<SpeleoRevertDialog />);
 
@@ -422,7 +412,7 @@ describe('SpeleoRevertDialog - the armed discard', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'not_editing' }),
+      speleodb_done: ok(report({ kind: 'not_editing' })),
     });
     render(<SpeleoRevertDialog />);
 
@@ -439,7 +429,7 @@ describe('SpeleoRevertDialog - the armed discard', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     render(<SpeleoRevertDialog />);
 
@@ -469,7 +459,7 @@ describe('SpeleoRevertDialog - unsaved local edits', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     render(<SpeleoRevertDialog />);
 
@@ -497,5 +487,62 @@ describe('SpeleoRevertDialog - unsaved local edits', () => {
     // The plain Revert stays the primary: nothing was taken, so saving and pressing it
     // again is the whole way forward.
     expect(screen.getByTestId('speleodb-revert-confirm-btn')).toBeInTheDocument();
+  });
+});
+
+/**
+ * [#576 W55 NF-W53-1] The restore inside the revert is refused the same way when the
+ * cached copy is there but could not be read (`state_unknown`). The link reads clean, so
+ * the pre-flight passes, the lock is taken, and the refusal arrives mid-flight. The
+ * discard step and its lock note must say the copy could not be read, not claim
+ * un-pushed changes; the two-press discard and its labels stay as they are.
+ */
+describe('SpeleoRevertDialog - a copy that could not be read (#576 W55 NF-W53-1)', () => {
+  const refusal = (stateUnknown: boolean) => ({
+    message: 'could not be read',
+    code: 'SPELEODB_UNPUSHED_LOCAL_EDITS',
+    unpushed_local: {
+      project_id: 'p1',
+      local_path: '/cache/p1.stalx',
+      last_edit_at: null,
+      state_unknown: stateUnknown,
+    },
+  });
+
+  const refusedMidFlight = async (error: unknown) => {
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: rejects(error),
+      speleodb_done: ok(report({ kind: 'released' })),
+    });
+    render(<SpeleoRevertDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
+    return {
+      warning: (await screen.findByTestId('speleodb-revert-discard-warning')).textContent,
+      lockNote: screen.getByTestId('speleodb-revert-lock-held').textContent,
+    };
+  };
+
+  it('says the copy could not be read instead of claiming un-pushed changes', async () => {
+    const { warning, lockNote } = await refusedMidFlight(refusal(true));
+    console.log('[W55] revert discard warning (state_unknown):', warning);
+    console.log('[W55] revert lock note (state_unknown):', lockNote);
+    expect(warning).toContain('could not be read');
+    expect(warning).toContain('A save may have been interrupted, or another program may be using it.');
+    expect(warning).not.toContain('This copy has changes that are not on SpeleoDB');
+    expect(lockNote).not.toContain('your unpushed changes');
+    // The lock is still kept over a copy nobody could read, and nothing was uploaded.
+    expect(issued()).not.toContain('speleodb_done');
+    // Same offer, same label: only the wording follows the flag.
+    expect(screen.getByTestId('speleodb-revert-discard-offer-btn')).toHaveTextContent(
+      'Replace my changes & revert',
+    );
+  });
+
+  it('keeps the un-pushed wording for a copy that was read and found dirty', async () => {
+    const { warning, lockNote } = await refusedMidFlight(refusal(false));
+    expect(warning).toContain('This copy has changes that are not on SpeleoDB');
+    expect(warning).not.toContain('could not be read');
+    expect(lockNote).toContain('your unpushed changes');
   });
 });

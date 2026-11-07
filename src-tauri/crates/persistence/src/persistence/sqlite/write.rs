@@ -2,12 +2,37 @@ use anyhow::Result;
 use chrono::Utc;
 use rusqlite::params;
 
-use crate::models::Project;
+use crate::models::{CreationStamp, Project};
 
 use super::{Database, SCHEMA_VERSION};
 
+/// Every table [`Database::save_project`] writes from the [`Project`] model: the
+/// survey tables it wipes and rewrites, and `project_settings`, whose keys it
+/// upserts or deletes.
+///
+/// The app's save builds a FRESH file and renames it over the destination, so a
+/// table neither listed here nor carried by hand is emptied by every save. The
+/// save pipeline's side-table registry (`core::state::save_sidecars`) carries the
+/// rest, and its coverage test pins that the two lists together name every table
+/// `init_schema` creates (#576 A3). The sibling test pins that this list is what
+/// the transaction below actually writes.
+pub const SAVE_PROJECT_TABLES: &[&str] = &[
+    "project",
+    "sections",
+    "shots",
+    "station_merges",
+    "zero_datums",
+    "section_offsets",
+    "station_offsets",
+    "station_comments",
+    "loop_closures",
+    "imported_file_hashes",
+    "imported_section_hashes",
+    "project_settings",
+];
+
 impl Database {
-    /// Save a project to the database
+    /// Save a project to the database. Writes exactly [`SAVE_PROJECT_TABLES`].
     pub fn save_project(&mut self, project: &Project) -> Result<()> {
         tracing::debug!(
             "Saving project: name={}, sections={}",
@@ -57,14 +82,21 @@ impl Database {
             params![
                 project.name,
                 project.location,
-                project.created_at.to_rfc3339(),
+                // [#576 NF-W18-1] As stored, byte for byte (as a section's stamp).
+                project.created_at.as_str(),
                 project.modified_at.to_rfc3339(),
                 SCHEMA_VERSION,
                 next_closure_id_i64
             ],
         )?;
 
-        // Save sections and shots
+        // Save sections and shots. [#576 NF-W14BE-1] `created_at` is the
+        // section's creation time, stamped once: the model carries the value its
+        // first save recorded (read back on open, stamped by the app's save heals
+        // before that first save), and only a section that has none yet - a
+        // writer that skips the heals - takes this save's time. [#576 RV14-2]
+        // A stamp is written as the text it holds: as stored, byte for byte.
+        let now = Utc::now().to_rfc3339();
         for section in &project.sections {
             tx.execute(
                 "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, gauge_shot_uuid, gauge_neighbour_uuid, azimuth_north, azimuth_correction, azimuth_source, azimuth_epoch_year, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
@@ -92,7 +124,10 @@ impl Database {
                     section
                         .azimuth_reference
                         .and_then(|r| r.source.epoch_year()),
-                    Utc::now().to_rfc3339()
+                    section
+                        .created_at
+                        .as_ref()
+                        .map_or(now.as_str(), CreationStamp::as_str)
                 ],
             )?;
 
@@ -193,16 +228,34 @@ impl Database {
             )?;
         }
 
+        // [#576 NF-W13BE-3] The three tables held in a `HashMap` (section
+        // offsets, station offsets, station comments) are written in key order,
+        // not map order. Every map built anew - an open builds them from the
+        // file - has its own random seed, so the same project opened and saved
+        // again wrote these rows in another order: other rowids, other page
+        // bytes, though nothing had changed.
+
         // Save section offsets
-        for (section_id, (offset_x, offset_y)) in &project.section_offsets {
+        let mut section_offsets: Vec<_> = project.section_offsets().iter().collect();
+        section_offsets.sort_by_key(|(section_id, _)| **section_id);
+        for (section_id, (offset_x, offset_y)) in section_offsets {
             tx.execute(
                 "INSERT INTO section_offsets (section_id, offset_x, offset_y) VALUES (?1, ?2, ?3)",
                 params![section_id, offset_x, offset_y],
             )?;
         }
 
+        // [#576 RV13-6] One row per station: two keys naming one station each
+        // wrote a row, and the second failed the whole save on the tables'
+        // primary key. They are settled as the re-anchor on open settles them
+        // (`Project::one_row_per_station`): the canonical key's offset, both
+        // comments.
+        let mut offsets_dropped = 0_usize;
+        let mut comments_joined = 0_usize;
+
         // Save station offsets
-        for (key, (offset_x, offset_y, offset_z)) in &project.station_offsets {
+        let mut station_offsets = Vec::with_capacity(project.station_offsets.len());
+        for (key, offset) in &project.station_offsets {
             let Some(sr) = project.resolve_key(key) else {
                 tracing::warn!(
                     purpose = "skip orphan station offset on save",
@@ -210,6 +263,11 @@ impl Database {
                 );
                 continue;
             };
+            station_offsets.push((key, sr, *offset));
+        }
+        let station_offsets =
+            project.one_row_per_station(station_offsets, |_kept, _other| offsets_dropped += 1);
+        for (sr, (offset_x, offset_y, offset_z)) in station_offsets {
             tx.execute(
                 "INSERT INTO station_offsets (section_id, station_index, offset_x, offset_y, offset_z) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![sr.section_id, sr.station_index, offset_x, offset_y, offset_z],
@@ -217,6 +275,7 @@ impl Database {
         }
 
         // Save station comments
+        let mut station_comments = Vec::with_capacity(project.station_comments.len());
         for (key, comment) in &project.station_comments {
             let Some(sr) = project.resolve_key(key) else {
                 tracing::warn!(
@@ -225,61 +284,34 @@ impl Database {
                 );
                 continue;
             };
+            station_comments.push((key, sr, comment.clone()));
+        }
+        let station_comments = project.one_row_per_station(station_comments, |kept, other| {
+            comments_joined += 1;
+            crate::models::join_station_comment(kept, other);
+        });
+        for (sr, comment) in station_comments {
             tx.execute(
                 "INSERT INTO station_comments (section_id, station_index, comment) VALUES (?1, ?2, ?3)",
                 params![sr.section_id, sr.station_index, comment],
             )?;
         }
-
-        // Save loop closures (with closure_id column)
-        // Ensure closure_id column exists
-        let has_closure_id: bool = tx
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='closure_id'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c > 0)
-            .unwrap_or(false);
-        if !has_closure_id {
-            tx.execute(
-                "ALTER TABLE loop_closures ADD COLUMN closure_id INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
+        if offsets_dropped > 0 || comments_joined > 0 {
+            tracing::warn!(
+                offsets_dropped,
+                comments_joined,
+                purpose = "write one station offset and comment row per station (#576 RV13-6)",
+                "Two keys named one station on save: kept the canonical key's offset and \
+                 joined the comments"
+            );
         }
 
-        // Ensure strategy column exists
-        let has_strategy: bool = tx
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='strategy'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c > 0)
-            .unwrap_or(false);
-        if !has_strategy {
-            tx.execute(
-                "ALTER TABLE loop_closures ADD COLUMN strategy TEXT NOT NULL DEFAULT 'Batch'",
-                [],
-            )?;
-        }
-
-        // Ensure is_aligned column exists
-        let has_is_aligned: bool = tx
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='is_aligned'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c > 0)
-            .unwrap_or(false);
-        if !has_is_aligned {
-            tx.execute(
-                "ALTER TABLE loop_closures ADD COLUMN is_aligned INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
-        }
-
+        // Save loop closures. The `closure_id`, `strategy` and `is_aligned`
+        // columns are the schema's business, not the save's: `init_schema`
+        // creates them on a fresh file and `ensure_schema_version` migrates an
+        // existing one on open (B23, #576). A save must never run DDL - the
+        // SpeleoDB writers save on the LIVE file, and a copy of those ALTERs
+        // here used to rewrite its schema mid-save.
         for lc in &project.loop_closures {
             let closure_id_i64 = i64::try_from(lc.id)
                 .map_err(|_| anyhow::anyhow!("Closure ID {} exceeds i64 range", lc.id))?;

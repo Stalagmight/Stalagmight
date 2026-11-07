@@ -220,9 +220,9 @@ export function buildEditableShotColumns(
       align: 'right',
       kind: 'number',
       // One displayed azimuth: the average of the two legs, with a commit
-      // fanning back out to both (applyAzimuthEdit). Deliberately NOT
-      // `getAzimuthAverage`, which coerces a non-finite leg to 0 - that made an
-      // unset azimuth render as a confident "0.0" the user never typed.
+      // fanning back out to both (`buildShotUpdates`, dataTableEdits.ts). A
+      // non-finite leg must never be coerced to 0 here - that made an unset
+      // azimuth render as a confident "0.0" the user never typed.
       //
       // Blank only when BOTH legs are unset. With exactly one measured leg -
       // which the completeness rules allow and Save accepts - that reading IS

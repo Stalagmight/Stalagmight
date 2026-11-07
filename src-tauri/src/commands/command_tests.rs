@@ -3,7 +3,7 @@
 use super::{
     cache, config, export, history, import, project, raw_data, section, shot, station, validation,
 };
-use crate::core::{AppState, Command, CommandResult};
+use crate::core::{AppState, Command, CommandError, CommandResult};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
     ShotKind, ShotUpdates, StationRef, SurveyDirection,
@@ -11,6 +11,7 @@ use crate::models::{
 use crate::persistence::Database;
 use crate::test_helpers::TestDb;
 use chrono::NaiveDate;
+use stalagmight_core::test_fixtures::bare_shot;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::{env, fs};
@@ -18,7 +19,7 @@ use tauri::test::{mock_app, MockRuntime};
 use tauri::{Manager, State};
 use tempfile::{NamedTempFile, TempDir};
 
-fn app_with_state() -> tauri::App<MockRuntime> {
+pub(super) fn app_with_state() -> tauri::App<MockRuntime> {
     let app = mock_app();
     app.manage(AppState::new().expect("app state"));
     app
@@ -30,11 +31,32 @@ fn app_with_custom_state(state: AppState) -> tauri::App<MockRuntime> {
     app
 }
 
-fn state(app: &tauri::App<MockRuntime>) -> State<'_, AppState> {
+pub(super) fn state(app: &tauri::App<MockRuntime>) -> State<'_, AppState> {
     app.state::<AppState>()
 }
 
-fn with_config_lock<T>(f: impl FnOnce() -> T) -> T {
+/// The handle a command takes (#576 C2/C9: every command is `async`, generic
+/// over the runtime and takes the app handle, so a test calls the registered
+/// command itself).
+pub(super) fn h(app: &tauri::App<MockRuntime>) -> tauri::AppHandle<MockRuntime> {
+    app.handle().clone()
+}
+
+/// Drive a command to completion: its body runs on the blocking pool, as in the
+/// app, and this thread waits for the answer.
+pub(super) fn run<F: std::future::Future>(command: F) -> F::Output {
+    tauri::async_runtime::block_on(command)
+}
+
+/// [`run`] for a command that fails only when its body crashes (a read such as
+/// `can_undo`, or a recorder such as `set_workspace_mode`): its answer is a
+/// `Result` so a crash still answers (#576 RV5-6), and a test of its ordinary path
+/// wants the value.
+pub(super) fn read<T>(command: impl std::future::Future<Output = Result<T, CommandError>>) -> T {
+    run(command).expect("the command answers")
+}
+
+pub(super) fn with_config_lock<T>(f: impl FnOnce() -> T) -> T {
     // Redirect the config path to a fresh temp dir for the duration, so a test
     // neither reads nor pollutes the real ~/.config/stalagmight/config.toml.
     // Resolution is per-thread now (see `test_helpers`), so this no longer takes
@@ -44,9 +66,9 @@ fn with_config_lock<T>(f: impl FnOnce() -> T) -> T {
 }
 
 fn with_restored_config<T>(app: &tauri::App<MockRuntime>, f: impl FnOnce() -> T) -> T {
-    let original = config::get_config(state(app));
+    let original = run(config::get_config(h(app))).unwrap();
     let result = f();
-    config::update_config(state(app), original).expect("restore config");
+    run(config::update_config(h(app), original)).expect("restore config");
     result
 }
 
@@ -76,44 +98,52 @@ impl Drop for EnvVarGuard {
     }
 }
 
-fn assert_success(result: &CommandResult) {
-    assert!(
-        result.success,
-        "expected success, got error: {:?}",
-        result.error
-    );
-    assert!(result.error.is_none());
+/// A command's answer as the assertions below read it (#576 C4): a command
+/// answers `Result<T, CommandError>`, an `AppState` method a `CommandResult`.
+pub(super) trait Answer {
+    /// `true` when the answer is a success.
+    fn succeeded(&self) -> bool;
+    /// The failure's display message (`None` on success or when there is none).
+    fn failure_message(&self) -> Option<&str>;
 }
 
-fn assert_failure_contains(result: &CommandResult, needle: &str) {
-    assert!(!result.success, "expected failure");
-    let err = result.error.as_deref().unwrap_or("<none>");
+impl Answer for CommandResult {
+    fn succeeded(&self) -> bool {
+        self.success && self.error.is_none()
+    }
+    fn failure_message(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+}
+
+impl<T> Answer for Result<T, CommandError> {
+    fn succeeded(&self) -> bool {
+        self.is_ok()
+    }
+    fn failure_message(&self) -> Option<&str> {
+        self.as_ref().err().map(|e| e.message.as_str())
+    }
+}
+
+pub(super) fn assert_success(result: &impl Answer) {
+    assert!(
+        result.succeeded(),
+        "expected success, got error: {:?}",
+        result.failure_message()
+    );
+}
+
+fn assert_failure_contains(result: &impl Answer, needle: &str) {
+    assert!(!result.succeeded(), "expected failure");
+    let err = result.failure_message().unwrap_or("<none>");
     assert!(
         err.contains(needle),
         "expected error containing '{needle}', got '{err}'"
     );
 }
 
-fn shot_data(length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: 0.0,
-        azimuth_out: 5.0,
-        length,
-        depth_in: 0.0,
-        depth_out: 0.0,
-        ..Default::default()
-    }
-}
-
-fn shot_data_with_depth(length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-    ShotData {
-        azimuth_in: 10.0,
-        azimuth_out: 15.0,
-        length,
-        depth_in,
-        depth_out,
-        ..Default::default()
-    }
+pub(super) fn shot_data(length: f64) -> ShotData {
+    bare_shot(length).with_azimuths(0.0, 5.0)
 }
 
 fn create_project(app: &tauri::App<MockRuntime>) {
@@ -145,17 +175,17 @@ fn set_project_for_tests(app: &tauri::App<MockRuntime>, project: Project) {
 }
 
 fn create_section_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>) -> u32 {
-    let result = section::create_section(
-        state(app),
+    let result = run(section::create_section(
+        h(app),
         Some("Section A".to_string()),
         Some("Surveyor".to_string()),
         None,
         "#4ecdc4".to_string(),
         Some(SurveyDirection::In),
         shots,
-    );
+    ));
     assert_success(&result);
-    result.section_id.expect("section id")
+    result.expect("section id").section_id
 }
 
 fn project_with_section(shots: Vec<ShotData>) -> Project {
@@ -174,7 +204,7 @@ fn project_with_section(shots: Vec<ShotData>) -> Project {
 
 fn save_project_to_temp(app: &tauri::App<MockRuntime>, dir: &TempDir) -> PathBuf {
     let path = dir.path().join("project");
-    let result = project::save_project(state(app), Some(path.clone()), None);
+    let result = run(project::save_project(h(app), Some(path.clone()), None));
     assert_success(&result);
     path.with_extension("stalx")
 }
@@ -187,7 +217,7 @@ fn test_get_config_defaults_general_auto_save() {
     // holds when no user config (e.g. auto_save = false) is readable.
     with_config_lock(|| {
         let app = app_with_state();
-        let cfg = config::get_config(state(&app));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert!(cfg.general.auto_save);
         assert_eq!(cfg.general.auto_save_interval_seconds, 30);
     });
@@ -243,8 +273,8 @@ fn test_get_config_defaults_panels() {
 fn test_update_data_table_view_roundtrip() {
     with_config_lock(|| {
         let app = app_with_state();
-        config::update_data_table_view_impl(
-            state(&app).inner(),
+        run(config::update_data_table_view(
+            h(&app),
             Some(vec!["length".to_string(), "_azimuth_avg".to_string()]),
             Some(vec![
                 "left".to_string(),
@@ -261,9 +291,9 @@ fn test_update_data_table_view_roundtrip() {
                 ("_azimuth_avg".to_string(), 95),
             ])),
             Some(BTreeMap::from([("_zeroDatum".to_string(), 140)])),
-        )
+        ))
         .expect("update data-table view");
-        let cfg = config::get_config(state(&app));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(
             cfg.panels.data_table_shot_column_order,
             vec!["length", "_azimuth_avg"]
@@ -295,8 +325,8 @@ fn test_update_data_table_view_roundtrip() {
             BTreeMap::from([("_zeroDatum".to_string(), 140)])
         );
         // invalid mode is rejected, config untouched
-        let err = config::update_data_table_view_impl(
-            state(&app).inner(),
+        let err = run(config::update_data_table_view(
+            h(&app),
             None,
             None,
             Some("sideways".to_string()),
@@ -305,10 +335,11 @@ fn test_update_data_table_view_roundtrip() {
             None,
             None,
             None,
-        );
+        ));
         assert!(err.is_err());
         assert_eq!(
-            config::get_config(state(&app))
+            run(config::get_config(h(&app)))
+                .unwrap()
                 .panels
                 .data_table_azimuth_mode,
             "inout"
@@ -320,14 +351,14 @@ fn test_update_data_table_view_roundtrip() {
 fn test_update_new_section_view_roundtrip() {
     with_config_lock(|| {
         let app = app_with_state();
-        config::update_new_section_view_impl(
-            state(&app).inner(),
+        run(config::update_new_section_view(
+            h(&app),
             Some(vec!["length".to_string(), "_azimuth_avg".to_string()]),
             Some(vec!["comment".to_string()]),
             Some(BTreeMap::from([("length".to_string(), 180)])),
-        )
+        ))
         .expect("update new-section view");
-        let cfg = config::get_config(state(&app));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(
             cfg.panels.new_section_column_order,
             vec!["length", "_azimuth_avg"]
@@ -347,14 +378,14 @@ fn test_update_new_section_view_roundtrip() {
         );
 
         // A partial update leaves the fields it omits alone.
-        config::update_new_section_view_impl(
-            state(&app).inner(),
+        run(config::update_new_section_view(
+            h(&app),
             None,
             Some(vec!["left".to_string()]),
             None,
-        )
+        ))
         .expect("update new-section view");
-        let cfg = config::get_config(state(&app));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(cfg.panels.new_section_hidden_columns, vec!["left"]);
         assert_eq!(
             cfg.panels.new_section_column_order,
@@ -368,14 +399,14 @@ fn test_update_new_section_view_roundtrip() {
 fn test_update_edit_section_view_roundtrip() {
     with_config_lock(|| {
         let app = app_with_state();
-        config::update_edit_section_view_impl(
-            state(&app).inner(),
+        run(config::update_edit_section_view(
+            h(&app),
             Some(vec!["length".to_string()]),
             Some(vec!["comment".to_string()]),
             Some(BTreeMap::from([("length".to_string(), 190)])),
-        )
+        ))
         .expect("update edit-section view");
-        let cfg = config::get_config(state(&app));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(cfg.panels.edit_section_column_order, vec!["length"]);
         assert_eq!(cfg.panels.edit_section_hidden_columns, vec!["comment"]);
         assert_eq!(
@@ -388,18 +419,19 @@ fn test_update_edit_section_view_roundtrip() {
         assert!(cfg.panels.data_table_shot_column_order.is_empty());
 
         // Degenerate widths are clamped on the way in, as everywhere else.
-        config::update_edit_section_view_impl(
-            state(&app).inner(),
+        run(config::update_edit_section_view(
+            h(&app),
             None,
             None,
             Some(BTreeMap::from([
                 ("collapsed".to_string(), 0),
                 ("runaway".to_string(), 100_000),
             ])),
-        )
+        ))
         .expect("update edit-section view");
         assert_eq!(
-            config::get_config(state(&app))
+            run(config::get_config(h(&app)))
+                .unwrap()
                 .panels
                 .edit_section_column_widths,
             BTreeMap::from([("collapsed".to_string(), 40), ("runaway".to_string(), 2000),])
@@ -411,8 +443,8 @@ fn test_update_edit_section_view_roundtrip() {
 fn test_update_new_section_view_clamps_degenerate_widths() {
     with_config_lock(|| {
         let app = app_with_state();
-        config::update_new_section_view_impl(
-            state(&app).inner(),
+        run(config::update_new_section_view(
+            h(&app),
             None,
             None,
             Some(BTreeMap::from([
@@ -420,10 +452,11 @@ fn test_update_new_section_view_clamps_degenerate_widths() {
                 ("runaway".to_string(), 100_000),
                 ("sane".to_string(), 150),
             ])),
-        )
+        ))
         .expect("update new-section view");
         assert_eq!(
-            config::get_config(state(&app))
+            run(config::get_config(h(&app)))
+                .unwrap()
                 .panels
                 .new_section_column_widths,
             BTreeMap::from([
@@ -443,8 +476,8 @@ fn test_update_data_table_view_clamps_degenerate_widths() {
         // A 0-px column renders invisible AND un-resizable (no border left to
         // grab), and a 100000-px one pushes every later column off-screen. Both
         // must be repaired before they reach disk.
-        config::update_data_table_view_impl(
-            state(&app).inner(),
+        run(config::update_data_table_view(
+            h(&app),
             None,
             None,
             None,
@@ -457,9 +490,9 @@ fn test_update_data_table_view_clamps_degenerate_widths() {
                 ("sane".to_string(), 150),
             ])),
             Some(BTreeMap::from([("also_collapsed".to_string(), 3)])),
-        )
+        ))
         .expect("update data-table view");
-        let cfg = config::get_config(state(&app));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(
             cfg.panels.data_table_shot_column_widths,
             BTreeMap::from([
@@ -532,8 +565,8 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
         let app = app_with_state();
 
         // Door 1: the partial command the frontend actually calls.
-        config::update_data_table_view_impl(
-            state(&app).inner(),
+        run(config::update_data_table_view(
+            h(&app),
             Some(hostile_order()),
             Some(hostile_hidden()),
             None,
@@ -542,9 +575,9 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             Some(hostile_hidden()),
             None,
             None,
-        )
+        ))
         .expect("update data-table view");
-        let panels = config::get_config(state(&app)).panels;
+        let panels = run(config::get_config(h(&app))).unwrap().panels;
         assert_bounded(&panels.data_table_shot_column_order, "shot_column_order");
         assert_bounded(
             &panels.data_table_shot_hidden_columns,
@@ -573,28 +606,28 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
         assert_eq!(panels.data_table_shot_hidden_columns, vec!["left"]);
 
         // Same door, the new-section dialog's own lists.
-        config::update_new_section_view_impl(
-            state(&app).inner(),
+        run(config::update_new_section_view(
+            h(&app),
             Some(hostile_order()),
             Some(hostile_hidden()),
             None,
-        )
+        ))
         .expect("update new-section view");
-        let panels = config::get_config(state(&app)).panels;
+        let panels = run(config::get_config(h(&app))).unwrap().panels;
         assert_bounded(&panels.new_section_column_order, "new_section_column_order");
         assert_bounded(
             &panels.new_section_hidden_columns,
             "new_section_hidden_columns",
         );
 
-        config::update_edit_section_view_impl(
-            state(&app).inner(),
+        run(config::update_edit_section_view(
+            h(&app),
             Some(hostile_order()),
             Some(hostile_hidden()),
             None,
-        )
+        ))
         .expect("update edit-section view");
-        let panels = config::get_config(state(&app)).panels;
+        let panels = run(config::get_config(h(&app))).unwrap().panels;
         assert_bounded(
             &panels.edit_section_column_order,
             "edit_section_column_order",
@@ -607,7 +640,7 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
         // Door 2: the whole-`Config` write, which does no per-field validation of
         // its own and so relies entirely on the normalize pass.
         with_restored_config(&app, || {
-            let mut cfg = config::get_config(state(&app));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.panels.data_table_shot_column_order = hostile_order();
             cfg.panels.data_table_shot_hidden_columns = hostile_hidden();
             cfg.panels.data_table_station_column_order = hostile_order();
@@ -616,9 +649,9 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             cfg.panels.new_section_hidden_columns = hostile_hidden();
             cfg.panels.edit_section_column_order = hostile_order();
             cfg.panels.edit_section_hidden_columns = hostile_hidden();
-            config::update_config(state(&app), cfg).expect("update config");
+            run(config::update_config(h(&app), cfg)).expect("update config");
 
-            let panels = config::get_config(state(&app)).panels;
+            let panels = run(config::get_config(h(&app))).unwrap().panels;
             assert_bounded(&panels.data_table_shot_column_order, "shot_column_order");
             assert_bounded(
                 &panels.data_table_shot_hidden_columns,
@@ -650,7 +683,7 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
 }
 
 /// An angle display mode the PARTIAL command rejects must not sail through the
-/// whole-`Config` door. `update_data_table_view_impl` returns `Err` for
+/// whole-`Config` door. `update_data_table_view` returns `Err` for
 /// "sideways", but `update_config` writes a whole `Config` and validated neither
 /// mode string - so the same value was refused at one door and persisted cleanly
 /// through the other, and the load path never repaired it either.
@@ -665,8 +698,8 @@ fn test_update_config_repairs_invalid_angle_modes() {
         with_restored_config(&app, || {
             // Precondition: this is exactly the value the partial door refuses.
             assert!(
-                config::update_data_table_view_impl(
-                    state(&app).inner(),
+                run(config::update_data_table_view(
+                    h(&app),
                     None,
                     None,
                     Some("sideways".to_string()),
@@ -674,18 +707,18 @@ fn test_update_config_repairs_invalid_angle_modes() {
                     None,
                     None,
                     None,
-                    None,
-                )
+                    None
+                ))
                 .is_err(),
                 "precondition: the partial command rejects 'sideways'"
             );
 
-            let mut cfg = config::get_config(state(&app));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.panels.data_table_azimuth_mode = "sideways".to_string();
             cfg.panels.data_table_inclination_mode = String::new();
-            config::update_config(state(&app), cfg).expect("update config");
+            run(config::update_config(h(&app), cfg)).expect("update config");
 
-            let panels = config::get_config(state(&app)).panels;
+            let panels = run(config::get_config(h(&app))).unwrap().panels;
             assert_eq!(
                 panels.data_table_azimuth_mode, "avg",
                 "an invalid azimuth mode must fall back to its documented default"
@@ -697,12 +730,12 @@ fn test_update_config_repairs_invalid_angle_modes() {
 
             // The repair must be a repair, not a reset: a VALID non-default mode
             // still has to survive the same door.
-            let mut cfg = config::get_config(state(&app));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.panels.data_table_azimuth_mode = "inout".to_string();
             cfg.panels.data_table_inclination_mode = "avg".to_string();
-            config::update_config(state(&app), cfg).expect("update config");
+            run(config::update_config(h(&app), cfg)).expect("update config");
 
-            let panels = config::get_config(state(&app)).panels;
+            let panels = run(config::get_config(h(&app))).unwrap().panels;
             assert_eq!(panels.data_table_azimuth_mode, "inout");
             assert_eq!(panels.data_table_inclination_mode, "avg");
         });
@@ -726,17 +759,23 @@ fn test_update_gas_config_normalizes_and_leaves_other_sections_alone() {
         let app = app_with_state();
         // A value inside the 100..500 clamp, so anything other than 321 coming
         // back means the write was lost rather than clamped.
-        config::update_panel_sizes_impl(state(&app).inner(), None, None, Some(321), None)
-            .expect("update panel sizes");
+        run(config::update_panel_sizes(
+            h(&app),
+            None,
+            None,
+            Some(321),
+            None,
+        ))
+        .expect("update panel sizes");
 
-        let mut gas = config::get_config(state(&app)).gas;
+        let mut gas = run(config::get_config(h(&app))).unwrap().gas;
         gas.swim_speed_m_per_min = -1.0;
         // A valid change alongside it, so the test cannot pass by the command
         // being a no-op.
         gas.include_reference_legs = true;
-        config::update_gas_config_impl(state(&app).inner(), gas).expect("update gas config");
+        run(config::update_gas_config(h(&app), gas)).expect("update gas config");
 
-        let cfg = config::get_config(state(&app));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(
             cfg.gas.swim_speed_m_per_min, 10.0,
             "a non-positive swim speed must be repaired to the default, not persisted"
@@ -757,7 +796,7 @@ fn test_get_config_defaults_validation() {
     // Same isolation as above: defaults must not depend on the real config.
     with_config_lock(|| {
         let app = app_with_state();
-        let cfg = config::get_config(state(&app));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(cfg.validation.warn_shot_length_min, 0.3);
         assert_eq!(cfg.validation.warn_shot_length_max, 50.0);
     });
@@ -777,7 +816,7 @@ fn test_update_config_caps_general_collections() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let mut cfg = config::get_config(state(&app));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.general.onboarding_completed_flows =
                 (0..100_000).map(|i| format!("flow-{i}")).collect();
             cfg.general.locale = "e".repeat(10_000);
@@ -790,9 +829,9 @@ fn test_update_config_caps_general_collections() {
             cfg.general.recent_projects = (0..100_000)
                 .map(|i| PathBuf::from(format!("/caves/{i}.stalx")))
                 .collect();
-            config::update_config(state(&app), cfg).expect("update config");
+            run(config::update_config(h(&app), cfg)).expect("update config");
 
-            let general = config::get_config(state(&app)).general;
+            let general = run(config::get_config(h(&app))).unwrap().general;
             assert!(
                 general.onboarding_completed_flows.len() <= 256,
                 "100k flow ids reached the config: {}",
@@ -821,10 +860,10 @@ fn test_update_config_roundtrip_auto_save() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let mut cfg = config::get_config(state(&app));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.general.auto_save = false;
-            config::update_config(state(&app), cfg).expect("update config");
-            let updated = config::get_config(state(&app));
+            run(config::update_config(h(&app), cfg)).expect("update config");
+            let updated = run(config::get_config(h(&app))).unwrap();
             assert!(!updated.general.auto_save);
         });
     });
@@ -835,10 +874,10 @@ fn test_update_config_roundtrip_recent_projects() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let mut cfg = config::get_config(state(&app));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.general.recent_projects = vec![PathBuf::from("/tmp/example.stalx")];
-            config::update_config(state(&app), cfg).expect("update config");
-            let updated = config::get_config(state(&app));
+            run(config::update_config(h(&app), cfg)).expect("update config");
+            let updated = run(config::get_config(h(&app))).unwrap();
             assert_eq!(updated.general.recent_projects.len(), 1);
             assert!(updated
                 .general
@@ -856,9 +895,16 @@ fn test_update_panel_sizes_sections_only() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let before = config::get_config(state(&app));
-            config::update_panel_sizes(state(&app), Some(333), None, None, None).unwrap();
-            let after = config::get_config(state(&app));
+            let before = run(config::get_config(h(&app))).unwrap();
+            run(config::update_panel_sizes(
+                h(&app),
+                Some(333),
+                None,
+                None,
+                None,
+            ))
+            .unwrap();
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(after.panels.sections_panel_width, 333);
             assert_eq!(
                 after.panels.detail_panel_width,
@@ -877,9 +923,16 @@ fn test_update_panel_sizes_detail_only() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let before = config::get_config(state(&app));
-            config::update_panel_sizes(state(&app), None, Some(444), None, None).unwrap();
-            let after = config::get_config(state(&app));
+            let before = run(config::get_config(h(&app))).unwrap();
+            run(config::update_panel_sizes(
+                h(&app),
+                None,
+                Some(444),
+                None,
+                None,
+            ))
+            .unwrap();
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(after.panels.detail_panel_width, 444);
             assert_eq!(
                 after.panels.sections_panel_width,
@@ -898,7 +951,7 @@ fn test_update_panel_sizes_data_only() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let before = config::get_config(state(&app));
+            let before = run(config::get_config(h(&app))).unwrap();
             // IN-RANGE on purpose (`data_table_height` is clamped to 100..500).
             // This test is about the PARTIAL semantics - only the field passed is
             // touched - so it must not also be straddling the clamp. It used to
@@ -906,8 +959,15 @@ fn test_update_panel_sizes_data_only() {
             // "the write path normalizes nothing" behaviour as the spec: the value
             // reached disk out of range and was repaired on the NEXT load instead.
             // Clamping on the way in is covered by its own test below.
-            config::update_panel_sizes(state(&app), None, None, Some(400), None).unwrap();
-            let after = config::get_config(state(&app));
+            run(config::update_panel_sizes(
+                h(&app),
+                None,
+                None,
+                Some(400),
+                None,
+            ))
+            .unwrap();
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(after.panels.data_table_height, 400);
             assert_eq!(
                 after.panels.sections_panel_width,
@@ -930,9 +990,15 @@ fn test_update_panel_sizes_all() {
             // the note in `test_update_panel_sizes_data_only`. The old 111 for a
             // field with a 150 floor made this assert that an out-of-range value
             // survives.
-            config::update_panel_sizes(state(&app), Some(200), Some(222), Some(333), Some(600))
-                .unwrap();
-            let after = config::get_config(state(&app));
+            run(config::update_panel_sizes(
+                h(&app),
+                Some(200),
+                Some(222),
+                Some(333),
+                Some(600),
+            ))
+            .unwrap();
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(after.panels.sections_panel_width, 200);
             assert_eq!(after.panels.detail_panel_width, 222);
             assert_eq!(after.panels.data_table_height, 333);
@@ -954,8 +1020,15 @@ fn test_update_panel_sizes_clamps_out_of_range_values() {
         let app = app_with_state();
         with_restored_config(&app, || {
             // Below the 150 floor, above the 500 ceiling.
-            config::update_panel_sizes(state(&app), Some(1), None, Some(9999), Some(9999)).unwrap();
-            let after = config::get_config(state(&app));
+            run(config::update_panel_sizes(
+                h(&app),
+                Some(1),
+                None,
+                Some(9999),
+                Some(9999),
+            ))
+            .unwrap();
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(after.panels.sections_panel_width, 150);
             assert_eq!(after.panels.data_table_height, 500);
             // The wizard map column clamps to 280..900, not 100..500.
@@ -969,9 +1042,9 @@ fn test_update_panel_sizes_none_keeps_values() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let before = config::get_config(state(&app));
-            config::update_panel_sizes(state(&app), None, None, None, None).unwrap();
-            let after = config::get_config(state(&app));
+            let before = run(config::get_config(h(&app))).unwrap();
+            run(config::update_panel_sizes(h(&app), None, None, None, None)).unwrap();
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(
                 after.panels.sections_panel_width,
                 before.panels.sections_panel_width
@@ -993,19 +1066,19 @@ fn test_update_panel_layout_partial() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let before = config::get_config(state(&app));
+            let before = run(config::get_config(h(&app))).unwrap();
             // Update only the sections panel: close it + switch to hover.
-            config::update_panel_layout(
-                state(&app),
+            run(config::update_panel_layout(
+                h(&app),
                 Some(false),
                 Some("hover".to_string()),
                 None,
                 None,
                 None,
                 None,
-            )
+            ))
             .unwrap();
-            let after = config::get_config(state(&app));
+            let after = run(config::get_config(h(&app))).unwrap();
             assert!(!after.panels.sections_panel_open);
             assert_eq!(after.panels.sections_panel_mode, "hover");
             // Other panels untouched.
@@ -1023,18 +1096,18 @@ fn test_update_panel_layout_rejects_invalid_mode() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let result = config::update_panel_layout(
-                state(&app),
+            let result = run(config::update_panel_layout(
+                h(&app),
                 None,
                 Some("nope".to_string()),
                 None,
                 None,
                 None,
                 None,
-            );
+            ));
             assert!(result.is_err());
             // A rejected mode must not have mutated config.
-            let after = config::get_config(state(&app));
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(after.panels.sections_panel_mode, "pin");
         });
     });
@@ -1043,7 +1116,13 @@ fn test_update_panel_layout_rejects_invalid_mode() {
 #[test]
 fn test_save_display_setting_then_get() {
     let app = app_with_state();
-    config::save_display_setting(state(&app), "k1".to_string(), "v1".to_string()).unwrap();
+    run(config::save_display_setting(
+        h(&app),
+        "k1".to_string(),
+        "v1".to_string(),
+        None,
+    ))
+    .unwrap();
     let value = state(&app).get_display_setting("k1").unwrap();
     assert_eq!(value, Some("v1".to_string()));
 }
@@ -1051,8 +1130,20 @@ fn test_save_display_setting_then_get() {
 #[test]
 fn test_save_display_setting_overwrites() {
     let app = app_with_state();
-    config::save_display_setting(state(&app), "k2".to_string(), "v1".to_string()).unwrap();
-    config::save_display_setting(state(&app), "k2".to_string(), "v2".to_string()).unwrap();
+    run(config::save_display_setting(
+        h(&app),
+        "k2".to_string(),
+        "v1".to_string(),
+        None,
+    ))
+    .unwrap();
+    run(config::save_display_setting(
+        h(&app),
+        "k2".to_string(),
+        "v2".to_string(),
+        None,
+    ))
+    .unwrap();
     let value = state(&app).get_display_setting("k2").unwrap();
     assert_eq!(value, Some("v2".to_string()));
 }
@@ -1067,16 +1158,28 @@ fn test_get_display_setting_missing_returns_none() {
 #[test]
 fn test_load_display_settings_empty_default() {
     let app = app_with_state();
-    let values = config::load_display_settings(state(&app)).unwrap();
+    let values = run(config::load_display_settings(h(&app))).unwrap();
     assert!(values.is_empty());
 }
 
 #[test]
 fn test_load_display_settings_returns_all() {
     let app = app_with_state();
-    config::save_display_setting(state(&app), "k1".to_string(), "v1".to_string()).unwrap();
-    config::save_display_setting(state(&app), "k2".to_string(), "v2".to_string()).unwrap();
-    let values = config::load_display_settings(state(&app)).unwrap();
+    run(config::save_display_setting(
+        h(&app),
+        "k1".to_string(),
+        "v1".to_string(),
+        None,
+    ))
+    .unwrap();
+    run(config::save_display_setting(
+        h(&app),
+        "k2".to_string(),
+        "v2".to_string(),
+        None,
+    ))
+    .unwrap();
+    let values = run(config::load_display_settings(h(&app))).unwrap();
     assert_eq!(values.len(), 2);
     assert_eq!(values.get("k1").cloned(), Some("v1".to_string()));
     assert_eq!(values.get("k2").cloned(), Some("v2".to_string()));
@@ -1087,26 +1190,26 @@ fn test_load_display_settings_returns_all() {
 #[test]
 fn test_can_undo_false_initial() {
     let app = app_with_state();
-    assert!(!history::can_undo(state(&app)));
+    assert!(!read(history::can_undo(h(&app))));
 }
 
 #[test]
 fn test_can_redo_false_initial() {
     let app = app_with_state();
-    assert!(!history::can_redo(state(&app)));
+    assert!(!read(history::can_redo(h(&app))));
 }
 
 #[test]
 fn test_undo_fails_when_empty() {
     let app = app_with_state();
-    let result = history::undo(state(&app));
+    let result = run(history::undo(h(&app)));
     assert_failure_contains(&result, "Nothing to undo");
 }
 
 #[test]
 fn test_redo_fails_when_empty() {
     let app = app_with_state();
-    let result = history::redo(state(&app));
+    let result = run(history::redo(h(&app)));
     assert_failure_contains(&result, "Nothing to redo");
 }
 
@@ -1115,7 +1218,7 @@ fn test_can_undo_true_after_create_section() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    assert!(history::can_undo(state(&app)));
+    assert!(read(history::can_undo(h(&app))));
 }
 
 #[test]
@@ -1123,7 +1226,7 @@ fn test_undo_removes_section() {
     let app = app_with_state();
     create_project(&app);
     let section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let undo_result = history::undo(state(&app));
+    let undo_result = run(history::undo(h(&app)));
     assert_success(&undo_result);
     let section = get_section(state(&app), section_id);
     assert!(section.is_none());
@@ -1134,8 +1237,8 @@ fn test_can_redo_true_after_undo() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = history::undo(state(&app));
-    assert!(history::can_redo(state(&app)));
+    let _ = run(history::undo(h(&app)));
+    assert!(read(history::can_redo(h(&app))));
 }
 
 #[test]
@@ -1143,10 +1246,10 @@ fn test_redo_restores_section() {
     let app = app_with_state();
     create_project(&app);
     let _section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = history::undo(state(&app));
-    let redo_result = history::redo(state(&app));
+    let _ = run(history::undo(h(&app)));
+    let redo_result = run(history::redo(h(&app)));
     assert_success(&redo_result);
-    let project_state = project::get_project_state(state(&app)).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 1);
 }
 
@@ -1158,9 +1261,9 @@ fn test_undo_to_fails_when_index_out_of_bounds() {
     create_section_with_shots(&app, vec![shot_data(1.0)]);
 
     // Index 0 should work (1 item), but index 1 should fail
-    let result = history::undo_to(1, state(&app));
-    assert!(!result.success);
-    assert!(result.error.unwrap().contains("Invalid undo index"));
+    let result = run(history::undo_to(h(&app), 1));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().message.contains("Invalid undo index"));
 }
 
 #[test]
@@ -1170,7 +1273,7 @@ fn test_undo_to_index_0_undoes_one_operation() {
     let section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
 
     // Undo to index 0 should undo just the most recent action
-    let result = history::undo_to(0, state(&app));
+    let result = run(history::undo_to(h(&app), 0));
     assert_success(&result);
 
     // Section should be removed
@@ -1189,15 +1292,15 @@ fn test_undo_to_index_2_undoes_three_operations() {
     let _section_3 = create_section_with_shots(&app, vec![shot_data(3.0)]);
 
     // Verify we have 3 sections
-    let project_state = project::get_project_state(state(&app)).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 3);
 
     // Undo to index 2 should undo all 3 sections (indices 0, 1, 2)
-    let result = history::undo_to(2, state(&app));
+    let result = run(history::undo_to(h(&app), 2));
     assert_success(&result);
 
     // All sections should be removed
-    let project_state = project::get_project_state(state(&app)).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 0);
 }
 
@@ -1207,12 +1310,12 @@ fn test_redo_to_fails_when_index_out_of_bounds() {
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     // Undo to create a redo entry
-    let _ = history::undo(state(&app));
+    let _ = run(history::undo(h(&app)));
 
     // Index 0 should work (1 item), but index 1 should fail
-    let result = history::redo_to(1, state(&app));
-    assert!(!result.success);
-    assert!(result.error.unwrap().contains("Invalid redo index"));
+    let result = run(history::redo_to(h(&app), 1));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().message.contains("Invalid redo index"));
 }
 
 #[test]
@@ -1220,18 +1323,18 @@ fn test_redo_to_index_0_redoes_one_operation() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = history::undo(state(&app));
+    let _ = run(history::undo(h(&app)));
 
     // Verify section is gone
-    let project_state = project::get_project_state(state(&app)).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 0);
 
     // Redo to index 0 should redo just the most recent undone action
-    let result = history::redo_to(0, state(&app));
+    let result = run(history::redo_to(h(&app), 0));
     assert_success(&result);
 
     // Section should be restored
-    let project_state = project::get_project_state(state(&app)).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 1);
 }
 
@@ -1246,18 +1349,18 @@ fn test_redo_to_index_2_redoes_three_operations() {
     let _section_3 = create_section_with_shots(&app, vec![shot_data(3.0)]);
 
     // Undo all 3
-    let _ = history::undo_to(2, state(&app));
+    let _ = run(history::undo_to(h(&app), 2));
 
     // Verify all sections are gone
-    let project_state = project::get_project_state(state(&app)).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 0);
 
     // Redo to index 2 should redo all 3 sections (indices 0, 1, 2)
-    let result = history::redo_to(2, state(&app));
+    let result = run(history::redo_to(h(&app), 2));
     assert_success(&result);
 
     // All sections should be restored
-    let project_state = project::get_project_state(state(&app)).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 3);
 }
 
@@ -1265,18 +1368,18 @@ fn test_redo_to_index_2_redoes_three_operations() {
 fn test_undo_to_fails_when_stack_empty() {
     let app = app_with_state();
     // No project or actions
-    let result = history::undo_to(0, state(&app));
-    assert!(!result.success);
-    assert!(result.error.unwrap().contains("Invalid undo index"));
+    let result = run(history::undo_to(h(&app), 0));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().message.contains("Invalid undo index"));
 }
 
 #[test]
 fn test_redo_to_fails_when_stack_empty() {
     let app = app_with_state();
     // No project or actions, so no redo available
-    let result = history::redo_to(0, state(&app));
-    assert!(!result.success);
-    assert!(result.error.unwrap().contains("Invalid redo index"));
+    let result = run(history::redo_to(h(&app), 0));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().message.contains("Invalid redo index"));
 }
 
 // === Project commands ===
@@ -1284,7 +1387,7 @@ fn test_redo_to_fails_when_stack_empty() {
 #[test]
 fn test_get_project_state_none_when_no_project() {
     let app = app_with_state();
-    assert!(project::get_project_state(state(&app)).is_none());
+    assert!(read(project::get_project_state(h(&app))).is_none());
 }
 
 /// The depth stats the frontend gets are the ABSOLUTE station range, matching
@@ -1297,12 +1400,16 @@ fn test_get_project_state_depth_stats_match_station_z() {
     create_section_with_shots(
         &app,
         vec![
-            shot_data_with_depth(10.0, 5.0, 6.0),
-            shot_data_with_depth(10.0, 6.0, 8.0),
+            bare_shot(10.0)
+                .with_azimuths(10.0, 15.0)
+                .with_depths(5.0, 6.0),
+            bare_shot(10.0)
+                .with_azimuths(10.0, 15.0)
+                .with_depths(6.0, 8.0),
         ],
     );
 
-    let project_state = project::get_project_state(state(&app)).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     let depths: Vec<f64> = project_state
         .stations
         .iter()
@@ -1317,14 +1424,18 @@ fn test_get_project_state_depth_stats_match_station_z() {
 fn test_close_project_clears_state() {
     let app = app_with_state();
     create_project(&app);
-    assert_success(&project::close_project(state(&app), None));
-    assert!(project::get_project_state(state(&app)).is_none());
+    assert_success(&run(project::close_project(h(&app), None)));
+    assert!(read(project::get_project_state(h(&app))).is_none());
 }
 
 #[test]
 fn test_save_project_fails_when_no_project() {
     let app = app_with_state();
-    let result = project::save_project(state(&app), Some(PathBuf::from("/tmp/nope.stalx")), None);
+    let result = run(project::save_project(
+        h(&app),
+        Some(PathBuf::from("/tmp/nope.stalx")),
+        None,
+    ));
     assert_failure_contains(&result, "No project open");
 }
 
@@ -1342,7 +1453,7 @@ fn test_save_project_creates_stalx_extension() {
         create_project(&app);
         let dir = TempDir::new().unwrap();
         let raw_path = dir.path().join("project_data");
-        let result = project::save_project(state(&app), Some(raw_path), None);
+        let result = run(project::save_project(h(&app), Some(raw_path), None));
         assert_success(&result);
         let saved_path = dir.path().join("project_data.stalx");
         assert!(saved_path.exists());
@@ -1360,7 +1471,7 @@ fn test_open_project_loads_saved_project() {
         let app2 = app_with_state();
         let result = open_project(state(&app2), saved_path);
         assert_success(&result);
-        let project_state = project::get_project_state(state(&app2)).expect("project state");
+        let project_state = read(project::get_project_state(h(&app2))).expect("project state");
         assert_eq!(project_state.project.name, "Test Cave");
     });
 }
@@ -1373,15 +1484,19 @@ fn test_project_lifecycle_persists_undo_and_state() {
         let section_a = create_section_with_shots(&app, vec![shot_data(10.0), shot_data(5.0)]);
         let section_b = create_section_with_shots(&app, vec![shot_data(7.0)]);
 
-        let merge_result = station::merge_stations(
-            state(&app),
+        let merge_result = run(station::merge_stations(
+            h(&app),
             StationRef::new(section_a, 0),
             StationRef::new(section_b, 0),
-        );
+        ));
         assert_success(&merge_result);
 
         let gps = GpsCoordinates::new(10.0, 20.0, 0.0).unwrap();
-        let datum_result = station::set_zero_datum(state(&app), StationRef::new(section_a, 0), gps);
+        let datum_result = run(station::set_zero_datum(
+            h(&app),
+            StationRef::new(section_a, 0),
+            gps,
+        ));
         assert_success(&datum_result);
 
         let updates = ShotUpdates {
@@ -1389,10 +1504,10 @@ fn test_project_lifecycle_persists_undo_and_state() {
             comment: Some(Some("recalc".to_string())),
             ..Default::default()
         };
-        let update_result = shot::update_shot(state(&app), section_a, 0, updates);
+        let update_result = run(shot::update_shot(h(&app), section_a, 0, updates));
         assert_success(&update_result);
 
-        let undo_before = history::get_undo_stack(state(&app));
+        let undo_before = read(history::get_undo_stack(h(&app)));
         assert!(!undo_before.is_empty());
         assert_eq!(undo_before[0].command_type, "update_shot");
 
@@ -1402,11 +1517,11 @@ fn test_project_lifecycle_persists_undo_and_state() {
         // Wait for background undo persistence thread to complete
         std::thread::sleep(std::time::Duration::from_millis(200));
 
-        assert_success(&project::close_project(state(&app), None));
+        assert_success(&run(project::close_project(h(&app), None)));
         let open_result = open_project(state(&app), saved_path);
         assert_success(&open_result);
 
-        let project_state = project::get_project_state(state(&app)).expect("project state");
+        let project_state = read(project::get_project_state(h(&app))).expect("project state");
         assert_eq!(project_state.project.sections.len(), 2);
         assert_eq!(project_state.project.station_merges.len(), 1);
         assert_eq!(project_state.project.zero_datums.len(), 1);
@@ -1418,7 +1533,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
         assert!((section.shots[0].length - 12.5).abs() < f64::EPSILON);
         assert_eq!(section.shots[0].comment.as_deref(), Some("recalc"));
 
-        let undo_after = history::get_undo_stack(state(&app));
+        let undo_after = read(history::get_undo_stack(h(&app)));
         assert_eq!(undo_after.len(), undo_before.len());
         assert_eq!(undo_after[0].command_type, "update_shot");
     });
@@ -1433,13 +1548,13 @@ fn test_get_project_state_emits_positional_wire_refs() {
         let section_b = create_section_with_shots(&app, vec![shot_data(7.0)]);
         // Merge two AfterShot stations across sections so the wire form must
         // resolve a non-trivial positional index.
-        assert_success(&station::merge_stations(
-            state(&app),
+        assert_success(&run(station::merge_stations(
+            h(&app),
             StationRef::new(section_a, 1),
             StationRef::new(section_b, 1),
-        ));
+        )));
 
-        let project_state = project::get_project_state(state(&app)).expect("project state");
+        let project_state = read(project::get_project_state(h(&app))).expect("project state");
 
         // The IPC payload (ProjectState) must carry the positional StationRef
         // wire shape: `station_index` present, no StationKey `anchor`.
@@ -1470,12 +1585,6 @@ fn test_get_project_state_emits_positional_wire_refs() {
 fn test_open_project_updates_recent_projects_when_config_save_fails() {
     use std::os::unix::fs::PermissionsExt;
 
-    // Skip when running as root - file permission restrictions don't apply to UID 0
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
-        return;
-    }
-
     // Resolve the config path for REAL rather than into this thread's own temp
     // dir: this test drives config_path() itself by pointing XDG_CONFIG_HOME at
     // a read-only dir to force a save failure. The env is process-wide, so the
@@ -1486,6 +1595,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
         let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
         perms.set_mode(0o555);
         fs::set_permissions(readonly_dir.path(), perms).unwrap();
+        crate::models::test_support::assert_dir_refuses_new_files(readonly_dir.path());
 
         let _env_guard = EnvVarGuard::set("XDG_CONFIG_HOME", readonly_dir.path().to_str().unwrap());
 
@@ -1505,7 +1615,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
         let result = open_project(state(&app), project_path.clone());
         assert_success(&result);
 
-        let cfg = config::get_config(state(&app));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(cfg.general.recent_projects.first(), Some(&project_path));
 
         let config_path = crate::config::Config::config_path().unwrap();
@@ -1530,11 +1640,6 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
 fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
     use std::os::unix::fs::PermissionsExt;
 
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
-        return;
-    }
-
     // Real resolution (not this thread's temp dir): drives config_path() via HOME.
     let _config_guard = crate::test_helpers::real_config_resolution();
     {
@@ -1542,6 +1647,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
         let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
         perms.set_mode(0o555);
         fs::set_permissions(readonly_dir.path(), perms).unwrap();
+        crate::models::test_support::assert_dir_refuses_new_files(readonly_dir.path());
 
         // On macOS, directories crate uses ~/Library/Application Support/...
         // Setting HOME to a read-only dir makes create_dir_all fail for config save.
@@ -1563,7 +1669,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
         let result = open_project(state(&app), project_path.clone());
         assert_success(&result);
 
-        let cfg = config::get_config(state(&app));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(cfg.general.recent_projects.first(), Some(&project_path));
 
         let config_path = crate::config::Config::config_path().unwrap();
@@ -1584,10 +1690,10 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let mut cfg = config::get_config(state(&app));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.general.recent_projects_max = 2;
             cfg.general.recent_projects = Vec::new();
-            config::update_config(state(&app), cfg).expect("update config");
+            run(config::update_config(h(&app), cfg)).expect("update config");
 
             let dir = TempDir::new().unwrap();
             let path_a = dir.path().join("a.stalx");
@@ -1608,14 +1714,14 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
             assert_success(&open_project(state(&app), path_b.clone()));
             assert_success(&open_project(state(&app), path_c.clone()));
 
-            let cfg = config::get_config(state(&app));
+            let cfg = run(config::get_config(h(&app))).unwrap();
             assert_eq!(
                 cfg.general.recent_projects,
                 vec![path_c.clone(), path_b.clone()]
             );
 
             assert_success(&open_project(state(&app), path_b.clone()));
-            let cfg = config::get_config(state(&app));
+            let cfg = run(config::get_config(h(&app))).unwrap();
             assert_eq!(cfg.general.recent_projects, vec![path_b, path_c]);
         });
     });
@@ -1632,7 +1738,7 @@ fn test_save_project_persists_sections() {
 
         let app2 = app_with_state();
         let _ = open_project(state(&app2), saved_path);
-        let project_state = project::get_project_state(state(&app2)).expect("project state");
+        let project_state = read(project::get_project_state(h(&app2))).expect("project state");
         assert_eq!(project_state.project.sections.len(), 1);
     });
 }
@@ -1647,7 +1753,7 @@ fn test_save_project_fails_when_output_is_directory() {
             let blocked = dir.path().join("blocked.stalx");
             fs::create_dir_all(&blocked).unwrap();
 
-            let result = project::save_project(state(&app), Some(blocked.clone()), None);
+            let result = run(project::save_project(h(&app), Some(blocked.clone()), None));
             assert_failure_contains(&result, "Failed to finalize save");
 
             let temp_path = blocked.with_extension("stalx.tmp");
@@ -1702,8 +1808,8 @@ fn test_import_sections_persists_deferred_new_project() {
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
         }];
-        let result = import::import_sections(
-            state(&app),
+        let result = run(import::import_sections(
+            h(&app),
             sections,
             None,
             None,
@@ -1712,15 +1818,17 @@ fn test_import_sections_persists_deferred_new_project() {
             None,
             None,
             None,
-        );
+            None,
+        ));
         assert_success(&result);
+        let result = result.expect("the import succeeds");
 
         // The command resolved the deferred save: file on disk + in Recent Projects.
         assert!(
             project_path.exists(),
             "import must write the deferred project to disk"
         );
-        let cfg = config::get_config(state(&app));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(cfg.general.recent_projects.first(), Some(&project_path));
         assert!(
             !state(&app).initial_save_deferred(),
@@ -1733,260 +1841,6 @@ fn test_import_sections_persists_deferred_new_project() {
             .expect("import must attach an import receipt");
         assert_eq!(receipt.sections_imported, 1);
         assert_eq!(receipt.shot_count, 1);
-    });
-}
-
-/// #391: `import_sections`' additive provenance params (used by the mNemo DMP
-/// wizard) decorate the base receipt when passed, and leave it at its
-/// (empty-provenance) defaults when omitted - the shape every other caller
-/// still uses.
-#[test]
-fn test_import_sections_provenance_params_decorate_receipt() {
-    with_config_lock(|| {
-        let app = app_with_state();
-        state(&app).execute(Command::CreateProject {
-            name: "Test".to_string(),
-            location: None,
-        });
-
-        let sections = vec![crate::models::ImportSectionConfig {
-            reverse: false,
-            section_index: 0,
-            name: Some("Imported".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ff0000".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![shot_data(5.0)],
-            station_comments: Vec::new(),
-            placement: crate::models::ImportPlacement::Origin,
-            azimuth_reference: None,
-        }];
-
-        let result = import::import_sections(
-            state(&app),
-            sections,
-            None,
-            None,
-            None,
-            None,
-            Some("mNemo DMP".to_string()),
-            Some("dive.dmp".to_string()),
-            Some(1),
-        );
-        assert_success(&result);
-        let receipt = result
-            .import_receipt
-            .as_ref()
-            .expect("import must attach an import receipt");
-        assert_eq!(receipt.source_format, "mNemo DMP");
-        assert_eq!(receipt.file_name, "dive.dmp");
-        assert_eq!(receipt.sections_found, 1);
-    });
-}
-
-/// PR #529 Codex review: `import_sections` (the mNemo DMP wizard's actual IPC
-/// entry point) never calls `decorate_receipt` - it only overwrites
-/// source_format/file_name/sections_found directly (see above and
-/// `import::import_sections`). A `zero_datum_created` sanitized ONLY in
-/// `decorate_receipt` would therefore reach the frontend as a raw,
-/// file-controlled `ImportSectionConfig::name` through this exact command.
-/// Drives the real command with a hostile name (a bidi override + 10k chars)
-/// and asserts the receipt field arrives clean - proof this route, not just
-/// `decorate_receipt`'s callers, is sanitized.
-#[test]
-fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
-    with_config_lock(|| {
-        let app = app_with_state();
-        state(&app).execute(Command::CreateProject {
-            name: "Test".to_string(),
-            location: None,
-        });
-
-        let hostile_name = format!("A\u{202e}B{}", "x".repeat(10_000));
-        let sections = vec![crate::models::ImportSectionConfig {
-            reverse: false,
-            section_index: 0,
-            name: Some(hostile_name),
-            surveyor: None,
-            date: None,
-            color: "#ff0000".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![shot_data(5.0)],
-            station_comments: Vec::new(),
-            placement: crate::models::ImportPlacement::ZeroDatum {
-                coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
-                station_index: 0,
-            },
-            azimuth_reference: None,
-        }];
-
-        let result = import::import_sections(
-            state(&app),
-            sections,
-            None,
-            None,
-            None,
-            None,
-            Some("mNemo DMP".to_string()),
-            Some("dive.dmp".to_string()),
-            Some(1),
-        );
-        assert_success(&result);
-
-        let receipt = result
-            .import_receipt
-            .as_ref()
-            .expect("import must attach an import receipt");
-        let name = receipt
-            .zero_datum_created
-            .as_ref()
-            .expect("field must still be Some after sanitizing");
-        assert!(
-            !name.contains('\u{202e}'),
-            "bidi override must be stripped: {name:?}"
-        );
-        assert!(
-            name.chars().count() <= 120,
-            "must clamp to MAX_FILE_NAME_LEN chars, got {}",
-            name.chars().count()
-        );
-    });
-}
-
-#[test]
-fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
-    with_config_lock(|| {
-        let app = app_with_state();
-        state(&app).execute(Command::CreateProject {
-            name: "Test".to_string(),
-            location: None,
-        });
-
-        let sections = vec![crate::models::ImportSectionConfig {
-            reverse: false,
-            section_index: 0,
-            name: Some("Imported".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ff0000".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![shot_data(5.0)],
-            station_comments: Vec::new(),
-            placement: crate::models::ImportPlacement::Origin,
-            azimuth_reference: None,
-        }];
-
-        let result = import::import_sections(
-            state(&app),
-            sections,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
-        assert_success(&result);
-        let receipt = result
-            .import_receipt
-            .as_ref()
-            .expect("import must attach an import receipt");
-        assert_eq!(receipt.sections_imported, 1);
-        assert_eq!(receipt.source_format, "");
-        assert_eq!(receipt.file_name, "");
-        assert_eq!(receipt.sections_found, 0);
-    });
-}
-
-/// #391: `execute_gpx_import` decorates the import receipt with source format
-/// "GPX", no unit conversion, and `sections_found` counting the tracks/routes/
-/// waypoints actually selected for import.
-#[test]
-fn test_execute_gpx_import_decorates_receipt() {
-    with_config_lock(|| {
-        let app = app_with_state();
-        state(&app).execute(Command::CreateProject {
-            name: "Test".to_string(),
-            location: None,
-        });
-
-        let gpx_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1">
-  <trk>
-    <name>Surface Path</name>
-    <trkseg>
-      <trkpt lat="45.5" lon="-90.5"><ele>350.2</ele></trkpt>
-      <trkpt lat="45.5005" lon="-90.4995"><ele>351.0</ele></trkpt>
-      <trkpt lat="45.501" lon="-90.499"><ele>348.0</ele></trkpt>
-    </trkseg>
-  </trk>
-</gpx>"#;
-        let mut file = NamedTempFile::with_suffix(".gpx").unwrap();
-        use std::io::Write;
-        file.write_all(gpx_xml.as_bytes()).unwrap();
-
-        let result = import::execute_gpx_import(
-            state(&app),
-            file.path().to_path_buf(),
-            None,
-            false,
-            true,
-            false,
-            Vec::new(),
-            false,
-        );
-        assert_success(&result);
-        let receipt = result
-            .import_receipt
-            .as_ref()
-            .expect("import must attach an import receipt");
-        assert_eq!(receipt.source_format, "GPX");
-        assert_eq!(receipt.sections_found, 1);
-        assert_eq!(receipt.unit_conversion, None);
-    });
-}
-
-/// #411: an import whose sections all vanished before they reached the command
-/// (every shot excluded, or every section malformed) lands NOTHING. It must
-/// still return a receipt - a zero one - because `decorate_receipt` hangs the
-/// converter's "why" on that receipt and had nothing to hang it on when the
-/// command returned a bare success. A silent, successful, empty import is the
-/// exact failure this closes.
-#[test]
-fn test_import_sections_with_nothing_to_import_still_reports_a_receipt() {
-    with_config_lock(|| {
-        let app = app_with_state();
-        state(&app).execute(Command::CreateProject {
-            name: "Test".to_string(),
-            location: None,
-        });
-
-        let result = import::import_sections(
-            state(&app),
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        assert_success(&result);
-        let receipt = result
-            .import_receipt
-            .as_ref()
-            .expect("an import that landed nothing must still report a receipt");
-        assert_eq!(receipt.sections_imported, 0);
-        assert_eq!(receipt.shot_count, 0);
-        assert_eq!(receipt.closures_requested, 0);
-        assert!(receipt.warnings.is_empty());
     });
 }
 
@@ -2043,8 +1897,8 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
         }];
-        let result = import::import_sections(
-            state(&app),
+        let result = run(import::import_sections(
+            h(&app),
             sections,
             None,
             None,
@@ -2053,11 +1907,13 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             None,
             None,
             None,
-        );
+            None,
+        ));
 
         // Partial success: the import itself still succeeds, but a warning flags the
         // failed save instead of reporting a phantom "saved".
         assert_success(&result);
+        let result = result.expect("the import succeeds");
         assert!(
             result
                 .warnings
@@ -2069,7 +1925,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
 
         // No phantom: the never-written project must NOT appear in Recent Projects,
         // and it must remain deferred (still unsaved) so the app keeps prompting.
-        let cfg = config::get_config(state(&app));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert!(
             !cfg.general.recent_projects.contains(&project_path),
             "a project whose save failed must not be added to Recent Projects"
@@ -2121,9 +1977,9 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
 // A real EACCES is the only route to that branch since #429: SQLite's generic
 // "unable to open database file" is no longer read as a denial on its own (a
 // directory squatting the temp path produces it too, and that is not a
-// permission problem). So this is unix-only, and skips itself when the mode bits
-// don't bite (container-root holds CAP_DAC_OVERRIDE) rather than false-failing -
-// the same idiom as `save_into_unwritable_dir_reports_permission_code`. The
+// permission problem). So this is unix-only, and FAILS when the mode bits don't
+// bite (root holds CAP_DAC_OVERRIDE; CI runs the tests unprivileged, #576
+// NF-ROOT-PERM) - the same idiom as `save_into_unwritable_dir_reports_permission_code`. The
 // partial-success invariants (no phantom, in-memory survival, still-deferred) are
 // already covered by the generic-failure twin above; this test focuses on the
 // message mapping.
@@ -2137,11 +1993,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
         let locked = dir.path().join("locked");
         fs::create_dir_all(&locked).unwrap();
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
-        // Restore perms first so TempDir cleanup can remove the directory.
-        if fs::File::create(locked.join(".probe")).is_ok() {
-            let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
-            return;
-        }
+        crate::models::test_support::assert_dir_refuses_new_files(&locked);
         let project_path = locked.join("new-import.stalx");
 
         let mut project = Project::new("New Import".to_string(), None);
@@ -2169,8 +2021,8 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
         }];
-        let result = import::import_sections(
-            state(&app),
+        let result = run(import::import_sections(
+            h(&app),
             sections,
             None,
             None,
@@ -2179,12 +2031,14 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             None,
             None,
             None,
-        );
+            None,
+        ));
 
         let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
 
         // Partial success carrying a HUMANIZED permission warning...
         assert_success(&result);
+        let result = result.expect("the import succeeds");
         assert!(
             result
                 .warnings
@@ -2193,12 +2047,14 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             "a permission-classified save failure must be humanized: {:?}",
             result.warnings
         );
-        // ...and the internal marker must never reach the user-facing message.
+        // ...and no marker reaches the user-facing message (#576 C4: the save's
+        // classification is its code, so there is none to strip).
         assert!(
-            result.warnings.iter().all(|w| !w
-                .message
-                .contains(crate::core::loading::PERMISSION_DENIED_CODE)),
-            "the internal FS_PERMISSION_DENIED marker must be stripped, not leaked: {:?}",
+            result
+                .warnings
+                .iter()
+                .all(|w| !w.message.contains("FS_PERMISSION_DENIED")),
+            "the FS_PERMISSION_DENIED marker must not reach the warning: {:?}",
             result.warnings
         );
     });
@@ -2242,8 +2098,8 @@ fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
         }];
-        let result = import::import_sections(
-            state(&app),
+        let result = run(import::import_sections(
+            h(&app),
             sections,
             None,
             None,
@@ -2252,9 +2108,11 @@ fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
             None,
             None,
             None,
-        );
+            None,
+        ));
 
         assert_success(&result);
+        let result = result.expect("the import succeeds");
         assert!(
             !result.warnings.is_empty(),
             "the deferred save failed, so the import must say it is unsaved"
@@ -2268,9 +2126,9 @@ fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
             result.warnings
         );
         for marker in [
-            crate::core::loading::PERMISSION_DENIED_CODE,
-            crate::core::loading::PATH_NOT_FOUND_CODE,
-            crate::core::loading::PATH_TOO_LONG_CODE,
+            "FS_PERMISSION_DENIED",
+            "FS_PATH_NOT_FOUND",
+            "FS_PATH_TOO_LONG",
         ] {
             assert!(
                 result.warnings.iter().all(|w| !w.message.contains(marker)),
@@ -2313,7 +2171,7 @@ fn test_list_recent_projects_includes_saved() {
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let saved_path = save_project_to_temp(&app, &dir);
-            let recent = project::list_recent_projects(state(&app));
+            let recent = read(project::list_recent_projects(h(&app)));
             assert!(recent.iter().any(|p| p.file_path == saved_path));
         });
     });
@@ -2330,7 +2188,7 @@ fn test_remove_from_recent_projects_absent_is_idempotent_success() {
         let app = app_with_state();
         with_restored_config(&app, || {
             let missing = PathBuf::from("/tmp/does-not-exist.stalx");
-            let result = project::remove_from_recent_projects(state(&app), missing);
+            let result = run(project::remove_from_recent_projects(h(&app), missing));
             assert_success(&result);
         });
     });
@@ -2344,10 +2202,12 @@ fn test_remove_from_recent_projects_success() {
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let saved_path = save_project_to_temp(&app, &dir);
-            let remove_result =
-                project::remove_from_recent_projects(state(&app), saved_path.clone());
+            let remove_result = run(project::remove_from_recent_projects(
+                h(&app),
+                saved_path.clone(),
+            ));
             assert_success(&remove_result);
-            let recent = project::list_recent_projects(state(&app));
+            let recent = read(project::list_recent_projects(h(&app)));
             assert!(!recent.iter().any(|p| p.file_path == saved_path));
         });
     });
@@ -2367,13 +2227,13 @@ fn test_delete_project_removes_file_and_recent() {
             let saved_path = save_project_to_temp(&app, &dir);
             assert!(saved_path.exists(), "precondition: .stalx written to disk");
 
-            let result = project::delete_project(state(&app), saved_path.clone());
+            let result = run(project::delete_project(h(&app), saved_path.clone()));
             assert_success(&result);
             assert!(
                 !saved_path.exists(),
                 "project file should be deleted from disk"
             );
-            let recent = project::list_recent_projects(state(&app));
+            let recent = read(project::list_recent_projects(h(&app)));
             assert!(!recent.iter().any(|p| p.file_path == saved_path));
         });
     });
@@ -2388,7 +2248,7 @@ fn test_delete_project_tolerates_missing_file() {
             // should still succeed (there is simply nothing to remove).
             let dir = TempDir::new().unwrap();
             let missing = dir.path().join("never-saved.stalx");
-            let result = project::delete_project(state(&app), missing.clone());
+            let result = run(project::delete_project(h(&app), missing.clone()));
             assert_success(&result);
             assert!(!missing.exists());
         });
@@ -2409,7 +2269,7 @@ fn test_delete_project_leaves_a_same_stem_tml_alone() {
             let dir = TempDir::new().unwrap();
             let saved_path = save_project_to_temp(&app, &dir);
             assert!(
-                project::list_recent_projects(state(&app))
+                read(project::list_recent_projects(h(&app)))
                     .iter()
                     .any(|p| p.file_path == saved_path),
                 "precondition: saved project is listed in recents"
@@ -2417,16 +2277,16 @@ fn test_delete_project_leaves_a_same_stem_tml_alone() {
             let tml = saved_path.with_extension("tml");
             fs::write(&tml, b"not ours").unwrap();
 
-            let result = project::delete_project(state(&app), saved_path.clone());
+            let result = run(project::delete_project(h(&app), saved_path.clone()));
 
-            assert!(result.success, "the .stalx delete succeeded");
+            assert!(result.is_ok(), "the .stalx delete succeeded");
             assert!(!saved_path.exists(), "project .stalx should be trashed");
             assert!(
                 tml.exists(),
                 "an unrelated same-stem .tml must be left alone"
             );
             assert!(
-                !project::list_recent_projects(state(&app))
+                !read(project::list_recent_projects(h(&app)))
                     .iter()
                     .any(|p| p.file_path == saved_path),
                 "recents must be pruned"
@@ -2452,12 +2312,6 @@ fn test_delete_project_leaves_a_same_stem_tml_alone() {
 fn test_delete_project_partial_failure_still_prunes_recents() {
     use std::os::unix::fs::PermissionsExt;
 
-    // Skip when running as root - file permission restrictions don't apply to UID 0
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
-        return;
-    }
-
     // Same technique as test_open_project_updates_recent_projects_when_config_save_fails:
     // resolve `config_path()` for real rather than into this thread's temp dir, and point
     // the platform's config root at a read-only directory so every `config.save()` fails
@@ -2469,6 +2323,7 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
     let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
     perms.set_mode(0o555);
     fs::set_permissions(readonly_dir.path(), perms).unwrap();
+    crate::models::test_support::assert_dir_refuses_new_files(readonly_dir.path());
     #[cfg(target_os = "linux")]
     let _env_guard = EnvVarGuard::set("XDG_CONFIG_HOME", readonly_dir.path().to_str().unwrap());
     #[cfg(target_os = "macos")]
@@ -2481,7 +2336,8 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
     // The save could not persist the config either - that is the point - but it DID
     // update the in-memory recents, so there is a real entry for the delete to prune.
     assert!(
-        config::get_config(state(&app))
+        run(config::get_config(h(&app)))
+            .unwrap()
             .general
             .recent_projects
             .contains(&saved_path),
@@ -2492,7 +2348,7 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
         "precondition: the config root is genuinely unwritable"
     );
 
-    let result = project::delete_project(state(&app), saved_path.clone());
+    let result = run(project::delete_project(h(&app), saved_path.clone()));
 
     // Restore permissions BEFORE the assertions: a panicking assert would otherwise
     // unwind past this and leave TempDir unable to clean up.
@@ -2501,10 +2357,11 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
     fs::set_permissions(readonly_dir.path(), perms).unwrap();
 
     assert!(
-        result.success,
+        result.is_ok(),
         "the .stalx was trashed, so the delete succeeded overall: {:?}",
-        result.error
+        result.as_ref().err()
     );
+    let result = result.expect("the delete succeeded");
     assert!(!saved_path.exists(), "project .stalx should be trashed");
     assert!(
         result
@@ -2515,7 +2372,8 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
         result.warnings
     );
     assert!(
-        !config::get_config(state(&app))
+        !run(config::get_config(h(&app)))
+            .unwrap()
             .general
             .recent_projects
             .contains(&saved_path),
@@ -2551,10 +2409,10 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
             // already empty would prove nothing.
             create_section_with_shots(&app, vec![shot_data(1.0)]);
             create_section_with_shots(&app, vec![shot_data(2.0)]);
-            assert_success(&history::undo(state(&app)));
+            assert_success(&run(history::undo(h(&app))));
 
             assert_eq!(
-                project::get_project_state(state(&app))
+                read(project::get_project_state(h(&app)))
                     .expect("precondition: a project is open")
                     .project
                     .file_path
@@ -2563,55 +2421,55 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
                 "precondition: the path being deleted IS the open project"
             );
             assert!(
-                raw_data::get_raw_table_names_impl(state(&app).inner()).is_ok(),
+                run(raw_data::get_raw_table_names(h(&app))).is_ok(),
                 "precondition: the project database handle is live"
             );
             assert!(
-                history::can_undo(state(&app)),
+                read(history::can_undo(h(&app))),
                 "precondition: the undo stack is non-empty"
             );
             assert!(
-                history::can_redo(state(&app)),
+                read(history::can_redo(h(&app))),
                 "precondition: the redo stack is non-empty"
             );
 
-            let result = project::delete_project(state(&app), saved_path.clone());
+            let result = run(project::delete_project(h(&app), saved_path.clone()));
 
             assert_success(&result);
             assert!(!saved_path.exists(), "project .stalx should be trashed");
 
             assert!(
-                project::get_project_state(state(&app)).is_none(),
+                read(project::get_project_state(h(&app))).is_none(),
                 "the open project must be dropped when its file is deleted"
             );
-            let db_err = raw_data::get_raw_table_names_impl(state(&app).inner()).expect_err(
+            let db_err = run(raw_data::get_raw_table_names(h(&app))).expect_err(
                 "the database handle LEAKED: still open on a file that was just deleted",
             );
             assert!(
-                db_err.contains("No project database"),
+                db_err.message.contains("No project database"),
                 "expected the no-database error, got: {db_err}"
             );
             assert!(
-                !history::can_undo(state(&app)),
+                !read(history::can_undo(h(&app))),
                 "the undo stack LEAKED ({} entries): an undo must never be able to \
                  replay against a deleted project",
-                history::get_undo_stack(state(&app)).len()
+                read(history::get_undo_stack(h(&app))).len()
             );
             assert!(
-                history::get_undo_stack(state(&app)).is_empty(),
+                read(history::get_undo_stack(h(&app))).is_empty(),
                 "the undo stack LEAKED: {:?}",
-                history::get_undo_stack(state(&app))
+                read(history::get_undo_stack(h(&app)))
             );
             assert!(
-                !history::can_redo(state(&app)),
+                !read(history::can_redo(h(&app))),
                 "the redo stack LEAKED ({} entries): a redo must never be able to \
                  replay against a deleted project",
-                history::get_redo_stack(state(&app)).len()
+                read(history::get_redo_stack(h(&app))).len()
             );
             assert!(
-                history::get_redo_stack(state(&app)).is_empty(),
+                read(history::get_redo_stack(h(&app))).is_empty(),
                 "the redo stack LEAKED: {:?}",
-                history::get_redo_stack(state(&app))
+                read(history::get_redo_stack(h(&app)))
             );
         });
     });
@@ -2637,12 +2495,6 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
 fn test_delete_project_tears_down_before_removing_the_file() {
     use std::os::unix::fs::PermissionsExt;
 
-    // Skip when running as root - file permission restrictions don't apply to UID 0
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
-        return;
-    }
-
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
@@ -2651,7 +2503,7 @@ fn test_delete_project_tears_down_before_removing_the_file() {
             let saved_path = save_project_to_temp(&app, &dir);
             create_section_with_shots(&app, vec![shot_data(1.0)]);
             assert!(
-                history::can_undo(state(&app)),
+                read(history::can_undo(h(&app))),
                 "precondition: there is real undo history to tear down"
             );
 
@@ -2660,8 +2512,8 @@ fn test_delete_project_tears_down_before_removing_the_file() {
             let mut perms = fs::metadata(dir.path()).unwrap().permissions();
             perms.set_mode(0o555);
             fs::set_permissions(dir.path(), perms).unwrap();
-
-            let result = project::delete_project(state(&app), saved_path.clone());
+            crate::models::test_support::assert_dir_refuses_new_files(dir.path());
+            let result = run(project::delete_project(h(&app), saved_path.clone()));
 
             // Restore permissions BEFORE the assertions: a panicking assert would
             // otherwise unwind past this and leave TempDir unable to clean up.
@@ -2678,27 +2530,27 @@ fn test_delete_project_tears_down_before_removing_the_file() {
             // The removal never happened, yet the session is gone - so the teardown
             // must have run before it.
             assert!(
-                project::get_project_state(state(&app)).is_none(),
+                read(project::get_project_state(h(&app))).is_none(),
                 "the teardown must precede the file removal: the project is still open, \
                  so the close can only have been sequenced AFTER the (failed) delete"
             );
             assert!(
-                raw_data::get_raw_table_names_impl(state(&app).inner()).is_err(),
+                run(raw_data::get_raw_table_names(h(&app))).is_err(),
                 "the teardown must precede the file removal: the database handle is \
                  still live, so the close can only have been sequenced AFTER the \
                  (failed) delete"
             );
             assert!(
-                !history::can_undo(state(&app)),
+                !read(history::can_undo(h(&app))),
                 "the teardown must precede the file removal: the undo stack still has \
                  {} entries",
-                history::get_undo_stack(state(&app)).len()
+                read(history::get_undo_stack(h(&app))).len()
             );
 
             // The documented cost of closing first: recents is left untouched on this
             // branch, so the user can reopen the project that survived.
             assert!(
-                project::list_recent_projects(state(&app))
+                read(project::list_recent_projects(h(&app)))
                     .iter()
                     .any(|p| p.file_path == saved_path),
                 "a failed delete must leave the recents entry so the surviving project \
@@ -2710,7 +2562,11 @@ fn test_delete_project_tears_down_before_removing_the_file() {
             // and a frontend that tried kept rendering a project the backend had
             // already dropped.
             assert_eq!(
-                result.session_closed,
+                result
+                    .as_ref()
+                    .expect_err("the delete failed")
+                    .payload
+                    .session_closed,
                 Some(true),
                 "a failed delete that already tore the session down must still report it"
             );
@@ -2737,7 +2593,7 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
             // A project that is NOT open: save it, then close the session.
             create_project(&app);
             let other_path = save_project_to_temp(&app, &dir);
-            assert_success(&project::close_project(state(&app), None));
+            assert_success(&run(project::close_project(h(&app), None)));
 
             // ...and the one that IS open, in its own directory so the two saves
             // don't collide on `project.stalx`.
@@ -2746,35 +2602,34 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
             let open_path = save_project_to_temp(&app, &open_dir);
             create_section_with_shots(&app, vec![shot_data(1.0)]);
 
-            let other = project::delete_project(state(&app), other_path.clone());
+            let other = run(project::delete_project(h(&app), other_path.clone()));
             assert_success(&other);
             assert!(!other_path.exists(), "the unrelated .stalx was deleted");
-            assert_eq!(
-                other.session_closed, None,
+            assert!(
+                !other.expect("the delete succeeded").session_closed,
                 "deleting an unrelated project must not report - or perform - a close"
             );
             assert!(
-                project::get_project_state(state(&app)).is_some(),
+                read(project::get_project_state(h(&app))).is_some(),
                 "the OPEN project must survive an unrelated delete"
             );
             assert!(
-                raw_data::get_raw_table_names_impl(state(&app).inner()).is_ok(),
+                run(raw_data::get_raw_table_names(h(&app))).is_ok(),
                 "the open project's database handle must survive an unrelated delete"
             );
             assert!(
-                history::can_undo(state(&app)),
+                read(history::can_undo(h(&app))),
                 "the open project's undo stack must survive an unrelated delete"
             );
 
-            let own = project::delete_project(state(&app), open_path.clone());
+            let own = run(project::delete_project(h(&app), open_path.clone()));
             assert_success(&own);
-            assert_eq!(
-                own.session_closed,
-                Some(true),
+            assert!(
+                own.expect("the delete succeeded").session_closed,
                 "deleting the OPEN project's own .stalx must report the close"
             );
             assert!(
-                project::get_project_state(state(&app)).is_none(),
+                read(project::get_project_state(h(&app))).is_none(),
                 "precondition for the flag: the session really was torn down"
             );
         });
@@ -2804,7 +2659,7 @@ fn test_delete_project_matches_an_alias_of_the_open_path() {
             let saved_path = save_project_to_temp(&app, &dir);
             create_section_with_shots(&app, vec![shot_data(1.0)]);
             assert!(
-                history::can_undo(state(&app)),
+                read(history::can_undo(h(&app))),
                 "precondition: there is real undo history to tear down"
             );
 
@@ -2818,27 +2673,26 @@ fn test_delete_project_matches_an_alias_of_the_open_path() {
                 "precondition: the alias is not literally the open project's path"
             );
 
-            let result = project::delete_project(state(&app), alias);
+            let result = run(project::delete_project(h(&app), alias));
 
             assert_success(&result);
-            assert_eq!(
-                result.session_closed,
-                Some(true),
+            assert!(
+                result.expect("the delete succeeded").session_closed,
                 "an alias of the open project's path must still close the session"
             );
             assert!(!saved_path.exists(), "the aliased .stalx should be trashed");
             assert!(
-                project::get_project_state(state(&app)).is_none(),
+                read(project::get_project_state(h(&app))).is_none(),
                 "the open project must be dropped when an alias of its path is deleted"
             );
             assert!(
-                raw_data::get_raw_table_names_impl(state(&app).inner()).is_err(),
+                run(raw_data::get_raw_table_names(h(&app))).is_err(),
                 "the database handle LEAKED: still open on a file that was just deleted"
             );
             assert!(
-                !history::can_undo(state(&app)),
+                !read(history::can_undo(h(&app))),
                 "the undo stack LEAKED ({} entries)",
-                history::get_undo_stack(state(&app)).len()
+                read(history::get_undo_stack(h(&app))).len()
             );
             // The recents prune matches on file identity too, so the entry stored
             // under the plain path goes with it - see
@@ -2846,7 +2700,8 @@ fn test_delete_project_matches_an_alias_of_the_open_path() {
             // focused version of that (this test is about the live SQLite handle,
             // which is what the Windows delete depends on).
             assert!(
-                !config::get_config(state(&app))
+                !run(config::get_config(h(&app)))
+                    .unwrap()
                     .general
                     .recent_projects
                     .contains(&saved_path),
@@ -2889,7 +2744,7 @@ fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let saved_path = save_project_to_temp(&app, &dir);
-            assert_success(&project::close_project(state(&app), None));
+            assert_success(&run(project::close_project(h(&app), None)));
 
             // An unrelated bystander, in its own directory so the two saves don't
             // collide on `project.stalx`. Left OPEN as well.
@@ -2897,7 +2752,10 @@ fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
             create_project(&app);
             let other_path = save_project_to_temp(&app, &other_dir);
 
-            let recents_before = config::get_config(state(&app)).general.recent_projects;
+            let recents_before = run(config::get_config(h(&app)))
+                .unwrap()
+                .general
+                .recent_projects;
             assert!(
                 recents_before.contains(&saved_path) && recents_before.contains(&other_path),
                 "precondition: both projects are in recents under their plain paths, \
@@ -2913,11 +2771,14 @@ fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
                 "precondition: the alias is not literally the stored recents path"
             );
 
-            let result = project::delete_project(state(&app), alias);
+            let result = run(project::delete_project(h(&app), alias));
 
             assert_success(&result);
             assert!(!saved_path.exists(), "the aliased .stalx should be trashed");
-            let recents_after = config::get_config(state(&app)).general.recent_projects;
+            let recents_after = run(config::get_config(h(&app)))
+                .unwrap()
+                .general
+                .recent_projects;
             assert!(
                 !recents_after.contains(&saved_path),
                 "an aliased delete must prune the recents row, or it becomes a \
@@ -2928,13 +2789,13 @@ fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
                 "and must not over-prune: an unrelated project's row has to survive: \
                  {recents_after:?}"
             );
-            assert_eq!(
-                result.session_closed, None,
+            assert!(
+                !result.expect("the delete succeeded").session_closed,
                 "the deleted project was already closed and the OPEN one is a \
                  different file, so no session was torn down"
             );
             assert!(
-                project::get_project_state(state(&app)).is_some(),
+                read(project::get_project_state(h(&app))).is_some(),
                 "the unrelated open project must survive"
             );
             assert!(other_path.exists(), "and so must its .stalx");
@@ -2971,7 +2832,7 @@ fn test_delete_project_unlinks_a_dangling_symlink() {
                 "precondition: but there IS an entry at that path to unlink"
             );
 
-            let result = project::delete_project(state(&app), link.clone());
+            let result = run(project::delete_project(h(&app), link.clone()));
 
             assert_success(&result);
             assert!(
@@ -3014,7 +2875,7 @@ fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
             let saved_path = save_project_to_temp(&app, &dir);
             create_section_with_shots(&app, vec![shot_data(1.0)]);
             assert!(
-                history::can_undo(state(&app)),
+                read(history::can_undo(h(&app))),
                 "precondition: there is real undo history that must NOT be torn down"
             );
 
@@ -3028,7 +2889,7 @@ fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
                  vacuous"
             );
 
-            let result = project::delete_project(state(&app), link.clone());
+            let result = run(project::delete_project(h(&app), link.clone()));
 
             assert_success(&result);
             assert!(
@@ -3042,13 +2903,13 @@ fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
             );
 
             // The session is still valid: its file is right there.
-            assert_eq!(
-                result.session_closed, None,
+            assert!(
+                !result.expect("the delete succeeded").session_closed,
                 "the referent's session is still backed by a real file, so nothing may \
                  be torn down - and the frontend must not be told it was"
             );
             assert_eq!(
-                project::get_project_state(state(&app))
+                read(project::get_project_state(h(&app)))
                     .expect("the open project must survive the deletion of a link to it")
                     .project
                     .file_path
@@ -3057,16 +2918,17 @@ fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
                 "the open project must still be the referent"
             );
             assert!(
-                raw_data::get_raw_table_names_impl(state(&app).inner()).is_ok(),
+                run(raw_data::get_raw_table_names(h(&app))).is_ok(),
                 "the database handle must survive: its file was never deleted"
             );
             assert!(
-                history::can_undo(state(&app)),
+                read(history::can_undo(h(&app))),
                 "the undo history must survive: nothing was destroyed that it could \
                  replay against"
             );
             assert!(
-                config::get_config(state(&app))
+                run(config::get_config(h(&app)))
+                    .unwrap()
                     .general
                     .recent_projects
                     .contains(&saved_path),
@@ -3100,7 +2962,7 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let real_path = save_project_to_temp(&app, &dir);
-            assert_success(&project::close_project(state(&app), None));
+            assert_success(&run(project::close_project(h(&app), None)));
 
             let link = dir.path().join("link.stalx");
             std::os::unix::fs::symlink(&real_path, &link).unwrap();
@@ -3108,7 +2970,7 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
             create_section_with_shots(&app, vec![shot_data(1.0)]);
 
             assert_eq!(
-                project::get_project_state(state(&app))
+                read(project::get_project_state(h(&app)))
                     .expect("precondition: a project is open")
                     .project
                     .file_path
@@ -3117,7 +2979,10 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
                 "precondition: the session was opened through the link, so its \
                  file_path IS the link"
             );
-            let recents_before = config::get_config(state(&app)).general.recent_projects;
+            let recents_before = run(config::get_config(h(&app)))
+                .unwrap()
+                .general
+                .recent_projects;
             assert!(
                 recents_before.contains(&link) && recents_before.contains(&real_path),
                 "precondition: both spellings have their own recents row (the save \
@@ -3125,7 +2990,7 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
                  {recents_before:?}"
             );
 
-            let result = project::delete_project(state(&app), link.clone());
+            let result = run(project::delete_project(h(&app), link.clone()));
 
             assert_success(&result);
             assert!(
@@ -3137,28 +3002,30 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
                 "the referent was not named, so it survives even here"
             );
 
-            assert_eq!(
-                result.session_closed,
-                Some(true),
+            assert!(
+                result.expect("the delete succeeded").session_closed,
                 "the session's own file_path was the link we just removed, so it MUST \
                  be torn down - leaving it open points every later save at a path that \
                  no longer exists"
             );
             assert!(
-                project::get_project_state(state(&app)).is_none(),
+                read(project::get_project_state(h(&app))).is_none(),
                 "precondition for the flag: the session really was torn down"
             );
             assert!(
-                raw_data::get_raw_table_names_impl(state(&app).inner()).is_err(),
+                run(raw_data::get_raw_table_names(h(&app))).is_err(),
                 "the database handle LEAKED: still open through a link that is gone"
             );
             assert!(
-                !history::can_undo(state(&app)),
+                !read(history::can_undo(h(&app))),
                 "the undo stack LEAKED ({} entries)",
-                history::get_undo_stack(state(&app)).len()
+                read(history::get_undo_stack(h(&app))).len()
             );
 
-            let recents_after = config::get_config(state(&app)).general.recent_projects;
+            let recents_after = run(config::get_config(h(&app)))
+                .unwrap()
+                .general
+                .recent_projects;
             assert!(
                 !recents_after.contains(&link),
                 "the link's own row must be pruned - its file is gone, so it would be a \
@@ -3193,11 +3060,11 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
             let dir = TempDir::new().unwrap();
             let real_dir = dir.path().join("realdir");
             fs::create_dir(&real_dir).unwrap();
-            assert_success(&project::save_project(
-                state(&app),
+            assert_success(&run(project::save_project(
+                h(&app),
                 Some(real_dir.join("project")),
                 None,
-            ));
+            )));
             let saved_path = real_dir.join("project.stalx");
             assert!(
                 saved_path.exists(),
@@ -3205,7 +3072,7 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
             );
             create_section_with_shots(&app, vec![shot_data(1.0)]);
             assert!(
-                history::can_undo(state(&app)),
+                read(history::can_undo(h(&app))),
                 "precondition: there is real undo history to tear down"
             );
 
@@ -3223,7 +3090,7 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
                  stat as an ordinary file, or this test is exercising the other rule"
             );
 
-            let result = project::delete_project(state(&app), through_link);
+            let result = run(project::delete_project(h(&app), through_link));
 
             assert_success(&result);
             assert!(
@@ -3231,29 +3098,29 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
                 "the delete really did destroy the file under the real path, so \
                  referent identity is the correct reading here"
             );
-            assert_eq!(
-                result.session_closed,
-                Some(true),
+            assert!(
+                result.expect("the delete succeeded").session_closed,
                 "a second spelling of the open project's path must still close the \
                  session: on Windows the trash is denied outright while SQLite's handle \
                  is alive"
             );
             assert!(
-                project::get_project_state(state(&app)).is_none(),
+                read(project::get_project_state(h(&app))).is_none(),
                 "the open project must be dropped when its file is deleted through a \
                  symlinked parent directory"
             );
             assert!(
-                raw_data::get_raw_table_names_impl(state(&app).inner()).is_err(),
+                run(raw_data::get_raw_table_names(h(&app))).is_err(),
                 "the database handle LEAKED: still open on a file that was just deleted"
             );
             assert!(
-                !history::can_undo(state(&app)),
+                !read(history::can_undo(h(&app))),
                 "the undo stack LEAKED ({} entries)",
-                history::get_undo_stack(state(&app)).len()
+                read(history::get_undo_stack(h(&app))).len()
             );
             assert!(
-                !config::get_config(state(&app))
+                !run(config::get_config(h(&app)))
+                    .unwrap()
                     .general
                     .recent_projects
                     .contains(&saved_path),
@@ -3273,7 +3140,7 @@ fn test_save_project_fails_when_directory_missing() {
         let missing_dir = dir.path().join("missing");
         let path = missing_dir.join("project");
 
-        let result = project::save_project(state(&app), Some(path), None);
+        let result = run(project::save_project(h(&app), Some(path), None));
         // #429: refused up front, naming the destination as the problem, rather
         // than relaying SQLite's "Failed to open database" from an attempt that
         // never had a folder to write into.
@@ -3281,7 +3148,11 @@ fn test_save_project_fails_when_directory_missing() {
             &result,
             "the folder no longer exists or the drive is not connected",
         );
-        assert_failure_contains(&result, crate::core::loading::PATH_NOT_FOUND_CODE);
+        // [#576 C4] The code the save router keys on, not a marker in the text.
+        assert_eq!(
+            result.as_ref().err().map(|e| e.code),
+            Some(crate::core::CommandErrorCode::FsPathNotFound)
+        );
         assert!(!missing_dir.exists());
     });
 }
@@ -3295,13 +3166,13 @@ fn test_merge_projects_fails_when_source_missing() {
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.stalx");
 
-    let result = project::merge_projects(
-        state(&app),
+    let result = run(project::merge_projects(
+        h(&app),
         vec![db_a.path().to_path_buf(), missing_path],
         output_path,
         "Merged".to_string(),
         false,
-    );
+    ));
 
     assert_failure_contains(&result, "Source file not found");
 }
@@ -3311,15 +3182,15 @@ fn test_merge_projects_fails_when_source_missing() {
 #[test]
 fn test_create_section_fails_without_project() {
     let app = app_with_state();
-    let result = section::create_section(
-        state(&app),
+    let result = run(section::create_section(
+        h(&app),
         Some("Section".to_string()),
         None,
         None,
         "#4ecdc4".to_string(),
         None,
         vec![shot_data(1.0)],
-    );
+    ));
     assert_failure_contains(&result, "No project open");
 }
 
@@ -3335,17 +3206,17 @@ fn test_create_section_success_returns_id() {
 fn test_create_section_defaults_direction() {
     let app = app_with_state();
     create_project(&app);
-    let result = section::create_section(
-        state(&app),
+    let result = run(section::create_section(
+        h(&app),
         Some("Section".to_string()),
         None,
         None,
         "#4ecdc4".to_string(),
         None,
         vec![shot_data(1.0)],
-    );
+    ));
     assert_success(&result);
-    let section = get_section(state(&app), result.section_id.unwrap()).unwrap();
+    let section = get_section(state(&app), result.unwrap().section_id).unwrap();
     assert_eq!(section.direction, SurveyDirection::In);
 }
 
@@ -3369,7 +3240,11 @@ fn test_get_section_returns_section() {
 fn test_update_section_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = section::update_section(state(&app), 99, SectionUpdates::default());
+    let result = run(section::update_section(
+        h(&app),
+        99,
+        SectionUpdates::default(),
+    ));
     assert_failure_contains(&result, "not found");
 }
 
@@ -3382,7 +3257,7 @@ fn test_update_section_updates_name() {
         name: Some(Some("Updated".to_string())),
         ..Default::default()
     };
-    let result = section::update_section(state(&app), id, updates);
+    let result = run(section::update_section(h(&app), id, updates));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.name, Some("Updated".to_string()));
@@ -3397,7 +3272,7 @@ fn test_update_section_updates_color() {
         color: Some("#123456".to_string()),
         ..Default::default()
     };
-    let result = section::update_section(state(&app), id, updates);
+    let result = run(section::update_section(h(&app), id, updates));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.color, "#123456".to_string());
@@ -3407,7 +3282,7 @@ fn test_update_section_updates_color() {
 fn test_delete_section_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = section::delete_section(state(&app), 22);
+    let result = run(section::delete_section(h(&app), 22));
     assert_failure_contains(&result, "not found");
 }
 
@@ -3416,7 +3291,7 @@ fn test_delete_section_removes_section() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = section::delete_section(state(&app), id);
+    let result = run(section::delete_section(h(&app), id));
     assert_success(&result);
     assert!(get_section(state(&app), id).is_none());
 }
@@ -3425,7 +3300,11 @@ fn test_delete_section_removes_section() {
 fn test_move_section_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = section::move_section(state(&app), 22, Coordinates::new(1.0, 1.0, 0.0));
+    let result = run(section::move_section(
+        h(&app),
+        22,
+        Coordinates::new(1.0, 1.0, 0.0),
+    ));
     assert_failure_contains(&result, "Section not found");
 }
 
@@ -3434,7 +3313,11 @@ fn test_move_section_success() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = section::move_section(state(&app), id, Coordinates::new(2.0, -3.0, 0.0));
+    let result = run(section::move_section(
+        h(&app),
+        id,
+        Coordinates::new(2.0, -3.0, 0.0),
+    ));
     assert_success(&result);
 }
 
@@ -3445,39 +3328,39 @@ fn test_move_segment_moves_connected_sections() {
     let section_a = create_section_with_shots(&app, vec![shot_data(1.0)]);
     let section_b = create_section_with_shots(&app, vec![shot_data(1.0)]);
 
-    assert_success(&station::merge_stations(
-        state(&app),
+    assert_success(&run(station::merge_stations(
+        h(&app),
         StationRef::new(section_a, 1),
         StationRef::new(section_b, 0),
-    ));
+    )));
 
-    let before = project::get_project_state(state(&app)).expect("project state");
+    let before = read(project::get_project_state(h(&app))).expect("project state");
     let offset_a_before = before
         .project
-        .section_offsets
+        .section_offsets()
         .get(&section_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let offset_b_before = before
         .project
-        .section_offsets
+        .section_offsets()
         .get(&section_b)
         .copied()
         .unwrap_or((0.0, 0.0));
 
     let delta = Coordinates::new(3.0, -2.0, 0.0);
-    assert_success(&section::move_segment(state(&app), section_a, delta));
+    assert_success(&run(section::move_segment(h(&app), section_a, delta)));
 
-    let after = project::get_project_state(state(&app)).expect("project state");
+    let after = read(project::get_project_state(h(&app))).expect("project state");
     let offset_a_after = after
         .project
-        .section_offsets
+        .section_offsets()
         .get(&section_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let offset_b_after = after
         .project
-        .section_offsets
+        .section_offsets()
         .get(&section_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -3492,16 +3375,16 @@ fn test_move_segment_moves_connected_sections() {
 fn test_create_section_with_validation_warnings() {
     let app = app_with_state();
     create_project(&app);
-    let result = section::create_section(
-        state(&app),
+    let result = run(section::create_section(
+        h(&app),
         Some("Section".to_string()),
         None,
         None,
         "#4ecdc4".to_string(),
         None,
         vec![shot_data(0.05)],
-    );
-    assert!(result.success);
+    ));
+    let result = result.expect("success");
     assert!(!result.warnings.is_empty());
 }
 
@@ -3510,7 +3393,7 @@ fn test_create_section_with_validation_warnings() {
 #[test]
 fn test_create_shot_fails_without_project() {
     let app = app_with_state();
-    let result = shot::create_shot(state(&app), 0, shot_data(1.0), None, None);
+    let result = run(shot::create_shot(h(&app), 0, shot_data(1.0), None, None));
     assert_failure_contains(&result, "No project open");
 }
 
@@ -3518,7 +3401,7 @@ fn test_create_shot_fails_without_project() {
 fn test_create_shot_fails_invalid_section() {
     let app = app_with_state();
     create_project(&app);
-    let result = shot::create_shot(state(&app), 99, shot_data(1.0), None, None);
+    let result = run(shot::create_shot(h(&app), 99, shot_data(1.0), None, None));
     assert_failure_contains(&result, "Section 99 not found");
 }
 
@@ -3527,7 +3410,7 @@ fn test_create_shot_success_adds_shot() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![]);
-    let result = shot::create_shot(state(&app), id, shot_data(1.0), None, None);
+    let result = run(shot::create_shot(h(&app), id, shot_data(1.0), None, None));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots.len(), 1);
@@ -3538,7 +3421,13 @@ fn test_create_shot_after_shot_id_inserts() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
-    let result = shot::create_shot(state(&app), id, shot_data(3.0), Some(0), None);
+    let result = run(shot::create_shot(
+        h(&app),
+        id,
+        shot_data(3.0),
+        Some(0),
+        None,
+    ));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots.len(), 3);
@@ -3550,13 +3439,13 @@ fn test_create_shot_returns_warning_for_short() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![]);
-    let result = shot::create_shot(state(&app), id, shot_data(0.05), None, None);
-    assert!(result.success);
+    let result = run(shot::create_shot(h(&app), id, shot_data(0.05), None, None));
+    // `ShotCreated::shot_id` is required: a success without it is INTERNAL_ERROR,
+    // so the `expect` is the "shot_id is returned" assertion.
+    let result = result.expect("shot_id must be returned even when warnings are present");
     assert!(!result.warnings.is_empty());
-    assert!(
-        result.shot_id.is_some(),
-        "shot_id must be returned even when warnings are present"
-    );
+    let section = get_section(state(&app), id).unwrap();
+    assert_eq!(section.shots.last().map(|s| s.id), Some(result.shot_id));
 }
 
 #[test]
@@ -3564,7 +3453,13 @@ fn test_create_shot_rejects_both_after_and_before() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
-    let result = shot::create_shot(state(&app), id, shot_data(3.0), Some(0), Some(1));
+    let result = run(shot::create_shot(
+        h(&app),
+        id,
+        shot_data(3.0),
+        Some(0),
+        Some(1),
+    ));
     assert_failure_contains(&result, "Cannot specify both");
 }
 
@@ -3574,13 +3469,20 @@ fn test_create_shot_before_inserts_at_position() {
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
     // Insert before the first shot (position 0)
-    let result = shot::create_shot(state(&app), id, shot_data(5.0), None, Some(0));
+    let result = run(shot::create_shot(
+        h(&app),
+        id,
+        shot_data(5.0),
+        None,
+        Some(0),
+    ));
     assert_success(&result);
-    assert!(
-        result.shot_id.is_some(),
-        "shot_id must be returned on success"
-    );
+    let shot_id = result.expect("shot_id must be returned on success").shot_id;
     let section = get_section(state(&app), id).unwrap();
+    assert_eq!(
+        section.shots[0].id, shot_id,
+        "the returned id names the new shot"
+    );
     assert_eq!(section.shots.len(), 3);
     assert_eq!(
         section.shots[0].length, 5.0,
@@ -3592,7 +3494,7 @@ fn test_create_shot_before_inserts_at_position() {
 
 #[test]
 fn test_create_shot_wrapper_strips_a_client_named_uuid() {
-    // Identity is not the caller's to name (#423): `create_shot_impl` clears
+    // Identity is not the caller's to name (#423): `create_shot` clears
     // `ShotData::uuid` before building the command. The executor clears its own
     // copy too, but `execute` records the command AS RECEIVED into the undo
     // stack, which every save persists - so the persisted-history assertion
@@ -3601,8 +3503,8 @@ fn test_create_shot_wrapper_strips_a_client_named_uuid() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = shot::create_shot_impl(
-        state(&app).inner(),
+    let result = run(shot::create_shot(
+        h(&app),
         id,
         ShotData {
             uuid: Some(SPOOFED.to_string()),
@@ -3610,7 +3512,7 @@ fn test_create_shot_wrapper_strips_a_client_named_uuid() {
         },
         None,
         None,
-    );
+    ));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     let created = section.shots.last().unwrap();
@@ -3639,7 +3541,7 @@ fn test_create_shot_wrapper_strips_a_client_named_uuid() {
 fn test_update_shot_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = shot::update_shot(state(&app), 0, 999, ShotUpdates::default());
+    let result = run(shot::update_shot(h(&app), 0, 999, ShotUpdates::default()));
     assert_failure_contains(&result, "not found");
 }
 
@@ -3652,7 +3554,7 @@ fn test_update_shot_updates_length() {
         length: Some(12.0),
         ..Default::default()
     };
-    let result = shot::update_shot(state(&app), id, 0, updates);
+    let result = run(shot::update_shot(h(&app), id, 0, updates));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots[0].length, 12.0);
@@ -3667,7 +3569,7 @@ fn test_update_shot_updates_comment() {
         comment: Some(Some("note".to_string())),
         ..Default::default()
     };
-    let result = shot::update_shot(state(&app), id, 0, updates);
+    let result = run(shot::update_shot(h(&app), id, 0, updates));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots[0].comment, Some("note".to_string()));
@@ -3677,7 +3579,7 @@ fn test_update_shot_updates_comment() {
 fn test_delete_shot_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = shot::delete_shot(state(&app), 0, 1);
+    let result = run(shot::delete_shot(h(&app), 0, 1));
     assert_failure_contains(&result, "not found");
 }
 
@@ -3686,7 +3588,7 @@ fn test_delete_shot_removes_shot() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = shot::delete_shot(state(&app), id, 0);
+    let result = run(shot::delete_shot(h(&app), id, 0));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert!(section.shots.is_empty());
@@ -3700,15 +3602,15 @@ fn test_delete_shot_and_split_creates_new_section() {
     let section_state = get_section(state(&app), id).unwrap();
     let shot_id = section_state.shots[1].id;
 
-    let result = shot::delete_shot_and_split(
-        state(&app),
+    let result = run(shot::delete_shot_and_split(
+        h(&app),
         id,
         shot_id,
         "Section A".to_string(),
         "Section B".to_string(),
-    );
+    ));
     assert_success(&result);
-    let new_id = result.section_id.expect("new section id");
+    let new_id = result.expect("new section id").section_id;
 
     let section_a = get_section(state(&app), id).unwrap();
     let section_b = get_section(state(&app), new_id).unwrap();
@@ -3726,7 +3628,7 @@ fn test_delete_last_shot_and_section_removes_section() {
     let section_state = get_section(state(&app), id).unwrap();
     let shot_id = section_state.shots[0].id;
 
-    let result = shot::delete_last_shot_and_section(state(&app), id, shot_id);
+    let result = run(shot::delete_last_shot_and_section(h(&app), id, shot_id));
     assert_success(&result);
     assert!(get_section(state(&app), id).is_none());
 }
@@ -3735,7 +3637,7 @@ fn test_delete_last_shot_and_section_removes_section() {
 fn test_set_shot_kind_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = shot::set_shot_kind(state(&app), 0, 999, ShotKind::Jump);
+    let result = run(shot::set_shot_kind(h(&app), 0, 999, ShotKind::Jump));
     assert_failure_contains(&result, "not found");
 }
 
@@ -3744,7 +3646,7 @@ fn test_set_shot_kind_sets_jump() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = shot::set_shot_kind(state(&app), id, 0, ShotKind::Jump);
+    let result = run(shot::set_shot_kind(h(&app), id, 0, ShotKind::Jump));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots[0].kind, ShotKind::Jump);
@@ -3755,7 +3657,7 @@ fn test_set_shot_kind_sets_reference() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = shot::set_shot_kind(state(&app), id, 0, ShotKind::Reference);
+    let result = run(shot::set_shot_kind(h(&app), id, 0, ShotKind::Reference));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots[0].kind, ShotKind::Reference);
@@ -3766,8 +3668,8 @@ fn test_set_shot_kind_back_to_normal() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = shot::set_shot_kind(state(&app), id, 0, ShotKind::Jump);
-    let result = shot::set_shot_kind(state(&app), id, 0, ShotKind::Normal);
+    let _ = run(shot::set_shot_kind(h(&app), id, 0, ShotKind::Jump));
+    let result = run(shot::set_shot_kind(h(&app), id, 0, ShotKind::Normal));
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots[0].kind, ShotKind::Normal);
@@ -3781,15 +3683,15 @@ fn test_set_shot_kind_undo_restores_previous_kind() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    assert_success(&shot::set_shot_kind(state(&app), id, 0, ShotKind::Jump));
-    assert_success(&shot::set_shot_kind(
-        state(&app),
+    assert_success(&run(shot::set_shot_kind(h(&app), id, 0, ShotKind::Jump)));
+    assert_success(&run(shot::set_shot_kind(
+        h(&app),
         id,
         0,
         ShotKind::Reference,
-    ));
+    )));
 
-    assert_success(&history::undo_impl(state(&app).inner()));
+    assert_success(&run(history::undo(h(&app))));
 
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(
@@ -3804,7 +3706,11 @@ fn test_set_shot_kind_undo_restores_previous_kind() {
 #[test]
 fn test_merge_stations_fails_without_project() {
     let app = app_with_state();
-    let result = station::merge_stations(state(&app), StationRef::new(0, 0), StationRef::new(1, 0));
+    let result = run(station::merge_stations(
+        h(&app),
+        StationRef::new(0, 0),
+        StationRef::new(1, 0),
+    ));
     assert_failure_contains(&result, "No project open");
 }
 
@@ -3813,7 +3719,11 @@ fn test_merge_stations_fails_same_section() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::merge_stations(state(&app), StationRef::new(0, 0), StationRef::new(0, 1));
+    let result = run(station::merge_stations(
+        h(&app),
+        StationRef::new(0, 0),
+        StationRef::new(0, 1),
+    ));
     assert_failure_contains(&result, "same section");
 }
 
@@ -3823,7 +3733,11 @@ fn test_merge_stations_success_between_sections() {
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::merge_stations(state(&app), StationRef::new(0, 1), StationRef::new(1, 0));
+    let result = run(station::merge_stations(
+        h(&app),
+        StationRef::new(0, 1),
+        StationRef::new(1, 0),
+    ));
     assert_success(&result);
 }
 
@@ -3832,7 +3746,7 @@ fn test_unmerge_stations_noop_success() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::unmerge_stations(state(&app), StationRef::new(0, 0));
+    let result = run(station::unmerge_stations(h(&app), StationRef::new(0, 0)));
     assert_success(&result);
 }
 
@@ -3842,8 +3756,12 @@ fn test_unmerge_stations_removes_merge() {
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = station::merge_stations(state(&app), StationRef::new(0, 1), StationRef::new(1, 0));
-    let result = station::unmerge_stations(state(&app), StationRef::new(0, 1));
+    let _ = run(station::merge_stations(
+        h(&app),
+        StationRef::new(0, 1),
+        StationRef::new(1, 0),
+    ));
+    let result = run(station::unmerge_stations(h(&app), StationRef::new(0, 1)));
     assert_success(&result);
 }
 
@@ -3857,7 +3775,7 @@ fn test_set_zero_datum_success() {
         longitude: 2.0,
         depth_reference: 3.0,
     };
-    let result = station::set_zero_datum(state(&app), StationRef::new(0, 0), gps);
+    let result = run(station::set_zero_datum(h(&app), StationRef::new(0, 0), gps));
     assert_success(&result);
 }
 
@@ -3870,7 +3788,11 @@ fn test_set_zero_datum_fails_invalid_station() {
         longitude: 2.0,
         depth_reference: 3.0,
     };
-    let result = station::set_zero_datum(state(&app), StationRef::new(0, 99), gps);
+    let result = run(station::set_zero_datum(
+        h(&app),
+        StationRef::new(0, 99),
+        gps,
+    ));
     assert_failure_contains(&result, "does not exist");
 }
 
@@ -3879,7 +3801,7 @@ fn test_remove_zero_datum_fails_when_not_zero() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::remove_zero_datum(state(&app), StationRef::new(0, 0));
+    let result = run(station::remove_zero_datum(h(&app), StationRef::new(0, 0)));
     assert_failure_contains(&result, "not a zero datum");
 }
 
@@ -3893,19 +3815,19 @@ fn test_remove_zero_datum_success() {
         longitude: 2.0,
         depth_reference: 3.0,
     };
-    let _ = station::set_zero_datum(state(&app), StationRef::new(0, 0), gps);
-    let result = station::remove_zero_datum(state(&app), StationRef::new(0, 0));
+    let _ = run(station::set_zero_datum(h(&app), StationRef::new(0, 0), gps));
+    let result = run(station::remove_zero_datum(h(&app), StationRef::new(0, 0)));
     assert_success(&result);
 }
 
 #[test]
 fn test_move_station_fails_without_project() {
     let app = app_with_state();
-    let result = station::move_station(
-        state(&app),
+    let result = run(station::move_station(
+        h(&app),
         StationRef::new(0, 0),
         Coordinates::new(1.0, 1.0, 0.0),
-    );
+    ));
     assert_failure_contains(&result, "No project open");
 }
 
@@ -3913,11 +3835,11 @@ fn test_move_station_fails_without_project() {
 fn test_move_station_fails_invalid_section() {
     let app = app_with_state();
     create_project(&app);
-    let result = station::move_station(
-        state(&app),
+    let result = run(station::move_station(
+        h(&app),
         StationRef::new(99, 0),
         Coordinates::new(1.0, 1.0, 0.0),
-    );
+    ));
     assert_failure_contains(&result, "Section not found");
 }
 
@@ -3926,11 +3848,11 @@ fn test_move_station_fails_invalid_index() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::move_station(
-        state(&app),
+    let result = run(station::move_station(
+        h(&app),
         StationRef::new(0, 5),
         Coordinates::new(1.0, 1.0, 0.0),
-    );
+    ));
     assert_failure_contains(&result, "Invalid station index");
 }
 
@@ -3939,11 +3861,11 @@ fn test_move_station_success() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::move_station(
-        state(&app),
+    let result = run(station::move_station(
+        h(&app),
         StationRef::new(0, 0),
         Coordinates::new(1.0, 1.0, 0.0),
-    );
+    ));
     assert_success(&result);
 }
 
@@ -3952,14 +3874,14 @@ fn test_move_station_success() {
 #[test]
 fn test_import_dmp_missing_file_err() {
     let missing = PathBuf::from("/tmp/does-not-exist.dmp");
-    let result = import::import_dmp(missing);
+    let result = run(import::import_dmp(missing));
     assert!(result.is_err());
 }
 
 #[test]
 fn test_calculate_file_hash_empty() {
     let file = NamedTempFile::new().unwrap();
-    let hash = import::calculate_file_hash(file.path().to_path_buf()).unwrap();
+    let hash = run(import::calculate_file_hash(file.path().to_path_buf())).unwrap();
     assert_eq!(
         hash,
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -3970,7 +3892,7 @@ fn test_calculate_file_hash_empty() {
 fn test_calculate_file_hash_known_abc() {
     let file = NamedTempFile::new().unwrap();
     fs::write(file.path(), b"abc").unwrap();
-    let hash = import::calculate_file_hash(file.path().to_path_buf()).unwrap();
+    let hash = run(import::calculate_file_hash(file.path().to_path_buf())).unwrap();
     assert_eq!(
         hash,
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
@@ -3981,7 +3903,7 @@ fn test_calculate_file_hash_known_abc() {
 fn test_calculate_file_hash_known_linebreak() {
     let file = NamedTempFile::new().unwrap();
     fs::write(file.path(), b"line1\n").unwrap();
-    let hash = import::calculate_file_hash(file.path().to_path_buf()).unwrap();
+    let hash = run(import::calculate_file_hash(file.path().to_path_buf())).unwrap();
     assert_eq!(
         hash,
         "cd205f1f8b8ab1bf7da554fd3460b5d377c587eb7fa4f394c3f403af3a787a1b"
@@ -3991,41 +3913,24 @@ fn test_calculate_file_hash_known_linebreak() {
 #[test]
 fn test_check_duplicate_import_false_no_project() {
     let app = app_with_state();
-    let result = import::check_duplicate_import(state(&app), "hash1".to_string()).unwrap();
+    let result = run(import::check_duplicate_import(h(&app), "hash1".to_string())).unwrap();
     assert!(!result);
 }
 
 #[test]
-fn test_track_imported_file_fails_no_project() {
-    let app = app_with_state();
-    let result = import::track_imported_file(state(&app), "hash1".to_string());
-    assert_failure_contains(&result, "No project open");
-}
-
-#[test]
-fn test_track_imported_file_then_check_true() {
+fn test_check_duplicate_import_true_once_an_import_tracked_the_hash() {
     let app = app_with_state();
     create_project(&app);
-    let _ = import::track_imported_file(state(&app), "hash1".to_string());
-    let result = import::check_duplicate_import(state(&app), "hash1".to_string()).unwrap();
+    let _ = state(&app).track_imported_file("hash1".to_string());
+    let result = run(import::check_duplicate_import(h(&app), "hash1".to_string())).unwrap();
     assert!(result);
-}
-
-#[test]
-fn test_track_imported_file_idempotent() {
-    let app = app_with_state();
-    create_project(&app);
-    let _ = import::track_imported_file(state(&app), "hash1".to_string());
-    let _ = import::track_imported_file(state(&app), "hash1".to_string());
-    let project_state = project::get_project_state(state(&app)).unwrap();
-    assert_eq!(project_state.project.imported_file_hashes.len(), 1);
 }
 
 #[test]
 fn test_check_duplicate_import_false_before_track() {
     let app = app_with_state();
     create_project(&app);
-    let result = import::check_duplicate_import(state(&app), "hash2".to_string()).unwrap();
+    let result = run(import::check_duplicate_import(h(&app), "hash2".to_string())).unwrap();
     assert!(!result);
 }
 
@@ -4034,14 +3939,14 @@ fn test_check_duplicate_import_false_before_track() {
 #[test]
 fn test_export_csv_fails_no_project() {
     let app = app_with_state();
-    let result = export::export_csv(state(&app), PathBuf::from("/tmp/out.csv"));
+    let result = run(export::export_csv(h(&app), PathBuf::from("/tmp/out.csv")));
     assert!(result.is_err());
 }
 
 #[test]
 fn test_export_json_fails_no_project() {
     let app = app_with_state();
-    let result = export::export_json(state(&app), PathBuf::from("/tmp/out.json"));
+    let result = run(export::export_json(h(&app), PathBuf::from("/tmp/out.json")));
     assert!(result.is_err());
 }
 
@@ -4049,8 +3954,11 @@ fn test_export_json_fails_no_project() {
 fn test_export_image_fails_no_project() {
     let app = app_with_state();
     let options = crate::export::ExportImageOptions::default();
-    let result =
-        export::export_image_impl(state(&app).inner(), PathBuf::from("/tmp/out.png"), options);
+    let result = run(export::export_image(
+        h(&app),
+        PathBuf::from("/tmp/out.png"),
+        options,
+    ));
     assert!(result.is_err());
 }
 
@@ -4062,7 +3970,7 @@ fn test_export_csv_fails_when_directory_missing() {
     let dir = TempDir::new().unwrap();
     let missing_dir = dir.path().join("missing");
     let path = missing_dir.join("out.csv");
-    let result = export::export_csv(state(&app), path.clone());
+    let result = run(export::export_csv(h(&app), path.clone()));
     assert!(result.is_err());
     assert!(!path.exists());
 }
@@ -4075,7 +3983,7 @@ fn test_export_json_fails_when_directory_missing() {
     let dir = TempDir::new().unwrap();
     let missing_dir = dir.path().join("missing");
     let path = missing_dir.join("out.json");
-    let result = export::export_json(state(&app), path.clone());
+    let result = run(export::export_json(h(&app), path.clone()));
     assert!(result.is_err());
     assert!(!path.exists());
 }
@@ -4090,7 +3998,7 @@ fn test_export_image_fails_when_directory_missing() {
     let path = missing_dir.join("out.svg");
     let mut options = crate::export::ExportImageOptions::default();
     options.format = crate::export::ImageFormat::Svg;
-    let result = export::export_image_impl(state(&app).inner(), path.clone(), options);
+    let result = run(export::export_image(h(&app), path.clone(), options));
     assert!(result.is_err());
     assert!(!path.exists());
 }
@@ -4108,13 +4016,13 @@ fn test_export_image_refuses_to_overwrite_open_project_file() {
 
     let mut options = crate::export::ExportImageOptions::default();
     options.format = crate::export::ImageFormat::Svg;
-    let result = export::export_image_impl(state(&app).inner(), saved_path.clone(), options);
+    let result = run(export::export_image(h(&app), saved_path.clone(), options));
     assert!(
         result.is_err(),
         "must refuse to export an image over the open project file"
     );
     assert!(
-        result.unwrap_err().contains("open project"),
+        result.unwrap_err().message.contains("open project"),
         "error must explain the clobber guard"
     );
     // The project database on disk is untouched (still present, not an SVG).
@@ -4144,13 +4052,13 @@ fn test_export_image_refuses_to_overwrite_the_plnx_sibling() {
 
     let mut options = crate::export::ExportImageOptions::default();
     options.format = crate::export::ImageFormat::Svg;
-    let result = export::export_image_impl(state(&app).inner(), plnx.clone(), options);
+    let result = run(export::export_image(h(&app), plnx.clone(), options));
     assert!(
         result.is_err(),
         "an image export must refuse the open project's .plnx sibling"
     );
     assert!(
-        result.unwrap_err().contains("open project"),
+        result.unwrap_err().message.contains("open project"),
         "error must explain the clobber guard"
     );
     assert_eq!(
@@ -4173,13 +4081,13 @@ fn test_text_exports_refuse_to_overwrite_the_plnx_sibling() {
     fs::write(&plnx, b"dive plans").unwrap();
 
     for res in [
-        export::export_csv(state(&app), plnx.clone()),
-        export::export_json(state(&app), plnx.clone()),
-        export::export_tml(state(&app), plnx.clone()).map(|_| ()),
+        run(export::export_csv(h(&app), plnx.clone())),
+        run(export::export_json(h(&app), plnx.clone())),
+        run(export::export_tml(h(&app), plnx.clone())).map(|_| ()),
     ] {
         assert!(res.is_err(), "text export must refuse the .plnx sibling");
         assert!(
-            res.unwrap_err().contains("open project"),
+            res.unwrap_err().message.contains("open project"),
             "error must explain the clobber guard"
         );
     }
@@ -4199,16 +4107,16 @@ fn test_text_exports_refuse_to_overwrite_open_project_file() {
     let before = fs::read(&saved_path).unwrap();
 
     for res in [
-        export::export_csv(state(&app), saved_path.clone()),
-        export::export_json(state(&app), saved_path.clone()),
-        export::export_tml(state(&app), saved_path.clone()).map(|_| ()),
+        run(export::export_csv(h(&app), saved_path.clone())),
+        run(export::export_json(h(&app), saved_path.clone())),
+        run(export::export_tml(h(&app), saved_path.clone())).map(|_| ()),
     ] {
         assert!(
             res.is_err(),
             "text export must refuse the open project path"
         );
         assert!(
-            res.unwrap_err().contains("open project"),
+            res.unwrap_err().message.contains("open project"),
             "error must explain the clobber guard"
         );
     }
@@ -4226,7 +4134,7 @@ fn test_export_image_rejects_zero_dpi() {
     let mut options = crate::export::ExportImageOptions::default();
     options.format = crate::export::ImageFormat::Png;
     options.dpi = 0;
-    let result = export::export_image_impl(state(&app).inner(), path.clone(), options);
+    let result = run(export::export_image(h(&app), path.clone(), options));
     assert!(result.is_err());
     assert!(!path.exists());
 }
@@ -4239,7 +4147,7 @@ fn test_export_json_overwrites_existing_file() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("out.json");
     fs::write(&path, "sentinel").unwrap();
-    export::export_json(state(&app), path.clone()).unwrap();
+    run(export::export_json(h(&app), path.clone())).unwrap();
     let contents = fs::read_to_string(&path).unwrap();
     assert!(contents.contains("\"project\""));
     assert!(!contents.contains("sentinel"));
@@ -4252,7 +4160,7 @@ fn test_export_csv_success_creates_file() {
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("out.csv");
-    export::export_csv(state(&app), path.clone()).unwrap();
+    run(export::export_csv(h(&app), path.clone())).unwrap();
     assert!(path.exists());
 }
 
@@ -4263,7 +4171,7 @@ fn test_export_json_success_creates_file() {
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("out.json");
-    export::export_json(state(&app), path.clone()).unwrap();
+    run(export::export_json(h(&app), path.clone())).unwrap();
     assert!(path.exists());
 }
 
@@ -4276,7 +4184,7 @@ fn test_export_image_success_creates_file() {
     let path = dir.path().join("out.svg");
     let mut options = crate::export::ExportImageOptions::default();
     options.format = crate::export::ImageFormat::Svg;
-    export::export_image_impl(state(&app).inner(), path.clone(), options).unwrap();
+    run(export::export_image(h(&app), path.clone(), options)).unwrap();
     assert!(path.exists());
 }
 
@@ -4298,19 +4206,19 @@ fn test_export_roundtrip_includes_reference_and_comment() {
         ..Default::default()
     };
     let section_id = create_section_with_shots(&app, vec![shot]);
-    assert_success(&shot::set_shot_kind(
-        state(&app),
+    assert_success(&run(shot::set_shot_kind(
+        h(&app),
         section_id,
         0,
         ShotKind::Jump,
-    ));
+    )));
 
     let dir = TempDir::new().unwrap();
     let csv_path = dir.path().join("export.csv");
     let json_path = dir.path().join("export.json");
 
-    export::export_csv(state(&app), csv_path.clone()).unwrap();
-    export::export_json(state(&app), json_path.clone()).unwrap();
+    run(export::export_csv(h(&app), csv_path.clone())).unwrap();
+    run(export::export_json(h(&app), json_path.clone())).unwrap();
 
     let csv_contents = fs::read_to_string(&csv_path).unwrap();
     assert!(csv_contents.contains("section_id,section_name"));
@@ -4334,10 +4242,10 @@ fn test_export_roundtrip_includes_reference_and_comment() {
 fn test_get_cache_stats_empty_when_disabled() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
-    let mut guard = cache.lock().unwrap();
+    let mut guard = cache.lock();
     *guard = None;
     drop(guard);
-    let stats = cache::get_cache_stats(state(&app)).unwrap();
+    let stats = run(cache::get_cache_stats(h(&app))).unwrap();
     assert_eq!(stats.total_tiles, 0);
     assert_eq!(stats.total_bytes, 0);
     assert!(stats.providers.is_empty());
@@ -4348,13 +4256,13 @@ fn test_get_cache_stats_counts_provider() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
         c.put_granted("esri", 1, 2, 3, b"data", "image/png")
             .unwrap();
     }
-    let stats = cache::get_cache_stats(state(&app)).unwrap();
+    let stats = run(cache::get_cache_stats(h(&app))).unwrap();
     assert_eq!(stats.total_tiles, 1);
     assert_eq!(stats.providers.get("esri").unwrap().tiles, 1);
 }
@@ -4363,10 +4271,10 @@ fn test_get_cache_stats_counts_provider() {
 fn test_clear_tile_cache_noop_when_disabled() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
-    let mut guard = cache.lock().unwrap();
+    let mut guard = cache.lock();
     *guard = None;
     drop(guard);
-    let result = cache::clear_tile_cache(state(&app), None);
+    let result = run(cache::clear_tile_cache(h(&app), None));
     assert!(result.is_ok());
 }
 
@@ -4375,14 +4283,14 @@ fn test_clear_tile_cache_all_clears() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
         c.put_granted("esri", 1, 2, 3, b"data", "image/png")
             .unwrap();
     }
-    cache::clear_tile_cache(state(&app), None).unwrap();
-    let stats = cache::get_cache_stats(state(&app)).unwrap();
+    run(cache::clear_tile_cache(h(&app), None)).unwrap();
+    let stats = run(cache::get_cache_stats(h(&app))).unwrap();
     assert_eq!(stats.total_tiles, 0);
 }
 
@@ -4391,7 +4299,7 @@ fn test_clear_tile_cache_provider_only_clears() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
         c.put_granted("esri", 1, 2, 3, b"data", "image/png")
@@ -4399,8 +4307,8 @@ fn test_clear_tile_cache_provider_only_clears() {
         c.put_granted("other", 1, 2, 3, b"data", "image/png")
             .unwrap();
     }
-    cache::clear_tile_cache(state(&app), Some("esri".to_string())).unwrap();
-    let stats = cache::get_cache_stats(state(&app)).unwrap();
+    run(cache::clear_tile_cache(h(&app), Some("esri".to_string()))).unwrap();
+    let stats = run(cache::get_cache_stats(h(&app))).unwrap();
     assert_eq!(stats.total_tiles, 1);
     assert!(stats.providers.contains_key("other"));
 }
@@ -4418,7 +4326,7 @@ fn test_fetch_tile_cache_hit_returns_data() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
         c.put_granted("esri", 1, 2, 3, b"data", "image/png")
@@ -4458,7 +4366,7 @@ fn test_fetch_tile_unknown_provider_errors() {
 #[test]
 fn test_get_project_warnings_empty_when_no_project() {
     let app = app_with_state();
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.is_empty());
 }
 
@@ -4467,7 +4375,7 @@ fn test_get_project_warnings_detects_zero_length() {
     let app = app_with_state();
     let project = project_with_section(vec![shot_data(0.0)]);
     set_project_for_tests(&app, project);
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "ZERO_LENGTH"));
 }
 
@@ -4476,7 +4384,7 @@ fn test_get_project_warnings_detects_negative_length() {
     let app = app_with_state();
     let project = project_with_section(vec![shot_data(-1.0)]);
     set_project_for_tests(&app, project);
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LENGTH"));
 }
 
@@ -4485,7 +4393,7 @@ fn test_get_project_warnings_detects_short_shot() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(0.05)]);
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "SHORT_SHOT"));
 }
 
@@ -4494,7 +4402,7 @@ fn test_get_project_warnings_detects_long_shot() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(100.0)]);
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "LONG_SHOT"));
 }
 
@@ -4503,7 +4411,7 @@ fn test_get_project_warnings_orders_error_before_warning() {
     let app = app_with_state();
     let project = project_with_section(vec![shot_data(0.0), shot_data(0.05)]);
     set_project_for_tests(&app, project);
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(!warnings.is_empty());
     assert_eq!(warnings[0].severity, crate::core::WarningSeverity::Error);
 }
@@ -4513,7 +4421,7 @@ fn test_get_project_warnings_includes_shot_index() {
     let app = app_with_state();
     let project = project_with_section(vec![shot_data(0.0), shot_data(0.0)]);
     set_project_for_tests(&app, project);
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.shot_index == 0));
     assert!(warnings.iter().any(|w| w.shot_index == 1));
 }
@@ -4531,7 +4439,7 @@ fn test_get_project_warnings_multiple_sections_sorted_by_section_id() {
         ..Default::default()
     });
     set_project_for_tests(&app, project);
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.len() >= 2);
     assert!(warnings[0].section_id <= warnings[1].section_id);
 }
@@ -4540,22 +4448,38 @@ fn test_get_project_warnings_multiple_sections_sorted_by_section_id() {
 fn test_get_project_warnings_detects_large_depth_change() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data_with_depth(5.0, 0.0, 20.0)]);
-    let warnings = validation::get_project_warnings(state(&app));
+    create_section_with_shots(
+        &app,
+        vec![bare_shot(5.0)
+            .with_azimuths(10.0, 15.0)
+            .with_depths(0.0, 20.0)],
+    );
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "LARGE_DEPTH_CHANGE"));
 }
 
 #[test]
 fn test_resolve_warning_fails_without_db() {
     let app = app_with_state();
-    let result = validation::resolve_warning(state(&app), 0, 0, "SHORT_SHOT".to_string(), None);
+    let result = run(validation::resolve_warning(
+        h(&app),
+        0,
+        0,
+        "SHORT_SHOT".to_string(),
+        None,
+    ));
     assert!(result.is_err());
 }
 
 #[test]
 fn test_unresolve_warning_fails_without_db() {
     let app = app_with_state();
-    let result = validation::unresolve_warning(state(&app), 0, 0, "SHORT_SHOT".to_string());
+    let result = run(validation::unresolve_warning(
+        h(&app),
+        0,
+        0,
+        "SHORT_SHOT".to_string(),
+    ));
     assert!(result.is_err());
 }
 
@@ -4565,23 +4489,23 @@ fn test_resolve_warning_marks_resolved_in_list() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     let warning = warnings
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
     assert!(!warning.is_resolved);
 
-    validation::resolve_warning(
-        state(&app),
+    run(validation::resolve_warning(
+        h(&app),
         warning.section_id,
         warning.shot_id,
         warning.code.clone(),
         Some("ack".to_string()),
-    )
+    ))
     .unwrap();
 
-    let warnings_after = validation::get_project_warnings(state(&app));
+    let warnings_after = read(validation::get_project_warnings(h(&app)));
     let warning_after = warnings_after
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -4610,19 +4534,19 @@ fn test_resolve_warning_refuses_when_shot_missing() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warning = validation::get_project_warnings(state(&app))
+    let warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
 
     // A shot_id that does not exist in the section.
-    let result = validation::resolve_warning(
-        state(&app),
+    let result = run(validation::resolve_warning(
+        h(&app),
         warning.section_id,
         warning.shot_id + 9999,
         "SHORT_SHOT".to_string(),
         None,
-    );
+    ));
     assert!(result.is_err(), "resolving a vanished shot must be refused");
     assert!(
         state(&app)
@@ -4640,29 +4564,29 @@ fn test_unresolve_warning_clears_resolved_flag() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warning = validation::get_project_warnings(state(&app))
+    let warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
 
-    validation::resolve_warning(
-        state(&app),
+    run(validation::resolve_warning(
+        h(&app),
         warning.section_id,
         warning.shot_id,
         warning.code.clone(),
         None,
-    )
+    ))
     .unwrap();
 
-    validation::unresolve_warning(
-        state(&app),
+    run(validation::unresolve_warning(
+        h(&app),
         warning.section_id,
         warning.shot_id,
         warning.code,
-    )
+    ))
     .unwrap();
 
-    let warnings_after = validation::get_project_warnings(state(&app));
+    let warnings_after = read(validation::get_project_warnings(h(&app)));
     let warning_after = warnings_after
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -4680,22 +4604,22 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warning = validation::get_project_warnings(state(&app))
+    let warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
     let original_shot_id = warning.shot_id;
     let uuid = warning.shot_uuid.clone().expect("loaded shot has a uuid");
 
-    validation::resolve_warning(
-        state(&app),
+    run(validation::resolve_warning(
+        h(&app),
         warning.section_id,
         warning.shot_id,
         warning.code.clone(),
         None,
-    )
+    ))
     .unwrap();
-    assert!(validation::get_project_warnings(state(&app))
+    assert!(read(validation::get_project_warnings(h(&app)))
         .iter()
         .any(|w| w.code == "SHORT_SHOT" && w.is_resolved));
 
@@ -4704,7 +4628,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
     renumbered.sections[0].shots[0].id = original_shot_id + 1000;
     state(&app).inner().set_project_for_tests(renumbered);
 
-    let after = validation::get_project_warnings(state(&app));
+    let after = read(validation::get_project_warnings(h(&app)));
     let w = after
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -4728,7 +4652,7 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warning = validation::get_project_warnings(state(&app))
+    let warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
@@ -4751,7 +4675,7 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
         })
         .unwrap();
 
-    let after = validation::get_project_warnings(state(&app));
+    let after = read(validation::get_project_warnings(h(&app)));
     let w = after
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -4772,7 +4696,7 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     let mut zero: Vec<_> = warnings
         .into_iter()
         .filter(|w| w.code == "SHORT_SHOT")
@@ -4811,7 +4735,7 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
         })
         .unwrap();
 
-    let after = validation::get_project_warnings(state(&app));
+    let after = read(validation::get_project_warnings(h(&app)));
     let a = after
         .iter()
         .find(|w| w.code == "SHORT_SHOT" && w.shot_id == shot_uuid_hit.shot_id)
@@ -4840,24 +4764,24 @@ fn test_resolved_warning_survives_save() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warning = validation::get_project_warnings(state(&app))
+    let warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
-    validation::resolve_warning(
-        state(&app),
+    run(validation::resolve_warning(
+        h(&app),
         warning.section_id,
         warning.shot_id,
         warning.code.clone(),
         None,
-    )
+    ))
     .unwrap();
 
     // Save rebuilds the .stalx and reopens the DB at the new file.
     let dir = tempfile::tempdir().unwrap();
     let _saved = save_project_to_temp(&app, &dir);
 
-    let after = validation::get_project_warnings(state(&app));
+    let after = read(validation::get_project_warnings(h(&app)));
     let w = after
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -4891,25 +4815,31 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
     let app = app_with_custom_state(app_state);
 
     // Ignore the SHORT_SHOT warning in each section.
-    let zero: Vec<_> = validation::get_project_warnings(state(&app))
+    let zero: Vec<_> = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .filter(|w| w.code == "SHORT_SHOT")
         .collect();
     assert_eq!(zero.len(), 2, "expected a short-shot warning per section");
     for w in &zero {
-        validation::resolve_warning(state(&app), w.section_id, w.shot_id, w.code.clone(), None)
-            .unwrap();
+        run(validation::resolve_warning(
+            h(&app),
+            w.section_id,
+            w.shot_id,
+            w.code.clone(),
+            None,
+        ))
+        .unwrap();
     }
     let surviving_section = zero[1].section_id;
 
     // Delete the first section - its resolved_warnings row is now orphaned.
-    assert_success(&section::delete_section(state(&app), zero[0].section_id));
+    assert_success(&run(section::delete_section(h(&app), zero[0].section_id)));
 
     // Save, then confirm the surviving section's ignore is still resolved.
     let dir = tempfile::tempdir().unwrap();
     let _ = save_project_to_temp(&app, &dir);
 
-    let after = validation::get_project_warnings(state(&app));
+    let after = read(validation::get_project_warnings(h(&app)));
     let surviving = after
         .iter()
         .find(|w| w.section_id == surviving_section && w.code == "SHORT_SHOT")
@@ -5001,14 +4931,20 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     let app = app_with_custom_state(app_state);
 
     // Ignore BOTH shots' SHORT_SHOT warnings (stored by UUID at positions 0 & 1).
-    let zero: Vec<_> = validation::get_project_warnings(state(&app))
+    let zero: Vec<_> = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .filter(|w| w.code == "SHORT_SHOT")
         .collect();
     assert_eq!(zero.len(), 2, "expected a short-shot warning per shot");
     for w in &zero {
-        validation::resolve_warning(state(&app), w.section_id, w.shot_id, w.code.clone(), None)
-            .unwrap();
+        run(validation::resolve_warning(
+            h(&app),
+            w.section_id,
+            w.shot_id,
+            w.code.clone(),
+            None,
+        ))
+        .unwrap();
     }
 
     let loaded = state(&app).inner().get_project_state().unwrap();
@@ -5022,13 +4958,13 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     // Delete the first shot. The successor shifts into its index/position, so the
     // orphaned by-UUID row for the deleted shot now shares the survivor's new
     // position. (No datums → not frozen → delete succeeds.)
-    assert_success(&shot::delete_shot(state(&app), section_id, shot_a_id));
+    assert_success(&run(shot::delete_shot(h(&app), section_id, shot_a_id)));
 
     let dir = tempfile::tempdir().unwrap();
     let _ = save_project_to_temp(&app, &dir);
 
     // The survivor's ignore must persist...
-    let after = validation::get_project_warnings(state(&app));
+    let after = read(validation::get_project_warnings(h(&app)));
     let survivor = after
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -5062,7 +4998,7 @@ fn test_project_validation_drives_warnings_and_persists() {
     let app = app_with_custom_state(app_state);
 
     // A 1.0 m shot is not short under the default 0.3 m minimum.
-    assert!(validation::get_project_warnings(state(&app))
+    assert!(read(validation::get_project_warnings(h(&app)))
         .iter()
         .all(|w| w.code != "SHORT_SHOT"));
 
@@ -5071,14 +5007,15 @@ fn test_project_validation_drives_warnings_and_persists() {
         warn_shot_length_min: 2.0,
         ..crate::config::ValidationConfig::default()
     };
-    assert_success(&project::update_project_settings(
-        state(&app),
+    assert_success(&run(project::update_project_settings(
+        h(&app),
         "Renamed Cave".to_string(),
         validation_cfg,
-    ));
+        None,
+    )));
 
     // Now it's flagged - warnings use the PROJECT's thresholds, not the global.
-    assert!(validation::get_project_warnings(state(&app))
+    assert!(read(validation::get_project_warnings(h(&app)))
         .iter()
         .any(|w| w.code == "SHORT_SHOT"));
 
@@ -5104,13 +5041,14 @@ fn test_update_project_settings_is_undoable() {
         warn_shot_length_min: 2.0,
         ..crate::config::ValidationConfig::default()
     };
-    assert_success(&project::update_project_settings(
-        state(&app),
+    assert_success(&run(project::update_project_settings(
+        h(&app),
         "Renamed Cave".to_string(),
         validation_cfg,
-    ));
+        None,
+    )));
     assert!(
-        history::can_undo(state(&app)),
+        read(history::can_undo(h(&app))),
         "settings change must be undoable"
     );
     let applied = state(&app).get_project_state().unwrap();
@@ -5118,7 +5056,7 @@ fn test_update_project_settings_is_undoable() {
     assert_eq!(applied.validation.warn_shot_length_min, 2.0);
 
     // Undo reverts the settings change instead of leaving it stranded.
-    assert_success(&history::undo(state(&app)));
+    assert_success(&run(history::undo(h(&app))));
     let reverted = state(&app).get_project_state().unwrap();
     assert_eq!(reverted.name, "Test Cave");
     assert_eq!(reverted.validation.warn_shot_length_min, 0.3);
@@ -5132,13 +5070,13 @@ fn test_resolve_warning_refuses_to_ignore_over_anchoring() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    validation::resolve_warning(
-        state(&app),
+    run(validation::resolve_warning(
+        h(&app),
         0,
         0,
         crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT.to_string(),
         None,
-    )
+    ))
     .unwrap();
 
     assert!(
@@ -5170,17 +5108,17 @@ fn test_resolve_warning_refuses_error_severity_codes() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warning = validation::get_project_warnings(state(&app))
+    let warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == "ZERO_LENGTH")
         .expect("zero length warning");
-    validation::resolve_warning(
-        state(&app),
+    run(validation::resolve_warning(
+        h(&app),
         warning.section_id,
         warning.shot_id,
         warning.code.clone(),
         None,
-    )
+    ))
     .unwrap();
     assert!(
         state(&app)
@@ -5190,7 +5128,7 @@ fn test_resolve_warning_refuses_error_severity_codes() {
             .is_empty(),
         "an error-severity warning must never be persisted as ignored"
     );
-    let after = validation::get_project_warnings(state(&app));
+    let after = read(validation::get_project_warnings(h(&app)));
     assert!(
         !after
             .iter()
@@ -5227,7 +5165,7 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     let a_warning = warnings
         .iter()
         .find(|w| w.section_id == a && w.code == "SHORT_SHOT")
@@ -5236,16 +5174,16 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
         .iter()
         .any(|w| w.section_id == b && w.code == "SHORT_SHOT"));
 
-    validation::resolve_warning(
-        state(&app),
+    run(validation::resolve_warning(
+        h(&app),
         a_warning.section_id,
         a_warning.shot_id,
         "SHORT_SHOT".to_string(),
         None,
-    )
+    ))
     .unwrap();
 
-    let after = validation::get_project_warnings(state(&app));
+    let after = read(validation::get_project_warnings(h(&app)));
     assert!(
         after
             .iter()
@@ -5271,22 +5209,22 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
         .find(|w| w.section_id == b && w.code == "SHORT_SHOT")
         .unwrap()
         .clone();
-    validation::resolve_warning(
-        state(&app),
+    run(validation::resolve_warning(
+        h(&app),
         b_warning.section_id,
         b_warning.shot_id,
         "SHORT_SHOT".to_string(),
         None,
-    )
+    ))
     .unwrap();
-    validation::unresolve_warning(
-        state(&app),
+    run(validation::unresolve_warning(
+        h(&app),
         a_warning.section_id,
         a_warning.shot_id,
         "SHORT_SHOT".to_string(),
-    )
+    ))
     .unwrap();
-    let cleared = validation::get_project_warnings(state(&app));
+    let cleared = read(validation::get_project_warnings(h(&app)));
     assert!(
         !cleared
             .iter()
@@ -5343,7 +5281,7 @@ fn test_over_anchoring_warning_is_never_suppressible() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let datum_warning = validation::get_project_warnings(state(&app))
+    let datum_warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT)
         .expect("over-anchored merge component must raise a warning");
@@ -5363,7 +5301,7 @@ fn test_over_anchoring_warning_is_never_suppressible() {
         })
         .unwrap();
 
-    let after = validation::get_project_warnings(state(&app));
+    let after = read(validation::get_project_warnings(h(&app)));
     let w = after
         .iter()
         .find(|w| w.code == crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT)
@@ -5381,7 +5319,7 @@ fn test_get_project_warnings_detects_invalid_azimuth() {
     let mut shot = shot_data(1.0);
     shot.azimuth_in = -1.0;
     create_section_with_shots(&app, vec![shot]);
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "INVALID_AZIMUTH"));
 }
 
@@ -5392,7 +5330,7 @@ fn test_get_project_warnings_detects_negative_lrud() {
     let mut shot = shot_data(1.0);
     shot.left = Some(-1.0);
     create_section_with_shots(&app, vec![shot]);
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LRUD"));
 }
 
@@ -5404,7 +5342,7 @@ fn test_get_project_warnings_detects_azimuth_deviation() {
     shot.azimuth_in = 0.0;
     shot.azimuth_out = 45.0; // 45° difference exceeds 10° threshold
     create_section_with_shots(&app, vec![shot]);
-    let warnings = validation::get_project_warnings(state(&app));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
 }
 
@@ -5415,17 +5353,17 @@ fn test_create_section_with_date_roundtrip() {
     let app = app_with_state();
     create_project(&app);
     let date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
-    let result = section::create_section(
-        state(&app),
+    let result = run(section::create_section(
+        h(&app),
         Some("Dated".to_string()),
         None,
         Some(date),
         "#4ecdc4".to_string(),
         Some(SurveyDirection::Out),
         vec![shot_data(1.0)],
-    );
+    ));
     assert_success(&result);
-    let section = get_section(state(&app), result.section_id.unwrap()).unwrap();
+    let section = get_section(state(&app), result.unwrap().section_id).unwrap();
     assert_eq!(section.date, Some(date));
     assert_eq!(section.direction, SurveyDirection::Out);
 }
@@ -5433,8 +5371,8 @@ fn test_create_section_with_date_roundtrip() {
 #[test]
 fn test_create_section_and_merge_fails_without_project() {
     let app = app_with_state();
-    let result = section::create_section_and_merge(
-        state(&app),
+    let result = run(section::create_section_and_merge(
+        h(&app),
         Some("Imported".to_string()),
         None,
         None,
@@ -5444,7 +5382,7 @@ fn test_create_section_and_merge_fails_without_project() {
         0,
         StationRef::new(0, 0),
         ClosureStrategy::Batch,
-    );
+    ));
     assert_failure_contains(&result, "No project open");
 }
 
@@ -5454,8 +5392,8 @@ fn test_create_section_and_merge_success() {
     create_project(&app);
     let existing_section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
 
-    let result = section::create_section_and_merge(
-        state(&app),
+    let result = run(section::create_section_and_merge(
+        h(&app),
         Some("Imported".to_string()),
         None,
         None,
@@ -5465,11 +5403,11 @@ fn test_create_section_and_merge_success() {
         0,
         StationRef::new(existing_section_id, 0),
         ClosureStrategy::Batch,
-    );
+    ));
 
     assert_success(&result);
-    let new_section_id = result.section_id.expect("new section id");
-    let project_state = project::get_project_state(state(&app)).expect("project state");
+    let new_section_id = result.expect("new section id").section_id;
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 2);
     assert_eq!(project_state.project.station_merges.len(), 1);
 
@@ -5485,13 +5423,13 @@ fn test_merge_projects_requires_sources() {
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.stalx");
 
-    let result = project::merge_projects(
-        state(&app),
+    let result = run(project::merge_projects(
+        h(&app),
         Vec::new(),
         output_path,
         "Merged".to_string(),
         false,
-    );
+    ));
 
     assert_failure_contains(&result, "No source projects provided");
 }
@@ -5504,13 +5442,13 @@ fn test_merge_projects_requires_two_sources() {
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.stalx");
 
-    let result = project::merge_projects(
-        state(&app),
+    let result = run(project::merge_projects(
+        h(&app),
         vec![db.path().to_path_buf()],
         output_path,
         "Merged".to_string(),
         false,
-    );
+    ));
 
     assert_failure_contains(&result, "At least two projects are required");
 }
@@ -5525,13 +5463,13 @@ fn test_merge_projects_fails_when_output_exists() {
     let output_path = output_dir.path().join("merged.stalx");
     fs::write(&output_path, b"exists").unwrap();
 
-    let result = project::merge_projects(
-        state(&app),
+    let result = run(project::merge_projects(
+        h(&app),
         vec![db_a.path().to_path_buf(), db_b.path().to_path_buf()],
         output_path,
         "Merged".to_string(),
         false,
-    );
+    ));
 
     assert_failure_contains(&result, "Output file already exists");
 }
@@ -5546,13 +5484,13 @@ fn test_merge_projects_success_creates_output() {
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.stalx");
 
-    let result = project::merge_projects(
-        state(&app),
+    let result = run(project::merge_projects(
+        h(&app),
         vec![db_a.path().to_path_buf(), db_b.path().to_path_buf()],
         output_path.clone(),
         "Merged".to_string(),
         false,
-    );
+    ));
 
     assert_success(&result);
     assert!(output_path.exists());
@@ -5563,15 +5501,15 @@ fn test_update_config_persists_and_reload_restores() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let mut cfg = config::get_config(state(&app));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             let original_auto_save = cfg.general.auto_save;
             cfg.general.auto_save = !original_auto_save;
-            config::update_config(state(&app), cfg).expect("update config");
+            run(config::update_config(h(&app), cfg)).expect("update config");
 
-            let updated = config::get_config(state(&app));
+            let updated = run(config::get_config(h(&app))).unwrap();
             assert_eq!(updated.general.auto_save, !original_auto_save);
 
-            let reloaded = config::reload_config(state(&app)).expect("reload config");
+            let reloaded = run(config::reload_config(h(&app))).expect("reload config");
             assert_eq!(reloaded.general.auto_save, !original_auto_save);
         });
     });
@@ -5582,15 +5520,15 @@ fn test_reload_config_syncs_undo_history_limit() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let mut cfg = config::get_config(state(&app));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.general.undo_history_limit = 42;
-            config::update_config(state(&app), cfg).expect("update config");
+            run(config::update_config(h(&app), cfg)).expect("update config");
 
-            let reloaded = config::reload_config(state(&app)).expect("reload config");
+            let reloaded = run(config::reload_config(h(&app))).expect("reload config");
             assert_eq!(reloaded.general.undo_history_limit, 42);
 
             // Verify the in-memory config also reflects the reloaded limit
-            let current = config::get_config(state(&app));
+            let current = run(config::get_config(h(&app))).unwrap();
             assert_eq!(current.general.undo_history_limit, 42);
         });
     });
@@ -5601,18 +5539,18 @@ fn test_reload_config_syncs_undo_history_limit() {
 #[test]
 fn test_get_segment_geometry_no_project_errors() {
     let app = app_with_state();
-    let result = section::get_segment_geometry_impl(state(&app).inner(), 0);
+    let result = run(section::get_segment_geometry(h(&app), 0));
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("No project open"));
+    assert!(result.unwrap_err().message.contains("No project open"));
 }
 
 #[test]
 fn test_get_segment_geometry_invalid_section_errors() {
     let app = app_with_state();
     create_project(&app);
-    let result = section::get_segment_geometry_impl(state(&app).inner(), 999);
+    let result = run(section::get_segment_geometry(h(&app), 999));
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not found"));
+    assert!(result.unwrap_err().message.contains("not found"));
 }
 
 #[test]
@@ -5621,7 +5559,7 @@ fn test_get_segment_geometry_single_section() {
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(5.0), shot_data(3.0)]);
 
-    let geom = section::get_segment_geometry_impl(state(&app).inner(), id).unwrap();
+    let geom = run(section::get_segment_geometry(h(&app), id)).unwrap();
     assert_eq!(geom.sections.len(), 1);
     assert_eq!(geom.sections[0].section_id, id);
     // 2 shots → 2 shot lines (station 0→1, station 1→2)
@@ -5646,14 +5584,14 @@ fn test_get_segment_geometry_connected_sections() {
     let id_b = create_section_with_shots(&app, vec![shot_data(3.0)]);
 
     // Merge section A station 1 with section B station 0
-    assert_success(&station::merge_stations(
-        state(&app),
+    assert_success(&run(station::merge_stations(
+        h(&app),
         StationRef::new(id_a, 1),
         StationRef::new(id_b, 0),
-    ));
+    )));
 
     // Query segment from section A
-    let geom = section::get_segment_geometry_impl(state(&app).inner(), id_a).unwrap();
+    let geom = run(section::get_segment_geometry(h(&app), id_a)).unwrap();
     assert_eq!(
         geom.sections.len(),
         2,
@@ -5694,7 +5632,7 @@ fn test_get_segment_geometry_unconnected_section_excluded() {
     let _id_b = create_section_with_shots(&app, vec![shot_data(3.0)]);
 
     // No merge - sections are disconnected
-    let geom = section::get_segment_geometry_impl(state(&app).inner(), id_a).unwrap();
+    let geom = run(section::get_segment_geometry(h(&app), id_a)).unwrap();
     assert_eq!(
         geom.sections.len(),
         1,
@@ -5710,14 +5648,14 @@ fn test_get_segment_geometry_queried_from_either_end() {
     let id_a = create_section_with_shots(&app, vec![shot_data(5.0)]);
     let id_b = create_section_with_shots(&app, vec![shot_data(3.0)]);
 
-    assert_success(&station::merge_stations(
-        state(&app),
+    assert_success(&run(station::merge_stations(
+        h(&app),
         StationRef::new(id_a, 1),
         StationRef::new(id_b, 0),
-    ));
+    )));
 
     // Query from section B - should still include both sections
-    let geom = section::get_segment_geometry_impl(state(&app).inner(), id_b).unwrap();
+    let geom = run(section::get_segment_geometry(h(&app), id_b)).unwrap();
     assert_eq!(geom.sections.len(), 2);
 
     // Coordinates should now be relative to section B station 0
@@ -5740,7 +5678,7 @@ fn test_get_raw_table_names_lists_project_tables() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let names = raw_data::get_raw_table_names_impl(state(&app).inner()).unwrap();
+    let names = run(raw_data::get_raw_table_names(h(&app))).unwrap();
     for expected in ["project", "sections", "shots"] {
         assert!(
             names.iter().any(|n| n == expected),
@@ -5756,8 +5694,13 @@ fn test_get_raw_table_row_shape_and_total() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let data =
-        raw_data::get_raw_table_impl(state(&app).inner(), "shots".to_string(), 100, 0).unwrap();
+    let data = run(raw_data::get_raw_table(
+        h(&app),
+        "shots".to_string(),
+        100,
+        0,
+    ))
+    .unwrap();
     assert!(!data.columns.is_empty());
     assert_eq!(data.total_rows, 3);
     assert_eq!(data.rows.len(), 3);
@@ -5772,10 +5715,8 @@ fn test_get_raw_table_offset_paging() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let first =
-        raw_data::get_raw_table_impl(state(&app).inner(), "shots".to_string(), 2, 0).unwrap();
-    let second =
-        raw_data::get_raw_table_impl(state(&app).inner(), "shots".to_string(), 2, 2).unwrap();
+    let first = run(raw_data::get_raw_table(h(&app), "shots".to_string(), 2, 0)).unwrap();
+    let second = run(raw_data::get_raw_table(h(&app), "shots".to_string(), 2, 2)).unwrap();
     assert_eq!(first.rows.len(), 2);
     assert_eq!(second.rows.len(), 1);
     assert_eq!(first.total_rows, 3);
@@ -5791,10 +5732,9 @@ fn test_get_raw_table_rejects_injection_names() {
     let app = app_with_custom_state(app_state);
 
     for name in ["shots; DROP TABLE shots", "sqlite_master"] {
-        let err = raw_data::get_raw_table_impl(state(&app).inner(), name.to_string(), 100, 0)
-            .unwrap_err();
+        let err = run(raw_data::get_raw_table(h(&app), name.to_string(), 100, 0)).unwrap_err();
         assert!(
-            err.contains("Unknown table"),
+            err.message.contains("Unknown table"),
             "expected rejection for {name:?}, got: {err}"
         );
     }
@@ -5804,12 +5744,17 @@ fn test_get_raw_table_rejects_injection_names() {
 fn test_raw_data_commands_fail_without_db() {
     let app = app_with_state();
 
-    let err = raw_data::get_raw_table_names_impl(state(&app).inner()).unwrap_err();
-    assert!(err.contains("save the project"), "got: {err}");
+    let err = run(raw_data::get_raw_table_names(h(&app))).unwrap_err();
+    assert!(err.message.contains("save the project"), "got: {err}");
 
-    let err =
-        raw_data::get_raw_table_impl(state(&app).inner(), "shots".to_string(), 100, 0).unwrap_err();
-    assert!(err.contains("save the project"), "got: {err}");
+    let err = run(raw_data::get_raw_table(
+        h(&app),
+        "shots".to_string(),
+        100,
+        0,
+    ))
+    .unwrap_err();
+    assert!(err.message.contains("save the project"), "got: {err}");
 }
 
 // ========================================================================
@@ -5821,8 +5766,8 @@ fn test_raw_data_commands_fail_without_db() {
 
 #[test]
 fn test_concurrent_partial_config_updates_do_not_lose_writes() {
-    // Guard F: the lost-update race. `update_panel_sizes_impl` and
-    // `update_data_table_view_impl` write DIFFERENT `[panels]` fields but used
+    // Guard F: the lost-update race. `update_panel_sizes` and
+    // `update_data_table_view` write DIFFERENT `[panels]` fields but used
     // to run get-then-update as two separate critical sections; a write from
     // one landing in the gap of the other's read-modify-write was silently
     // reverted by the other's stale snapshot. With the shared
@@ -5883,9 +5828,9 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
         // (`sections_panel_width` 150..400, column widths 40..2000), so what comes
         // back is what went in.
         for trial in 0..TRIALS {
-            let shared = std::sync::Arc::new(AppState::new().expect("app state"));
+            let shared = app_with_custom_state(AppState::new().expect("app state"));
 
-            let a = std::sync::Arc::clone(&shared);
+            let a = h(&shared);
             let config_a = config.clone();
             let file_a = raced_file.clone();
             let handle_a = std::thread::spawn(move || {
@@ -5898,11 +5843,17 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
                 for i in 0..ITERS {
                     let width = 150 + trial * 10 + (i % 10);
                     retrying(|| {
-                        config::update_panel_sizes_impl(a.as_ref(), Some(width), None, None, None)
+                        run(config::update_panel_sizes(
+                            a.clone(),
+                            Some(width),
+                            None,
+                            None,
+                            None,
+                        ))
                     });
                 }
             });
-            let b = std::sync::Arc::clone(&shared);
+            let b = h(&shared);
             let config_b = config.clone();
             let file_b = raced_file.clone();
             let handle_b = std::thread::spawn(move || {
@@ -5916,8 +5867,8 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
                     let widths =
                         BTreeMap::from([("length".to_string(), 100 + trial * 10 + (i % 10))]);
                     retrying(|| {
-                        config::update_data_table_view_impl(
-                            b.as_ref(),
+                        run(config::update_data_table_view(
+                            b.clone(),
                             None,
                             None,
                             None,
@@ -5926,7 +5877,7 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
                             None,
                             Some(widths.clone()),
                             None,
-                        )
+                        ))
                     });
                 }
             });
@@ -5935,7 +5886,7 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
 
             let last_width_a = 150 + trial * 10 + ((ITERS - 1) % 10);
             let last_width_b = 100 + trial * 10 + ((ITERS - 1) % 10);
-            let cfg = shared.get_config();
+            let cfg = state(&shared).get_config();
             assert_eq!(
                 cfg.panels.sections_panel_width, last_width_a,
                 "thread A's last write to sections_panel_width was lost to a concurrent partial update"
@@ -5957,13 +5908,14 @@ fn test_update_data_table_view_rejects_the_whole_payload_on_invalid_mode() {
     // confirm neither one lands.
     with_config_lock(|| {
         let app = app_with_state();
-        let before = config::get_config(state(&app))
+        let before = run(config::get_config(h(&app)))
+            .unwrap()
             .panels
             .data_table_shot_column_order;
         assert!(before.is_empty(), "test assumes the default is empty");
 
-        let err = config::update_data_table_view_impl(
-            state(&app).inner(),
+        let err = run(config::update_data_table_view(
+            h(&app),
             Some(vec!["length".to_string()]),
             None,
             Some("sideways".to_string()),
@@ -5972,10 +5924,10 @@ fn test_update_data_table_view_rejects_the_whole_payload_on_invalid_mode() {
             None,
             None,
             None,
-        );
+        ));
         assert!(err.is_err(), "an invalid azimuth mode must be rejected");
 
-        let after = config::get_config(state(&app));
+        let after = run(config::get_config(h(&app))).unwrap();
         assert!(
             after.panels.data_table_shot_column_order.is_empty(),
             "a valid field set in the SAME rejected call must not land either: {:?}",

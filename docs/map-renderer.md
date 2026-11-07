@@ -35,7 +35,7 @@ the link-time uniform/attribute location cache, #339). A fix in the
 tessellator, shaders, or hit index of one is not a fix in the other.
 
 Still ordinary MapLibre, on small GeoJSON sources built in
-`SurveyLayer.initializeSources`: loop closures, the gas route highlight, merge
+`surveyLayer/auxiliaryLayers.ts::addAuxiliarySources`: loop closures, the gas route highlight, merge
 ghosts, and the **interact overlay** - a handful of features holding only the
 currently hovered / selected / snapped items, redrawn above the custom geometry
 so per-item highlight survives without feature-state. Z-order is explicit: the
@@ -153,8 +153,8 @@ defers the first build until the font promise resolves.
 ## Hit-testing
 
 MapLibre returns nothing from a custom layer, so `queryRenderedFeatures` is not
-available for survey geometry at all. `SurveyLayer.hitCandidateSections` replaces
-it:
+available for survey geometry at all. `SurveyLayer.hitCandidateSections` (body in
+`surveyLayer/surveyHitTester.ts`) replaces it:
 
 1. pad the probe point or box by the type's hit reach (`surveyLayer/hitProbe.ts`;
    shot and station reaches differ, and the padding preserves the historical
@@ -170,7 +170,7 @@ only the candidate prefilter. The index's multi-hit box resolver went away with
 box select (#409), so there is no "everything inside this rectangle" query left.
 
 The index caches its projected AABBs against a camera snapshot
-(`SurveyLayer.cameraSnapshot`), so a static hover reprojects the sections once per
+(`surveyHitTester.ts::cameraSnapshot`), so a static hover reprojects the sections once per
 camera, not once per probe. That snapshot key keeps the map center at full
 precision on purpose: quantizing it let features near the tolerance boundary drop
 out of hover until the camera moved far enough. Candidate discovery is gated by
@@ -187,33 +187,8 @@ absorbed. Three paths reach it:
   not link (`program-link-failed`). The controller sees `isDisabled()` right
   after `addLayer`, removes the dead layer, and latches fatal. A successful
   link also resolves the program's uniform/attribute locations into its bundle
-  (`glProgram.ts`), so a re-add after a style rebuild (below) rebuilds the
-  program and its location cache together.
-
-**Style rebuilds drop every custom layer.** MapLibre 6 rebuilds the style from
-`style.serialize()` after a WebGL context loss and after a worker restart
-(`watchWorkers()` pings the workers on every return to the foreground and
-restarts them if they stay silent for 500 ms). Custom layers cannot be
-serialized, so MapLibre leaves them out. Both paths fire `webglcontextrestored`,
-and the rebuilt style announces itself a frame later with `style.load`.
-`customRender/styleRestore.ts` waits for that pair, and each controller's
-`reattach()` re-adds its layer instance in the original z-order (geometry,
-measure tint, labels, drag ghost; one layer on the Global View). The instance
-still holds its last data, so `onRemove` + `onAdd` re-upload it to fresh GL
-objects. A layer that cannot start again goes down the same fatal path as a
-failed first `onAdd`.
-
-From the loss to that `style.load` no layer can be added (the style is null,
-then not yet loaded), so `addCustomLayer` holds a new layer back and the
-reattach adds it; a self-disable in that window is ignored, because the re-add
-rebuilds the layer. `SurveyLayer` also keeps the last survey update that
-arrived in the window and replays it, then redraws the interact overlay and
-the measure tint. Two limits: other stock overlay setters that ran in the window
-(gas route, closures highlight, and the like) show their pre-loss state until
-they next change, and the custom layers come back at their own anchors, so a
-stock layer that had been appended above the labels ends up below them.
-Teardown goes through `removeCustomLayer`, which frees the GL objects directly
-when a worker restart already dropped the layer from the style.
+  (`glProgram.ts`), so a re-add after a style rebuild - which re-runs `onAdd`,
+  see below - rebuilds the program and its location cache together.
 - **Mid-render**: each layer calls `gl.getError()` after its draws for the first
   5 frames only (a `getError` is a pipeline stall, and WebKitGTK can drop a
   layer silently), self-disabling with a `gl-error-0x<code>` reason. This fires
@@ -232,6 +207,69 @@ flip-flopping through an enable that would fail again. The **drag ghost is the o
 exception**: if its custom layer cannot start or dies mid-drag,
 `dragGhostController.ts` spins up the historical GeoJSON preview at the live
 offset, so a drag is never left without a preview.
+
+**Style rebuilds drop every custom layer.** MapLibre 6 rebuilds the style from
+`style.serialize()` on two paths: a **WebGL context loss** and restore (GPU
+reset, driver crash, some sleep/resume cycles, WebKit memory pressure), and a
+**worker restart** (`watchWorkers()` pings the workers on every return to the
+foreground and restarts them if they stay silent; `_handleWorkersRestarted`).
+Custom layers cannot be serialized, so both paths leave them out. That is not a
+failure of these layers but would end the same way, so one mechanism brings
+them back (#576 D38, #606):
+
+- `customRender/styleRestore.ts` is the only listener for the events: one
+  tracker per map marks a rebuild under way on `webglcontextlost` /
+  `webglcontextrestored` and runs its subscribers on the `style.load` of the
+  rebuilt style (`onStyleRestored(map, reattach, onLoss)`). Until then no layer
+  can be added (the style is null, then not yet loaded): `addCustomLayer` holds a
+  new layer back, the controllers ignore a self-disable in that window, and
+  `isStyleRestoring` tells the survey flush to wait.
+- `surveyLayer/glContextRecovery.ts` (`watchGlContextLoss`) is the one
+  subscriber per map. It snapshots the layer order before the old style goes: on
+  a context loss in the capture phase on the canvas container (before MapLibre's
+  own listener, while the style is alive), on a worker restart in `onLoss`
+  (MapLibre fires a synthetic `webglcontextlost` there with the old style still
+  in place). Once the rebuilt style has loaded it has each controller re-add its
+  live layer object at its old position (`reattachInOrder`, top-down against the
+  live map, so a layer that does not come back cannot take its neighbour with
+  it), then adds the held-back layers at their own anchors. Without a snapshot
+  the order is geometry, measure tint, labels, drag ghost; the Global View has
+  one layer.
+- Each controller's `reattach(beforeId?)` goes through `reAddCustomLayer`, which
+  frees the layer's GL objects first (a worker restart drops the style without
+  calling `onRemove`) and then adds it; the layer's `onAdd` re-uploads from its
+  own data. A layer that cannot start again goes down the same fatal path as a
+  failed first `onAdd` (the drag ghost falls back to the GeoJSON preview).
+  Teardown goes through `removeCustomLayer`, which frees the GL objects directly
+  when a rebuild already dropped the layer.
+
+SurveyLayer replays the last flush afterwards, including one that arrived while
+the style was being rebuilt, and redraws the measure tint. While the style is gone
+nothing may write it (MapLibre 6 reads it with `?.` in `getLayer`, `getSource`,
+`setPaintProperty` and `setFilter`, but `addLayer`, `removeLayer`, `addSource` and
+`setLayoutProperty` throw, and a throw in an effect takes down the map panel), and
+in the frame before the rebuilt style loads that style is empty and refuses every
+write ("Style is not done loading."). So the style-writing setters and effects
+skip their writes in both windows (`canWriteStyle` in `mapUtils.ts`, #576
+RV18-MAP-1): SurveyLayer's replay re-applies its stock-layer state (visibility,
+paint, closure opacity and filter, ghost section), and MapCanvas's own
+style-writing effects (satellite, grid, background) re-run on `useStyleEpoch`,
+which moves once the restored style has loaded (#576 NF-MAP-5). The Global View layer
+recovers the same way (`GlobalSurveyLayer` runs the same watch over its one
+controller and applies systems that arrived during the loss after the restore).
+
+A context that is lost and **not** restored - WebKit may give up on it - would
+leave the map blank for good. So would a second loss in the frame before the
+rebuilt style loads: that style serializes to nothing, so the next restore brings
+back no style at all (the recovery keeps the layer order of the last loaded style
+for it, #576 RV18-MAP-2). `useContextLossToast` (both maps) gives the restore
+5 s (`CONTEXT_RESTORE_GRACE_MS`) to end in a loaded style; after that an error
+toast says "Survey rendering unavailable (WebGL2/GPU)" and offers **Reload
+map**, which remounts the map on a new canvas and so a new context (transient
+state such as a measurement or a move carry does not survive it). The toast
+stays until the map comes back by itself (a restore whose style loads; then it
+clears itself), the map is rebuilt or left, or the user dismisses it (#576
+D38-LOST).
 
 ## Debug and dev hooks
 

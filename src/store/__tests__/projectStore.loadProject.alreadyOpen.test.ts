@@ -20,29 +20,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../speleoStore';
+import { invokeIpcMock } from '../../test/factories/ipc';
+import { makeSpeleoLink } from '../../test/factories/speleo';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
 const loadBinaryMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc');
 vi.mock('../../utils/loadProjectBinary', () => ({ loadProjectFullBinary: loadBinaryMock }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 
 /** An editing link for a project we hold the lock on, with work not yet pushed. */
-const EDITING_LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
+const EDITING_LINK: SpeleoLinkState = makeSpeleoLink({
   editState: 'editing',
   lockHolder: 'me@example.com',
-  lockedByOther: false,
   hasUnpushedEdits: true,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+});
 
 let refreshLinkStatusMock: ReturnType<typeof vi.fn>;
 
@@ -67,7 +58,7 @@ beforeEach(() => {
   useProjectStore.setState({
     project: null,
     isDirty: false,
-    loading: { loadingId: 0n, clientOpId: 0, isLoading: false, overallProgress: 0 },
+    loading: { loadingId: 0, clientOpId: 0, isLoading: false, overallProgress: 0 },
     refreshUndoState: vi.fn(async () => {}),
   });
 });

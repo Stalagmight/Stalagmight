@@ -306,9 +306,9 @@ mod tests {
 // Relocated from `telemetry::registry` ahead of the crate split: `speleodb`
 // depends on `telemetry` non-test, so the coverage test that joins
 // `Endpoint::ALL` with `EVENT_NAMES` lives on the upper side of that edge.
-// Gated exactly as the registry test module it came from: the registry
-// (and `EVENT_NAMES`) only exists with the `telemetry` feature.
-#[cfg(all(test, feature = "telemetry"))]
+// The registry is compiled with or without the `telemetry` feature (#576 B7),
+// so this runs in every `cargo test`.
+#[cfg(test)]
 mod telemetry_coverage_tests {
     use std::collections::HashSet;
 

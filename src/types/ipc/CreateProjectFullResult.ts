@@ -2,4 +2,4 @@
 import type { DisplaySettings } from "./DisplaySettings";
 import type { Project } from "./Project";
 
-export interface CreateProjectFullResult { loadingId: bigint, project: Project, displaySettings: DisplaySettings, }
+export interface CreateProjectFullResult { loadingId: number, project: Project, displaySettings: DisplaySettings, }

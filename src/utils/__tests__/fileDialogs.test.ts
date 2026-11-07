@@ -10,6 +10,7 @@ import {
   IMPORTABLE_EXTENSIONS,
   DROPPABLE_EXTENSIONS,
   isDroppableFilePath,
+  KNOWN_FILE_EXTENSIONS,
   openDialog,
   saveDialog,
   takeTestFileDialogAnswer,
@@ -38,19 +39,19 @@ describe('ensureExtension', () => {
     expect(ensureExtension('myfile.Stalx', 'stalx')).toBe('myfile.Stalx');
   });
 
-  it('replaces existing different extension', () => {
-    expect(ensureExtension('myfile.txt', 'stalx')).toBe('myfile.stalx');
+  it('replaces an extension that names another known file type', () => {
     expect(ensureExtension('myfile.csv', 'json')).toBe('myfile.json');
+    expect(ensureExtension('myfile.tml', 'stalx')).toBe('myfile.stalx');
   });
 
   it('handles path with directory separators', () => {
     expect(ensureExtension('/home/user/myfile', 'stalx')).toBe('/home/user/myfile.stalx');
-    expect(ensureExtension('/home/user/myfile.txt', 'stalx')).toBe('/home/user/myfile.stalx');
+    expect(ensureExtension('/home/user/myfile.gpx', 'stalx')).toBe('/home/user/myfile.stalx');
   });
 
   it('handles Windows-style path separators', () => {
     expect(ensureExtension('C:\\Users\\test\\file', 'stalx')).toBe('C:\\Users\\test\\file.stalx');
-    expect(ensureExtension('C:\\Users\\test\\file.txt', 'stalx')).toBe('C:\\Users\\test\\file.stalx');
+    expect(ensureExtension('C:\\Users\\test\\file.dmp', 'stalx')).toBe('C:\\Users\\test\\file.stalx');
   });
 
   it('handles dot in directory name but no file extension', () => {
@@ -59,7 +60,49 @@ describe('ensureExtension', () => {
   });
 
   it('handles file with multiple dots', () => {
-    expect(ensureExtension('my.cave.project.txt', 'stalx')).toBe('my.cave.project.stalx');
+    expect(ensureExtension('my.cave.project.csv', 'stalx')).toBe('my.cave.project.stalx');
+  });
+
+  // [#576 D35-D1] "Replace known, else append": only a trailing extension that
+  // names a file type Stalagmight reads or writes is a mistyped format; anything
+  // else is part of the name. `CaveA 1.5` used to lose its tail (`CaveA 1.csv`)
+  // and could land on a different existing file.
+  it.each([
+    ['map.svg', 'png', 'map.png'],
+    ['map.PNG', 'svg', 'map.svg'],
+    ['/mock/CaveA 1.5', 'csv', '/mock/CaveA 1.5.csv'],
+    ['/mock/CaveA 1.5', 'stalx', '/mock/CaveA 1.5.stalx'],
+    ['CaveA.STALX', 'stalx', 'CaveA.STALX'],
+    ['cave', 'tml', 'cave.tml'],
+    ['cave.tmlu', 'tml', 'cave.tml'],
+    ['plan.plnx', 'xml', 'plan.xml'],
+    ['notes.txt', 'stalx', 'notes.txt.stalx'],
+    ['Survey v2.final', 'json', 'Survey v2.final.json'],
+    ['/home/diver/.hidden', 'csv', '/home/diver/.hidden.csv'],
+    ['/home/diver/.svg', 'png', '/home/diver/.svg.png'],
+    ['CaveA.', 'csv', 'CaveA.csv'],
+  ])('%s as .%s -> %s', (typed, ext, written) => {
+    expect(ensureExtension(typed, ext)).toBe(written);
+  });
+
+  // [#576 NF-W2FE-3] On Linux and macOS `\` is an ordinary file-name character
+  // (utils/path.ts isWindowsPath): only a Windows-shaped path splits on it. A
+  // POSIX name whose last dot follows a backslash used to read as a leading-dot
+  // name, so its known extension was appended to instead of replaced.
+  it.each([
+    ['/home/diver/CaveA\\.svg', 'png', '/home/diver/CaveA\\.png'],
+    ['/home/diver/CaveA\\.', 'csv', '/home/diver/CaveA\\.csv'],
+    ['/home/diver/a\\b.tml', 'stalx', '/home/diver/a\\b.stalx'],
+    ['C:\\caves\\.svg', 'png', 'C:\\caves\\.svg.png'],
+    ['\\\\srv\\share\\.hidden', 'csv', '\\\\srv\\share\\.hidden.csv'],
+  ])('splits %s on the platform separator only: as .%s -> %s', (typed, ext, written) => {
+    expect(ensureExtension(typed, ext)).toBe(written);
+  });
+
+  it('knows every format the app opens, imports or exports', () => {
+    for (const ext of [PROJECT_EXTENSION, ...IMPORTABLE_EXTENSIONS, 'csv', 'json', 'tml', 'tmlu', 'png', 'svg', 'pdf', 'xml', 'plnx']) {
+      expect(KNOWN_FILE_EXTENSIONS).toContain(ext);
+    }
   });
 });
 

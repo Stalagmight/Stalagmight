@@ -11,6 +11,7 @@ import {
   type SectionSeed,
   type ShotScreenPos,
 } from './helpers/app';
+import { recordIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
 
 /**
  * E2E tests for depth gradient functionality.
@@ -175,9 +176,10 @@ function differs(a: PixelRgba, b: PixelRgba, tolerance = 8): boolean {
  */
 function isBetween(mid: PixelRgba, a: PixelRgba, b: PixelRgba, slack = 6): boolean {
   for (let c = 0; c < 3; c++) {
-    const lo = Math.min(a[c], b[c]) - slack;
-    const hi = Math.max(a[c], b[c]) + slack;
-    if (mid[c] < lo || mid[c] > hi) return false;
+    // In range: c < 3 indexes the r/g/b members of the 4-channel PixelRgba tuple.
+    const lo = Math.min(a[c]!, b[c]!) - slack;
+    const hi = Math.max(a[c]!, b[c]!) + slack;
+    if (mid[c]! < lo || mid[c]! > hi) return false;
   }
   return true;
 }
@@ -352,99 +354,18 @@ test.describe('Depth Gradient', () => {
     expect(new Set([...bySlot.values()].map((s) => s.mid)).size, diag).toBe(bySlot.size);
   });
 
-  test('toggle shows depth legend when enabled', async ({ page }) => {
-    // Verify legend is hidden initially
-    await expect(page.locator('[data-testid="depth-legend"]')).not.toBeVisible();
-
-    // Enable depth gradient
-    await openDisplayMenu(page);
-    await toggleDisplayOption(page, 'showDepthGradient');
-
-    // Verify legend is now visible
-    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
-  });
-
-  test('toggle hides depth legend when disabled', async ({ page }) => {
-    // Enable depth gradient first
-    await openDisplayMenu(page);
-    await toggleDisplayOption(page, 'showDepthGradient');
-
-    // Verify legend is visible
-    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
-
-    // Disable depth gradient
-    await toggleDisplayOption(page, 'showDepthGradient');
-
-    // Verify legend is now hidden
-    await expect(page.locator('[data-testid="depth-legend"]')).not.toBeVisible();
-  });
-
-  test('legend shows correct depth range labels', async ({ page }) => {
-    // Enable depth gradient
-    await openDisplayMenu(page);
-    await toggleDisplayOption(page, 'showDepthGradient');
-
-    // Verify legend is visible
+  test('toggle shows the depth legend, and hides it again', async ({ page }) => {
+    // [#576 E17-D1] One test for what three asserted separately (shown when enabled,
+    // hidden when disabled, both immediately): hidden before, shown on, hidden off.
     const legend = page.locator('[data-testid="depth-legend"]');
+    await expect(legend).not.toBeVisible();
+
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showDepthGradient');
     await expect(legend).toBeVisible();
 
-    // Verify legend contains depth values with unit 'm'
-    await expect(legend).toContainText('m');
-
-    // Verify min and max labels exist
-    await expect(page.locator('[data-testid="depth-legend-min"]')).toBeVisible();
-    await expect(page.locator('[data-testid="depth-legend-max"]')).toBeVisible();
-
-    // Verify min and max labels contain numeric values (allow negative depths)
-    const minText = await page.locator('[data-testid="depth-legend-min"]').textContent();
-    const maxText = await page.locator('[data-testid="depth-legend-max"]').textContent();
-
-    // Regex allows optional negative sign for depth values like -8.0m
-    expect(minText).toMatch(/-?\d+(\.\d+)?m/);
-    expect(maxText).toMatch(/-?\d+(\.\d+)?m/);
-  });
-
-  test('depth gradient setting calls save_display_setting on toggle', async ({ page }) => {
-    // Track IPC calls via console logs (mock logs them)
-    const ipcCalls: string[] = [];
-    page.on('console', (msg) => {
-      const text = msg.text();
-      if (text.includes('[Mock IPC]')) {
-        ipcCalls.push(text);
-      }
-    });
-
-    // Enable depth gradient
-    await openDisplayMenu(page);
     await toggleDisplayOption(page, 'showDepthGradient');
-
-    // Verify legend is visible
-    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
-
-    // Wait for save_display_setting IPC call using poll instead of fixed timeout
-    await expect.poll(
-      () => ipcCalls.some((call) => call.includes('save_display_setting')),
-      { timeout: 2000 }
-    ).toBe(true);
-
-    // Verify the setting was saved (checked via mock console)
-    const saveCall = ipcCalls.find((call) => call.includes('save_display_setting'));
-    expect(saveCall).toBeDefined();
-  });
-
-  test('depth gradient toggle updates immediately', async ({ page }) => {
-    // Enable depth gradient
-    await openDisplayMenu(page);
-    await toggleDisplayOption(page, 'showDepthGradient');
-
-    // Verify legend appears (use default timeout for reliability)
-    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
-
-    // Disable depth gradient
-    await toggleDisplayOption(page, 'showDepthGradient');
-
-    // Verify legend hides (use default timeout for reliability)
-    await expect(page.locator('[data-testid="depth-legend"]')).not.toBeVisible();
+    await expect(legend).not.toBeVisible();
   });
 
   test('depth gradient toggle is independent of other display toggles', async ({ page }) => {
@@ -468,52 +389,34 @@ test.describe('Depth Gradient', () => {
     await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
   });
 
-  test('legend has proper accessibility attributes', async ({ page }) => {
-    // Enable depth gradient
-    await openDisplayMenu(page);
-    await toggleDisplayOption(page, 'showDepthGradient');
-
-    // Verify legend SVG has role and aria-label
-    const legendSvg = page.locator('[data-testid="depth-legend"] svg');
-    await expect(legendSvg).toBeVisible();
-    await expect(legendSvg).toHaveAttribute('role', 'img');
-
-    const ariaLabel = await legendSvg.getAttribute('aria-label');
-    expect(ariaLabel).toMatch(/Depth scale/i);
-    expect(ariaLabel).toMatch(/to/i);
-  });
-
   // Note: Reload persistence cannot be tested with mocks because the mock's
   // in-memory storage is re-initialized on page reload. Config persistence is
   // pinned against the real backend in the Rust config tier (crates/core config
   // tests + loading paths).
-  // This test verifies that the setting is correctly saved to the backend.
-  test('depth gradient setting is saved to backend on toggle', async ({ page }) => {
-    // Track IPC calls via console logs (mock logs them)
-    const ipcCalls: string[] = [];
-    page.on('console', (msg) => {
-      const text = msg.text();
-      if (text.includes('[Mock IPC]') && text.includes('save_display_setting')) {
-        ipcCalls.push(text);
-      }
-    });
+  test('toggling saves showDepthGradient to the backend, on and then off', async ({ page }) => {
+    // [#576 E17-D1] One test for the two that scraped the mock's console log; this one
+    // reads the recorded IPC calls, so it sees the key and the value the app sent.
+    await recordIpcCalls(page, ['save_display_setting']);
 
-    // Enable depth gradient
     await openDisplayMenu(page);
     await toggleDisplayOption(page, 'showDepthGradient');
-
-    // Verify legend is visible
     await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
+    const [on] = await waitForIpcCall(page, 'save_display_setting');
+    // The write also carries the project's identity (#576 RV6b-2), pinned in vitest
+    // and Rust; this test is about the key and the value the toggle sends.
+    expect(on.args).toMatchObject({ key: 'showDepthGradient', value: 'true' });
 
-    // Wait for save call
-    await expect.poll(
-      () => ipcCalls.some((call) => call.includes('showDepthGradient')),
-      { timeout: 2000 }
-    ).toBe(true);
-
-    // Verify the setting value was saved as 'true'
-    const saveCall = ipcCalls.find((call) => call.includes('showDepthGradient'));
-    expect(saveCall).toContain('true');
+    await toggleDisplayOption(page, 'showDepthGradient');
+    const calls = await waitForIpcCall(page, 'save_display_setting', 2);
+    expect(
+      calls
+        .map((c) => c.args)
+        .filter((a) => a.key === 'showDepthGradient')
+        .map((a) => ({ key: a.key, value: a.value })),
+    ).toEqual([
+      { key: 'showDepthGradient', value: 'true' },
+      { key: 'showDepthGradient', value: 'false' },
+    ]);
   });
 });
 

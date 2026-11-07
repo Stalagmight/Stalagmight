@@ -1,13 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
 const saveDialogMock = vi.hoisted(() => vi.fn());
 const surfaceSaveFailureMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../ipc');
+stubGetErrorMessage(fallbackOr('error'));
 vi.mock('../fileDialogs', () => ({
   saveDialog: saveDialogMock,
   ensureExtension: (p: string) => (p.endsWith('.stalx') ? p : `${p}.stalx`),
@@ -16,12 +12,16 @@ vi.mock('../fileDialogs', () => ({
 }));
 vi.mock('../saveFeedback', () => ({
   surfaceSaveFailure: surfaceSaveFailureMock,
+  // A caught rejection's line, as the real one reads it (code, message or fallback).
+  saveFailureOf: (_e: unknown, fallback?: string) => ({ code: null, error: fallback ?? 'error' }),
 }));
 
 import { convertToUnmanagedStalx } from '../projectActions';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
+import { useOverwritePromptStore } from '../overwriteGuard';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
 /**
  * The detach flow's data-safety ORDER, under Save-a-Copy semantics (an explicit
@@ -80,7 +80,7 @@ describe('convertToUnmanagedStalx ordering', () => {
   it('a failed save detaches nothing and loads nothing', async () => {
     saveProjectMock.mockImplementation(async () => {
       order.push('save');
-      return { success: false, error: 'disk full' };
+      return { success: false, error: 'disk full', code: 'FAILED', failure: { code: 'FAILED', message: 'disk full' } };
     });
 
     const converted = await convertToUnmanagedStalx();
@@ -128,9 +128,57 @@ describe('convertToUnmanagedStalx ordering', () => {
     // Routed through the save-failure router (with its own Detach Failed title
     // and skipIntegrityRouting - the unlink reject ran no integrity re-check).
     expect(surfaceSaveFailureMock).toHaveBeenCalledWith(
-      expect.stringContaining('detaching from SpeleoDB failed'),
+      expect.objectContaining({ error: expect.stringContaining('detaching from SpeleoDB failed') }),
       openDialog,
+      expect.anything(), // the integrity state, unused with skipIntegrityRouting
       expect.objectContaining({ skipIntegrityRouting: true }),
     );
+  });
+});
+
+/**
+ * [#576 D35] The copy is written to the NORMALISED name. When that differs from
+ * the dialog's answer (`OtherCave` -> `OtherCave.stalx`) the OS overwrite prompt
+ * never saw it, and the backend's copy-only branch renames over whatever is
+ * there - another project's file. Ask first; declining changes nothing.
+ */
+describe('convertToUnmanagedStalx onto a rewritten existing name', () => {
+  let saveProjectMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useOverwritePromptStore.setState({ request: null });
+    saveDialogMock.mockResolvedValue('/home/diver/OtherCave');
+    // clearAllMocks keeps implementations; drop the failing-unlink one above. The
+    // backend's existence probe (`save_target_exists`, #576 HFI-2) finds a file.
+    invokeIpcMock.mockReset();
+    invokeIpcMock.mockImplementation(async (cmd: string) => (cmd === 'save_target_exists' ? true : undefined));
+    saveProjectMock = vi.fn(async () => ({ success: true, unlinked_copy_path: '/home/diver/OtherCave.stalx' }));
+    useProjectStore.setState({ saveProject: saveProjectMock, loadProject: vi.fn() } as never);
+    useSpeleoStore.setState({ refreshLinkStatus: vi.fn(async () => {}) } as never);
+    useUIStore.setState({ openDialog: vi.fn() } as never);
+  });
+
+  it('asks before replacing it, and declining saves and detaches nothing', async () => {
+    const pending = convertToUnmanagedStalx();
+
+    await vi.waitFor(() => expect(useOverwritePromptStore.getState().request).not.toBeNull());
+    expect(useOverwritePromptStore.getState().request?.path).toBe('/home/diver/OtherCave.stalx');
+    expect(saveProjectMock).not.toHaveBeenCalled();
+    useOverwritePromptStore.getState().request!.resolve(false);
+
+    expect(await pending).toBe(false);
+    expect(saveProjectMock).not.toHaveBeenCalled();
+    // Only the existence probe ran: no unlink, nothing else.
+    expect(invokeIpcMock.mock.calls.map(([cmd]) => cmd)).toEqual(['save_target_exists']);
+  });
+
+  it('writes the copy there once the user agrees', async () => {
+    const pending = convertToUnmanagedStalx();
+    await vi.waitFor(() => expect(useOverwritePromptStore.getState().request).not.toBeNull());
+    useOverwritePromptStore.getState().request!.resolve(true);
+
+    expect(await pending).toBe(true);
+    expect(saveProjectMock).toHaveBeenCalledWith('/home/diver/OtherCave.stalx');
   });
 });

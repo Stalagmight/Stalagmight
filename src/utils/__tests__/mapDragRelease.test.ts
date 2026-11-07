@@ -4,26 +4,10 @@
  * a map's canvas container, so drags released over chrome still end (#409).
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import { attachDragReleaseForwarder } from '../mapDragRelease';
-
-/** A map stand-in exposing only the members the forwarder touches. */
-function makeFakeMap(options: { withHandlers?: boolean; dragActive?: boolean } = {}) {
-  const canvasContainer = document.createElement('div');
-  const canvas = document.createElement('canvas');
-  canvasContainer.appendChild(canvas);
-  document.body.appendChild(canvasContainer);
-
-  const handleEvent = vi.fn();
-  const map = {
-    getCanvasContainer: () => canvasContainer,
-    dragPan: { isActive: () => options.dragActive !== false },
-    ...(options.withHandlers === false ? {} : { _handlers: { handleEvent } }),
-  } as unknown as MaplibreMap;
-
-  return { map, canvasContainer, canvas, handleEvent };
-}
+import { makeFakeMap } from '../../test/factories/fakeMap';
 
 /** Dispatch a real capture-phase-visible mouseup from `target`. */
 function releaseOver(target: EventTarget): MouseEvent {
@@ -38,7 +22,7 @@ afterEach(() => {
 
 describe('attachDragReleaseForwarder', () => {
   it('forwards a release that lands outside the canvas container', () => {
-    const { map, handleEvent } = makeFakeMap();
+    const { map, handleEvent } = makeFakeMap({ dom: {} });
     const chrome = document.createElement('button');
     document.body.appendChild(chrome);
     const detach = attachDragReleaseForwarder(map);
@@ -54,7 +38,7 @@ describe('attachDragReleaseForwarder', () => {
     // `handleEvent` runs every handler's `mouseup`, not just dragEnd - on
     // macOS that replays a contextmenu deferred at mousedown - so releases
     // unrelated to a live drag must never be forwarded.
-    const { map, handleEvent } = makeFakeMap({ dragActive: false });
+    const { map, handleEvent } = makeFakeMap({ dom: { dragActive: false } });
     const chrome = document.createElement('button');
     document.body.appendChild(chrome);
     const detach = attachDragReleaseForwarder(map);
@@ -66,7 +50,7 @@ describe('attachDragReleaseForwarder', () => {
   });
 
   it('does not forward a release inside the canvas container', () => {
-    const { map, canvasContainer, canvas, handleEvent } = makeFakeMap();
+    const { map, canvasContainer, canvas, handleEvent } = makeFakeMap({ dom: {} });
     const detach = attachDragReleaseForwarder(map);
 
     // MapLibre's own container listener already ends these; forwarding would
@@ -79,7 +63,7 @@ describe('attachDragReleaseForwarder', () => {
   });
 
   it('resolves an accessor at event time, and no-ops while it is empty', () => {
-    const { map, handleEvent } = makeFakeMap();
+    const { map, handleEvent } = makeFakeMap({ dom: {} });
     let current: MaplibreMap | null = null;
     const detach = attachDragReleaseForwarder(() => current);
     const chrome = document.createElement('button');
@@ -95,7 +79,7 @@ describe('attachDragReleaseForwarder', () => {
   });
 
   it('does not throw when the map has no handler manager', () => {
-    const { map } = makeFakeMap({ withHandlers: false });
+    const { map } = makeFakeMap({ dom: { withHandlers: false } });
     const withoutHandleEvent = {
       getCanvasContainer: map.getCanvasContainer.bind(map),
       dragPan: { isActive: () => true },
@@ -114,7 +98,7 @@ describe('attachDragReleaseForwarder', () => {
   });
 
   it('stops forwarding once the returned unregister runs', () => {
-    const { map, handleEvent } = makeFakeMap();
+    const { map, handleEvent } = makeFakeMap({ dom: {} });
     const chrome = document.createElement('button');
     document.body.appendChild(chrome);
     const detach = attachDragReleaseForwarder(map);
@@ -128,8 +112,8 @@ describe('attachDragReleaseForwarder', () => {
   });
 
   it('gives each of several mounted maps its own forwarder', () => {
-    const first = makeFakeMap();
-    const second = makeFakeMap();
+    const first = makeFakeMap({ dom: {} });
+    const second = makeFakeMap({ dom: {} });
     const detachFirst = attachDragReleaseForwarder(first.map);
     const detachSecond = attachDragReleaseForwarder(second.map);
 

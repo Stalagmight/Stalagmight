@@ -2,19 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
-import { EDIT_DISABLED, READ_ONLY_EDIT_NOTICE } from '../../utils/editErrors';
+import { READ_ONLY_EDIT_NOTICE } from '../../utils/editErrors';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 /**
  * #191 read-only edit gate - executeCommand failure handling. When the backend
- * rejects a mutation on a remote project opened read-only it RETURNS
- * `{success:false, error:"EDIT_DISABLED…"}` (a struct, not a throw). executeCommand
- * must then:
+ * refuses a mutation on a remote project opened read-only it rejects with the
+ * CommandError `{code: 'EDIT_DISABLED', message}` (#576 C4), which executeCommand
+ * settles into the refused outcome (not a throw). executeCommand must then:
  *  (a) ALWAYS re-sync the view to backend truth, discarding any optimistic edit -
  *      the load-bearing guard against the "shots vanish on drag" regression (a
  *      committed drag preview was left stranded because the success-only refresh
@@ -45,9 +42,9 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
   });
 
   it('re-syncs the view AND shows the read-only notice on an EDIT_DISABLED rejection', async () => {
-    invokeIpcMock.mockResolvedValue({
-      success: false,
-      error: `${EDIT_DISABLED}: Move section is disabled: this SpeleoDB project is open read-only.`,
+    invokeIpcMock.mockRejectedValue({
+      code: 'EDIT_DISABLED',
+      message: 'Move section is disabled: this SpeleoDB project is open read-only.',
     });
 
     const result = await useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 });
@@ -61,7 +58,7 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
 
   it('surfaces an unclaimed failure via the catch-all error toast when no dialog is open', async () => {
     useUIStore.setState({ activeDialog: null } as never);
-    invokeIpcMock.mockResolvedValue({ success: false, error: 'Invalid offset' });
+    invokeIpcMock.mockRejectedValue({ code: 'FAILED', message: 'Invalid offset' });
 
     await useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 });
 
@@ -71,7 +68,7 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
 
   it('still toasts an unclaimed failure from the context menu (it renders no errors)', async () => {
     useUIStore.setState({ activeDialog: 'context-menu' } as never);
-    invokeIpcMock.mockResolvedValue({ success: false, error: 'Invalid offset' });
+    invokeIpcMock.mockRejectedValue({ code: 'FAILED', message: 'Invalid offset' });
 
     await useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 });
 
@@ -80,7 +77,7 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
 
   it('re-syncs but does NOT toast a failure while a dialog is open (it owns the inline error)', async () => {
     useUIStore.setState({ activeDialog: 'edit-shot' } as never);
-    invokeIpcMock.mockResolvedValue({ success: false, error: 'Invalid offset' });
+    invokeIpcMock.mockRejectedValue({ code: 'FAILED', message: 'Invalid offset' });
 
     await useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 });
 
@@ -101,18 +98,23 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
   });
 
   it('undo shows the friendly read-only notice (not the raw EDIT_DISABLED string)', async () => {
-    invokeIpcMock.mockResolvedValue({
-      success: false,
-      error: `${EDIT_DISABLED}: Undo is disabled: this SpeleoDB project is open read-only.`,
+    invokeIpcMock.mockRejectedValue({
+      code: 'EDIT_DISABLED',
+      message: 'Undo is disabled: this SpeleoDB project is open read-only.',
     });
 
     await useProjectStore.getState().undo();
 
     // executeUndoRedo must match executeCommand: friendly notice under the shared
-    // 'edit-disabled' dedup key, never the raw coded string under the undo toastId.
+    // 'edit-disabled' dedup key, never the raw refusal under the undo toastId.
     expect(showToast).toHaveBeenCalledWith(READ_ONLY_EDIT_NOTICE(), 'edit-disabled', 'warning');
     expect(showToast).not.toHaveBeenCalledWith(
-      expect.stringContaining(EDIT_DISABLED),
+      expect.stringContaining('EDIT_DISABLED'),
+      expect.anything()
+    );
+    expect(showToast).not.toHaveBeenCalledWith(
+      'Undo is disabled: this SpeleoDB project is open read-only.',
+      expect.anything(),
       expect.anything()
     );
   });

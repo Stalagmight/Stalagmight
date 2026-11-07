@@ -23,12 +23,12 @@ export type { DiveProfileRequest };
 export type DiveProfileFormat = 'subsurface-xml' | 'text';
 
 /** Write the planned dive profile to `path`. Rejects when the plan has no route. */
-export function exportDiveProfile(
+export async function exportDiveProfile(
   path: string,
   format: DiveProfileFormat,
   request: DiveProfileRequest
 ): Promise<void> {
-  return invokeIpc<void>(
+  await invokeIpc(
     'export_dive_profile',
     { path, format, request },
     { purpose: 'export the planned dive profile', fields: { format } }
@@ -37,7 +37,7 @@ export function exportDiveProfile(
 
 /** Render the profile as text without writing it, for the clipboard. */
 export function renderDiveProfileText(request: DiveProfileRequest): Promise<string> {
-  return invokeIpc<string>(
+  return invokeIpc(
     'render_dive_profile_text',
     { request },
     { purpose: 'copy the planned dive profile' }
@@ -53,13 +53,13 @@ export function renderDiveProfileText(request: DiveProfileRequest): Promise<stri
 
 /** List the saved plans for the open project (newest first; `[]` if none). */
 export function listDivePlans(): Promise<DivePlanMeta[]> {
-  return invokeIpc<DivePlanMeta[]>('list_dive_plans', {}, { purpose: 'list dive plans' });
+  return invokeIpc('list_dive_plans', {}, { purpose: 'list dive plans' });
 }
 
 /** Load one plan; the backend nulls any station refs that no longer resolve and
  *  reports how many via `stale_ref_count`. */
 export function loadDivePlan(id: number): Promise<DivePlan> {
-  return invokeIpc<DivePlan>(
+  return invokeIpc(
     'load_dive_plan',
     { id },
     { purpose: 'load dive plan', fields: { id } }
@@ -72,7 +72,7 @@ export function saveDivePlan(
   name: string,
   snapshot: DivePlanSnapshot
 ): Promise<DivePlanMeta> {
-  return invokeIpc<DivePlanMeta>(
+  return invokeIpc(
     'save_dive_plan',
     { id, name, snapshot },
     { purpose: 'save dive plan', fields: { id: id ?? 'new' } }
@@ -80,8 +80,8 @@ export function saveDivePlan(
 }
 
 /** Delete a plan by id. */
-export function deleteDivePlan(id: number): Promise<void> {
-  return invokeIpc<void>(
+export async function deleteDivePlan(id: number): Promise<void> {
+  await invokeIpc(
     'delete_dive_plan',
     { id },
     { purpose: 'delete dive plan', fields: { id } }
@@ -137,7 +137,7 @@ export function planAnchorsOf(plan: DivePlan): LoadedPlanAnchors | null {
 
 /** Anchor live plan pins, index-aligned with `refs`; `null` = that ref names no real station. */
 export function planAnchorsForRefs(refs: StationRef[]): Promise<(PlanAnchor | null)[]> {
-  return invokeIpc<(PlanAnchor | null)[]>(
+  return invokeIpc(
     'plan_anchors_for_refs',
     { refs },
     { purpose: 'anchor the live dive-plan pins', fields: { count: refs.length } }
@@ -146,7 +146,7 @@ export function planAnchorsForRefs(refs: StationRef[]): Promise<(PlanAnchor | nu
 
 /** Re-resolve anchors to today's numbering; `null` = the anchor no longer names a station. */
 export function planRefsForAnchors(anchors: PlanAnchor[]): Promise<(StationRef | null)[]> {
-  return invokeIpc<(StationRef | null)[]>(
+  return invokeIpc(
     'plan_refs_for_anchors',
     { anchors },
     { purpose: 're-resolve the dive-plan pins after a survey edit', fields: { count: anchors.length } }

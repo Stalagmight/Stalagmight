@@ -8,7 +8,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { extractFilename } from '../../utils/path';
 import { defaultConfig } from '../../types/config';
 import { formatLength, formatDepthRange } from '../../utils/formatStats';
-import { isImportableDmpShot } from '../../hooks/useImportState';
+import { isImportableDmpShot } from '../../utils/shotConversion';
+import { getErrorMessage } from '../../utils/ipc';
 import type { DmpFile } from '../../types/commands';
 
 /**
@@ -132,11 +133,21 @@ export default function DmpSelectionDialog({
   const [duplicateSectionIndices, setDuplicateSectionIndices] = useState<Set<number>>(new Set());
   const [sectionHashesSettled, setSectionHashesSettled] = useState(false);
 
+  // Why a duplicate check could not run (#576 NF-AN4-N4). The checks are
+  // advisory, so the user may still continue - but a failed one used to be
+  // swallowed, which reads as "no duplicates" and lets them re-import sections
+  // the project already holds without a word. Each check has its own notice
+  // (#576 DMP-1): only a failed section check means sections already in the
+  // project are not flagged.
+  const [sectionCheckError, setSectionCheckError] = useState<string | null>(null);
+  const [fileCheckError, setFileCheckError] = useState<string | null>(null);
+
   // Check section content hashes for duplicates on mount
   useEffect(() => {
     let cancelled = false;
     setSectionHashesSettled(false);
     setDuplicateSectionIndices(new Set());
+    setSectionCheckError(null);
     (async () => {
       try {
         const hashes = dmpFile.sections.map(s => s.content_hash);
@@ -157,8 +168,10 @@ export default function DmpSelectionDialog({
             return next;
           });
         }
-      } catch {
-        // Graceful degradation
+      } catch (e) {
+        const reason = getErrorMessage(e);
+        console.warn('[dmpImport] section duplicate check failed:', reason);
+        if (!cancelled) setSectionCheckError(reason);
       } finally {
         if (!cancelled) {
           setSectionHashesSettled(true);
@@ -175,6 +188,7 @@ export default function DmpSelectionDialog({
     setFileHash(null);
     setIsDuplicate(false);
     setHashSettled(false);
+    setFileCheckError(null);
     (async () => {
       try {
         const hash = await calculateFileHash(filePath);
@@ -184,8 +198,11 @@ export default function DmpSelectionDialog({
         const isDup = await checkDuplicateImport(hash);
         if (cancelled) return;
         setIsDuplicate(isDup);
-      } catch {
-        // Graceful degradation: proceed without warning
+      } catch (e) {
+        // Still advisory - the user may continue - but said, not swallowed.
+        const reason = getErrorMessage(e);
+        console.warn('[dmpImport] file duplicate check failed:', reason);
+        if (!cancelled) setFileCheckError(reason);
       } finally {
         if (!cancelled) {
           setHashSettled(true);
@@ -355,6 +372,26 @@ export default function DmpSelectionDialog({
           </div>
         </div>
 
+        {/* What the parser could not read (#576 B13): a section cut short, one that
+            stops at a damaged record, one that failed to read. Shown here, before
+            any section is picked, because this is where the user can still leave a
+            partial section out; the same lines lead the import receipt. */}
+        {(dmpFile.warnings?.length ?? 0) > 0 && (
+          <div
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
+            data-testid="dmp-parse-warnings"
+          >
+            <div className="font-medium">{'\u26A0'} {t('dialogs.dmpSelection.parseWarningsTitle')}</div>
+            <ul className="mt-1 list-disc pl-5 space-y-0.5">
+              {dmpFile.warnings?.map((warning, index) => (
+                <li key={index} data-testid={`dmp-parse-warning-${index}`}>
+                  {warning}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {/* Duplicate hash warning banner */}
         {isDuplicate && hashSettled && (
           <div
@@ -375,6 +412,24 @@ export default function DmpSelectionDialog({
               duplicates: duplicateSectionIndices.size,
               total: dmpFile.sections.length,
             })}
+          </div>
+        )}
+
+        {/* A duplicate check that could not run (#576 NF-AN4-N4), one notice per check (#576 DMP-1) */}
+        {fileCheckError && (
+          <div
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
+            data-testid="file-duplicate-check-failed"
+          >
+            {'\u26A0'} {t('dialogs.dmpSelection.fileCheckFailed', { reason: fileCheckError })}
+          </div>
+        )}
+        {sectionCheckError && (
+          <div
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
+            data-testid="section-duplicate-check-failed"
+          >
+            {'\u26A0'} {t('dialogs.dmpSelection.sectionCheckFailed', { reason: sectionCheckError })}
           </div>
         )}
 

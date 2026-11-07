@@ -1,11 +1,15 @@
+use super::project_slot::ProjectSlot;
+use super::save_sidecars::{SaveMode, SaveRequest};
+use super::session_commit::{CommandsHeld, SessionCommit};
 use super::AppState;
-use crate::core::{CommandResult, PersistStack, UndoStack};
-use crate::models::{Project, SectionId};
+use crate::core::{CommandError, CommandErrorCode, CommandResult, PersistStack, UndoStack};
+use crate::models::{CreationStamp, Project, SectionId};
 use crate::persistence::Database;
+use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
 
 /// What a failed save actually was, once the error chain and the destination
-/// have both been consulted. Each variant except `Other` carries a marker the
+/// have both been consulted. Each variant except `Other` carries a code the
 /// frontend keys on to pick the remediation it shows.
 #[derive(Clone, Copy)]
 enum SaveFailureKind {
@@ -23,13 +27,13 @@ enum SaveFailureKind {
 }
 
 impl SaveFailureKind {
-    /// The marker prefixed onto the `CommandResult` error, or `None` when the
-    /// message stands on its own.
-    fn code(self) -> Option<&'static str> {
+    /// The failure's code (#576 C4), or `None` when the message stands on its
+    /// own (`FAILED` at the boundary).
+    fn code(self) -> Option<CommandErrorCode> {
         match self {
-            Self::PermissionDenied => Some(crate::core::loading::PERMISSION_DENIED_CODE),
-            Self::PathNotFound => Some(crate::core::loading::PATH_NOT_FOUND_CODE),
-            Self::PathTooLong => Some(crate::core::loading::PATH_TOO_LONG_CODE),
+            Self::PermissionDenied => Some(CommandErrorCode::FsPermissionDenied),
+            Self::PathNotFound => Some(CommandErrorCode::FsPathNotFound),
+            Self::PathTooLong => Some(CommandErrorCode::FsPathTooLong),
             Self::Other => None,
         }
     }
@@ -154,7 +158,16 @@ fn classify_save_failure(target: &Path, err: &anyhow::Error) -> SaveFailureKind 
     }
 }
 
-/// Build a save-failure `CommandResult`, tagging it with the marker that tells
+#[cfg(test)]
+thread_local! {
+    /// [#576 RV5-1] Test seam: run once on the saving thread when the temp file is
+    /// complete and closed and before it is renamed over the destination, so a
+    /// test can land another write in exactly that window.
+    pub(super) static AFTER_TEMP_WRITTEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Build a save-failure `CommandResult`, tagging it with the code that tells
 /// the frontend which remediation to show, and logging the full error chain -
 /// the one place every failing save passes through, so a failure that only ever
 /// happens on a user's machine is still diagnosable from their log (#429).
@@ -170,8 +183,23 @@ pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) ->
         "Save failed"
     );
     match kind.code() {
-        Some(code) => CommandResult::failure(format!("{code}: {detail}")),
+        Some(code) => CommandResult::refused(CommandError::new(code, detail)),
         None => CommandResult::failure(detail),
+    }
+}
+
+/// [#576 NF-W14BE-1] Give every section that has no creation time yet `now`.
+///
+/// On the MODEL, not only in the file: the `.stalx` `sections.created_at`
+/// column is written from `Section::created_at`, so a section stamped here
+/// writes this same value on every later save - the time it was first saved,
+/// not the time of the latest save. A section that already has one (read back
+/// on open, carried by an undo) keeps it.
+pub(super) fn stamp_section_creation_times(project: &mut Project, now: DateTime<Utc>) {
+    for section in &mut project.sections {
+        section
+            .created_at
+            .get_or_insert_with(|| CreationStamp::at(now));
     }
 }
 
@@ -215,6 +243,9 @@ fn apply_save_heals(project: &mut Project) {
     // a pair of shots rather than re-derived from an index that a later append can shift.
     project.capture_missing_gauge_anchors();
 
+    // Stamp each section's creation time on its first save (#576 NF-W14BE-1).
+    stamp_section_creation_times(project, Utc::now());
+
     // Drop section_offsets for sections that no longer exist. An orphan entry
     // (a section removed via a path that bypassed cleanup) is dead data, and the
     // SQLite section_offsets row carries a FOREIGN KEY to sections(id) - writing
@@ -222,11 +253,7 @@ fn apply_save_heals(project: &mut Project) {
     // user to Repair. Lossless (matches repair_structural_integrity), so heal on
     // save. (orphan_section_offset is Critical but the save gate only sees
     // station cross-refs, not section_offsets.)
-    let existing_sections: std::collections::HashSet<SectionId> =
-        project.sections.iter().map(|s| s.id).collect();
-    project
-        .section_offsets
-        .retain(|sid, _| existing_sections.contains(sid));
+    project.drop_orphan_section_offsets();
 
     // Sanitize non-finite (NaN/inf) section offsets before persisting, mirroring
     // the load-boundary guard and the shot sanitize below. section_offsets has no
@@ -241,7 +268,7 @@ fn apply_save_heals(project: &mut Project) {
     // - the exact shape `write_section_offset` exists to prevent (#413 finding
     // 2) - and the row then had to be loaded, cascaded over and re-saved.
     let non_finite: Vec<SectionId> = project
-        .section_offsets
+        .section_offsets()
         .iter()
         .filter(|(_, offset)| !offset.0.is_finite() || !offset.1.is_finite())
         .map(|(id, _)| *id)
@@ -252,7 +279,7 @@ fn apply_save_heals(project: &mut Project) {
             if offset.0.is_finite() { offset.0 } else { 0.0 },
             if offset.1.is_finite() { offset.1 } else { 0.0 },
         );
-        Project::write_section_offset(&mut project.section_offsets, id, finite);
+        project.set_section_offset(id, finite);
     }
 
     // Sanitize non-finite (NaN/inf) shot geometry before binding. A NaN cannot
@@ -268,6 +295,12 @@ fn apply_save_heals(project: &mut Project) {
             shot.sanitize_non_finite();
         }
     }
+
+    // [#576 B35(h)] ...and station offsets, the one geometry map that had no
+    // finite guard on either side: an infinite component used to be written to
+    // the file as it was, to poison every open after it. Component-wise, as the
+    // load boundary does: the finite components are a real move.
+    Project::sanitize_station_offsets(&mut project.station_offsets);
 }
 
 /// Bring a project restored from an undo/redo snapshot up to the standard a
@@ -296,6 +329,12 @@ fn apply_save_heals(project: &mut Project) {
 ///   direction can OVERWRITE an anchor - both the app's capture and this
 ///   carry-forward skip a section that already has one - so the pair a section
 ///   is pinned to never moves.
+/// * `stamp_section_creation_times` - RE-APPLIED AS A CARRY-FORWARD, for the
+///   same reason (#576 NF-W14BE-1): a restored section with no creation time
+///   takes the one its live counterpart (same id) holds, so a save recorded
+///   before the undo still writes the time the first save stamped. Never over a
+///   time the restored section has, and never a fresh stamp - that is the
+///   save's to make.
 ///
 /// # The half of finding 11 this does NOT cover, and what does
 ///
@@ -338,7 +377,19 @@ pub(super) fn reapply_heals_after_restore(restored: &mut Project, live: Option<&
     let Some(live) = live else {
         return;
     };
+    // [#576 NF-W18-1] The project's creation time as the live project holds it
+    // (its file's text) when the snapshot names the same moment: one persisted
+    // before that text was kept holds it as `DateTime<Utc>` serialized it, which
+    // the next save would otherwise write.
+    if restored.created_at.utc() == live.created_at.utc() {
+        restored.created_at.clone_from(&live.created_at);
+    }
     for section in &mut restored.sections {
+        if section.created_at.is_none() {
+            section.created_at = live
+                .get_section(section.id)
+                .and_then(|s| s.created_at.clone());
+        }
         if section.gauge_shot_uuid.is_some() {
             continue;
         }
@@ -396,14 +447,48 @@ impl AppState {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub(super) fn save_project(&self, path: Option<PathBuf>) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+    /// The refusals a save makes BEFORE it touches the live project or any file:
+    /// a project a newer build saved (#576 B6-D1), stored settings the open could
+    /// not read (#576 B15), and unresolvable cross-references. Called under the
+    /// `project` lock, like the checks it reads.
+    ///
+    /// [#576 RV2-R-6] Its own method so EVERY in-place write of the model applies
+    /// the same rules as the save: the SpeleoDB name fold persists the whole model
+    /// beside the save path, and ran before the flush that would have refused - so
+    /// it wrote the in-memory defaults over unread settings.
+    pub(super) fn model_write_refusal(&self, project: &Project) -> Option<CommandResult> {
+        // [#576 B6-D1] A project a NEWER build saved is never written by this one -
+        // not in place (Ctrl+S, autosave, the pre-push flush) and not elsewhere
+        // either: a Save As would write this build's schema of it, the same silent
+        // downgrade under a different name. Checked first, under the project lock
+        // its flag was committed under, so a refused save leaves the live project
+        // exactly as loaded (the heals below mutate it).
+        if let Some(reason) = self.newer_file_refusal() {
+            tracing::warn!(
+                purpose = "never downgrade a project saved by a newer version",
+                "Refused to save a project saved by a newer version of Stalagmight"
+            );
+            return Some(CommandResult::refused(CommandError::new(
+                CommandErrorCode::NewerFileReadOnly,
+                format!("Saving is disabled: {reason}"),
+            )));
+        }
 
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
+        // [#576 B15] Stored per-project settings the open could not read are held as
+        // DEFAULTS in the model, and the core save writes them back: any save, in
+        // place or elsewhere, would put the defaults over the stored values. Refused
+        // under the side-table policy for the same reason, and before the heals for
+        // the reason above.
+        if let Some(refusal) =
+            super::save_sidecars::unread_settings_refusal(&self.unreadable_project_settings())
+        {
+            tracing::warn!(
+                purpose = "never write defaults over unread project settings",
+                "Refused to save: stored project settings could not be read when the project \
+                 was opened"
+            );
+            return Some(refusal);
+        }
 
         // Refuse to persist a project with unresolvable cross-references (a station an
         // endpoint anchors on was deleted) BEFORE the heals below mutate the live
@@ -441,12 +526,25 @@ impl AppState {
                 purpose = "block persisting unresolvable cross-references",
                 "Refused to save project with dangling cross-references"
             );
-            return CommandResult::failure(format!(
+            return Some(CommandResult::failure(format!(
                 "Can't save: the project has {count} unresolved cross-reference{} \
                  (a station they point to was deleted). Use \"Repair\" in the \
                  integrity banner, then save.",
                 if count == 1 { "" } else { "s" }
-            ));
+            )));
+        }
+        None
+    }
+
+    pub(super) fn save_project(&self, path: Option<PathBuf>) -> CommandResult {
+        let mut proj_guard = self.project.lock();
+
+        let Some(project) = proj_guard.as_mut() else {
+            return CommandResult::failure("No project open".to_string());
+        };
+
+        if let Some(refusal) = self.model_write_refusal(project) {
+            return refusal;
         }
 
         // The undo-less heals, all of them, in `apply_save_heals` - which is
@@ -469,25 +567,30 @@ impl AppState {
             }
         }
 
-        // Determine save path and ensure .stalx extension
+        // Determine save path and ensure .stalx extension. `CaveA.STALX` already
+        // has it: rewriting that to `CaveA.stalx` names a different file on a
+        // case-sensitive filesystem, one no overwrite prompt was shown for (B33).
         let is_implicit_save = path.is_none();
         let save_path = path.or_else(|| project.file_path.clone());
         let mut save_path = match save_path {
-            Some(p) => {
-                // Ensure .stalx extension
-                if p.extension().is_none_or(|ext| ext != "stalx") {
-                    p.with_extension("stalx")
-                } else {
-                    p
-                }
-            }
+            Some(p) => crate::persistence::with_stalx_extension(p),
             None => return CommandResult::failure("No save path specified".to_string()),
         };
 
+        // A missing database handle does not mean "first save": a failed reopen
+        // leaves one behind too (`DATABASE_NOT_REOPENED` below), on a project whose
+        // file exists and is the only place its ignores, display settings and
+        // SpeleoDB link live. Every side-table read below comes from this handle.
+        if let Some(refusal) = self.restore_missing_database(project, &save_path) {
+            return refusal;
+        }
+
         // On the first implicit save (path omitted), avoid overwriting an existing file.
         // Deferred new projects can reserve a canonical path; if it now exists, auto-rename.
-        let has_open_database = self.database.lock().map(|db| db.is_some()).unwrap_or(false);
-        if is_implicit_save && !has_open_database {
+        // Decided by the explicit flag: inferring it from the missing handle sent every
+        // autosave after a failed reopen to `<stem>_1.stalx` (#576 B35(c)).
+        let deferred = self.initial_save_deferred();
+        if is_implicit_save && deferred {
             let candidate_path = Self::next_available_project_path(&save_path);
             if candidate_path != save_path {
                 tracing::warn!(
@@ -522,11 +625,13 @@ impl AppState {
                     purpose = "persist edits safely",
                     "Save refused: the destination folder is not reachable"
                 );
-                return CommandResult::failure(format!(
-                    "{}: Cannot save to {}: the folder no longer exists or the drive is not \
-                     connected",
-                    crate::core::loading::PATH_NOT_FOUND_CODE,
-                    save_path.display()
+                return CommandResult::refused(CommandError::new(
+                    CommandErrorCode::FsPathNotFound,
+                    format!(
+                        "Cannot save to {}: the folder no longer exists or the drive is not \
+                         connected",
+                        save_path.display()
+                    ),
                 ));
             }
         }
@@ -540,227 +645,29 @@ impl AppState {
             "Starting safe save operation"
         );
 
-        // Load display settings from current database or in-memory cache
-        let display_settings = {
-            let db_guard = self.database.lock().ok();
-            let from_db = db_guard
-                .as_ref()
-                .and_then(|db| db.as_ref())
-                .and_then(|db| db.load_display_settings().ok())
-                .unwrap_or_default();
-
-            // If DB had settings, use those; otherwise use the in-memory cache
-            if from_db.is_empty() {
-                self.display_settings_cache
-                    .lock()
-                    .map(|cache| cache.clone())
-                    .unwrap_or_default()
-            } else {
-                from_db
-            }
+        // [#576 A3] The side tables the core save does not write - display settings,
+        // ignored warnings, the SpeleoDB link, the undo-chain markers, the undo
+        // history - are carried by the registry in `save_sidecars`, each under its
+        // failure policy. Snapshotted from the open file before any temp file
+        // exists, so a refusal here has written nothing; the same pass resolves the
+        // mode, which the link decides.
+        let rewrites_open_file = project
+            .file_path
+            .as_ref()
+            .is_some_and(|open| same_file(open, &save_path));
+        let carried = match self.snapshot_sidecars(
+            project,
+            SaveRequest {
+                destination: &save_path,
+                deferred,
+                implicit: is_implicit_save,
+                rewrites_open_file,
+            },
+        ) {
+            Ok(carried) => carried,
+            Err(refusal) => return *refusal,
         };
-
-        // Resolved (ignored) warnings live in their own table, not in the Project
-        // model, so save_project() won't carry them. Snapshot them from the
-        // current database and re-apply to the fresh save file below, otherwise
-        // every save would drop the user's "Ignore" acknowledgements (issue #57).
-        //
-        // [#517] The read is `load_resolved_warnings_verbatim`, not the load
-        // path's `load_resolved_warnings`: it takes the table in whatever shape
-        // the file has (a pre-v8 file with no `shot_uuid`, e.g. one whose
-        // migration chain a forged `PRAGMA user_version` skipped) instead of
-        // failing on the one missing column. What it still cannot read is
-        // refused below rather than guessed at.
-        let carried_ignores = {
-            // Recover a poisoned lock rather than silently dropping every ignore.
-            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            match db_guard.as_ref() {
-                Some(db) => db.load_resolved_warnings_verbatim(),
-                None => Ok(Vec::new()),
-            }
-        };
-        let resolved_warnings: Vec<_> = match carried_ignores {
-            Ok(rows) => {
-                // Drop rows whose section no longer exists. resolved_warnings has
-                // a FOREIGN KEY on section_id and the carry-over re-inserts in a
-                // single transaction - one orphaned row (e.g. a section deleted
-                // after a warning on it was ignored; delete_section is in-memory
-                // only and never prunes this table) would abort the whole
-                // transaction and silently drop EVERY still-valid ignore.
-                let section_ids: std::collections::HashSet<_> =
-                    project.sections.iter().map(|s| s.id).collect();
-                // Re-derive each UUID-keyed row's stored (section_id, shot_id)
-                // from the live shot's CURRENT position so two distinct live
-                // shots never share a (section_id, shot_id) in the fresh save
-                // file (issue #57). save_project writes shot_id =
-                // section_id*FEATURE_ID_STRIDE + sequence_order, so we derive
-                // the same value from the in-memory project; load regenerates
-                // ids with this identical formula. Without this, a renumber that
-                // lands a different shot on a stale UUID-keyed row's old position
-                // would let INSERT OR REPLACE (against UNIQUE(section_id, shot_id,
-                // warning_code)) silently delete the older shot's still-valid
-                // ignore.
-                // Key by (section_id, uuid), not uuid alone: ensure_unique_shot_uuids
-                // only de-dups within a section, so two sections can share a shot
-                // UUID and a uuid-only key would collapse both live shots into one
-                // entry - remapping section A's ignore to whichever section won the
-                // collect, losing A's ignore and mis-suppressing B (issue #57 / Codex).
-                let live_positions: std::collections::HashMap<(SectionId, &str), (SectionId, u32)> =
-                    project
-                        .sections
-                        .iter()
-                        .flat_map(|s| {
-                            s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
-                                sh.uuid.as_deref().map(|u| {
-                                    (
-                                        (s.id, u),
-                                        (
-                                            s.id,
-                                            s.id * crate::models::FEATURE_ID_STRIDE + seq as u32,
-                                        ),
-                                    )
-                                })
-                            })
-                        })
-                        .collect();
-                // Index live shots by their CURRENT (section_id, shot_id) → (uuid,
-                // saved position). A position-keyed (NULL-uuid) row written before
-                // its shot's UUID was persisted (resolve_warning on a pre-v6 or
-                // not-yet-saved shot) is upgraded here: THIS save persists every
-                // shot's UUID, so we re-key such a row to the shot's saved position
-                // AND its now-persisted UUID. Without this, its stale in-memory
-                // shot_id could point at a different shot (or none) after an
-                // insert/delete on the next load (issue #57 / Codex).
-                let live_by_id: std::collections::HashMap<
-                    (SectionId, u32),
-                    (&str, (SectionId, u32)),
-                > = project
-                    .sections
-                    .iter()
-                    .flat_map(|s| {
-                        s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
-                            sh.uuid.as_deref().map(|u| {
-                                (
-                                    (s.id, sh.id),
-                                    (
-                                        u,
-                                        (
-                                            s.id,
-                                            s.id * crate::models::FEATURE_ID_STRIDE + seq as u32,
-                                        ),
-                                    ),
-                                )
-                            })
-                        })
-                    })
-                    .collect();
-                // Remap each UUID-keyed row to its shot's live position; DROP a
-                // UUID-keyed row whose shot was deleted (UUID no longer live) - it
-                // can never match a live shot by UUID on reload, so it is dead.
-                // Keeping it with its stale id would let it collide (under
-                // UNIQUE(section_id, shot_id, warning_code) + INSERT OR REPLACE)
-                // with a live shot that a renumber moved onto that position, and
-                // REPLACE could drop either row depending on insert order - i.e.
-                // silently lose the live shot's still-valid ignore. Dropping dead
-                // rows here also stops them accumulating across saves. NULL-uuid
-                // (legacy, position-keyed) rows are kept and matched by position
-                // (the load-time backfill upgrades the ones that map to a shot).
-                rows.into_iter()
-                    .filter_map(|mut r| {
-                        match r.shot_uuid.as_deref() {
-                            Some(uuid) => {
-                                // Look up by (section_id, uuid): a UUID-keyed row's
-                                // section_id is its shot's section, so this targets the
-                                // right shot even when another section shares the UUID.
-                                let &(sec, shot) = live_positions.get(&(r.section_id, uuid))?;
-                                r.section_id = sec;
-                                r.shot_id = shot;
-                                Some(r)
-                            }
-                            None => {
-                                // Upgrade a position-keyed row to its shot's saved
-                                // position + now-persisted UUID when its (section_id,
-                                // shot_id) still maps to a live shot. A row that maps
-                                // to NO live shot is DEAD (its shot was deleted) - DROP
-                                // it: carrying it forward would let the load-time
-                                // position backfill re-attach it to whatever shot now
-                                // occupies that saved position, suppressing an
-                                // unrelated shot's warning (issue #57 / Codex).
-                                let &(uuid, (sec, shot)) =
-                                    live_by_id.get(&(r.section_id, r.shot_id))?;
-                                r.shot_uuid = Some(uuid.to_string());
-                                r.section_id = sec;
-                                r.shot_id = shot;
-                                Some(r)
-                            }
-                        }
-                    })
-                    // Then drop any (legacy) row whose section no longer exists so
-                    // the FK on section_id holds for every carried-over row.
-                    .filter(|r| section_ids.contains(&r.section_id))
-                    .collect()
-            }
-            // [#517] REFUSE the save. This snapshot is not a nicety the save
-            // can do without: the pipeline builds a FRESH `.stalx.tmp` and
-            // renames it over the destination, so the file's ignore list is
-            // rebuilt from exactly these rows. Continuing with `Vec::new()`
-            // wrote a file with zero ignores and destroyed the old one in the
-            // same stroke - every "Ignore" the user ever recorded, gone, on a
-            // save reported as successful.
-            //
-            // Refusing loses nothing: no temp file exists yet, the destination
-            // is untouched, and the rows stay in the file that still holds
-            // them. It is also the only channel that reaches the user - a
-            // `CommandResult.warnings` entry on a SUCCESSFUL save is read by
-            // nothing on the frontend (`projectStore.saveProject` inspects the
-            // list only for `DATABASE_NOT_REOPENED`), whereas a failure is
-            // routed to the error dialog / autosave banner by
-            // `surfaceSaveFailure`.
-            //
-            // The verbatim read above already absorbs every legacy SHAPE, and
-            // coerces every hostile VALUE, so what remains here is STRUCTURAL:
-            // a missing key column, an unreadable `sqlite_master`, a step error
-            // from a corrupt page. A single nonsense row must never land here -
-            // that would make one poisoned cell in a file the user merely opened
-            // into a project that can never be saved again. The project's survey
-            // data is exportable meanwhile, so the user is not walled in.
-            //
-            // The message carries `IGNORES_UNREADABLE` because an unmarked
-            // failure is routed to Review & Repair whenever the integrity check
-            // is also unhappy, and Review & Repair cannot fix this - see
-            // `saveErrors.ts` / `surfaceSaveFailure`. The quoted cause is clamped:
-            // SQLite error text embeds the attacker's own identifiers.
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    purpose = "carry resolved warnings across save",
-                    "Refused to save: the resolved-warnings table could not be read, and the \
-                     save would rebuild the file without the user's ignores"
-                );
-                return CommandResult::failure(format!(
-                    "{}: Can't save: this project's list of ignored warnings could not be read \
-                     ({}). Saving would rewrite the file without them, so nothing was written - \
-                     the file on disk is unchanged.",
-                    crate::core::loading::IGNORES_UNREADABLE_CODE,
-                    crate::core::loading::clamp_quoted_error(&e.to_string()),
-                ));
-            }
-        };
-
-        // [Track B] (#191, D-B13c) The SpeleoDB hand-off link (speleo_link) lives
-        // in its own table, not the Project model, so save_project() won't carry
-        // it. The save pipeline writes a FRESH temp .stalx and atomically renames
-        // it over the destination, so without this snapshot+re-apply a local save
-        // would DROP the link entirely - silently un-remoting the project and
-        // clearing has_unpushed_edits (exactly the "local save NEVER clears the
-        // dirty bit" invariant). Snapshot it here and re-apply to the fresh file
-        // below. base_commit_sha + the dirty bit are carried verbatim.
-        let speleo_link = {
-            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            db_guard
-                .as_ref()
-                .and_then(|db| db.load_speleo_link().ok().flatten())
-        };
+        let mode = carried.mode();
 
         // Save a Copy: an EXPLICIT destination on a SpeleoDB-managed project does
         // not relocate the session - it writes a detached copy WITHOUT the
@@ -773,19 +680,15 @@ impl AppState {
         // UNLINKED (the link is stamped after - pinned by
         // `publish_relocates_into_the_cache_before_it_stamps_the_link`), and
         // `speleodb_upload`'s pre-push flush is an implicit save.
-        let copy_only = speleo_link.is_some() && !is_implicit_save;
-        if copy_only {
+        if mode == SaveMode::DetachedCopy {
             // Refuse the managed file itself as the copy's destination: writing an
             // unlinked copy over it would strip the managed project's link in
             // place - the one outcome this whole arrangement exists to prevent.
             // Both spellings of "itself" are checked: the open file, and the
             // project's canonical cache slot (they are normally the same file, but
             // `same_file` cannot bridge them when one side does not resolve).
-            let names_the_managed_file = project
-                .file_path
-                .as_ref()
-                .is_some_and(|open| same_file(open, &save_path))
-                || speleo_link.as_ref().is_some_and(|link| {
+            let names_the_managed_file = rewrites_open_file
+                || carried.speleo_link().is_some_and(|link| {
                     super::speleodb::validate_project_id(&link.project_id).is_ok()
                         && super::speleodb_local_state::cache_root().is_some_and(|root| {
                             super::speleodb_local_state::is_the_cached_copy(
@@ -804,44 +707,6 @@ impl AppState {
                 ));
             }
         }
-        // [#303] The Unwind chain pointer needs the same treatment, and for a sharper
-        // reason than "it would be lost". Losing it is documented as benign - the next
-        // Unwind restarts from BASE - but the pointer is also what EXCUSES the dirty bit
-        // a walk leaves behind. Dropped here, a copy the user only unwound reads as
-        // holding un-pushed work nobody warned them about, so the confirmation and the
-        // backend guard disagree: the dialog resolved the flag before an autosave, the
-        // guard re-derived it after, and the Unwind failed on press with "this copy holds
-        // un-pushed edits that the undo history no longer covers". A scripted run never
-        // sees it because nothing saves in between; a person pausing between two Unwinds
-        // hits it every time.
-        // A detached copy deliberately sheds both markers, so it does not need to read
-        // them. For a managed save, keep absence distinct from a read error: if either
-        // marker cannot be preserved, the selected fail-closed policy is to save the
-        // survey with no undo history rather than publish unclassified inherited rows.
-        let marker_snapshot = if copy_only {
-            Ok((None, None))
-        } else {
-            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            match db_guard.as_ref() {
-                Some(db) => db.load_speleo_undo_chain().and_then(|chain| {
-                    db.load_speleo_undo_watermark()
-                        .map(|watermark| (chain, watermark))
-                }),
-                None => Ok((None, None)),
-            }
-        };
-        let (speleo_undo_chain, speleo_undo_watermark, mut marker_preservation_failed) =
-            match marker_snapshot {
-                Ok((chain, watermark)) => (chain, watermark, false),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "save without unclassified inherited undo history (#303)",
-                        "Could not read the undo-chain metadata; the saved file will drop Undo and Redo history"
-                    );
-                    (None, None, true)
-                }
-            };
 
         // Remove any leftover temp file from previous failed saves
         if temp_path.exists() {
@@ -870,112 +735,29 @@ impl AppState {
             return save_failure("Failed to save project", &save_path, &e);
         }
 
-        // Copy display settings to the new database
-        for (key, value) in &display_settings {
-            if let Err(e) = db.save_display_setting(key, value) {
-                tracing::warn!(
-                    key = %key,
-                    error = %e,
-                    purpose = "preserve display settings on save",
-                    "Failed to copy display setting"
-                );
-            }
-        }
-
-        // Carry over resolved (ignored) warnings so they survive the save.
-        if !resolved_warnings.is_empty() {
-            if let Err(e) = db.save_resolved_warnings_bulk(&resolved_warnings) {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "preserve resolved warnings on save",
-                    "Failed to copy resolved warnings"
-                );
-            }
-        }
-
-        // [Track B] (#191, D-B13c) Carry the SpeleoDB hand-off link forward so a
-        // local save never un-remotes the project or clears the dirty bit. The
-        // dirty bit is set-only here - only a later server push clears it.
-        // EXCEPT on a copy save, where dropping the row is the whole point: the
-        // copy is a plain unmanaged project.
-        // [#303] The chain position and the inherited-history watermark join the link
-        // under the SAME guard, rather than each carrying their own: all three describe
-        // this machine's relationship to the SERVER, so a copy that has deliberately shed
-        // its link must shed them too. A copy that kept the watermark and was later linked
-        // would have its own first push cut the user's history as "inherited". Grouped
-        // because the per-site version of this rule has already been missed once.
-        if !copy_only {
-            if let Some(link) = &speleo_link {
-                if let Err(e) = db.save_speleo_link(Some(link)) {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "preserve SpeleoDB hand-off link on save",
-                        "Failed to copy speleo_link onto the fresh save file"
-                    );
-                }
-            }
-            // [#303] ...and the Unwind chain position with it. Only written when one exists:
-            // `None` is already the fresh file's state, and writing it unconditionally would
-            // mean every save of every project touched this table for nothing.
-            if let Some(sha) = &speleo_undo_chain {
-                if let Err(e) = db.save_speleo_undo_chain(Some(sha)) {
-                    marker_preservation_failed = true;
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "preserve the Unwind chain position on save (#303)",
-                        "Failed to copy speleo_undo_chain onto the fresh save file; Undo and \
-                         Redo history will be removed from the saved file"
-                    );
-                }
-            }
-
-            // [#303] Likewise the inherited-history watermark.
-            if let Some(ts) = &speleo_undo_watermark {
-                if let Err(e) = db.save_speleo_undo_watermark(Some(ts)) {
-                    marker_preservation_failed = true;
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "preserve the inherited-history watermark on save (#303)",
-                        "Failed to copy speleo_undo_watermark onto the fresh save file; Undo and \
-                         Redo history will be removed from the saved file"
-                    );
-                }
-            }
-        }
-
-        // Persist history while the file is still staged. A partial undo/redo rewrite
-        // must never be renamed into place: try the pair atomically, and if it fails,
-        // atomically clear both stacks and continue with a visible warning.
-        let mut history_dropped = match self.persist_or_clear_undo_stacks_into(&db) {
-            Ok(dropped) => dropped,
-            Err(e) => {
+        // Every side table, written while the file is still staged, so a partial
+        // rewrite is never renamed into place: a table the policy will not save
+        // without stops the save here (the temp is discarded, the destination is
+        // untouched), and a cosmetic one comes back as a warning. The undo and redo
+        // history is persisted synchronously as the last of them.
+        let warnings = match self.write_sidecars(&db, carried) {
+            Ok(warnings) => warnings,
+            Err(failure) => {
                 drop(db);
                 let _ = std::fs::remove_file(&temp_path);
-                return save_failure("Failed to finalize undo history", &save_path, &e);
+                return save_failure(&failure.context, &save_path, &failure.error);
             }
         };
-        if marker_preservation_failed {
-            if let Err(e) = db.clear_history_stacks() {
-                drop(db);
-                let _ = std::fs::remove_file(&temp_path);
-                return save_failure("Failed to remove unclassified undo history", &save_path, &e);
-            }
-            history_dropped = true;
-            // Keep the fresh file coherent where possible. History is already empty, so
-            // failure here cannot expose inherited rows and must not turn the selected
-            // continue-saving policy back into a refused save.
-            if let Err(e) = db.save_speleo_undo_chain(None) {
-                tracing::warn!(error = %e, "Could not clear the saved undo-chain pointer");
-            }
-            if let Err(e) = db.save_speleo_undo_watermark(None) {
-                tracing::warn!(error = %e, "Could not clear the saved undo watermark");
-            }
-        }
 
         // Close the temp database before renaming
         drop(db);
 
-        if copy_only {
+        #[cfg(test)]
+        if let Some(hook) = AFTER_TEMP_WRITTEN.with(|hook| hook.borrow_mut().take()) {
+            hook();
+        }
+
+        if mode == SaveMode::DetachedCopy {
             // The destination is provably NOT the live file (refused above), so
             // the live connection stays open, the session keeps its file_path and
             // database handle, and no cache is invalidated. Rename the temp into
@@ -1001,7 +783,7 @@ impl AppState {
             );
             let mut result =
                 CommandResult::success().with_unlinked_copy_path(save_path.display().to_string());
-            Self::warn_history_dropped(&mut result, history_dropped);
+            result.warnings.extend(warnings);
             return result;
         }
 
@@ -1014,11 +796,7 @@ impl AppState {
         // only bit Windows. We reopen below - at save_path on success (existing
         // logic), or at the prior path here if the rename fails - so the
         // session keeps a working connection either way.
-        let closed_open_db = self
-            .database
-            .lock()
-            .map(|mut db| db.take().is_some())
-            .unwrap_or(false);
+        let closed_open_db = self.database.lock().take().is_some();
 
         // Atomically rename temp file to final destination
         // This is safe: if rename fails, original file is untouched
@@ -1031,7 +809,8 @@ impl AppState {
             if closed_open_db {
                 if let Some(prev_path) = project.file_path.clone() {
                     if let Ok(reopened) = Database::open(&prev_path) {
-                        if let Ok(mut database) = self.database.lock() {
+                        {
+                            let mut database = self.database.lock();
                             *database = Some(reopened);
                         }
                     }
@@ -1052,19 +831,6 @@ impl AppState {
         self.initial_save_deferred
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
-        // The installed file deliberately has no history because its chain metadata
-        // could not be classified safely. Drop the live mirror at the same commit point:
-        // otherwise a later save can write these same unclassified rows straight back
-        // into the now-valid database and undo the fail-closed fallback.
-        if marker_preservation_failed {
-            let mut undo_stack = self
-                .undo_stack
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            undo_stack.clear();
-            undo_stack.set_inherited_through(None);
-        }
-
         // Reopen the database at the final path
         let db = match Database::open(&save_path) {
             Ok(db) => db,
@@ -1077,18 +843,20 @@ impl AppState {
                 // File was saved but can't be reopened - subsequent operations
                 // (undo persistence, display settings) will fail. Clear the stale
                 // database handle so callers don't use it.
+                self.note_open_project_moved(project.file_path.as_deref(), &save_path);
                 project.file_path = Some(save_path.clone());
                 drop(proj_guard);
-                if let Ok(mut database) = self.database.lock() {
+                {
+                    let mut database = self.database.lock();
                     *database = None;
                 }
                 // Distinct code (not the generic "SYSTEM") so the frontend can keep
                 // databaseOpen=false and leave DB-backed actions (e.g. Ignore)
                 // disabled until the project is reopened (issue #57 / Codex).
                 let mut result = CommandResult::success();
-                Self::warn_history_dropped(&mut result, history_dropped);
+                result.warnings.extend(warnings);
                 result.warnings.push(crate::core::ValidationWarning {
-                    code: "DATABASE_NOT_REOPENED".to_string(),
+                    code: super::save_sidecars::DATABASE_NOT_REOPENED_CODE.to_string(),
                     message: "File saved, but database could not be reopened. Some features may not work until the project is reopened.".to_string(),
                     severity: crate::core::WarningSeverity::Warning,
                 });
@@ -1096,12 +864,15 @@ impl AppState {
             }
         };
 
-        // Update file path after successful save
+        // Update file path after successful save (a Save As moves the open
+        // project: #576 RV10b-4).
+        self.note_open_project_moved(project.file_path.as_deref(), &save_path);
         project.file_path = Some(save_path.clone());
 
         // Update database handle
         drop(proj_guard);
-        if let Ok(mut database) = self.database.lock() {
+        {
+            let mut database = self.database.lock();
             *database = Some(db);
         }
 
@@ -1119,27 +890,104 @@ impl AppState {
             "Project saved successfully"
         );
         let mut result = CommandResult::success().with_path(save_path_str);
-        Self::warn_history_dropped(&mut result, history_dropped);
+        result.warnings.extend(warnings);
         result
     }
 
-    fn warn_history_dropped(result: &mut CommandResult, dropped: bool) {
-        if dropped {
-            result.warnings.push(crate::core::ValidationWarning {
-                code: "UNDO_HISTORY_DROPPED".to_owned(),
-                message: "The project was saved, but its Undo and Redo history could not be preserved and was removed.".to_owned(),
-                severity: crate::core::WarningSeverity::Warning,
-            });
+    /// Reinstall the open project's database handle when it is missing on a project
+    /// whose file exists (#576 B35(c)). Returns the refusal `save_project` must hand
+    /// back when the file cannot be reopened and this save would replace it.
+    ///
+    /// The handle is legitimately absent only for a deferred new project (no file
+    /// yet) or one never saved (no `file_path`); both are left alone. Otherwise it is
+    /// missing because a reopen failed - after the rename (`DATABASE_NOT_REOPENED`),
+    /// or after a failed rename when the previous file would not reopen either - and
+    /// the save's side-table snapshots would read "nothing" from it.
+    ///
+    /// Display settings changed while the handle was gone went to the in-memory
+    /// cache, which the save reads only when the file has none; they are written
+    /// into the reopened file, as they would have been with the handle in place.
+    ///
+    /// A Save As to a DIFFERENT file goes ahead without the handle: the open file,
+    /// and the side tables in it, stay untouched on disk, and it is the user's way
+    /// out when the open file cannot be reopened.
+    fn restore_missing_database(
+        &self,
+        project: &Project,
+        save_path: &Path,
+    ) -> Option<CommandResult> {
+        if self.initial_save_deferred() {
+            return None;
+        }
+        let open_path = project.file_path.as_ref()?;
+        let mut db_guard = self.database.lock();
+        if db_guard.is_some() {
+            return None;
+        }
+        match Database::open_existing(open_path) {
+            Ok(db) => {
+                let cached = self.display_settings_cache.lock().clone();
+                for (key, value) in &cached {
+                    if let Err(e) = db.save_display_setting(key, value) {
+                        tracing::warn!(
+                            key = %key,
+                            error = %e,
+                            purpose = "preserve display settings on save",
+                            "Failed to write a cached display setting into the reopened database"
+                        );
+                    }
+                }
+                tracing::info!(
+                    path = ?open_path,
+                    purpose = "read the project's side tables before saving",
+                    "Reopened the project database the session had lost"
+                );
+                *db_guard = Some(db);
+                None
+            }
+            Err(e) if !same_file(open_path, save_path) => {
+                tracing::warn!(
+                    error = %e,
+                    path = ?open_path,
+                    destination = ?save_path,
+                    purpose = "save to another file without the unreadable open file",
+                    "Could not reopen the project database; saving to the other file without its side tables"
+                );
+                None
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    path = ?open_path,
+                    purpose = "refuse to rewrite a project without its side tables",
+                    "Refused to save: the project database could not be reopened"
+                );
+                Some(CommandResult::failure(format!(
+                    "Can't save: the project file could not be reopened ({}). Saving would \
+                     rewrite it without its ignored warnings, display settings and SpeleoDB \
+                     link, so nothing was written - the file on disk is unchanged. Use Save \
+                     As to save your changes to another file.",
+                    crate::core::loading::clamp_quoted_error(&e.to_string()),
+                )))
+            }
         }
     }
 
     pub(super) fn persist_or_clear_undo_stacks_into(&self, db: &Database) -> anyhow::Result<bool> {
-        let undo_stack = self
-            .undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // [#576 RV5-PI-2] After a crash under `command_lock`, `project` or
+        // `undo_stack` the history may be out of step with the survey: undo and
+        // redo refuse it for this session (`refuse_after_crash`). Persisting it
+        // would hand it to the restarted session, which has nothing poisoned and
+        // would replay it. The survey is saved with an EMPTY history instead, and
+        // the save says so (`UNDO_HISTORY_DROPPED`), like a history that could not
+        // be written.
+        if self.refuse_after_crash("Saving the Undo history").is_err() {
+            db.clear_history_stacks()?;
+            return Ok(true);
+        }
+        let undo_stack = self.undo_stack.lock();
         let (undo_rows, redo_rows) = self.history_rows_to_persist(db, &undo_stack);
-        match db.replace_history_stacks_with_timestamps(undo_rows, redo_rows) {
+        match super::save_sidecars::replace_history_rows(db, undo_rows, redo_rows) {
             Ok(()) => Ok(false),
             Err(e) => {
                 tracing::warn!(
@@ -1164,13 +1012,14 @@ impl AppState {
         // [#303] A Full-mode SpeleoDB-linked project persists its WHOLE history (bounded
         // by the byte budget, not by a count) because that history is what rides in the
         // next commit and gives undo its cross-commit reach. Everything else - local
-        // projects, Disabled mode - keeps the `undo_persist_limit` window unchanged.
+        // projects, Disabled mode - keeps the `undo_persist_limit` window, byte-capped
+        // by `UNDO_BYTE_BUDGET_BYTES` (#576 B20).
         //
         // The link is read from the LOCAL `db` handle rather than through
         // `undo_policy()`: `self.database` still points at the pre-save handle when the
         // normal save calls this, so asking the AppState would consult the wrong file.
         let (undo_rows, redo_rows) = self.history_rows_to_persist(db, undo_stack);
-        match db.replace_history_stacks_with_timestamps(undo_rows, redo_rows) {
+        match db.replace_history_stacks_stored(&undo_rows, &redo_rows) {
             Ok(()) => true,
             Err(e) => {
                 tracing::warn!(
@@ -1188,27 +1037,24 @@ impl AppState {
         db: &Database,
         undo_stack: &UndoStack,
     ) -> (
-        Vec<(String, String, Option<String>)>,
-        Vec<(String, String, Option<String>)>,
+        Vec<crate::persistence::StoredHistoryRow>,
+        Vec<crate::persistence::StoredHistoryRow>,
     ) {
         let count_limit = {
             let policy = self.undo_policy_for(db.load_speleo_link().ok().flatten().as_ref());
             if policy.unlimited_depth() {
                 None
             } else {
-                Some(
-                    self.config
-                        .lock()
-                        .map(|c| c.general.undo_persist_limit)
-                        .unwrap_or(20),
-                )
+                Some(self.config.lock().general.undo_persist_limit)
             }
         };
 
         // Every save writes the WHOLE (windowed) stack, because the pipeline above
         // built a fresh temp file and renamed it over the target: the reopened `db`
-        // has no undo tables to add to. See `UndoStack::rows_to_persist`.
-        let undo_rows = undo_stack.rows_to_persist(PersistStack::Undo, count_limit);
+        // has no undo tables to add to. See `UndoStack::rows_to_persist`. [#576 B20]
+        // It does not have to COMPRESS them all: each entry's gzipped rows are kept
+        // after the first save, so only entries new since then are compressed.
+        let undo_rows = undo_stack.stored_rows_to_persist(PersistStack::Undo, count_limit);
 
         // [#303] Redo is persisted in EVERY mode, including Full, where that means a
         // save can write up to 2x `UNDO_BYTE_BUDGET_BYTES` - the budget is applied to
@@ -1226,7 +1072,7 @@ impl AppState {
         // None of the redo half reaches the server either way: `redo_stack` is
         // unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`, so this is local-only cost
         // for a local-only feature.
-        let redo_rows = undo_stack.rows_to_persist(PersistStack::Redo, count_limit);
+        let redo_rows = undo_stack.stored_rows_to_persist(PersistStack::Redo, count_limit);
         (undo_rows, redo_rows)
     }
 
@@ -1234,19 +1080,17 @@ impl AppState {
     /// config. Takes no state locks other than `recent_projects` + `config`;
     /// callers must NOT hold `project` (the save paths drop it first).
     fn note_recent_project(&self, path: &Path) {
-        if let Ok(mut recent) = self.recent_projects.lock() {
+        {
+            let mut recent = self.recent_projects.lock();
             recent.retain(|p| p != path);
             recent.insert(0, path.to_path_buf());
-            if let Ok(mut config) = self.config.lock() {
-                recent.truncate(config.general.recent_projects_max);
-                config.general.recent_projects.clone_from(&recent);
-                if let Err(e) = config.save() {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "persist recent projects list",
-                        "Failed to save config with recent projects"
-                    );
-                }
+            // Under the config write lock (#576 RV4-R-M2).
+            if let Err(e) = self.persist_recent_projects(&mut recent, true) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "persist recent projects list",
+                    "Failed to save config with recent projects"
+                );
             }
         }
     }
@@ -1258,14 +1102,25 @@ impl AppState {
     /// are `Option<Project>` / `Option<Database>` / the undo stack, and setting
     /// them to `None`/empty is precisely the recovery - there is no half-written
     /// state to protect. Skipping the drop, by contrast, is never safe: this
-    /// function is the pre-rename close that `close_project_if_open_at` relies on,
-    /// and it used to report `true` while still holding the live SQLite handle and
+    /// function's teardown (`close_open_project_locked`) is the pre-replace close
+    /// that `close_project_if_open_at_held` relies on (#576 RV9a-8), and it used to
+    /// report `true` while still holding the live SQLite handle and
     /// its 256 MB mmap, so the caller went on to rename a new file over it - the
     /// exact SIGBUS / `MoveFileEx`-denied hazard the guard exists to prevent.
     pub(super) fn close_project(&self) -> CommandResult {
+        // [#576 A1] `command_lock` first: a close landing inside an edit or an undo
+        // would leave that command's entry on the emptied session's stacks.
+        let commands = self.hold_commands();
+        self.close_project_held(&commands)
+    }
+
+    /// [`close_project`](Self::close_project) inside a `command_lock` span the caller
+    /// already holds [#576 NF-W4C-3] - the Ariane adoption's, whose close before the
+    /// promote and whose failure-path closes are steps of that one span.
+    pub(super) fn close_project_held(&self, commands: &CommandsHeld<'_>) -> CommandResult {
         tracing::debug!("close_project: acquiring project lock");
-        let mut proj = self.project.lock().unwrap_or_else(|e| e.into_inner());
-        self.close_open_project_locked(&mut proj)
+        let mut proj = self.project.lock();
+        self.close_open_project_locked(commands, &mut proj)
     }
 
     /// [`close_project`](Self::close_project)'s teardown, with the `project` guard
@@ -1287,53 +1142,23 @@ impl AppState {
     /// [`close_project`](Self::close_project) with the guard held, by contrast,
     /// would self-deadlock on its own first acquisition.
     ///
-    /// The caller owns the poison recovery for the `project` lock (both of this
-    /// function's callers use `PoisonError::into_inner`, for the reason spelled out
-    /// on `close_project`); the locks taken here recover it themselves.
-    pub(super) fn close_open_project_locked(&self, project: &mut Option<Project>) -> CommandResult {
-        tracing::debug!("close_project: dropping project");
-        *project = None;
-        // A session boundary: the caller holds the `project` guard (it passed it
-        // in), which is the bump rule (`speleodb_session`). Covers close, delete
-        // and the project switch, which all route through here.
-        self.bump_speleodb_session();
-        // [#473] The discarded-history banner describes the OPEN project; with none
-        // open there is nothing for it to describe. Cleared here as well as on every
-        // load commit, so closing a project takes its banner with it rather than
-        // leaving it up over the welcome screen.
-        self.set_history_discarded(false);
-        tracing::debug!("close_project: project dropped");
-
-        tracing::debug!("close_project: acquiring database lock");
-        {
-            let mut db = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            tracing::debug!("close_project: dropping database");
-            *db = None;
-            tracing::debug!("close_project: database dropped");
-        }
-
-        tracing::debug!("close_project: acquiring undo_stack lock");
-        {
-            let mut undo_stack = self.undo_stack.lock().unwrap_or_else(|e| e.into_inner());
-            tracing::debug!("close_project: clearing undo stack");
-            undo_stack.clear();
-            // [#303] Back onto the configured entry window: the next project to open is
-            // local until a link says otherwise.
-            undo_stack.use_count_limit();
-            tracing::debug!("close_project: undo stack cleared");
-        }
-
-        // Clear display settings cache
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-        // [Track B] (#191) Reset the transient read-only edit gate so a previously
-        // read-only remote project can't leave the flag stuck for the next open.
-        self.set_edit_enabled(true);
-        // #213: clear force-edit so it never leaks across a close into the next open.
-        self.set_force_editing(false);
-
+    /// The caller holds the `project` guard, taken through `RecoveringMutex::lock`
+    /// like every lock (#576 A11), so a poisoned `project` cell is already
+    /// recovered by the time it gets here; the locks taken here recover theirs
+    /// themselves.
+    pub(super) fn close_open_project_locked(
+        &self,
+        commands: &CommandsHeld<'_>,
+        project: &mut ProjectSlot,
+    ) -> CommandResult {
+        // [#576 A5] The same commit every load and create goes through, installing the
+        // empty session: every per-project cell back to its no-project value - the undo
+        // stack's depth bound AND its inherited-history watermark included (#576
+        // NF-AN3-6) - and the session generation bumped under the caller's guard (the
+        // `speleodb_session` rule). Covers close, delete and the project switch, which
+        // all route through here.
+        self.commit_open_session_into(commands, project, SessionCommit::closed());
         tracing::info!(purpose = "release project resources", "Project closed");
-        tracing::debug!("close_project: returning success");
         CommandResult::success()
     }
 
@@ -1345,8 +1170,19 @@ impl AppState {
     /// is about to touch, and answering "no" on a poisoned mutex is the unsafe
     /// direction in both.
     pub(super) fn open_project_path(&self) -> Option<PathBuf> {
-        let guard = self.project.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = self.project.lock();
         guard.as_ref().and_then(|p| p.file_path.clone())
+    }
+
+    /// [`Self::close_project_if_open_at_held`] under a `command_lock` span of its own.
+    ///
+    /// [#576 RV6a-5] Test builds only: the one production caller, the cache
+    /// replace, closes inside its own `command_lock` span
+    /// ([`Self::close_project_if_open_at_held`]).
+    #[cfg(test)]
+    pub(super) fn close_project_if_open_at(&self, dest: &Path) -> bool {
+        let commands = self.hold_commands();
+        self.close_project_if_open_at_held(&commands, dest)
     }
 
     /// Close the open project IF AND ONLY IF it is the file at `dest`; returns
@@ -1367,11 +1203,25 @@ impl AppState {
     /// USUALLY, but not always, the open project (a pull can target a cached
     /// project the user does not currently have open), and dropping an unrelated
     /// open project would throw away its undo/redo history for nothing.
-    pub(super) fn close_project_if_open_at(&self, dest: &Path) -> bool {
-        let Some(open_path) = self.open_project_path() else {
-            return false;
-        };
-        if !same_file(&open_path, dest) {
+    ///
+    /// [#576 A1] Decided and closed under ONE `project` acquisition inside
+    /// `command_lock`, like `delete_project`'s check-and-teardown: checking through
+    /// `open_project_path` and closing through `close_project` re-took the lock in
+    /// between, so a load finishing in that gap had ITS session torn down instead.
+    ///
+    /// Inside a `command_lock` span the caller already holds - the cache replace's,
+    /// which reads the display settings to carry over in the same span (#576 RV6a-5).
+    pub(super) fn close_project_if_open_at_held(
+        &self,
+        commands: &CommandsHeld<'_>,
+        dest: &Path,
+    ) -> bool {
+        let mut open = self.project.lock();
+        let is_dest = open
+            .as_ref()
+            .and_then(|p| p.file_path.as_deref())
+            .is_some_and(|open_path| same_file(open_path, dest));
+        if !is_dest {
             return false;
         }
         tracing::info!(
@@ -1379,7 +1229,7 @@ impl AppState {
             purpose = "release the live handle before replacing the file",
             "Closing the open project because its .stalx is about to be replaced"
         );
-        self.close_project();
+        self.close_open_project_locked(commands, &mut open);
         true
     }
 }

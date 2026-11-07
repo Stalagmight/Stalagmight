@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { circularMeanDegrees, meanOrLoneLeg, normalizeAngle } from '../angles';
+import { averageAzimuth } from '../azimuth';
 
 describe('normalizeAngle', () => {
   it('returns angle unchanged when already in [0, 360)', () => {
@@ -36,16 +37,22 @@ describe('normalizeAngle', () => {
     expect(normalizeAngle(-3605)).toBe(355);
   });
 
-  it('returns 0 for NaN', () => {
-    expect(normalizeAngle(NaN)).toBe(0);
+  it('folds a tiny negative angle to 0, never to exactly 360', () => {
+    // `-1e-14 % 360` is -1e-14, and `-1e-14 + 360` rounds to exactly 360 in
+    // binary floating point - a bearing outside [0, 360) that the backend
+    // flags as a non-ignorable INVALID_AZIMUTH.
+    expect(normalizeAngle(-1e-14)).toBe(0);
+    expect(normalizeAngle(-4.440892098500626e-16)).toBe(0);
+    expect(normalizeAngle(-Number.MIN_VALUE)).toBe(0);
   });
 
-  it('returns 0 for Infinity', () => {
-    expect(normalizeAngle(Infinity)).toBe(0);
-  });
-
-  it('returns 0 for -Infinity', () => {
-    expect(normalizeAngle(-Infinity)).toBe(0);
+  it('passes a non-finite angle through instead of inventing due north (#576 D14)', () => {
+    // Folding NaN to 0 turned "no bearing" into a real-looking 0 that passes
+    // range validation and saves. The backend's normalize_azimuth passes it
+    // through, and so must this.
+    expect(normalizeAngle(NaN)).toBeNaN();
+    expect(normalizeAngle(Infinity)).toBe(Infinity);
+    expect(normalizeAngle(-Infinity)).toBe(-Infinity);
   });
 });
 
@@ -103,6 +110,32 @@ describe('circularMeanDegrees', () => {
       expect(result).toBeGreaterThanOrEqual(0);
       expect(result).toBeLessThan(360);
     }
+  });
+
+  // #576 D14: the DataTable Avg column, its edit delta and the import overlap
+  // merge used a unit-vector mean, while the map and the warning previews used
+  // the backend's short-arc bisect. They agree except for exactly opposite legs
+  // (a reading blunder), where the unit-vector mean is float noise: 100/280
+  // came out 198.43 on screen against the backend's 10. Expected values are
+  // what Rust's `average_azimuth_of` (crates/models/src/shot.rs) returns for
+  // the same pairs - printed by the backend, not derived here.
+  it.each([
+    [100, 280, 10],
+    [280, 100, 190],
+    [90, 270, 0],
+    [0, 180, 270],
+    [350, 10, 0],
+    [10, 350, 0],
+    [359.9, 0.1, 0],
+    [0.1, 359.9, 0],
+    [10, 20, 15],
+    [45, 69, 57],
+    [1.1, 1.1, 1.1],
+    [400, -200, 100],
+    [600, 0, 300],
+  ])('(%d, %d) is %d, exactly the backend mean', (a, b, backend) => {
+    expect(circularMeanDegrees(a, b)).toBe(backend);
+    expect(circularMeanDegrees(a, b)).toBe(averageAzimuth(a, b));
   });
 
   it('handles angles > 360 (they still work)', () => {

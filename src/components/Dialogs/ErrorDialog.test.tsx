@@ -7,11 +7,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-}));
+vi.mock('../../utils/telemetry', async () => (await import('../../test/factories/telemetry')).telemetryWith());
 
+import '../../i18n';
 import ErrorDialog from './ErrorDialog';
 import { useUIStore } from '../../store/uiStore';
 

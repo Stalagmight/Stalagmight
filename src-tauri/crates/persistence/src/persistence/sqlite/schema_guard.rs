@@ -77,9 +77,33 @@ impl std::error::Error for RefusedSchemaObject {}
 /// - virtual tables: rootpage 0, or SQL opening with the `CREATE VIRTUAL`
 ///   keywords (see [`declares_virtual_table`]).
 pub fn check_schema(conn: &Connection) -> anyhow::Result<()> {
+    guard(conn, TypeSpelling::Exact)
+}
+
+/// [`check_schema`] for the salvage of a damaged file (#576 RV19a-12): the
+/// same refusals, except that a `table` or `index` type spelled in another
+/// case - one flipped bit, 'table' -> 'Table', which SQLite still reads (it
+/// builds the schema from the `sql` text) - is checked as that type instead of
+/// refused. Every expression check still runs on it, so a case-variant row
+/// cannot hide a generated column or an expression index; a view or a trigger
+/// in any case is still refused. Every other open keeps the exact spelling.
+pub(super) fn check_schema_for_salvage(conn: &Connection) -> anyhow::Result<()> {
+    guard(conn, TypeSpelling::AnyCase)
+}
+
+/// How [`refused_by_master`] reads a row's `type`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TypeSpelling {
+    /// Only exactly `table` or `index` is accepted.
+    Exact,
+    /// `table` or `index` in any ASCII case is accepted as that type.
+    AnyCase,
+}
+
+fn guard(conn: &Connection, spelling: TypeSpelling) -> anyhow::Result<()> {
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
-    match refused_schema_object(conn)? {
+    match refused_object(conn, spelling)? {
         Some(refused) => Err(anyhow::Error::new(refused)),
         None => Ok(()),
     }
@@ -99,13 +123,23 @@ pub fn check_schema(conn: &Connection) -> anyhow::Result<()> {
 /// otherwise stall an open for minutes and hundreds of megabytes per row. The
 /// app has never written any of these.
 pub fn refused_schema_object(conn: &Connection) -> rusqlite::Result<Option<RefusedSchemaObject>> {
-    if let Some(refused) = refused_by_master(conn)? {
+    refused_object(conn, TypeSpelling::Exact)
+}
+
+fn refused_object(
+    conn: &Connection,
+    spelling: TypeSpelling,
+) -> rusqlite::Result<Option<RefusedSchemaObject>> {
+    if let Some(refused) = refused_by_master(conn, spelling)? {
         return Ok(Some(refused));
     }
     refused_by_expression(conn)
 }
 
-fn refused_by_master(conn: &Connection) -> rusqlite::Result<Option<RefusedSchemaObject>> {
+fn refused_by_master(
+    conn: &Connection,
+    spelling: TypeSpelling,
+) -> rusqlite::Result<Option<RefusedSchemaObject>> {
     use rusqlite::types::ValueRef;
     let text = |v: ValueRef<'_>| match v {
         ValueRef::Text(t) => Some(String::from_utf8_lossy(t).into_owned()),
@@ -128,6 +162,10 @@ fn refused_by_master(conn: &Connection) -> rusqlite::Result<Option<RefusedSchema
         };
         let sql = text(row.get_ref(3)?);
         let sql = sql.as_deref().unwrap_or("");
+        let kind = match spelling {
+            TypeSpelling::Exact => kind,
+            TypeSpelling::AnyCase => kind.to_ascii_lowercase(),
+        };
         let what = if name.to_ascii_lowercase().starts_with("pragma_") {
             Some("an object named like a SQLite pragma")
         } else if kind != "table" && kind != "index" {
@@ -150,10 +188,13 @@ fn refused_by_master(conn: &Connection) -> rusqlite::Result<Option<RefusedSchema
     Ok(None)
 }
 
+/// The type tests read `lower(m.type)`: under [`TypeSpelling::Exact`] the
+/// first pass has already refused any other spelling, and under
+/// [`TypeSpelling::AnyCase`] a 'Table' row must be checked like a 'table' one.
 fn refused_by_expression(conn: &Connection) -> rusqlite::Result<Option<RefusedSchemaObject>> {
     let mut stmt = conn.prepare(
         "SELECT m.name, c.hidden, c.dflt_value \
-         FROM sqlite_master AS m, pragma_table_xinfo(m.name) AS c WHERE m.type = 'table'",
+         FROM sqlite_master AS m, pragma_table_xinfo(m.name) AS c WHERE lower(m.type) = 'table'",
     )?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
@@ -175,10 +216,10 @@ fn refused_by_expression(conn: &Connection) -> rusqlite::Result<Option<RefusedSc
     }
     let mut stmt = conn.prepare(
         "SELECT i.name FROM sqlite_master AS m, pragma_index_list(m.name) AS i \
-         WHERE m.type = 'table' AND i.partial = 1 \
+         WHERE lower(m.type) = 'table' AND i.partial = 1 \
          UNION ALL \
          SELECT m.name FROM sqlite_master AS m, pragma_index_xinfo(m.name) AS x \
-         WHERE m.type = 'index' AND x.cid = -2",
+         WHERE lower(m.type) = 'index' AND x.cid = -2",
     )?;
     let mut rows = stmt.query([])?;
     if let Some(row) = rows.next()? {

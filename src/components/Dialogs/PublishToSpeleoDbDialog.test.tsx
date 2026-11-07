@@ -8,8 +8,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock, getErrorMessage: (_e: unknown, f: string) => f }));
+vi.mock('../../utils/ipc');
+// The real reader's shape: a crash inside the dialog (RV6a-6) must reach the toast as text.
+stubGetErrorMessage((e, f) => (e instanceof Error ? e.message : (f ?? String(e))));
 
 // jsdom does not implement scrollIntoView; the Select component calls it on open.
 Element.prototype.scrollIntoView = vi.fn();
@@ -26,6 +27,17 @@ import PublishToSpeleoDbDialog from './PublishToSpeleoDbDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
+import { TOAST_KEYS } from '../../utils/toastKeys';
+import i18n from '../../i18n';
+import { invokeIpcMock, stubGetErrorMessage } from '../../test/factories/ipc';
+import type { ValidationWarning } from '../../types/ipc/ValidationWarning';
+
+/** `speleodb_publish`'s answer as the wire carries it (`SpeleoPublishReport`, #576
+ *  RV6a-6): the outcome and what its saves could not keep (nothing here). */
+const published = () => ({
+  result: { project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' },
+  save_warnings: [],
+});
 
 let loadProjectMock: ReturnType<typeof vi.fn>;
 let closeDialogMock: ReturnType<typeof vi.fn>;
@@ -49,11 +61,7 @@ beforeEach(() => {
 
 describe('PublishToSpeleoDbDialog', () => {
   it('gates Publish on a chosen country and publishes with the right params', async () => {
-    invokeIpcMock.mockResolvedValue({
-      project_id: 'p1',
-      endpoint: 'https://x',
-      local_path: '/cache/p1/project.stalx',
-    });
+    invokeIpcMock.mockResolvedValue(published());
     render(<PublishToSpeleoDbDialog />);
 
     // Name prefilled from the project; country still unchosen -> Publish disabled.
@@ -90,12 +98,67 @@ describe('PublishToSpeleoDbDialog', () => {
     await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
   });
 
-  it('does NOT close or claim success when the reopen fails', async () => {
+  it("shows what publish's saves could not keep, like Done and Push (#576 NF-W4M-2)", async () => {
     invokeIpcMock.mockResolvedValue({
-      project_id: 'p1',
-      endpoint: 'https://x',
-      local_path: '/cache/p1/project.stalx',
+      result: { project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' },
+      save_warnings: [
+        { code: 'DISPLAY_SETTINGS_NOT_SAVED', message: 'display settings not kept', severity: 'warning' } satisfies ValidationWarning,
+      ],
     });
+    render(<PublishToSpeleoDbDialog />);
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
+
+    await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1/project.stalx'));
+    const keys = showToastMock.mock.calls.map((c) => c[1]);
+    expect(keys).toContain(`${TOAST_KEYS.SAVE_WARNING}:DISPLAY_SETTINGS_NOT_SAVED`);
+    await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
+  });
+
+  it('refuses an answer that is not the wire shape instead of loading from it (#576 RV6a-6)', async () => {
+    // The bare outcome, without its envelope: what the stale doubles used to return,
+    // and what a regression in the command would send. It must fail loudly, not
+    // be read as a publish that lost nothing.
+    invokeIpcMock.mockResolvedValue({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
+    render(<PublishToSpeleoDbDialog />);
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
+
+    await waitFor(() => expect(showToastMock).toHaveBeenCalled());
+    const kinds = showToastMock.mock.calls.map((c) => [c[1], c[2]]);
+    console.log(`[RV6a-6] bare answer: loadProject calls=${loadProjectMock.mock.calls.length} toasts=${JSON.stringify(kinds)}`);
+    expect(loadProjectMock).not.toHaveBeenCalled();
+    expect(kinds).toEqual([[TOAST_KEYS.SPELEODB_PUBLISH, 'error']]);
+    expect(closeDialogMock).not.toHaveBeenCalled();
+  });
+
+  it('a project a newer Stalagmight saved reads as the newer-version line, not "Not saved" (#576 NF-W9BE-1-D1)', async () => {
+    // Publish saves the project into the SpeleoDB cache first, and the backend refuses
+    // that save with NEWER_FILE_READ_ONLY. Decided: the toast reads like Start editing's
+    // and Update's refusal of such a project, not like a refused save.
+    invokeIpcMock.mockRejectedValue({
+      code: 'NEWER_FILE_READ_ONLY',
+      message: 'Saving is disabled: this project was saved by a newer version of Stalagmight (file format 99)',
+    });
+    render(<PublishToSpeleoDbDialog />);
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
+
+    await waitFor(() => expect(showToastMock).toHaveBeenCalled());
+    const [message, key, kind] = showToastMock.mock.calls[0] ?? [];
+    console.log(`[NF-W9BE-1-D1] publish toast: ${String(message)}`);
+    const noPeriod = (s: string) => s.replace(/\.\s*$/, '');
+    expect(message).toBe(`${i18n.t('speleodb.publish.failed')}: ${noPeriod(i18n.t('banners.newerFile.lead'))}`);
+    expect(message).not.toContain(noPeriod(i18n.t('banners.newerFile.saveRefused')));
+    expect([key, kind]).toEqual([TOAST_KEYS.SPELEODB_PUBLISH, 'error']);
+    expect(closeDialogMock).not.toHaveBeenCalled();
+  });
+
+  it('does NOT close or claim success when the reopen fails', async () => {
+    invokeIpcMock.mockResolvedValue(published());
     loadProjectMock.mockResolvedValue({ success: false });
     render(<PublishToSpeleoDbDialog />);
 
@@ -156,7 +219,7 @@ describe('PublishToSpeleoDbDialog', () => {
         return Promise.resolve([{ email: 'alice@x.com', label: 'Alice Diver <alice@x.com>' }]);
       }
       if (cmd === 'speleodb_publish') {
-        return Promise.resolve({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
+        return Promise.resolve(published());
       }
       // speleodb_add_collaborator -> the (unused-here) refreshed roster.
       return Promise.resolve({ users: [], teams: [] });
@@ -167,11 +230,11 @@ describe('PublishToSpeleoDbDialog', () => {
 
     // Pick a suggestion from the debounced typeahead, choose a level, and queue it.
     await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), 'ali');
-    await userEvent.click(await screen.findByTestId('publish-to-speleodb-dialog-collab-suggestion-alice@x.com'));
+    await userEvent.click(await screen.findByTestId('publish-to-speleodb-dialog-collab-suggestion-0'));
     expect(screen.getByTestId('publish-to-speleodb-dialog-collab-email')).toHaveValue('alice@x.com');
     await pickOption('publish-to-speleodb-dialog-collab-add-level', 'READ_AND_WRITE');
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
-    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-alice@x.com')).toBeInTheDocument();
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-0')).toHaveTextContent('alice@x.com');
 
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
 
@@ -187,7 +250,7 @@ describe('PublishToSpeleoDbDialog', () => {
   it('still closes but warns when a queued collaborator cannot be granted', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_publish') {
-        return Promise.resolve({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
+        return Promise.resolve(published());
       }
       if (cmd === 'speleodb_add_collaborator') return Promise.reject(new Error('403'));
       return Promise.resolve({ users: [], teams: [] });
@@ -209,7 +272,7 @@ describe('PublishToSpeleoDbDialog', () => {
   it('grants the FINAL queued level after changing a collaborator row in place', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_publish') {
-        return Promise.resolve({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
+        return Promise.resolve(published());
       }
       // speleodb_search_users (unused - added by typing) + add_collaborator roster.
       return Promise.resolve({ users: [], teams: [] });
@@ -223,7 +286,7 @@ describe('PublishToSpeleoDbDialog', () => {
       target: { value: 'carol@x.com' },
     });
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
-    await pickOption('publish-to-speleodb-dialog-collab-level-carol@x.com', 'ADMIN');
+    await pickOption('publish-to-speleodb-dialog-collab-level-0', 'ADMIN');
 
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
 
@@ -234,10 +297,53 @@ describe('PublishToSpeleoDbDialog', () => {
     });
   });
 
+  // A test id is printed wherever a run reports what it clicked (an agent
+  // session's report.md goes to public issues), so it must not carry a
+  // collaborator's email: the rows and the suggestions are keyed by position
+  // (#576 RV19b-P1).
+  it('keys the collaborator rows and suggestions by position, never by email', async () => {
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_search_users') {
+        return Promise.resolve([
+          { email: 'alice@x.com', label: 'Alice Diver <alice@x.com>' },
+          { email: 'bob@x.com', label: 'Bob Diver <bob@x.com>' },
+        ]);
+      }
+      return Promise.resolve({ users: [], teams: [] });
+    });
+    render(<PublishToSpeleoDbDialog />);
+    const testIdsWithEmail = () =>
+      Array.from(document.querySelectorAll('[data-testid]'))
+        .map((el) => el.getAttribute('data-testid') ?? '')
+        .filter((id) => id.includes('@') || id.includes('x.com'));
+
+    await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), 'div');
+    await screen.findByText('Bob Diver <bob@x.com>');
+    expect(testIdsWithEmail()).toEqual([]);
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-suggestion-1')).toHaveTextContent('Bob Diver');
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-suggestion-0'));
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-email')).toHaveValue('alice@x.com');
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), {
+      target: { value: 'carol@x.com' },
+    });
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
+
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-0')).toHaveTextContent('alice@x.com');
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-1')).toHaveTextContent('carol@x.com');
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-level-1')).toBeInTheDocument();
+    expect(testIdsWithEmail()).toEqual([]);
+
+    // Removing the first row moves the second into its place.
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-remove-0'));
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-0')).toHaveTextContent('carol@x.com');
+    expect(screen.queryByTestId('publish-to-speleodb-dialog-collab-1')).toBeNull();
+  });
+
   it('removes a queued collaborator so it is never granted', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_publish') {
-        return Promise.resolve({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
+        return Promise.resolve(published());
       }
       return Promise.resolve({ users: [], teams: [] });
     });
@@ -249,10 +355,10 @@ describe('PublishToSpeleoDbDialog', () => {
       target: { value: 'dave@x.com' },
     });
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
-    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-dave@x.com')).toBeInTheDocument();
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-0')).toHaveTextContent('dave@x.com');
 
-    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-remove-dave@x.com'));
-    expect(screen.queryByTestId('publish-to-speleodb-dialog-collab-dave@x.com')).toBeNull();
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-remove-0'));
+    expect(screen.queryByTestId('publish-to-speleodb-dialog-collab-0')).toBeNull();
 
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
 

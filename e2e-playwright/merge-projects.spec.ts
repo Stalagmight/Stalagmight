@@ -1,5 +1,7 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
+import type { MockReply } from './mocks/ipc/types';
 
 /**
  * E2E tests for the Merge Projects dialog.
@@ -50,7 +52,7 @@ const MOCK_PROJECTS = [
 async function openMergeDialog(page: Page, projects = MOCK_PROJECTS): Promise<void> {
   await page.evaluate(
     (selectedProjects) => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return;
       e2e.uiStore.getState().openDialog('merge-projects', { selectedProjects });
     },
@@ -135,9 +137,9 @@ test.describe('Merge Projects Dialog', () => {
   test('confirm button calls merge IPC and closes dialog @smoke', async ({ page }) => {
     // Set up mock override for merge_projects
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
-      overrides.merge_projects = { success: true };
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
+      overrides.merge_projects = { warnings: [] } satisfies MockReply<'merge_projects'>;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openMergeDialog(page);
@@ -154,9 +156,9 @@ test.describe('Merge Projects Dialog', () => {
   test('IPC error shows error in dialog', async ({ page }) => {
     // Override merge_projects to throw
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.merge_projects = { __throw: 'Disk space insufficient for merge' };
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openMergeDialog(page);

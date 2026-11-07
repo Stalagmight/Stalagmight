@@ -95,7 +95,7 @@ test.describe('Custom renderer health', () => {
     // labels), and an interior point keeps the fixed-size read block inside the
     // canvas (an out-of-bounds readPixels returns zeros that would be false ink).
     // Background is sampled from an empty corner (theme-independent).
-    const shot = geom.shots[Math.floor(geom.shots.length / 2)];
+    const shot = geom.shots[Math.floor(geom.shots.length / 2)]!; // in range: length > 0 asserted above
     const bg: PixelRgba = await readCanvasPixel(page, 8, 8);
     const ink = await countCanvasInk(page, Math.round(shot.mid.x), Math.round(shot.mid.y), bg, 9);
     expect(ink, 'expected visible custom-rendered survey ink at a shot midpoint').toBeGreaterThan(0);

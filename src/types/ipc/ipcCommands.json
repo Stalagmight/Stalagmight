@@ -1,0 +1,4879 @@
+{
+  "generatedBy": "pnpm gen:ipc-types (src-tauri/examples/gen_ipc_types/commands.rs)",
+  "commands": [
+    {
+      "name": "attempt_repair",
+      "module": "recovery",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "RepairResult",
+        "ts": "RepairResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "calculate_file_hash",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "String",
+        "ts": "string"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "can_redo",
+      "module": "history",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "bool",
+        "ts": "boolean"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "can_undo",
+      "module": "history",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "bool",
+        "ts": "boolean"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "cancel_loading",
+      "module": "project",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "check_create_target",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "name",
+          "key": "name",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "save_directory",
+          "key": "saveDirectory",
+          "rust": "Option<PathBuf>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "save_path",
+          "key": "savePath",
+          "rust": "Option<PathBuf>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "check_duplicate_import",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "hash",
+          "key": "hash",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "bool",
+        "ts": "boolean"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "check_merge_connectivity",
+      "module": "station",
+      "async": true,
+      "args": [
+        {
+          "name": "station_a",
+          "key": "stationA",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        },
+        {
+          "name": "station_b",
+          "key": "stationB",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "ConnectivityResult",
+        "ts": "ConnectivityResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "check_project_integrity",
+      "module": "validation",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "IntegrityCheckResult",
+        "ts": "IntegrityCheckResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "check_section_hashes",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "hashes",
+          "key": "hashes",
+          "rust": "Vec<String>",
+          "ts": "Array<string>",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Vec<bool>",
+        "ts": "Array<boolean>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "clear_tile_cache",
+      "module": "cache",
+      "async": true,
+      "args": [
+        {
+          "name": "provider",
+          "key": "provider",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "close_project",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "release_lock",
+          "key": "releaseLock",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "ProjectFileOutcome",
+        "ts": "ProjectFileOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "compute_gas_reach_field",
+      "module": "gas",
+      "async": true,
+      "args": [
+        {
+          "name": "origin",
+          "key": "origin",
+          "rust": "Option<StationRef>",
+          "ts": "StationRef | null",
+          "optional": true
+        },
+        {
+          "name": "endpoint",
+          "key": "endpoint",
+          "rust": "Option<StationRef>",
+          "ts": "StationRef | null",
+          "optional": true
+        },
+        {
+          "name": "waypoints",
+          "key": "waypoints",
+          "rust": "Vec<StationRef>",
+          "ts": "Array<StationRef>",
+          "optional": false
+        },
+        {
+          "name": "segments",
+          "key": "segments",
+          "rust": "Vec<PlanSegment>",
+          "ts": "Array<PlanSegment>",
+          "optional": false
+        },
+        {
+          "name": "diver",
+          "key": "diver",
+          "rust": "Diver",
+          "ts": "Diver",
+          "optional": false
+        },
+        {
+          "name": "cylinders",
+          "key": "cylinders",
+          "rust": "Vec<Cylinder>",
+          "ts": "Array<Cylinder>",
+          "optional": false
+        },
+        {
+          "name": "gas_config",
+          "key": "gasConfig",
+          "rust": "GasConfig",
+          "ts": "GasConfig",
+          "optional": false
+        },
+        {
+          "name": "stage_drop_overrides",
+          "key": "stageDropOverrides",
+          "rust": "Vec<Option<StationRef>>",
+          "ts": "Array<StationRef | null>",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Option<GasReachField>",
+        "ts": "GasReachField | null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "count_unanchored_sections",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "newly_imported_section_ids",
+          "key": "newlyImportedSectionIds",
+          "rust": "Vec<u32>",
+          "ts": "Array<number>",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "u32",
+        "ts": "number"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "create_loop_closure",
+      "module": "station",
+      "async": true,
+      "args": [
+        {
+          "name": "station_a",
+          "key": "stationA",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        },
+        {
+          "name": "station_b",
+          "key": "stationB",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        },
+        {
+          "name": "closure_strategy",
+          "key": "closureStrategy",
+          "rust": "ClosureStrategy",
+          "ts": "ClosureStrategy",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "create_project_full",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "name",
+          "key": "name",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "project_location",
+          "key": "projectLocation",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "save_directory",
+          "key": "saveDirectory",
+          "rust": "Option<PathBuf>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "save_path",
+          "key": "savePath",
+          "rust": "Option<PathBuf>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "defer_initial_save",
+          "key": "deferInitialSave",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "CreateProjectFullResult",
+        "ts": "CreateProjectFullResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "create_section",
+      "module": "section",
+      "async": true,
+      "args": [
+        {
+          "name": "name",
+          "key": "name",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "surveyor",
+          "key": "surveyor",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "date",
+          "key": "date",
+          "rust": "Option<NaiveDate>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "color",
+          "key": "color",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "direction",
+          "key": "direction",
+          "rust": "Option<SurveyDirection>",
+          "ts": "SurveyDirection | null",
+          "optional": true
+        },
+        {
+          "name": "shots",
+          "key": "shots",
+          "rust": "Vec<ShotData>",
+          "ts": "Array<ShotData>",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SectionCreated",
+        "ts": "SectionCreated"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "create_section_and_merge",
+      "module": "section",
+      "async": true,
+      "args": [
+        {
+          "name": "name",
+          "key": "name",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "surveyor",
+          "key": "surveyor",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "date",
+          "key": "date",
+          "rust": "Option<NaiveDate>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "color",
+          "key": "color",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "direction",
+          "key": "direction",
+          "rust": "Option<SurveyDirection>",
+          "ts": "SurveyDirection | null",
+          "optional": true
+        },
+        {
+          "name": "shots",
+          "key": "shots",
+          "rust": "Vec<ShotData>",
+          "ts": "Array<ShotData>",
+          "optional": false
+        },
+        {
+          "name": "import_station_index",
+          "key": "importStationIndex",
+          "rust": "u32",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "target_station",
+          "key": "targetStation",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        },
+        {
+          "name": "closure_strategy",
+          "key": "closureStrategy",
+          "rust": "ClosureStrategy",
+          "ts": "ClosureStrategy",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SectionCreated",
+        "ts": "SectionCreated"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "create_shot",
+      "module": "shot",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "shot",
+          "key": "shot",
+          "rust": "ShotData",
+          "ts": "ShotData",
+          "optional": false
+        },
+        {
+          "name": "after_shot_id",
+          "key": "afterShotId",
+          "rust": "Option<ShotId>",
+          "ts": "number | null",
+          "optional": true
+        },
+        {
+          "name": "before_shot_id",
+          "key": "beforeShotId",
+          "rust": "Option<ShotId>",
+          "ts": "number | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "ShotCreated",
+        "ts": "ShotCreated"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "debug_trigger_panic",
+      "module": "debug",
+      "async": true,
+      "args": [
+        {
+          "name": "delay_ms",
+          "key": "delayMs",
+          "rust": "Option<u64>",
+          "ts": "number | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "delete_dive_plan",
+      "module": "dive_plan",
+      "async": true,
+      "args": [
+        {
+          "name": "id",
+          "key": "id",
+          "rust": "i64",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "delete_last_shot_and_section",
+      "module": "shot",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "shot_id",
+          "key": "shotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "delete_project",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "DeleteProjectOutcome",
+        "ts": "DeleteProjectOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "delete_section",
+      "module": "section",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "delete_shot",
+      "module": "shot",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "shot_id",
+          "key": "shotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "delete_shot_and_split",
+      "module": "shot",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "shot_id",
+          "key": "shotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "name_a",
+          "key": "nameA",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "name_b",
+          "key": "nameB",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SectionCreated",
+        "ts": "SectionCreated"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "delete_shot_range_shift",
+      "module": "shot",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "start_shot_id",
+          "key": "startShotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "end_shot_id",
+          "key": "endShotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "delete_shot_range_split",
+      "module": "shot",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "start_shot_id",
+          "key": "startShotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "end_shot_id",
+          "key": "endShotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "name_a",
+          "key": "nameA",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "name_b",
+          "key": "nameB",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SectionCreated",
+        "ts": "SectionCreated"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "execute_batch",
+      "module": "section",
+      "async": true,
+      "args": [
+        {
+          "name": "commands",
+          "key": "commands",
+          "rust": "Vec<Command>",
+          "ts": "Array<Command>",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "BatchOutcome",
+        "ts": "BatchOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "execute_compass_import",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "file_hash",
+          "key": "fileHash",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "include_excluded",
+          "key": "includeExcluded",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        },
+        {
+          "name": "apply_corrections",
+          "key": "applyCorrections",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        },
+        {
+          "name": "comments_on_stations",
+          "key": "commentsOnStations",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "ImportOutcome",
+        "ts": "ImportOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "execute_gpx_import",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "file_hash",
+          "key": "fileHash",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "import_waypoints",
+          "key": "importWaypoints",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        },
+        {
+          "name": "import_tracks",
+          "key": "importTracks",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        },
+        {
+          "name": "import_routes",
+          "key": "importRoutes",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        },
+        {
+          "name": "section_placements",
+          "key": "sectionPlacements",
+          "rust": "Vec<GpxSectionPlacement>",
+          "ts": "Array<GpxSectionPlacement>",
+          "optional": false
+        },
+        {
+          "name": "depth_inverted",
+          "key": "depthInverted",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "ImportOutcome",
+        "ts": "ImportOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "execute_tml_import",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "file_hash",
+          "key": "fileHash",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "include_excluded",
+          "key": "includeExcluded",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        },
+        {
+          "name": "comments_on_stations",
+          "key": "commentsOnStations",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        },
+        {
+          "name": "virtual_shot_mode",
+          "key": "virtualShotMode",
+          "rust": "Option<VirtualShotMode>",
+          "ts": "VirtualShotMode | null",
+          "optional": true
+        },
+        {
+          "name": "selected_sections",
+          "key": "selectedSections",
+          "rust": "Option<Vec<u32>>",
+          "ts": "Array<number> | null",
+          "optional": true
+        },
+        {
+          "name": "root_placement",
+          "key": "rootPlacement",
+          "rust": "Option<TmlRootPlacement>",
+          "ts": "TmlRootPlacement | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "ImportOutcome",
+        "ts": "ImportOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "execute_walls_import",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "file_hash",
+          "key": "fileHash",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "comments_on_stations",
+          "key": "commentsOnStations",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        },
+        {
+          "name": "include_splays",
+          "key": "includeSplays",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        },
+        {
+          "name": "selected_surveys",
+          "key": "selectedSurveys",
+          "rust": "Option<Vec<u32>>",
+          "ts": "Array<number> | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "ImportOutcome",
+        "ts": "ImportOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "export_csv",
+      "module": "export",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "export_dive_profile",
+      "module": "export",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "format",
+          "key": "format",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "request",
+          "key": "request",
+          "rust": "DiveProfileRequest",
+          "ts": "DiveProfileRequest",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "export_image",
+      "module": "export",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "options",
+          "key": "options",
+          "rust": "ExportImageOptions",
+          "ts": "ExportImageOptions",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "export_json",
+      "module": "export",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "export_salvageable_data",
+      "module": "recovery",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SalvagedData",
+        "ts": "SalvagedData"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "export_tml",
+      "module": "export",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Vec<String>",
+        "ts": "Array<string>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "fetch_tile",
+      "module": "cache",
+      "async": true,
+      "args": [
+        {
+          "name": "provider",
+          "key": "provider",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "z",
+          "key": "z",
+          "rust": "u32",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "y",
+          "key": "y",
+          "rust": "u32",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "x",
+          "key": "x",
+          "rust": "u32",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Vec<u8>",
+        "ts": "Array<number>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "flush_telemetry",
+      "module": "telemetry",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_adjusted_stations",
+      "module": "project",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<Station>",
+        "ts": "Array<Station>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_along_line_distance",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "a",
+          "key": "a",
+          "rust": "RulerEndpoint",
+          "ts": "RulerEndpoint",
+          "optional": false
+        },
+        {
+          "name": "b",
+          "key": "b",
+          "rust": "RulerEndpoint",
+          "ts": "RulerEndpoint",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Option<AlongLineResult>",
+        "ts": "AlongLineResult | null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_anchored_section_ids",
+      "module": "section",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<SectionId>",
+        "ts": "Array<number>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_cache_stats",
+      "module": "cache",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "CacheStats",
+        "ts": "CacheStats"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_config",
+      "module": "config",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Config",
+        "ts": "Config"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_internal_error_status",
+      "module": "internal_error",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Option<InternalErrorNotice>",
+        "ts": "InternalErrorNotice | null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_memory_stats",
+      "module": "memory",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "MemoryStats",
+        "ts": "MemoryStats"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_network_status",
+      "module": "cache",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "bool",
+        "ts": "boolean"
+      },
+      "error": {
+        "rust": "!",
+        "ts": "never"
+      }
+    },
+    {
+      "name": "get_project_state",
+      "module": "project",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Option<ProjectState>",
+        "ts": "ProjectState | null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_project_state_binary",
+      "module": "project",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "tauri::ipc::Response",
+        "ts": "ArrayBuffer"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_project_warnings",
+      "module": "validation",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<ProjectWarning>",
+        "ts": "Array<ProjectWarning>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_raw_table",
+      "module": "raw_data",
+      "async": true,
+      "args": [
+        {
+          "name": "table",
+          "key": "table",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "limit",
+          "key": "limit",
+          "rust": "u32",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "offset",
+          "key": "offset",
+          "rust": "u32",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "RawTableData",
+        "ts": "RawTableData"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_raw_table_names",
+      "module": "raw_data",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<String>",
+        "ts": "Array<string>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_recent_logs",
+      "module": "logging",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<String>",
+        "ts": "Array<string>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_recent_logs_since",
+      "module": "logging",
+      "async": true,
+      "args": [
+        {
+          "name": "after_seq",
+          "key": "afterSeq",
+          "rust": "u64",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "LogsSince",
+        "ts": "LogsSince"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_redo_stack",
+      "module": "history",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<UndoHistoryItem>",
+        "ts": "Array<UndoHistoryItem>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_rigid_connected_section_ids",
+      "module": "section",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Vec<SectionId>",
+        "ts": "Array<number>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_section_relationships",
+      "module": "section",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SectionRelationships",
+        "ts": "SectionRelationships"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_segment_geometry",
+      "module": "section",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SegmentGeometry",
+        "ts": "SegmentGeometry"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_station_distances_from",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "from",
+          "key": "from",
+          "rust": "Option<StationRef>",
+          "ts": "StationRef | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "Option<DistanceField>",
+        "ts": "DistanceField | null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_survey_geometry_for_file",
+      "module": "survey_geometry",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SurveyGeometry",
+        "ts": "SurveyGeometry"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_tile_attribution",
+      "module": "cache",
+      "async": true,
+      "args": [
+        {
+          "name": "provider",
+          "key": "provider",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "crate::tile_attribution::TileAttribution",
+        "ts": "TileAttribution"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_tile_fetch_stats",
+      "module": "cache",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "TileFetchStatsResponse",
+        "ts": "TileFetchStatsResponse"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_tile_providers",
+      "module": "cache",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<crate::tile_providers::TileProviderInfo>",
+        "ts": "Array<TileProviderInfo>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "get_undo_stack",
+      "module": "history",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<UndoHistoryItem>",
+        "ts": "Array<UndoHistoryItem>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "history_discarded",
+      "module": "project",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "bool",
+        "ts": "boolean"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "import_dmp",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "DmpFile",
+        "ts": "DmpFile"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "import_sections",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "sections",
+          "key": "sections",
+          "rust": "Vec<crate::models::ImportSectionConfig>",
+          "ts": "Array<ImportSectionConfig>",
+          "optional": false
+        },
+        {
+          "name": "file_hash",
+          "key": "fileHash",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "section_hashes",
+          "key": "sectionHashes",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        },
+        {
+          "name": "existing_shot_updates",
+          "key": "existingShotUpdates",
+          "rust": "Option<Vec<crate::models::ExistingShotUpdate>>",
+          "ts": "Array<ExistingShotUpdate> | null",
+          "optional": true
+        },
+        {
+          "name": "virtual_shot_mode",
+          "key": "virtualShotMode",
+          "rust": "Option<VirtualShotMode>",
+          "ts": "VirtualShotMode | null",
+          "optional": true
+        },
+        {
+          "name": "source_label",
+          "key": "sourceLabel",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "source_file_name",
+          "key": "sourceFileName",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "sections_found",
+          "key": "sectionsFound",
+          "rust": "Option<u32>",
+          "ts": "number | null",
+          "optional": true
+        },
+        {
+          "name": "source_warnings",
+          "key": "sourceWarnings",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "ImportOutcome",
+        "ts": "ImportOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "is_telemetry_available",
+      "module": "telemetry",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "bool",
+        "ts": "boolean"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "list_backups",
+      "module": "recovery",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Vec<BackupInfo>",
+        "ts": "Array<BackupInfo>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "list_dive_plans",
+      "module": "dive_plan",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<DivePlanMeta>",
+        "ts": "Array<DivePlanMeta>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "list_recent_projects",
+      "module": "project",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<ProjectMetadata>",
+        "ts": "Array<ProjectMetadata>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "load_display_settings",
+      "module": "config",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "std::collections::HashMap<String, String>",
+        "ts": "Record<string, string>"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
+      "name": "load_dive_plan",
+      "module": "dive_plan",
+      "async": true,
+      "args": [
+        {
+          "name": "id",
+          "key": "id",
+          "rust": "i64",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "DivePlan",
+        "ts": "DivePlan"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "load_project_full",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "LoadProjectFullResult",
+        "ts": "LoadProjectFullResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "load_project_full_binary",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "tauri::ipc::Response",
+        "ts": "ArrayBuffer"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "merge_projects",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "source_paths",
+          "key": "sourcePaths",
+          "rust": "Vec<PathBuf>",
+          "ts": "Array<string>",
+          "optional": false
+        },
+        {
+          "name": "output_path",
+          "key": "outputPath",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "output_name",
+          "key": "outputName",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "archive_originals",
+          "key": "archiveOriginals",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "ProjectFileOutcome",
+        "ts": "ProjectFileOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "merge_stations",
+      "module": "station",
+      "async": true,
+      "args": [
+        {
+          "name": "station_a",
+          "key": "stationA",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        },
+        {
+          "name": "station_b",
+          "key": "stationB",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "move_comment",
+      "module": "station",
+      "async": true,
+      "args": [
+        {
+          "name": "source",
+          "key": "source",
+          "rust": "CommentHolder",
+          "ts": "CommentHolder",
+          "optional": false
+        },
+        {
+          "name": "target",
+          "key": "target",
+          "rust": "CommentHolder",
+          "ts": "CommentHolder",
+          "optional": false
+        },
+        {
+          "name": "swap",
+          "key": "swap",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "move_section",
+      "module": "section",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "offset",
+          "key": "offset",
+          "rust": "Coordinates",
+          "ts": "Coordinates",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "move_segment",
+      "module": "section",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "offset",
+          "key": "offset",
+          "rust": "Coordinates",
+          "ts": "Coordinates",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "move_station",
+      "module": "station",
+      "async": true,
+      "args": [
+        {
+          "name": "station_ref",
+          "key": "stationRef",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        },
+        {
+          "name": "offset",
+          "key": "offset",
+          "rust": "Coordinates",
+          "ts": "Coordinates",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "parse_compass",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "CompassFile",
+        "ts": "CompassFile"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "parse_gpx",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "GpxFile",
+        "ts": "GpxFile"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "parse_tml",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "TmlFile",
+        "ts": "TmlFile"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "parse_walls",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "WallsFile",
+        "ts": "WallsFile"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "patch_config",
+      "module": "config",
+      "async": true,
+      "args": [
+        {
+          "name": "patches",
+          "key": "patches",
+          "rust": "Vec<ConfigPatch>",
+          "ts": "Array<ConfigPatch>",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "ConfigSaveReport",
+        "ts": "ConfigSaveReport"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
+      "name": "plan_anchors_for_refs",
+      "module": "dive_plan",
+      "async": true,
+      "args": [
+        {
+          "name": "refs",
+          "key": "refs",
+          "rust": "Vec<StationRef>",
+          "ts": "Array<StationRef>",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Vec<Option<StoredAnchor>>",
+        "ts": "Array<unknown | null>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "plan_refs_for_anchors",
+      "module": "dive_plan",
+      "async": true,
+      "args": [
+        {
+          "name": "anchors",
+          "key": "anchors",
+          "rust": "Vec<StoredAnchor>",
+          "ts": "Array<unknown>",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Vec<Option<StationRef>>",
+        "ts": "Array<StationRef | null>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "preview_delete_shot",
+      "module": "shot",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "shot_id",
+          "key": "shotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "DeleteShotImpact",
+        "ts": "DeleteShotImpact"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "preview_delete_shot_range",
+      "module": "shot",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "start_shot_id",
+          "key": "startShotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "end_shot_id",
+          "key": "endShotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "DeleteShotRangeImpact",
+        "ts": "DeleteShotRangeImpact"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "preview_svg_export",
+      "module": "export",
+      "async": true,
+      "args": [
+        {
+          "name": "options",
+          "key": "options",
+          "rust": "ExportImageOptions",
+          "ts": "ExportImageOptions",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "String",
+        "ts": "string"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "push_frontend_log",
+      "module": "logging",
+      "async": true,
+      "args": [
+        {
+          "name": "level",
+          "key": "level",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "message",
+          "key": "message",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "redo",
+      "module": "history",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "HistoryOutcome",
+        "ts": "HistoryOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "redo_to",
+      "module": "history",
+      "async": true,
+      "args": [
+        {
+          "name": "index",
+          "key": "index",
+          "rust": "usize",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "HistoryOutcome",
+        "ts": "HistoryOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "reload_config",
+      "module": "config",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Config",
+        "ts": "Config"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
+      "name": "remove_from_recent_projects",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "ProjectFileOutcome",
+        "ts": "ProjectFileOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "remove_loop_closure",
+      "module": "station",
+      "async": true,
+      "args": [
+        {
+          "name": "closure_id",
+          "key": "closureId",
+          "rust": "u64",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "remove_zero_datum",
+      "module": "station",
+      "async": true,
+      "args": [
+        {
+          "name": "station_ref",
+          "key": "stationRef",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "render_dive_profile_text",
+      "module": "export",
+      "async": true,
+      "args": [
+        {
+          "name": "request",
+          "key": "request",
+          "rust": "DiveProfileRequest",
+          "ts": "DiveProfileRequest",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "String",
+        "ts": "string"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "repair_project_integrity",
+      "module": "validation",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "IntegrityRepairResult",
+        "ts": "IntegrityRepairResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "resolve_warning",
+      "module": "validation",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "shot_id",
+          "key": "shotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "warning_code",
+          "key": "warningCode",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "comment",
+          "key": "comment",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "restore_from_backup",
+      "module": "recovery",
+      "async": true,
+      "args": [
+        {
+          "name": "project_path",
+          "key": "projectPath",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "backup_path",
+          "key": "backupPath",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "String",
+        "ts": "string"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "reverse_section",
+      "module": "section",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "swap_left_right",
+          "key": "swapLeftRight",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "ReverseOutcome",
+        "ts": "ReverseOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "save_display_setting",
+      "module": "config",
+      "async": true,
+      "args": [
+        {
+          "name": "key",
+          "key": "key",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "value",
+          "key": "value",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "made_for",
+          "key": "madeFor",
+          "rust": "Option<crate::core::state::DisplaySettingTarget>",
+          "ts": "DisplaySettingTarget | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "save_dive_plan",
+      "module": "dive_plan",
+      "async": true,
+      "args": [
+        {
+          "name": "id",
+          "key": "id",
+          "rust": "Option<i64>",
+          "ts": "number | null",
+          "optional": true
+        },
+        {
+          "name": "name",
+          "key": "name",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "snapshot",
+          "key": "snapshot",
+          "rust": "DivePlanSnapshot",
+          "ts": "DivePlanSnapshot",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "DivePlanMeta",
+        "ts": "DivePlanMeta"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "save_project",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "Option<PathBuf>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "is_autosave",
+          "key": "isAutosave",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "SaveOutcome",
+        "ts": "SaveOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "save_target_exists",
+      "module": "save_target",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "bool",
+        "ts": "boolean"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "set_project_name_for_path",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "name",
+          "key": "name",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "set_shot_kind",
+      "module": "shot",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "shot_id",
+          "key": "shotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "kind",
+          "key": "kind",
+          "rust": "ShotKind",
+          "ts": "ShotKind",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "set_station_comment",
+      "module": "station",
+      "async": true,
+      "args": [
+        {
+          "name": "station_ref",
+          "key": "stationRef",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        },
+        {
+          "name": "comment",
+          "key": "comment",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "set_surface_elevation",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "elevation",
+          "key": "elevation",
+          "rust": "Option<f64>",
+          "ts": "number | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "set_telemetry_enabled",
+      "module": "telemetry",
+      "async": true,
+      "args": [
+        {
+          "name": "enabled",
+          "key": "enabled",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "set_workspace_mode",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "mode",
+          "key": "mode",
+          "rust": "crate::core::WorkspaceMode",
+          "ts": "WorkspaceMode",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "set_zero_datum",
+      "module": "station",
+      "async": true,
+      "args": [
+        {
+          "name": "station_ref",
+          "key": "stationRef",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        },
+        {
+          "name": "coordinates",
+          "key": "coordinates",
+          "rust": "GpsCoordinates",
+          "ts": "GpsCoordinates",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_add_collaborator",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "email",
+          "key": "email",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "permission",
+          "key": "permission",
+          "rust": "Permission",
+          "ts": "Permission",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SpeleoCollaborators",
+        "ts": "SpeleoCollaborators"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_add_team",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "team_id",
+          "key": "teamId",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "permission",
+          "key": "permission",
+          "rust": "Permission",
+          "ts": "Permission",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SpeleoCollaborators",
+        "ts": "SpeleoCollaborators"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_adopt_ariane",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "project_id",
+          "key": "projectId",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "project_name",
+          "key": "projectName",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "latest_commit_sha",
+          "key": "latestCommitSha",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "discard_local",
+          "key": "discardLocal",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        },
+        {
+          "name": "entry_path",
+          "key": "entryPath",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "SpeleoAdoptResult",
+        "ts": "SpeleoAdoptResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_delete_project",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_discard_changes",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "keep_lock",
+          "key": "keepLock",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        },
+        {
+          "name": "acknowledged",
+          "key": "acknowledged",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Option<StartEditingResult>",
+        "ts": "StartEditingResult | null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_done",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "message",
+          "key": "message",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "accept_older_version",
+          "key": "acceptOlderVersion",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "SpeleoDoneReport",
+        "ts": "SpeleoDoneReport"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_dump_candidates",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "project_id",
+          "key": "projectId",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "hexsha",
+          "key": "hexsha",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "Option<Vec<SpeleoDumpCandidate>>",
+        "ts": "Array<SpeleoDumpCandidate> | null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_force_edit",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_get_project_metadata",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "SpeleoProjectMetadata",
+        "ts": "SpeleoProjectMetadata"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_get_revisions",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "project_id",
+          "key": "projectId",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Vec<SpeleoRevision>",
+        "ts": "Array<SpeleoRevision>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_link_status",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "SpeleoLinkStatus",
+        "ts": "SpeleoLinkStatus"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_list_collaborators",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "SpeleoCollaborators",
+        "ts": "SpeleoCollaborators"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_list_projects",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<SpeleoProjectSummary>",
+        "ts": "Array<SpeleoProjectSummary>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_list_teams",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<SpeleoTeamOption>",
+        "ts": "Array<SpeleoTeamOption>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_local_project_states",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "project_ids",
+          "key": "projectIds",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "HashMap<String, SpeleoLocalProjectState>",
+        "ts": "Record<string, SpeleoLocalProjectState>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_login",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "endpoint",
+          "key": "endpoint",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "email",
+          "key": "email",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "password",
+          "key": "password",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "token",
+          "key": "token",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "SpeleoLoginResult",
+        "ts": "SpeleoLoginResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_logout",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_open_file_flags",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "crate::core::loading::OpenFileFlags",
+        "ts": "OpenFileFlags"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_open_project",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "project_id",
+          "key": "projectId",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "project_name",
+          "key": "projectName",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "latest_commit_sha",
+          "key": "latestCommitSha",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "entry_path",
+          "key": "entryPath",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "SpeleoOpenResult",
+        "ts": "SpeleoOpenResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_open_project_discarding_local",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "project_id",
+          "key": "projectId",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "project_name",
+          "key": "projectName",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "latest_commit_sha",
+          "key": "latestCommitSha",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "entry_path",
+          "key": "entryPath",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "SpeleoOpenResult",
+        "ts": "SpeleoOpenResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_patch_project",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "patch",
+          "key": "patch",
+          "rust": "SpeleoProjectMetadataPatch",
+          "ts": "SpeleoProjectMetadataPatch",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SpeleoProjectMetadata",
+        "ts": "SpeleoProjectMetadata"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_publish",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "params",
+          "key": "params",
+          "rust": "SpeleoPublishParams",
+          "ts": "SpeleoPublishParams",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "crate::core::command::SpeleoPublishReport",
+        "ts": "SpeleoPublishReport"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_push",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "message",
+          "key": "message",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "accept_older_version",
+          "key": "acceptOlderVersion",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "SpeleoPushReport",
+        "ts": "SpeleoPushReport"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_release_all_locks",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_release_current_lock",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_release_lock",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "project_id",
+          "key": "projectId",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_release_lock_acquired_here",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_remove_collaborator",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "email",
+          "key": "email",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SpeleoCollaborators",
+        "ts": "SpeleoCollaborators"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_remove_link_at",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "std::path::PathBuf",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "expected",
+          "key": "expected",
+          "rust": "crate::core::loading::SpeleoManagedFile",
+          "ts": "SpeleoManagedFile",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_remove_team",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "team_id",
+          "key": "teamId",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SpeleoCollaborators",
+        "ts": "SpeleoCollaborators"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_restore_revision",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "project_id",
+          "key": "projectId",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "project_name",
+          "key": "projectName",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "hexsha",
+          "key": "hexsha",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "restore",
+          "key": "restore",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        },
+        {
+          "name": "discard_local",
+          "key": "discardLocal",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        },
+        {
+          "name": "entry_path",
+          "key": "entryPath",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "keep_undo_history",
+          "key": "keepUndoHistory",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        },
+        {
+          "name": "discard_unpushed",
+          "key": "discardUnpushed",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        },
+        {
+          "name": "chain_forward",
+          "key": "chainForward",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "SpeleoOpenResult",
+        "ts": "SpeleoOpenResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_retry_keychain",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "SpeleoSessionStatus",
+        "ts": "SpeleoSessionStatus"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_rewind_target",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Option<SpeleoRewindTarget>",
+        "ts": "SpeleoRewindTarget | null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_search_users",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "query",
+          "key": "query",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Vec<SpeleoUserSuggestion>",
+        "ts": "Array<SpeleoUserSuggestion>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_session",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "SpeleoSessionStatus",
+        "ts": "SpeleoSessionStatus"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_set_collaborator",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "email",
+          "key": "email",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "permission",
+          "key": "permission",
+          "rust": "Permission",
+          "ts": "Permission",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SpeleoCollaborators",
+        "ts": "SpeleoCollaborators"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_set_exclude_geojson",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "exclude",
+          "key": "exclude",
+          "rust": "bool",
+          "ts": "boolean",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_set_team",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "team_id",
+          "key": "teamId",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "permission",
+          "key": "permission",
+          "rust": "Permission",
+          "ts": "Permission",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SpeleoCollaborators",
+        "ts": "SpeleoCollaborators"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_set_token_storage",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "mode",
+          "key": "mode",
+          "rust": "TokenFallback",
+          "ts": "TokenFallback",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SpeleoSessionStatus",
+        "ts": "SpeleoSessionStatus"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_set_undo_mode",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "mode",
+          "key": "mode",
+          "rust": "UndoMode",
+          "ts": "UndoMode",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_start_editing",
+      "module": "speleodb",
+      "async": true,
+      "args": [
+        {
+          "name": "resume_held_lock",
+          "key": "resumeHeldLock",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "StartEditingResult",
+        "ts": "StartEditingResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_take_remote",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "String",
+        "ts": "string"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_unlink",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_unwind_target",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Option<SpeleoUnwindTarget>",
+        "ts": "SpeleoUnwindTarget | null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "speleodb_update",
+      "module": "speleodb",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "UpdateResult",
+        "ts": "UpdateResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "split_shot_at_distance",
+      "module": "shot",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "shot_id",
+          "key": "shotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "distance",
+          "key": "distance",
+          "rust": "f64",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "ShotCreated",
+        "ts": "ShotCreated"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "suggest_all_import_placements",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "import_sections",
+          "key": "importSections",
+          "rust": "Vec<ImportSectionForSuggestion>",
+          "ts": "Array<ImportSectionForSuggestion>",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Vec<CrossSectionSuggestion>",
+        "ts": "Array<CrossSectionSuggestion>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "suggest_import_placement",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "shots",
+          "key": "shots",
+          "rust": "Vec<ShotData>",
+          "ts": "Array<ShotData>",
+          "optional": false
+        },
+        {
+          "name": "azimuth_reference",
+          "key": "azimuthReference",
+          "rust": "Option<AzimuthReference>",
+          "ts": "AzimuthReference | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "Vec<PlacementSuggestion>",
+        "ts": "Array<PlacementSuggestion>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "suggest_orphan_placements",
+      "module": "import",
+      "async": true,
+      "args": [
+        {
+          "name": "newly_imported_section_ids",
+          "key": "newlyImportedSectionIds",
+          "rust": "Vec<u32>",
+          "ts": "Array<number>",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Vec<OrphanPlacementSuggestion>",
+        "ts": "Array<OrphanPlacementSuggestion>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "take_pending_launch_files",
+      "module": "launch",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Vec<String>",
+        "ts": "Array<string>"
+      },
+      "error": {
+        "rust": "crate::core::CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "take_unrecognised_shot_kinds",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "loading_id",
+          "key": "loadingId",
+          "rust": "u64",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "Vec<crate::models::UnrecognisedShotKind>",
+        "ts": "Array<UnrecognisedShotKind>"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "track_events",
+      "module": "telemetry",
+      "async": true,
+      "args": [
+        {
+          "name": "events",
+          "key": "events",
+          "rust": "HashMap<String, u64>",
+          "ts": "Record<string, number>",
+          "optional": false
+        },
+        {
+          "name": "project_seq",
+          "key": "projectSeq",
+          "rust": "u32",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "undo",
+      "module": "history",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "HistoryOutcome",
+        "ts": "HistoryOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "undo_to",
+      "module": "history",
+      "async": true,
+      "args": [
+        {
+          "name": "index",
+          "key": "index",
+          "rust": "usize",
+          "ts": "number",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "HistoryOutcome",
+        "ts": "HistoryOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "unmerge_station_pair",
+      "module": "station",
+      "async": true,
+      "args": [
+        {
+          "name": "station_a",
+          "key": "stationA",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        },
+        {
+          "name": "station_b",
+          "key": "stationB",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "unmerge_stations",
+      "module": "station",
+      "async": true,
+      "args": [
+        {
+          "name": "station_ref",
+          "key": "stationRef",
+          "rust": "StationRef",
+          "ts": "StationRef",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "unresolve_warning",
+      "module": "validation",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "shot_id",
+          "key": "shotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "warning_code",
+          "key": "warningCode",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "update_config",
+      "module": "config",
+      "async": true,
+      "args": [
+        {
+          "name": "config",
+          "key": "config",
+          "rust": "Config",
+          "ts": "Config",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "ConfigSaveReport",
+        "ts": "ConfigSaveReport"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
+      "name": "update_data_table_view",
+      "module": "config",
+      "async": true,
+      "args": [
+        {
+          "name": "column_order",
+          "key": "columnOrder",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        },
+        {
+          "name": "hidden_columns",
+          "key": "hiddenColumns",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        },
+        {
+          "name": "azimuth_mode",
+          "key": "azimuthMode",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "inclination_mode",
+          "key": "inclinationMode",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "station_column_order",
+          "key": "stationColumnOrder",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        },
+        {
+          "name": "station_hidden_columns",
+          "key": "stationHiddenColumns",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        },
+        {
+          "name": "column_widths",
+          "key": "columnWidths",
+          "rust": "Option<BTreeMap<String, u32>>",
+          "ts": "Record<string, number> | null",
+          "optional": true
+        },
+        {
+          "name": "station_column_widths",
+          "key": "stationColumnWidths",
+          "rust": "Option<BTreeMap<String, u32>>",
+          "ts": "Record<string, number> | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
+      "name": "update_edit_section_view",
+      "module": "config",
+      "async": true,
+      "args": [
+        {
+          "name": "column_order",
+          "key": "columnOrder",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        },
+        {
+          "name": "hidden_columns",
+          "key": "hiddenColumns",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        },
+        {
+          "name": "column_widths",
+          "key": "columnWidths",
+          "rust": "Option<BTreeMap<String, u32>>",
+          "ts": "Record<string, number> | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
+      "name": "update_gas_config",
+      "module": "config",
+      "async": true,
+      "args": [
+        {
+          "name": "gas",
+          "key": "gas",
+          "rust": "GasConfig",
+          "ts": "GasConfig",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
+      "name": "update_import_shots_view",
+      "module": "config",
+      "async": true,
+      "args": [
+        {
+          "name": "column_order",
+          "key": "columnOrder",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        },
+        {
+          "name": "hidden_columns",
+          "key": "hiddenColumns",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        },
+        {
+          "name": "column_widths",
+          "key": "columnWidths",
+          "rust": "Option<BTreeMap<String, u32>>",
+          "ts": "Record<string, number> | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
+      "name": "update_new_section_view",
+      "module": "config",
+      "async": true,
+      "args": [
+        {
+          "name": "column_order",
+          "key": "columnOrder",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        },
+        {
+          "name": "hidden_columns",
+          "key": "hiddenColumns",
+          "rust": "Option<Vec<String>>",
+          "ts": "Array<string> | null",
+          "optional": true
+        },
+        {
+          "name": "column_widths",
+          "key": "columnWidths",
+          "rust": "Option<BTreeMap<String, u32>>",
+          "ts": "Record<string, number> | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
+      "name": "update_panel_layout",
+      "module": "config",
+      "async": true,
+      "args": [
+        {
+          "name": "sections_panel_open",
+          "key": "sectionsPanelOpen",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        },
+        {
+          "name": "sections_panel_mode",
+          "key": "sectionsPanelMode",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "detail_panel_open",
+          "key": "detailPanelOpen",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        },
+        {
+          "name": "detail_panel_mode",
+          "key": "detailPanelMode",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "data_table_open",
+          "key": "dataTableOpen",
+          "rust": "Option<bool>",
+          "ts": "boolean | null",
+          "optional": true
+        },
+        {
+          "name": "data_table_mode",
+          "key": "dataTableMode",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
+      "name": "update_panel_sizes",
+      "module": "config",
+      "async": true,
+      "args": [
+        {
+          "name": "sections_panel_width",
+          "key": "sectionsPanelWidth",
+          "rust": "Option<u32>",
+          "ts": "number | null",
+          "optional": true
+        },
+        {
+          "name": "detail_panel_width",
+          "key": "detailPanelWidth",
+          "rust": "Option<u32>",
+          "ts": "number | null",
+          "optional": true
+        },
+        {
+          "name": "data_table_height",
+          "key": "dataTableHeight",
+          "rust": "Option<u32>",
+          "ts": "number | null",
+          "optional": true
+        },
+        {
+          "name": "wizard_map_panel_width",
+          "key": "wizardMapPanelWidth",
+          "rust": "Option<u32>",
+          "ts": "number | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
+      "name": "update_project_settings",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "name",
+          "key": "name",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "validation",
+          "key": "validation",
+          "rust": "crate::config::ValidationConfig",
+          "ts": "ValidationConfig",
+          "optional": false
+        },
+        {
+          "name": "default_azimuth_reference",
+          "key": "defaultAzimuthReference",
+          "rust": "Option<crate::models::AzimuthReference>",
+          "ts": "AzimuthReference | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "update_section",
+      "module": "section",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "updates",
+          "key": "updates",
+          "rust": "SectionUpdates",
+          "ts": "SectionUpdates",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "update_shot",
+      "module": "shot",
+      "async": true,
+      "args": [
+        {
+          "name": "section_id",
+          "key": "sectionId",
+          "rust": "SectionId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "shot_id",
+          "key": "shotId",
+          "rust": "ShotId",
+          "ts": "number",
+          "optional": false
+        },
+        {
+          "name": "updates",
+          "key": "updates",
+          "rust": "ShotUpdates",
+          "ts": "ShotUpdates",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "write_salvaged_data",
+      "module": "recovery",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "dest_path",
+          "key": "destPath",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "SalvageWriteResult",
+        "ts": "SalvageWriteResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    }
+  ]
+}

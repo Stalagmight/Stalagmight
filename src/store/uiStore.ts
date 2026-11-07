@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
+import { chainProjectSettingWrite, chainSettingWrite, SETTING_KEYS } from '../utils/settingWriteChain';
+import { errorCode } from '../utils/commandError';
 import { clampRound } from '../utils/clamp';
 import {
   PANEL_SIZE_BOUNDS,
@@ -7,6 +9,7 @@ import {
 } from '../components/SingleSystemView/layoutConstants';
 import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackPanelMode, trackSelect, trackSelectAdd, clearProjectActionSource, isPersistSuppressed } from '../utils/telemetry';
 import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData } from '../types/project';
+import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 
 export interface CommentTarget {
   type: 'station' | 'shot';
@@ -227,6 +230,12 @@ export interface MeasureAlongLine {
   pathShots: PathShot[];
   /** Stations traversed on the path (tinted alongside the shots). */
   pathStations: StationRef[];
+  /**
+   * The query itself failed (it rejected), as opposed to answering that the
+   * endpoints are not connected (`alongLine` null, no flag): the readout says
+   * "Couldn't compute the path" rather than "No connected path" (#576 C7-MSG).
+   */
+  failed?: true;
 }
 
 /** Live shot-snap candidate while the measure tool hovers a shot (not a station).
@@ -288,6 +297,12 @@ export interface PlacementModeState {
   onCancel?: () => void;
   /** Additional sections to render alongside primary (for segment placement) */
   additionalSections?: AdditionalPlacementSection[];
+  /**
+   * The north reference the placed section(s) WILL be recorded with, when the
+   * import sets one (a DMP import: magnetic, no correction). Absent, the section
+   * records none and the preview walks it with the project default (#576 D15).
+   */
+  azimuthReference?: AzimuthReference | null;
 }
 
 export interface Selection {
@@ -324,6 +339,30 @@ export function selectionsEqual(a: Selection, b: Selection): boolean {
  */
 export type ToastKind = 'info' | 'success' | 'warning' | 'error';
 
+/**
+ * A toast's one action button. Toasts carry none by policy (docs/notifications.md);
+ * the single sanctioned exception is the lost-WebGL-context toast's "Reload map"
+ * (#576 D38-LOST).
+ */
+export interface ToastAction {
+  label: string;
+  /** Runs on click; the toast is dismissed after it. */
+  onAction: () => void;
+  /** `data-testid` of the button. */
+  testId: string;
+}
+
+/** Optional extras for {@link UIState.showToast}. */
+export interface ToastOptions {
+  action?: ToastAction;
+  /**
+   * Stays on screen (no dwell, no fade) until dismissed - by the user, or by the
+   * code that raised it via {@link UIState.dismissToastByKey} once the condition
+   * it reports is over.
+   */
+  persistent?: boolean;
+}
+
 /** One entry in the toast stack. Ordered oldest-first in `UIStore.toasts`. */
 export interface ToastItem {
   /** Process-unique, monotonically increasing. React key and timer identity. */
@@ -356,6 +395,10 @@ export interface ToastItem {
    * visible-count cap, and ToastStack drops them once their exit finishes.
    */
   leaving: boolean;
+  /** See {@link ToastOptions.action}. */
+  action?: ToastAction;
+  /** See {@link ToastOptions.persistent}. */
+  persistent?: boolean;
 }
 
 /**
@@ -383,13 +426,37 @@ const MAX_TOTAL_TOASTS = MAX_VISIBLE_TOASTS + 4;
 /**
  * Apply the live-toast cap: mark the oldest overflow `leaving` (so it animates
  * away rather than blinking out), then trim the array to its hard ceiling.
+ *
+ * A {@link ToastOptions.persistent} toast counts toward the cap but is evicted
+ * only when no ordinary toast is left to evict instead: it reports a condition
+ * that is raised once and stays until it is over (the lost-WebGL-context "Reload
+ * map" toast is never raised again for the same loss), so a burst of ordinary
+ * toasts must not push it out (#576 RV4-FE-MF1). The hard trim likewise drops
+ * leaving toasts first, so a persistent one that is still live survives it.
  */
 function capToasts(next: ToastItem[], capacity: number): ToastItem[] {
   const live = next.filter((t) => !t.leaving);
   const overflow = live.length - capacity;
-  const evicted = overflow > 0 ? new Set(live.slice(0, overflow).map((t) => t.id)) : null;
-  const marked = evicted ? next.map((t) => (evicted.has(t.id) ? { ...t, leaving: true } : t)) : next;
-  return marked.slice(-MAX_TOTAL_TOASTS);
+  let marked = next;
+  if (overflow > 0) {
+    const candidates = [...live.filter((t) => !t.persistent), ...live.filter((t) => t.persistent)];
+    const evicted = new Set(candidates.slice(0, overflow).map((t) => t.id));
+    marked = next.map((t) => (evicted.has(t.id) ? { ...t, leaving: true } : t));
+  }
+  let excess = marked.length - MAX_TOTAL_TOASTS;
+  if (excess <= 0) return marked;
+  // Oldest leaving toasts go first; only then (never in practice: live toasts are
+  // capped below the ceiling) the oldest of the rest.
+  const dropped = new Set<number>();
+  for (const t of marked) {
+    if (excess === 0) break;
+    if (t.leaving) {
+      dropped.add(t.id);
+      excess -= 1;
+    }
+  }
+  const kept = marked.filter((t) => !dropped.has(t.id));
+  return kept.slice(-MAX_TOTAL_TOASTS);
 }
 
 /**
@@ -666,7 +733,7 @@ interface UIStore {
    * and kind win, its timer restarts, and it moves to the newest slot - instead
    * of stacking a duplicate.
    */
-  showToast: (message: string, key: string, kind: ToastKind) => void;
+  showToast: (message: string, key: string, kind: ToastKind, options?: ToastOptions) => void;
   /**
    * Set the live-toast cap from measured geometry. Clamped into
    * [MIN_VISIBLE_TOASTS, MAX_VISIBLE_TOASTS]; shrinking it evicts the oldest
@@ -675,6 +742,11 @@ interface UIStore {
   setToastCapacity: (capacity: number) => void;
   /** Begin one toast's exit animation (the per-toast dismiss button). */
   dismissToast: (id: number) => void;
+  /**
+   * Begin the exit of the live toast under `key`, if any: for code that raised a
+   * {@link ToastOptions.persistent} toast and now knows its condition is over.
+   */
+  dismissToastByKey: (key: string) => void;
   /** Drop one toast outright. ToastStack calls this when a toast's life ends. */
   removeToast: (id: number) => void;
   /**
@@ -747,6 +819,7 @@ interface UIStore {
     onComplete?: (result: PlacementResult) => void,
     onCancel?: () => void,
     additionalSections?: AdditionalPlacementSection[],
+    azimuthReference?: AzimuthReference | null,
   ) => void;
   updatePlacementCursor: (position: Coordinates | null) => void;
   updatePlacementSnap: (stationRef: StationRef | null) => void;
@@ -979,6 +1052,30 @@ export function isScreenBusy(
   state: Pick<UIStore, 'activeDialog' | 'placementMode' | 'screenOccupants'>,
 ): boolean {
   return state.activeDialog !== null || state.placementMode !== null || state.screenOccupants > 0;
+}
+
+/**
+ * Persist one display setting (grid spacing, the geometry mode, a display toggle)
+ * into the open project, after any earlier write of the same key
+ * ([#576 SETTINGS-ORDER]) and for the project it was made in ([#576 RV6b-2]: a
+ * write queued past a project switch is dropped, one already sent names its
+ * project and the backend refuses it once another is open - PROJECT_CHANGED,
+ * which is that rule working, not a failure to report).
+ */
+function persistDisplaySetting(key: string, value: string, failure: string): Promise<void> {
+  return chainProjectSettingWrite(SETTING_KEYS.displaySetting(key), (madeFor) =>
+    invokeIpc(
+      'save_display_setting',
+      // Omitted with no project open: the backend reads an absent identity as none.
+      { key, value, ...(madeFor === null ? {} : { madeFor }) },
+      { purpose: 'persist display setting', fields: { key } },
+    ),
+  ).then(
+    () => undefined,
+    (e: unknown) => {
+      if (errorCode(e) !== 'PROJECT_CHANGED') console.warn(failure, e);
+    },
+  );
 }
 
 export const useUIStore = create<UIStore>((set) => ({
@@ -1323,7 +1420,10 @@ export const useUIStore = create<UIStore>((set) => ({
     const { min, max } = PANEL_SIZE_BOUNDS[panel];
     const fields = { [PANEL_WIDTH_FIELDS[panel]]: clampRound(size, min, max) };
     try {
-      await invokeIpc('update_panel_sizes', fields, { purpose: 'persist panel layout', fields });
+      // [#576 SETTINGS-ORDER] Same panel, issue order: the last size dragged to wins.
+      await chainSettingWrite(SETTING_KEYS.panelSize(PANEL_WIDTH_FIELDS[panel]), () =>
+        invokeIpc('update_panel_sizes', fields, { purpose: 'persist panel layout', fields }),
+      );
     } catch (e) {
       console.error('Failed to save panel sizes:', e);
     }
@@ -1346,10 +1446,14 @@ export const useUIStore = create<UIStore>((set) => ({
       dataTableMode: s.dataTableMode,
     };
     try {
-      await invokeIpc('update_panel_layout', fields, {
-        purpose: 'persist panel reveal layout',
-        fields,
-      });
+      // [#576 SETTINGS-ORDER] Each call snapshots all six fields, so an older
+      // snapshot landing last would put back a panel the user had since toggled.
+      await chainSettingWrite(SETTING_KEYS.panelLayout, () =>
+        invokeIpc('update_panel_layout', fields, {
+          purpose: 'persist panel reveal layout',
+          fields,
+        }),
+      );
     } catch (e) {
       console.error('Failed to save panel layout:', e);
     }
@@ -1768,24 +1872,13 @@ export const useUIStore = create<UIStore>((set) => ({
     set({ gridSpacing: spacing });
     // Scoped to Plan/Export while there (restored on exit) - don't persist it.
     if (useUIStore.getState().appMode !== 'survey') return;
-    // Persist the spacing setting
-    invokeIpc(
-      'save_display_setting',
-      { key: 'gridSpacing', value: String(spacing) },
-      { purpose: 'persist display setting', fields: { key: 'gridSpacing' } }
-    ).catch((e) => {
-      console.warn('Failed to save grid spacing:', e);
-    });
+    // Persist the spacing setting ([#576 SETTINGS-ORDER] in click order: last wins)
+    void persistDisplaySetting('gridSpacing', String(spacing), 'Failed to save grid spacing:');
   },
   saveDisplaySetting: async (key, value) => {
-    try {
-      await invokeIpc('save_display_setting', { key, value: String(value) }, {
-        purpose: 'persist display setting',
-        fields: { key: String(key) },
-      });
-    } catch (e) {
-      console.warn('Failed to save display setting:', e);
-    }
+    // [#576 SETTINGS-ORDER] Same key, click order: a toggle flipped twice lands
+    // as the second flip, not whichever IPC the pool happened to finish last.
+    await persistDisplaySetting(String(key), String(value), 'Failed to save display setting:');
   },
   resetDisplaySettings: () => {
     // Reset all display toggles to their default values (from DISPLAY_DEFAULTS - single source of truth)
@@ -1900,14 +1993,9 @@ export const useUIStore = create<UIStore>((set) => ({
     trackAction('toggle.geometryMode', source);
     // Distances depend on the active geometry; a stale ruler readout would lie.
     set({ geometryMode: mode, ...MEASURE_CLEARED });
-    // Persist for "remember last used" across sessions (string value, like gridSpacing).
-    invokeIpc(
-      'save_display_setting',
-      { key: 'geometryMode', value: mode },
-      { purpose: 'persist display setting', fields: { key: 'geometryMode' } }
-    ).catch((e) => {
-      console.warn('Failed to save geometry mode:', e);
-    });
+    // Persist for "remember last used" across sessions (string value, like gridSpacing),
+    // in toggle order ([#576 SETTINGS-ORDER]).
+    void persistDisplaySetting('geometryMode', mode, 'Failed to save geometry mode:');
   },
 
   // Hover state
@@ -1923,7 +2011,7 @@ export const useUIStore = create<UIStore>((set) => ({
   // ToastStack, which calls removeToast when a toast's life ends.
   toasts: [],
   toastCapacity: MAX_VISIBLE_TOASTS,
-  showToast: (message, key, kind = 'info') => {
+  showToast: (message, key, kind = 'info', options = {}) => {
     const prev = useUIStore.getState().toasts;
 
     // Same key fired again WITHIN THE BURST WINDOW: refresh in place rather than
@@ -1946,12 +2034,16 @@ export const useUIStore = create<UIStore>((set) => ({
       (t) => t.key === key && !t.leaving && now - t.refreshedAt < TOAST_DEDUP_WINDOW_MS,
     );
     if (existing) {
+      // The newest call's options win, like its wording: drop what it leaves out.
+      const { action: _staleAction, persistent: _stalePersistent, ...rest } = existing;
       const refreshed: ToastItem = {
-        ...existing,
+        ...rest,
         message,
         kind,
         refreshedAt: now,
         revision: existing.revision + 1,
+        ...(options.action ? { action: options.action } : {}),
+        ...(options.persistent ? { persistent: true } : {}),
       };
       // Move to the newest slot (end of the array = nearest the bottom edge).
       set({ toasts: [...prev.filter((t) => t.id !== existing.id), refreshed] });
@@ -1966,6 +2058,8 @@ export const useUIStore = create<UIStore>((set) => ({
       refreshedAt: now,
       revision: 0,
       leaving: false,
+      ...(options.action ? { action: options.action } : {}),
+      ...(options.persistent ? { persistent: true } : {}),
     };
     set({ toasts: capToasts([...prev, pushed], useUIStore.getState().toastCapacity) });
   },
@@ -1979,6 +2073,12 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   dismissToast: (id) =>
     set((s) => ({ toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) })),
+  dismissToastByKey: (key) =>
+    set((s) =>
+      s.toasts.some((t) => t.key === key && !t.leaving)
+        ? { toasts: s.toasts.map((t) => (t.key === key && !t.leaving ? { ...t, leaving: true } : t)) }
+        : s,
+    ),
   removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   clearToast: () => set({ toasts: [] }),
   toastBottomOffsets: {},
@@ -2065,7 +2165,7 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Placement mode state
   placementMode: null,
-  startPlacementMode: (sectionData, alignStationIndex, onComplete, onCancel, additionalSections) => {
+  startPlacementMode: (sectionData, alignStationIndex, onComplete, onCancel, additionalSections, azimuthReference) => {
     // Placement mode bypasses the setView() cleanup funnel, so leave the gas sub-mode
     // (#38) here too - its overlay/panel must not outlive entry into placement
     // (idempotent no-op when gas is off).
@@ -2097,6 +2197,7 @@ export const useUIStore = create<UIStore>((set) => ({
         ...(onComplete !== undefined && { onComplete }),
         ...(onCancel !== undefined && { onCancel }),
         ...(additionalSections !== undefined && { additionalSections }),
+        ...(azimuthReference != null && { azimuthReference }),
       },
       // Placement and the ruler readout both occupy top-center (#26 reset).
       ...MEASURE_CLEARED,
@@ -2115,7 +2216,11 @@ export const useUIStore = create<UIStore>((set) => ({
     ),
   updatePlacementSnap: (stationRef) =>
     set((state) =>
-      state.placementMode
+      // Called on every placement pointer move; an unchanged snap is no write
+      // (returning `state` notifies nobody), so the map is not re-rendered for it.
+      state.placementMode &&
+      (state.placementMode.snappedToStation?.section_id !== stationRef?.section_id ||
+        state.placementMode.snappedToStation?.station_index !== stationRef?.station_index)
         ? {
             placementMode: {
               ...state.placementMode,

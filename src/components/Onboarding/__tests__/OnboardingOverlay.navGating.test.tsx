@@ -10,10 +10,7 @@ import { defaultConfig, type Config } from '../../../types/config';
 // `src/i18n/index.ts` (pulled in by that store) needs the real `initReactI18next`.
 // `t` returning the key is what makes the assertions below readable - a tool's
 // label renders as its i18n key.
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys());
 
 /**
  * #409 - the tour must teach the toolbar the user actually has. The Navigate

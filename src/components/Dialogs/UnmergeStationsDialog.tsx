@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -8,6 +9,7 @@ import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 function stationRefKey(ref: StationRef): string {
   return `${ref.section_id}:${ref.station_index}`;
@@ -18,8 +20,18 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
 }
 
 export default function UnmergeStationsDialog() {
-  const { closeDialog, dialogData } = useUIStore();
-  const { project, stations, unmergeStations, unmergeStationPair } = useProjectStore();
+  const { t } = useTranslation();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
+  const { project, stations, unmergeStations, unmergeStationPair } = useProjectStore(
+    useShallow((s) => ({
+      project: s.project,
+      stations: s.stations,
+      unmergeStations: s.unmergeStations,
+      unmergeStationPair: s.unmergeStationPair,
+    })),
+  );
 
   const stationRef = dialogData.stationRef as StationRef | undefined;
   const mergedStationsFromDialog = dialogData.mergedStations as StationRef[] | undefined;
@@ -58,7 +70,7 @@ export default function UnmergeStationsDialog() {
 
   const getStationDisplayLabel = (ref: StationRef): ReactNode => {
     const section = project?.sections.find((item) => item.id === ref.section_id);
-    const sectionLabel = section?.name?.trim() || `Section ${ref.section_id}`;
+    const sectionLabel = section?.name?.trim() || t('dialogs.unmergeStations.sectionFallback', { id: ref.section_id });
     return (
       <span className="inline-flex items-center gap-1.5 align-middle">
         <EntityBlob entity="station">{formatStationId(ref.section_id, ref.station_index)}</EntityBlob>
@@ -85,13 +97,13 @@ export default function UnmergeStationsDialog() {
         ? await unmergeStationPair(stationRef, selectedStationRef)
         : await unmergeStations(stationRef);
       if (!result.success) {
-        setError(result.error ?? 'Failed to unmerge stations');
+        setError(result.error ?? t('dialogs.unmergeStations.unmergeFailed'));
         return;
       }
       trackDialogComplete('unmerge-stations');
       closeDialog();
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to unmerge stations'));
+      setError(getErrorMessage(e, t('dialogs.unmergeStations.unmergeFailed')));
     } finally {
       setIsLoading(false);
     }
@@ -99,11 +111,11 @@ export default function UnmergeStationsDialog() {
 
   if (!stationRef) {
     return (
-      <DialogWrapper title="Unmerge Stations" onClose={closeDialog} size="md" data-testid="unmerge-stations-dialog">
+      <DialogWrapper title={t('dialogs.unmergeStations.title')} onClose={closeDialog} size="md" data-testid="unmerge-stations-dialog">
         <div className="space-y-4">
-          <p className="text-error text-sm">Station not found.</p>
+          <p className="text-error text-sm">{t('dialogs.unmergeStations.notFound')}</p>
           <div className="flex justify-end">
-            <Button onClick={closeDialog} data-testid="unmerge-stations-close">Close</Button>
+            <Button onClick={closeDialog} data-testid="unmerge-stations-close">{t('common.actions.close')}</Button>
           </div>
         </div>
       </DialogWrapper>
@@ -111,7 +123,7 @@ export default function UnmergeStationsDialog() {
   }
 
   return (
-    <DialogWrapper title="Unmerge Stations" onClose={closeDialog} size="md" data-testid="unmerge-stations-dialog">
+    <DialogWrapper title={t('dialogs.unmergeStations.title')} onClose={closeDialog} size="md" data-testid="unmerge-stations-dialog">
       <div className="space-y-4">
         {error && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
@@ -120,7 +132,7 @@ export default function UnmergeStationsDialog() {
         )}
 
         <p className="text-sm text-text-secondary">
-          This station is merged with multiple stations. Select one merge to remove.
+          {t('dialogs.unmergeStations.intro')}
         </p>
 
         <div className="space-y-2 max-h-56 overflow-y-auto border border-border rounded p-2">
@@ -142,20 +154,20 @@ export default function UnmergeStationsDialog() {
           })}
           {mergedStations.length === 0 && (
             <p className="text-sm text-text-secondary" data-testid="unmerge-stations-empty">
-              No merged stations found.
+              {t('dialogs.unmergeStations.empty')}
             </p>
           )}
         </div>
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={closeDialog} disabled={isLoading} data-testid="unmerge-stations-cancel">Cancel</Button>
+          <Button onClick={closeDialog} disabled={isLoading} data-testid="unmerge-stations-cancel">{t('common.actions.cancel')}</Button>
           <Button
             variant="primary"
             onClick={handleConfirm}
             disabled={isLoading || !selectedStationRef}
             data-testid="unmerge-stations-confirm"
           >
-            {isLoading ? 'Unmerging...' : 'Unmerge'}
+            {isLoading ? t('dialogs.unmergeStations.unmerging') : t('dialogs.unmergeStations.unmerge')}
           </Button>
         </div>
       </div>

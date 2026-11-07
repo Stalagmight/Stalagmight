@@ -1,3 +1,4 @@
+use super::command_epilogue::EpilogueSteps;
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{SectionId, ShotId};
@@ -16,12 +17,10 @@ impl AppState {
         distance: f64,
     ) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Insert station (split shot)") {
-            return f;
+            return CommandResult::refused(f);
         }
 
         // Reject non-finite distance before it reaches the coordinate path
@@ -42,11 +41,12 @@ impl AppState {
             Ok(s) => s,
             Err(result) => return result,
         };
+        // [#576 A4] The frame-defining datum before the split, for the shared
+        // epilogue's frame check - which this path never ran before.
+        let frame_before = self.frame_datum_key();
 
         let (new_shot_id, head_data, tail_updates) = {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
+            let mut proj_guard = self.project.lock();
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
@@ -77,17 +77,12 @@ impl AppState {
             }
         };
 
-        // Custom path bypasses execute()'s reconcile; re-derive offsets here
-        // and before the after-snapshot so undo/redo and the saved file reflect
-        // any drift (the split itself needs none, but this mirrors the other
-        // custom execute_* paths for safety).
-        self.reconcile_geometry();
-
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
+        // [#576 A4] The shared forward epilogue, every step, before the after-
+        // snapshot. This path used to run only the reconcile, while its comment
+        // claimed to mirror the other custom paths: the orphan conversion and the
+        // frame check were missing. The split keeps the original shot's uuid on the
+        // tail and inserts a new head before it, so both are no-ops for it today;
+        // running them is what keeps that true when the split changes.
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::CreateShot {
@@ -103,10 +98,11 @@ impl AppState {
                 },
             ],
         };
-        self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
-        // Dirty-bit flip (#191, D-B16): a split mutated a remote project.
-        // Set-only; no-op for local-only.
-        self.mark_remote_forward_edit();
+        if let Err(failure) =
+            self.record_snapshot_edit(frame_before, EpilogueSteps::ALL, batch_cmd, before_snapshot)
+        {
+            return failure;
+        }
 
         tracing::info!(
             section_id,

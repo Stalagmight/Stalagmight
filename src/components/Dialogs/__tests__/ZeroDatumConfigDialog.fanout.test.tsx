@@ -19,22 +19,12 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent } from '@testing-library/react';
 
-// Partial mock: `src/i18n/index.ts` (pulled in by the number formatters) needs
-// the real `initReactI18next`.
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+// Real i18n: the station options ("Station N") picked below render from en.json.
+import '../../../i18n';
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
 vi.mock('../SectionPreview', () => ({ default: () => null }));
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({
-    children,
-  }: {
-    children: React.ReactNode | ((p: { requestClose: () => void }) => React.ReactNode);
-  }) => <div>{typeof children === 'function' ? children({ requestClose: () => {} }) : children}</div>,
-}));
+vi.mock('../DialogWrapper', async () => (await import('../../../test/factories/components')).dialogWrapperStub());
 vi.mock('../../common/SectionMetadataForm', () => ({ SectionMetadataForm: () => null }));
 
 const captured = vi.hoisted(() => ({ props: null as unknown }));
@@ -51,45 +41,16 @@ import type { EditableShot, ShotTableEditorProps } from '../../common/ShotTableE
 import type {
   DmpFile,
   DmpSection,
-  DmpShot,
   ImportPlacement,
 } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
+import { makeDmpSection, makeDmpShots } from '../../../test/factories/dmp';
 
 const SHOT_COUNT = 10;
 const PICK = 5;
 
-function dmpShot(): DmpShot {
-  return {
-    shot_type: 'Standard',
-    heading_in: 10,
-    heading_out: 10,
-    length: 5,
-    depth_in: 0,
-    depth_out: 0,
-    pitch_in: 0,
-    pitch_out: 0,
-    left: 0,
-    right: 0,
-    up: 0,
-    down: 0,
-    temperature: 0,
-    hour: 0,
-    minute: 0,
-    second: 0,
-    marker_index: 0,
-  };
-}
-
 function dmpFile(): DmpFile {
-  const section: DmpSection = {
-    version: 1,
-    name: 'Anchor',
-    direction: 'in',
-    date: '2026-01-01',
-    shots: Array.from({ length: SHOT_COUNT }, dmpShot),
-    content_hash: 'hash-anchor',
-  };
+  const section: DmpSection = makeDmpSection({ shots: makeDmpShots(SHOT_COUNT) });
   return { version: 1, sections: [section] } as unknown as DmpFile;
 }
 

@@ -1,5 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import { setIpcOverrides } from './helpers/ipcOverrides';
 import {
   seedProjectWithSections,
   waitForDrawnStations,
@@ -273,5 +274,20 @@ test.describe('Distance Gradient', () => {
     expectBetweenRampEnds(shotAfter);
     expect(shotAfter).not.toEqual(shotBase);
     await expect(page.locator('[data-testid="distance-legend"]')).toBeVisible();
+  });
+
+  // #576 C7-CUE (decided: "Hide computing cue while the field has failed"). A field
+  // that cannot be computed is reported by an error toast (C7-MSG); the "computing"
+  // cue used to stay up beside it for good, saying work was still under way.
+  test('a field that cannot be computed shows the error and no computing cue', async ({ page }) => {
+    await setIpcOverrides(page, { get_station_distances_from: { __throw: 'distance solve failed' } });
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showDistanceGradient');
+
+    await expect(
+      page.getByTestId('toast').filter({ hasText: "Couldn't compute distances; the map shows its usual colors." }),
+    ).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="distance-legend-loading"]')).toBeHidden();
+    await expect(page.locator('[data-testid="distance-legend"]')).toBeHidden();
   });
 });

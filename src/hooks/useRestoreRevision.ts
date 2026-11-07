@@ -4,7 +4,7 @@ import { useUIStore } from '../store/uiStore';
 import { speleoProjectSessionIssuedFor } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
-import type { SpeleoOpenResult } from '../types/ipc.generated';
+import { afterQueuedEdits } from '../utils/projectTransition';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 export interface RestoreRevisionArgs {
@@ -105,7 +105,8 @@ export function useRestoreRevision() {
       // The backend hardcodes concurrent_session:false for an in-place revision swap
       // (the open project is unchanged), so unlike the open/adopt flow there is no
       // concurrent-session notice to surface here.
-      await invokeIpc<SpeleoOpenResult>('speleodb_restore_revision', {
+      // [#576 D23-SWAP] The swap waits for the edits queued before it.
+      await afterQueuedEdits(() => invokeIpc('speleodb_restore_revision', {
         projectId,
         projectName,
         hexsha,
@@ -122,7 +123,7 @@ export function useRestoreRevision() {
         // ...and likewise the direction, which only selects a guard that a
         // history-keeping Restore is the one caller to reach.
         chainForward: restore && keepUndoHistory && chainForward,
-      });
+      }));
       // The backend closed and reopened the project at the swapped tree. Reconcile every
       // per-tree frontend store through the shared replacement seam. A false result means
       // this reply landed after the login or open project changed, so callers must stop.

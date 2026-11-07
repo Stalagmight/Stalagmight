@@ -1,4 +1,5 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, type RefObject } from 'react';
+import { useLatest } from './useLatest';
 import { attachLongPressTouch } from '../utils/longPressTouch';
 
 /**
@@ -24,8 +25,7 @@ export function useTouchContextMenu(
   ref: RefObject<HTMLElement | null>,
   options?: { enabled?: boolean },
 ): void {
-  const enabledRef = useRef(true);
-  enabledRef.current = options?.enabled ?? true;
+  const enabledRef = useLatest(options?.enabled ?? true);
 
   useEffect(() => {
     const root = ref.current;
@@ -54,5 +54,5 @@ export function useTouchContextMenu(
         return !target.dispatchEvent(menuEvent);
       },
     });
-  }, [ref]);
+  }, [ref, enabledRef]);
 }

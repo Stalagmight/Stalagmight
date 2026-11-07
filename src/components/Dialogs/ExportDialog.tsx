@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { DialogWrapper } from './DialogWrapper';
 import ExportControls from './ExportControls';
@@ -13,7 +14,8 @@ import type { ExportImageOptions } from '../../types/commands';
  * than the Export-mode `exportStore` (that store is panel + center only).
  */
 export default function ExportDialog() {
-  const { closeDialog } = useUIStore();
+  const { t } = useTranslation();
+  const closeDialog = useUIStore((s) => s.closeDialog);
   const [exportType, setExportType] = useState<ExportType>('data');
   const [dataFormat, setDataFormat] = useState<DataFormat>('csv');
   const [imageOptions, setImageOptions] = useState<ExportImageOptions>(DEFAULT_IMAGE_OPTIONS);
@@ -32,7 +34,7 @@ export default function ExportDialog() {
   }, [closeDialog]);
 
   return (
-    <DialogWrapper title="Export" onClose={handleClose} size="lg" data-testid="export-dialog">
+    <DialogWrapper title={t('dialogs.export.title')} onClose={handleClose} size="lg" data-testid="export-dialog">
       <ExportControls
         variant="dialog"
         exportType={exportType}

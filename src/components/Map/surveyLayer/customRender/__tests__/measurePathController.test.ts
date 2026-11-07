@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Map as MaplibreMap } from 'maplibre-gl';
+import { dropStyle } from './styleGone';
+import { makeFakeMap } from '../../../../../test/factories/fakeMap';
 import { MeasurePathController, type MeasurePathLayerLike } from '../measurePathController';
 import { buildMeasurePathBuffers } from '../measurePathTessellate';
 import type { MeasurePathRenderData } from '../surveyMeasurePathLayer';
@@ -60,31 +61,6 @@ class FakeLayer implements MeasurePathLayerLike {
   }
 }
 
-/** A fake map recording addLayer/removeLayer/getLayer + a settable layer set. */
-function makeFakeMap(existing: string[] = []) {
-  const present = new Set(existing);
-  const calls: { added: { id: string; beforeId: string | undefined }[]; removed: string[]; repaints: number } = {
-    added: [],
-    removed: [],
-    repaints: 0,
-  };
-  const map = {
-    getLayer: (id: string) => (present.has(id) ? ({ id } as unknown) : undefined),
-    addLayer: (layer: { id: string }, beforeId?: string) => {
-      present.add(layer.id);
-      calls.added.push({ id: layer.id, beforeId });
-    },
-    removeLayer: (id: string) => {
-      present.delete(id);
-      calls.removed.push(id);
-    },
-    triggerRepaint: () => {
-      calls.repaints++;
-    },
-  };
-  return { map: map as unknown as MaplibreMap, calls, present };
-}
-
 describe('MeasurePathController', () => {
   let warn: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
@@ -95,7 +71,8 @@ describe('MeasurePathController', () => {
   });
 
   it('adds the layer at the first existing beforeId candidate', () => {
-    const { map, calls } = makeFakeMap(['survey-stations']);
+    const calls = makeFakeMap({ layers: ['survey-stations'], onAdd: 'skip' });
+    const { map } = calls;
     const made: FakeLayer[] = [];
     const ctrl = new MeasurePathController(map, {
       makeLayer: (id, data, cb) => {
@@ -108,21 +85,23 @@ describe('MeasurePathController', () => {
     ctrl.setPath(renderData(2, 1), ['survey-interact-shots-measured', 'survey-stations', 'survey-measure-path']);
 
     expect(ctrl.isActive()).toBe(true);
-    expect(calls.added).toHaveLength(1);
+    expect(calls.addCalls).toHaveLength(1);
     // First candidate absent, second present -> insert before it.
-    expect(calls.added[0]!.beforeId).toBe('survey-stations');
-    expect(calls.repaints).toBeGreaterThan(0);
+    expect(calls.addCalls[0]!.beforeId).toBe('survey-stations');
+    expect(calls.repaintCount).toBeGreaterThan(0);
   });
 
   it('inserts with no beforeId when no candidate exists (draws on top)', () => {
-    const { map, calls } = makeFakeMap([]);
+    const calls = makeFakeMap({ onAdd: 'skip' });
+    const { map } = calls;
     const ctrl = new MeasurePathController(map, { makeLayer: (id, d, cb) => new FakeLayer(id, d, cb) });
     ctrl.setPath(renderData(1, 0), ['nope-a', 'nope-b']);
-    expect(calls.added[0]!.beforeId).toBeUndefined();
+    expect(calls.addCalls[0]!.beforeId).toBeUndefined();
   });
 
   it('updates data in place on a second setPath (no re-add)', () => {
-    const { map, calls } = makeFakeMap([]);
+    const calls = makeFakeMap({ onAdd: 'skip' });
+    const { map } = calls;
     let layer: FakeLayer | null = null;
     const ctrl = new MeasurePathController(map, {
       makeLayer: (id, d, cb) => (layer = new FakeLayer(id, d, cb)),
@@ -131,25 +110,27 @@ describe('MeasurePathController', () => {
     ctrl.setPath(renderData(1, 1), []);
     ctrl.setPath(renderData(3, 2), []);
 
-    expect(calls.added).toHaveLength(1);
+    expect(calls.addCalls).toHaveLength(1);
     expect(layer!.setDataCalls).toBe(1);
   });
 
   it('clear() frees the GL resources of a layer a worker restart already dropped', () => {
-    const { map, calls, present } = makeFakeMap([]);
+    const calls = makeFakeMap({ onAdd: 'skip' });
+    const { map } = calls;
     let onRemoveCalls = 0;
     const ctrl = new MeasurePathController(map, {
       makeLayer: (id, d, cb) => Object.assign(new FakeLayer(id, d, cb), { onRemove: () => onRemoveCalls++ }),
     });
     ctrl.setPath(renderData(1, 1), []);
-    present.clear();
+    calls.dropLayer('survey-measure-path-custom');
     ctrl.clear();
     expect(calls.removed).toEqual([]);
     expect(onRemoveCalls).toBe(1);
   });
 
   it('clears the layer on clear()', () => {
-    const { map, calls } = makeFakeMap([]);
+    const calls = makeFakeMap({ onAdd: 'skip' });
+    const { map } = calls;
     const ctrl = new MeasurePathController(map, { makeLayer: (id, d, cb) => new FakeLayer(id, d, cb) });
     ctrl.setPath(renderData(1, 1), []);
     ctrl.clear();
@@ -158,7 +139,8 @@ describe('MeasurePathController', () => {
   });
 
   it('treats an empty path (no shots + no stations) as a clear', () => {
-    const { map, calls } = makeFakeMap([]);
+    const calls = makeFakeMap({ onAdd: 'skip' });
+    const { map } = calls;
     const ctrl = new MeasurePathController(map, { makeLayer: (id, d, cb) => new FakeLayer(id, d, cb) });
     ctrl.setPath(renderData(2, 1), []);
     expect(ctrl.isActive()).toBe(true);
@@ -174,7 +156,8 @@ describe('MeasurePathController', () => {
   });
 
   it('removes a layer that disabled itself on add and surfaces onFatal (no stock fallback)', () => {
-    const { map, calls } = makeFakeMap([]);
+    const calls = makeFakeMap({ onAdd: 'skip' });
+    const { map } = calls;
     const fatals: string[] = [];
     const ctrl = new MeasurePathController(map, {
       makeLayer: (id, d, cb) => new FakeLayer(id, d, cb, true, 'program-link-failed'),
@@ -191,7 +174,7 @@ describe('MeasurePathController', () => {
   });
 
   it('surfaces onFatal on a deferred mid-render self-disable, at most once', () => {
-    const { map } = makeFakeMap([]);
+    const { map } = makeFakeMap({ onAdd: 'skip' });
     const scheduled: (() => void)[] = [];
     const fatals: string[] = [];
     let layer: FakeLayer | null = null;
@@ -209,7 +192,8 @@ describe('MeasurePathController', () => {
   });
 
   it('defers removal on a mid-render self-disable, generation-guarded', () => {
-    const { map, calls } = makeFakeMap([]);
+    const calls = makeFakeMap({ onAdd: 'skip' });
+    const { map } = calls;
     const scheduled: (() => void)[] = [];
     let layer: FakeLayer | null = null;
     const ctrl = new MeasurePathController(map, {
@@ -232,7 +216,8 @@ describe('MeasurePathController', () => {
   });
 
   it('no-ops a stale deferred self-disable removal after a newer clear/path', () => {
-    const { map, calls } = makeFakeMap([]);
+    const calls = makeFakeMap({ onAdd: 'skip' });
+    const { map } = calls;
     const scheduled: (() => void)[] = [];
     let layer: FakeLayer | null = null;
     const ctrl = new MeasurePathController(map, {
@@ -263,7 +248,7 @@ describe('MeasurePathController', () => {
  */
 describe('MeasurePathController.drawnCounts', () => {
   it('reports zero before any path, the counts while drawn, and zero after clear', () => {
-    const { map } = makeFakeMap([]);
+    const { map } = makeFakeMap({ onAdd: 'skip' });
     const ctrl = new MeasurePathController(map, {
       makeLayer: (id, d, cb) => new FakeLayer(id, d, cb),
     });
@@ -281,11 +266,35 @@ describe('MeasurePathController.drawnCounts', () => {
   });
 
   it('reports zero when the layer failed to initialize', () => {
-    const { map } = makeFakeMap([]);
+    const { map } = makeFakeMap({ onAdd: 'skip' });
     const ctrl = new MeasurePathController(map, {
       makeLayer: (id, d, cb) => new FakeLayer(id, d, cb, true, 'program-link-failed'),
     });
     ctrl.setPath(renderData(2, 2), []);
     expect(ctrl.drawnCounts()).toEqual({ shots: 0, stations: 0 });
+  });
+});
+
+describe('MeasurePathController deferred self-disable without a style (#576 NF-MAP-3)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a context loss before the deferred removal: no throw, still surfaces the fatal', () => {
+    const { map } = makeFakeMap({ onAdd: 'skip' });
+    const scheduled: (() => void)[] = [];
+    const fatals: string[] = [];
+    let layer: FakeLayer | null = null;
+    const ctrl = new MeasurePathController(map, {
+      makeLayer: (id, d, cb) => (layer = new FakeLayer(id, d, cb)),
+      scheduleRestore: (fn) => scheduled.push(fn),
+      onFatal: (r) => fatals.push(r),
+    });
+    ctrl.setPath(renderData(1, 1), []);
+    layer!.onSelfDisable('gl-error-0x502');
+    dropStyle(map);
+    expect(() => scheduled[0]!()).not.toThrow();
+    expect(fatals).toEqual(['measure-path: gl-error-0x502']);
   });
 });

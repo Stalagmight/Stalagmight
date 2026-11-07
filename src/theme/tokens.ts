@@ -29,7 +29,6 @@ export const themeTokens = {
     '--cc-map-ctrl-border': '#0f3460',
     '--cc-map-ctrl-hover': '#1a1a2e',
     '--cc-map-ctrl-active': '#0f3460',
-    '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(15, 52, 96, 0.3)',
     '--cc-map-scale-bg': 'transparent',
     // Was #0f3460 (same as --cc-border, tuned for the panel, not the map canvas):
@@ -157,7 +156,6 @@ export const themeTokens = {
     '--cc-map-ctrl-border': '#d4c5a9',
     '--cc-map-ctrl-hover': '#ede6db',
     '--cc-map-ctrl-active': '#d4c5a9',
-    '--cc-map-ctrl-icon-filter': 'none',
     '--cc-map-ctrl-shadow': 'rgba(0, 0, 0, 0.15)',
     '--cc-map-scale-bg': 'transparent',
     // Was #d4c5a9 (same as --cc-border, tuned for the panel, not the map canvas):
@@ -265,7 +263,6 @@ export const themeTokens = {
     '--cc-map-ctrl-border': '#2a2826',
     '--cc-map-ctrl-hover': '#0e0d0c',
     '--cc-map-ctrl-active': '#2a2826',
-    '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(42, 40, 38, 0.3)',
     '--cc-map-scale-bg': 'transparent',
     // Was #2a2826 (same as --cc-border, tuned for the panel, not the map canvas):
@@ -373,7 +370,6 @@ export const themeTokens = {
     '--cc-map-ctrl-border': '#44475a',
     '--cc-map-ctrl-hover': '#282a36',
     '--cc-map-ctrl-active': '#44475a',
-    '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(68, 71, 90, 0.3)',
     '--cc-map-scale-bg': 'transparent',
     // Was #44475a (same as --cc-border, tuned for the panel, not the map canvas):
@@ -482,7 +478,6 @@ export const themeTokens = {
     '--cc-map-ctrl-border': '#3e4451',
     '--cc-map-ctrl-hover': '#282c34',
     '--cc-map-ctrl-active': '#3e4451',
-    '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(62, 68, 81, 0.3)',
     '--cc-map-scale-bg': 'transparent',
     // Was #3e4451 (same as --cc-border, tuned for the panel, not the map canvas):
@@ -593,7 +588,6 @@ export const themeTokens = {
     '--cc-map-ctrl-border': '#d3cbb7',
     '--cc-map-ctrl-hover': '#fdf6e3',
     '--cc-map-ctrl-active': '#d3cbb7',
-    '--cc-map-ctrl-icon-filter': 'none',
     '--cc-map-ctrl-shadow': 'rgba(0, 0, 0, 0.15)',
     '--cc-map-scale-bg': 'transparent',
     '--cc-map-scale-border': '#d3cbb7',
@@ -672,7 +666,6 @@ export const themeTokens = {
     '--cc-map-ctrl-border': '#ccd0da',
     '--cc-map-ctrl-hover': '#eff1f5',
     '--cc-map-ctrl-active': '#ccd0da',
-    '--cc-map-ctrl-icon-filter': 'none',
     '--cc-map-ctrl-shadow': 'rgba(0, 0, 0, 0.15)',
     '--cc-map-scale-bg': 'transparent',
     '--cc-map-scale-border': '#ccd0da',
@@ -752,7 +745,6 @@ export const themeTokens = {
     '--cc-map-ctrl-border': '#4c566a',
     '--cc-map-ctrl-hover': '#2e3440',
     '--cc-map-ctrl-active': '#4c566a',
-    '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(76, 86, 106, 0.3)',
     '--cc-map-scale-bg': 'transparent',
     // Was #4c566a (same as --cc-border, tuned for the panel, not the map canvas):
@@ -861,7 +853,6 @@ export const themeTokens = {
     '--cc-map-ctrl-border': '#313244',
     '--cc-map-ctrl-hover': '#1e1e2e',
     '--cc-map-ctrl-active': '#313244',
-    '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(49, 50, 68, 0.3)',
     '--cc-map-scale-bg': 'transparent',
     // Was #313244 (same as --cc-border, tuned for the panel, not the map canvas):
@@ -967,7 +958,6 @@ export const themeTokens = {
     '--cc-map-ctrl-border': '#555555',
     '--cc-map-ctrl-hover': '#e8e8e8',
     '--cc-map-ctrl-active': '#cccccc',
-    '--cc-map-ctrl-icon-filter': 'none',
     '--cc-map-ctrl-shadow': '#aaaaaa',
     '--cc-map-scale-bg': 'transparent',
     '--cc-map-scale-border': '#555555',

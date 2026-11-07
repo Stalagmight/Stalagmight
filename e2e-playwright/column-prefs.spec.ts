@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for data-table column preferences (hide / reorder) and their
@@ -16,7 +17,7 @@ import {
  * into get_config's panels, so these tests pin (a) the exact IPC payload the
  * debounce sends and (b) the config re-sync round trip the frontend performs
  * after saving - NOT real on-disk persistence (that's the Rust
- * update_data_table_view_impl tests).
+ * update_data_table_view tests).
  *
  * Calls are recorded in __MOCK_DATA_TABLE_VIEW_CALLS__ (camelCase payloads).
  * Default panels config hides section_id + shot_id and shows azimuth as avg /
@@ -38,12 +39,12 @@ const sectionSeeds: SectionSeed[] = [
 ];
 
 async function getViewCalls(page: Page): Promise<Array<Record<string, unknown>>> {
-  return page.evaluate(() => ((window as any).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as Array<Record<string, unknown>>);
+  return page.evaluate(() => ((window as E2EWindow).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as Array<Record<string, unknown>>);
 }
 
 /** panels section of the in-memory config (re-synced via get_config after a save). */
 async function getPanelsConfig(page: Page): Promise<Record<string, unknown>> {
-  return page.evaluate(() => (window as any).__E2E_TEST__?.projectStore.getState().config?.panels ?? {});
+  return page.evaluate(() => (window as E2EWindow).__E2E_TEST__?.projectStore.getState().config?.panels ?? {});
 }
 
 /** Visible grid column keys, in DOM order. */
@@ -66,6 +67,12 @@ async function latestPersistedWidth(page: Page, colKey: string): Promise<number 
   const calls = await getViewCalls(page);
   const widths = calls[calls.length - 1]?.columnWidths as Record<string, number> | undefined;
   return widths?.[colKey];
+}
+
+/** Resolve on the page's next animation frame: everything a discrete input event
+ *  committed is on screen by then (#576 RV7b-13). */
+async function nextFrame(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
 }
 
 /** How many recorded view-save calls carry a width for `colKey`. A bare call count
@@ -118,7 +125,7 @@ async function openDataTable(page: Page): Promise<void> {
 /** Wait for the debounced save to fire, then return its single recorded call. */
 async function waitForSingleViewCall(page: Page): Promise<Record<string, unknown>> {
   await page.waitForFunction(
-    () => (((window as any).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as unknown[]).length >= 1,
+    () => (((window as E2EWindow).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as unknown[]).length >= 1,
     undefined,
     { timeout: 5000 },
   );
@@ -145,6 +152,8 @@ test.describe('Data table column preferences', () => {
     // comparing a sorted snapshot against the config's own unsorted order, and the
     // station default `['_x','_y','_lat','_long']` is unsorted, so this fired on every
     // open until DataTable's init sorted both hidden lists.
+    // settle: the spurious persist this guards against is debounced, so only a
+    // wait past that debounce can show that it did NOT fire.
     await page.waitForTimeout(900);
     expect(await getViewCalls(page)).toHaveLength(0);
   });
@@ -179,7 +188,7 @@ test.describe('Data table column preferences', () => {
     // now carry the stored view state.
     await page.waitForFunction(
       () => {
-        const hidden = ((window as any).__E2E_TEST__?.projectStore.getState().config?.panels
+        const hidden = ((window as E2EWindow).__E2E_TEST__?.projectStore.getState().config?.panels
           ?.data_table_shot_hidden_columns ?? []) as string[];
         return hidden.includes('comment') && !hidden.includes('shot_id');
       },
@@ -232,7 +241,7 @@ test.describe('Data table column preferences', () => {
     // against re-firing the save.)
     await page.waitForFunction(
       () => {
-        const calls = ((window as any).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as Array<{
+        const calls = ((window as E2EWindow).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as Array<{
           columnOrder?: string[];
         }>;
         const order = (calls[calls.length - 1]?.columnOrder ?? []) as string[];
@@ -385,7 +394,7 @@ test.describe('Data table column preferences', () => {
 
     await page.waitForFunction(
       () => {
-        const hidden = ((window as any).__E2E_TEST__?.projectStore.getState().config?.panels
+        const hidden = ((window as E2EWindow).__E2E_TEST__?.projectStore.getState().config?.panels
           ?.data_table_shot_hidden_columns ?? []) as string[];
         return hidden.includes('comment');
       },
@@ -397,6 +406,67 @@ test.describe('Data table column preferences', () => {
       'section_id',
       'shot_id',
     ]);
+  });
+
+  /**
+   * D11 (#576): autofit measured the clipped cell box, whose scrollWidth is the
+   * column width itself, so each double-click ADDED its padding allowance (about
+   * 17 px) instead of fitting: the column only ever grew, toward the 600 px cap,
+   * and every step was persisted. Real layout is needed - jsdom measures 0.
+   */
+  test('double-clicking a resize edge fits the column to its content, and again changes nothing (D11)', async ({
+    page,
+  }) => {
+    const headerWidth = async (key: string) =>
+      Math.round((await page.getByTestId(`grid-header-${key}`).boundingBox())!.width);
+    // Nothing in the column (header text, any rendered cell text) is cut off.
+    const truncated = (key: string) =>
+      page.evaluate((k) => {
+        const header = document.querySelector(`[data-testid="grid-header-${k}"] span`) as HTMLElement;
+        const cells = Array.from(
+          document.querySelectorAll(`[data-testid^="grid-cell-"][data-testid$="-${k}"] .sg-cell-text`),
+        ) as HTMLElement[];
+        return [header, ...cells].filter((el) => el.scrollWidth > el.clientWidth).length;
+      }, key);
+
+    // A column dragged wide shrinks back to its content.
+    const before = await beginColumnDrag(page, 'depth_in', 150);
+    await page.mouse.up();
+    await expect.poll(() => headerWidth('depth_in')).toBeGreaterThan(before + 100);
+    const wide = await headerWidth('depth_in');
+    await page.getByTestId('grid-col-resize-depth_in').dblclick();
+    await expect.poll(() => headerWidth('depth_in')).toBeLessThan(wide - 50);
+    const fitted = await headerWidth('depth_in');
+    expect(await truncated('depth_in')).toBe(0);
+
+    // The first fit has gone all the way round (debounced save, config echo), so
+    // nothing still in flight can move the width after the second fit's read.
+    await expect.poll(async () => latestPersistedWidth(page, 'depth_in'), { timeout: 5000 }).toBe(fitted);
+
+    // Fitting is idempotent: a second double-click leaves the width alone.
+    await page.getByTestId('grid-col-resize-depth_in').dblclick();
+    // [#576 RV7b-13] The fit measures and commits inside the dblclick handler, a
+    // discrete update React commits before the next frame: one frame on, the
+    // width it produced is on screen. A real condition, not a sleep.
+    await nextFrame(page);
+    expect(await headerWidth('depth_in')).toBe(fitted);
+
+    // Same on a column that starts at its declared width: repeated
+    // double-clicks settle on one width instead of stepping toward 600 px.
+    const widths: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      await page.getByTestId('grid-col-resize-length').dblclick();
+      // Each re-fit has committed one frame on (see above).
+      await nextFrame(page);
+      widths.push(await headerWidth('length'));
+    }
+    expect(widths[1]).toBe(widths[0]);
+    expect(widths[2]).toBe(widths[0]);
+    expect(await truncated('length')).toBe(0);
+    // The measuring pass leaves no layout override behind on the cells it read.
+    expect(await page.locator('[data-grid-id] [style*="max-content"]').count()).toBe(0);
+    // And that is the width persisted to config.
+    await expect.poll(async () => latestPersistedWidth(page, 'length'), { timeout: 5000 }).toBe(widths[0]);
   });
 });
 

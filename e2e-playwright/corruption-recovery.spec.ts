@@ -1,6 +1,7 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
 import { recoveryBackupItems } from './helpers/testIds';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for the Corruption Recovery Dialog.
@@ -17,7 +18,7 @@ import { recoveryBackupItems } from './helpers/testIds';
 async function openRecoveryDialog(page: Page, errorMessage?: string): Promise<void> {
   await page.evaluate(
     ({ errorMsg }) => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return;
       e2e.uiStore.getState().openDialog('corruption-recovery', {
         corruptPath: '/mock/corrupt-project.stalx',
@@ -32,10 +33,11 @@ async function openRecoveryDialog(page: Page, errorMessage?: string): Promise<vo
 
 function setupRecoveryMocks(page: Page): Promise<void> {
   return page.evaluate(() => {
-    const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+    const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
 
     overrides.attempt_repair = {
       success: true,
+      backupPath: '/mock/corrupt-project.stalx.bak.1',
       message: 'Repair complete. REINDEX and VACUUM applied successfully.',
     };
 
@@ -44,17 +46,28 @@ function setupRecoveryMocks(page: Page): Promise<void> {
         path: '/mock/corrupt-project.stalx.bak.1',
         modifiedAt: '2026-02-05 14:30:00',
         sizeBytes: 51200,
+        // #576 C15: what the backend now says about each candidate.
+        kind: 'backup',
+        restoreNumber: null,
+        usable: true,
+        problem: null,
       },
       {
         path: '/mock/corrupt-project.stalx.bak.2',
         modifiedAt: '2026-02-04 10:15:00',
         sizeBytes: 48000,
+        kind: 'backup',
+        restoreNumber: null,
+        usable: true,
+        problem: null,
       },
     ];
 
     overrides.restore_from_backup = 'File restored successfully from backup.';
 
     overrides.export_salvageable_data = {
+      projectName: 'CaveA',
+      projectLocation: null,
       sectionCount: 3,
       shotCount: 42,
       mergeCount: 2,
@@ -63,18 +76,18 @@ function setupRecoveryMocks(page: Page): Promise<void> {
       errors: [],
     };
 
-    (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+    (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
   });
 }
 
 function clearRecoveryMocks(page: Page): Promise<void> {
   return page.evaluate(() => {
-    const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+    const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
     delete overrides.attempt_repair;
     delete overrides.list_backups;
     delete overrides.restore_from_backup;
     delete overrides.export_salvageable_data;
-    (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+    (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
   });
 }
 
@@ -160,7 +173,7 @@ test.describe('Corruption Recovery Dialog', () => {
 
     // Should show backup list
     const dialog = page.getByTestId('corruption-recovery-dialog');
-    await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
+    await expect(dialog).toContainText('Select a file to restore', { timeout: 5000 });
 
     // Should show backup items
     const backupItems = recoveryBackupItems(page);
@@ -178,7 +191,7 @@ test.describe('Corruption Recovery Dialog', () => {
 
     // Wait for backup list
     const dialog = page.getByTestId('corruption-recovery-dialog');
-    await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
+    await expect(dialog).toContainText('Select a file to restore', { timeout: 5000 });
 
     // Click first backup
     const firstBackup = recoveryBackupItems(page).first();
@@ -195,10 +208,11 @@ test.describe('Corruption Recovery Dialog', () => {
     await page.getByTestId('recovery-restore-backup').click();
 
     const dialog = page.getByTestId('corruption-recovery-dialog');
-    await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
+    await expect(dialog).toContainText('Select a file to restore', { timeout: 5000 });
 
-    // Click Back
-    await dialog.getByRole('button', { name: /Back/i }).click();
+    // Click Back. By test id: the candidates are labelled ("Backup", #576 C15), so
+    // a /Back/i role query matches them too.
+    await dialog.getByTestId('recovery-backup-back').click();
 
     // Should return to choice screen
     await expect(page.getByTestId('recovery-attempt-repair')).toBeVisible();
@@ -209,9 +223,9 @@ test.describe('Corruption Recovery Dialog', () => {
   test('no backups found shows message', async ({ page }) => {
     // Override to return empty backup list
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.list_backups = [];
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openRecoveryDialog(page);
@@ -224,12 +238,13 @@ test.describe('Corruption Recovery Dialog', () => {
   test('repair failure shows error and Try Another Option button', async ({ page }) => {
     // Override to return failure
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.attempt_repair = {
         success: false,
+        backupPath: '/mock/corrupt-project.stalx.bak.1',
         message: 'Database corruption too severe for automatic repair.',
       };
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openRecoveryDialog(page);
@@ -245,12 +260,13 @@ test.describe('Corruption Recovery Dialog', () => {
 
   test('Try Another Option returns to choice screen', async ({ page }) => {
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.attempt_repair = {
         success: false,
+        backupPath: '/mock/corrupt-project.stalx.bak.1',
         message: 'Repair failed.',
       };
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openRecoveryDialog(page);
@@ -268,9 +284,9 @@ test.describe('Corruption Recovery Dialog', () => {
   test('repair IPC error shows error result', async ({ page }) => {
     // Override to throw
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.attempt_repair = { __throw: 'Connection lost during repair' };
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openRecoveryDialog(page);

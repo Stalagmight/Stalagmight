@@ -25,10 +25,7 @@ import userEvent from '@testing-library/user-event';
 // identity mapping is. Returning the key keeps this file independent of copy.
 // `initReactI18next` is stubbed too: `projectStore` transitively imports
 // `src/i18n/index.ts`, which installs it at module load.
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-  initReactI18next: { type: '3rdParty', init: () => undefined },
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).translationStub());
 
 import DisplayMenu from '../DisplayMenu';
 import { LockIcon, LockOpenIcon } from '../../common/icons';

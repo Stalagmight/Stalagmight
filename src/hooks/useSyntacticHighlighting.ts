@@ -48,7 +48,7 @@ export function useSyntacticHighlighting(): SyntacticHighlightLevel {
     () => resolveSyntacticColors(preset, overrides),
     // overridesKey stands in for `overrides` so we re-resolve on preset/override
     // changes only, not on unrelated renders.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- overridesKey stands in for overrides (compared by value)
     [preset, overridesKey],
   );
 

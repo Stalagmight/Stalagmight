@@ -10,11 +10,12 @@ import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
 import { WarningResolution } from './WarningResolution';
 import { ProjectStatsActions } from './ProjectStatsActions';
-import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, LinkOffIcon } from '../common/icons';
+import { ClosuresSection } from './ClosuresSection';
+import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import { EntityBlob } from '../common/EntityBlob';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
+import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
@@ -24,6 +25,8 @@ import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
+import { warningTextAfterOwnShot } from './warningShotRef';
+import { useGrayscalePaint } from '../../hooks/useGrayscalePaint';
 
 /** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
  *  under the page-zoom UI scale. Shared by the per-entity "center on map"
@@ -48,7 +51,9 @@ export default function DetailPanel() {
   const { selection, detailPanelTab, setDetailPanelTab, setSelection } = useUIStore(
     useShallow((s) => ({ selection: s.selection, detailPanelTab: s.detailPanelTab, setDetailPanelTab: s.setDetailPanelTab, setSelection: s.setSelection }))
   );
-  const { project, stations, warnings } = useProjectStore();
+  const { project, stations, warnings } = useProjectStore(
+    useShallow((s) => ({ project: s.project, stations: s.stations, warnings: s.warnings })),
+  );
 
   const unresolvedWarnings = warnings.filter((w) => !w.isResolved);
   const errorCount = unresolvedWarnings.filter((w) => w.severity === 'error').length;
@@ -151,7 +156,7 @@ interface DetailsContentProps {
 
 function DetailsContent({ selection, project, stations }: DetailsContentProps) {
   const { t } = useTranslation();
-  const { stats } = useProjectStore();
+  const stats = useProjectStore((s) => s.stats);
 
   if (!selection) {
     // Show project stats when nothing is selected
@@ -281,7 +286,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
       setSelection({ type: 'shot', sectionId: activeWarning.sectionId, shotId: activeWarning.shotId });
       triggerCenterOnShot(activeWarning.sectionId, activeWarning.shotId);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the warning identity so it re-fires as the queue steps, not on every refresh
   }, [activeKey]);
 
   // Open the resolve flow when requested from outside (e.g. clicking the warning
@@ -523,7 +528,6 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 operable (role=button + Enter/Space) to preserve select-by-keyboard.
                 Either way it stays normal flow so the text wraps around the
                 floated action button. */}
-            {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
             <div
               {...(showPills
                 ? {}
@@ -549,10 +553,11 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               </span>
               <span className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
                 {(() => {
-                  // Messages start with "Shot <sectionId>:<position> …"; at the
-                  // Full level swap that leading reference for the shot pill.
-                  const m = showPills && warning.message.match(/^Shot \d+:\d+\s*/);
-                  if (!m) return warning.message;
+                  // At the Full level swap the message's leading reference to the
+                  // warning's OWN shot for the shot pill (#576 NF-W7E-3: found from
+                  // its sectionId/shotIndex, not by pattern over the text).
+                  const rest = showPills ? warningTextAfterOwnShot(warning) : null;
+                  if (rest === null) return warning.message;
                   return (
                     <>
                       {/* The shot pill navigates to Details (select + switch tab),
@@ -576,7 +581,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                         </EntityBlob>
                       </button>
                       {' '}
-                      {warning.message.slice(m[0].length)}
+                      {rest}
                     </>
                   );
                 })()}
@@ -617,7 +622,14 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
 
 function StationDetail({ station }: { station: Station }) {
   const { t } = useTranslation();
-  const { project, stations, unmergeStations, unmergeStationPair } = useProjectStore();
+  const { project, stations, unmergeStations, unmergeStationPair } = useProjectStore(
+    useShallow((s) => ({
+      project: s.project,
+      stations: s.stations,
+      unmergeStations: s.unmergeStations,
+      unmergeStationPair: s.unmergeStationPair,
+    })),
+  );
   const { openDialog, setSelection, triggerCenterOnStation, announceSelection, setHoveredStation, setHoveredShot, setHoveredSectionId } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnStation: s.triggerCenterOnStation, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredShot: s.setHoveredShot, setHoveredSectionId: s.setHoveredSectionId }))
   );
@@ -945,7 +957,7 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
 
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { t } = useTranslation();
-  const { setShotKind } = useProjectStore();
+  const setShotKind = useProjectStore((s) => s.setShotKind);
   const editingBlocked = useEditingBlocked();
   const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnShot: s.triggerCenterOnShot, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredSectionId: s.setHoveredSectionId }))
@@ -1174,6 +1186,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerZoomToSection: s.triggerZoomToSection, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation }))
   );
   const precision = useDecimalPrecision();
+  const paint = useGrayscalePaint();
 
   // Calculate section statistics
   const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
@@ -1264,7 +1277,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
               <div className="flex items-center gap-2">
                 <span
                   className="w-4 h-4 rounded"
-                  style={{ backgroundColor: section.color }}
+                  style={{ backgroundColor: paint(section.color) }}
                 />
                 <span>{section.color}</span>
               </div>
@@ -1518,211 +1531,6 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
           <ProjectStatsActions />
         </div>
       </Panel>
-    </div>
-  );
-}
-
-interface ClosuresSectionProps {
-  closures: ClosureRef[];
-  loopClosures: LoopClosure[];
-  stations: Station[];
-  onSelectStation: (ref: { section_id: number; station_index: number }) => void;
-  onAnnounce: (message: string) => void;
-  onHoverStart: (ref: { section_id: number; station_index: number }) => void;
-  onHoverEnd: () => void;
-}
-
-function ClosuresSection({
-  closures,
-  loopClosures,
-  stations,
-  onSelectStation,
-  onAnnounce,
-  onHoverStart,
-  onHoverEnd,
-}: ClosuresSectionProps) {
-  const { t } = useTranslation();
-  const removeLoopClosure = useProjectStore((s) => s.removeLoopClosure);
-  const editingBlocked = useEditingBlocked();
-  const precision = useDecimalPrecision();
-  const [expanded, setExpanded] = useState(true);
-  const [removingClosureId, setRemovingClosureId] = useState<bigint | null>(null);
-  const contentId = 'closures-section-content';
-
-  // Precompute station existence set for O(1) lookups
-  const stationKeySet = useMemo(() => {
-    const keys = new Set<string>();
-    for (const s of stations) {
-      keys.add(`${s.station_ref.section_id}:${s.station_ref.station_index}`);
-    }
-    return keys;
-  }, [stations]);
-
-  const stationExists = (ref: { section_id: number; station_index: number }): boolean => {
-    return stationKeySet.has(`${ref.section_id}:${ref.station_index}`);
-  };
-
-  // Precompute loop closures map for O(1) lookups
-  const closureMap = useMemo(() => {
-    const map = new Map<bigint, LoopClosure>();
-    for (const lc of loopClosures) {
-      map.set(lc.id, lc);
-    }
-    return map;
-  }, [loopClosures]);
-
-  // Group closures by closure_id and sort deterministically
-  const sortedGroups = useMemo(() => {
-    const grouped = new Map<bigint, ClosureRef[]>();
-    for (const c of closures) {
-      const existing = grouped.get(c.closure_id);
-      if (existing) {
-        existing.push(c);
-      } else {
-        grouped.set(c.closure_id, [c]);
-      }
-    }
-
-    // Sort: direct closures first, then transitive; tiebreak by closure_id ascending
-    return Array.from(grouped.entries()).sort(([idA, refsA], [idB, refsB]) => {
-      const aHasDirect = refsA.some((r) => !r.is_transitive);
-      const bHasDirect = refsB.some((r) => !r.is_transitive);
-      if (aHasDirect && !bHasDirect) return -1;
-      if (!aHasDirect && bHasDirect) return 1;
-      if (idA < idB) return -1;
-      if (idA > idB) return 1;
-      return 0;
-    });
-  }, [closures]);
-
-  const handleRemoveClosure = async (closureId: bigint) => {
-    trackContextMenuAction('remove-closure', 'detail-panel');
-    setRemovingClosureId(closureId);
-    try {
-      await removeLoopClosure(closureId);
-    } finally {
-      setRemovingClosureId(null);
-    }
-  };
-
-  return (
-    <div className="pt-2 border-t border-border" data-testid="closures-section">
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary w-full text-left"
-        data-testid="closures-section-toggle"
-        aria-expanded={expanded}
-        aria-controls={contentId}
-      >
-        <span className="text-xs">
-          {expanded ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
-        </span>
-        <span>{t('detailPanel.closures.title')}</span>
-      </button>
-      {expanded && (
-        <div className="mt-1 space-y-2" id={contentId} data-testid="closures-section-content">
-          {sortedGroups.map(([closureId, refs]) => {
-            const closureIdLabel = closureId.toString();
-            const closure = closureMap.get(closureId);
-            const directRefs = refs.filter((r) => !r.is_transitive);
-            const transitiveRefs = refs.filter((r) => r.is_transitive);
-
-            const isTransitiveOnly = directRefs.length === 0 && transitiveRefs.length > 0;
-
-            return (
-              <div key={closureIdLabel} className={`space-y-1${isTransitiveOnly ? ' opacity-50' : ''}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="space-y-1 min-w-0">
-                    {directRefs.length > 0 && (
-                      <div className="text-sm" data-testid={`closure-direct-${closureIdLabel}`}>
-                        <span className="text-text-secondary">{t('detailPanel.closures.direct')} </span>
-                        {directRefs.map((ref, i) => (
-                          <span key={i}>
-                            {i > 0 && ', '}
-                            <DetailLink
-                              type="station"
-                              target={{ sectionId: ref.station_ref.section_id, position: ref.station_ref.station_index }}
-                              displayText={formatStationId(ref.station_ref.section_id, ref.station_ref.station_index)}
-                              onSelect={() => onSelectStation(ref.station_ref)}
-                              isMissing={!stationExists(ref.station_ref)}
-                              onAnnounce={onAnnounce}
-                              onHoverStart={() => onHoverStart(ref.station_ref)}
-                              onHoverEnd={onHoverEnd}
-                            />
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {transitiveRefs.length > 0 && (
-                      <div className="text-sm" data-testid={`closure-transitive-${closureIdLabel}`}>
-                        <span className="text-text-secondary">{t('detailPanel.closures.transitive')} </span>
-                        {transitiveRefs.map((ref, i) => (
-                          <span key={i}>
-                            {i > 0 && ', '}
-                            <DetailLink
-                              type="station"
-                              target={{ sectionId: ref.station_ref.section_id, position: ref.station_ref.station_index }}
-                              displayText={formatStationId(ref.station_ref.section_id, ref.station_ref.station_index)}
-                              onSelect={() => onSelectStation(ref.station_ref)}
-                              isMissing={!stationExists(ref.station_ref)}
-                              onAnnounce={onAnnounce}
-                              onHoverStart={() => onHoverStart(ref.station_ref)}
-                              onHoverEnd={onHoverEnd}
-                            />
-                            {ref.via_station && (
-                              <span>
-                                {t('detailPanel.closures.viaPrefix')}
-                                <DetailLink
-                                  type="station"
-                                  target={{ sectionId: ref.via_station.section_id, position: ref.via_station.station_index }}
-                                  displayText={formatStationId(ref.via_station.section_id, ref.via_station.station_index)}
-                                  onSelect={() => onSelectStation(ref.via_station!)}
-                                  isMissing={!stationExists(ref.via_station)}
-                                  onAnnounce={onAnnounce}
-                                  onHoverStart={() => onHoverStart(ref.via_station!)}
-                                  onHoverEnd={onHoverEnd}
-                                />
-                                {t('detailPanel.closures.viaSuffix')}
-                              </span>
-                            )}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void handleRemoveClosure(closureId);
-                    }}
-                    className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Remove Closure"
-                    aria-label={`Remove closure ${closureIdLabel}`}
-                    data-testid={`detail-remove-closure-${closureIdLabel}`}
-                    disabled={editingBlocked || !closure || removingClosureId === closureId}
-                  >
-                    <LinkOffIcon size={14} />
-                  </button>
-                </div>
-                {closure ? (
-                  <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureIdLabel}`}>
-                    {t('detailPanel.closures.metrics', {
-                      path: `${formatFixed(closure.path_length, undefined, precision.length)}${t('common.units.meters')}`,
-                      error: `${formatFixed(closure.misclosure_distance, undefined, precision.length)}${t('common.units.meters')}`,
-                      percent: formatPercent(closure.error_percentage, undefined, 2),
-                    })}
-                  </div>
-                ) : (
-                  <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureId}`}>
-                    {t('detailPanel.closures.unavailable')}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }

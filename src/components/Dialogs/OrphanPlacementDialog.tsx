@@ -5,6 +5,7 @@ import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
 import type { MergePreviewConfig } from './SectionPreview';
+import { azimuthReferenceFor } from '../../utils/stationWalk';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { OrphanPlacementSuggestion } from '../../types/commands';
@@ -16,6 +17,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { presentImportReceipt } from '../../utils/saveFeedback';
 import {
   computeMergeOptions,
+  defaultMergeOffset,
   computeActionableIds,
   computeTargetShotIndex,
   needsDirectionReversal,
@@ -23,6 +25,8 @@ import {
   interpolateShots,
   type TargetShotLike,
 } from '../../utils/overlapHelpers';
+import { changedShotFields } from '../../utils/shotUpdatesDiff';
+import { useShallow } from 'zustand/react/shallow';
 
 interface OrphanPlacementDialogProps {
   suggestions: OrphanPlacementSuggestion[];
@@ -95,8 +99,24 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     existing_data: t('dialogs.orphanPlacement.overlapModes.existing_data'),
     keep_both: t('dialogs.orphanPlacement.overlapModes.keep_both'),
   };
-  const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore();
-  const { closeDialog, setView, triggerFitToBounds, openDialog, showToast } = useUIStore();
+  const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore(
+    useShallow((s) => ({
+      mergeStations: s.mergeStations,
+      updateShot: s.updateShot,
+      setShotKind: s.setShotKind,
+      refreshProjectState: s.refreshProjectState,
+      project: s.project,
+    })),
+  );
+  const { closeDialog, setView, triggerFitToBounds, openDialog, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      setView: s.setView,
+      triggerFitToBounds: s.triggerFitToBounds,
+      openDialog: s.openDialog,
+      showToast: s.showToast,
+    })),
+  );
 
   const [processing, setProcessing] = useState(false);
   const [currentEndIndex, setCurrentEndIndex] = useState(0);
@@ -183,13 +203,12 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     return mergeOptions.find((o) => o.offset === selectedMergeOffset) ?? mergeOptions[mergeOptions.length - 1]!;
   }, [mergeOptions, selectedMergeOffset]);
 
-  // Reset merge offset to last option (deepest overlap) when suggestion changes
+  // Reset the merge offset to the suggestion's default (preferred, else deepest)
+  // when the suggestion changes - the rule the import wizard shares.
   useEffect(() => {
-    if (mergeOptions.length > 0) {
-      const preferred = currentSuggestion?.preferredMergeOffset != null
-        ? mergeOptions.find((o) => o.offset === currentSuggestion.preferredMergeOffset)
-        : null;
-      setSelectedMergeOffset((preferred ?? mergeOptions[mergeOptions.length - 1]!).offset);
+    const offset = defaultMergeOffset(mergeOptions, currentSuggestion?.preferredMergeOffset);
+    if (offset != null) {
+      setSelectedMergeOffset(offset);
     }
   }, [currentSuggestion, mergeOptions]);
 
@@ -287,6 +306,16 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     [orphanSection],
   );
 
+  // Both sections are already in the project, so the backend walks each with
+  // its own north reference, else the project default (#576 D15); the preview
+  // has to as well, or merge partners are drawn off each other by the
+  // difference of the two corrections.
+  const defaultAzimuthReference = project?.default_azimuth_reference;
+  const orphanAzimuthReference = azimuthReferenceFor(
+    orphanSection?.azimuth_reference,
+    defaultAzimuthReference,
+  );
+
   // Build merge preview config using selected merge pair
   const mergePreviewConfig = useMemo((): MergePreviewConfig | null => {
     if (!targetSection || !currentSuggestion) return null;
@@ -294,8 +323,9 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       targetSection,
       importStationIndex: selectedMergePair?.importStation ?? currentSuggestion.orphanStationIndex,
       targetStationIndex: selectedMergePair?.existingStation ?? currentSuggestion.targetStationIndex,
+      targetAzimuthReference: azimuthReferenceFor(targetSection.azimuth_reference, defaultAzimuthReference),
     };
-  }, [targetSection, currentSuggestion, selectedMergePair]);
+  }, [targetSection, currentSuggestion, selectedMergePair, defaultAzimuthReference]);
 
   const finish = useCallback(async () => {
     await refreshProjectState();
@@ -395,39 +425,31 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
           ? reverseTargetShot(orphanShot)
           : orphanShot;
 
-        if (mode === 'interpolate') {
-          const interp = interpolateShots(
-            { ...targetShot, comment: targetShot.comment ?? null, kind: targetShot.kind },
-            orphanAsTarget,
-          );
-          await updateShot(suggestion.targetSectionId, targetShot.id, {
-            azimuth_in: interp.azimuth_in,
-            azimuth_out: interp.azimuth_out,
-            length: interp.length,
-            depth_in: interp.depth_in,
-            depth_out: interp.depth_out,
-            pitch_in: interp.pitch_in,
-            pitch_out: interp.pitch_out,
-            left: interp.left,
-            right: interp.right,
-            up: interp.up,
-            down: interp.down,
-          });
-        } else {
-          // import_data: use orphan's values on the target
-          await updateShot(suggestion.targetSectionId, targetShot.id, {
-            azimuth_in: orphanAsTarget.azimuth_in,
-            azimuth_out: orphanAsTarget.azimuth_out,
-            length: orphanAsTarget.length,
-            depth_in: orphanAsTarget.depth_in,
-            depth_out: orphanAsTarget.depth_out,
-            pitch_in: orphanAsTarget.pitch_in,
-            pitch_out: orphanAsTarget.pitch_out,
-            left: orphanAsTarget.left,
-            right: orphanAsTarget.right,
-            up: orphanAsTarget.up,
-            down: orphanAsTarget.down,
-          });
+        // interpolate: the blend of both; import_data: the orphan's values.
+        const source: TargetShotLike =
+          mode === 'interpolate'
+            ? interpolateShots(
+                { ...targetShot, comment: targetShot.comment ?? null, kind: targetShot.kind },
+                orphanAsTarget,
+              )
+            : orphanAsTarget;
+        // [#576 F32-EDIT] Only the readings that change: an unchanged one re-sent
+        // from the store would write its f32 rounding over the backend's exact value.
+        const updates = changedShotFields(targetShot, {
+          azimuth_in: source.azimuth_in,
+          azimuth_out: source.azimuth_out,
+          length: source.length,
+          depth_in: source.depth_in,
+          depth_out: source.depth_out,
+          pitch_in: source.pitch_in,
+          pitch_out: source.pitch_out,
+          left: source.left,
+          right: source.right,
+          up: source.up,
+          down: source.down,
+        });
+        if (Object.keys(updates).length > 0) {
+          await updateShot(suggestion.targetSectionId, targetShot.id, updates);
         }
       }
     }
@@ -573,6 +595,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                 color={orphanSection?.color ?? '#4a9eff'}
                 size={340}
                 mergePreview={mergePreviewConfig}
+                azimuthReference={orphanAzimuthReference}
                 focusStationIndex={currentSuggestion?.orphanStationIndex ?? null}
               />
             )}
@@ -657,6 +680,10 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                 <Select
                   value={overlapMode}
                   onChange={(v) => setOverlapMode(v as OverlapMode)}
+                  // [#576 HFI2-F6] Like Accept: a running Accept captured the
+                  // mode at click, so a change now would not apply to it and
+                  // would carry over to the next suggestion unannounced.
+                  disabled={processing}
                   options={[
                     { value: 'interpolate', label: overlapModeLabels.interpolate, disabled: isTargetDoublyAnchored },
                     { value: 'import_data', label: overlapModeLabels.import_data, disabled: isTargetDoublyAnchored },

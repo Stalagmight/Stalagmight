@@ -254,7 +254,7 @@ survey_rmv_multiplier = 1.0         # Task-loading RMV bump on the survey-in leg
 stressed_rmv_multiplier = 1.5       # Stressed-RMV multiplier for bailout / contingency
 jump_rmv_multiplier = 1.5           # Extra RMV on jump legs; stacks multiplicatively with survey_rmv_multiplier
 include_reference_legs = false      # Escape hatch: treat reference shots as swimmable again
-conservative_tank_gas = true        # "Call it an 80" derate instead of precise fill x volume x Z
+conservative_tank_gas = true        # "Call it an 80": strategy shares of min(fill, rated), not of an overfill
 # survey_speed_m_per_min (unset = same speed both ways) and the dpv scooter
 # profile (unset = no scooter) are optional; see `src-tauri/crates/models/src/config/gas.rs`.
 
@@ -464,6 +464,8 @@ than carried over.
 ## Settings Dialog
 
 The Settings dialog provides a UI for common configuration changes. Access it by clicking the **Settings** button in the application header. After modifying `config.toml` manually, use the **Reload Config** button in the Settings dialog to apply changes without restarting the application.
+
+Saving the dialog sends only the settings you changed (`patch_config`, #576 D27-32(c)): the backend applies them onto the configuration it holds now and saves that, so anything it recorded while the dialog was open - the panel layout and widths, the recent projects, the table views - is kept. The undo history limit and the tile-cache settings (on/off, size, retention) take effect at once, on a save and on Reload Config alike (#576 A18): a smaller cache size or a shorter retention trims the cache immediately.
 
 ### Configuring Shortcuts via UI
 

@@ -304,7 +304,8 @@ test.describe('section picker is not dismissed by background auto-scroll', () =>
     });
     expect(lastId).not.toBeNull();
 
-    // Well past the 120ms hover-scroll debounce: the picker must still be open.
+    // settle: well past the 120ms hover-scroll debounce - the picker must still
+    // be open, which a poll would confirm before the debounce fired.
     await page.waitForTimeout(300);
     await expect(menu).toBeVisible();
     // Positively prove the auto-scroll was SUPPRESSED, not merely slow to fire:

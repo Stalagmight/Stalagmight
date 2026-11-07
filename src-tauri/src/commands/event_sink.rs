@@ -9,17 +9,28 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime, Wry};
 
-use crate::core::events::EventSink;
+use crate::core::events::{EventSink, IpcEvent};
 use crate::core::state::AppState;
 
+/// Emit `E` to the webview (#576 C13): the name and the payload type both come
+/// from `E`'s one declaration in `core::events`, so neither can drift from what
+/// the generated `IpcEvents` tells the frontend's listeners.
+pub fn emit_event<E: IpcEvent, R: Runtime>(
+    emitter: &impl Emitter<R>,
+    payload: E::Payload,
+) -> tauri::Result<()> {
+    emitter.emit(E::NAME, payload)
+}
+
 /// [`EventSink`] over the real Tauri app handle. Installed on [`AppState`]
-/// during app setup; unit tests never construct one (they run with no sink).
-pub struct TauriSink(pub AppHandle);
+/// during app setup. Generic over the runtime so a command that reports progress
+/// can be driven by a `tauri::test` app (#576 C2/C9); the app itself is `Wry`.
+pub struct TauriSink<R: Runtime = Wry>(pub AppHandle<R>);
 
 /// Wrap `handle` as the shared, type-erased [`EventSink`] every consumer takes.
-pub fn tauri_sink(handle: AppHandle) -> Arc<dyn EventSink> {
+pub fn tauri_sink<R: Runtime>(handle: AppHandle<R>) -> Arc<dyn EventSink> {
     Arc::new(TauriSink(handle))
 }
 
@@ -57,7 +68,7 @@ pub fn init_app_dirs(handle: &AppHandle) {
     crate::app_dirs::init_paths(data_local, config, cache, document);
 }
 
-impl EventSink for TauriSink {
+impl<R: Runtime> EventSink for TauriSink<R> {
     fn emit(&self, event: &str, payload: serde_json::Value) {
         if let Err(e) = self.0.emit(event, payload) {
             tracing::warn!(

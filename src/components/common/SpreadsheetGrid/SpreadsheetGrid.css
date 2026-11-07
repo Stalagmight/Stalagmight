@@ -145,34 +145,46 @@
   transform: scale(1.3);
 }
 
-/* Marching-ants animated dashed border for a copied range. */
+/* Marching-ants animated dashed border for a copied range (and, in the
+   warning color, for a pending cut, so the two read differently).
+
+   Each edge is ONE untiled background layer - a repeating gradient 8px longer
+   than the edge, slid by one 8px dash period - never a small gradient tile
+   repeated along it (#576 HFI-9). On WebKitGTK's GPU painter a TILED gradient
+   is drawn as a pattern of a GPU-backed image, i.e. a Skia promise image, and
+   this animation repaints it every frame for as long as the marquee shows. A
+   critical memory release landing while such an image is in flight
+   deadlocks the web process (the compositor thread re-takes its own Skia
+   GL-context lock while fulfilling it), and the app's memory budget asks for
+   one every second once the page is large: the whole window froze for good
+   moments after a copy or cut in a big grid. An untiled gradient is filled
+   directly (no image), so the marquee creates no promise images. Same dashes,
+   same 8px period and phase, same 0.6s march clockwise: top right, right
+   down, bottom left, left up. */
 @keyframes sg-ants {
   to {
-    background-position: 8px 0, -8px 100%, 0 -8px, 100% 8px;
+    background-position: 0 0, -8px 100%, 0 -8px, 100% 0;
   }
 }
-.sg-marching-ants {
-  background-image: linear-gradient(90deg, var(--sg-blue) 50%, transparent 0),
-    linear-gradient(90deg, var(--sg-blue) 50%, transparent 0),
-    linear-gradient(0deg, var(--sg-blue) 50%, transparent 0),
-    linear-gradient(0deg, var(--sg-blue) 50%, transparent 0);
-  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
-  background-size: 8px 2px, 8px 2px, 2px 8px, 2px 8px;
-  background-position: 0 0, 0 100%, 0 0, 100% 0;
+.sg-marching-ants,
+.sg-cut-marquee {
+  --sg-ants-color: var(--sg-blue);
+  background-image:
+    repeating-linear-gradient(90deg, var(--sg-ants-color) 0 4px, transparent 4px 8px),
+    repeating-linear-gradient(90deg, var(--sg-ants-color) 0 4px, transparent 4px 8px),
+    repeating-linear-gradient(180deg, transparent 0 4px, var(--sg-ants-color) 4px 8px),
+    repeating-linear-gradient(180deg, transparent 0 4px, var(--sg-ants-color) 4px 8px);
+  background-repeat: no-repeat;
+  background-size:
+    calc(100% + 8px) 2px,
+    calc(100% + 8px) 2px,
+    2px calc(100% + 8px),
+    2px calc(100% + 8px);
+  background-position: -8px 0, 0 100%, 0 0, 100% -8px;
   animation: sg-ants 0.6s linear infinite;
 }
-
-/* Cut range: same geometry as the copy marquee, but warning-colored so a
-   pending cut reads differently from a copy. */
 .sg-cut-marquee {
-  background-image: linear-gradient(90deg, var(--cc-warning) 50%, transparent 0),
-    linear-gradient(90deg, var(--cc-warning) 50%, transparent 0),
-    linear-gradient(0deg, var(--cc-warning) 50%, transparent 0),
-    linear-gradient(0deg, var(--cc-warning) 50%, transparent 0);
-  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
-  background-size: 8px 2px, 8px 2px, 2px 8px, 2px 8px;
-  background-position: 0 0, 0 100%, 0 0, 100% 0;
-  animation: sg-ants 0.6s linear infinite;
+  --sg-ants-color: var(--cc-warning);
 }
 
 /* Fill-drag preview border. */

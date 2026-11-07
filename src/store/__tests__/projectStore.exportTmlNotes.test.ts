@@ -14,17 +14,15 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
 const showToastMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => String(e),
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(stringOfError);
 
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { invokeIpcMock, stubGetErrorMessage, stringOfError } from '../../test/factories/ipc';
 
 describe('exportTml surfaces the backend azimuth notes', () => {
   beforeEach(() => {
@@ -70,6 +68,23 @@ describe('exportTml surfaces the backend azimuth notes', () => {
 
     const [message] = showToastMock.mock.calls[0] as [string];
     expect(message).not.toBe('azimuth-mixed-unresolved');
+  });
+
+  /**
+   * #576 B11: text the file could not carry was replaced with U+FFFD. The
+   * export succeeded, so this is a translated warning, never the raw code.
+   */
+  it('translates the replaced-characters note', async () => {
+    invokeIpcMock.mockResolvedValue(['xml-chars-replaced']);
+
+    await useProjectStore.getState().exportTml('/tmp/cave.tml');
+
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    const [message, key, kind] = showToastMock.mock.calls[0] as [string, string, string];
+    expect(message).not.toBe('xml-chars-replaced');
+    expect(message).toContain('�');
+    expect(key).toBe(`${TOAST_KEYS.EXPORT_NOTE}:xml-chars-replaced`);
+    expect(kind).toBe('warning');
   });
 
   /**

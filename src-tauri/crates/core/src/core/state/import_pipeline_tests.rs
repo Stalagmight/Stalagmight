@@ -8,14 +8,14 @@ use crate::parsers::tml::test_helpers::{
 };
 use crate::parsers::tml::{convert_tml_to_import_configs, parse_tml};
 use crate::parsers::walls::test_support::{convert_one, parse_srv};
+use crate::test_fixtures::state_with_project;
 
 /// #431: a round elevation in metres (100.0) stated in feet (328.084)
 /// lands in `Project.surface_elevation` correctly converted, not just on
 /// the intermediate `TmlFile`/`TmlGeoCoding` structs.
 #[test]
 fn imperial_elevation_328_084_ft_lands_as_100_m_in_the_project() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
+    use crate::core::state::VirtualShotMode;
 
     let shots = [
         tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
@@ -26,11 +26,7 @@ fn imperial_elevation_328_084_ft_lands_as_100_m_in_the_project() {
     assert!((tml.first_start_absolute_elevation - 100.0).abs() < 1e-3);
 
     let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Elevation Units".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Elevation Units");
     let elevation = crate::models::ariane_elevation_or_absent(tml.first_start_absolute_elevation);
     let result = state.execute_tml_import_sections(
         sections,
@@ -54,8 +50,7 @@ fn imperial_elevation_328_084_ft_lands_as_100_m_in_the_project() {
 /// if the export side reverts to reading a zero datum's `depth_reference`.
 #[test]
 fn entrance_elevation_round_trips_through_import_and_export() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
+    use crate::core::state::VirtualShotMode;
 
     let shots = [
         tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
@@ -65,11 +60,7 @@ fn entrance_elevation_round_trips_through_import_and_export() {
     let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 123.5, &shots));
 
     let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Round Trip".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Round Trip");
     let elevation = crate::models::ariane_elevation_or_absent(tml.first_start_absolute_elevation);
     let result = state.execute_tml_import_sections(
         sections,
@@ -101,19 +92,14 @@ fn entrance_elevation_round_trips_through_import_and_export() {
 /// rather than silently overwriting it.
 #[test]
 fn entrance_elevation_import_does_not_clobber_an_existing_value() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
+    use crate::core::state::VirtualShotMode;
 
     let shots = [
         tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
         tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
     ]
     .join("\n");
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "No Clobber".to_string(),
-        location: None,
-    });
+    let state = state_with_project("No Clobber");
 
     let first_tml = parse_synthetic_tmlu(&wrap_xml_with("m", 50.0, &shots));
     let (sections, closures, _) = convert_tml_to_import_configs(&first_tml, false, false).unwrap();
@@ -171,19 +157,14 @@ fn entrance_elevation_import_does_not_clobber_an_existing_value() {
 /// different and prints a warning naming "100.00 m" against "100.00 m".
 #[test]
 fn reimporting_the_metric_and_imperial_twins_of_one_elevation_warns_never() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
+    use crate::core::state::VirtualShotMode;
 
     let shots = [
         tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
         tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
     ]
     .join("\n");
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Unit Twins".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Unit Twins");
 
     let metric_tml = parse_synthetic_tmlu(&wrap_xml_with("m", 100.0, &shots));
     let (sections, closures, _) = convert_tml_to_import_configs(&metric_tml, false, false).unwrap();
@@ -232,16 +213,11 @@ fn end_to_end_import_respects_datum_invariants() {
     // Runs the REAL import (execute_import_sections enforces
     // `multiple_datums_per_merge_component`), so a successful result proves
     // the placement respects the model's one-datum-per-component invariant.
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
+    use crate::core::state::VirtualShotMode;
 
     let run = |srv: &str| -> (bool, Option<String>, usize) {
         let (sections, closures, _w) = convert_one(parse_srv(srv));
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: "T".to_string(),
-            location: None,
-        });
+        let state = state_with_project("T");
         let result = state.execute_import_sections(
             sections,
             closures,
@@ -295,8 +271,8 @@ fn end_to_end_import_respects_datum_invariants() {
 /// survey onto one anchor again.
 #[test]
 fn zero_datums_are_stable_across_export_import_cycles() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
+    use crate::core::state::VirtualShotMode;
+
     use crate::models::{GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum};
 
     fn two_entrance_project(datums: &[(u32, f64, f64)]) -> Project {
@@ -333,11 +309,7 @@ fn zero_datums_are_stable_across_export_import_cycles() {
         crate::export::tml::export_tml(project, &path).unwrap();
         let tml = parse_tml(&path).unwrap();
         let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: label.to_string(),
-            location: None,
-        });
+        let state = state_with_project(label);
         let result = state.execute_tml_import_sections(
             sections,
             closures,
@@ -439,8 +411,8 @@ fn zero_datums_are_stable_across_export_import_cycles() {
 /// shot (the shape that always worked, which is why the bug hid).
 #[test]
 fn comments_keep_their_side_across_a_default_reimport() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
+    use crate::core::state::VirtualShotMode;
+
     use crate::models::{Project, SectionData, ShotData, StationRef};
 
     let mut original = Project::new("Comments".to_string(), None);
@@ -488,11 +460,7 @@ fn comments_keep_their_side_across_a_default_reimport() {
     // `true` = comments-on-stations, the import dialog's default - the exact
     // setting under which the missing marker moved shot comments.
     let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, true).unwrap();
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "comments-reimport".to_string(),
-        location: None,
-    });
+    let state = state_with_project("comments-reimport");
     let result = state.execute_tml_import_sections(
         sections,
         closures,
@@ -559,8 +527,7 @@ fn inclination_depth_mismatch_count(project: &crate::models::Project) -> usize {
 /// change on every one of these depth-only shots.
 #[test]
 fn depth_only_tml_round_trip_fabricates_no_inclination_depth_mismatch() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
+    use crate::core::state::VirtualShotMode;
 
     // Five depth-only shots (Inclination 0.0, i.e. never sighted), each with
     // a real depth change steep enough to fabricate a mismatch under the old
@@ -582,11 +549,7 @@ fn depth_only_tml_round_trip_fabricates_no_inclination_depth_mismatch() {
     let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 100.0, &shots));
     let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Depth Only".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Depth Only");
     let result = state.execute_tml_import_sections(
         sections,
         closures,
@@ -613,11 +576,7 @@ fn depth_only_tml_round_trip_fabricates_no_inclination_depth_mismatch() {
     let (sections, closures, _) =
         convert_tml_to_import_configs(&round_tripped, false, false).unwrap();
 
-    let state2 = AppState::new().unwrap();
-    state2.execute(Command::CreateProject {
-        name: "Depth Only Round Trip".to_string(),
-        location: None,
-    });
+    let state2 = state_with_project("Depth Only Round Trip");
     let result2 = state2.execute_tml_import_sections(
         sections,
         closures,
@@ -652,15 +611,10 @@ fn depth_only_tml_round_trip_fabricates_no_inclination_depth_mismatch() {
 /// place, so nothing observable is lost beyond the raw pitch value itself.
 #[test]
 fn a_genuinely_recorded_zero_pitch_on_a_steep_shot_is_erased_by_one_round_trip() {
-    use crate::core::state::AppState;
     use crate::core::Command;
     use crate::models::ShotData;
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Erasure Pin".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Erasure Pin");
     let create = state.execute(Command::CreateSection {
         name: Some("Main".to_string()),
         surveyor: None,
@@ -694,11 +648,7 @@ fn a_genuinely_recorded_zero_pitch_on_a_steep_shot_is_erased_by_one_round_trip()
     let (sections, closures, _) =
         convert_tml_to_import_configs(&round_tripped, false, false).unwrap();
 
-    let state2 = AppState::new().unwrap();
-    state2.execute(Command::CreateProject {
-        name: "Erasure Pin Round Trip".to_string(),
-        location: None,
-    });
+    let state2 = state_with_project("Erasure Pin Round Trip");
     let result2 = state2.execute_tml_import_sections(
         sections,
         closures,
@@ -736,7 +686,7 @@ fn a_genuinely_recorded_zero_pitch_on_a_steep_shot_is_erased_by_one_round_trip()
 /// freshly-written pitch) - report it, do not tune the threshold to hide it.
 #[test]
 fn depth_only_shots_closed_into_a_loop_do_not_fabricate_a_mismatch() {
-    use crate::core::state::{AppState, VirtualShotMode};
+    use crate::core::state::VirtualShotMode;
     use crate::core::Command;
     use crate::models::{ClosureStrategy, ShotData, StationRef};
 
@@ -750,11 +700,7 @@ fn depth_only_shots_closed_into_a_loop_do_not_fabricate_a_mismatch() {
     let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 100.0, &shots));
     let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Closure Interaction".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Closure Interaction");
     let import_result = state.execute_tml_import_sections(
         sections,
         closures,
@@ -834,8 +780,8 @@ fn depth_only_shots_closed_into_a_loop_do_not_fabricate_a_mismatch() {
 /// "A (trip 2) (trip 2)", a re-merged "A", or a lost surveyor.
 #[test]
 fn per_trip_sections_survive_an_export_and_re_import_unchanged() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
+    use crate::core::state::VirtualShotMode;
+
     use crate::parsers::tml::test_helpers::TripShot;
 
     let second = TripShot {
@@ -881,11 +827,7 @@ fn per_trip_sections_survive_an_export_and_re_import_unchanged() {
 
     let import_into = |name: &str, tml: &crate::parsers::tml::TmlFile| {
         let (sections, closures, _) = convert_tml_to_import_configs(tml, false, false).unwrap();
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: name.to_string(),
-            location: None,
-        });
+        let state = state_with_project(name);
         let result = state.execute_tml_import_sections(
             sections,
             closures,
@@ -933,5 +875,100 @@ fn per_trip_sections_survive_an_export_and_re_import_unchanged() {
         trips(&round_tripped),
         expected,
         "and both trips come back with their own surveyor"
+    );
+}
+
+/// #576 B24: azimuths are stored in `[0, 360)` (SPEC "Azimuths are stored in
+/// `[0, 360)`"), and the import gate is where that holds for EVERY importer.
+/// The DMP wizard builds its `ShotData` in TypeScript and sends the device's
+/// headings verbatim; a heading is a raw `i16 * 0.1`, so a damaged dump can
+/// carry 400 or -30. Both the new sections' shots and the overlap updates the
+/// wizard sends for existing shots (`existing_shot_updates`) must land wrapped.
+#[test]
+fn import_sections_stores_out_of_range_azimuths_wrapped_into_0_360() {
+    use crate::core::state::VirtualShotMode;
+
+    use crate::models::{ImportPlacement, ImportSectionConfig, ShotData, ShotUpdates};
+
+    let config = |name: &str, shots: Vec<ShotData>| ImportSectionConfig {
+        reverse: false,
+        section_index: 0,
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: "#222222".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots,
+        station_comments: Vec::new(),
+        placement: ImportPlacement::Origin,
+        azimuth_reference: None,
+    };
+    let shot = |azimuth_in: f64, azimuth_out: f64| ShotData {
+        azimuth_in,
+        azimuth_out,
+        length: 10.0,
+        depth_in: 5.0,
+        depth_out: 5.0,
+        ..Default::default()
+    };
+    let close = |got: f64, want: f64| (got - want).abs() < 1e-9;
+
+    let state = state_with_project("Azimuth Gate");
+    let first = state.execute_import_sections(
+        vec![config(
+            "SectionA",
+            vec![shot(400.0, -30.0), shot(90.0, 90.0)],
+        )],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(first.success, "import failed: {:?}", first.error);
+
+    let project = state.get_project_state().unwrap();
+    let section = project.sections.first().expect("one section imported");
+    let imported = section.shots.first().expect("first shot imported");
+    let (imported_in, imported_out) = (imported.azimuth_in, imported.azimuth_out);
+    let (section_id, shot_id) = (section.id, imported.id);
+
+    // The overlap path: a second import whose `existing_shot_updates` rewrite
+    // the first section's shot (DMP interpolation / import-data modes).
+    let second = state.execute_import_sections(
+        vec![config("SectionB", vec![shot(10.0, 10.0)])],
+        Vec::new(),
+        None,
+        Vec::new(),
+        vec![crate::models::ExistingShotUpdate {
+            section_id,
+            shot_id,
+            updates: ShotUpdates {
+                azimuth_in: Some(-90.0),
+                azimuth_out: Some(725.0),
+                ..Default::default()
+            },
+        }],
+        VirtualShotMode::Auto,
+    );
+    assert!(second.success, "import failed: {:?}", second.error);
+
+    let project = state.get_project_state().unwrap();
+    let updated = project
+        .sections
+        .iter()
+        .find(|s| s.id == section_id)
+        .and_then(|s| s.shots.iter().find(|sh| sh.id == shot_id))
+        .expect("updated shot still present");
+    let (updated_in, updated_out) = (updated.azimuth_in, updated.azimuth_out);
+    assert!(
+        close(imported_in, 40.0)
+            && close(imported_out, 330.0)
+            && close(updated_in, 270.0)
+            && close(updated_out, 5.0),
+        "azimuths must be stored wrapped into [0, 360): new shot sent (400, -30) stored \
+         ({imported_in}, {imported_out}), want (40, 330); existing-shot update sent (-90, 725) \
+         stored ({updated_in}, {updated_out}), want (270, 5)"
     );
 }

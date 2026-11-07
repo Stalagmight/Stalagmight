@@ -29,6 +29,9 @@ usvg = { workspace = true }
 svg2pdf = { workspace = true }
 
 [dev-dependencies]
+# The shared test helpers (`stalagmight_models::test_support`): opt-in
+# prerequisites fail the test naming what is missing (#576 E13).
+stalagmight-models = { path = "../models", features = ["test-support"] }
 # Test-only and acyclic: the hand-run `.stalx` export diagnostic in tml.rs
 # opens a real project database to root-check every exported shot.
 stalagmight-persistence = { path = "../persistence" }

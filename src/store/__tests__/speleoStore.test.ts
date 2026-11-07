@@ -7,15 +7,12 @@ import {
   speleoProjectSessionStillCurrent,
 } from '../speleoStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
+import { invokeIpcMock, messageOr, stubGetErrorMessage } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  // The store reports a failed picker retry through this, so the mock has to carry
-  // it or the error path throws inside the very catch that exists to report.
-  getErrorMessage: (e: unknown, fallback?: string) =>
-    (e as { message?: string })?.message ?? fallback ?? 'error',
-}));
+vi.mock('../../utils/ipc');
+// The store reports a failed picker retry through this, so the mock has to carry
+// it or the error path throws inside the very catch that exists to report.
+stubGetErrorMessage(messageOr('error'));
 
 /** A logged-in session so `scanLocksOnOpen` skips the `refreshSession` prelude. */
 const loggedInAs = (email: string) =>
@@ -279,7 +276,7 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
       invokeIpcMock.mockRejectedValue({
         message: 'Logged out, but the stored SpeleoDB credential could not be removed',
-        action: 'Fatal',
+        code: 'SPELEODB_FATAL',
         status: null,
       });
 
@@ -426,11 +423,71 @@ describe('speleoStore', () => {
     });
 
     it('surfaces an unexpected server_error, and clears it on the next clean poll (fix 12)', () => {
-      const err = { message: 'No Project matches the given query.', action: 'Fatal' as const, status: 404, transport: null, unpushed_local: null, dump_candidates: null, dump_candidate_kind: null };
+      const err = { code: 'SPELEODB_FATAL' as const, message: 'No Project matches the given query.', action: 'Fatal' as const, status: 404, transport: null, unpushed_local: null, dump_candidates: null, dump_candidate_kind: null };
       useSpeleoStore.getState().seedFromStatus(status({ server_error: err }));
       expect(useSpeleoStore.getState().link?.serverError).toEqual(err);
       useSpeleoStore.getState().seedFromStatus(status({ server_error: null }));
       expect(useSpeleoStore.getState().link?.serverError).toBeNull();
+    });
+
+    describe('lock lost under an edit session (#576 B35(e))', () => {
+      // The backend now switches editing off when SpeleoDB says the lock this session
+      // was editing under is gone or someone else's. The toolbar going read-only on
+      // its own said nothing about why, or that un-uploaded edits are stranded.
+      const editingThenPoll = (o: Partial<SpeleoLinkStatus>) => {
+        loggedInAs('me@x');
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, lock_holder: 'me@x' }));
+        expect(useSpeleoStore.getState().banner).toBeNull();
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, ...o }));
+        return useSpeleoStore.getState();
+      };
+
+      it('names the account that took the lock', () => {
+        const s = editingThenPoll({ lock_holder: 'colleague@x' });
+        expect(s.banner).toEqual({ kind: 'lock_lost', holder: 'colleague@x' });
+        expect(s.link?.editState).toBe('read-only');
+      });
+
+      it('says so when the lock is gone over un-pushed edits', () => {
+        const s = editingThenPoll({ lock_holder: null, has_unpushed_edits: true });
+        expect(s.banner).toEqual({ kind: 'lock_lost', holder: null });
+      });
+
+      it('outranks a push-failure banner left by a Done that was refused for it', () => {
+        loggedInAs('me@x');
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, lock_holder: 'me@x' }));
+        useSpeleoStore.getState().raisePushFailedBanner({ message: 'm', origin: 'done', pushMessage: null });
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: 'colleague@x' }));
+        expect(useSpeleoStore.getState().banner?.kind).toBe('lock_lost');
+      });
+
+      it('stays quiet for a clean copy whose lock simply went away (a release looks the same)', () => {
+        expect(editingThenPoll({ lock_holder: null }).banner).toBeNull();
+      });
+
+      it('stays quiet when the server did not answer (offline / signed out)', () => {
+        expect(editingThenPoll({ lock_holder: null, permission: null, has_unpushed_edits: true }).banner).toBeNull();
+        reset();
+        expect(editingThenPoll({ lock_holder: 'colleague@x', permission: null }).banner).toBeNull();
+      });
+
+      it('stays quiet when the holder is our own account in another case', () => {
+        expect(editingThenPoll({ lock_holder: 'ME@X' }).banner).toBeNull();
+      });
+
+      it('stays quiet when this session never held the lock', () => {
+        loggedInAs('me@x');
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false }));
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: 'colleague@x' }));
+        expect(useSpeleoStore.getState().banner).toBeNull();
+      });
+
+      it('stays quiet for a force-edit session, which never held the lock', () => {
+        loggedInAs('me@x');
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, force_editing: true }));
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: 'colleague@x' }));
+        expect(useSpeleoStore.getState().banner).toBeNull();
+      });
     });
 
     it('carries force_editing + allow_force_edit through (#213)', () => {
@@ -465,8 +522,10 @@ describe('speleoStore', () => {
       );
       const inFlight = useSpeleoStore.getState().refreshLinkStatus();
 
-      // The push lands while that poll is still waiting on the network.
-      useSpeleoStore.getState().markDirty();
+      // An edit and then a push land while that poll is still waiting on the network.
+      useSpeleoStore
+        .getState()
+        .applyRemoteLink({ has_unpushed_edits: true, unwound: false }, useSpeleoStore.getState().linkPath);
       useSpeleoStore.getState().applyPush({ kind: 'pushed' });
       expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
 
@@ -714,37 +773,46 @@ describe('speleoStore', () => {
     });
   });
 
-  describe('markDirty', () => {
+  // [#576 D22] The link bits a survey mutation answered with, applied as the backend
+  // set them. They replace the hand-written mirrors (`markDirty` after an undo,
+  // `markForwardEdit` after an edit); each case below is one those used to cover.
+  describe('applyRemoteLink', () => {
+    const apply = (has_unpushed_edits: boolean, unwound: boolean, linkPath = useSpeleoStore.getState().linkPath) =>
+      useSpeleoStore.getState().applyRemoteLink({ has_unpushed_edits, unwound }, linkPath);
+
     it('flips the dirty bit on for an editing link', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
-      useSpeleoStore.getState().markDirty();
+      apply(true, false);
       expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
     });
 
     it('is a no-op with no link', () => {
-      useSpeleoStore.getState().markDirty();
+      apply(true, false);
       expect(useSpeleoStore.getState().link).toBeNull();
     });
 
-    // [#303] The bug this pair exists to prevent: `markDirty` short-circuits on an
-    // already-dirty link, and an unwound copy is ALWAYS already dirty, so mirroring a
-    // forward edit through it left `unwound` standing until the next poll - and
-    // `isUnwoundNotEdited` kept routing the user to a discard of work they just made.
-    it('markDirty leaves unwound standing on an already-dirty link', () => {
+    // [#303] An undo/redo does NOT drop the chain pointer (the backend keeps it, and a
+    // tripwire in speleodb_revisions.rs asserts undo.rs never forgets it), so an undo
+    // on an unwound copy answers still-unwound - and `unwound` must stay standing.
+    it('leaves unwound standing when the backend kept it (an undo)', () => {
       useSpeleoStore
         .getState()
         .seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true, unwound: true }));
-      useSpeleoStore.getState().markDirty();
+      apply(true, true);
       expect(useSpeleoStore.getState().link?.unwound).toBe(true);
       expect(isUnwoundNotEdited(useSpeleoStore.getState().link)).toBe(true);
     });
 
-    it('markForwardEdit clears unwound even when already dirty', () => {
+    // [#303] The bug the old `markForwardEdit` existed to prevent: an unwound copy is
+    // ALWAYS already dirty, so a dirty-bit-only mirror left `unwound` standing until
+    // the next poll - and `isUnwoundNotEdited` kept routing the user to a discard of
+    // work they just made. A forward edit answers dirty AND no longer unwound.
+    it('clears unwound on a forward edit even when already dirty', () => {
       useSpeleoStore
         .getState()
         .seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true, unwound: true }));
       const generation = useSpeleoStore.getState().chainTargetGeneration;
-      useSpeleoStore.getState().markForwardEdit();
+      apply(true, false);
       const link = useSpeleoStore.getState().link;
       expect(link?.hasUnpushedEdits).toBe(true);
       expect(link?.unwound).toBe(false);
@@ -752,23 +820,51 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation + 1);
     });
 
-    it('markForwardEdit dirties a clean link and no-ops when nothing changes', () => {
+    it('dirties a clean link and no-ops when nothing changes', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
       const generation = useSpeleoStore.getState().chainTargetGeneration;
-      useSpeleoStore.getState().markForwardEdit();
+      apply(true, false);
       const after = useSpeleoStore.getState().link;
       expect(after?.hasUnpushedEdits).toBe(true);
       expect(after?.unwound).toBe(false);
       // Identity is preserved on a true no-op: refreshLinkStatus uses it to detect a
       // concurrent mutation, so a gratuitous new object would discard live replies.
-      useSpeleoStore.getState().markForwardEdit();
+      apply(true, false);
       expect(useSpeleoStore.getState().link).toBe(after);
       expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation + 1);
     });
 
-    it('markForwardEdit is a no-op with no link', () => {
-      useSpeleoStore.getState().markForwardEdit();
-      expect(useSpeleoStore.getState().link).toBeNull();
+    it('leaves a clean copy clean when the backend says the edit dirtied nothing (a provable no-op)', () => {
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+      const before = useSpeleoStore.getState().link;
+      const generation = useSpeleoStore.getState().chainTargetGeneration;
+      apply(false, false);
+      expect(useSpeleoStore.getState().link).toBe(before);
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+      expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation);
+    });
+
+    it('takes the backend value both ways, a cleared bit included', () => {
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true, unwound: true }));
+      apply(false, false);
+      const link = useSpeleoStore.getState().link;
+      expect(link?.hasUnpushedEdits).toBe(false);
+      expect(link?.unwound).toBe(false);
+    });
+
+    it('drops a reply issued for another link path (the user left that project)', () => {
+      useSpeleoStore.getState().syncProjectLink(true, '/caves/now-open.stalx');
+      const before = useSpeleoStore.getState().link;
+      const generation = useSpeleoStore.getState().chainTargetGeneration;
+      apply(true, false, '/caves/left-behind.stalx');
+      expect(useSpeleoStore.getState().link).toBe(before);
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+      expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation);
+      // The same reply for the path that IS open applies.
+      apply(true, false, '/caves/now-open.stalx');
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
     });
   });
 

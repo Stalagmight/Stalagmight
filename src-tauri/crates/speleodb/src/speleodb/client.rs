@@ -1,29 +1,39 @@
 //! ureq HTTP client for the SpeleoDB v2 API (#183 read-only spike → #185
 //! production transport).
 //!
-//! Reuses the tile-fetch transport idiom (`lib.rs`): a fresh `ureq::Agent` per
-//! attempt with a global timeout, and a retry loop over transient failures. The
-//! agent is configured with `http_status_as_error(false)` so non-2xx responses
-//! are returned (not turned into errors) and this module branches on the status
-//! itself - the shape #186's status→action table builds on.
+//! Every call is described by one row of the endpoint table ([`spec`], #576 B5):
+//! its metrics label, the error category its failures are mapped through, whether
+//! it may be retried, which connection it travels on, its timeout and its body
+//! ceiling. [`send`] is the one transport every call goes through and reads all of
+//! it from that row, so no call site picks a retry flag, an agent, a timeout or a
+//! label by hand any more - the four disagreements that hand-picking produced
+//! (#576 B5) cannot recur by construction. The agents are configured with
+//! `http_status_as_error(false)` so non-2xx responses are returned (not turned
+//! into errors) and this module branches on the status itself - the shape #186's
+//! status→action table builds on.
 //!
 //! Auth uses `Authorization: Bearer <token>` (verified: `BearerAuthentication`,
 //! `authentication.py:59`).
 //!
-//! Transport policy (#185/#187/D-A-retry/D-B3):
+//! Transport policy (#185/#187/D-A-retry/D-B3, #576 B5-D3):
 //! - [`with_retry`] enforces the http private-network policy ([`super::tls`]) on
 //!   every request before the first attempt, then runs the closure with backoff.
 //! - The closure returns `(status, body)` so a 5xx is visible to the retry loop.
-//!   Idempotent (read-like) calls retry a transient 5xx; non-idempotent writes
-//!   (`idempotent == false`) run **exactly once** - a mid-response failure must
-//!   never double-submit a commit / lock / create.
+//!   Retry-safe calls ([`Retry::Transient`]) retry a transport failure and a 5xx;
+//!   run-once writes ([`Retry::Once`]) run **exactly once** - a mid-response
+//!   failure must never double-submit a commit / lock / create.
+//! - Retry-safe reads share one pooled, keep-alive agent, so the status poll's two
+//!   back-to-back GETs cost one handshake; every write opens a connection of its
+//!   own, so a run-once write never lands on a socket the server already closed.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
 
+use super::contract::Endpoint as Category;
 use super::metrics::{Endpoint, Outcome};
 use super::models::{
     Commit, Permission, Project, RevisionHistory, Team, TeamPermission, TeamPermissionList,
@@ -96,21 +106,202 @@ const MAX_RETRIES: u32 = 2;
 /// Backoff delays between retries (mirrors the tile-fetch idiom).
 const RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(200), Duration::from_millis(500)];
 
-/// Build a fresh agent with the read timeout. `http_status_as_error(false)` makes
-/// non-2xx a normal `Response` so the caller branches on the status code itself.
-fn agent() -> ureq::Agent {
-    agent_with_timeout(REQUEST_TIMEOUT)
+/// Whether a call may be repeated after a transient failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Retry {
+    /// Retry-safe (a read, or a write whose repetition is a no-op): a transport
+    /// failure or a 5xx is retried with backoff, `1 + MAX_RETRIES` attempts in all.
+    Transient,
+    /// Runs exactly once: a write whose reply can be lost after the server
+    /// committed it, so a second attempt could double-submit.
+    Once,
 }
 
-/// Build a fresh agent for a dump download, on the longer
-/// [`DUMP_DOWNLOAD_TIMEOUT`] budget. Both dump endpoints go through here so
-/// neither can silently fall back to the small-GET budget.
-fn dump_agent() -> ureq::Agent {
-    agent_with_timeout(DUMP_DOWNLOAD_TIMEOUT)
+/// Which connection a call travels on (#576 B5-D3 "Pool reads, fresh writes").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Connection {
+    /// The process-wide keep-alive agent. Only for retry-safe reads: a pooled
+    /// socket the server closed while it sat idle costs at most one retried
+    /// attempt there.
+    Pooled,
+    /// A connection opened for this call alone. Every write: a run-once write on
+    /// a stale pooled socket would fail with a transport error it may not retry,
+    /// and the push would report "could not be confirmed" for nothing.
+    Fresh,
 }
 
-/// Build a fresh agent with an explicit global timeout (upload uses the longer
-/// [`UPLOAD_TIMEOUT`], the dump download [`DUMP_DOWNLOAD_TIMEOUT`]).
+/// One row of the endpoint table: everything the transport needs to know about
+/// one SpeleoDB API call, so nothing about it is decided at the call site.
+///
+/// `category` is the half that crosses into `core`: the IPC boundary maps a
+/// failure through it ([`super::contract::dto_for_error`]), so a call site that
+/// names its row (`spec::PATCH_PROJECT.category`) cannot map a write as a read.
+/// The table test (`every_endpoint_row_agrees_with_its_contract_row`) pins each
+/// row's retry policy to its category's 5xx row.
+#[derive(Debug, Clone, Copy)]
+pub struct EndpointSpec {
+    /// The `speleodb-api.<kind>.*` telemetry label (#210).
+    pub(crate) metrics: Endpoint,
+    /// The contract category a failure of this call is mapped through (#186).
+    pub category: Category,
+    pub(crate) retry: Retry,
+    pub(crate) connection: Connection,
+    /// End-to-end budget for one attempt, body read included (`timeout_global`).
+    pub(crate) timeout: Duration,
+    /// Response-body ceiling; a reply over it is a size refusal, never retried.
+    pub(crate) body_limit: u64,
+}
+
+impl EndpointSpec {
+    /// A retry-safe GET on the pooled agent, on the small-GET budget.
+    const fn read(metrics: Endpoint, category: Category) -> Self {
+        Self {
+            metrics,
+            category,
+            retry: Retry::Transient,
+            connection: Connection::Pooled,
+            timeout: REQUEST_TIMEOUT,
+            body_limit: DEFAULT_MAX_BYTES,
+        }
+    }
+
+    /// A write on a connection of its own, on the small-GET budget.
+    const fn write(metrics: Endpoint, category: Category, retry: Retry) -> Self {
+        Self {
+            metrics,
+            category,
+            retry,
+            connection: Connection::Fresh,
+            timeout: REQUEST_TIMEOUT,
+            body_limit: DEFAULT_MAX_BYTES,
+        }
+    }
+
+    /// The agent this call runs on.
+    fn agent(&self) -> &'static ureq::Agent {
+        static POOLED: OnceLock<ureq::Agent> = OnceLock::new();
+        static FRESH: OnceLock<ureq::Agent> = OnceLock::new();
+        match self.connection {
+            Connection::Pooled => POOLED.get_or_init(|| agent_config().build().new_agent()),
+            // No idle connection is ever kept, so every request dials anew.
+            Connection::Fresh => FRESH.get_or_init(|| {
+                agent_config()
+                    .max_idle_connections(0)
+                    .max_idle_connections_per_host(0)
+                    .build()
+                    .new_agent()
+            }),
+        }
+    }
+}
+
+/// The endpoint table: one row per `client::*` call (#576 B5).
+pub mod spec {
+    use super::{
+        Category, Connection, Endpoint, EndpointSpec, Retry, DUMP_DOWNLOAD_TIMEOUT, DUMP_MAX_BYTES,
+        REVERIFY_PROBE_TIMEOUT, UPLOAD_TIMEOUT,
+    };
+
+    /// `POST user/auth-token/`: get-or-create (non-rotating), so a retry returns
+    /// the same token rather than minting a second one.
+    pub const LOGIN: EndpointSpec =
+        EndpointSpec::write(Endpoint::Login, Category::Login, Retry::Transient);
+    pub const LIST_PROJECTS: EndpointSpec =
+        EndpointSpec::read(Endpoint::ListProjects, Category::ListProjects);
+    pub const GET_PROJECT: EndpointSpec =
+        EndpointSpec::read(Endpoint::GetProject, Category::GetProject);
+    /// The #202 lazy lock re-verify: the same GET, ONE attempt on a tight budget,
+    /// because it runs under the command lock and must never stall the editor.
+    /// Its failures are only logged (the release fence is the backstop), never
+    /// mapped to an action - the one row whose category retries and it does not.
+    pub const GET_PROJECT_PROBE: EndpointSpec = EndpointSpec {
+        retry: Retry::Once,
+        connection: Connection::Fresh,
+        timeout: REVERIFY_PROBE_TIMEOUT,
+        ..GET_PROJECT
+    };
+    pub const GET_REVISIONS: EndpointSpec =
+        EndpointSpec::read(Endpoint::GetRevisions, Category::GetProject);
+    /// `GET user/`, the whoami chokepoint: a 403 here is the dead-token signal.
+    pub const FETCH_USER: EndpointSpec = EndpointSpec::read(Endpoint::FetchUser, Category::User);
+    /// Both dump downloads (HEAD and at-hash): the whole working tree as a ZIP, on
+    /// their own budget and body ceiling (#270).
+    pub const DOWNLOAD_DUMP: EndpointSpec = EndpointSpec {
+        timeout: DUMP_DOWNLOAD_TIMEOUT,
+        body_limit: DUMP_MAX_BYTES,
+        ..EndpointSpec::read(Endpoint::DownloadDump, Category::DownloadDump)
+    };
+    /// The multipart push: a commit, run once, on the longer upload budget.
+    pub const UPLOAD: EndpointSpec = EndpointSpec {
+        timeout: UPLOAD_TIMEOUT,
+        ..EndpointSpec::write(Endpoint::Upload, Category::UploadAuto, Retry::Once)
+    };
+    pub const ACQUIRE: EndpointSpec =
+        EndpointSpec::write(Endpoint::Acquire, Category::Acquire, Retry::Once);
+    pub const RELEASE: EndpointSpec =
+        EndpointSpec::write(Endpoint::Release, Category::Release, Retry::Once);
+    /// `DELETE user/release_all_locks/`: releasing when none are held is a no-op.
+    pub const RELEASE_ALL: EndpointSpec =
+        EndpointSpec::write(Endpoint::ReleaseAll, Category::ReleaseAll, Retry::Transient);
+    /// The metadata `PATCH projects/{id}/`: must not double-apply.
+    pub const PATCH_PROJECT: EndpointSpec =
+        EndpointSpec::write(Endpoint::PatchProject, Category::ManageProject, Retry::Once);
+    pub const CREATE_PROJECT: EndpointSpec = EndpointSpec::write(
+        Endpoint::CreateProject,
+        Category::CreateProject,
+        Retry::Once,
+    );
+    /// `DELETE projects/{id}/`: idempotent, and a 404 means it is already gone
+    /// (#576 B5-D2). Sent only to the project's own server (#576 RV4-R-S4).
+    pub const DELETE_PROJECT: EndpointSpec = EndpointSpec::write(
+        Endpoint::DeleteProject,
+        Category::DeleteProject,
+        Retry::Transient,
+    );
+    /// Both permission lists (users and teams).
+    pub const LIST_PERMISSIONS: EndpointSpec =
+        EndpointSpec::read(Endpoint::ListPermissions, Category::GetProject);
+    /// The six collaborator/team permission writes (#215), run once (#576 B25).
+    pub const MUTATE_PERMISSION: EndpointSpec = EndpointSpec::write(
+        Endpoint::MutatePermission,
+        Category::ManageProject,
+        Retry::Once,
+    );
+    pub const LIST_TEAMS: EndpointSpec =
+        EndpointSpec::read(Endpoint::ListTeams, Category::GetProject);
+    /// `GET user/autocomplete/`: authenticated-only with no per-object permission,
+    /// so (like whoami) a 403 there is the dead-token signal.
+    pub const AUTOCOMPLETE: EndpointSpec =
+        EndpointSpec::read(Endpoint::Autocomplete, Category::User);
+
+    /// Every row, for the table test.
+    #[cfg(test)]
+    pub(crate) const ALL: &[(&str, EndpointSpec)] = &[
+        ("LOGIN", LOGIN),
+        ("LIST_PROJECTS", LIST_PROJECTS),
+        ("GET_PROJECT", GET_PROJECT),
+        ("GET_PROJECT_PROBE", GET_PROJECT_PROBE),
+        ("GET_REVISIONS", GET_REVISIONS),
+        ("FETCH_USER", FETCH_USER),
+        ("DOWNLOAD_DUMP", DOWNLOAD_DUMP),
+        ("UPLOAD", UPLOAD),
+        ("ACQUIRE", ACQUIRE),
+        ("RELEASE", RELEASE),
+        ("RELEASE_ALL", RELEASE_ALL),
+        ("PATCH_PROJECT", PATCH_PROJECT),
+        ("CREATE_PROJECT", CREATE_PROJECT),
+        ("DELETE_PROJECT", DELETE_PROJECT),
+        ("LIST_PERMISSIONS", LIST_PERMISSIONS),
+        ("MUTATE_PERMISSION", MUTATE_PERMISSION),
+        ("LIST_TEAMS", LIST_TEAMS),
+        ("AUTOCOMPLETE", AUTOCOMPLETE),
+    ];
+}
+
+/// The configuration both agents share. No global timeout here: [`send`] sets
+/// each request's own from its row, so one pooled agent can serve the 30 s reads
+/// and the 120 s dump downloads alike.
+///
 /// `http_status_as_error(false)` is kept so the status branching shape #186 keys
 /// off is preserved.
 ///
@@ -128,13 +319,58 @@ fn dump_agent() -> ureq::Agent {
 /// cross-host hop. Verified against the pinned ureq; the plaintext-to-anywhere hole
 /// is what this closes. The v2 API is not expected to redirect at all, so nothing
 /// legitimate is lost.)
-fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
+fn agent_config() -> ureq::config::ConfigBuilder<ureq::typestate::AgentScope> {
     ureq::Agent::config_builder()
-        .timeout_global(Some(timeout))
         .http_status_as_error(false)
         .max_redirects(0)
-        .build()
-        .new_agent()
+}
+
+/// Run one call described by `spec`: build its request with `build` (once per
+/// attempt - a multipart body is consumed by sending it), send it on the row's
+/// agent with the row's timeout, read the reply under the row's body ceiling, and
+/// let [`with_retry`] apply the row's retry policy and record each attempt.
+///
+/// The single transport every `client::*` call goes through - including the
+/// permission writes, which used to re-implement its tail without the body-limit
+/// arm (#576 B25).
+fn send<B: ureq::AsSendBody>(
+    base: &str,
+    insecure_http: bool,
+    spec: &EndpointSpec,
+    mut build: impl FnMut() -> Result<http::Request<B>, ureq::Error>,
+) -> Result<(u16, Vec<u8>), SpeleoDbError> {
+    with_retry(base, insecure_http, spec, || {
+        let agent = spec.agent();
+        let request = agent
+            .configure_request(build()?)
+            .timeout_global(Some(spec.timeout))
+            .build();
+        read_body_limited(agent.run(request)?, spec.body_limit)
+    })
+}
+
+/// A request with the bearer header and no body.
+fn bare(method: http::Method, url: &str, token: &str) -> Result<http::Request<()>, ureq::Error> {
+    Ok(http::Request::builder()
+        .method(method)
+        .uri(url)
+        .header("Authorization", bearer(token))
+        .body(())?)
+}
+
+/// A request with the bearer header and a JSON body.
+fn json(
+    method: http::Method,
+    url: &str,
+    token: &str,
+    payload: &str,
+) -> Result<http::Request<String>, ureq::Error> {
+    Ok(http::Request::builder()
+        .method(method)
+        .uri(url)
+        .header("Authorization", bearer(token))
+        .header("Content-Type", "application/json")
+        .body(payload.to_owned())?)
 }
 
 fn api_url(base: &str, suffix: &str) -> String {
@@ -160,23 +396,24 @@ fn bearer(token: &str) -> String {
 ///
 /// The closure returns `(status, body)`. With `http_status_as_error(false)` every
 /// `Err` is transport-level (DNS, timeout, connection reset, mid-body read).
-/// Retry rules (D-A-retry / D-B3):
-/// - `idempotent` reads retry a transport `Err` **and** an idempotent 5xx (read
-///   the body, treat a 500-599 like a transient error).
-/// - non-idempotent writes (`idempotent == false`, `max_retries == 0`) run
-///   exactly once and surface a 5xx straight through - retrying could
-///   double-submit (the response failure can land after the server committed).
+/// Retry rules (D-A-retry / D-B3), read off `spec.retry`:
+/// - [`Retry::Transient`] calls retry a transport `Err` **and** a 5xx (read the
+///   body, treat a 500-599 like a transient error).
+/// - [`Retry::Once`] writes (`max_retries == 0`) run exactly once and surface a
+///   5xx straight through - retrying could double-submit (the response failure
+///   can land after the server committed).
 fn with_retry(
     base: &str,
     insecure_http: bool,
-    idempotent: bool,
-    endpoint: Endpoint,
+    spec: &EndpointSpec,
     mut attempt: impl FnMut() -> Result<(u16, Vec<u8>), ureq::Error>,
 ) -> Result<(u16, Vec<u8>), SpeleoDbError> {
     // #187: block public `http://` / scheme-less endpoints before any dial. A
     // policy block is not server traffic, so it is intentionally not recorded.
     super::tls::enforce(base, insecure_http)?;
 
+    let endpoint = spec.metrics;
+    let idempotent = spec.retry == Retry::Transient;
     let max_retries = if idempotent { MAX_RETRIES } else { 0 };
     let mut last_err: Option<(TransportCause, String)> = None;
     for i in 0..=max_retries {
@@ -220,7 +457,7 @@ fn with_retry(
                 // Retrying re-downloads the whole oversized body to fail again,
                 // and reporting it as "cannot reach the endpoint" sends the user
                 // looking at their network for a payload-size refusal.
-                let limit = body_limit_for(endpoint);
+                let limit = spec.body_limit;
                 tracing::error!(
                     ?endpoint,
                     limit,
@@ -293,20 +530,11 @@ fn clean_transport(raw: &str) -> String {
     s.trim().to_owned()
 }
 
-/// Read a response into `(status, body)` for [`with_retry`]'s closure. A
-/// body-read failure is a transport `Err` (so an idempotent call retries it).
-fn read_status_body(resp: http::Response<ureq::Body>) -> Result<(u16, Vec<u8>), ureq::Error> {
-    let status = resp.status().as_u16();
-    let body = resp.into_body().read_to_vec()?;
-    Ok((status, body))
-}
-
-/// [`read_status_body`] on an explicit body ceiling.
-///
-/// The limit is a parameter purely so the over-limit path can be exercised for
-/// real in a test - see `an_over_limit_read_is_reported_as_a_size_refusal`, which
-/// is what pins [`is_body_limit`]'s Display match to ureq's actual wording. In
-/// production there is exactly one caller and one limit.
+/// Read a response into `(status, body)` for [`with_retry`]'s closure, on an
+/// explicit body ceiling (the row's `body_limit` - [`DUMP_MAX_BYTES`] for the dump
+/// downloads, [`DEFAULT_MAX_BYTES`] everywhere else). A body-read failure is a
+/// transport `Err` (so a retry-safe call retries it); a body over the ceiling is
+/// ureq's `BodyExceedsLimit`, which [`with_retry`] reports as a size refusal.
 fn read_body_limited(
     resp: http::Response<ureq::Body>,
     limit: u64,
@@ -314,12 +542,6 @@ fn read_body_limited(
     let status = resp.status().as_u16();
     let body = resp.into_body().with_config().limit(limit).read_to_vec()?;
     Ok((status, body))
-}
-
-/// [`read_status_body`] for a dump download, on the [`DUMP_MAX_BYTES`] ceiling
-/// instead of the 10 MiB one `read_to_vec()` applies by default.
-fn read_dump_body(resp: http::Response<ureq::Body>) -> Result<(u16, Vec<u8>), ureq::Error> {
-    read_body_limited(resp, DUMP_MAX_BYTES)
 }
 
 /// Whether a transport failure is the body-size ceiling being hit.
@@ -339,20 +561,6 @@ fn read_dump_body(resp: http::Response<ureq::Body>) -> Result<(u16, Vec<u8>), ur
 /// (`an_over_limit_read_is_reported_as_a_size_refusal_not_a_retried_transport_failure`).
 fn is_body_limit(err: &ureq::Error) -> bool {
     matches!(err, ureq::Error::BodyExceedsLimit(_))
-}
-
-/// Which body ceiling actually applied to `endpoint`.
-///
-/// [`with_retry`] is shared by all thirteen endpoints, but only the two dump
-/// downloads read through [`read_dump_body`]; the rest use [`read_status_body`],
-/// which takes ureq's own [`DEFAULT_MAX_BYTES`]. Quoting the dump ceiling at a JSON
-/// endpoint told the user their reply had exceeded a limit six-and-a-half times the
-/// one it actually hit.
-fn body_limit_for(endpoint: Endpoint) -> u64 {
-    match endpoint {
-        Endpoint::DownloadDump => DUMP_MAX_BYTES,
-        _ => DEFAULT_MAX_BYTES,
-    }
 }
 
 /// A byte count as GiB / MiB / KiB for a user-facing message. Whole units only
@@ -451,12 +659,10 @@ pub fn login(
 
     // Idempotent: the auth-token endpoint is get-or-create (non-rotating), so a
     // retried login returns the same token rather than minting a duplicate.
-    let (status, body) = with_retry(base, insecure_http, true, Endpoint::Login, || {
-        let resp = agent()
-            .post(&url)
+    let (status, body) = send(base, insecure_http, &spec::LOGIN, || {
+        Ok(http::Request::post(&url)
             .header("Content-Type", "application/json")
-            .send(payload.as_str())?;
-        read_status_body(resp)
+            .body(payload.clone())?)
     })?;
 
     if !(200..300).contains(&status) {
@@ -474,14 +680,8 @@ pub fn list_projects(
     insecure_http: bool,
 ) -> Result<Vec<Project>, SpeleoDbError> {
     let url = api_url(base, "projects/");
-    let auth = bearer(token);
-
-    let (status, body) = with_retry(base, insecure_http, true, Endpoint::ListProjects, || {
-        let resp = agent()
-            .get(&url)
-            .header("Authorization", auth.as_str())
-            .call()?;
-        read_status_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::LIST_PROJECTS, || {
+        bare(http::Method::GET, &url, token)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -502,14 +702,7 @@ pub fn get_project(
     insecure_http: bool,
     project_id: &str,
 ) -> Result<Project, SpeleoDbError> {
-    get_project_inner(
-        base,
-        token,
-        insecure_http,
-        project_id,
-        REQUEST_TIMEOUT,
-        true,
-    )
+    get_project_inner(base, token, insecure_http, project_id, &spec::GET_PROJECT)
 }
 
 /// Short per-request budget for the best-effort #202 lazy lock re-verify probe. It
@@ -533,8 +726,7 @@ pub fn get_project_probe(
         token,
         insecure_http,
         project_id,
-        REVERIFY_PROBE_TIMEOUT,
-        false,
+        &spec::GET_PROJECT_PROBE,
     )
 }
 
@@ -543,25 +735,12 @@ fn get_project_inner(
     token: &str,
     insecure_http: bool,
     project_id: &str,
-    timeout: Duration,
-    idempotent: bool,
+    row: &EndpointSpec,
 ) -> Result<Project, SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/"));
-    let auth = bearer(token);
-
-    let (status, body) = with_retry(
-        base,
-        insecure_http,
-        idempotent,
-        Endpoint::GetProject,
-        || {
-            let resp = agent_with_timeout(timeout)
-                .get(&url)
-                .header("Authorization", auth.as_str())
-                .call()?;
-            read_status_body(resp)
-        },
-    )?;
+    let (status, body) = send(base, insecure_http, row, || {
+        bare(http::Method::GET, &url, token)
+    })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
     }
@@ -582,14 +761,8 @@ pub fn get_revisions(
     project_id: &str,
 ) -> Result<RevisionHistory, SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/revisions/"));
-    let auth = bearer(token);
-
-    let (status, body) = with_retry(base, insecure_http, true, Endpoint::GetRevisions, || {
-        let resp = agent()
-            .get(&url)
-            .header("Authorization", auth.as_str())
-            .call()?;
-        read_status_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::GET_REVISIONS, || {
+        bare(http::Method::GET, &url, token)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -616,14 +789,8 @@ pub fn fetch_user_email(
     insecure_http: bool,
 ) -> Result<String, SpeleoDbError> {
     let url = api_url(base, "user/");
-    let auth = bearer(token);
-
-    let (status, body) = with_retry(base, insecure_http, true, Endpoint::FetchUser, || {
-        let resp = agent()
-            .get(&url)
-            .header("Authorization", auth.as_str())
-            .call()?;
-        read_status_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::FETCH_USER, || {
+        bare(http::Method::GET, &url, token)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -633,23 +800,69 @@ pub fn fetch_user_email(
     Ok(info.email)
 }
 
+/// [#576 A8 NF-A8-BYPASS] Proof a caller hands [`download_dump`] /
+/// [`download_dump_at_hash`]: whatever had to run before the download did.
+///
+/// The orchestration's orderings are proof types (`core::state`): the pull's
+/// un-pushed-edits guard returns one, the revision swap's Unwind preconditions
+/// return one, the adoption's lock decision returns one. A proof stops a REORDER
+/// at its own call site, but a raw wire call taking only strings could still be
+/// written above the step it must follow, skipping the proof altogether. So the
+/// download takes the proof as its first argument, and a call made without one
+/// does not compile.
+///
+/// Implemented only by those proof types, by a function-local marker in each
+/// flow whose download has no precondition (named for why), and by
+/// [`TestWire`]. Implementing it anywhere else is the bypass this trait exists
+/// to stop.
+///
+/// [#576 RV9a-4] Not sealed, because it cannot be: a sealed trait admits only the
+/// crate that defines it, and its implementors are core's proof types (core
+/// depends on this crate). Every implementation of this trait, [`UploadLicence`]
+/// and [`PatchLicence`] in the workspace is inventoried instead, by core's
+/// `licence_implementations_are_exactly_the_sanctioned_set`.
+pub trait DumpLicence {}
+
+/// [#576 A8 NF-A8-BYPASS] The [`DumpLicence`] of [`upload_auto`]: the push's
+/// quiescent snapshot (`core::state`'s `PushSnapshot`, made only after the
+/// pre-push flush). Same rule - only that proof and [`TestWire`] implement it.
+pub trait UploadLicence {}
+
+/// [#576 NF-A8R-4] The licence of [`patch_project`]. Two of its callers may only
+/// run after a landed push - adoption's type flip (`AdoptLanded`) and the push's
+/// managed-type heal (`Landed`) - and those proofs implement it, so the PATCH cannot
+/// be written above the landing it follows. The user-initiated metadata edit has no
+/// precondition and passes a marker named for that (`speleodb_project`'s
+/// `UserMetadataEdit`). Same rule as [`DumpLicence`]: only those and [`TestWire`]
+/// implement it.
+pub trait PatchLicence {}
+
+/// The licence tests drive the wire calls with: they test the call, not the
+/// orchestration that earns one. Compiled only into test builds.
+#[cfg(any(test, feature = "test-support"))]
+pub struct TestWire;
+
+#[cfg(any(test, feature = "test-support"))]
+impl DumpLicence for TestWire {}
+
+#[cfg(any(test, feature = "test-support"))]
+impl UploadLicence for TestWire {}
+
+#[cfg(any(test, feature = "test-support"))]
+impl PatchLicence for TestWire {}
+
 /// `GET /api/v2/projects/{id}/download/dump/` - download the project's working
 /// tree (HEAD) as a ZIP. Returns the raw ZIP bytes for [`super::dump`] to handle.
 pub fn download_dump(
+    _licence: &impl DumpLicence,
     base: &str,
     token: &str,
     insecure_http: bool,
     project_id: &str,
 ) -> Result<Vec<u8>, SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/download/dump/"));
-    let auth = bearer(token);
-
-    let (status, body) = with_retry(base, insecure_http, true, Endpoint::DownloadDump, || {
-        let resp = dump_agent()
-            .get(&url)
-            .header("Authorization", auth.as_str())
-            .call()?;
-        read_dump_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::DOWNLOAD_DUMP, || {
+        bare(http::Method::GET, &url, token)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -664,6 +877,7 @@ pub fn download_dump(
 /// retry) but pinned to `hexsha` rather than HEAD. The caller validates `hexsha`
 /// at the trust boundary before it reaches this URL interpolation.
 pub fn download_dump_at_hash(
+    _licence: &impl DumpLicence,
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -674,14 +888,8 @@ pub fn download_dump_at_hash(
         base,
         &format!("projects/{project_id}/download/dump/{hexsha}/"),
     );
-    let auth = bearer(token);
-
-    let (status, body) = with_retry(base, insecure_http, true, Endpoint::DownloadDump, || {
-        let resp = dump_agent()
-            .get(&url)
-            .header("Authorization", auth.as_str())
-            .call()?;
-        read_dump_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::DOWNLOAD_DUMP, || {
+        bare(http::Method::GET, &url, token)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -703,7 +911,8 @@ fn parse_project(body: &[u8], context: &str) -> Result<Project, SpeleoDbError> {
 /// #184: `live_open1_bare_tml_mime_outcome`; see `docs/speleodb-dev-testing.md`).
 fn mime_for(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
-        Some("stalx") => "application/vnd.sqlite3",
+        // Any letter case, as `has_stalx_extension` reads a project path (#576 B33).
+        Some(ext) if ext.eq_ignore_ascii_case("stalx") => "application/vnd.sqlite3",
         // .tml (and anything else co-pushed) → generic binary.
         _ => "application/octet-stream",
     }
@@ -774,6 +983,7 @@ fn build_upload_parts(
 /// mutex. `idempotent = false` → runs at most once (a commit must not
 /// double-submit on a mid-response failure).
 pub fn upload_auto(
+    _licence: &impl UploadLicence,
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -786,12 +996,11 @@ pub fn upload_auto(
 
     let descriptor = build_upload_parts(stalx_path, tml_path, message)?;
     let url = api_url(base, &format!("projects/{project_id}/upload/auto/"));
-    let auth = bearer(token);
 
-    // The Form/Part builders consume their inputs (`send(form)` takes the Form by
-    // value), so the form is rebuilt inside the closure. `idempotent = false`
-    // means the closure runs at most once regardless.
-    let (status, body) = with_retry(base, insecure_http, false, Endpoint::Upload, || {
+    // The Form/Part builders consume their inputs (sending takes the Form by
+    // value), so the form is rebuilt inside the closure. `Retry::Once` means the
+    // closure runs at most once regardless.
+    let (status, body) = send(base, insecure_http, &spec::UPLOAD, || {
         let mut form = Form::new();
         for p in &descriptor.parts {
             let part = Part::file(&p.src)?
@@ -800,11 +1009,13 @@ pub fn upload_auto(
             form = form.part(p.name, part);
         }
         let form = form.text("message", descriptor.message.as_str());
-        let resp = agent_with_timeout(UPLOAD_TIMEOUT)
-            .put(&url)
-            .header("Authorization", auth.as_str())
-            .send(form)?;
-        read_status_body(resp)
+        // `RequestBuilder::send` would copy the form's content type (with its
+        // boundary) onto the request; `Agent::run` does not, so it is set here.
+        let content_type = format!("multipart/form-data; boundary={}", form.boundary());
+        Ok(http::Request::put(&url)
+            .header("Authorization", bearer(token))
+            .header("Content-Type", content_type)
+            .body(form)?)
     })?;
 
     if !(200..300).contains(&status) {
@@ -868,7 +1079,7 @@ fn parse_upload_auto_response(body: &[u8]) -> Result<Project, SpeleoDbError> {
 
 /// `POST /api/v2/projects/{id}/acquire/` - take the project mutex, returning the
 /// updated [`Project`]. The upload endpoint requires the caller to hold the lock
-/// (`UserOwnsProjectMutex`). `idempotent = false`. Consumed by #194
+/// (`UserOwnsProjectMutex`). Runs once ([`spec::ACQUIRE`]). Consumed by #194
 /// `speleodb_start_editing`.
 pub fn acquire_lock(
     base: &str,
@@ -880,14 +1091,14 @@ pub fn acquire_lock(
         base,
         token,
         insecure_http,
-        Endpoint::Acquire,
+        &spec::ACQUIRE,
         &format!("projects/{project_id}/acquire/"),
         "acquire lock response",
     )
 }
 
 /// `POST /api/v2/projects/{id}/release/` - release the project mutex, returning
-/// the updated [`Project`]. `idempotent = false`. Consumed by #194/#197.
+/// the updated [`Project`]. Runs once ([`spec::RELEASE`]). Consumed by #194/#197.
 pub fn release_lock(
     base: &str,
     token: &str,
@@ -898,7 +1109,7 @@ pub fn release_lock(
         base,
         token,
         insecure_http,
-        Endpoint::Release,
+        &spec::RELEASE,
         &format!("projects/{project_id}/release/"),
         "release lock response",
     )
@@ -914,13 +1125,8 @@ pub fn release_all_locks(
     insecure_http: bool,
 ) -> Result<(), SpeleoDbError> {
     let url = api_url(base, "user/release_all_locks/");
-    let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, true, Endpoint::ReleaseAll, || {
-        let resp = agent()
-            .delete(&url)
-            .header("Authorization", auth.as_str())
-            .call()?;
-        read_status_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::RELEASE_ALL, || {
+        bare(http::Method::DELETE, &url, token)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -929,11 +1135,15 @@ pub fn release_all_locks(
 }
 
 /// `PATCH /api/v2/projects/{id}/` - update project metadata, returning the updated
-/// [`Project`]. Non-idempotent (`idempotent = false`) so a mid-response transport
+/// [`Project`]. Runs once ([`spec::PATCH_PROJECT`]) so a mid-response transport
 /// failure can't double-apply. Consumed by #200's Enable-rendering action (PATCH
 /// `exclude_geojson = false`); the server enforces permission (READ_AND_WRITE, no
 /// lock) on the metadata PATCH.
+///
+/// [#576 NF-A8R-4] Takes a [`PatchLicence`]: a call written without one does not
+/// compile.
 pub fn patch_project(
+    _licence: &impl PatchLicence,
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -941,14 +1151,8 @@ pub fn patch_project(
     payload: &str,
 ) -> Result<Project, SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/"));
-    let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, false, Endpoint::PatchProject, || {
-        let resp = agent()
-            .patch(&url)
-            .header("Authorization", auth.as_str())
-            .header("Content-Type", "application/json")
-            .send(payload)?;
-        read_status_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::PATCH_PROJECT, || {
+        json(http::Method::PATCH, &url, token, payload)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -957,8 +1161,8 @@ pub fn patch_project(
 }
 
 /// `POST /api/v2/projects/` with a caller-built JSON body - create a fresh project
-/// and return the full parsed [`Project`]. `idempotent = false` (run once so a
-/// mid-response failure can't double-submit a create). The #207 create-on-SDB
+/// and return the full parsed [`Project`]. Runs once ([`spec::CREATE_PROJECT`]) so
+/// a mid-response failure can't double-submit a create. The #207 create-on-SDB
 /// orchestration builds the payload (name/description/country/visibility/`type`/
 /// lat-long/`exclude_geojson`); `created_by` is injected server-side.
 pub fn create_project_with(
@@ -968,14 +1172,8 @@ pub fn create_project_with(
     payload: &str,
 ) -> Result<Project, SpeleoDbError> {
     let url = api_url(base, "projects/");
-    let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, false, Endpoint::CreateProject, || {
-        let resp = agent()
-            .post(&url)
-            .header("Authorization", auth.as_str())
-            .header("Content-Type", "application/json")
-            .send(payload)?;
-        read_status_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::CREATE_PROJECT, || {
+        json(http::Method::POST, &url, token, payload)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -1007,23 +1205,20 @@ pub fn create_project(
 }
 
 /// Shared POST-with-no-body helper for the lock mutations (acquire/release):
-/// non-idempotent (run once), parse the 2xx body into a [`Project`].
+/// run once (their rows say so), parse the 2xx body into a [`Project`].
 fn post_no_body_project(
     base: &str,
     token: &str,
     insecure_http: bool,
-    endpoint: Endpoint,
+    row: &EndpointSpec,
     suffix: &str,
     context: &str,
 ) -> Result<Project, SpeleoDbError> {
     let url = api_url(base, suffix);
-    let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, false, endpoint, || {
-        let resp = agent()
-            .post(&url)
-            .header("Authorization", auth.as_str())
-            .send("")?;
-        read_status_body(resp)
+    let (status, body) = send(base, insecure_http, row, || {
+        Ok(http::Request::post(&url)
+            .header("Authorization", bearer(token))
+            .body("")?)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -1033,23 +1228,82 @@ fn post_no_body_project(
 
 /// `DELETE /api/v2/projects/{id}/` - soft-delete the project (the server
 /// deactivates it and a cron purges after ~30 days), returning `()` on success.
-/// DELETE is idempotent (deleting an already-deleted project is a no-op/404), so a
-/// transient-transport retry is safe. Consumed by #215's Delete-project action and
-/// the live tests' per-run cleanup. Does not require releasing the lock first.
+/// Consumed by #215's Delete-project action and the live tests' per-run cleanup.
+/// Does not require releasing the lock first.
+///
+/// [#576 B5-D2] Retried, and a **404 means it is already deleted**. DELETE is
+/// idempotent: when the first request lands and its reply is lost, the retry (the
+/// transport's own, or the user's next click) finds the project gone. Reporting
+/// that 404 as a failure left the local copy linked to a project the server no
+/// longer has, because the caller only unlinks on success.
+///
+/// [#576 RV4-R-S4, decision RV4-R-S4-D2] Only on the server the project LIVES on:
+/// `project_endpoint` is the deployment `project_id` belongs to (the open copy's
+/// link), and `base` is the server the session is signed in to. When the two differ
+/// (compared through [`super::auth::normalize_endpoint`]) the delete is refused
+/// BEFORE anything is sent: another server's 404 would say only that IT has no such
+/// project, and its 2xx would mean it deleted ITS project of that id. The refusal
+/// names the project's server, and the caller keeps the copy linked. So a 404 here
+/// always comes from the project's own server.
 pub fn delete_project(
     base: &str,
     token: &str,
     insecure_http: bool,
     project_id: &str,
+    project_endpoint: &str,
 ) -> Result<(), SpeleoDbError> {
+    if super::auth::normalize_endpoint(base) != super::auth::normalize_endpoint(project_endpoint) {
+        tracing::warn!(
+            project_id,
+            purpose =
+                "never send a delete to a server the project does not live on (#576 RV4-R-S4)",
+            "SpeleoDB project delete refused before sending: the session is on another server"
+        );
+        return Err(SpeleoDbError::refused(format!(
+            "This project lives on {project_endpoint}; sign in there to delete it."
+        )));
+    }
     let url = api_url(base, &format!("projects/{project_id}/"));
-    let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, true, Endpoint::DeleteProject, || {
-        let resp = agent()
-            .delete(&url)
-            .header("Authorization", auth.as_str())
-            .call()?;
-        read_status_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::DELETE_PROJECT, || {
+        bare(http::Method::DELETE, &url, token)
+    })?;
+    if status == 404 {
+        tracing::info!(
+            project_id,
+            purpose = "a DELETE whose project is already gone has done its job (#576 B5-D2)",
+            "SpeleoDB answered 404 to the project delete; treating it as already deleted"
+        );
+        return Ok(());
+    }
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    Ok(())
+}
+
+/// Send `payload` as a JSON body with an arbitrary `method` to `suffix`; a 2xx maps
+/// to `Ok(())`. The collaborator permission-detail endpoints (#215) are run-once
+/// writes routed here ([`spec::MUTATE_PERMISSION`]), AND the `remove` variants are
+/// a DELETE-with-body - which ureq's typestate `.delete()` builder cannot express -
+/// so all three verbs go through `Agent::run` with an explicit `http::Request`,
+/// like every other call now does.
+///
+/// [#576 B25] Through [`send`] like everything else. It used to re-implement
+/// `with_retry`'s tail by hand - policy check, metrics, transport mapping - minus
+/// the body-limit arm, so an oversized reply surfaced as "could not reach SpeleoDB".
+fn send_json_request(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    row: &EndpointSpec,
+    method: http::Method,
+    suffix: &str,
+    payload: &serde_json::Value,
+) -> Result<(), SpeleoDbError> {
+    let url = api_url(base, suffix);
+    let payload = payload.to_string();
+    let (status, body) = send(base, insecure_http, row, || {
+        json(method.clone(), &url, token, &payload)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -1057,58 +1311,18 @@ pub fn delete_project(
     Ok(())
 }
 
-/// Send `payload` as a JSON body with an arbitrary `method` to `suffix`, enforcing
-/// the http private-network policy first ([`super::tls::enforce`], the #187
-/// chokepoint); a 2xx maps to `Ok(())`. The collaborator permission-detail
-/// endpoints (#215) are non-idempotent writes routed here: they run exactly once
-/// (no retry, matching every other SDB write), AND the `remove` variants are a
-/// DELETE-with-body - which ureq's typestate `.delete()` builder cannot express -
-/// so all three verbs go through `Agent::run` with an explicit `http::Request`.
-fn send_json_request(
-    base: &str,
-    token: &str,
-    insecure_http: bool,
-    endpoint: Endpoint,
-    method: http::Method,
-    suffix: &str,
-    payload: &serde_json::Value,
-) -> Result<(), SpeleoDbError> {
-    // #187: block public `http://` / scheme-less endpoints before any dial (the
-    // same gate `with_retry` runs; these writes bypass the retry loop, never it).
-    // A policy block is not server traffic, so it is intentionally not recorded.
-    super::tls::enforce(base, insecure_http)?;
-    let url = api_url(base, suffix);
-    let request = http::Request::builder()
-        .method(method)
-        .uri(url)
-        .header("Authorization", bearer(token))
-        .header("Content-Type", "application/json")
-        .body(payload.to_string())
-        .map_err(|e| SpeleoDbError::Parse(format!("build request: {e}")))?;
-    // #210: this write bypasses `with_retry`, so record its one attempt here - the
-    // same count + latency + outcome the retry-loop chokepoint emits. Time and
-    // classify the FULL attempt (dial + status + body read), exactly as
-    // `with_retry`'s timed closure does, so latency covers the body read and a
-    // mid-body read failure counts as `network-error` on both paths (not a false
-    // `ok`/`server-error` off the status line alone).
-    let started = std::time::Instant::now();
-    let result = agent().run(request).and_then(read_status_body);
-    let outcome = match &result {
-        Ok((status, _)) => Outcome::from_status(*status),
-        Err(_) => Outcome::NetworkError,
-    };
-    super::metrics::record(endpoint, outcome, started.elapsed());
-    let (status, body) = result.map_err(|e| {
-        let cause = classify_transport(&e);
-        let detail = clean_transport(&e.to_string());
-        // Same #270 contract as `with_retry`: the raw cause lives in the log.
-        tracing::warn!(?endpoint, ?cause, detail = %detail, "SpeleoDB transport failure");
-        SpeleoDbError::Transport { cause, detail }
-    })?;
-    if !(200..300).contains(&status) {
-        return Err(status_error(status, &body));
+/// [#576 B16] The level a grant may send: any tier this build knows. An
+/// [`Permission::Unknown`] is a label the SERVER sent that this build cannot name,
+/// so there is nothing faithful to send back - refused before any request.
+fn grantable(level: Permission) -> Result<Permission, SpeleoDbError> {
+    if level == Permission::Unknown {
+        return Err(SpeleoDbError::refused(
+            "this access level is not one this version of Stalagmight knows, so it cannot be \
+             granted - pick another level"
+                .to_owned(),
+        ));
     }
-    Ok(())
+    Ok(level)
 }
 
 /// `GET /api/v2/projects/{id}/permissions/user/` - list the project's active
@@ -1121,13 +1335,8 @@ pub fn list_user_permissions(
     project_id: &str,
 ) -> Result<Vec<UserPermission>, SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/permissions/user/"));
-    let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, true, Endpoint::ListPermissions, || {
-        let resp = agent()
-            .get(&url)
-            .header("Authorization", auth.as_str())
-            .call()?;
-        read_status_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::LIST_PERMISSIONS, || {
+        bare(http::Method::GET, &url, token)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -1147,11 +1356,12 @@ pub fn add_user_permission(
     email: &str,
     level: Permission,
 ) -> Result<(), SpeleoDbError> {
+    let level = grantable(level)?;
     send_json_request(
         base,
         token,
         insecure_http,
-        Endpoint::MutatePermission,
+        &spec::MUTATE_PERMISSION,
         http::Method::POST,
         &format!("projects/{project_id}/permission/user/detail/"),
         &serde_json::json!({ "user": email, "level": level }),
@@ -1168,11 +1378,12 @@ pub fn set_user_permission(
     email: &str,
     level: Permission,
 ) -> Result<(), SpeleoDbError> {
+    let level = grantable(level)?;
     send_json_request(
         base,
         token,
         insecure_http,
-        Endpoint::MutatePermission,
+        &spec::MUTATE_PERMISSION,
         http::Method::PUT,
         &format!("projects/{project_id}/permission/user/detail/"),
         &serde_json::json!({ "user": email, "level": level }),
@@ -1192,7 +1403,7 @@ pub fn remove_user_permission(
         base,
         token,
         insecure_http,
-        Endpoint::MutatePermission,
+        &spec::MUTATE_PERMISSION,
         http::Method::DELETE,
         &format!("projects/{project_id}/permission/user/detail/"),
         &serde_json::json!({ "user": email }),
@@ -1208,13 +1419,8 @@ pub fn list_team_permissions(
     project_id: &str,
 ) -> Result<Vec<TeamPermission>, SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/permissions/team/"));
-    let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, true, Endpoint::ListPermissions, || {
-        let resp = agent()
-            .get(&url)
-            .header("Authorization", auth.as_str())
-            .call()?;
-        read_status_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::LIST_PERMISSIONS, || {
+        bare(http::Method::GET, &url, token)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -1235,11 +1441,12 @@ pub fn add_team_permission(
     team_id: &str,
     level: Permission,
 ) -> Result<(), SpeleoDbError> {
+    let level = grantable(level)?;
     send_json_request(
         base,
         token,
         insecure_http,
-        Endpoint::MutatePermission,
+        &spec::MUTATE_PERMISSION,
         http::Method::POST,
         &format!("projects/{project_id}/permission/team/detail/"),
         &serde_json::json!({ "team": team_id, "level": level }),
@@ -1256,11 +1463,12 @@ pub fn set_team_permission(
     team_id: &str,
     level: Permission,
 ) -> Result<(), SpeleoDbError> {
+    let level = grantable(level)?;
     send_json_request(
         base,
         token,
         insecure_http,
-        Endpoint::MutatePermission,
+        &spec::MUTATE_PERMISSION,
         http::Method::PUT,
         &format!("projects/{project_id}/permission/team/detail/"),
         &serde_json::json!({ "team": team_id, "level": level }),
@@ -1280,7 +1488,7 @@ pub fn remove_team_permission(
         base,
         token,
         insecure_http,
-        Endpoint::MutatePermission,
+        &spec::MUTATE_PERMISSION,
         http::Method::DELETE,
         &format!("projects/{project_id}/permission/team/detail/"),
         &serde_json::json!({ "team": team_id }),
@@ -1296,13 +1504,8 @@ pub fn list_teams(
     insecure_http: bool,
 ) -> Result<Vec<Team>, SpeleoDbError> {
     let url = api_url(base, "teams/");
-    let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, true, Endpoint::ListTeams, || {
-        let resp = agent()
-            .get(&url)
-            .header("Authorization", auth.as_str())
-            .call()?;
-        read_status_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::LIST_TEAMS, || {
+        bare(http::Method::GET, &url, token)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -1323,13 +1526,8 @@ pub fn list_user_autocomplete(
 ) -> Result<Vec<UserAutocomplete>, SpeleoDbError> {
     let encoded = utf8_percent_encode(query, NON_ALPHANUMERIC);
     let url = api_url(base, &format!("user/autocomplete/?query={encoded}"));
-    let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, true, Endpoint::Autocomplete, || {
-        let resp = agent()
-            .get(&url)
-            .header("Authorization", auth.as_str())
-            .call()?;
-        read_status_body(resp)
+    let (status, body) = send(base, insecure_http, &spec::AUTOCOMPLETE, || {
+        bare(http::Method::GET, &url, token)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -1354,7 +1552,7 @@ pub fn grant_permission(
         base,
         token,
         false,
-        Endpoint::MutatePermission,
+        &spec::MUTATE_PERMISSION,
         http::Method::POST,
         &format!("projects/{project_id}/permission/user/detail/"),
         &serde_json::json!({ "user": email, "level": level }),
@@ -1375,13 +1573,13 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        add_team_permission, add_user_permission, api_url, bearer, body_limit_for,
-        build_upload_parts, classify_transport, clean_transport, delete_project, download_dump,
-        download_dump_at_hash, human_bytes, list_teams, list_user_autocomplete,
-        list_user_permissions, mime_for, parse_error_message, parse_upload_auto_response,
-        remove_team_permission, remove_user_permission, set_user_permission, with_retry, Endpoint,
-        RevisionHistory, UserInfo, DEFAULT_MAX_BYTES, DUMP_DOWNLOAD_TIMEOUT, DUMP_MAX_BYTES,
-        REQUEST_TIMEOUT,
+        add_team_permission, add_user_permission, api_url, bare, bearer, build_upload_parts,
+        classify_transport, clean_transport, delete_project, download_dump, download_dump_at_hash,
+        human_bytes, json, list_teams, list_user_autocomplete, list_user_permissions, mime_for,
+        parse_error_message, parse_upload_auto_response, remove_team_permission,
+        remove_user_permission, send, set_user_permission, spec, with_retry, Connection, Retry,
+        RevisionHistory, TestWire, UserInfo, DEFAULT_MAX_BYTES, DUMP_DOWNLOAD_TIMEOUT,
+        DUMP_MAX_BYTES, REQUEST_TIMEOUT, REVERIFY_PROBE_TIMEOUT, UPLOAD_TIMEOUT,
     };
     use crate::speleodb::{Permission, SpeleoDbError, TransportCause};
 
@@ -1610,8 +1808,7 @@ mod tests {
         let err = with_retry(
             &format!("http://127.0.0.1:{port}"),
             false,
-            false,
-            Endpoint::ListProjects,
+            &spec::CREATE_PROJECT,
             || {
                 Err(ureq::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::ConnectionRefused,
@@ -1687,6 +1884,16 @@ mod tests {
         assert_eq!(mime_for(Path::new("a.bin")), "application/octet-stream");
     }
 
+    /// A `.stalx` in any letter case is a project, as `has_stalx_extension` reads it
+    /// (#576 B33 review RV1-RUST-9): `CaveB.STALX` must not go out as octet-stream.
+    #[test]
+    fn mime_for_reads_the_stalx_extension_in_any_case() {
+        for name in ["CaveB.STALX", "CaveB.Stalx"] {
+            let mime = mime_for(Path::new(name));
+            assert_eq!(mime, "application/vnd.sqlite3", "{name}");
+        }
+    }
+
     #[test]
     fn upload_auto_rejects_blank_message() {
         for blank in ["", "   ", "\t\n"] {
@@ -1731,16 +1938,10 @@ mod tests {
         // runs even once (the closure increments a counter we assert stays 0).
         let calls = Arc::new(AtomicUsize::new(0));
         let c = Arc::clone(&calls);
-        let result = with_retry(
-            "http://8.8.8.8",
-            false,
-            true,
-            Endpoint::ListProjects,
-            move || {
-                c.fetch_add(1, Ordering::SeqCst);
-                Ok((200, Vec::new()))
-            },
-        );
+        let result = with_retry("http://8.8.8.8", false, &spec::LIST_PROJECTS, move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            Ok((200, Vec::new()))
+        });
         assert!(matches!(
             result,
             Err(SpeleoDbError::InsecureEndpoint { .. })
@@ -1757,8 +1958,7 @@ mod tests {
         let out = with_retry(
             "http://127.0.0.1:9",
             false,
-            true,
-            Endpoint::ListProjects,
+            &spec::LIST_PROJECTS,
             move || {
                 let i = c.fetch_add(1, Ordering::SeqCst);
                 if i == 0 {
@@ -1782,8 +1982,7 @@ mod tests {
         let out = with_retry(
             "http://127.0.0.1:9",
             false,
-            true,
-            Endpoint::ListProjects,
+            &spec::LIST_PROJECTS,
             move || {
                 let i = c.fetch_add(1, Ordering::SeqCst);
                 if i < 2 {
@@ -1807,8 +2006,7 @@ mod tests {
         let out = with_retry(
             "http://127.0.0.1:9",
             false,
-            true,
-            Endpoint::ListProjects,
+            &spec::LIST_PROJECTS,
             move || {
                 c.fetch_add(1, Ordering::SeqCst);
                 Ok((500, b"down".to_vec()))
@@ -1828,8 +2026,7 @@ mod tests {
         let out = with_retry(
             "http://127.0.0.1:9",
             false,
-            false,
-            Endpoint::ListProjects,
+            &spec::CREATE_PROJECT,
             move || {
                 c.fetch_add(1, Ordering::SeqCst);
                 Ok((500, b"down".to_vec()))
@@ -1846,8 +2043,7 @@ mod tests {
         let err = with_retry(
             "http://127.0.0.1:9",
             false,
-            false,
-            Endpoint::ListProjects,
+            &spec::CREATE_PROJECT,
             move || {
                 c2.fetch_add(1, Ordering::SeqCst);
                 Err(ureq::Error::HostNotFound)
@@ -1956,8 +2152,8 @@ mod tests {
         let stub = LoopbackStub::start_with_body_len(vec![200, 200, 200], 4096);
         let url = format!("{}/api/v2/projects/x/dump/", stub.base);
         let base = stub.base.clone();
-        let err = with_retry(&base, false, true, Endpoint::DownloadDump, || {
-            let resp = super::agent().get(&url).call()?;
+        let err = with_retry(&base, false, &spec::DOWNLOAD_DUMP, || {
+            let resp = spec::DOWNLOAD_DUMP.agent().get(&url).call()?;
             super::read_body_limited(resp, 1024)
         })
         .expect_err("a body over the ceiling cannot be read");
@@ -1999,9 +2195,8 @@ mod tests {
         let mut stub = LoopbackStub::start(vec![503, 503, 200]);
         let url = format!("{}/api/v2/projects/", stub.base);
         let base = stub.base.clone();
-        let (status, _body) = with_retry(&base, false, true, Endpoint::ListProjects, || {
-            let resp = super::agent().get(&url).call()?;
-            super::read_status_body(resp)
+        let (status, _body) = send(&base, false, &spec::LIST_PROJECTS, || {
+            bare(http::Method::GET, &url, "tok")
         })
         .expect("read retries to success");
         assert_eq!(status, 200);
@@ -2016,9 +2211,8 @@ mod tests {
         let mut stub = LoopbackStub::start(vec![503]);
         let url = format!("{}/api/v2/projects/", stub.base);
         let base = stub.base.clone();
-        let (status, _body) = with_retry(&base, false, false, Endpoint::ListProjects, || {
-            let resp = super::agent().post(&url).send("")?;
-            super::read_status_body(resp)
+        let (status, _body) = send(&base, false, &spec::CREATE_PROJECT, || {
+            json(http::Method::POST, &url, "tok", "")
         })
         .expect("write returns the 503");
         assert_eq!(status, 503);
@@ -2045,6 +2239,7 @@ mod tests {
         let mut stub = LoopbackStub::start(vec![200]);
         let base = stub.base.clone();
         let project = super::upload_auto(
+            &TestWire,
             &base,
             "tok",
             false,
@@ -2078,6 +2273,14 @@ mod tests {
             "the .tml part carries its explicit MIME"
         );
         assert!(wire.contains("PUT "), "it is a PUT");
+        // [#576 B5] `Agent::run` (unlike `RequestBuilder::send`) does not copy the
+        // form's own content type onto the request, so the transport sets it: the
+        // server cannot split the parts without the boundary.
+        assert!(
+            wire.to_ascii_lowercase()
+                .contains("content-type: multipart/form-data; boundary="),
+            "the request names the multipart boundary: {wire}"
+        );
     }
 
     #[test]
@@ -2309,7 +2512,7 @@ mod tests {
     fn loopback_delete_project_is_bare_delete() {
         let mut stub = LoopbackStub::start(vec![200]);
         let base = stub.base.clone();
-        delete_project(&base, "tok", false, WIRE_PID).expect("200 -> Ok(())");
+        delete_project(&base, "tok", false, WIRE_PID, &base).expect("200 -> Ok(())");
         stub.join();
         let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
         assert!(
@@ -2325,7 +2528,7 @@ mod tests {
         // HEAD. A missing/misplaced SHA would silently restore the wrong revision.
         let mut stub = LoopbackStub::start(vec![200]);
         let base = stub.base.clone();
-        let _ = download_dump_at_hash(&base, "tok", false, WIRE_PID, "abc1234");
+        let _ = download_dump_at_hash(&TestWire, &base, "tok", false, WIRE_PID, "abc1234");
         stub.join();
         let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
         assert!(
@@ -2341,15 +2544,17 @@ mod tests {
         // #270: `timeout_global` is end-to-end INCLUDING the body read, so a dump
         // (the whole working tree as a ZIP) on the shared 30 s small-GET budget
         // fails all three idempotent attempts while a same-size upload succeeds.
+        // [#576 B5] The budget is the row's, applied per request by `send` (the
+        // pooled read agent serves both budgets).
         assert_eq!(
-            super::dump_agent().config().timeouts().global,
-            Some(DUMP_DOWNLOAD_TIMEOUT),
-            "the dump agent must carry the dump budget"
+            spec::DOWNLOAD_DUMP.timeout,
+            DUMP_DOWNLOAD_TIMEOUT,
+            "the dump row must carry the dump budget"
         );
         assert_eq!(
-            super::agent().config().timeouts().global,
-            Some(REQUEST_TIMEOUT),
-            "the shared read agent keeps the small-GET budget"
+            spec::LIST_PROJECTS.timeout,
+            REQUEST_TIMEOUT,
+            "the shared read rows keep the small-GET budget"
         );
         assert!(
             DUMP_DOWNLOAD_TIMEOUT > REQUEST_TIMEOUT,
@@ -2358,35 +2563,125 @@ mod tests {
     }
 
     #[test]
-    fn both_dump_downloads_use_the_dump_agent() {
-        // The agent a function picks is not observable from its return value, so
-        // guard it at the source: BOTH dump endpoints must build `dump_agent()`. A
-        // future edit that reaches for the bare `agent()` silently reinstates the
-        // 30 s budget on one of them.
-        let src = include_str!("client.rs");
+    fn both_dump_downloads_use_the_dump_row() {
+        // The row a function picks is not observable from its return value, so
+        // guard it at the source: BOTH dump endpoints must send on
+        // `spec::DOWNLOAD_DUMP`. A future edit that reaches for another row
+        // silently reinstates the 30 s budget and the 10 MiB ceiling on one of them.
+        // A sanctioned source scan (#576 A8-D2, docs/testing-recipes.md "Source scans").
+        use crate::models::source_scan::{fn_body, prod_region};
+        let src = prod_region(include_str!("client.rs"), "pub fn download_dump_at_hash(");
         for name in ["pub fn download_dump(", "pub fn download_dump_at_hash("] {
-            let start = src.find(name).expect("dump download fn present");
-            let body = &src[start..];
-            let end = body.find("\n}\n").expect("fn body terminates");
-            let body = &body[..end];
+            let body = fn_body(src, name);
             assert!(
-                body.contains("dump_agent()"),
-                "{name} must build its agent via dump_agent()"
+                body.contains("send(base, insecure_http, &spec::DOWNLOAD_DUMP,"),
+                "RULE (both dump downloads use the dump row): {name} must send on the dump row"
             );
-            // Blank out the legitimate calls first, then look for ANY `agent()` left
-            // over. Matching on a leading-space needle instead let two spellings
-            // through: a qualified `client::agent()`, and a rustfmt wrap that puts
-            // `agent()` at the start of an indented continuation line - both of which
-            // reinstate the 30 s budget while the test stays green.
-            let remaining = body.replace("dump_agent()", "");
-            assert!(
-                !remaining.contains("agent()"),
-                "{name} must NOT fall back to the shared 30 s agent()"
+            assert_eq!(
+                body.matches("spec::").count(),
+                1,
+                "RULE (both dump downloads use the dump row): {name} must name no other row"
             );
+        }
+        assert_eq!(
+            spec::DOWNLOAD_DUMP.body_limit,
+            DUMP_MAX_BYTES,
+            "and the dump row reads on the dump ceiling, not the 10 MiB default"
+        );
+    }
+
+    #[test]
+    fn no_call_builds_its_own_agent_or_bypasses_the_table() {
+        // [#576 B5] Every call goes through `send`, which reads the agent, the
+        // timeout, the body ceiling, the retry policy and the metrics label off the
+        // call's row. An agent built or a retry flag passed anywhere else is the
+        // hand-picking that produced the four disagreements this table replaced.
+        // A sanctioned source scan (#576 A8-D2, docs/testing-recipes.md "Source scans").
+        let prod =
+            crate::models::source_scan::prod_region(include_str!("client.rs"), "fn agent_config");
+        assert_eq!(
+            prod.matches("ureq::Agent::config_builder()").count(),
+            1,
+            "RULE (one endpoint table, #576 B5): agents are configured in one place \
+             (`agent_config`)"
+        );
+        assert_eq!(
+            prod.matches("with_retry(").count(),
+            2,
+            "RULE (one endpoint table, #576 B5): with_retry is called only by `send` (plus \
+             its own definition)"
+        );
+        assert!(
+            !prod.contains(".call()?") && !prod.contains(".send(form)"),
+            "RULE (one endpoint table, #576 B5): no request is sent outside `send`"
+        );
+    }
+
+    #[test]
+    fn every_endpoint_row_agrees_with_its_contract_row() {
+        // [#576 B5] The action a failure is mapped to (`contract::map_status`) is a
+        // function of the row's category, and the transport's behaviour a function
+        // of the row's retry policy. They used to be chosen separately per call, and
+        // disagreed four ways. Pinned row by row:
+        use crate::speleodb::contract::{map_status, Endpoint as Category};
+        use crate::speleodb::SpeleoDbAction;
+        for (name, row) in spec::ALL {
+            // 1. A row retries exactly when its category's exhausted 5xx says
+            //    "already retried" (Retry), and runs once exactly when it says
+            //    "may have landed, stay dirty" (StayDirty). The one exception is the
+            //    #202 probe: a retry-safe GET run once for latency, whose failures
+            //    are only logged and never mapped.
+            let retried = row.retry == Retry::Transient;
+            if *name != "GET_PROJECT_PROBE" {
+                assert_eq!(
+                    retried,
+                    row.category.is_idempotent(),
+                    "{name}: retry policy and contract row disagree"
+                );
+                let action = map_status(row.category, 503);
+                let expected = if retried {
+                    SpeleoDbAction::Retry
+                } else {
+                    SpeleoDbAction::StayDirty
+                };
+                assert_eq!(action, expected, "{name}: a 503 maps to {action:?}");
+            }
+            // 2. Only retry-safe calls share the pooled connection; every write
+            //    opens its own (B5-D3 "Pool reads, fresh writes").
+            if row.connection == Connection::Pooled {
+                assert!(retried, "{name}: a run-once call must not use the pool");
+                assert!(
+                    row.category.is_read() || row.category == Category::User,
+                    "{name}: only reads are pooled"
+                );
+            }
+            // 3. The dump ceiling only where a dump is read; ureq's own default
+            //    everywhere else, so a size refusal names the limit that applied.
+            let expected_limit = if *name == "DOWNLOAD_DUMP" {
+                DUMP_MAX_BYTES
+            } else {
+                DEFAULT_MAX_BYTES
+            };
+            assert_eq!(row.body_limit, expected_limit, "{name}: body ceiling");
+        }
+        // The rows the disagreements were about, by name.
+        assert_eq!(spec::PATCH_PROJECT.retry, Retry::Once);
+        assert_eq!(
+            map_status(spec::PATCH_PROJECT.category, 403),
+            SpeleoDbAction::Fence,
+            "a refused PATCH is a write fence, not read-only access"
+        );
+        assert_eq!(spec::RELEASE_ALL.retry, Retry::Transient);
+        assert_eq!(spec::DELETE_PROJECT.retry, Retry::Transient);
+        assert_eq!(spec::GET_PROJECT_PROBE.retry, Retry::Once);
+        assert_eq!(spec::GET_PROJECT_PROBE.timeout, REVERIFY_PROBE_TIMEOUT);
+        assert_eq!(spec::UPLOAD.timeout, UPLOAD_TIMEOUT);
+        // Every metrics label is used by some row, so no registered telemetry
+        // event is dead.
+        for metric in super::Endpoint::ALL {
             assert!(
-                body.contains("read_dump_body(resp)"),
-                "{name} must read its body on the dump ceiling, not the 10 MiB default \
-                 `read_to_vec()` applies via read_status_body"
+                spec::ALL.iter().any(|(_, row)| row.metrics == *metric),
+                "metrics label {metric:?} has no row"
             );
         }
     }
@@ -2421,7 +2716,8 @@ mod tests {
         });
 
         let base = format!("http://127.0.0.1:{port}");
-        let body = download_dump(&base, "tok", false, WIRE_PID).expect("an 10 MiB+ dump downloads");
+        let body = download_dump(&TestWire, &base, "tok", false, WIRE_PID)
+            .expect("an 10 MiB+ dump downloads");
         let _ = handle.join();
         assert_eq!(
             body.len(),
@@ -2461,13 +2757,14 @@ mod tests {
 
     #[test]
     fn the_body_limit_message_names_the_limit_that_actually_applied() {
-        // `with_retry` is shared by all thirteen endpoints, but only the two dump
-        // downloads read on the dump ceiling; the other eleven use `read_status_body`,
-        // i.e. ureq's own 10 MiB default. Quoting the dump ceiling at a JSON endpoint
-        // told the user their reply had exceeded a limit many times the one it hit.
-        assert_eq!(body_limit_for(Endpoint::DownloadDump), DUMP_MAX_BYTES);
-        assert_eq!(body_limit_for(Endpoint::ListProjects), DEFAULT_MAX_BYTES);
-        assert_eq!(body_limit_for(Endpoint::Upload), DEFAULT_MAX_BYTES);
+        // `with_retry` is shared by every endpoint, but only the two dump downloads
+        // read on the dump ceiling; the rest read on ureq's own 10 MiB default.
+        // Quoting the dump ceiling at a JSON endpoint told the user their reply had
+        // exceeded a limit many times the one it hit. The message quotes the row's
+        // own `body_limit`, the same number the read was capped at.
+        assert_eq!(spec::DOWNLOAD_DUMP.body_limit, DUMP_MAX_BYTES);
+        assert_eq!(spec::LIST_PROJECTS.body_limit, DEFAULT_MAX_BYTES);
+        assert_eq!(spec::UPLOAD.body_limit, DEFAULT_MAX_BYTES);
 
         // And it is rendered in units a human reads, not as a raw byte count
         // ("2147483648-byte" was the old message).
@@ -2487,24 +2784,35 @@ mod tests {
         // redirects means the 3xx returns as an ordinary status and `status_error` maps
         // it like any other unexpected response.
         assert_eq!(
-            super::agent().config().max_redirects(),
+            spec::LIST_PROJECTS.agent().config().max_redirects(),
             0,
-            "the shared agent must not follow redirects"
+            "the pooled read agent must not follow redirects"
         );
         assert_eq!(
-            super::dump_agent().config().max_redirects(),
+            spec::UPLOAD.agent().config().max_redirects(),
             0,
-            "nor the dump agent"
+            "nor the fresh-connection write agent"
         );
         // Credentials were never the exposure here - ureq drops `Authorization` on a
         // cross-host hop - but pin that too so a config change cannot quietly turn a
         // redirect into a token leak on top.
-        assert!(
-            matches!(
-                super::agent().config().redirect_auth_headers(),
-                ureq::config::RedirectAuthHeaders::Never
-            ),
-            "auth headers must never ride a redirect"
+        for agent in [spec::LIST_PROJECTS.agent(), spec::UPLOAD.agent()] {
+            assert!(
+                matches!(
+                    agent.config().redirect_auth_headers(),
+                    ureq::config::RedirectAuthHeaders::Never
+                ),
+                "auth headers must never ride a redirect"
+            );
+        }
+        // [#576 B5-D3] And the write agent keeps nothing idle: every write dials.
+        assert_eq!(spec::UPLOAD.agent().config().max_idle_connections(), 0);
+        assert_eq!(
+            spec::UPLOAD
+                .agent()
+                .config()
+                .max_idle_connections_per_host(),
+            0
         );
     }
 
@@ -2538,7 +2846,7 @@ mod tests {
         });
 
         let base = format!("http://127.0.0.1:{port}");
-        let err = download_dump(&base, "tok", false, WIRE_PID)
+        let err = download_dump(&TestWire, &base, "tok", false, WIRE_PID)
             .expect_err("a 302 must not be followed, and is not a success");
         assert!(
             matches!(err, SpeleoDbError::Status { status: 302, .. }),
