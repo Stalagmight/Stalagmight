@@ -33,6 +33,7 @@ import {
   checkRoundtripState,
   checkTempFiles,
   exportChordVerdict,
+  nextErrorGrace,
   s4WorkStarted,
   ipcArgRejections,
   leftoverTempNames,
@@ -66,6 +67,7 @@ const digest = (over: Partial<ImportScreenDigest> = {}): ImportScreenDigest => (
   screen: 'idle',
   dialog: null,
   placement: false,
+  parsing: false,
   ctx: null,
   phase: null,
   hasProject: true,
@@ -498,6 +500,89 @@ describe('s4WorkStarted', () => {
         }
       }
     }
+  });
+});
+
+/**
+ * #576 W62-NF3: S4's grace window, held open while an import's file parses.
+ *
+ * `routeOpenedFile` refuses every second file while a parse is in flight, so the
+ * moves that follow a slow parse start nothing - an undo, a mode switch, a route
+ * the gate refused - and the one move of grace a started parse opens ran out
+ * while the parse was still going. Its error then landed on an unrelated move,
+ * and S4 blamed that move.
+ */
+describe('nextErrorGrace', () => {
+  const WINDOW = 1; // importDialogFuzz's ERROR_GRACE_MOVES
+
+  interface Move {
+    /** `s4WorkStarted(...).started`. */
+    started: boolean;
+    /** `digest.parsing` after the move. */
+    parsing: boolean;
+    /** Did a NEW error dialog come up on this move? */
+    errorRaised: boolean;
+  }
+
+  /**
+   * S4 over a run, as `stepOracles` applies it: a newly raised error dialog on a
+   * move that started nothing is blamed on that move unless grace is left, and
+   * the grace is updated after the check. Answers the blamed moves' indexes.
+   */
+  function blamedMoves(moves: readonly Move[]): number[] {
+    let grace = 0;
+    const blamed: number[] = [];
+    moves.forEach((move, index) => {
+      if (move.errorRaised && !move.started && grace === 0) blamed.push(index);
+      grace = nextErrorGrace({ previous: grace, started: move.started, parsing: move.parsing, window: WINDOW });
+    });
+    return blamed;
+  }
+
+  const unrelated = (parsing: boolean, errorRaised = false): Move => ({ started: false, parsing, errorRaised });
+
+  it('a move that started work opens the window', () => {
+    expect(nextErrorGrace({ previous: 0, started: true, parsing: false, window: WINDOW })).toBe(WINDOW);
+    expect(nextErrorGrace({ previous: 0, started: true, parsing: true, window: WINDOW })).toBe(WINDOW);
+  });
+
+  it('with no parse in flight, the window closes one move at a time, as before', () => {
+    expect(nextErrorGrace({ previous: 1, started: false, parsing: false, window: WINDOW })).toBe(0);
+    expect(nextErrorGrace({ previous: 0, started: false, parsing: false, window: WINDOW })).toBe(0);
+    expect(nextErrorGrace({ previous: 3, started: false, parsing: false, window: 3 })).toBe(2);
+  });
+
+  it('a parse in flight holds the window open, move after move', () => {
+    let grace = WINDOW;
+    for (let move = 0; move < 5; move++) {
+      grace = nextErrorGrace({ previous: grace, started: false, parsing: true, window: WINDOW });
+      expect(grace).toBe(WINDOW);
+    }
+    // ...including a parse the run never saw start (a picker answer consumed
+    // after its own move had been scored).
+    expect(nextErrorGrace({ previous: 0, started: false, parsing: true, window: WINDOW })).toBe(WINDOW);
+  });
+
+  it('THE REGRESSION: a parse spanning several moves is not blamed on the move it lands on', () => {
+    const run: Move[] = [
+      { started: true, parsing: true, errorRaised: false }, // the file picked; its parse is slow
+      unrelated(true), // an undo
+      unrelated(true), // a route the gate refused
+      unrelated(true), // a mode switch
+      unrelated(false, true), // the parse fails: its error lands on an Escape
+    ];
+    expect(blamedMoves(run)).toEqual([]);
+  });
+
+  it('once the parse has ended, the window closes again, so a later error is still blamed', () => {
+    const run: Move[] = [
+      { started: true, parsing: true, errorRaised: false },
+      unrelated(true),
+      unrelated(false), // the parse ended on this move, with no error
+      unrelated(false),
+      unrelated(false, true), // an error out of nowhere
+    ];
+    expect(blamedMoves(run)).toEqual([4]);
   });
 });
 

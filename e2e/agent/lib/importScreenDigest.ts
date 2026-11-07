@@ -140,6 +140,13 @@ export interface ImportScreenDigest {
   dialog: string | null;
   /** `uiStore.placementMode !== null`. */
   placement: boolean;
+  /**
+   * `uiStore.importParse !== null`: an import's file is still being parsed, and
+   * its result (an error, or the flow's first dialog) is still to land. S4's
+   * grace holds while it is set (`nextErrorGrace`, #576 W62-NF3). False on a
+   * build without the field.
+   */
+  parsing: boolean;
   /** `uiStore.importContext`. */
   ctx: 'new-project' | 'existing-project' | null;
   /** `uiStore.dmpImportWizardPhase` (only ever suggesting/manual_placing/null). */
@@ -297,6 +304,7 @@ export async function computeImportScreenDigest(
   const dialog = (ui.activeDialog as string | null) ?? null;
   const dialogData = (ui.dialogData as Record<string, unknown>) || {};
   const placement = ui.placementMode !== null && ui.placementMode !== undefined;
+  const parsing = ui.importParse !== null && ui.importParse !== undefined;
   const hasProject = !!projectState.project;
 
   // App.tsx's `isImportInProgress`, clause for clause. It is a component-local
@@ -575,6 +583,7 @@ export async function computeImportScreenDigest(
     screen: screen as ScreenId,
     dialog,
     placement,
+    parsing,
     ctx: (ui.importContext as 'new-project' | 'existing-project' | null) ?? null,
     phase: (ui.dmpImportWizardPhase as string | null) ?? null,
     hasProject,

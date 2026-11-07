@@ -239,6 +239,40 @@ export function s4WorkStarted(input: {
   return { started: true, reason: null };
 }
 
+/**
+ * S4's grace after one move: for how many of the moves that follow a NEWLY
+ * raised error dialog is still the late result of earlier work, not theirs.
+ *
+ * A move that started work (`s4WorkStarted`) opens the window, `window` moves
+ * wide: the parse it handed a file to can report on the next move instead. A
+ * move that started nothing lets it close by one - EXCEPT while an import's
+ * file is still parsing, read off the digest taken after the move
+ * (`ImportScreenDigest.parsing`, the app's `uiStore.importParse`). That parse's
+ * result is still to land, as an error or as the flow's first dialog, on
+ * whichever move is next, so the window stays open until the parse ends,
+ * however many moves it spans (#576 W62-NF3). Without the hold, a slow parse
+ * that outlived the one move of grace was blamed on whatever unrelated move it
+ * happened to land on - an undo, a mode switch, a route the gate refused.
+ *
+ * The router opens a failed parse's error dialog BEFORE it clears
+ * `importParse`, so a digest that reads `parsing: false` with no error up means
+ * the result already landed, and the window can start to close.
+ */
+export function nextErrorGrace(input: {
+  /** The grace the move was judged with. */
+  previous: number;
+  /** `s4WorkStarted(...).started` for the move. */
+  started: boolean;
+  /** `ImportScreenDigest.parsing` after the move. */
+  parsing: boolean;
+  /** How many moves a started piece of work opens (`ERROR_GRACE_MOVES`). */
+  window: number;
+}): number {
+  if (input.started) return input.window;
+  if (input.parsing) return Math.max(input.previous, input.window);
+  return Math.max(0, input.previous - 1);
+}
+
 /** The store state `useKeyboardShortcuts` reads when a Ctrl+E is dispatched. */
 export interface ExportChordGates {
   /** `activeDialog` at dispatch; null when no dialog was up. */

@@ -427,6 +427,7 @@ import {
   importGateRefusalSeen,
   leftoverTempNames,
   captureReceipt,
+  nextErrorGrace,
   s4WorkStarted,
   type CountedProject,
   type FileHandoff,
@@ -1344,6 +1345,10 @@ export const importDialogFuzz: Scenario = {
      * UP exempting every later move - is already conceded by the
      * `screenBefore !== 'error'` clause, and this is the same concession for the
      * instant the dialog arrives.
+     *
+     * The one longer lag the app itself announces is held instead of guessed: an
+     * import's file still parsing after a move (`digest.parsing`) keeps the
+     * window open until the parse ends (`nextErrorGrace`, #576 W62-NF3).
      */
     const ERROR_GRACE_MOVES = 1;
     let errorGrace = 0;
@@ -1422,7 +1427,13 @@ export const importDialogFuzz: Scenario = {
       // points are mostly not landing, which is worth knowing on its own.
       if (work.started) ctx.metric('s4WorkStarted');
       else if (work.reason !== 'not-eligible') ctx.metric(`s4NoWork:${work.reason}`);
-      errorGrace = work.started ? ERROR_GRACE_MOVES : Math.max(0, errorGrace - 1);
+      if (!work.started && digest.parsing) ctx.metric('s4GraceHeldByParse');
+      errorGrace = nextErrorGrace({
+        previous: errorGrace,
+        started: work.started,
+        parsing: digest.parsing,
+        window: ERROR_GRACE_MOVES,
+      });
       if (digest.screen !== 'idle' && !WEDGE_EXEMPT_SCREENS.has(digest.screen) && actionableCount(digest) === 0) {
         fail(
           `S5 WEDGE on "${digest.screen}": no actionable control anywhere in the inventory`,
