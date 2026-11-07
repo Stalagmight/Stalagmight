@@ -155,7 +155,7 @@ export function scanOptions(groups: readonly SiteGroup[]): ScanOptions {
 /** The kinds whose values reach a shareable sink. */
 const VALUE_KINDS: ReadonlySet<SinkKind> = new Set(['stream', 'progress', 'error', 'return']);
 
-/** How an allow-list keys a value: a bare identifier by its function, anything else as written. */
+/** How an allow-list keys a value: a bare identifier or a call of a parameter by its function, anything else as written. */
 export function valueKey(value: PrintValue): string {
   return value.bare ? `${value.fn}: ${value.text}` : value.text;
 }

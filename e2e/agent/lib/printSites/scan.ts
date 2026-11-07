@@ -66,7 +66,7 @@ export interface PrintValue {
   withheld: boolean;
   /** The value is a call of this function (the callee's last name), if any. */
   callee?: string;
-  /** A bare identifier: the allow-list keys it by function too. */
+  /** A bare identifier, or a call of a parameter (`what()`): the allow-list keys it by function too. */
   bare: boolean;
   /** The function the value is written in (a const or a local arrow function can be another than the site's). */
   fn: string;
@@ -222,6 +222,15 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     }
     return undefined;
   };
+  /** Is `id` a parameter of a function that encloses it? A call of one runs whatever its caller passed. */
+  const isParameter = (id: ts.Identifier): boolean => {
+    for (let at: ts.Node | undefined = id.parent; at; at = at.parent) {
+      if (ts.isFunctionLike(at) && at.parameters.some((param) => ts.isIdentifier(param.name) && param.name.text === id.text)) {
+        return true;
+      }
+    }
+    return false;
+  };
 
   /** One printed part: literal text, or a value. */
   type Part = { lit: string } | { expr: ts.Expression };
@@ -259,8 +268,8 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
   const valuesOf = (node: ts.Expression, withheld: boolean, out: PrintValue[], seen: Set<ts.Node>, folded = false): void => {
     if (seen.has(node)) return;
     seen.add(node);
-    const add = (n: ts.Expression, callee?: string): void => {
-      out.push({ text: text(n), line: lineOf(n), withheld, ...(callee ? { callee } : {}), bare: ts.isIdentifier(n), folded, fn: fnName(n) });
+    const add = (n: ts.Expression, callee?: string, bare = ts.isIdentifier(n)): void => {
+      out.push({ text: text(n), line: lineOf(n), withheld, ...(callee ? { callee } : {}), bare, folded, fn: fnName(n) });
     };
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)) {
       return valuesOf(node.expression, withheld, out, seen, folded);
@@ -365,7 +374,9 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
         for (const part of flatten(node)) if ('expr' in part) valuesOf(part.expr, withheld, out, seen, folded);
         return;
       }
-      return add(node, last);
+      // A call of a parameter (`guarded`'s `what()`) runs whatever its caller passed, so the same text in
+      // another function is another value: keyed by its function, as a bare identifier is.
+      return add(node, last, ts.isIdentifier(node.expression) && isParameter(node.expression));
     }
     add(node);
   };

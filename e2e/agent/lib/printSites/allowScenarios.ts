@@ -269,9 +269,9 @@ export const GROUP: SiteGroup = {
       'digest.ctx': "uiStore.importContext as the digest reads it: 'new-project' | 'existing-project' (importScreenDigest.ts:151)",
       [UNANCHORED_PROBE]:
         "a number: countUnanchoredComponents' in-page script returns a component count, -1 or -2 (importDialogFuzz.ts)",
-      'what()':
-        "guarded(fn) returns fn(): at its one print, the f1Pushed metric key, fn is checkPushed, which returns a number " +
-        '(lib/importFlowOracles.ts:648-653)',
+      'guarded: what()':
+        "guarded(fn) returns fn(): at its one print, the f1Pushed metric key (importDialogFuzz.ts runEpisodes), fn is " +
+        'checkPushed, which returns a number (lib/importFlowOracles.ts:648-653)',
       "ctx.metrics['file:shape:suggestive']": METRIC_COUNT,
     },
     'e2e/agent/scenarios/importDialogTrace.ts': {

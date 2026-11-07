@@ -109,7 +109,7 @@ export const GROUP: SiteGroup = {
         "the run's fixture, fuzzKnobs.fuzzFixture() at all four callers (an e2e/fixtures/ name the run already opened); the scenarios' reproduce: lines print it too",
       'throwFailure: message':
         "throwFailure's parameter, forwarded whole: the scenario's failure message, failureText's headline first - its callers in e2e/agent/scenarios/ are where that headline is built (see the W51 report)",
-      'dumpTrace({ message })':
+      'throwFailure: dumpTrace({ message })':
         "the trace path writeRunTrace wrote, on a later `  trace: ` line, which a runner keeps only as `trace: <one path>.json`, folded by shareableFailureText's foldLocalPaths",
     },
     'e2e/agent/lib/fuzzMatrixArgs.ts': {

@@ -238,6 +238,23 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
     expect(found.unchecked).toEqual(['a.ts:2 [stream] rename: n']);
   });
 
+  it("keys a call of a parameter by its function, so the fuzzer's `guarded` print allows no other `what()` (#576)", () => {
+    // Keyed by text, `what()` allowed every `what()` in the file, wherever it printed.
+    const fuzz = 'e2e/agent/scenarios/importDialogFuzz.ts';
+    const sources = {
+      [fuzz]:
+        'const guarded = (what) => {\n  try {\n    return what();\n  } catch (err) {\n    throw err;\n  }\n};\n' +
+        'const pushed = guarded(() => checkPushed(shape, before, after, label));\n' +
+        'ctx.metric(`f1Pushed:${pushed}`);\n' +
+        'function describeQz(what) {\n  ctx.log(`qz ${what()}`);\n}\n',
+    };
+    // Against the file's real entries: the f1Pushed print through `guarded` passes, the other `what()` does not.
+    const allow = { [fuzz]: merged((group) => group.allow)[fuzz] ?? {} };
+    expect(check(sources, { allow }).unchecked).toEqual([`${fuzz}:11 [progress] describeQz: what()`]);
+    // Each keyed by the function it is written in.
+    expect(check(sources).unchecked).toEqual([`${fuzz}:3 [stream] guarded: what()`, `${fuzz}:11 [progress] describeQz: what()`]);
+  });
+
   it('lists every file write and passthrough, and reports an entry nothing uses', () => {
     const found = check(
       { 'a.ts': "fs.writeFileSync(path.join(dir, 'report.md'), md);\nspawn('x', [], { stdio: 'inherit' });\n" },
