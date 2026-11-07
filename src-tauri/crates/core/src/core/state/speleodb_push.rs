@@ -198,6 +198,7 @@ const STALE_PUSH_SCRATCH: std::time::Duration = std::time::Duration::from_hours(
 /// of live pushes, because it holds across processes. Best-effort: nothing here can
 /// fail the push. `symlink_metadata`, so a `push-*` link is removed, never followed.
 fn sweep_stale_push_scratch(cache_dir: &Path, older_than: std::time::Duration) {
+    remove_legacy_push_scratch(cache_dir);
     let entries = match std::fs::read_dir(cache_dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -242,6 +243,31 @@ fn sweep_stale_push_scratch(cache_dir: &Path, older_than: std::time::Duration) {
                 path = %path.display(),
                 "speleodb_upload: could not sweep a stale push scratch entry"
             ),
+        }
+    }
+}
+
+/// The fixed names v0.5.0-rc5 wrote a push's scratch at, beside the cache copy.
+const LEGACY_PUSH_SCRATCH: [&str; 2] = ["snapshot.stalx", "ariane.tml"];
+
+/// [#576 RVF-d-12] Remove the scratch a v0.5.0-rc5 push left at its fixed names
+/// in `cache_dir`. That build never removed them and nothing since writes there,
+/// so every project an rc5 build pushed kept a full extra copy of its survey in
+/// the cache. Whatever their age; a link there is removed, never followed, and a
+/// folder at either name is left alone. Best-effort, like the sweep.
+fn remove_legacy_push_scratch(cache_dir: &Path) {
+    for name in LEGACY_PUSH_SCRATCH {
+        let path = cache_dir.join(name);
+        if std::fs::symlink_metadata(&path).is_ok_and(|meta| !meta.is_dir()) {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "speleodb_upload: could not remove an old build's push scratch"
+                ),
+            }
         }
     }
 }
@@ -2208,6 +2234,39 @@ mod snapshot_undo_metadata_tests {
             std::fs::read(&precious).ok(),
             Some(b"not the push's".to_vec()),
             "and its target was not touched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_scratch_sweep_removes_what_an_rc5_push_left_at_its_fixed_names() {
+        // [#576 RVF-d-12] v0.5.0-rc5 pushed through `<cache>/snapshot.stalx` and
+        // `<cache>/ariane.tml` and never removed them: a full extra copy of the
+        // survey per project, for good. The sweep takes both, whatever their age,
+        // and never follows a link at either name.
+        let cache = TempDir::new().expect("temp dir");
+        let outside = TempDir::new().expect("outside dir");
+        let precious = outside.path().join("keep.tml");
+        put(&precious, b"not the push's");
+        put(&cache.path().join("project.stalx"), b"live copy");
+        put(
+            &cache.path().join("snapshot.stalx"),
+            b"an rc5 push snapshot",
+        );
+        std::os::unix::fs::symlink(&precious, cache.path().join("ariane.tml"))
+            .expect("a link at the other rc5 name");
+
+        sweep_stale_push_scratch(cache.path(), STALE_PUSH_SCRATCH);
+
+        assert_eq!(
+            names_in(cache.path()),
+            vec!["project.stalx"],
+            "both rc5 names went, and only those"
+        );
+        assert_eq!(
+            std::fs::read(&precious).ok(),
+            Some(b"not the push's".to_vec()),
+            "the link's target was not touched"
         );
     }
 }
