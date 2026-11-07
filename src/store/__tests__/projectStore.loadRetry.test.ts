@@ -77,4 +77,23 @@ describe('a load refused because a save replaced its file is repeated once (#576
     expect(outcome).toEqual({ success: false });
     expect(useProjectStore.getState().loading.error?.message).toBe(REPLACED.message);
   });
+
+  it('never repeats a load the user cancelled, and opens nothing (#576 RVF-c-A2-1)', async () => {
+    // The refusal arrives after the user pressed Cancel on the loading overlay.
+    let refuse!: (e: unknown) => void;
+    loadBinaryMock
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { refuse = reject; }))
+      .mockResolvedValueOnce(loadResult());
+
+    const pending = useProjectStore.getState().loadProject(PATH);
+    await vi.waitFor(() => expect(loadBinaryMock).toHaveBeenCalledTimes(1));
+    await useProjectStore.getState().cancelLoading();
+    expect(useProjectStore.getState().loading.isLoading).toBe(false);
+    refuse(REPLACED);
+    const outcome = await pending;
+
+    expect(loadBinaryMock, 'a cancelled load is not repeated').toHaveBeenCalledTimes(1);
+    expect(outcome.success).toBe(false);
+    expect(useProjectStore.getState().project).toBeNull();
+  });
 });

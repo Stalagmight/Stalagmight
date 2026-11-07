@@ -124,6 +124,57 @@ fn a_load_whose_file_a_save_replaced_before_it_committed_is_refused() {
     assert!(section_names(&state).contains(&"SavedByTheOtherSession".to_owned()));
 }
 
+/// [#576 RVF-c-A2-1] A load the user cancelled is answered as cancelled even when
+/// its file was ALSO replaced before it committed: `FILE_REPLACED_DURING_LOAD` is
+/// the one refusal the frontend repeats, and a repeat is a fresh load the earlier
+/// cancel never reaches, so a cancelled load answered that way opened anyway.
+/// Unix only, as above (the other session runs on a second state).
+#[cfg(unix)]
+#[test]
+fn a_cancelled_load_whose_file_was_also_replaced_is_answered_cancelled() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let a = saved(temp.path(), "CaveA.stalx", "CaveA");
+    let state = state_with_null_sink();
+    let other = state_with_null_sink();
+    let (at_commit, reached) = mpsc::channel::<()>();
+    let (go, wait) = mpsc::channel::<()>();
+    let load = std::thread::scope(|scope| {
+        let load = scope.spawn(|| {
+            BEFORE_SESSION_COMMIT.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    at_commit.send(()).unwrap();
+                    wait.recv().unwrap();
+                }));
+            });
+            state.do_load_project_full(a.clone())
+        });
+        reached.recv().unwrap();
+        // Both at once: the user cancels, and another session saves the file.
+        state.cancel_loading();
+        other.do_load_project_full(a.clone()).unwrap();
+        assert!(other.execute(new_section("SavedByTheOtherSession")).success);
+        assert!(other.execute(Command::SaveProject { path: None }).success);
+        assert!(other.execute(Command::CloseProject).success);
+        go.send(()).unwrap();
+        load.join().unwrap()
+    });
+
+    println!(
+        "cancelled load of CaveA whose file was also replaced -> {}",
+        match &load {
+            Ok(_) => "Ok (committed)".to_owned(),
+            Err(e) => format!("Err({})", e.code),
+        }
+    );
+    assert_eq!(
+        load.err().map(|e| e.code),
+        Some(CommandErrorCode::Cancelled),
+        "a cancelled load is never answered with the retryable code"
+    );
+    assert!(state.project_snapshot().is_none(), "nothing committed");
+}
+
 /// [FZ-FZ-INT-R2] Off unix the stamp is the save epoch: every save that renames a
 /// file into place moves it, the detached copy included.
 #[test]

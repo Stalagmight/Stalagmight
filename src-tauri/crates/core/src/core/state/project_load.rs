@@ -577,10 +577,14 @@ impl AppState {
         // [#576 FZ-FZ-INT-R2] A save renamed another file over the path while the
         // handle was being opened: it may be on either file. Refused now, before
         // the read; the stamp the commit compares is then one the open handle holds.
+        // [#576 RVF-c-A2-1] The cancel first: the frontend repeats a load refused
+        // with FILE_REPLACED_DURING_LOAD as a fresh load this cancel never reaches,
+        // so a cancelled load must be answered as cancelled.
+        check_cancelled!();
         if self.file_stamp(&path) != opened_stamp {
+            check_cancelled!();
             early_return_err!(LoadError::file_replaced_during_load());
         }
-        check_cancelled!();
         progress.complete_phase(LoadingPhase::OpeningDatabase);
         // [#576 RV4-R-M3-D2] A file where nothing may be written (the app's own
         // folders, a system folder): the load writes nothing to it either. The
@@ -1076,6 +1080,9 @@ impl AppState {
         // `command_lock`, so the file at the path cannot change while this decides.
         // Retryable: the same load again reads the file now there.
         if self.file_stamp(&path) != opened_stamp {
+            // [#576 RVF-c-A2-1] A cancelled load is answered as cancelled, never with
+            // the code the frontend repeats.
+            check_cancelled!();
             tracing::info!(
                 path = ?path,
                 purpose = "never commit a session on a file a save replaced",

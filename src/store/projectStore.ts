@@ -987,8 +987,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // doesn't need to change. See utils/loadProjectBinary.ts.
         const { loadProjectFullBinary } = await import('../utils/loadProjectBinary');
         // [#576 FZ-FZ-INT-R2] Repeated once, silently, when a save replaced the file mid-read.
+        // [#576 RVF-c-A2-1] Never after the user cancelled it (Cancel resets the loading
+        // state, keeping clientOpId): the repeat is a new backend load that cancel never reached.
         const result = await loadRetryingReplacedFile(() => loadProjectFullBinary(path), () => {
           if (turn.superseded || get().loading.clientOpId !== clientOpId) return false;
+          if (!get().loading.isLoading) return false;
           get().setLoadingProgress({ loadingId: 0 }); // the repeat's progress events carry a new id
           return true;
         });
