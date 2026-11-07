@@ -5,6 +5,7 @@ import { useOnboardingStep } from '../../hooks/useOnboardingStep';
 import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
 import { useToastBottomClearance } from '../../hooks/useToastBottomClearance';
+import { useParseIndicatorClearance } from '../../hooks/useParseIndicatorClearance';
 import { useProjectStore } from '../../store/projectStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { PANEL_FIELDS, useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
@@ -74,6 +75,8 @@ export default function SingleSystemView() {
   useKeyboardShortcuts();
   // [#576 W70] Toasts keep their gap above the status bar instead of covering it.
   const statusBarToastClearance = useToastBottomClearance('project-view-status-bar');
+  // [#576 W71] The import parse indicator floats above the imagery attribution too.
+  const attributionParseIndicatorClearance = useParseIndicatorClearance('project-view-map-attribution');
 
   const {
     project,
@@ -814,6 +817,7 @@ export default function SingleSystemView() {
               visible={showSatellite}
               className="absolute bottom-0 z-10"
               style={{ right: attributionRight }}
+              elementRef={attributionParseIndicatorClearance}
             />
             {/* Export mode: large WYSIWYG preview of the image export, overlaid
                 on the (still-mounted) map. Only for the image export type -

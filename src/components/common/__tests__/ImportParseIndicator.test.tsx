@@ -14,7 +14,13 @@ import { ImportParseIndicator } from '../ImportParseIndicator';
 import { useUIStore } from '../../../store/uiStore';
 
 beforeEach(() => {
-  useUIStore.setState({ importParse: null, activeDialog: null, dialogData: {} });
+  useUIStore.setState({
+    importParse: null,
+    activeDialog: null,
+    dialogData: {},
+    toastBottomOffsets: {},
+    parseIndicatorBottomOffsets: {},
+  });
 });
 
 describe('ImportParseIndicator', () => {
@@ -29,6 +35,27 @@ describe('ImportParseIndicator', () => {
 
     act(() => useUIStore.setState({ importParse: null }));
     expect(screen.queryByTestId('import-parse-indicator')).toBeNull();
+  });
+
+  // #576 W71: the status bar's height is the clearance the bar registered for the
+  // toast stack, not a restatement of its classes, and anything else along the
+  // bottom edge (the project view's map attribution) registers its own.
+  it('floats above the highest edge registered along the bottom, and follows it', () => {
+    useUIStore.setState({ importParse: { path: '/cave/CaveA.dmp', token: 3 } });
+    render(<ImportParseIndicator />);
+    const clearance = () =>
+      screen.getByTestId('import-parse-indicator').style.getPropertyValue('--parse-indicator-clearance');
+    expect(clearance()).toBe('0px');
+
+    act(() => useUIStore.getState().registerToastBottomOffset('status-bar', 37));
+    expect(clearance()).toBe('37px');
+    act(() => useUIStore.getState().registerParseIndicatorBottomOffset('map-attribution', 69));
+    expect(clearance()).toBe('69px');
+    // The bar wraps and grows past the attribution's edge.
+    act(() => useUIStore.getState().registerToastBottomOffset('status-bar', 74));
+    expect(clearance()).toBe('74px');
+    act(() => useUIStore.getState().unregisterToastBottomOffset('status-bar'));
+    expect(clearance()).toBe('69px');
   });
 
   it('stays out of the way while a dialog owns the screen', () => {

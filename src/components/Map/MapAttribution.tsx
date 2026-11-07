@@ -90,6 +90,12 @@ interface MapAttributionProps {
   className?: string;
   /** Positioning styles, for insets that come from a shared layout constant. */
   style?: CSSProperties;
+  /**
+   * Called with the attribution's element while it is on screen, and with `null`
+   * when it goes, for a surface that keeps something else off it (#576 W71: the
+   * project view keeps the import parse indicator clear of the source names).
+   */
+  elementRef?: (el: HTMLDivElement | null) => void;
 }
 
 /**
@@ -110,13 +116,21 @@ export function MapAttribution({
   variant = 'auto',
   className = '',
   style,
+  elementRef,
 }: MapAttributionProps) {
   const { t } = useTranslation();
   // Gated on `visible`: this component is mounted unconditionally by every
   // surface and hidden by the prop, so an ungated fetch contacted the imagery
   // provider even for a project opened with satellite off.
   const { text } = useTileAttribution(provider, visible);
-  const wrapperRef = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const setWrapper = useCallback(
+    (el: HTMLDivElement | null) => {
+      wrapperRef.current = el;
+      elementRef?.(el);
+    },
+    [elementRef],
+  );
   const [narrow, setNarrow] = useState(false);
   const [pinned, setPinned] = useState(false);
 
@@ -178,7 +192,7 @@ export function MapAttribution({
   if (!isCompact) {
     return (
       <div
-        ref={wrapperRef}
+        ref={setWrapper}
         // A bottom-flush bar, not a floating card: `min-h-5` with centred
         // content rather than a vertical padding, so the names sit on the bar's
         // centre line instead of riding an edge. The height is the only thing
@@ -198,7 +212,7 @@ export function MapAttribution({
   }
 
   return (
-    <div ref={wrapperRef} className={className} style={style} data-testid="map-attribution">
+    <div ref={setWrapper} className={className} style={style} data-testid="map-attribution">
       <Tooltip
         content={<span data-testid="map-attribution-text">{text}</span>}
         openDelayMs={HOVER_OPEN_MS}

@@ -773,6 +773,16 @@ interface UIStore {
   toastBottomOffsets: Record<string, number>;
   registerToastBottomOffset: (owner: string, px: number) => void;
   unregisterToastBottomOffset: (owner: string) => void;
+  /**
+   * Clearance (px from the window's bottom edge) the import parse indicator keeps
+   * on top of the status bars' `toastBottomOffsets`, keyed by owner like those
+   * (#576 W71). Only the indicator reads it: the project view registers the map's
+   * imagery attribution here, which the centred indicator would cover and the
+   * bottom-left toast stack does not reach.
+   */
+  parseIndicatorBottomOffsets: Record<string, number>;
+  registerParseIndicatorBottomOffset: (owner: string, px: number) => void;
+  unregisterParseIndicatorBottomOffset: (owner: string) => void;
 
   // Snap state
   snappedStation: StationRef | null;
@@ -2110,6 +2120,16 @@ export const useUIStore = create<UIStore>((set) => ({
       const next = { ...s.toastBottomOffsets };
       delete next[owner];
       return { toastBottomOffsets: next };
+    }),
+  parseIndicatorBottomOffsets: {},
+  registerParseIndicatorBottomOffset: (owner, px) =>
+    set((s) => ({ parseIndicatorBottomOffsets: { ...s.parseIndicatorBottomOffsets, [owner]: px } })),
+  unregisterParseIndicatorBottomOffset: (owner) =>
+    set((s) => {
+      if (!(owner in s.parseIndicatorBottomOffsets)) return s;
+      const next = { ...s.parseIndicatorBottomOffsets };
+      delete next[owner];
+      return { parseIndicatorBottomOffsets: next };
     }),
 
   // Snap state
