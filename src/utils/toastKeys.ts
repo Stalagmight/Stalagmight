@@ -25,6 +25,8 @@ export const TOAST_KEYS = {
   SETTINGS_UNREADABLE: 'settings-unreadable',
   /** Catch-all for a command failure no specific handler claims (docs/notifications.md). */
   COMMAND_FAILED: 'command-failed',
+  /** A user-started verb refused because the project changed under it (#576 Q-W44-7-D1). */
+  PROJECT_CHANGED: 'project-changed',
   UNDO_FAILED: 'undo-failed',
   REDO_FAILED: 'redo-failed',
 

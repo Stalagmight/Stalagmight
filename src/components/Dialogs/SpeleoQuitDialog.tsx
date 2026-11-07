@@ -8,6 +8,7 @@ import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { humanizeSpeleoError } from '../../utils/speleoError';
+import { toastProjectChanged } from '../../utils/projectChangedNotice';
 import { holdsWriteLock, performQuit } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -155,7 +156,10 @@ export default function SpeleoQuitDialog() {
     try {
       await invokeIpc('speleodb_release_current_lock', { expectedProject });
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
+      // [#576 Q-W44-7-D1] Refused because the project changed: the short line instead.
+      if (!toastProjectChanged(e)) {
+        showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
+      }
       setReleasing(false);
       // Re-probe so the button/badge reflect whatever the server actually thinks.
       void refreshLinkStatus();

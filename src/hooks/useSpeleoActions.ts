@@ -20,6 +20,7 @@ import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import { afterQueuedEdits } from '../utils/projectTransition';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import { surfaceSaveWarnings } from '../utils/saveFeedback';
+import { projectChangedMessage, toastProjectChanged } from '../utils/projectChangedNotice';
 import type {
   DoneResult,
   PushResult,
@@ -179,21 +180,23 @@ export function useSpeleoActions(): SpeleoActions {
       collapses the shell to read-only) WITHOUT toasting - for push/done, whose
       failures get a durable surface instead (the push_failed banner, and the
       inline notice inside the Speleo dialogs). One event, one surface
-      (docs/notifications.md); the toast-and-banner pair predates the banner. */
+      (docs/notifications.md); the toast-and-banner pair predates the banner.
+      [#576 Q-W44-7-D1] Refused because the project changed: the short line instead. */
   const humanizeError = useCallback(
     (e: unknown, prefixKey: string, context?: SpeleoErrorContext): string => {
       if (errorCode(e) === 'SPELEODB_RELOGIN') clearSession();
-      return humanizeSpeleoError(e, t(prefixKey), context);
+      return projectChangedMessage(e) ?? humanizeSpeleoError(e, t(prefixKey), context);
     },
     [clearSession, t],
   );
 
   /** Toast the failure - for the transient verbs (start/update/force/take-remote)
-      that have no durable surface of their own. */
+      that have no durable surface of their own. A refusal because the project
+      changed is its own warning toast (#576 Q-W44-7-D1). */
   const handleError = useCallback(
     (e: unknown, prefixKey: string): string => {
       const message = humanizeError(e, prefixKey);
-      showToast(message, TOAST_KEYS.SPELEODB_ACTION_ERROR, 'error');
+      if (!toastProjectChanged(e)) showToast(message, TOAST_KEYS.SPELEODB_ACTION_ERROR, 'error');
       return message;
     },
     [humanizeError, showToast],

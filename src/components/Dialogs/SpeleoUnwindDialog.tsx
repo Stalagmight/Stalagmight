@@ -7,6 +7,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useRestoreRevision } from '../../hooks/useRestoreRevision';
 import { humanizeSpeleoError } from '../../utils/speleoError';
+import { projectChangedMessage } from '../../utils/projectChangedNotice';
 import { trackDialogComplete } from '../../utils/telemetry';
 
 /**
@@ -93,7 +94,8 @@ export default function SpeleoUnwindDialog() {
       trackDialogComplete('speleodb-unwind');
       closeDialog();
     } catch (e) {
-      setError(humanizeSpeleoError(e, t('speleodb.unwind.failed')));
+      // [#576 Q-W44-7-D1] Refused because the project changed: the short line instead.
+      setError(projectChangedMessage(e) ?? humanizeSpeleoError(e, t('speleodb.unwind.failed')));
       setBusy(false);
     }
   };

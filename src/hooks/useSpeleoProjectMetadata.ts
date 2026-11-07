@@ -7,6 +7,8 @@ import { expectedOpenProject } from '../store/expectedOpenProject';
 import { useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { humanizeSpeleoError } from '../utils/speleoError';
+import { toastProjectChanged } from '../utils/projectChangedNotice';
+import { isProjectChangedRefusal } from '../store/commandResult';
 import { permissionAtLeast } from '../utils/speleoPermission';
 import { validateCoordinates } from '../utils/gps';
 import { TOAST_KEYS } from '../utils/toastKeys';
@@ -244,11 +246,14 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
       void refreshLinkStatus();
       showToast(t('speleodb.projectSettings.saved'), TOAST_KEYS.SPELEODB_PROJECT_SETTINGS, 'success');
     } catch (e) {
-      showToast(
-        humanizeSpeleoError(e, t('speleodb.projectSettings.saveFailed')),
-        TOAST_KEYS.SPELEODB_PROJECT_SETTINGS,
-        'error',
-      );
+      // [#576 Q-W44-7-D1] Refused because the project changed: the short line instead.
+      if (!toastProjectChanged(e)) {
+        showToast(
+          humanizeSpeleoError(e, t('speleodb.projectSettings.saveFailed')),
+          TOAST_KEYS.SPELEODB_PROJECT_SETTINGS,
+          'error',
+        );
+      }
     } finally {
       setSaving(false);
     }
@@ -280,6 +285,9 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
       );
       showToast(t('speleodb.projectSettings.rendering.enabled'), TOAST_KEYS.SPELEODB_PROJECT_SETTINGS, 'success');
     } catch (e) {
+      // [#576 Q-W44-7-D1] The web-rendering switch is a background verb: a refusal
+      // because the project changed is dropped, nothing shown.
+      if (isProjectChangedRefusal(e)) return;
       showToast(
         humanizeSpeleoError(e, t('speleodb.banner.enableRenderingFailed')),
         TOAST_KEYS.SPELEODB_ENABLE_RENDERING_ERROR,

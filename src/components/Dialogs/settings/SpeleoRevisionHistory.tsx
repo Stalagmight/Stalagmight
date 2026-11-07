@@ -13,6 +13,7 @@ import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
 import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../../../utils/speleoError';
+import { toastProjectChanged } from '../../../utils/projectChangedNotice';
 import { holdsWriteLock } from '../../../utils/quit';
 import { permissionAtLeast } from '../../../utils/speleoPermission';
 import { formatDate } from '../../../i18n/format';
@@ -153,6 +154,8 @@ export function SpeleoRevisionHistory() {
       // to the backend's raw line.
       // [#576 W55 NF-W53-1] Unless the copy could not be read (`state_unknown`): then
       // nothing is known about un-pushed changes, and the toast says that instead.
+      // [#576 Q-W44-7-D1] Refused because the project changed: the short line instead.
+      if (toastProjectChanged(e)) return;
       const refusal = unpushedLocalEdits(e);
       showToast(
         refusal

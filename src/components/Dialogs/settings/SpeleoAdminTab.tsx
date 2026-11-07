@@ -8,6 +8,7 @@ import { useProjectStore } from '../../../store/projectStore';
 import { expectedOpenProject } from '../../../store/expectedOpenProject';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
+import { toastProjectChanged } from '../../../utils/projectChangedNotice';
 import { permissionAtLeast } from '../../../utils/speleoPermission';
 import { holdsWriteLock } from '../../../utils/quit';
 import { convertToUnmanagedStalx } from '../../../utils/projectActions';
@@ -47,7 +48,10 @@ export function SpeleoAdminTab() {
       await refreshLinkStatus();
       showToast(t('speleodb.lock.released'), TOAST_KEYS.SPELEODB_LOCK, 'success');
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
+      // [#576 Q-W44-7-D1] Refused because the project changed: the short line instead.
+      if (!toastProjectChanged(e)) {
+        showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
+      }
     } finally {
       setReleasing(false);
     }
@@ -70,7 +74,9 @@ export function SpeleoAdminTab() {
       showToast(t('speleodb.delete.deleted'), TOAST_KEYS.SPELEODB_DELETE, 'success');
       closeDialog();
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.delete.deleteFailed')), TOAST_KEYS.SPELEODB_DELETE, 'error');
+      if (!toastProjectChanged(e)) {
+        showToast(humanizeSpeleoError(e, t('speleodb.delete.deleteFailed')), TOAST_KEYS.SPELEODB_DELETE, 'error');
+      }
       setDeleting(false);
       return;
     }

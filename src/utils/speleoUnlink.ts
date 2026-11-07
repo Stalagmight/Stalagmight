@@ -13,6 +13,7 @@ import { expectedOpenProject } from '../store/expectedOpenProject';
 import { useSpeleoStore } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { saveFailureOf, surfaceSaveFailure, surfaceSaveWarnings } from './saveFeedback';
+import { projectChangedMessage } from './projectChangedNotice';
 import i18n from '../i18n';
 import { invokeIpc } from './ipc';
 import { projectSaveFilters, saveDialog, PROJECT_EXTENSION } from './fileDialogs';
@@ -83,6 +84,17 @@ export async function unlinkOpenProjectTo(
     // another is open.
     outcome = await invokeIpc('speleodb_unlink', { destination, expectedProject: madeFor });
   } catch (e) {
+    // [#576 Q-W44-7-D1] Refused because the project changed: the user asked for this
+    // move, so its error dialog says so in the short line (the save router would drop
+    // it as quiet, as it does for a save).
+    const changed = projectChangedMessage(e);
+    if (changed !== null) {
+      useUIStore.getState().openDialog('error', {
+        message: changed,
+        title: i18n.t('dialogs.saveFailure.detachTitle'),
+      });
+      return false;
+    }
     surfaceSaveFailure(
       saveFailureOf(e, 'Detaching from SpeleoDB failed'),
       useUIStore.getState().openDialog,

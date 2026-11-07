@@ -17,6 +17,7 @@ import {
   planAnchorsOf,
   saveDivePlan,
 } from '../../utils/divePlanApi';
+import { projectChangedMessage } from '../../utils/projectChangedNotice';
 import type { DivePlanMeta } from '../../types/ipc.generated';
 
 /** Inline confirm/prompt state for the bar (kept inline to avoid registering a new
@@ -160,7 +161,8 @@ export function DivePlanBar() {
       markPlanSaved(meta.id, snap);
       refresh();
     } catch (e) {
-      setError(String(e));
+      // [#576 Q-W44-7-D1] Refused because the project changed: the short line instead.
+      setError(projectChangedMessage(e) ?? String(e));
     } finally {
       setBusy(false);
     }
@@ -182,7 +184,7 @@ export function DivePlanBar() {
       setPending({ kind: 'none' });
       refresh();
     } catch (e) {
-      setError(String(e));
+      setError(projectChangedMessage(e) ?? String(e));
     } finally {
       setBusy(false);
     }
@@ -203,7 +205,7 @@ export function DivePlanBar() {
       setDroppedSpeedCount(0);
       refresh();
     } catch (e) {
-      setError(String(e));
+      setError(projectChangedMessage(e) ?? String(e));
     } finally {
       setBusy(false);
     }

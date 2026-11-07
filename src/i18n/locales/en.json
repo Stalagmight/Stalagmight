@@ -3220,6 +3220,9 @@
     "switchPendingNotice": "Wait for the project to finish opening.",
     "commandFailed": "The change could not be applied."
   },
+  "projectChanged": {
+    "notFinished": "The project changed before this finished."
+  },
   "importGate": {
     "inProgress": "Finish or cancel the current import first.",
     "parsing": "Reading {{fileName}}..."

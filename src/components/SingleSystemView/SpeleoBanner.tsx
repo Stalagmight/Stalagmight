@@ -8,6 +8,7 @@ import {
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { humanizeSpeleoError } from '../../utils/speleoError';
+import { isProjectChangedRefusal } from '../../store/commandResult';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /**
@@ -157,6 +158,9 @@ export function SpeleoBanner() {
       await enableRendering();
       // enableRendering clears the banner on success.
     } catch (e) {
+      // [#576 Q-W44-7-D1] The web-rendering switch is a background verb: a refusal
+      // because the project changed is dropped, nothing shown.
+      if (isProjectChangedRefusal(e)) return;
       showToast(
         humanizeSpeleoError(e, t('speleodb.banner.enableRenderingFailed')),
         TOAST_KEYS.SPELEODB_ENABLE_RENDERING_ERROR,

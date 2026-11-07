@@ -11,6 +11,7 @@ import { expectedOpenProject } from '../../../store/expectedOpenProject';
 import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
+import { toastProjectChanged } from '../../../utils/projectChangedNotice';
 import { permissionAtLeast, USER_LEVELS, TEAM_LEVELS } from '../../../utils/speleoPermission';
 import type { Permission, SpeleoCollaborators, SpeleoTeamOption } from '../../../types/ipc.generated';
 import { TOAST_KEYS } from '../../../utils/toastKeys';
@@ -239,14 +240,17 @@ export function SpeleoCollaboratorsTab() {
   }, [canManage, t, reloadNonce]);
 
   // Run a roster mutation, folding the returned server-truth roster back in. All
-  // errors surface as a toast; the roster is left untouched on failure.
+  // errors surface as a toast; the roster is left untouched on failure. A refusal
+  // because the project changed toasts the short line instead (#576 Q-W44-7-D1).
   const mutate = useCallback(
     async (op: () => Promise<SpeleoCollaborators>, failKey: string) => {
       setBusy(true);
       try {
         setRoster(await op());
       } catch (e) {
-        showToast(humanizeSpeleoError(e, t(failKey)), TOAST_KEYS.SPELEODB_COLLABORATORS, 'error');
+        if (!toastProjectChanged(e)) {
+          showToast(humanizeSpeleoError(e, t(failKey)), TOAST_KEYS.SPELEODB_COLLABORATORS, 'error');
+        }
       } finally {
         setBusy(false);
         // Disarm on completion, either way, and for every mutation (an add is just

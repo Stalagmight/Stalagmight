@@ -7,6 +7,7 @@ import { invokeIpc } from '../utils/ipc';
 import { useSpeleoActions } from './useSpeleoActions';
 import { useRestoreRevision } from './useRestoreRevision';
 import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../utils/speleoError';
+import { projectChangedMessage } from '../utils/projectChangedNotice';
 import type { SpeleoDumpCandidate } from '../types/ipc.generated';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
@@ -435,7 +436,10 @@ export function useRevertRevision() {
         if (candidates && !lockHeld) return { kind: 'awaiting_dump_choice', candidates };
         return {
           kind: 'restore_failed',
-          message: humanizeSpeleoError(e, t('speleodb.revert.errors.restorePrefix', { sha: shortSha })),
+          // [#576 Q-W44-7-D1] Refused because the project changed: the short line instead.
+          message:
+            projectChangedMessage(e) ??
+            humanizeSpeleoError(e, t('speleodb.revert.errors.restorePrefix', { sha: shortSha })),
           lockHeld,
         };
       }

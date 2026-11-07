@@ -4,6 +4,7 @@ import { useUIStore } from '../../store/uiStore';
 import { doneFinished } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { getErrorMessage } from '../../utils/ipc';
+import { projectChangedMessage } from '../../utils/projectChangedNotice';
 import { handBackProject, performQuit, readPendingExit } from '../../utils/quit';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
@@ -96,7 +97,8 @@ export default function SpeleoUnwoundPushDialog() {
     } catch (e) {
       openDialog('error', {
         title: t('speleodb.unwoundPush.discardFailedTitle'),
-        message: getErrorMessage(e, t('speleodb.unwoundPush.discardFailedMessage')),
+        // [#576 Q-W44-7-D1] Refused because the project changed: the short line instead.
+        message: projectChangedMessage(e) ?? getErrorMessage(e, t('speleodb.unwoundPush.discardFailedMessage')),
       });
       setBusy(false);
     }

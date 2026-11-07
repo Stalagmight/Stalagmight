@@ -11,6 +11,7 @@ import {
 import { useProjectStore } from '../../store/projectStore';
 import { useRestoreRevision } from '../../hooks/useRestoreRevision';
 import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../../utils/speleoError';
+import { projectChangedMessage } from '../../utils/projectChangedNotice';
 
 /** Names this flow to `openDumpPicker` - see the revert dialog for why. */
 const DUMP_PICKER_OWNER = 'speleodb-restore';
@@ -131,7 +132,8 @@ export default function SpeleoRestoreDialog() {
         setCopyUnreadable(refusal.state_unknown === true);
         setError(null);
       } else {
-        setError(humanizeSpeleoError(e, t('speleodb.restore.failed')));
+        // [#576 Q-W44-7-D1] Refused because the project changed: the short line instead.
+        setError(projectChangedMessage(e) ?? humanizeSpeleoError(e, t('speleodb.restore.failed')));
       }
       setBusy(false);
     }

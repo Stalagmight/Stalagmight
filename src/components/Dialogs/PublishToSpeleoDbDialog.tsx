@@ -10,6 +10,7 @@ import { expectedOpenProject } from '../../store/expectedOpenProject';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { invokeIpc } from '../../utils/ipc';
 import { humanizeSpeleoError } from '../../utils/speleoError';
+import { toastProjectChanged } from '../../utils/projectChangedNotice';
 import { errorCode } from '../../utils/commandError';
 import { USER_LEVELS } from '../../utils/speleoPermission';
 import { validateCoordinates } from '../../utils/gps';
@@ -204,7 +205,10 @@ export default function PublishToSpeleoDbDialog() {
       // [#576 NF-W9BE-1-D1] No `saves` context, though publish saves into the cache
       // first: a project a newer Stalagmight saved reads as the newer-version line,
       // like Start editing and Update, not as "Not saved: ...".
-      showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
+      // [#576 Q-W44-7-D1] Refused because the project changed: the short line instead.
+      if (!toastProjectChanged(e)) {
+        showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
+      }
       if (errorCode(e) === 'SPELEODB_RELOGIN') {
         useSpeleoStore.getState().clearSession();
       }

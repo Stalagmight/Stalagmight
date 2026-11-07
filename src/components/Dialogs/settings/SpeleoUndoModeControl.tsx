@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
+import { isProjectChangedRefusal } from '../../../store/commandResult';
 import type { UndoMode } from '../../../types/ipc.generated';
 
 /**
@@ -38,6 +39,9 @@ export function SpeleoUndoModeControl() {
     try {
       await setUndoMode(next);
     } catch (e) {
+      // [#576 Q-W44-7-D1] The undo-mode write is a background verb: a refusal because
+      // the project changed is dropped, nothing shown.
+      if (isProjectChangedRefusal(e)) return;
       setError(humanizeSpeleoError(e, t('speleodb.undoMode.failed')));
     } finally {
       setBusy(false);

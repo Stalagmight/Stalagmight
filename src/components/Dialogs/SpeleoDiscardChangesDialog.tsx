@@ -4,6 +4,7 @@ import { useUIStore } from '../../store/uiStore';
 import { isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { getErrorMessage } from '../../utils/ipc';
+import { projectChangedMessage } from '../../utils/projectChangedNotice';
 import { holdsWriteLock } from '../../utils/quit';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
@@ -60,7 +61,8 @@ export default function SpeleoDiscardChangesDialog() {
     } catch (e) {
       openDialog('error', {
         title: t('speleodb.discardChanges.failedTitle'),
-        message: getErrorMessage(e, t('speleodb.discardChanges.failedMessage')),
+        // [#576 Q-W44-7-D1] Refused because the project changed: the short line instead.
+        message: projectChangedMessage(e) ?? getErrorMessage(e, t('speleodb.discardChanges.failedMessage')),
       });
       setBusy(false);
     }
