@@ -27,6 +27,7 @@ import {
 import { extractFilename } from './path';
 import { saveTargetPresence } from './overwriteGuard';
 import { chooseUnlinkDestination, unlinkOpenProjectTo } from './speleoUnlink';
+import { expectedOpenProject } from '../store/expectedOpenProject';
 import type { CommandOutcome } from '../store/commandResult';
 import type { SaveOutcome } from '../types/ipc/SaveOutcome';
 
@@ -145,6 +146,9 @@ export async function saveProjectAs(opts?: {
  */
 export async function convertToUnmanagedStalx(): Promise<boolean> {
   const { openDialog } = useUIStore.getState();
+  // [#576 RVF-c-B4] The project to move is the one open NOW, not whatever is open
+  // once the Save As closes.
+  const madeFor = expectedOpenProject();
   let destination: string | null;
   try {
     destination = await chooseUnlinkDestination(useProjectStore.getState().project?.name ?? '');
@@ -155,5 +159,5 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     return false;
   }
   if (!destination) return false;
-  return unlinkOpenProjectTo(destination);
+  return unlinkOpenProjectTo(destination, madeFor);
 }

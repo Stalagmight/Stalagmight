@@ -17,6 +17,7 @@ import i18n from '../i18n';
 import { invokeIpc } from './ipc';
 import { projectSaveFilters, saveDialog, PROJECT_EXTENSION } from './fileDialogs';
 import { resolveSavePath } from './overwriteGuard';
+import type { ProjectIdentity } from '../types/ipc/ProjectIdentity';
 import type { SaveOutcome } from '../types/ipc/SaveOutcome';
 
 /**
@@ -66,16 +67,21 @@ export async function chooseUnlinkDestination(projectName: string): Promise<stri
  * Returns true once moved. A failed unlink is surfaced the way a failed save is
  * (its own Detach Failed title; it ran no integrity re-check). A failed load
  * surfaces its own error through `loadProject`; the move itself already happened.
+ *
+ * [#576 RVF-c-B4] `madeFor` is the project the user asked to move, captured BEFORE
+ * the Save As (`expectedOpenProject()`): a load that committed while the dialog was
+ * up must not have its copy moved under the name chosen for the first one. Defaults
+ * to the project open now, for a caller that opened the copy itself just before.
  */
-export async function unlinkOpenProjectTo(destination: string): Promise<boolean> {
+export async function unlinkOpenProjectTo(
+  destination: string,
+  madeFor: ProjectIdentity | null = expectedOpenProject(),
+): Promise<boolean> {
   let outcome: SaveOutcome;
   try {
     // [#576 RVF-c-C1] Names the project to move: refused (nothing written) once
     // another is open.
-    outcome = await invokeIpc('speleodb_unlink', {
-      destination,
-      expectedProject: expectedOpenProject(),
-    });
+    outcome = await invokeIpc('speleodb_unlink', { destination, expectedProject: madeFor });
   } catch (e) {
     surfaceSaveFailure(
       saveFailureOf(e, 'Detaching from SpeleoDB failed'),

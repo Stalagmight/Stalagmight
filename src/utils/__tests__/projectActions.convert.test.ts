@@ -147,6 +147,23 @@ describe('convertToUnmanagedStalx moves the copy out of the cache', () => {
       expect.objectContaining({ skipIntegrityRouting: true, title: expect.any(String) }),
     );
   });
+
+  it('names the project the Save As was raised for, not one opened while it was up (#576 RVF-c-B4)', async () => {
+    const CAVE_A = { name: 'Cenote Azul', created_at: '2026-04-04T10:00:00Z', file_path: '/cache/p1/project.stalx' };
+    const CAVE_B = { name: 'Other Cave', created_at: '2026-05-05T10:00:00Z', file_path: '/caves/OtherCave.stalx' };
+    useProjectStore.setState({ project: CAVE_A } as never);
+    saveDialogMock.mockImplementation(async () => {
+      useProjectStore.setState({ project: CAVE_B } as never); // a load committed meanwhile
+      return CHOSEN;
+    });
+
+    await convertToUnmanagedStalx();
+
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_unlink', {
+      destination: CHOSEN,
+      expectedProject: { createdAt: CAVE_A.created_at, filePath: CAVE_A.file_path },
+    });
+  });
 });
 
 /**
