@@ -4523,8 +4523,8 @@
         }
       ],
       "result": {
-        "rust": "Vec<SpeleoLockLeftHeld>",
-        "ts": "Array<SpeleoLockLeftHeld>"
+        "rust": "SpeleoSignOutLocks",
+        "ts": "SpeleoSignOutLocks"
       },
       "error": {
         "rust": "CommandError",
@@ -4537,8 +4537,8 @@
       "async": true,
       "args": [],
       "result": {
-        "rust": "Vec<SpeleoLockLeftHeld>",
-        "ts": "Array<SpeleoLockLeftHeld>"
+        "rust": "SpeleoSignOutLocks",
+        "ts": "SpeleoSignOutLocks"
       },
       "error": {
         "rust": "CommandError",

@@ -210,7 +210,10 @@ holds a lock they would hand back (#576 SIGNOUT-PROMPT-D1; `speleodb_sign_out_lo
 `speleodb_sign_in_hand_back_locks`): "Release and sign out" releases as above, "Keep
 locks and sign out" (`release_locks: false`) sends no release and marks the lock kept
 as the close dialog's "Keep lock" does, and Cancel does nothing. A lock over un-pushed
-edits is not offered: the veto keeps it whatever the answer. An acquire whose reply was lost and whose
+edits is not offered for release - the veto keeps it whatever the answer - but it is
+named, as staying held until the edits are pushed or discarded (`unpushed`, #576
+SIGNOUT-PROMPT-D2); when such locks are all there is, the prompt still appears, with
+only "Sign out" and Cancel. An acquire whose reply was lost and whose
 holder re-read failed is marked unconfirmed in every case and settled by the next
 poll (#576 SDB-POLL-D1). An adopted claim is marked as resumed: it licenses the
 release only, not the authorship self-heal above (#576 RV4-R-S3), since the other

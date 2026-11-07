@@ -28,7 +28,7 @@ use stalagmight_lib::config::{
 use stalagmight_lib::core::command::{
     Command, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
     ReversedSection, SpeleoDoneReport, SpeleoLockLeftHeld, SpeleoLogoutReport, SpeleoPublishReport,
-    SpeleoPushReport, ValidationWarning, WarningSeverity,
+    SpeleoPushReport, SpeleoSignOutLocks, ValidationWarning, WarningSeverity,
 };
 use stalagmight_lib::core::command_error::{CommandError, CommandErrorCode, HistoryStepFailure};
 use stalagmight_lib::core::events::InternalErrorNotice;
@@ -468,6 +468,8 @@ fn main() {
     // [#576 Q-W61-3-D1] Logout's answer: the locks it could not release
     export::<SpeleoLogoutReport>(&out_dir);
     export::<SpeleoLockLeftHeld>(&out_dir);
+    // [#576 SIGNOUT-PROMPT-D2] What the sign-out prompt names
+    export::<SpeleoSignOutLocks>(&out_dir);
     // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
     export::<Visibility>(&out_dir);
     export::<SpeleoProjectMetadata>(&out_dir);
@@ -715,6 +717,7 @@ fn main() {
         "SpeleoPushReport",
         "SpeleoLogoutReport",
         "SpeleoLockLeftHeld",
+        "SpeleoSignOutLocks",
         "Visibility",
         "SpeleoProjectMetadata",
         "SpeleoProjectMetadataPatch",

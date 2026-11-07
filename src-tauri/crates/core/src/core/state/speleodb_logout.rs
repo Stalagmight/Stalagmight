@@ -391,29 +391,37 @@ impl AppState {
         left_held
     }
 
-    /// [#576 SIGNOUT-PROMPT-D1] The write locks a sign-out would hand back now, for
+    /// [#576 SIGNOUT-PROMPT-D1] The write locks this session holds at a sign-out, for
     /// the prompt that asks first: the open project's lock while this session edits
-    /// under it (the edit gate open, not force-editing, a remote link, a token), over
-    /// a copy with no un-pushed edits. Empty when there is nothing to ask about.
+    /// under it (the edit gate open, not force-editing, a remote link, a token). Both
+    /// lists empty when there is nothing to ask about.
     ///
     /// The same conditions as the silent release's snapshot
-    /// (`speleodb_lock_release_params`), read without its side effect: a lock over
-    /// un-pushed edits is kept by that veto whatever the answer, so it is not offered
-    /// for release.
-    pub fn speleodb_sign_out_locks(&self) -> Vec<crate::core::SpeleoLockLeftHeld> {
+    /// (`speleodb_lock_release_params`), read without its side effect. [#576
+    /// SIGNOUT-PROMPT-D2] A lock over un-pushed edits is kept by that snapshot's veto
+    /// whatever the answer, so it is listed apart (`unpushed`): the prompt says it
+    /// stays held, and offers no release for it.
+    pub fn speleodb_sign_out_locks(&self) -> crate::core::SpeleoSignOutLocks {
+        let mut locks = crate::core::SpeleoSignOutLocks::default();
         if !self.edit_enabled() || self.force_editing() {
-            return Vec::new();
+            return locks;
         }
         let Ok(link) = self.speleodb_open_link() else {
-            return Vec::new();
+            return locks;
         };
-        if link.has_unpushed_edits || self.speleodb_active_token().is_err() {
-            return Vec::new();
+        if self.speleodb_active_token().is_err() {
+            return locks;
         }
-        vec![crate::core::SpeleoLockLeftHeld {
+        let held = crate::core::SpeleoLockLeftHeld {
             project_id: link.project_id,
             project_name: link.project_name,
-        }]
+        };
+        if link.has_unpushed_edits {
+            locks.unpushed.push(held);
+        } else {
+            locks.releasable.push(held);
+        }
+        locks
     }
 
     /// [#576 A8] Drop the session (token, keychain entry, plaintext) - inside the

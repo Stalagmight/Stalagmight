@@ -1536,11 +1536,11 @@ impl AppState {
         }
     }
 
-    /// [#576 SIGNOUT-PROMPT-D1] The write locks a sign-in with these credentials
-    /// would hand back from the session it replaces, for the prompt that asks first
-    /// ([`Self::speleodb_sign_out_locks`]): empty when the sign-in replaces nothing
-    /// (signed out, or the same account on the same server) or that session holds
-    /// no lock to ask about.
+    /// [#576 SIGNOUT-PROMPT-D1/D2] The write locks a sign-in with these credentials
+    /// would sign out with the session it replaces, for the prompt that asks first
+    /// ([`Self::speleodb_sign_out_locks`]): both lists empty when the sign-in replaces
+    /// nothing (signed out, or the same account on the same server) or that session
+    /// holds no lock to ask about.
     ///
     /// The account is resolved as [`Self::speleodb_login`] resolves it: a pasted
     /// token is asked who it belongs to (`GET /user/`, with the login's error for a
@@ -1550,11 +1550,11 @@ impl AppState {
         override_endpoint: Option<String>,
         email: Option<String>,
         token: Option<String>,
-    ) -> Result<Vec<crate::core::SpeleoLockLeftHeld>, SpeleoErrorDto> {
+    ) -> Result<crate::core::SpeleoSignOutLocks, SpeleoErrorDto> {
         // Signed out: nothing to replace, and no reason to ask the server who a
         // pasted token belongs to.
         if self.speleodb.lock().email.is_none() {
-            return Ok(Vec::new());
+            return Ok(crate::core::SpeleoSignOutLocks::default());
         }
         let endpoint = self
             .speleodb_resolve_endpoint(override_endpoint.as_deref())
@@ -1567,7 +1567,7 @@ impl AppState {
             email.map(|e| e.trim().to_owned()).unwrap_or_default()
         };
         if email.is_empty() || !self.speleodb_login_replaces_session(&endpoint, &email) {
-            return Ok(Vec::new());
+            return Ok(crate::core::SpeleoSignOutLocks::default());
         }
         Ok(self.speleodb_sign_out_locks())
     }

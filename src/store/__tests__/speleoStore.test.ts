@@ -282,7 +282,7 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
       // No lock held, so no sign-out prompt (#576 SIGNOUT-PROMPT-D1); the logout rejects.
       invokeIpcMock.mockImplementation(async (cmd: string) => {
-        if (cmd === 'speleodb_sign_out_locks') return [];
+        if (cmd === 'speleodb_sign_out_locks') return { releasable: [], unpushed: [] };
         throw {
           message: 'Logged out, but the stored SpeleoDB credential could not be removed',
           code: 'SPELEODB_FATAL',
@@ -348,6 +348,8 @@ describe('speleoStore', () => {
             };
           // The re-seed: never answers, so what is asserted is the reset, not a status.
           if (cmd === 'speleodb_link_status') return new Promise(() => {});
+          // No lock held: no sign-out prompt (#576 SIGNOUT-PROMPT-D1).
+          if (cmd === 'speleodb_sign_in_hand_back_locks') return { releasable: [], unpushed: [] };
           return [];
         });
         return useSpeleoStore.getState().applyPendingAuth('https://y/');
@@ -402,7 +404,9 @@ describe('speleoStore', () => {
               needs_storage_choice,
               locks_left_held: [],
             }
-          : [],
+          : cmd === 'speleodb_sign_in_hand_back_locks'
+            ? { releasable: [], unpushed: [] }
+            : [],
       );
       return useSpeleoStore.getState().applyPendingAuth('https://x/');
     };

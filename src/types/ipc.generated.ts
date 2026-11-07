@@ -230,6 +230,7 @@ export * from './ipc/SpeleoDoneReport';
 export * from './ipc/SpeleoPushReport';
 export * from './ipc/SpeleoLogoutReport';
 export * from './ipc/SpeleoLockLeftHeld';
+export * from './ipc/SpeleoSignOutLocks';
 export * from './ipc/Visibility';
 export * from './ipc/SpeleoProjectMetadata';
 export * from './ipc/SpeleoProjectMetadataPatch';

@@ -3901,9 +3901,12 @@
       "message_other": "You hold the locks on {{projects}}. Release them before signing out?",
       "keepHint_one": "If you keep it, it stays held on SpeleoDB and nobody else can edit that project until it is released.",
       "keepHint_other": "If you keep them, they stay held on SpeleoDB and nobody else can edit those projects until they are released.",
+      "unpushed_one": "{{projects}} has edits not pushed to SpeleoDB yet; its lock stays held until you push or discard them.",
+      "unpushed_other": "{{projects}} have edits not pushed to SpeleoDB yet; their locks stay held until you push or discard them.",
       "release": "Release and sign out",
       "keep_one": "Keep lock and sign out",
-      "keep_other": "Keep locks and sign out"
+      "keep_other": "Keep locks and sign out",
+      "signOut": "Sign out"
     },
     "storageChoice": {
       "title": "Where should your API key be kept?",

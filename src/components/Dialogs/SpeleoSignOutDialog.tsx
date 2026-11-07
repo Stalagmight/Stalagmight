@@ -17,6 +17,10 @@ import { DialogWrapper } from './DialogWrapper';
  * - Cancel (and Escape, X, the backdrop): nothing happens, and what Settings
  *   staged stays staged.
  *
+ * [#576 SIGNOUT-PROMPT-D2] A lock over edits not pushed to SpeleoDB yet is kept by
+ * every sign-out, so it is named on a line of its own and offered no release. When
+ * such locks are all there is, the prompt only informs: Sign out or Cancel.
+ *
  * An INDEPENDENT top-layer overlay (`signOutPrompt`), not the shared `activeDialog`
  * slot, for the storage prompt's reason: the sign-out is applied from the Settings
  * account panel, which must survive a Cancel with everything it staged.
@@ -29,8 +33,9 @@ export default function SpeleoSignOutDialog() {
   const answer = useSpeleoStore((s) => s.answerSignOutPrompt);
   if (!prompt) return null;
 
-  const count = prompt.locks.length;
-  const projects = prompt.locks.map((lock) => lock.project_name).join(', ');
+  const names = (locks: { project_name: string }[]) => locks.map((lock) => lock.project_name).join(', ');
+  const count = prompt.releasable.length;
+  const offersRelease = count > 0;
   const switching = prompt.kind === 'switch';
 
   return (
@@ -44,27 +49,54 @@ export default function SpeleoSignOutDialog() {
         {switching && (
           <p className="text-sm text-text-secondary">{t('speleodb.signOutLocks.switchNote')}</p>
         )}
-        <p className="text-sm text-text-primary" data-testid="speleodb-sign-out-message">
-          {t('speleodb.signOutLocks.message', { count, projects })}
-        </p>
-        <p className="text-xs text-text-secondary">{t('speleodb.signOutLocks.keepHint', { count })}</p>
+        {offersRelease && (
+          <p className="text-sm text-text-primary" data-testid="speleodb-sign-out-message">
+            {t('speleodb.signOutLocks.message', { count, projects: names(prompt.releasable) })}
+          </p>
+        )}
+        {prompt.unpushed.length > 0 && (
+          <p className="text-sm text-text-primary" data-testid="speleodb-sign-out-unpushed">
+            {t('speleodb.signOutLocks.unpushed', {
+              count: prompt.unpushed.length,
+              projects: names(prompt.unpushed),
+            })}
+          </p>
+        )}
+        {offersRelease && (
+          <p className="text-xs text-text-secondary">{t('speleodb.signOutLocks.keepHint', { count })}</p>
+        )}
         <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
           <Button onClick={() => answer('cancel')} data-testid="speleodb-sign-out-cancel">
             {t('common.actions.cancel')}
           </Button>
-          <Button variant="secondary" onClick={() => answer('keep')} data-testid="speleodb-sign-out-keep">
-            {t('speleodb.signOutLocks.keep', { count })}
-          </Button>
-          {/* Primary + [data-primary-action]: a stray Enter hands the locks back, the
-              sign-out's behaviour before it asked. */}
-          <Button
-            variant="primary"
-            onClick={() => answer('release')}
-            data-primary-action=""
-            data-testid="speleodb-sign-out-release"
-          >
-            {t('speleodb.signOutLocks.release')}
-          </Button>
+          {offersRelease ? (
+            <>
+              <Button variant="secondary" onClick={() => answer('keep')} data-testid="speleodb-sign-out-keep">
+                {t('speleodb.signOutLocks.keep', { count })}
+              </Button>
+              {/* Primary + [data-primary-action]: a stray Enter hands the locks back,
+                  the sign-out's behaviour before it asked. */}
+              <Button
+                variant="primary"
+                onClick={() => answer('release')}
+                data-primary-action=""
+                data-testid="speleodb-sign-out-release"
+              >
+                {t('speleodb.signOutLocks.release')}
+              </Button>
+            </>
+          ) : (
+            // Nothing to release: the sign-out runs as it always did, and the
+            // un-pushed-edits veto keeps those locks (see SignOutChoice).
+            <Button
+              variant="primary"
+              onClick={() => answer('release')}
+              data-primary-action=""
+              data-testid="speleodb-sign-out-ok"
+            >
+              {t('speleodb.signOutLocks.signOut')}
+            </Button>
+          )}
         </div>
       </div>
     </DialogWrapper>

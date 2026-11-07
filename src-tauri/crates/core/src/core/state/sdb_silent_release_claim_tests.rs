@@ -204,12 +204,19 @@ fn claim_kept(state: &AppState) -> bool {
         .any(|claim| claim.project_id == REMOTE_ID && claim.is_kept())
 }
 
-/// [#576 SIGNOUT-PROMPT-D1] The sign-out prompt asks only when this session holds a
-/// lock a sign-out would hand back: the open project's, while editing a clean copy
-/// under it. Read-only, signed out or over un-pushed edits (the veto keeps that lock
-/// whatever the answer), there is nothing to ask.
+/// The (releasable, unpushed) names the sign-out prompt would show.
+fn prompt_names(
+    locks: &crate::core::SpeleoSignOutLocks,
+) -> (Vec<(String, String)>, Vec<(String, String)>) {
+    (named(&locks.releasable), named(&locks.unpushed))
+}
+
+/// [#576 SIGNOUT-PROMPT-D1/D2] The sign-out prompt names the lock this session holds:
+/// the open project's, while editing under it. Over a clean copy it is offered for
+/// release; over un-pushed edits it is listed apart, as kept (the veto keeps it
+/// whatever the answer). Read-only or signed out, there is nothing to ask.
 #[test]
-fn the_sign_out_prompt_names_only_a_lock_the_sign_out_would_hand_back() {
+fn the_sign_out_prompt_names_the_held_lock_and_whether_the_sign_out_keeps_it() {
     let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
     let (_temp, editing) = editing_fixture(&base);
     let (_temp_ro, read_only) = remote_readonly_fixture();
@@ -219,28 +226,33 @@ fn the_sign_out_prompt_names_only_a_lock_the_sign_out_would_hand_back() {
     dirty.set_edit_enabled(true);
     let (_temp_out, signed_out) = editing_fixture(&base);
     signed_out.speleodb.lock().forget_reporting().unwrap();
+    let remote = vec![(REMOTE_ID.to_owned(), "Remote".to_owned())];
 
-    let asked = [
-        (
-            "editing a clean copy",
-            named(&editing.speleodb_sign_out_locks()),
-        ),
-        ("read-only", named(&read_only.speleodb_sign_out_locks())),
-        (
-            "editing over un-pushed edits",
-            named(&dirty.speleodb_sign_out_locks()),
-        ),
-        ("signed out", named(&signed_out.speleodb_sign_out_locks())),
-    ];
-    println!("[SIGNOUT-PROMPT-D1] sign-out locks: {asked:?}");
-    assert_eq!(
-        asked[0].1,
-        vec![(REMOTE_ID.to_owned(), "Remote".to_owned())],
-        "the lock the sign-out would release is named"
+    let clean = prompt_names(&editing.speleodb_sign_out_locks());
+    let unpushed = prompt_names(&dirty.speleodb_sign_out_locks());
+    let read_only = prompt_names(&read_only.speleodb_sign_out_locks());
+    let out = prompt_names(&signed_out.speleodb_sign_out_locks());
+    println!(
+        "[SIGNOUT-PROMPT-D2] sign-out locks (releasable, unpushed): editing a clean copy \
+         {clean:?}; editing over un-pushed edits {unpushed:?}; read-only {read_only:?}; \
+         signed out {out:?}"
     );
-    for (case, locks) in &asked[1..] {
-        assert!(locks.is_empty(), "{case}: nothing to ask about: {locks:?}");
-    }
+    assert_eq!(
+        clean,
+        (remote.clone(), Vec::new()),
+        "a clean copy's lock is offered for release"
+    );
+    assert_eq!(
+        unpushed,
+        (Vec::new(), remote),
+        "a lock over un-pushed edits is named as kept, not offered for release"
+    );
+    assert_eq!(
+        read_only,
+        (Vec::new(), Vec::new()),
+        "read-only: nothing to ask"
+    );
+    assert_eq!(out, (Vec::new(), Vec::new()), "signed out: nothing to ask");
     assert!(
         release_requests(&seen).is_empty(),
         "asking changes nothing on the server"

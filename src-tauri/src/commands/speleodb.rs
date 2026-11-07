@@ -32,8 +32,8 @@ use tauri::{AppHandle, Manager};
 use crate::config::TokenFallback;
 use crate::core::state::{for_project, ProjectIdentity};
 use crate::core::{
-    AppState, CommandError, SpeleoDoneReport, SpeleoLockLeftHeld, SpeleoLogoutReport,
-    SpeleoPushReport,
+    AppState, CommandError, SpeleoDoneReport, SpeleoLogoutReport, SpeleoPushReport,
+    SpeleoSignOutLocks,
 };
 // [Track A] #186/D-B2: the orchestration `AppState::speleodb_*` methods build the
 // structured SpeleoErrorDto at the call site where the endpoint is known; the
@@ -89,19 +89,18 @@ pub async fn speleodb_login(
     .await
 }
 
-/// [#576 SIGNOUT-PROMPT-D1] The write locks a sign-out would hand back now: what
-/// the sign-out prompt names before a logout. Empty when there is nothing to ask.
+/// [#576 SIGNOUT-PROMPT-D1/D2] The write locks this session holds at a sign-out:
+/// what the sign-out prompt names before a logout - those it would hand back, and
+/// those it keeps for un-pushed edits. Both empty when there is nothing to ask.
 #[tauri::command]
-pub async fn speleodb_sign_out_locks(
-    app: AppHandle,
-) -> Result<Vec<SpeleoLockLeftHeld>, CommandError> {
+pub async fn speleodb_sign_out_locks(app: AppHandle) -> Result<SpeleoSignOutLocks, CommandError> {
     run_blocking(app, |s| Ok(s.speleodb_sign_out_locks())).await
 }
 
-/// [#576 SIGNOUT-PROMPT-D1] The write locks a sign-in with these credentials would
-/// hand back from the live session it replaces (another account or server): what
-/// the sign-out prompt names before such a sign-in. Empty when it replaces nothing
-/// or that session holds no lock to ask about. A pasted `token` is resolved to its
+/// [#576 SIGNOUT-PROMPT-D1/D2] The write locks of the live session a sign-in with
+/// these credentials replaces (another account or server), split as
+/// [`speleodb_sign_out_locks`] splits them: what the sign-out prompt names before
+/// such a sign-in. Both empty when it replaces nothing or that session holds no lock. A pasted `token` is resolved to its
 /// account as the login resolves it.
 #[tauri::command]
 pub async fn speleodb_sign_in_hand_back_locks(
@@ -109,7 +108,7 @@ pub async fn speleodb_sign_in_hand_back_locks(
     endpoint: Option<String>,
     email: Option<String>,
     token: Option<String>,
-) -> Result<Vec<SpeleoLockLeftHeld>, CommandError> {
+) -> Result<SpeleoSignOutLocks, CommandError> {
     run_blocking(app, move |s| {
         s.speleodb_sign_in_hand_back_locks(endpoint, email, token)
     })

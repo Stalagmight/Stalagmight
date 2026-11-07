@@ -579,6 +579,16 @@ pub struct SpeleoLogoutReport {
     pub locks_left_held: Vec<SpeleoLockLeftHeld>,
 }
 
+/// [#576 SIGNOUT-PROMPT-D1/D2] What the sign-out prompt names: the write locks this
+/// session holds that a sign-out (a logout, or a sign-in that replaces the session)
+/// would hand back (`releasable`), and those it keeps whatever the answer because
+/// the project has edits not on SpeleoDB yet (`unpushed`). Both empty: no prompt.
+#[derive(Debug, Clone, Default, Serialize, TS)]
+pub struct SpeleoSignOutLocks {
+    pub releasable: Vec<SpeleoLockLeftHeld>,
+    pub unpushed: Vec<SpeleoLockLeftHeld>,
+}
+
 /// One project whose write lock a logout could not hand back (see
 /// [`SpeleoLogoutReport`]). [#576 NF-W72-1] Defined beside `SpeleoLoginResult`,
 /// whose replacing sign-in names them too.

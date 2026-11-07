@@ -9,11 +9,11 @@ import type {
   SpeleoDumpCandidate,
   SpeleoErrorDto,
   SpeleoLinkStatus,
-  SpeleoLockLeftHeld,
   SpeleoLoginResult,
   SpeleoLogoutReport,
   SpeleoProjectSummary,
   SpeleoSessionStatus,
+  SpeleoSignOutLocks,
   StartEditingResult,
   TokenStorage,
   UndoMode,
@@ -276,35 +276,41 @@ export interface PendingLogin {
 
 export type PendingAuth = PendingLogin | { kind: 'logout' } | null;
 
-/** [#576 SIGNOUT-PROMPT-D1] The sign-out prompt's three answers. */
+/** [#576 SIGNOUT-PROMPT-D1] The sign-out prompt's answers. When it offers nothing to
+ *  release (D2), its "Sign out" answers `release`: the sign-out runs as it always
+ *  did, and the un-pushed-edits veto keeps those locks. */
 export type SignOutChoice = 'release' | 'keep' | 'cancel';
 
 /**
  * [#576 SIGNOUT-PROMPT-D1] The sign-out prompt on screen: the write locks this
  * session holds, asked about before a logout (`logout`) or before a sign-in as
- * another account or server replaces the session (`switch`).
+ * another account or server replaces the session (`switch`). `releasable` are the
+ * locks the sign-out would hand back; [#576 SIGNOUT-PROMPT-D2] `unpushed` those it
+ * keeps whatever the answer, because the project has edits not on SpeleoDB yet.
  */
-export interface SignOutPrompt {
+export interface SignOutPrompt extends SpeleoSignOutLocks {
   kind: 'logout' | 'switch';
-  locks: SpeleoLockLeftHeld[];
 }
 
 /** The pending `applyPendingAuth` waiting on the sign-out prompt's answer. */
 let signOutPromptAnswer: ((choice: SignOutChoice) => void) | null = null;
 
 /**
- * Raise the sign-out prompt and wait for its answer. A prompt raised over one still
- * unanswered answers that one Cancel, so no sign-out is left waiting forever.
+ * Ask before a sign-out when this session holds any lock - one to release, or one
+ * kept for un-pushed edits (D2) - and wait for the answer; with none, `release`
+ * (nothing to ask). A prompt raised over one still unanswered answers that one
+ * Cancel, so no sign-out is left waiting forever.
  */
 function askSignOut(
   set: (patch: { signOutPrompt: SignOutPrompt | null }) => void,
   kind: SignOutPrompt['kind'],
-  locks: SpeleoLockLeftHeld[],
+  locks: SpeleoSignOutLocks,
 ): Promise<SignOutChoice> {
+  if (locks.releasable.length === 0 && locks.unpushed.length === 0) return Promise.resolve('release');
   signOutPromptAnswer?.('cancel');
   return new Promise((resolve) => {
     signOutPromptAnswer = resolve;
-    set({ signOutPrompt: { kind, locks } });
+    set({ signOutPrompt: { kind, releasable: locks.releasable, unpushed: locks.unpushed } });
   });
 }
 
@@ -972,8 +978,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // [#576 SIGNOUT-PROMPT-D1] Ask first when this session holds write locks:
         // release them, keep them held on SpeleoDB, or do nothing at all. No locks,
         // no prompt - the sign-out releases as it always did (nothing to release).
+        // [#576 SIGNOUT-PROMPT-D2] Locks kept for un-pushed edits are named too, and
+        // when they are all there is, the prompt only says so: Sign out or Cancel.
         const locks = await invokeIpc('speleodb_sign_out_locks');
-        const choice = locks.length > 0 ? await askSignOut(set, 'logout', locks) : 'release';
+        const choice = await askSignOut(set, 'logout', locks);
         if (choice === 'cancel') return { ok: false, cancelled: true };
         // #270: the backend drops the session and the persisted account email even
         // when it can't remove the credential from the OS keychain - it rejects only
@@ -1019,7 +1027,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           email: credentials.email,
           token: credentials.token,
         });
-        const choice = locks.length > 0 ? await askSignOut(set, 'switch', locks) : 'release';
+        const choice = await askSignOut(set, 'switch', locks);
         if (choice === 'cancel') return { ok: false, cancelled: true };
         const r = await invokeIpc('speleodb_login', {
           ...credentials,

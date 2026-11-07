@@ -26,6 +26,7 @@ const CAVE_A: SpeleoLockLeftHeld = {
   project_name: 'CaveA',
 };
 const CAVE_B: SpeleoLockLeftHeld = { project_id: 'b', project_name: 'CaveB' };
+const CAVE_C: SpeleoLockLeftHeld = { project_id: 'c', project_name: 'CaveC' };
 
 interface Path {
   kind: 'logout' | 'switch';
@@ -80,10 +81,16 @@ const PATHS: Path[] = [
 ];
 
 /** The backend: `held` are the locks the sign-out would hand back; `leftHeld` what
- *  its release could not release. */
-function backend(path: Path, held: SpeleoLockLeftHeld[], leftHeld: SpeleoLockLeftHeld[] = []) {
+ *  its release could not release; `unpushed` the locks it keeps for un-pushed edits
+ *  (#576 SIGNOUT-PROMPT-D2). */
+function backend(
+  path: Path,
+  held: SpeleoLockLeftHeld[],
+  leftHeld: SpeleoLockLeftHeld[] = [],
+  unpushed: SpeleoLockLeftHeld[] = [],
+) {
   invokeIpcMock.mockImplementation(async (cmd: string) => {
-    if (cmd === path.ask) return held;
+    if (cmd === path.ask) return { releasable: held, unpushed };
     if (cmd === 'speleodb_logout') return { locks_left_held: leftHeld };
     if (cmd === 'speleodb_login')
       return {
@@ -93,7 +100,7 @@ function backend(path: Path, held: SpeleoLockLeftHeld[], leftHeld: SpeleoLockLef
         storage: 'keychain',
         keychain: 'available',
         needs_storage_choice: false,
-        replaced_session: held.length > 0,
+        replaced_session: held.length + unpushed.length > 0,
         locks_left_held: leftHeld,
       };
     // The re-seed after a replaced session: never answers.
@@ -151,7 +158,11 @@ describe.each(PATHS)('sign-out prompt: $kind (#576 SIGNOUT-PROMPT-D1)', (path) =
     const applied = useSpeleoStore.getState().applyPendingAuth('https://x/');
     await vi.waitFor(() => expect(useSpeleoStore.getState().signOutPrompt).not.toBeNull());
 
-    expect(useSpeleoStore.getState().signOutPrompt).toEqual({ kind: path.kind, locks: [CAVE_A, CAVE_B] });
+    expect(useSpeleoStore.getState().signOutPrompt).toEqual({
+      kind: path.kind,
+      releasable: [CAVE_A, CAVE_B],
+      unpushed: [],
+    });
     expect(callsTo(path.act)).toHaveLength(0);
     expect(useSpeleoStore.getState().session?.userEmail).toBe('old@x');
 
@@ -210,5 +221,54 @@ describe.each(PATHS)('sign-out prompt: $kind (#576 SIGNOUT-PROMPT-D1)', (path) =
     expect(toasts[0]!.key).toBe(path.warningKey);
     expect(toasts[0]!.kind).toBe('warning');
     expect(toasts[0]!.message).toBe(path.warning);
+  });
+
+  // [#576 SIGNOUT-PROMPT-D2] Locks the sign-out keeps for un-pushed edits are named.
+  it('mixed: names the locks it would release and those kept for un-pushed edits', async () => {
+    backend(path, [CAVE_A], [], [CAVE_C]);
+
+    const applied = useSpeleoStore.getState().applyPendingAuth('https://x/');
+    await vi.waitFor(() => expect(useSpeleoStore.getState().signOutPrompt).not.toBeNull());
+
+    expect(useSpeleoStore.getState().signOutPrompt).toEqual({
+      kind: path.kind,
+      releasable: [CAVE_A],
+      unpushed: [CAVE_C],
+    });
+    expect(callsTo(path.act)).toHaveLength(0);
+    useSpeleoStore.getState().answerSignOutPrompt('keep');
+    expect((await applied).ok).toBe(true);
+    expect(callsTo(path.act)[0]).toMatchObject({ releaseLocks: false });
+    expect(path.signedOut()).toBe(true);
+  });
+
+  it('un-pushed only: still asks, and Sign out signs out as it always did', async () => {
+    backend(path, [], [], [CAVE_C]);
+
+    const applied = useSpeleoStore.getState().applyPendingAuth('https://x/');
+    await vi.waitFor(() => expect(useSpeleoStore.getState().signOutPrompt).not.toBeNull());
+
+    expect(useSpeleoStore.getState().signOutPrompt).toEqual({
+      kind: path.kind,
+      releasable: [],
+      unpushed: [CAVE_C],
+    });
+    expect(callsTo(path.act)).toHaveLength(0);
+    // The dialog's "Sign out" answers `release`: the veto keeps the lock.
+    useSpeleoStore.getState().answerSignOutPrompt('release');
+    expect((await applied).ok).toBe(true);
+    expect(callsTo(path.act)).toHaveLength(1);
+    expect(callsTo(path.act)[0]).toMatchObject({ releaseLocks: true });
+    expect(path.signedOut()).toBe(true);
+  });
+
+  it('un-pushed only: Cancel does nothing', async () => {
+    backend(path, [], [], [CAVE_C]);
+
+    const result = await applyAnswering('cancel');
+
+    expect(result).toEqual({ ok: false, cancelled: true });
+    expect(callsTo(path.act)).toHaveLength(0);
+    expect(useSpeleoStore.getState().session?.userEmail).toBe('old@x');
   });
 });

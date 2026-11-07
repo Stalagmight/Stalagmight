@@ -492,12 +492,16 @@ fn the_sign_in_prompt_names_the_old_sessions_lock_only_when_the_sign_in_replaces
         let (a_base, _a_listener, a_seen) = routing_stub(server_a);
         let (b_base, _b_listener, _b_seen) = routing_stub(server_b);
         let (_temp, state) = editing_fixture(&a_base);
-        let named = |locks: Vec<crate::core::SpeleoLockLeftHeld>| -> Vec<(String, String)> {
-            locks
-                .into_iter()
-                .map(|left| (left.project_id, left.project_name))
-                .collect()
+        // (releasable, unpushed), as (id, name) pairs.
+        let named = |locks: crate::core::SpeleoSignOutLocks| {
+            let pairs = |list: Vec<crate::core::SpeleoLockLeftHeld>| -> Vec<(String, String)> {
+                list.into_iter()
+                    .map(|left| (left.project_id, left.project_name))
+                    .collect()
+            };
+            (pairs(locks.releasable), pairs(locks.unpushed))
         };
+        let none = (Vec::new(), Vec::new());
         let to_b = state
             .speleodb_sign_in_hand_back_locks(Some(b_base.clone()), None, Some("tok-b".to_owned()))
             .map(named)
@@ -523,15 +527,18 @@ fn the_sign_in_prompt_names_the_old_sessions_lock_only_when_the_sign_in_replaces
         );
         assert_eq!(
             to_b,
-            Ok(vec![(REMOTE_ID.to_owned(), "Remote".to_owned())]),
+            Ok((
+                vec![(REMOTE_ID.to_owned(), "Remote".to_owned())],
+                Vec::new()
+            )),
             "a sign-in as another account names the old session's lock"
         );
         assert_eq!(
             same_account,
-            Ok(Vec::new()),
+            Ok(none.clone()),
             "the same account replaces nothing"
         );
-        assert_eq!(nobody, Ok(Vec::new()), "signed out, nothing is replaced");
+        assert_eq!(nobody, Ok(none), "signed out, nothing is replaced");
         assert!(
             !a_requests.iter().any(|r| r.contains("/release/")),
             "asking releases nothing: {a_requests:?}"
