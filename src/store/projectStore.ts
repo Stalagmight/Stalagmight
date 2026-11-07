@@ -1322,6 +1322,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (get().loading.clientOpId === clientOpId) get().resetLoading();
         return emptyCommandResult(false, message);
       }
+      // [#576 Q-W44-2-D1, W60-NF1] The user cancelled this create: it ends quietly,
+      // whatever it answers, as a cancelled load does (see loadProject).
+      if (loadCancelledByUser(clientOpId)) {
+        if (get().loading.clientOpId === clientOpId) get().resetLoading();
+        return emptyCommandResult(false, message);
+      }
       if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(message, commandErrorOf(e)?.details);
       }
