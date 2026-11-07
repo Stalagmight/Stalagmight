@@ -147,6 +147,17 @@ pub(super) fn clear_scratch_name(path: &Path) -> std::io::Result<()> {
 /// refuses any entry at the name, a link included). The copy gets `from`'s
 /// permission bits (narrowed by the umask), as `fs::copy` gave it, so a private
 /// project never gets a world-readable copy. Returns the bytes copied.
+///
+/// [#576 RVF-d-11] The trade-off on macOS: `fs::copy` there first tries an
+/// APFS clone (`fclonefileat`: no new data blocks, instant), and this is a
+/// byte-for-byte copy (`io::copy` has a kernel fast path on Linux only), so
+/// each copy now costs the file's size in time and disk space, and on a nearly
+/// full disk a large project's upgrade, repair or restore can be refused for
+/// space a clone would not have needed. `fs::copy` into the `create_new` file
+/// would not get the clone back: `fclonefileat` refuses a destination that
+/// exists, and `fs::copy` then reopens it by name, following a link there. A
+/// clone needs `fclonefileat` called here directly (it refuses an existing
+/// name, a link included), which is untested on macOS.
 pub(super) fn copy_to_new_file(from: &Path, to: &Path) -> std::io::Result<u64> {
     clear_scratch_name(to)?;
     let mut source = std::fs::File::open(from)?;

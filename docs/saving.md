@@ -62,6 +62,13 @@ system folder is not upgraded at all: the open is refused before the chain start
 copy the project somewhere writable and open the copy (#576 RV4-R-M3-OPEN; see
 docs/architecture.md, "IPC trust boundary").
 
+This copy, the restore's staging and check copies and the repair's numbered
+backup are each written as a new file, never through a link left at their name
+(#576 RVF-b-1, `copy_to_new_file`). On macOS that makes them full byte copies
+where APFS used to clone the file for free, so each costs the project's size in
+disk space and time, and on a nearly full disk a large project's upgrade, repair
+or restore can be refused for space it did not need before (#576 RVF-d-11).
+
 The whole chain - `migrate_schema`, every version arm and the stamp - runs in ONE
 `BEGIN IMMEDIATE` transaction (#576 B6), so an upgrade lands completely or not at
 all: a step that fails part-way, or a crash, leaves the file as unmigrated as it
