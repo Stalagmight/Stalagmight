@@ -50,8 +50,13 @@ export interface SwitchTurn {
 export interface SwitchOptions<T> {
   /** What this switch resolves when it is dropped while waiting (latest wins). Absent: never dropped. */
   dropped?: () => T;
-  /** Called once if a newer switch is requested while this one runs. */
-  onSuperseded?: () => void;
+  /**
+   * Called once if a newer switch is requested while this one runs. [#576 RVF-c-C3] What
+   * it returns (a load: its `cancel_loading` IPC) is waited for before the newer switch
+   * starts: `cancel_loading` cancels whatever load is active when it runs, so one still
+   * on its way could cancel the newer switch's load instead.
+   */
+  onSuperseded?: () => unknown;
   /** Flush the queued display-setting writes before the work starts (load, close). */
   flushDisplayWrites?: boolean;
   /**
@@ -67,7 +72,8 @@ interface QueuedSwitch {
   started: boolean;
   /** Drop it if it has not started and may be dropped; whether it was. */
   drop: () => boolean;
-  supersede: () => void;
+  /** Tell it a newer switch was requested; what its `onSuperseded` returned, if it ran. */
+  supersede: () => unknown;
 }
 
 let replacementTail: Promise<void> = Promise.resolve();
@@ -85,13 +91,16 @@ export function runProjectSwitch<T>(
   const release = noteSwitchRequested();
   // [#576 RVF-c-A1-3] A throw from an earlier switch's `dropped` / `onSuperseded` must not
   // leave this switch's gate held: every later save and edit would be refused for good.
+  const supersededSettled: Promise<unknown>[] = [];
   try {
-    for (const earlier of [...unsettled]) if (!earlier.drop()) earlier.supersede();
+    for (const earlier of [...unsettled]) {
+      if (!earlier.drop()) supersededSettled.push(Promise.resolve(earlier.supersede()).catch(() => undefined));
+    }
   } catch (e) {
     release();
     throw e;
   }
-  const before = Promise.all([replacementTail, mutationsSettled(), savesSettled(), switchTail]);
+  const before = Promise.all([replacementTail, mutationsSettled(), savesSettled(), switchTail, ...supersededSettled]);
 
   let superseded = false;
   let dropped = false;
@@ -139,10 +148,9 @@ export function runProjectSwitch<T>(
     supersede: () => {
       superseded = true;
       const notify = entry.started ? onSuperseded : undefined;
-      if (notify) {
-        onSuperseded = undefined;
-        notify();
-      }
+      if (!notify) return undefined;
+      onSuperseded = undefined;
+      return notify();
     },
   };
   unsettled.push(entry);

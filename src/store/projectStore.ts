@@ -1276,8 +1276,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Stop the backend's work at once, but leave the loading state to this load's own
       // ending: its answer may still commit, and the reset arrived after a newer load had
       // started, or while this one still ran, showing a project open with no load running.
+      // [#576 RVF-c-C3] Returned: the next switch waits for it to answer, so it cannot
+      // reach the backend after that switch's own load started and cancel it instead.
       onSuperseded: () =>
-        void invokeIpc('cancel_loading', undefined, { purpose: 'cancel project loading' }).catch(() => undefined),
+        invokeIpc('cancel_loading', undefined, { purpose: 'cancel project loading' }).catch(() => undefined),
       flushDisplayWrites: true, // [#576 FZ-FZ-INT-6]
     }),
 

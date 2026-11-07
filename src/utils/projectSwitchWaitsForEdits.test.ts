@@ -109,4 +109,40 @@ describe('runProjectSwitch', () => {
     // must not leave that state behind.
     expect(switchUnderWay(), 'the gate is released').toBe(false);
   });
+
+  it('starts the next switch only after the superseded one\'s cancel has answered (#576 RVF-c-C3)', async () => {
+    // `cancel_loading` cancels whatever load is active when it RUNS. Sent when a load
+    // is superseded, it must not still be on its way when the next switch starts its
+    // own load, or it cancels that one instead.
+    const trace: string[] = [];
+    const running = deferred();
+    const cancelAnswered = deferred();
+    const first = runProjectSwitch(
+      async () => {
+        await running.promise;
+        trace.push('first load answers');
+      },
+      {
+        onSuperseded: () => {
+          trace.push('cancel sent');
+          return cancelAnswered.promise.then(() => {
+            trace.push('cancel answered');
+          });
+        },
+      },
+    );
+    await microtasks(10);
+    const second = runProjectSwitch(async () => {
+      trace.push('second load starts');
+    });
+    running.resolve(); // the superseded load finished on its own
+    await first;
+    await microtasks(10);
+    const startedBeforeTheCancelAnswered = trace.includes('second load starts');
+    cancelAnswered.resolve();
+    await second;
+
+    expect(startedBeforeTheCancelAnswered, trace.join(' > ')).toBe(false);
+    expect(trace).toEqual(['cancel sent', 'first load answers', 'cancel answered', 'second load starts']);
+  });
 });
