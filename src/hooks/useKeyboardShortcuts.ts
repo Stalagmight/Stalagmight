@@ -649,6 +649,14 @@ export function useKeyboardShortcuts() {
           const toggleKey = DISPLAY_TOGGLE_ACTIONS[action];
           if (toggleKey) {
             event.preventDefault();
+            // [#576 W54-NF2] Not while a load is in progress. A load started from
+            // this view (Discard in the unsaved-changes prompt) keeps it mounted
+            // with no overlay, dialog or occupant up - the loading modal lives in
+            // the project list - so the toggle reached the outgoing project
+            // mid-switch. A failed load leaves its error in the loading state and
+            // the old project open: the toggles work again then.
+            const { isLoading, error } = useProjectStore.getState().loading;
+            if (isLoading && error === undefined) break;
             // Get current state before toggle to report new state
             const currentState = useUIStore.getState()[toggleKey];
             toggleDisplay(toggleKey);
