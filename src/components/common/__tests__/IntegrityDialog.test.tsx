@@ -18,6 +18,7 @@ import '../../../i18n';
 import { IntegrityDialog } from '../IntegrityDialog';
 import type { EditBlockedReason } from '../../../hooks/useEditingBlocked';
 import { isTopmost, popDialog, pushDialog } from '../../../utils/dialogStack';
+import { useUIStore } from '../../../store/uiStore';
 
 const ISSUES = ['Station merge #0 station_a references missing section 42'];
 
@@ -123,5 +124,20 @@ describe('IntegrityDialog on the dialog stack (NF3)', () => {
     expect(screen.queryByTestId('behind')).toBeNull();
     expect(() => view.rerender(<Scene open={false} withButton={false} />)).not.toThrow();
     expect(screen.queryByTestId('integrity-dialog')).toBeNull();
+  });
+});
+
+// It is not the `activeDialog` slot, so it registers as a screen occupant: both
+// keyboard shortcut dispatchers stand down while one is on screen, and before
+// this the survey shortcuts (open, import, the shortcuts list, undo, delete)
+// acted on the project behind it.
+describe('IntegrityDialog holds the keyboard shortcuts', () => {
+  it('occupies the screen while it is open and frees it when it closes', () => {
+    useUIStore.setState({ screenOccupants: 0 });
+    const view = openFromBehind();
+    expect(useUIStore.getState().screenOccupants).toBe(1);
+    view.rerender(<Scene open={false} />);
+    expect(screen.queryByTestId('integrity-dialog')).toBeNull();
+    expect(useUIStore.getState().screenOccupants).toBe(0);
   });
 });

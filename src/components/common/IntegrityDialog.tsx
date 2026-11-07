@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import type { EditBlockedReason } from '../../hooks/useEditingBlocked';
 import { getFocusableElements, useFocusTrap } from '../../hooks/useFocusTrap';
+import { useScreenOccupant } from '../../hooks/useScreenOccupant';
 import { popDialog, pushDialog } from '../../utils/dialogStack';
 
 export interface IntegrityDialogProps {
@@ -41,6 +42,10 @@ export function IntegrityDialog({ issues, repairBlocked, repairing, onClose, onR
   const triggerRef = useRef<Element | null>(document.activeElement);
 
   useFocusTrap(dialogRef);
+  // Not the `activeDialog` slot, so the keyboard shortcuts stand down for it only
+  // as a screen occupant: without this, open, import, the shortcuts list, undo and
+  // delete acted on the project behind it. Mounted only while open (App.tsx).
+  useScreenOccupant(true);
 
   // Register with the dialog stack and move focus in before the browser paints,
   // so no key press reaches the app behind it in between.

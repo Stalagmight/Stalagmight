@@ -1,6 +1,8 @@
 import { test, expect, type Page } from './fixtures/coverage';
-import { setupMockedPage, createProject } from './helpers/app';
+import { setupMockedPage, createProject, createSectionViaStore } from './helpers/app';
 import type { E2EWindow } from './helpers/e2eWindow';
+import { setIpcOverrides } from './helpers/ipcOverrides';
+import { getIpcCalls, recordIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
 
 /**
  * E2E for the structural-integrity warn + repair banner (#17). The mock's
@@ -203,5 +205,110 @@ test.describe('Structural-integrity banner', () => {
     await expect(page.getByTestId('integrity-banner')).toContainText('1 integrity issue');
     await page.getByTestId('integrity-dismiss-button').click();
     await expect(page.getByTestId('integrity-banner')).toHaveCount(0);
+  });
+
+  // The integrity dialog is on the dialog stack, but it is neither the
+  // `activeDialog` slot nor a screen occupant, so the survey shortcuts did not
+  // stand down for it: Ctrl+O / Ctrl+I asked for the file picker, `?` opened the
+  // shortcuts list, Ctrl+Z undid and Delete asked to delete the selection, all on
+  // the project behind it. Each test presses its keys with the dialog open, then
+  // closes it and presses them again: they act then, so the first presses were
+  // stopped by the dialog, not keys that do nothing here anyway.
+  test.describe('shortcuts stand down while the integrity dialog is open', () => {
+    const activeDialog = (page: Page) =>
+      page.evaluate(() => (window as E2EWindow).__E2E_TEST__.uiStore.getState().activeDialog);
+
+    async function openIntegrityDialog(page: Page): Promise<void> {
+      await seedAndCheck(page, ['Station merge #0 station_a references missing section 42']);
+      await page.getByTestId('integrity-review-button').click();
+      await expect(page.getByTestId('integrity-dialog-cancel')).toBeFocused();
+    }
+
+    async function closeIntegrityDialog(page: Page): Promise<void> {
+      await page.getByTestId('integrity-dialog-cancel').click();
+      await expect(page.getByTestId('integrity-dialog')).toHaveCount(0);
+    }
+
+    test('Ctrl+O and Ctrl+I do not ask for the file picker', async ({ page }) => {
+      // The picker answers "cancelled", so the control presses below open nothing more.
+      await setIpcOverrides(page, { 'plugin:dialog|open': null });
+      await recordIpcCalls(page, ['plugin:dialog|open']);
+      await openIntegrityDialog(page);
+
+      await page.keyboard.press('Control+o');
+      await page.keyboard.press('Control+i');
+      // settle: proves no picker is asked for; an empty call log is what the first
+      // read sees whether or not the shortcuts fired.
+      await page.waitForTimeout(300);
+      expect(await getIpcCalls(page, 'plugin:dialog|open')).toEqual([]);
+      await expect(page.getByTestId('integrity-dialog')).toBeVisible();
+
+      // Control: with the dialog closed, Ctrl+O asks for the picker, and Ctrl+I asks
+      // for it for a .dmp (a project is open).
+      await closeIntegrityDialog(page);
+      await page.keyboard.press('Control+o');
+      await waitForIpcCall(page, 'plugin:dialog|open', 1);
+      await page.keyboard.press('Control+i');
+      const calls = await waitForIpcCall(page, 'plugin:dialog|open', 2);
+      expect(calls[1]?.args).toMatchObject({ options: { filters: [{ extensions: ['dmp'] }] } });
+    });
+
+    test('? does not open the shortcuts list', async ({ page }) => {
+      await openIntegrityDialog(page);
+
+      await page.keyboard.press('?');
+      // settle: proves the shortcuts list does not open; its absence is what the
+      // first read sees whether or not the shortcut fired.
+      await page.waitForTimeout(300);
+      expect(await activeDialog(page)).toBeNull();
+      await expect(page.getByTestId('keyboard-shortcuts-dialog')).toHaveCount(0);
+
+      // Control: with the dialog closed, `?` opens it.
+      await closeIntegrityDialog(page);
+      await page.keyboard.press('?');
+      await expect(page.getByTestId('keyboard-shortcuts-dialog')).toBeVisible();
+    });
+
+    test('Ctrl+Z does not undo', async ({ page }) => {
+      await recordIpcCalls(page, ['undo']);
+      await openIntegrityDialog(page);
+
+      await page.keyboard.press('Control+z');
+      // settle: proves no undo is sent; an empty call log is what the first read
+      // sees whether or not the shortcut fired.
+      await page.waitForTimeout(300);
+      expect(await getIpcCalls(page, 'undo')).toEqual([]);
+
+      // Control: with the dialog closed, Ctrl+Z undoes.
+      await closeIntegrityDialog(page);
+      await page.keyboard.press('Control+z');
+      await waitForIpcCall(page, 'undo');
+    });
+
+    test('Delete does not ask to delete the selection', async ({ page }) => {
+      await createSectionViaStore(page, {
+        name: 'Integrity Delete Section',
+        shots: [{ azimuth_in: 0, azimuth_out: 0, length: 5, depth_in: 0, depth_out: 1 }],
+      });
+      await openIntegrityDialog(page);
+      await page.evaluate(() => {
+        const e2e = (window as E2EWindow).__E2E_TEST__;
+        const id = e2e.projectStore.getState().project!.sections[0]!.id;
+        e2e.uiStore.getState().setSelection({ type: 'section', sectionId: id });
+      });
+
+      await page.keyboard.press('Delete');
+      // settle: proves the delete confirmation does not open; its absence is what
+      // the first read sees whether or not the shortcut fired.
+      await page.waitForTimeout(300);
+      expect(await activeDialog(page)).toBeNull();
+      await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
+
+      // Control: with the dialog closed, Delete asks to delete the selected section.
+      await closeIntegrityDialog(page);
+      await page.keyboard.press('Delete');
+      await expect(page.getByTestId('confirm-dialog')).toBeVisible();
+      expect(await activeDialog(page)).toBe('confirm-delete');
+    });
   });
 });
