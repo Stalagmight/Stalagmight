@@ -7,6 +7,7 @@ import { Select } from '../../common/Select';
 import { SpeleoUserAutocomplete } from '../../common/SpeleoUserAutocomplete';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
+import { expectedOpenProject } from '../../../store/expectedOpenProject';
 import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
@@ -262,6 +263,9 @@ export function SpeleoCollaboratorsTab() {
         invokeIpc('speleodb_add_collaborator', {
           email,
           permission: newLevel,
+          // [#576 RVF-c-C1] Each roster change names its project (refused once
+          // another is open); `mutate` runs the call at once, so this is the click.
+          expectedProject: expectedOpenProject(),
         }).then((r) => {
           setNewEmail('');
           return r;
@@ -277,6 +281,7 @@ export function SpeleoCollaboratorsTab() {
         invokeIpc('speleodb_add_team', {
           teamId: newTeamId,
           permission: newTeamLevel,
+          expectedProject: expectedOpenProject(),
         }).then((r) => {
           setNewTeamId('');
           return r;
@@ -360,6 +365,7 @@ export function SpeleoCollaboratorsTab() {
                           invokeIpc('speleodb_set_collaborator', {
                             email: u.email,
                             permission,
+                            expectedProject: expectedOpenProject(),
                           }),
                         'speleodb.collaborators.changeFailed',
                       )
@@ -369,6 +375,7 @@ export function SpeleoCollaboratorsTab() {
                         () =>
                           invokeIpc('speleodb_remove_collaborator', {
                             email: u.email,
+                            expectedProject: expectedOpenProject(),
                           }),
                         'speleodb.collaborators.removeFailed',
                       )
@@ -405,6 +412,7 @@ export function SpeleoCollaboratorsTab() {
                             invokeIpc('speleodb_set_team', {
                               teamId: g.team_id,
                               permission,
+                              expectedProject: expectedOpenProject(),
                             }),
                           'speleodb.collaborators.changeFailed',
                         )
@@ -414,6 +422,7 @@ export function SpeleoCollaboratorsTab() {
                           () =>
                             invokeIpc('speleodb_remove_team', {
                               teamId: g.team_id,
+                              expectedProject: expectedOpenProject(),
                             }),
                           'speleodb.collaborators.removeFailed',
                         )

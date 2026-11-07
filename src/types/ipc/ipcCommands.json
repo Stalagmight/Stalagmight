@@ -667,6 +667,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "id",
           "key": "id",
           "rust": "i64",
@@ -3005,6 +3012,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "id",
           "key": "id",
           "rust": "Option<i64>",
@@ -3323,6 +3337,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "email",
           "key": "email",
           "rust": "String",
@@ -3351,6 +3372,13 @@
       "module": "speleodb",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "team_id",
           "key": "teamId",
@@ -3429,7 +3457,15 @@
       "name": "speleodb_delete_project",
       "module": "speleodb",
       "async": true,
-      "args": [],
+      "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        }
+      ],
       "result": {
         "rust": "()",
         "ts": "null"
@@ -3444,6 +3480,13 @@
       "module": "speleodb",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "keep_lock",
           "key": "keepLock",
@@ -3473,6 +3516,13 @@
       "module": "speleodb",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "message",
           "key": "message",
@@ -3530,7 +3580,15 @@
       "name": "speleodb_force_edit",
       "module": "speleodb",
       "async": true,
-      "args": [],
+      "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        }
+      ],
       "result": {
         "rust": "()",
         "ts": "null"
@@ -3817,6 +3875,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "patch",
           "key": "patch",
           "rust": "SpeleoProjectMetadataPatch",
@@ -3839,6 +3904,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "params",
           "key": "params",
           "rust": "SpeleoPublishParams",
@@ -3860,6 +3932,13 @@
       "module": "speleodb",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "message",
           "key": "message",
@@ -3902,7 +3981,15 @@
       "name": "speleodb_release_current_lock",
       "module": "speleodb",
       "async": true,
-      "args": [],
+      "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        }
+      ],
       "result": {
         "rust": "()",
         "ts": "null"
@@ -3953,6 +4040,13 @@
       "module": "speleodb",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "email",
           "key": "email",
@@ -4005,6 +4099,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "team_id",
           "key": "teamId",
           "rust": "String",
@@ -4026,6 +4127,13 @@
       "module": "speleodb",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "project_id",
           "key": "projectId",
@@ -4169,6 +4277,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "email",
           "key": "email",
           "rust": "String",
@@ -4198,6 +4313,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "exclude",
           "key": "exclude",
           "rust": "bool",
@@ -4219,6 +4341,13 @@
       "module": "speleodb",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "team_id",
           "key": "teamId",
@@ -4271,6 +4400,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "mode",
           "key": "mode",
           "rust": "UndoMode",
@@ -4293,6 +4429,13 @@
       "async": true,
       "args": [
         {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
+        {
           "name": "resume_held_lock",
           "key": "resumeHeldLock",
           "rust": "Option<bool>",
@@ -4313,7 +4456,15 @@
       "name": "speleodb_take_remote",
       "module": "speleodb",
       "async": true,
-      "args": [],
+      "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        }
+      ],
       "result": {
         "rust": "String",
         "ts": "string"
@@ -4328,6 +4479,13 @@
       "module": "speleodb",
       "async": true,
       "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        },
         {
           "name": "destination",
           "key": "destination",
@@ -4363,7 +4521,15 @@
       "name": "speleodb_update",
       "module": "speleodb",
       "async": true,
-      "args": [],
+      "args": [
+        {
+          "name": "expected_project",
+          "key": "expectedProject",
+          "rust": "Option<ProjectIdentity>",
+          "ts": "ProjectIdentity | null",
+          "optional": true
+        }
+      ],
       "result": {
         "rust": "UpdateResult",
         "ts": "UpdateResult"

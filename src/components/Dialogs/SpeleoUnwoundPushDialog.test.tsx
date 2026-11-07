@@ -101,7 +101,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
 
     await userEvent.click(screen.getByTestId('speleodb-unwound-push-discard'));
 
-    await waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: true, acknowledged: true }));
+    await waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: true, acknowledged: true, expectedProject: null }));
     // Never a push: that is the whole point of this branch.
     expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_done', expect.anything());
   });
@@ -163,6 +163,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
       expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_push', {
         message: 'push old',
         acceptOlderVersion: true,
+        expectedProject: null,
       }),
     );
     expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_done', expect.anything());
@@ -197,7 +198,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
     invokeIpcMock.mockResolvedValueOnce(null);
     await userEvent.click(screen.getByTestId('speleodb-discard-changes-release'));
     await waitFor(() =>
-      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: false, acknowledged: true }),
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: false, acknowledged: true, expectedProject: null }),
     );
     await waitFor(() =>
       expect(useProjectStore.getState().refreshProjectState).toHaveBeenCalled(),
@@ -230,7 +231,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
 
     await userEvent.click(keep);
     await waitFor(() =>
-      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: true, acknowledged: true }),
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: true, acknowledged: true, expectedProject: null }),
     );
   });
 

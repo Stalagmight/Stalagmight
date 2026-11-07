@@ -84,6 +84,7 @@ describe('SpeleoRestoreDialog (#218)', () => {
       // ...and with no history kept there is no chain step, so no direction to pick a
       // guard with either.
       chainForward: false,
+      expectedProject: null,
     });
     expect(closeDialogMock).toHaveBeenCalled();
     expect(showToastMock).toHaveBeenCalled();

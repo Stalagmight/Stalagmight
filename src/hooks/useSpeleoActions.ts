@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
+import { expectedOpenProject } from '../store/expectedOpenProject';
 import {
   useSpeleoStore,
   asPushKind,
@@ -251,14 +252,16 @@ export function useSpeleoActions(): SpeleoActions {
     const issuedFor = speleoProjectSessionIssuedFor(
       useSpeleoStore.getState().remoteProjectId,
     );
+    // [#576 RVF-c-C1] The project this is asked for, before the queued-edits wait.
+    const expectedProject = expectedOpenProject();
     const busyToken = beginBusy();
     try {
       // [#576 D23-SWAP] A fast-forward swaps the tree, so the edits queued
       // before this reach the backend first.
       const result = await afterQueuedEdits(() =>
         options?.resumeHeldLock
-          ? invokeIpc('speleodb_start_editing', { resumeHeldLock: true })
-          : invokeIpc('speleodb_start_editing'),
+          ? invokeIpc('speleodb_start_editing', { resumeHeldLock: true, expectedProject })
+          : invokeIpc('speleodb_start_editing', { expectedProject }),
       );
       const routed = await routeStartEditingResult(result, true, issuedFor);
       if (!routed.landed) return false;
@@ -283,6 +286,7 @@ export function useSpeleoActions(): SpeleoActions {
       const issuedFor = speleoProjectSessionIssuedFor(
         useSpeleoStore.getState().remoteProjectId,
       );
+      const expectedProject = expectedOpenProject();
       const busyToken = beginBusy();
       try {
         // [#576 D23-SWAP] Discard always swaps the tree (see below): the edits
@@ -291,6 +295,7 @@ export function useSpeleoActions(): SpeleoActions {
           invokeIpc('speleodb_discard_changes', {
             keepLock,
             acknowledged: true,
+            expectedProject,
           }),
         );
         const routed = result
@@ -322,7 +327,7 @@ export function useSpeleoActions(): SpeleoActions {
       // No result payload: the backend flips the edit gate + force-edit flag.
       // Re-seed the link so `editState → editing` and `forceEditing → true` drive
       // the read-only badge off and the big-red banner on.
-      await invokeIpc('speleodb_force_edit');
+      await invokeIpc('speleodb_force_edit', { expectedProject: expectedOpenProject() });
       await refreshLinkStatus();
       showToast(t('speleodb.forceEdit.toasts.active'), TOAST_KEYS.SPELEODB_FORCE_EDIT, 'warning');
       return true;
@@ -342,10 +347,11 @@ export function useSpeleoActions(): SpeleoActions {
     const issuedFor = speleoProjectSessionIssuedFor(
       useSpeleoStore.getState().remoteProjectId,
     );
+    const expectedProject = expectedOpenProject();
     const busyToken = beginBusy();
     try {
       // [#576 D23-SWAP] A fast-forward swaps the tree: queued edits land first.
-      const result = await afterQueuedEdits(() => invokeIpc('speleodb_update'));
+      const result = await afterQueuedEdits(() => invokeIpc('speleodb_update', { expectedProject }));
       if (!speleoProjectSessionStillCurrent(issuedFor)) return;
       applyUpdate(result);
       switch (result.kind) {
@@ -399,6 +405,7 @@ export function useSpeleoActions(): SpeleoActions {
           await invokeIpc('speleodb_push', {
             message: message ?? null,
             acceptOlderVersion: opts?.acceptOlderVersion ?? false,
+            expectedProject: expectedOpenProject(),
           }),
         );
         applyPush(result);
@@ -509,6 +516,7 @@ export function useSpeleoActions(): SpeleoActions {
           await invokeIpc('speleodb_done', {
             message: message ?? null,
             acceptOlderVersion: opts?.acceptOlderVersion ?? false,
+            expectedProject: expectedOpenProject(),
           }),
         );
         applyDone(result);
@@ -595,12 +603,15 @@ export function useSpeleoActions(): SpeleoActions {
     const issuedFor = speleoProjectSessionIssuedFor(
       useSpeleoStore.getState().remoteProjectId,
     );
+    const expectedProject = expectedOpenProject();
     const busyToken = beginBusy();
     try {
       // Backend re-pulls + resets the tree to the server tip and returns the
       // reloaded path; loadProject re-seeds the link status (→ read-only).
       // [#576 D23-SWAP] The reset swaps the tree: queued edits land first.
-      const localPath = await afterQueuedEdits(() => invokeIpc('speleodb_take_remote'));
+      const localPath = await afterQueuedEdits(() =>
+        invokeIpc('speleodb_take_remote', { expectedProject }),
+      );
       // If the reload was superseded (the user opened another project mid-pull),
       // don't claim success: the backend reset already happened, but the view the
       // caller thinks it reloaded is not showing. Skip the toast + return false so

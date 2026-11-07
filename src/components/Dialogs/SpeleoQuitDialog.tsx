@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { doneFinished, isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
+import { expectedOpenProject } from '../../store/expectedOpenProject';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
@@ -147,10 +148,12 @@ export default function SpeleoQuitDialog() {
   // the older server version. Destructive, two-step, and never the default. A failed
   // release does not quit - we'd otherwise claim to have freed a lock we still hold.
   const discardReleaseThenQuit = async () => {
+    // [#576 RVF-c-C1] The project whose lock this releases, before the save's await.
+    const expectedProject = expectedOpenProject();
     if (!(await maybeSaveLocally())) return;
     setReleasing(true);
     try {
-      await invokeIpc('speleodb_release_current_lock');
+      await invokeIpc('speleodb_release_current_lock', { expectedProject });
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
       setReleasing(false);

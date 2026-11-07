@@ -133,7 +133,7 @@ impl AppState {
     /// (the server has no retroactive re-render for the current tip; the FE
     /// confirmation states this). A 403 surfaces as an error the button reports.
     pub fn speleodb_set_exclude_geojson(&self, exclude: bool) -> Result<(), SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
+        let link = self.speleodb_link_made_for("Changing web-viewer rendering")?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
         let payload = serde_json::json!({ "exclude_geojson": exclude }).to_string();
@@ -182,7 +182,7 @@ impl AppState {
         &self,
         patch: SpeleoProjectMetadataPatch,
     ) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
+        let link = self.speleodb_link_made_for("Editing the project details")?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -231,7 +231,14 @@ impl AppState {
         // under the lock (`speleodb_upload`).
         if patch.name.is_some() {
             let _commands = self.hold_commands();
-            self.speleodb_fold_local_name(&updated.name);
+            // [#576 RVF-c-C1] The fold is best-effort like every failure of it: a
+            // project a switch opened since the PATCH does not take this one's name.
+            if self
+                .refuse_other_project("Folding the SpeleoDB name")
+                .is_ok()
+            {
+                self.speleodb_fold_local_name(&updated.name);
+            }
         }
 
         Ok(SpeleoProjectMetadata::from_project(&updated))
@@ -313,6 +320,12 @@ impl AppState {
         &self,
         params: SpeleoPublishParams,
     ) -> Result<crate::core::command::SpeleoPublishReport, SpeleoErrorDto> {
+        // [#576 RVF-c-C1] Made for another project than the open one: refused before
+        // the create POST, which cannot be taken back (the relocation checks again).
+        {
+            let _commands = self.hold_commands();
+            self.speleodb_refuse_other_project("Publish")?;
+        }
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -524,7 +537,13 @@ impl AppState {
                 Ok((tip, _)) if tip.is_some() => {
                     // [#576 NF-W4C-2] Under `command_lock`, like every link write.
                     let _commands = self.hold_commands();
-                    let _ = self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone());
+                    // [#576 RVF-c-C1] Best-effort, and never into another project's link.
+                    if self
+                        .refuse_other_project("Recording the published tip")
+                        .is_ok()
+                    {
+                        let _ = self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone());
+                    }
                 }
                 Ok(_) => {}
                 Err(e) => tracing::warn!(
@@ -577,6 +596,10 @@ impl AppState {
         // and the stamp needs the relocation's - which borrows that same span, so the
         // two cannot be split across two acquisitions (#576 RV8a-1).
         let commands = self.hold_commands();
+        // [#576 RVF-c-C1] Never relocate (and link) a project a switch opened since
+        // Publish was asked for.
+        self.refuse_other_project("Publish")
+            .map_err(super::speleodb::refused_by)?;
         let (relocated, relocation_losses) =
             self.speleodb_publish_relocate_into(&commands, dest)?;
         let link = self.speleodb_publish_stamp(relocated, make_link)?;

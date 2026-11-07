@@ -31,6 +31,41 @@ const TAKES_EXPECTED_PROJECT = manifest.commands
   .map((c) => c.name)
   .sort();
 
+/**
+ * [#576 RVF-c-C1] The commands that take `expectedProject` but are NOT sent from this
+ * store, each with the module that sends it (capturing it through
+ * `store/expectedOpenProject.ts`). `openProjectWriterIdentity.test.ts` pins the identity
+ * at the dive-plan and speleoStore senders; each sender's own test pins its args.
+ */
+const SENT_ELSEWHERE: Record<string, string> = {
+  save_dive_plan: 'components/SingleSystemView/DivePlanBar.tsx',
+  delete_dive_plan: 'components/SingleSystemView/DivePlanBar.tsx',
+  speleodb_set_undo_mode: 'store/speleoStore.ts',
+  speleodb_set_exclude_geojson: 'store/speleoStore.ts',
+  speleodb_unlink: 'utils/speleoUnlink.ts',
+  speleodb_done: 'hooks/useSpeleoActions.ts',
+  speleodb_push: 'hooks/useSpeleoActions.ts',
+  speleodb_discard_changes: 'hooks/useSpeleoActions.ts',
+  speleodb_take_remote: 'hooks/useSpeleoActions.ts',
+  speleodb_update: 'hooks/useSpeleoActions.ts',
+  speleodb_start_editing: 'hooks/useSpeleoActions.ts',
+  speleodb_force_edit: 'hooks/useSpeleoActions.ts',
+  speleodb_restore_revision: 'hooks/useRestoreRevision.ts',
+  speleodb_publish: 'components/Dialogs/PublishToSpeleoDbDialog.tsx',
+  speleodb_patch_project: 'hooks/useSpeleoProjectMetadata.ts',
+  speleodb_add_collaborator: 'components/Dialogs/settings/SpeleoCollaboratorsTab.tsx',
+  speleodb_set_collaborator: 'components/Dialogs/settings/SpeleoCollaboratorsTab.tsx',
+  speleodb_remove_collaborator: 'components/Dialogs/settings/SpeleoCollaboratorsTab.tsx',
+  speleodb_add_team: 'components/Dialogs/settings/SpeleoCollaboratorsTab.tsx',
+  speleodb_set_team: 'components/Dialogs/settings/SpeleoCollaboratorsTab.tsx',
+  speleodb_remove_team: 'components/Dialogs/settings/SpeleoCollaboratorsTab.tsx',
+  speleodb_release_current_lock: 'components/Dialogs/settings/SpeleoAdminTab.tsx',
+  speleodb_delete_project: 'components/Dialogs/settings/SpeleoAdminTab.tsx',
+};
+
+/** The commands of {@link TAKES_EXPECTED_PROJECT} this store sends. */
+const SENT_BY_THE_STORE = TAKES_EXPECTED_PROJECT.filter((name) => !(name in SENT_ELSEWHERE));
+
 const A = stationRef(1, 0);
 const B = stationRef(1, 1);
 const OFFSET = { x: 1, y: 2, z: 0 };
@@ -102,10 +137,14 @@ beforeEach(() => {
 
 describe('every save and edit IPC names the project it was issued against (#576 FZ-FZ-INT-4/7)', () => {
   it('has a store path for every command that takes expectedProject', () => {
-    expect(Object.keys(PATHS).sort()).toEqual(TAKES_EXPECTED_PROJECT);
+    // Sent here or listed as sent elsewhere, never neither (and never both).
+    expect(Object.keys(PATHS).filter((name) => name in SENT_ELSEWHERE)).toEqual([]);
+    expect([...Object.keys(PATHS), ...Object.keys(SENT_ELSEWHERE)].sort()).toEqual(
+      TAKES_EXPECTED_PROJECT,
+    );
   });
 
-  it.each(TAKES_EXPECTED_PROJECT)('%s carries expectedProject', async (command) => {
+  it.each(SENT_BY_THE_STORE)('%s carries expectedProject', async (command) => {
     const path = PATHS[command];
     expect(path, `no store path for ${command}`).toBeDefined();
     // A path's own aftermath may trip over the minimal answers; what was SENT is the point.

@@ -6,6 +6,7 @@ import { Select } from '../common/Select';
 import { SpeleoUserAutocomplete } from '../common/SpeleoUserAutocomplete';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { expectedOpenProject } from '../../store/expectedOpenProject';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { invokeIpc } from '../../utils/ipc';
 import { humanizeSpeleoError } from '../../utils/speleoError';
@@ -139,7 +140,10 @@ export default function PublishToSpeleoDbDialog() {
       longitude: bothCoords ? lonNum : null,
     };
     try {
-      const { result, saveLosses } = readPublishReport(await invokeIpc('speleodb_publish', { params }));
+      // [#576 RVF-c-C1] Names the project to publish: refused once another is open.
+      const { result, saveLosses } = readPublishReport(
+        await invokeIpc('speleodb_publish', { params, expectedProject: expectedOpenProject() }),
+      );
       surfaceSaveWarnings(saveLosses);
       // The project now EXISTS on the server and is linked. Reload its cache copy so the
       // app converges on the now-remote project. loadProject reports failure via
@@ -173,11 +177,14 @@ export default function PublishToSpeleoDbDialog() {
       // failed grant must NOT undo a successful publish, so we collect the failures
       // and warn, leaving the rest to be finished from Project Settings.
       const failed: string[] = [];
+      // The project the grants are for: the published one, reloaded just above.
+      const grantsFor = expectedOpenProject();
       for (const c of collaborators) {
         try {
           await invokeIpc('speleodb_add_collaborator', {
             email: c.email,
             permission: c.permission,
+            expectedProject: grantsFor,
           });
         } catch {
           failed.push(c.email);

@@ -26,6 +26,7 @@ import {
 } from '../utils/telemetry';
 import { emailsMatch } from '../utils/email';
 import { useProjectStore } from './projectStore';
+import { expectedOpenProject } from './expectedOpenProject';
 import { useUIStore } from './uiStore';
 import { registerSpeleoStore } from './speleoStoreHandle';
 
@@ -1820,7 +1821,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   enableRendering: async () => {
     // Throws on failure so the banner keeps itself open and shows the error.
-    await invokeIpc('speleodb_set_exclude_geojson', { exclude: false });
+    // [#576 RVF-c-C1] Names the project it was asked for: refused once another is open.
+    await invokeIpc('speleodb_set_exclude_geojson', {
+      exclude: false,
+      expectedProject: expectedOpenProject(),
+    });
     // Drop the rendering-disabled banner (this resolved it) and re-seed from the
     // server so the flag reflects the change.
     set((state) => (state.banner?.kind === 'rendering_disabled' ? { banner: null } : {}));
@@ -1831,7 +1836,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // [#303] Throws on failure so the caller (the settings control) renders the
     // refusal - most usefully the lock one, since this writes the `.stalx` and so
     // becomes every collaborator's policy on the next push.
-    await invokeIpc('speleodb_set_undo_mode', { mode });
+    await invokeIpc('speleodb_set_undo_mode', { mode, expectedProject: expectedOpenProject() });
     // The backend policy changed even if the best-effort status refresh below cannot
     // reach the server, so a target resolved under the old policy is already stale.
     get().invalidateChainTargets();

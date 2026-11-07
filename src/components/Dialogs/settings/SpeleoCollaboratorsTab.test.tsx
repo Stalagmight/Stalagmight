@@ -120,7 +120,7 @@ describe('SpeleoCollaboratorsTab', () => {
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_add_collaborator');
       expect(call).toBeTruthy();
-      expect(call![1]).toEqual({ email: 'new@x.com', permission: 'READ_AND_WRITE' });
+      expect(call![1]).toEqual({ email: 'new@x.com', permission: 'READ_AND_WRITE', expectedProject: null });
     });
   });
 
@@ -165,13 +165,13 @@ describe('SpeleoCollaboratorsTab', () => {
     await userEvent.click(screen.getByTestId('speleodb-collab-user-level-apply-bob@x.com'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_set_collaborator');
-      expect(call![1]).toEqual({ email: 'bob@x.com', permission: 'READ_AND_WRITE' });
+      expect(call![1]).toEqual({ email: 'bob@x.com', permission: 'READ_AND_WRITE', expectedProject: null });
     });
     await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-offer-bob@x.com'));
     await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-confirm-bob@x.com'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_remove_collaborator');
-      expect(call![1]).toEqual({ email: 'bob@x.com' });
+      expect(call![1]).toEqual({ email: 'bob@x.com', expectedProject: null });
     });
   });
 
@@ -189,7 +189,7 @@ describe('SpeleoCollaboratorsTab', () => {
     await userEvent.click(screen.getByTestId('speleodb-collaborators-add-team'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_add_team');
-      expect(call![1]).toEqual({ teamId: 't2', permission: 'READ_ONLY' });
+      expect(call![1]).toEqual({ teamId: 't2', permission: 'READ_ONLY', expectedProject: null });
     });
   });
 
@@ -201,13 +201,13 @@ describe('SpeleoCollaboratorsTab', () => {
     await userEvent.click(screen.getByTestId('speleodb-collab-team-level-apply-t1'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_set_team');
-      expect(call![1]).toEqual({ teamId: 't1', permission: 'READ_ONLY' });
+      expect(call![1]).toEqual({ teamId: 't1', permission: 'READ_ONLY', expectedProject: null });
     });
     await userEvent.click(screen.getByTestId('speleodb-collab-team-remove-offer-t1'));
     await userEvent.click(screen.getByTestId('speleodb-collab-team-remove-confirm-t1'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_remove_team');
-      expect(call![1]).toEqual({ teamId: 't1' });
+      expect(call![1]).toEqual({ teamId: 't1', expectedProject: null });
     });
   });
 
@@ -229,7 +229,7 @@ describe('SpeleoCollaboratorsTab', () => {
     await waitFor(() =>
       expect(
         invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_remove_collaborator')![1],
-      ).toEqual({ email: 'bob@x.com' }),
+      ).toEqual({ email: 'bob@x.com', expectedProject: null }),
     );
   });
 

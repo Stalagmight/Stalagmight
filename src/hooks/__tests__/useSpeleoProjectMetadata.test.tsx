@@ -114,6 +114,7 @@ describe('useSpeleoProjectMetadata reloads (#576 D26)', () => {
         latitude: null,
         longitude: null,
       },
+      expectedProject: null,
     });
   });
 

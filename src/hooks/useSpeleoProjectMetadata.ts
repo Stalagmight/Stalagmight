@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
+import { expectedOpenProject } from '../store/expectedOpenProject';
 import { useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { humanizeSpeleoError } from '../utils/speleoError';
@@ -224,7 +225,11 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
       longitude: coordinatesChanged ? lonNum : null,
     };
     try {
-      const updated = await invokeIpc('speleodb_patch_project', { patch });
+      // [#576 RVF-c-C1] Names the project: refused once another is open.
+      const updated = await invokeIpc('speleodb_patch_project', {
+        patch,
+        expectedProject: expectedOpenProject(),
+      });
       setMetadata({ baseline: updated, form: toForm(updated) });
       // The backend folds a name change into the local .stalx; mirror it in the UI.
       // A lightweight in-memory set (not set_project_name_for_path) avoids marking the

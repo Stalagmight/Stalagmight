@@ -7,6 +7,7 @@ import {
   useGasPlanStore,
 } from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
+import { expectedOpenProject } from '../../store/expectedOpenProject';
 import { Select } from '../common/Select';
 import { divePlanSnapshotOf } from '../../utils/divePlan';
 import {
@@ -148,11 +149,13 @@ export function DivePlanBar() {
     setError(null);
     setBusy(true);
     const key = projectKey();
+    // [#576 RVF-c-C1] The project the plan is saved for, named on the IPC.
+    const madeFor = expectedOpenProject();
     // Capture the exact snapshot once so the persisted bytes and the new dirty-baseline agree
     // even if the user edits a field during the async save (#244).
     const snap = divePlanSnapshotOf(useGasPlanStore.getState());
     try {
-      const meta = await saveDivePlan(loadedPlanId, loadedName, snap);
+      const meta = await saveDivePlan(loadedPlanId, loadedName, snap, madeFor);
       if (projectKey() !== key) return;
       markPlanSaved(meta.id, snap);
       refresh();
@@ -169,9 +172,10 @@ export function DivePlanBar() {
     setError(null);
     setBusy(true);
     const key = projectKey();
+    const madeFor = expectedOpenProject();
     const snap = divePlanSnapshotOf(useGasPlanStore.getState());
     try {
-      const meta = await saveDivePlan(null, name, snap);
+      const meta = await saveDivePlan(null, name, snap, madeFor);
       if (projectKey() !== key) return;
       markPlanSaved(meta.id, snap);
       setSaveAsName('');
@@ -189,8 +193,9 @@ export function DivePlanBar() {
     setError(null);
     setBusy(true);
     const key = projectKey();
+    const madeFor = expectedOpenProject();
     try {
-      await deleteDivePlan(loadedPlanId);
+      await deleteDivePlan(loadedPlanId, madeFor);
       if (projectKey() !== key) return;
       clearLoadedPlan();
       setPending({ kind: 'none' });

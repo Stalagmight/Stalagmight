@@ -109,6 +109,7 @@ describe('SpeleoDbGeneralTab', () => {
           latitude: null,
           longitude: null,
         },
+        expectedProject: null,
       });
     });
   });

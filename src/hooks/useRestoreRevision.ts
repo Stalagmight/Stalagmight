@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { speleoProjectSessionIssuedFor } from '../store/speleoStore';
+import { expectedOpenProject } from '../store/expectedOpenProject';
 import { invokeIpc } from '../utils/ipc';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import { afterQueuedEdits } from '../utils/projectTransition';
@@ -102,6 +103,8 @@ export function useRestoreRevision() {
       chainForward = false,
     }: RestoreRevisionArgs) => {
       const issuedFor = speleoProjectSessionIssuedFor(projectId);
+      // [#576 RVF-c-C1] The project the swap is asked for, before the queued-edits wait.
+      const expectedProject = expectedOpenProject();
       // The backend hardcodes concurrent_session:false for an in-place revision swap
       // (the open project is unchanged), so unlike the open/adopt flow there is no
       // concurrent-session notice to surface here.
@@ -123,6 +126,7 @@ export function useRestoreRevision() {
         // ...and likewise the direction, which only selects a guard that a
         // history-keeping Restore is the one caller to reach.
         chainForward: restore && keepUndoHistory && chainForward,
+        expectedProject,
       }));
       // The backend closed and reopened the project at the swapped tree. Reconcile every
       // per-tree frontend store through the shared replacement seam. A false result means

@@ -1782,6 +1782,11 @@ impl AppState {
     /// BASE-vs-tip fence). A force-editor is exempt from the #202 lock re-verify and
     /// from every lock-release path (it holds no lock).
     pub fn speleodb_force_edit(&self) -> Result<(), SpeleoErrorDto> {
+        // [#576 RVF-c-C1] Under `command_lock` to the end (nothing below takes it or
+        // makes a network call): a force edit made for another project than the open
+        // one is refused before the gate opens or the history is cleared.
+        let _commands = self.hold_commands();
+        self.speleodb_refuse_other_project("Force edit")?;
         // [#576 B6-D1] A project a newer build saved cannot be edited here, so
         // there is no edit session to force.
         if let Some(reason) = self.newer_file_refusal() {
@@ -1841,6 +1846,13 @@ impl AppState {
         &self,
         resume_held_lock: bool,
     ) -> Result<StartEditingResult, SpeleoErrorDto> {
+        // [#576 RVF-c-C1] Made for another project than the open one: refused before
+        // anything below reads or resets that project's state. The check that binds
+        // is the one in the snapshot's span.
+        {
+            let _commands = self.hold_commands();
+            self.speleodb_refuse_other_project("Start editing")?;
+        }
         // [#576 B6-D1] Before any of it: a project a newer build saved cannot be
         // edited here, and taking the server lock for it would only keep every
         // collaborator out of a project this session can never change or push.
@@ -1874,7 +1886,14 @@ impl AppState {
         // commit far below re-checks the generation before opening the gate, so a
         // teardown landing inside the network window refuses instead of committing
         // onto a torn-down world (F7). See `speleodb_session`.
-        let (entry_gen, link) = self.speleodb_session_snapshot(&lock_ops)?;
+        // [#576 RVF-c-C1] In one `command_lock` span with the identity check (that
+        // lock sits below the lock-ops span and above `project`), so the acquire below
+        // goes to the remote of the project the request was made for.
+        let (entry_gen, link) = {
+            let _commands = self.hold_commands();
+            self.speleodb_refuse_other_project("Start editing")?;
+            self.speleodb_session_snapshot(&lock_ops)?
+        };
         let account = lock_ops.read_account().transpose().map_err(local_dto)?;
         let (endpoint, token) = account.get().clone();
         let insecure_http = self.speleodb_insecure_http();
@@ -2337,6 +2356,8 @@ impl AppState {
             // [#576 NF-W4C-2] Under `command_lock`, like every link write: an autosave
             // landing in between copies the link at its start and would write it back.
             let _commands = self.hold_commands();
+            // [#576 RVF-c-C1] Never the link of a project a switch opened meanwhile.
+            self.speleodb_refuse_other_project("Unlinking from SpeleoDB")?;
             let db_guard = self.database.lock();
             let db = db_guard
                 .as_ref()
@@ -2370,7 +2391,7 @@ impl AppState {
         // [#576 RV4-R-NITS S-8] Replaces the survey: refused in the read-only
         // Plan and Export workspaces, before any network call (as Restore, RV2-R-15).
         self.speleodb_guard_workspace("Take remote")?;
-        let link = self.speleodb_validated_link()?;
+        let link = self.speleodb_link_made_for("Take remote")?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 

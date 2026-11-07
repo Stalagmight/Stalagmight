@@ -12,7 +12,9 @@
 //! back. The order is the data-safety argument:
 //!
 //! 1. Refuse first, before anything is written: no open project, an open project
-//!    that is not in the cache (nothing to move), a destination inside the cache.
+//!    that is not in the cache (nothing to move), a destination inside the cache,
+//!    and (#576 RVF-c-C1) an Unlink made for another project than the open one -
+//!    checked in the save's own `command_lock` span.
 //! 2. Write the copy through the ordinary save pipeline, so it is the same file a
 //!    Save As would write (survey, settings, undo history; staged to a temp file and
 //!    renamed into place). A linked project's explicit-destination save is the
@@ -87,6 +89,13 @@ impl AppState {
         // meet a Start Editing that took the mutex after the session closed.
         let _lock_ops = self.speleodb_lock_ops_guard();
         let refuse = |why: String| Err(local_dto(SpeleoDbError::refused(why)));
+        // [#576 RVF-c-C1] Made for another project than the open one: say so, rather
+        // than refuse over the open project's state below. The check that binds is
+        // the one in the save's span.
+        {
+            let _commands = self.hold_commands();
+            self.speleodb_refuse_other_project("Unlink")?;
+        }
 
         let Some(source) = self.open_project_path() else {
             return refuse("no project is open".to_owned());
@@ -129,6 +138,10 @@ impl AppState {
 
         let mut warnings = {
             let commands = self.hold_commands();
+            // [#576 RVF-c-C1] An Unlink made for another project than the open one is
+            // refused before the Save As: it would write THAT project to the path
+            // chosen for this one, then close it and remove its cache copy.
+            self.speleodb_refuse_other_project("Unlink")?;
             let saved = self.save_project(Some(dest.clone()));
             if !saved.success {
                 let message = saved

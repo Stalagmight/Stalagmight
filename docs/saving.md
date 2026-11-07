@@ -128,7 +128,9 @@ handling.
 ```
 0. Under command_lock, refuse with PROJECT_CHANGED when the save was made for
    another project than the open one (its `expected_project`, #576 FZ-FZ-INT-4;
-   docs/architecture.md, "Where commands run") - nothing is written
+   docs/architecture.md, "Where commands run") - nothing is written. The saves a
+   SpeleoDB verb runs itself (Unlink's Save As, the pre-push save, Publish's
+   relocation) check the verb's own `expected_project` the same way (#576 RVF-c-C1)
 1. Lock project, resolve save path, ensure .stalx extension, refuse early if the
    destination folder is not reachable (see Failure classification below)
 2. Snapshot the side tables from the open file and resolve the save mode

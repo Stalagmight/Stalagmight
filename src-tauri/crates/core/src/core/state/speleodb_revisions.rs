@@ -565,7 +565,14 @@ impl AppState {
         // so a stale / mismatched FE project_id must never close the open project and
         // swap in a DIFFERENT cached one behind the unsaved-changes guard - every other
         // edit verb goes through the open link, and so does this.
-        let open_link = self.speleodb_open_link().map_err(local_dto)?;
+        // [#576 RVF-c-C1] Read in one `command_lock` span with the identity check: a
+        // swap made for another project than the open one (another copy of the same
+        // SpeleoDB project included) is refused with PROJECT_CHANGED.
+        let open_link = {
+            let _commands = self.hold_commands();
+            self.speleodb_refuse_other_project("Viewing or restoring a revision")?;
+            self.speleodb_open_link().map_err(local_dto)?
+        };
         if open_link.project_id != project_id {
             return Err(local_dto(SpeleoDbError::NoRemoteProject));
         }

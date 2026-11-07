@@ -109,6 +109,7 @@ describe('SpeleoRevertDialog', () => {
     expect(call?.[1]).toEqual({
       message: 'roll back the bad merge',
       acceptOlderVersion: false,
+      expectedProject: null,
     });
     expect(closeDialogMock).toHaveBeenCalled();
   });

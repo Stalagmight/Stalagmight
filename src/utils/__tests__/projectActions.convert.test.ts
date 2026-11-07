@@ -97,7 +97,7 @@ describe('convertToUnmanagedStalx moves the copy out of the cache', () => {
 
     expect(converted).toBe(true);
     expect(order).toEqual(['speleodb_unlink', 'refresh', 'load']);
-    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_unlink', { destination: CHOSEN });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_unlink', { destination: CHOSEN, expectedProject: null });
     expect(saveProjectMock).not.toHaveBeenCalled();
     expect(loadProjectMock).toHaveBeenCalledWith(CHOSEN);
   });
@@ -200,7 +200,10 @@ describe('convertToUnmanagedStalx onto a rewritten existing name', () => {
     useOverwritePromptStore.getState().request!.resolve(true);
 
     expect(await pending).toBe(true);
-    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_unlink', { destination: '/home/diver/OtherCave.stalx' });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_unlink', {
+      destination: '/home/diver/OtherCave.stalx',
+      expectedProject: null,
+    });
     expect(saveProjectMock).not.toHaveBeenCalled();
   });
 });

@@ -151,10 +151,23 @@ Commands now run **concurrently**, which makes three rules explicit:
   `created_at` and a file the session's project has been at). A mismatch is refused
   with `PROJECT_CHANGED` and nothing is written; every project-slot commit takes the
   same lock, so no switch lands between the check and the write. `None` means "made
-  with no project open". A source scan (`app_contract_tests.rs`) fails when a new
-  mutation command does not declare, hand on, or put the identity on the wire.
+  with no project open". [#576 RVF-c-C1] Not only those: every command that writes
+  the OPEN project carries it the same way - the dive-plan save and delete (its
+  `.plnx`, checked and written in one `command_lock` span) and the SpeleoDB verbs
+  that write its `.stalx` or link row or change its server side through the link
+  (Done, Push, Unlink, Discard, Restore/View, Take remote, Update, Start editing,
+  Force edit, the undo mode, web rendering, the metadata PATCH, Publish, the
+  collaborator and team changes, lock release, project delete). Those check where
+  they first read the link, in one `command_lock` span with that read and before any
+  network call (`speleodb_link_made_for`), and again in each span that then writes
+  the open file; the refusal reaches the frontend as `PROJECT_CHANGED`. A source
+  scan (`app_contract_tests.rs`) fails when an identity-carrying command does not
+  declare, hand on, or put the identity on the wire, and every registered command
+  must be classified - an identity carrier, or listed with the reason it does not
+  write the open project - so a new one fails until someone decides which it is.
   The frontend captures the identity when the user issues the edit or the save
-  (`store/projectIssue.ts`) and keeps both apart from project switches
+  (`store/projectIssue.ts`; the other open-project writers through
+  `store/expectedOpenProject.ts`) and keeps both apart from project switches
   (`store/switchGate.ts`, `utils/projectTransition.ts`): a load, create or close
   waits for the saves and edits already sent; a save or an edit requested while a
   switch is under way is refused locally, with the same PROJECT_CHANGED text, until

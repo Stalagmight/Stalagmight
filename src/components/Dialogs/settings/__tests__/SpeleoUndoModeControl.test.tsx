@@ -61,7 +61,7 @@ describe('SpeleoUndoModeControl (#303)', () => {
     await userEvent.click(screen.getByTestId('speleodb-undo-mode-disabled-input'));
 
     await waitFor(() =>
-      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_undo_mode', { mode: 'disabled' }),
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_undo_mode', { mode: 'disabled', expectedProject: null }),
     );
     // ...and re-reads the committed backend value rather than assuming its own.
     await waitFor(() =>
@@ -91,6 +91,7 @@ describe('SpeleoUndoModeControl (#303)', () => {
     await waitFor(() =>
       expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_undo_mode', {
         mode: 'disabled',
+        expectedProject: null,
       }),
     );
   });

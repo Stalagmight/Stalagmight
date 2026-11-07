@@ -65,6 +65,12 @@ impl AppState {
     /// Re-arms the depth bound immediately, so switching to Disabled starts trimming to
     /// the count window without waiting for a reload.
     pub fn speleodb_set_undo_mode(&self, mode: UndoMode) -> Result<(), SpeleoErrorDto> {
+        // [#576 RVF-c-C1] `command_lock` first (it sits above `project`), held through
+        // the write: a mode made for another project than the open one is refused with
+        // PROJECT_CHANGED before anything is read or written, and no switch can land
+        // between the check and the link row.
+        let commands = self.hold_commands();
+        self.speleodb_refuse_other_project("Setting the undo-history mode")?;
         // Save rewrites the whole database while holding `project`, then renames the
         // fresh file over the live one. Hold the same lock through this database edit so
         // a save cannot snapshot the old mode and overwrite a successful setting change.
@@ -83,6 +89,7 @@ impl AppState {
         gate.write(db, mode, &now)?;
         drop(db_guard);
         drop(project_guard);
+        drop(commands);
         self.sync_undo_depth_limit();
         tracing::info!(
             mode = ?mode,

@@ -405,7 +405,7 @@ impl AppState {
         accept_older_version: bool,
         save_warnings: &mut pre_push_save::PrePushSave<'_>,
     ) -> Result<DoneResult, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
+        let link = self.speleodb_link_made_for("Done")?;
 
         // #213: a force-editor is edit-enabled but holds NO lock, so Done cannot push
         // (the server would 403 the lockless upload). The FE offers "Reconnect to
@@ -607,7 +607,7 @@ impl AppState {
         accept_older_version: bool,
         save_warnings: &mut pre_push_save::PrePushSave<'_>,
     ) -> Result<PushResult, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
+        let link = self.speleodb_link_made_for("Push")?;
 
         // #213: a force-editor holds no lock, so a push would 403. Refuse with the
         // same reconnect hint as Done (the FE never offers push in force-edit).
@@ -759,7 +759,7 @@ impl AppState {
                     .to_owned(),
             )));
         }
-        let link = self.speleodb_validated_link()?;
+        let link = self.speleodb_link_made_for("Discard changes")?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -798,7 +798,7 @@ impl AppState {
     /// Read-only refresh of the open project against the server (#197): no lock is
     /// taken. UpToDate / FastForward (re-pull + reload) / DivergenceNeeded.
     pub fn speleodb_update(&self) -> Result<UpdateResult, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
+        let link = self.speleodb_link_made_for("Update from SpeleoDB")?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -1091,6 +1091,8 @@ impl AppState {
         clear_dirty: bool,
     ) -> Result<(), SpeleoErrorDto> {
         let _commands = self.hold_commands();
+        // [#576 RVF-c-C1] Never into the link of a project a switch opened meanwhile.
+        self.speleodb_refuse_other_project("Recording the upload")?;
         self.speleodb_mutate_link(|l| {
             l.base_commit_sha = tip;
             if clear_dirty {
@@ -1211,6 +1213,9 @@ impl AppState {
         // network calls: an edit made while the upload runs must keep working, and the
         // push-start fence keeps it (and its undo entry) for the next push.
         let commands = self.hold_commands();
+        // [#576 RVF-c-C1] A push made for another project than the open one (a switch
+        // landed since the verb read its link) folds, saves and snapshots nothing.
+        self.speleodb_refuse_other_project("Pushing to SpeleoDB")?;
         if let Some(name) = fetched_name.as_deref() {
             self.speleodb_fold_local_name(name);
         }
@@ -1491,6 +1496,9 @@ impl AppState {
         captured_through: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Option<ValidationWarning>, SpeleoDbError> {
         let _commands = self.hold_commands();
+        // [#576 RVF-c-C1] Never into the link of a project a switch opened meanwhile.
+        self.refuse_other_project("Recording the upload")
+            .map_err(super::speleodb::refused_by)?;
         self.speleodb_mutate_link(|l| {
             if let Some(base) = new_base {
                 l.base_commit_sha = Some(base.to_owned());

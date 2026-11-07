@@ -90,7 +90,7 @@ describe('SpeleoAdminTab: Delete project moves the local copy out of the cache',
     expect(saveDialogMock).toHaveBeenCalledWith(
       expect.objectContaining({ defaultPath: '/home/diver/Documents/stalagmight/Cenote_Azul.stalx' }),
     );
-    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_unlink', { destination: CHOSEN });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_unlink', { destination: CHOSEN, expectedProject: null });
   });
 
   it('Cancel leaves the copy where it is: nothing is moved or loaded', async () => {

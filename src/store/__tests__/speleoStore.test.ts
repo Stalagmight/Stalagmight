@@ -1097,7 +1097,10 @@ describe('speleoStore', () => {
         cmd === 'speleodb_link_status' ? status({ exclude_geojson: false }) : null,
       );
       await useSpeleoStore.getState().enableRendering();
-      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_exclude_geojson', { exclude: false });
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_exclude_geojson', {
+        exclude: false,
+        expectedProject: null,
+      });
       expect(useSpeleoStore.getState().banner).toBeNull();
     });
 

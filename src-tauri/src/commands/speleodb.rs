@@ -17,12 +17,20 @@
 //! Each command runs its blocking work (HTTP + OS-keychain I/O) off the main
 //! thread via `spawn_blocking`: Tauri executes synchronous commands on the main
 //! thread, so doing the network/keychain round-trips inline would freeze the UI.
+//!
+//! [#576 RVF-c-C1] A verb that writes the OPEN project - its `.stalx`, its link
+//! row, or its server side through that link - takes `expected_project` (the
+//! project the frontend made the request for) and runs inside `for_project`, so
+//! one made for another project than the open one is refused with
+//! `PROJECT_CHANGED` (`core::state::expected_project`). The app crate's contract
+//! scan lists which verbs those are.
 
 use std::collections::HashMap;
 
 use tauri::{AppHandle, Manager};
 
 use crate::config::TokenFallback;
+use crate::core::state::{for_project, ProjectIdentity};
 use crate::core::{AppState, CommandError, SpeleoDoneReport, SpeleoPushReport};
 // [Track A] #186/D-B2: the orchestration `AppState::speleodb_*` methods build the
 // structured SpeleoErrorDto at the call site where the endpoint is known; the
@@ -208,8 +216,14 @@ pub async fn speleodb_logout(app: AppHandle) -> Result<(), CommandError> {
 /// (gated on the `allow_force_edit` config). No acquire, no network, BASE unchanged;
 /// the user later reconnects via `speleodb_start_editing`.
 #[tauri::command]
-pub async fn speleodb_force_edit(app: AppHandle) -> Result<(), CommandError> {
-    run_blocking(app, AppState::speleodb_force_edit).await
+pub async fn speleodb_force_edit(
+    app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
+) -> Result<(), CommandError> {
+    run_blocking(app, move |s| {
+        for_project(expected_project, || s.speleodb_force_edit())
+    })
+    .await
 }
 
 /// Acquire the write lock on the open remote project and reconcile it against the
@@ -223,13 +237,19 @@ pub async fn speleodb_force_edit(app: AppHandle) -> Result<(), CommandError> {
 #[tauri::command]
 pub async fn speleodb_start_editing(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     resume_held_lock: Option<bool>,
 ) -> Result<StartEditingResult, CommandError> {
-    if resume_held_lock == Some(true) {
-        run_blocking(app, AppState::speleodb_resume_held_lock_editing).await
-    } else {
-        run_blocking(app, AppState::speleodb_start_editing).await
-    }
+    run_blocking(app, move |s| {
+        for_project(expected_project, || {
+            if resume_held_lock == Some(true) {
+                s.speleodb_resume_held_lock_editing()
+            } else {
+                s.speleodb_start_editing()
+            }
+        })
+    })
+    .await
 }
 
 /// Push the open project's edits (if any) and release the lock, returning to
@@ -239,11 +259,14 @@ pub async fn speleodb_start_editing(
 #[tauri::command]
 pub async fn speleodb_done(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     message: Option<String>,
     accept_older_version: Option<bool>,
 ) -> Result<SpeleoDoneReport, CommandError> {
     run_blocking(app, move |s| {
-        s.speleodb_done_reported(message, accept_older_version.unwrap_or(false))
+        for_project(expected_project, || {
+            s.speleodb_done_reported(message, accept_older_version.unwrap_or(false))
+        })
     })
     .await
 }
@@ -251,8 +274,14 @@ pub async fn speleodb_done(
 /// Read-only refresh of the open project against the server (#197): no lock is
 /// taken (UpToDate / FastForward / DivergenceNeeded).
 #[tauri::command]
-pub async fn speleodb_update(app: AppHandle) -> Result<UpdateResult, CommandError> {
-    run_blocking(app, AppState::speleodb_update).await
+pub async fn speleodb_update(
+    app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
+) -> Result<UpdateResult, CommandError> {
+    run_blocking(app, move |s| {
+        for_project(expected_project, || s.speleodb_update())
+    })
+    .await
 }
 
 /// Push the open project's edits to SpeleoDB WITHOUT releasing the lock (T2d):
@@ -262,11 +291,14 @@ pub async fn speleodb_update(app: AppHandle) -> Result<UpdateResult, CommandErro
 #[tauri::command]
 pub async fn speleodb_push(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     message: Option<String>,
     accept_older_version: Option<bool>,
 ) -> Result<SpeleoPushReport, CommandError> {
     run_blocking(app, move |s| {
-        s.speleodb_push_only_reported(message, accept_older_version.unwrap_or(false))
+        for_project(expected_project, || {
+            s.speleodb_push_only_reported(message, accept_older_version.unwrap_or(false))
+        })
     })
     .await
 }
@@ -277,8 +309,14 @@ pub async fn speleodb_push(
 /// gates this behind a second destroy-confirmation - it is the only irreversible
 /// choice in the divergence prompt, so there is no single-click path to it.
 #[tauri::command]
-pub async fn speleodb_take_remote(app: AppHandle) -> Result<String, CommandError> {
-    run_blocking(app, AppState::speleodb_take_remote).await
+pub async fn speleodb_take_remote(
+    app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
+) -> Result<String, CommandError> {
+    run_blocking(app, move |s| {
+        for_project(expected_project, || s.speleodb_take_remote())
+    })
+    .await
 }
 
 /// Release EVERY write lock this user currently holds (#201 "Release all"): the
@@ -369,6 +407,7 @@ pub async fn speleodb_get_revisions(
 #[tauri::command]
 pub async fn speleodb_restore_revision(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     project_id: String,
     project_name: String,
     hexsha: String,
@@ -384,17 +423,19 @@ pub async fn speleodb_restore_revision(
     let discard_unpushed = discard_unpushed.unwrap_or(false);
     let chain_forward = chain_forward.unwrap_or(false);
     run_blocking(app, move |s| {
-        s.speleodb_restore_revision(
-            project_id,
-            project_name,
-            hexsha,
-            restore,
-            discard_local,
-            entry_path,
-            keep_undo_history,
-            discard_unpushed,
-            chain_forward,
-        )
+        for_project(expected_project, || {
+            s.speleodb_restore_revision(
+                project_id,
+                project_name,
+                hexsha,
+                restore,
+                discard_local,
+                entry_path,
+                keep_undo_history,
+                discard_unpushed,
+                chain_forward,
+            )
+        })
     })
     .await
 }
@@ -439,11 +480,14 @@ pub async fn speleodb_unwind_target(
 #[tauri::command]
 pub async fn speleodb_discard_changes(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     keep_lock: bool,
     acknowledged: bool,
 ) -> Result<Option<StartEditingResult>, CommandError> {
     run_blocking(app, move |s| {
-        s.speleodb_discard_changes(keep_lock, acknowledged)
+        for_project(expected_project, || {
+            s.speleodb_discard_changes(keep_lock, acknowledged)
+        })
     })
     .await
 }
@@ -472,8 +516,15 @@ pub async fn speleodb_rewind_target(
 /// the server in the next push, so every collaborator inherits it. Force editing uses
 /// the same gate deliberately - see `AppState::speleodb_set_undo_mode`.
 #[tauri::command]
-pub async fn speleodb_set_undo_mode(app: AppHandle, mode: UndoMode) -> Result<(), CommandError> {
-    run_blocking(app, move |s| s.speleodb_set_undo_mode(mode)).await
+pub async fn speleodb_set_undo_mode(
+    app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
+    mode: UndoMode,
+) -> Result<(), CommandError> {
+    run_blocking(app, move |s| {
+        for_project(expected_project, || s.speleodb_set_undo_mode(mode))
+    })
+    .await
 }
 
 /// Set the open project's server-side `exclude_geojson` flag (#200
@@ -482,9 +533,13 @@ pub async fn speleodb_set_undo_mode(app: AppHandle, mode: UndoMode) -> Result<()
 #[tauri::command]
 pub async fn speleodb_set_exclude_geojson(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     exclude: bool,
 ) -> Result<(), CommandError> {
-    run_blocking(app, move |s| s.speleodb_set_exclude_geojson(exclude)).await
+    run_blocking(app, move |s| {
+        for_project(expected_project, || s.speleodb_set_exclude_geojson(exclude))
+    })
+    .await
 }
 
 /// Report whether the backend already holds a usable token (and for whom). The
@@ -559,6 +614,7 @@ pub async fn speleodb_open_file_flags<R: tauri::Runtime>(
 #[tauri::command]
 pub async fn speleodb_unlink(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     destination: std::path::PathBuf,
 ) -> Result<crate::core::outcome::SaveOutcome, CommandError> {
     crate::commands::write_path::check_write_path(
@@ -571,7 +627,10 @@ pub async fn speleodb_unlink(
             &crate::speleodb::SpeleoDbError::refused(why),
         )
     })?;
-    run_blocking(app, move |s| s.speleodb_unlink(destination)).await
+    run_blocking(app, move |s| {
+        for_project(expected_project, || s.speleodb_unlink(destination))
+    })
+    .await
 }
 
 /// Remove the `speleo_link` row from a CLOSED foreign `.stalx` so it can be
@@ -621,9 +680,13 @@ pub async fn speleodb_get_project_metadata(
 #[tauri::command]
 pub async fn speleodb_patch_project(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     patch: SpeleoProjectMetadataPatch,
 ) -> Result<SpeleoProjectMetadata, CommandError> {
-    run_blocking(app, move |s| s.speleodb_patch_project(patch)).await
+    run_blocking(app, move |s| {
+        for_project(expected_project, || s.speleodb_patch_project(patch))
+    })
+    .await
 }
 
 /// Create the open local project on SpeleoDB and push its first revision (#207):
@@ -632,9 +695,13 @@ pub async fn speleodb_patch_project(
 #[tauri::command]
 pub async fn speleodb_publish(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     params: SpeleoPublishParams,
 ) -> Result<crate::core::command::SpeleoPublishReport, CommandError> {
-    run_blocking(app, move |s| s.speleodb_publish(params)).await
+    run_blocking(app, move |s| {
+        for_project(expected_project, || s.speleodb_publish(params))
+    })
+    .await
 }
 
 // [#215] Full Project Settings: collaborator management (per-user + per-team), in-app
@@ -655,29 +722,45 @@ pub async fn speleodb_list_collaborators(
 #[tauri::command]
 pub async fn speleodb_add_collaborator(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     email: String,
     permission: Permission,
 ) -> Result<SpeleoCollaborators, CommandError> {
-    run_blocking(app, move |s| s.speleodb_add_collaborator(email, permission)).await
+    run_blocking(app, move |s| {
+        for_project(expected_project, || {
+            s.speleodb_add_collaborator(email, permission)
+        })
+    })
+    .await
 }
 
 /// Change an existing collaborator's permission level (ADMIN).
 #[tauri::command]
 pub async fn speleodb_set_collaborator(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     email: String,
     permission: Permission,
 ) -> Result<SpeleoCollaborators, CommandError> {
-    run_blocking(app, move |s| s.speleodb_set_collaborator(email, permission)).await
+    run_blocking(app, move |s| {
+        for_project(expected_project, || {
+            s.speleodb_set_collaborator(email, permission)
+        })
+    })
+    .await
 }
 
 /// Remove a collaborator from the linked project (ADMIN; soft-delete server-side).
 #[tauri::command]
 pub async fn speleodb_remove_collaborator(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     email: String,
 ) -> Result<SpeleoCollaborators, CommandError> {
-    run_blocking(app, move |s| s.speleodb_remove_collaborator(email)).await
+    run_blocking(app, move |s| {
+        for_project(expected_project, || s.speleodb_remove_collaborator(email))
+    })
+    .await
 }
 
 /// Grant a team a permission level on the linked project (ADMIN; teams cannot hold
@@ -685,29 +768,45 @@ pub async fn speleodb_remove_collaborator(
 #[tauri::command]
 pub async fn speleodb_add_team(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     team_id: String,
     permission: Permission,
 ) -> Result<SpeleoCollaborators, CommandError> {
-    run_blocking(app, move |s| s.speleodb_add_team(team_id, permission)).await
+    run_blocking(app, move |s| {
+        for_project(expected_project, || {
+            s.speleodb_add_team(team_id, permission)
+        })
+    })
+    .await
 }
 
 /// Change a team's permission level on the linked project (ADMIN).
 #[tauri::command]
 pub async fn speleodb_set_team(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     team_id: String,
     permission: Permission,
 ) -> Result<SpeleoCollaborators, CommandError> {
-    run_blocking(app, move |s| s.speleodb_set_team(team_id, permission)).await
+    run_blocking(app, move |s| {
+        for_project(expected_project, || {
+            s.speleodb_set_team(team_id, permission)
+        })
+    })
+    .await
 }
 
 /// Revoke a team's access to the linked project (ADMIN; soft-delete server-side).
 #[tauri::command]
 pub async fn speleodb_remove_team(
     app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
     team_id: String,
 ) -> Result<SpeleoCollaborators, CommandError> {
-    run_blocking(app, move |s| s.speleodb_remove_team(team_id)).await
+    run_blocking(app, move |s| {
+        for_project(expected_project, || s.speleodb_remove_team(team_id))
+    })
+    .await
 }
 
 /// List the teams the signed-in user belongs to, for the add-team picker.
@@ -729,13 +828,25 @@ pub async fn speleodb_search_users(
 /// Release the lock on the linked project (own lock, or an ADMIN force-release of
 /// another user's lock). Does not push; a recovery action for a stuck lock.
 #[tauri::command]
-pub async fn speleodb_release_current_lock(app: AppHandle) -> Result<(), CommandError> {
-    run_blocking(app, AppState::speleodb_release_current_lock).await
+pub async fn speleodb_release_current_lock(
+    app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
+) -> Result<(), CommandError> {
+    run_blocking(app, move |s| {
+        for_project(expected_project, || s.speleodb_release_current_lock())
+    })
+    .await
 }
 
 /// Delete the linked project on SpeleoDB (ADMIN; soft-delete), then unlink locally
 /// so the app stops treating it as remote.
 #[tauri::command]
-pub async fn speleodb_delete_project(app: AppHandle) -> Result<(), CommandError> {
-    run_blocking(app, AppState::speleodb_delete_project).await
+pub async fn speleodb_delete_project(
+    app: AppHandle,
+    expected_project: Option<ProjectIdentity>,
+) -> Result<(), CommandError> {
+    run_blocking(app, move |s| {
+        for_project(expected_project, || s.speleodb_delete_project())
+    })
+    .await
 }

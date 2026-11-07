@@ -5,6 +5,7 @@ import { Button } from '../../common/Button';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
+import { expectedOpenProject } from '../../../store/expectedOpenProject';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 import { permissionAtLeast } from '../../../utils/speleoPermission';
@@ -41,7 +42,8 @@ export function SpeleoAdminTab() {
   const handleRelease = useCallback(async () => {
     setReleasing(true);
     try {
-      await invokeIpc('speleodb_release_current_lock');
+      // [#576 RVF-c-C1] Names the project: refused once another is open.
+      await invokeIpc('speleodb_release_current_lock', { expectedProject: expectedOpenProject() });
       await refreshLinkStatus();
       showToast(t('speleodb.lock.released'), TOAST_KEYS.SPELEODB_LOCK, 'success');
     } catch (e) {
@@ -54,7 +56,7 @@ export function SpeleoAdminTab() {
   const handleDelete = useCallback(async () => {
     setDeleting(true);
     try {
-      await invokeIpc('speleodb_delete_project');
+      await invokeIpc('speleodb_delete_project', { expectedProject: expectedOpenProject() });
       // The server soft-deleted it and the backend already unlinked locally, so
       // the still-open project is now a plain LOCAL one - say that, rather than
       // just dropping the link.

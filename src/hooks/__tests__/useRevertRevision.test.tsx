@@ -129,10 +129,12 @@ describe('useRevertRevision - the happy path', () => {
       discardUnpushed: false,
       // A revert walks no chain, so there is no direction to select a guard with.
       chainForward: false,
+      expectedProject: null,
     });
     expect(argsOf('speleodb_done')).toEqual({
       message: 'undo the bad survey',
       acceptOlderVersion: false,
+      expectedProject: null,
     });
   });
 
@@ -453,6 +455,7 @@ describe('useRevertRevision - resuming at the push', () => {
     expect(argsOf('speleodb_done')).toEqual({
       message: 'undo the bad survey',
       acceptOlderVersion: false,
+      expectedProject: null,
     });
   });
 

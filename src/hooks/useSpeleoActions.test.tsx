@@ -502,6 +502,7 @@ describe('useSpeleoActions - discard routes every StartEditingResult (#303)', ()
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', {
       keepLock: false,
       acknowledged: true,
+      expectedProject: null,
     });
   });
 
@@ -819,6 +820,7 @@ describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)',
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_done', {
       message: 'msg',
       acceptOlderVersion: true,
+      expectedProject: null,
     });
   });
 
@@ -836,6 +838,7 @@ describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)',
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_done', {
       message: 'msg',
       acceptOlderVersion: false,
+      expectedProject: null,
     });
   });
 

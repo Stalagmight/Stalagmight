@@ -125,7 +125,7 @@ describe('SpeleoUnpushedLocalDialog over a link-less cache copy (#576 FZ-SDB-5-D
     expect(order).toEqual([
       'seed',
       'load /cache/p1/project.stalx',
-      `unlink ${JSON.stringify({ destination: CHOSEN })}`,
+      `unlink ${JSON.stringify({ destination: CHOSEN, expectedProject: null })}`,
       'refresh',
       `load ${CHOSEN}`,
     ]);

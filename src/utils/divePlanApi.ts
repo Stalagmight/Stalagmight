@@ -5,6 +5,7 @@ import type {
   DivePlanSnapshot,
   DiveProfileRequest,
 } from '../types/ipc.generated';
+import type { ProjectIdentity } from '../types/ipc/ProjectIdentity';
 import type { StationRef } from '../types/project';
 
 /**
@@ -66,24 +67,34 @@ export function loadDivePlan(id: number): Promise<DivePlan> {
   );
 }
 
-/** Save a plan: `id = null` inserts (Save as), a number overwrites (Save). */
+/**
+ * Save a plan: `id = null` inserts (Save as), a number overwrites (Save).
+ *
+ * [#576 RVF-c-C1] `expectedProject` is the project the plan was made for, captured when
+ * the user asked (`expectedOpenProject()`): the `.plnx` is that project's sibling, and the
+ * backend refuses the save with PROJECT_CHANGED when another project is open by then.
+ */
 export function saveDivePlan(
   id: number | null,
   name: string,
-  snapshot: DivePlanSnapshot
+  snapshot: DivePlanSnapshot,
+  expectedProject: ProjectIdentity | null
 ): Promise<DivePlanMeta> {
   return invokeIpc(
     'save_dive_plan',
-    { id, name, snapshot },
+    { id, name, snapshot, expectedProject },
     { purpose: 'save dive plan', fields: { id: id ?? 'new' } }
   );
 }
 
-/** Delete a plan by id. */
-export async function deleteDivePlan(id: number): Promise<void> {
+/** Delete a plan by id; `expectedProject` as for {@link saveDivePlan}. */
+export async function deleteDivePlan(
+  id: number,
+  expectedProject: ProjectIdentity | null
+): Promise<void> {
   await invokeIpc(
     'delete_dive_plan',
-    { id },
+    { id, expectedProject },
     { purpose: 'delete dive plan', fields: { id } }
   );
 }

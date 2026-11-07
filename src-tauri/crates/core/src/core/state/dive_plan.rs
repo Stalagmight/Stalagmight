@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use super::AppState;
 use crate::config::GasConfig;
+use crate::core::CommandError;
 use crate::models::project::gas::{MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
 use crate::models::{
     Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, MarkedPoint, PlanAnchorSet,
@@ -754,6 +755,33 @@ impl AppState {
             return Err("That dive plan no longer exists.".to_string());
         }
         Ok(())
+    }
+
+    /// [#576 RVF-c-C1] [`Self::save_dive_plan`] for the IPC, which runs it inside
+    /// `for_project`: under `command_lock`, and refused with `PROJECT_CHANGED` -
+    /// nothing written - when the plan was made for another project than the open
+    /// one. The `.plnx` is the open project's sibling, so a save made for CaveA that
+    /// ran after a switch to CaveB wrote CaveA's plan into CaveB's file (an update
+    /// by id overwrote CaveB's plan of that id). The lock is held through the write,
+    /// so no open, create or close can land between the check and the `.plnx`.
+    pub fn save_dive_plan_for(
+        &self,
+        id: Option<i64>,
+        name: String,
+        snapshot: DivePlanSnapshot,
+    ) -> Result<DivePlanMeta, CommandError> {
+        let _commands = self.hold_commands();
+        self.refuse_other_project("Saving the dive plan")?;
+        self.save_dive_plan(id, name, snapshot)
+            .map_err(CommandError::from)
+    }
+
+    /// [#576 RVF-c-C1] [`Self::delete_dive_plan`] for the IPC: the check and the
+    /// delete in one `command_lock` span, as [`Self::save_dive_plan_for`].
+    pub fn delete_dive_plan_for(&self, id: i64) -> Result<(), CommandError> {
+        let _commands = self.hold_commands();
+        self.refuse_other_project("Deleting the dive plan")?;
+        self.delete_dive_plan(id).map_err(CommandError::from)
     }
 
     /// Canonicalize an IPC snapshot's positional refs to stable keys against the open

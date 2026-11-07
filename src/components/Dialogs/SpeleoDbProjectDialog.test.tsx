@@ -275,7 +275,7 @@ describe('SpeleoDbProjectDialog', () => {
 
     await waitFor(() => expect(patchCalls()).toHaveLength(1));
     expect(patchCalls()).toEqual([
-      ['speleodb_patch_project', { patch: expect.objectContaining({ name: 'Cave AB' }) }],
+      ['speleodb_patch_project', { patch: expect.objectContaining({ name: 'Cave AB' }), expectedProject: null }],
     ]);
     expect(closeDialog).not.toHaveBeenCalled();
   });

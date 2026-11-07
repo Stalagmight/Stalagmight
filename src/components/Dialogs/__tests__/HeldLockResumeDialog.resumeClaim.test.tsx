@@ -99,6 +99,6 @@ describe('HeldLockResumeDialog Continue editing claims the lock (#576 RV2-R-13-R
       expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
     );
     const start = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_start_editing');
-    expect(start?.[1]).toEqual({ resumeHeldLock: true });
+    expect(start?.[1]).toEqual({ resumeHeldLock: true, expectedProject: null });
   });
 });

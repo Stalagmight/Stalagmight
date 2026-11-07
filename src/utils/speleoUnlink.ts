@@ -9,6 +9,7 @@
  * the same tail, so the two can never drift apart.
  */
 import { useProjectStore } from '../store/projectStore';
+import { expectedOpenProject } from '../store/expectedOpenProject';
 import { useSpeleoStore } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { saveFailureOf, surfaceSaveFailure, surfaceSaveWarnings } from './saveFeedback';
@@ -69,7 +70,12 @@ export async function chooseUnlinkDestination(projectName: string): Promise<stri
 export async function unlinkOpenProjectTo(destination: string): Promise<boolean> {
   let outcome: SaveOutcome;
   try {
-    outcome = await invokeIpc('speleodb_unlink', { destination });
+    // [#576 RVF-c-C1] Names the project to move: refused (nothing written) once
+    // another is open.
+    outcome = await invokeIpc('speleodb_unlink', {
+      destination,
+      expectedProject: expectedOpenProject(),
+    });
   } catch (e) {
     surfaceSaveFailure(
       saveFailureOf(e, 'Detaching from SpeleoDB failed'),

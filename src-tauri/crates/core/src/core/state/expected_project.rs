@@ -25,6 +25,20 @@
 //! expectation travels with the body on its pool thread (a thread-local scope), so
 //! the many `AppState` mutation methods keep their signatures; a body run outside
 //! any scope - the core's own callers and tests - is not checked.
+//!
+//! [#576 RVF-c-C1] Not only the survey mutations and the save: every IPC that
+//! writes the OPEN project carries the identity and runs in [`for_project`] (the
+//! app crate's contract scan lists them, `app_contract_tests.rs`). The dive-plan
+//! save and delete write its `.plnx` under `command_lock`
+//! (`save_dive_plan_for` / `delete_dive_plan_for`). The SpeleoDB verbs that act on
+//! its link check at two kinds of point: where they first read the link
+//! ([`AppState::speleodb_link_made_for`] - the check and the read in one
+//! `command_lock` span, released before any network call, so the request goes to
+//! the remote the right project is linked to), and in each `command_lock` span
+//! that then writes the open file (the unlink's Save As, the push's local half and
+//! its link writes after the upload, Publish's relocation, the metadata name fold,
+//! the undo-mode write). A refusal reaches the frontend as `PROJECT_CHANGED`
+//! (through `refused_by` for a SpeleoDB verb) with nothing written.
 use std::cell::RefCell;
 use std::path::PathBuf;
 
@@ -32,8 +46,11 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use ts_rs::TS;
 
+use super::speleodb::{local_dto, refused_by};
 use super::AppState;
 use crate::core::{CommandError, CommandErrorCode};
+use crate::models::SpeleoLink;
+use crate::speleodb::SpeleoErrorDto;
 
 /// [#576 FZ-FZ-INT-4, FZ-FZ-INT-7] The open project a save or an edit was made
 /// for, as the frontend names it when the user makes it: the shape of
@@ -131,5 +148,36 @@ impl AppState {
             CommandErrorCode::ProjectChanged,
             format!("{what} was not applied: another project is open now."),
         ))
+    }
+
+    /// [#576 RVF-c-C1] [`Self::refuse_other_project`] for a SpeleoDB verb: the same
+    /// refusal as its error DTO, its `PROJECT_CHANGED` code kept. Same rules: hold
+    /// `command_lock`, nothing written yet, never while holding `project`.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the SpeleoErrorDto every SpeleoDB verb returns; boxing the error type is a \
+                  repo-wide change outside #576 RVF-c-C1"
+    )]
+    pub(super) fn speleodb_refuse_other_project(&self, what: &str) -> Result<(), SpeleoErrorDto> {
+        self.refuse_other_project(what)
+            .map_err(|refusal| local_dto(refused_by(refusal)))
+    }
+
+    /// [#576 RVF-c-C1] The open project's validated SpeleoDB link, read in ONE
+    /// `command_lock` span with the identity check: a verb made for another project
+    /// than the open one is refused with `PROJECT_CHANGED` before it reads the link,
+    /// so no request goes to the remote of the project a switch opened. The span ends
+    /// here - before the caller's network call - and every later write the verb makes
+    /// to the open file checks again in its own span. Takes `command_lock`: call it
+    /// holding no lock but `speleodb_lock_ops` (which sits above it).
+    #[expect(
+        clippy::result_large_err,
+        reason = "the SpeleoErrorDto every SpeleoDB verb returns; boxing the error type is a \
+                  repo-wide change outside #576 RVF-c-C1"
+    )]
+    pub(super) fn speleodb_link_made_for(&self, what: &str) -> Result<SpeleoLink, SpeleoErrorDto> {
+        let _commands = self.hold_commands();
+        self.speleodb_refuse_other_project(what)?;
+        self.speleodb_validated_link()
     }
 }

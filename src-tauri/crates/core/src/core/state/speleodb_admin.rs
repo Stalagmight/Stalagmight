@@ -8,7 +8,9 @@
 //! only in the UI; the server's 401/403 is the real enforcement (an ADMIN-only
 //! write returns 403 for a non-admin, surfaced verbatim). No lock is required:
 //! permissions/locks/delete are all mutex-free (the edit lock governs only the
-//! survey `.stalx`).
+//! survey `.stalx`). [#576 RVF-c-C1] The calls that CHANGE the server side carry
+//! the project they were made for and read their context through
+//! `speleodb_admin_write_context`, which refuses another project's.
 
 use super::speleodb::validate_project_id;
 use super::speleodb_lock_release::AfterLockVerb;
@@ -43,6 +45,20 @@ impl AppState {
         let (endpoint, token) = self.speleodb_active_token().map_err(admin_dto)?;
         let insecure_http = self.speleodb_insecure_http();
         Ok((link, endpoint, token, insecure_http))
+    }
+
+    /// [#576 RVF-c-C1] [`Self::speleodb_admin_context`] for a call that CHANGES the
+    /// open project's server side (its collaborators, its lock, the project itself):
+    /// read in one `command_lock` span with the identity check, so a change made for
+    /// another project than the open one is refused with `PROJECT_CHANGED` before
+    /// anything is sent. The span ends before the request.
+    fn speleodb_admin_write_context(
+        &self,
+        what: &str,
+    ) -> Result<(crate::models::SpeleoLink, String, String, bool), SpeleoErrorDto> {
+        let _commands = self.hold_commands();
+        self.speleodb_refuse_other_project(what)?;
+        self.speleodb_admin_context()
     }
 
     /// [#215] The linked project's collaborator roster: individual users and teams.
@@ -116,7 +132,8 @@ impl AppState {
         email: String,
         permission: Permission,
     ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
-        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        let (link, endpoint, token, insecure_http) =
+            self.speleodb_admin_write_context("Adding a collaborator")?;
         self.speleodb_handle_auth(
             client::spec::MUTATE_PERMISSION.category,
             client::add_user_permission(
@@ -138,7 +155,8 @@ impl AppState {
         email: String,
         permission: Permission,
     ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
-        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        let (link, endpoint, token, insecure_http) =
+            self.speleodb_admin_write_context("Changing a collaborator's access")?;
         self.speleodb_handle_auth(
             client::spec::MUTATE_PERMISSION.category,
             client::set_user_permission(
@@ -159,7 +177,8 @@ impl AppState {
         &self,
         email: String,
     ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
-        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        let (link, endpoint, token, insecure_http) =
+            self.speleodb_admin_write_context("Removing a collaborator")?;
         self.speleodb_handle_auth(
             client::spec::MUTATE_PERMISSION.category,
             client::remove_user_permission(
@@ -181,7 +200,8 @@ impl AppState {
         team_id: String,
         permission: Permission,
     ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
-        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        let (link, endpoint, token, insecure_http) =
+            self.speleodb_admin_write_context("Adding a team")?;
         self.speleodb_handle_auth(
             client::spec::MUTATE_PERMISSION.category,
             client::add_team_permission(
@@ -203,7 +223,8 @@ impl AppState {
         team_id: String,
         permission: Permission,
     ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
-        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        let (link, endpoint, token, insecure_http) =
+            self.speleodb_admin_write_context("Changing a team's access")?;
         self.speleodb_handle_auth(
             client::spec::MUTATE_PERMISSION.category,
             client::set_team_permission(
@@ -224,7 +245,8 @@ impl AppState {
         &self,
         team_id: String,
     ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
-        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        let (link, endpoint, token, insecure_http) =
+            self.speleodb_admin_write_context("Removing a team")?;
         self.speleodb_handle_auth(
             client::spec::MUTATE_PERMISSION.category,
             client::remove_team_permission(
@@ -315,7 +337,8 @@ impl AppState {
     /// needs a link the project no longer has - so it stayed read-only until it was
     /// closed and reopened.
     pub fn speleodb_release_current_lock(&self) -> Result<(), SpeleoErrorDto> {
-        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        let (link, endpoint, token, insecure_http) =
+            self.speleodb_admin_write_context("Releasing the lock")?;
         if let Err(e) = self.speleodb_handle_auth(
             client::spec::RELEASE.category,
             client::release_lock(&endpoint, &token, insecure_http, &link.project_id),
@@ -375,7 +398,8 @@ impl AppState {
     /// another server's answer, 404 or 2xx, says nothing about this project. The
     /// refusal returns here before the unlink, so the copy stays linked.
     pub fn speleodb_delete_project(&self) -> Result<(), SpeleoErrorDto> {
-        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        let (link, endpoint, token, insecure_http) =
+            self.speleodb_admin_write_context("Deleting the project on SpeleoDB")?;
         self.speleodb_handle_auth(
             client::spec::DELETE_PROJECT.category,
             client::delete_project(

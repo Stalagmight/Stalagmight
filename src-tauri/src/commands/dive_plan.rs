@@ -5,6 +5,7 @@
 
 use tauri::Manager;
 
+use crate::core::state::{for_project, ProjectIdentity};
 use crate::core::{AppState, CommandError};
 use crate::models::{DivePlan, DivePlanMeta, DivePlanSnapshot, StationRef, StoredAnchor};
 
@@ -46,22 +47,28 @@ pub async fn load_dive_plan(
 
 /// Save a plan next to the open project. `id` is `None` for a new plan (Save as),
 /// `Some` to overwrite an existing one (Save).
+///
+/// [#576 RVF-c-C1] `expected_project` is the project the plan was made for: the
+/// `.plnx` is that project's sibling, so a save that reaches the backend after a
+/// switch is refused with `PROJECT_CHANGED` rather than written into the project
+/// opened since.
 #[tauri::command]
 pub async fn save_dive_plan(
     app_handle: tauri::AppHandle,
+    expected_project: Option<ProjectIdentity>,
     id: Option<i64>,
     name: String,
     snapshot: DivePlanSnapshot,
 ) -> Result<DivePlanMeta, CommandError> {
     match tauri::async_runtime::spawn_blocking(move || {
-        app_handle
-            .state::<AppState>()
-            .inner()
-            .save_dive_plan(id, name, snapshot)
+        let state = app_handle.state::<AppState>();
+        for_project(expected_project, || {
+            state.inner().save_dive_plan_for(id, name, snapshot)
+        })
     })
     .await
     {
-        Ok(res) => res.map_err(CommandError::from),
+        Ok(res) => res,
         Err(e) => Err(CommandError::internal(format!(
             "save dive plan failed: {e}"
         ))),
@@ -122,15 +129,21 @@ pub async fn plan_refs_for_anchors(
     }
 }
 
-/// Delete a plan next to the open project.
+/// Delete a plan next to the open project. [#576 RVF-c-C1] Refused with
+/// `PROJECT_CHANGED` when made for another project, as [`save_dive_plan`].
 #[tauri::command]
-pub async fn delete_dive_plan(app_handle: tauri::AppHandle, id: i64) -> Result<(), CommandError> {
+pub async fn delete_dive_plan(
+    app_handle: tauri::AppHandle,
+    expected_project: Option<ProjectIdentity>,
+    id: i64,
+) -> Result<(), CommandError> {
     match tauri::async_runtime::spawn_blocking(move || {
-        app_handle.state::<AppState>().inner().delete_dive_plan(id)
+        let state = app_handle.state::<AppState>();
+        for_project(expected_project, || state.inner().delete_dive_plan_for(id))
     })
     .await
     {
-        Ok(res) => res.map_err(CommandError::from),
+        Ok(res) => res,
         Err(e) => Err(CommandError::internal(format!(
             "delete dive plan failed: {e}"
         ))),

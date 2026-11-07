@@ -444,7 +444,10 @@ load's test hook `project_load::BEFORE_SESSION_COMMIT`, which runs on the loadin
 thread holding `command_lock` (`switch_commit_tests.rs`, `switch_identity_tests.rs`).
 A test that drives a save or a survey mutation through the registered command
 passes the open project's identity (`command_tests::made_for`), as the frontend
-does; without it the command is refused with `PROJECT_CHANGED`.
+does; without it the command is refused with `PROJECT_CHANGED`. The same holds for
+the other open-project writers (the dive-plan save and delete, the SpeleoDB verbs
+listed in `app_contract_tests.rs`); a core test of one runs it inside `for_project`
+(`open_project_writer_identity_tests.rs`), and outside any scope it is unchecked.
 
 ## The interleaving fuzzer (vitest tier)
 

@@ -91,6 +91,7 @@ describe('PublishToSpeleoDbDialog', () => {
           latitude: null,
           longitude: null,
         },
+        expectedProject: null,
       });
     });
     // Reloaded the now-remote project and closed on success.
@@ -242,7 +243,7 @@ describe('PublishToSpeleoDbDialog', () => {
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_add_collaborator');
       expect(call).toBeTruthy();
-      expect(call![1]).toEqual({ email: 'alice@x.com', permission: 'READ_AND_WRITE' });
+      expect(call![1]).toEqual({ email: 'alice@x.com', permission: 'READ_AND_WRITE', expectedProject: null });
     });
     await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
   });
@@ -293,7 +294,7 @@ describe('PublishToSpeleoDbDialog', () => {
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_add_collaborator');
       expect(call).toBeTruthy();
-      expect(call![1]).toEqual({ email: 'carol@x.com', permission: 'ADMIN' });
+      expect(call![1]).toEqual({ email: 'carol@x.com', permission: 'ADMIN', expectedProject: null });
     });
   });
 
