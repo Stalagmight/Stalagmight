@@ -34,6 +34,8 @@ const THIRD_PARTY_CHECK = 'scripts/check-third-party-licenses.mjs';
 const TS_SIZE = 'scripts/check-ts-file-size.mjs';
 const IPC_MOCK = 'scripts/check-vitest-ipc-mock.mjs';
 const THIRD_PARTY_GEN = 'scripts/gen-third-party-licenses.mjs';
+const UPDATER_PUBKEY = 'scripts/check-updater-pubkey.mjs';
+const UPDATER_MANIFEST = 'scripts/gen-updater-manifest.mjs';
 const HEAP = 'scripts/heap-profile.mjs';
 const MERGE_COVERAGE = 'scripts/merge-coverage.mjs';
 const PW_REPORTER = 'scripts/pw-timing-reporter.mjs';
@@ -338,6 +340,40 @@ export const GROUP: SiteGroup = {
       "main: renderSection( 'Rust crates', 'The dependency graph of the release binary (telemetry features included, dev-dependencies excluded), as harvested by cargo-about.', rust, )":
         'the Rust section: crate names, versions and license texts, from cargo about over Cargo.lock (third-party public data)',
     },
+    // #579 updater gates (master). The pubkey gate reads the tracked tauri.conf.json.
+    [UPDATER_PUBKEY]: {
+      'main: p':
+        "a problem checkUpdaterConfig found in the tracked src-tauri/tauri.conf.json: the file's repo-relative name, the offending pubkey or endpoint text of that public file, and the gate's fixed wording",
+    },
+    // The manifest generator runs in the release job over the release's own artifacts; every value
+    // is a release fact (version, tag, artifact and signature names) or the job's own paths.
+    [UPDATER_MANIFEST]: {
+      'getFlag: argv[i + 1]':
+        'a flag value the caller gave: in CI the release version and tag, the repo-relative artifact dir and the runner-temp notes and output paths release.yml passes; a bad --include-darwin value is quoted back',
+      'findOne: label': "a platform label from the generator's own PLATFORMS table (Linux, Windows, macOS)",
+      'findOne: dir': "the --dir the caller gave: release.yml's repo-relative release-artifacts directory",
+      "findOne: entries.join(', ')": 'the file names of release artifacts the bundler built from the public tree, as uploaded to the GitHub release',
+      'readSig: label': "a platform label from the generator's own PLATFORMS table",
+      'readSig: artifactFile': 'a release artifact file name the bundler built, as uploaded to the GitHub release',
+      'readSig: dir': "the --dir the caller gave: release.yml's repo-relative release-artifacts directory",
+      'readSig: path.join(dir, sigFile)':
+        'the repo-relative path of a release artifact signature: the --dir the caller gave and the artifact file name the bundler built',
+      'buildManifest: version': 'the --version the caller gave: the release version from the tag release.yml builds',
+      'buildManifest: tag': 'the --tag the caller gave: the git tag release.yml builds',
+      'buildManifest: plat.label': "a platform label from the generator's own PLATFORMS table",
+      'buildManifest: dir': "the --dir the caller gave: release.yml's repo-relative release-artifacts directory",
+      'buildManifest: plat.artifactRe': "an artifact name pattern from the generator's own PLATFORMS table",
+      'resolveNotes: opts.notesFile':
+        "the --notes-file the caller gave: in CI the release body release.yml wrote under the GitHub runner's RUNNER_TEMP, not a user's machine",
+      'resolveNotes: e.message':
+        "Node's fs error reading that --notes-file: its code and the runner-temp path the caller gave (a CI-only release step; no user data)",
+      'main: e.message':
+        "an Error this generator threw from parseArgs, resolveNotes or buildManifest, each built from the values above, or Node's fs error on --dir naming the release-artifacts directory",
+      'main: opts.out': "the --out the caller gave: in CI a manifest path under the GitHub runner's RUNNER_TEMP",
+      'main: manifest.version': 'the --version the caller gave, checked against VERSION_RE: the release version',
+      'main: JSON.stringify(manifest, null, 2)':
+        'the manifest buildManifest made: the release version, the release notes (the GitHub release body, from CHANGELOG.md), a timestamp, and per platform the public download URL and minisign signature of a release artifact',
+    },
     [PW_SUMMARY]: {
       "<module>: render(JSON.parse(readFileSync(file, 'utf8')), { top })":
         'the markdown timing table render() builds from a timing.json pw-timing-reporter wrote: spec paths and test titles of the public e2e suite, durations, attempts and statuses',
@@ -386,6 +422,14 @@ export const GROUP: SiteGroup = {
         class: 'shareable',
         what: 'ts-file-size-baseline.json, a tracked file of the public tree',
         reason: "LOC counts per repo-relative TS file, the gate's thresholds and its fixed README text",
+      },
+    },
+    [UPDATER_MANIFEST]: {
+      'main -> opts.out': {
+        class: 'shareable',
+        what: 'latest-<track>.json, the updater manifest the release job uploads to the public `updater` release',
+        reason:
+          'the release version, the release notes (the GitHub release body, from CHANGELOG.md), a timestamp, and per platform the public download URL and the minisign signature of a release artifact',
       },
     },
     [THIRD_PARTY_GEN]: {
