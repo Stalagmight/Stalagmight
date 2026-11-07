@@ -380,6 +380,94 @@ test.describe('Loading Progress', () => {
     });
   });
 
+  test.describe('In the project list', () => {
+    // [#576 Q-W60-1-D1] The project list's loading window holds the screen the way the
+    // project view's does (LOAD-VIEW-D1): menus, shortcuts and an OS-launched file all
+    // wait until the load ends or is cancelled.
+    test('a load holds the screen until it ends: menus, shortcuts and a launched file wait', async ({ page }) => {
+      await page.evaluate(() => {
+        const w = window as unknown as {
+          __MOCK_IPC_OVERRIDES__?: Record<string, unknown>;
+          __pickerCalls?: number;
+          __launchFetches?: number;
+        };
+        const overrides = { ...(w.__MOCK_IPC_OVERRIDES__ ?? {}) };
+        Object.defineProperty(overrides, 'plugin:dialog|open', {
+          enumerable: true,
+          configurable: true,
+          get() {
+            w.__pickerCalls = (w.__pickerCalls ?? 0) + 1;
+            return null;
+          },
+        });
+        Object.defineProperty(overrides, 'take_pending_launch_files', {
+          enumerable: true,
+          configurable: true,
+          get() {
+            w.__launchFetches = (w.__launchFetches ?? 0) + 1;
+            return [];
+          },
+        });
+        w.__MOCK_IPC_OVERRIDES__ = overrides;
+        const e2e = (window as unknown as { __E2E_TEST__?: { simulateLoadingProgress?: (payload: Record<string, unknown>) => void } }).__E2E_TEST__;
+        e2e?.simulateLoadingProgress?.({
+          isLoading: true,
+          projectName: 'CaveB',
+          projectPath: '/caves/CaveB.stalx',
+          phase: 'loading_project_data',
+          overallProgress: 25,
+        });
+      });
+      const counters = () =>
+        page.evaluate(() => {
+          const w = window as unknown as E2EWindow & { __pickerCalls?: number; __launchFetches?: number };
+          return {
+            occupants: w.__E2E_TEST__.uiStore.getState().screenOccupants as number,
+            activeDialog: w.__E2E_TEST__.uiStore.getState().activeDialog,
+            pickerCalls: w.__pickerCalls ?? 0,
+            launchFetches: w.__launchFetches ?? 0,
+          };
+        });
+
+      await expect(page.getByTestId('loading-progress')).toBeVisible();
+      await expect(page.getByText('Loading CaveB')).toBeVisible();
+      await expect(page.getByTestId('global-view')).toBeVisible();
+
+      // The toolbar's Open / Import button is under the overlay: a click there lands on the overlay.
+      const openButtonReachable = await page.evaluate(() => {
+        const button = document.querySelector('[data-testid="global-open-import-button"]');
+        if (!button) return null;
+        const r = button.getBoundingClientRect();
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return top !== null && button.contains(top);
+      });
+      expect(openButtonReachable).toBe(false);
+
+      // The loading window holds the screen, so the shortcuts stand down and an
+      // OS-launched file stays in the launch queue instead of replacing the load.
+      await page.keyboard.press('Control+o');
+      await page.keyboard.press('Control+n');
+      await page.evaluate(() =>
+        (window as unknown as { __tauriEventMock: { emit: (e: string, p: unknown) => void } }).__tauriEventMock.emit('launch-file-queued', null),
+      );
+      expect(await counters()).toEqual({ occupants: 1, activeDialog: null, pickerCalls: 0, launchFetches: 0 });
+
+      // The load fails; its error stays up (and holds the screen) until dismissed.
+      await page.evaluate(() => {
+        const e2e = (window as unknown as { __E2E_TEST__?: { simulateLoadingError?: (msg: string, details?: string) => void } }).__E2E_TEST__;
+        e2e?.simulateLoadingError?.('Could not read the project file.');
+      });
+      await expect(page.getByText('Could not read the project file.')).toBeVisible();
+      expect((await counters()).occupants).toBe(1);
+
+      await page.getByTestId('loading-error-dismiss').click();
+      await expect(page.getByTestId('loading-progress')).toHaveCount(0);
+      // The screen is free: the launched file that waited is taken now.
+      await expect.poll(async () => (await counters()).launchFetches).toBeGreaterThan(0);
+      expect((await counters()).occupants).toBe(0);
+    });
+  });
+
   test.describe('E2E Hook Availability', () => {
     test('loading E2E hooks are exposed globally (always, not DEV-gated)', async ({ page }) => {
       // These hooks are exposed for E2E tests even in production builds

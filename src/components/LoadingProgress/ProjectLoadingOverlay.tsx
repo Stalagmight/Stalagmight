@@ -12,7 +12,8 @@ export interface ProjectLoadingOverlayProps {
   retrySource: SourceName;
   /**
    * Register the overlay as a screen occupant while it is up, so the window-level
-   * shortcuts stand down as they do for a dialog (the project view: #576 LOAD-VIEW-D1).
+   * shortcuts stand down as they do for a dialog (the project view: #576 LOAD-VIEW-D1;
+   * the project list: #576 Q-W60-1-D1).
    */
   occupiesScreen?: boolean;
 }
@@ -28,6 +29,9 @@ export interface ProjectLoadingOverlayProps {
  * state with nothing on screen to show or dismiss it (and every banner gated on
  * "no load in progress" hidden until the next load). The project view now shows
  * it too, over everything, and it blocks the menus and the shortcuts.
+ *
+ * [#576 Q-W60-1-D1] The project list's overlay holds the screen the same way, so
+ * one rule covers both views: an OS-launched file waits for the load as well.
  */
 export function ProjectLoadingOverlay({ retrySource, occupiesScreen = false }: ProjectLoadingOverlayProps) {
   const { t } = useTranslation();

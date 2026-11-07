@@ -839,8 +839,10 @@ export default function GlobalView() {
         </div>
       </header>
 
-      {/* Loading Modal Overlay (also shown in the project view: App.tsx) */}
-      <ProjectLoadingOverlay retrySource="recent-list" />
+      {/* Loading Modal Overlay (also shown in the project view: App.tsx). It holds
+          the screen here too (#576 Q-W60-1-D1): menus, shortcuts and an OS-launched
+          file wait for the load to end or be cancelled, as in the project view. */}
+      <ProjectLoadingOverlay retrySource="recent-list" occupiesScreen />
 
       {/* Content */}
       <main className="flex-1 overflow-hidden flex">
