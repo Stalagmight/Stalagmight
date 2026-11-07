@@ -539,28 +539,15 @@ impl AppState {
                     );
                     return Ok(DoneResult::PushUnconfirmed);
                 }
-                // [#576 RV2-R-13] Release only a lock this session holds a claim on.
-                // [#576 SDB-ACCT-D1] That is every lock it edits under: one it took,
-                // and one it ADOPTED from the account (another window or computer, the
-                // website, this app before a restart) - the poll's reopen and Start
-                // editing record the adopted lock's claim as the gate opens, so Done
-                // releases it as usual. An edit session with no claim at all (none of
-                // those flows opened its gate) finishes here: editing off, nothing
-                // released, and say the lock stays with the account elsewhere.
-                if !self.speleodb_lock_acquired_here(&link.project_id) {
-                    // Marked BEFORE the gate shuts, so a status poll that sees the
-                    // gate shut also sees why, and does not reopen it under the
-                    // account's lock (#576 RV4-R-S1).
-                    self.speleodb_mark_finished_here();
-                    self.set_edit_enabled(false);
-                    tracing::info!(
-                        project_id = %link.project_id,
-                        purpose = "release only a lock this app session acquired (#576 RV2-R-13)",
-                        "speleodb done: the lock is the account's but was not taken in this \
-                         session; editing ended here and the lock was left with the account"
-                    );
-                    return Ok(DoneResult::LockHeldElsewhere);
-                }
+                // [#576 SDB-ACCT-D1, SDB-QUIT-D1] No claim check: the open gate (not
+                // force-editing, both checked above) under a lock the server names our
+                // account as holding is the edit session, and its lock is released
+                // whether this session took it or adopted it from the account (another
+                // window or computer, the website, this app before a restart) - the
+                // rule close, switch, logout and quit release by. Done used to release
+                // only a lock this session held a claim on (decision RV2-R-13) and
+                // finish without one as `LockHeldElsewhere`.
+                //
                 // Edits are safely on the server; release the lock and go
                 // read-only. Drop the edit gate only after a confirmed release -
                 // if release fails the lock is still held, so a retry of Done

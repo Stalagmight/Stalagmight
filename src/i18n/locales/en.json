@@ -4183,8 +4183,6 @@
         "upToDate": "Already up to date.",
         "released": "Changes uploaded and the write lock released.",
         "releasedNothingToUpload": "Write lock released. Nothing to upload.",
-        "lockHeldElsewhere": "Changes uploaded and editing finished here. The write lock was taken by another session of your account (another window or computer, or before this app restarted), so it was left with that session, not released.",
-        "lockHeldElsewhereNothingToUpload": "Editing finished here. Nothing to upload. The write lock was taken by another session of your account (another window or computer, or before this app restarted), so it was left with that session, not released.",
         "pushed": "Changes pushed to SpeleoDB.",
         "startFailed": "Could not start editing",
         "updateFailed": "Could not update",

@@ -194,14 +194,14 @@ Done, close, project switch, logout, a sign-in that replaces the session, deleti
 the open project, and the quit. When the status poll's inherited-lock reopen or a
 Start editing (plain, or the held-lock prompt's "Continue editing") opens the gate
 over a lock the account already held, the session records an adopted claim for it,
-and the silent releases (close, switch, logout, replacing sign-in, quit) release
-whenever the edit gate is open (not force-editing), claim or not; the un-pushed-edits
-veto still keeps a lock over edits not on the server. A revision View is refused
-while the gate is open over such a lock as over one taken here (FZ-SDB-4). This
-replaces decision RV2-R-13, under which only a lock this session took was released
-and a session whose gate the reopen had opened left it with the account
-(`DoneResult::LockHeldElsewhere`, now reached only by an edit session with no claim
-at all, which none of these flows leaves). An acquire whose reply was lost and whose
+and Done and the silent releases (close, switch, logout, replacing sign-in, quit)
+release whenever the edit gate is open (not force-editing), claim or not; the
+un-pushed-edits veto still keeps a lock over edits not on the server (Done pushes
+them first). A revision View is refused while the gate is open over such a lock as
+over one taken here (FZ-SDB-4). This replaces decision RV2-R-13, under which only a
+lock this session took was released and a session whose gate the reopen had opened
+left it with the account (Done's former `LockHeldElsewhere` answer, gone with the
+poll's "finished here" guard it needed). An acquire whose reply was lost and whose
 holder re-read failed is marked unconfirmed in every case and settled by the next
 poll (#576 SDB-POLL-D1). An adopted claim is marked as resumed: it licenses the
 release only, not the authorship self-heal above (#576 RV4-R-S3), since the other

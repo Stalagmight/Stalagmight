@@ -1770,9 +1770,6 @@ mod adopt_order {
 
             match self.speleodb_done(Some(ADOPT_COMMIT_MESSAGE.to_owned())) {
                 Ok(DoneResult::Released) => AdoptUpload::Pushed,
-                // [#576 RV2-R-13] Landed, but the lock was the account's from another
-                // session (Start editing inherited it), so Done left it with that session.
-                Ok(DoneResult::LockHeldElsewhere) => AdoptUpload::PushedLockHeld,
                 Ok(DoneResult::DivergenceNeeded) => AdoptUpload::Diverged,
                 // Both mean the same thing to a caller with nothing left to retry with:
                 // the bytes did not land. The lock stays held, by `speleodb_done`'s own

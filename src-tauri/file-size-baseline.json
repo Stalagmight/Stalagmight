@@ -351,7 +351,6 @@
     "src-tauri/crates/core/src/core/state/sdb_adopt_span_tests.rs": 323,
     "src-tauri/crates/core/src/core/state/sdb_delete_move_tests.rs": 201,
     "src-tauri/crates/core/src/core/state/sdb_delete_release_claim_tests.rs": 89,
-    "src-tauri/crates/core/src/core/state/sdb_done_here_tests.rs": 65,
     "src-tauri/crates/core/src/core/state/sdb_endpoint_tests.rs": 153,
     "src-tauri/crates/core/src/core/state/sdb_failed_push_save_tests.rs": 81,
     "src-tauri/crates/core/src/core/state/sdb_ff_arm_tests.rs": 151,

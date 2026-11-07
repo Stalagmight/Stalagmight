@@ -28,7 +28,7 @@
 //! - **I5 no orphan cache files.** The SpeleoDB cache holds only
 //!   `<id>/project.stalx` (and SQLite's own sidecars while that file is open).
 //! - **I6 a confirmed push agrees with the server.** After Push -> `Pushed`,
-//!   Done -> `Released` / `LockHeldElsewhere`, take remote, a pushed adoption and
+//!   Done -> `Released`, take remote, a pushed adoption and
 //!   a publish: BASE is the server tip, the copy is marked clean, and its content
 //!   equals the tip's. **I6b** after Update -> up to date / fast-forwarded: BASE
 //!   is the tip.

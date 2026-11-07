@@ -784,13 +784,6 @@ pub enum DoneResult {
     /// AND the lock are retained so a later retry recovers via ancestry (#193) -
     /// no edits are lost.
     PushUnconfirmed,
-    /// [#576 RV2-R-13] Edits pushed (or there was nothing to push) and editing has
-    /// ended HERE, but the write lock was NOT released: this app session did not
-    /// take it. The lock is held by the same account from somewhere else - another
-    /// window or computer, or a run of this app before a restart - and releasing it
-    /// from here would pull it out from under that session. Like [`Self::Released`]
-    /// the local work is on the server; unlike it, the account still holds the lock.
-    LockHeldElsewhere,
 }
 
 /// Outcome of `speleodb_update` (#197): a read-only refresh of the open project

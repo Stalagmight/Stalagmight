@@ -264,16 +264,6 @@ pub struct AppState {
     /// [`Self::adjusted_cache_generation`] / `unrecognised_shot_kinds`, applied to
     /// the one slot that never had it. See `core::state::speleodb_session`.
     pub(super) speleodb_session_generation: AtomicU64,
-    /// [#576 RV4-R-S1] The session generation, plus one, in which a Done finished
-    /// editing HERE while the account's lock stayed held elsewhere
-    /// (`DoneResult::LockHeldElsewhere`); 0 for none. One generation is one open
-    /// project, so the generation names the project too. The status poll's
-    /// inherited-lock reopen honours it: the poll cannot otherwise tell "finished
-    /// here by Done" from "reopened after a restart", and switched editing back on
-    /// under the other session's lock. Lapses at the next session boundary (a new
-    /// open, a close, a logout bump the generation); an explicit Start editing
-    /// clears it. Transient, never persisted; an atomic, so it is no lock cell.
-    pub(super) speleodb_finished_here: AtomicU64,
     /// [#576 NF-W4C-3-EDIT] The session generation, plus one, an Ariane adoption
     /// shut the edit gate in, from its local span until its hand-over push has
     /// landed (0: not shut): the adopted project is open (and reopened editable,
@@ -403,7 +393,6 @@ impl AppState {
             adjusted_cache: RecoveringMutex::with_monitor("adjusted_cache", None, &poison),
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
-            speleodb_finished_here: AtomicU64::new(0),
             speleodb_adoption_gate: AtomicU64::new(0),
             #[cfg(test)]
             park_after_mutation: RecoveringMutex::with_monitor(

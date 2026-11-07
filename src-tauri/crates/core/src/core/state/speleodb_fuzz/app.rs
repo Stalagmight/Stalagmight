@@ -639,7 +639,7 @@ impl App {
         }
     }
 
-    /// Done; `true` when it released (or left the lock with the account).
+    /// Done; `true` when it released.
     fn done(&mut self, out: &mut Outcome) -> bool {
         let link = self.open_link();
         let uploads = link.as_ref().is_some_and(|l| l.has_unpushed_edits);
@@ -650,10 +650,7 @@ impl App {
         {
             Ok(report) => {
                 out.note(format!("done -> Ok({:?})", report.result));
-                let released = matches!(
-                    report.result,
-                    DoneResult::Released | DoneResult::LockHeldElsewhere
-                );
+                let released = matches!(report.result, DoneResult::Released);
                 if released {
                     self.save(out);
                 }

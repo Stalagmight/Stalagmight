@@ -536,19 +536,6 @@ export function useSpeleoActions(): SpeleoActions {
             noteNoAnchorIfNeeded();
             await flushToDiskAfterPush();
             break;
-          case 'lock_held_elsewhere':
-            // [#576 RV2-R-13] Finished here, but the lock was taken by another session
-            // of this account and is left with it - say so, rather than "released".
-            showToast(
-              hadUnpushedEdits
-                ? t('speleodb.editBar.toasts.lockHeldElsewhere')
-                : t('speleodb.editBar.toasts.lockHeldElsewhereNothingToUpload'),
-              TOAST_KEYS.SPELEODB_RELEASED,
-              'info',
-            );
-            noteNoAnchorIfNeeded();
-            await flushToDiskAfterPush();
-            break;
           case 'push_unconfirmed':
             // #200 seam: applyDone raised the push_unconfirmed banner.
             break;

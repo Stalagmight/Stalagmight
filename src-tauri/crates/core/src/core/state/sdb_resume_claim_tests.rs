@@ -141,3 +141,49 @@ fn a_second_start_editing_keeps_the_lock_this_session_took() {
         "the second keeps the acquisition, not an adopted claim"
     );
 }
+
+#[test]
+fn done_releases_a_lock_the_poll_adopted_whatever_the_claim_says() {
+    // [#576 SDB-ACCT-D1] The status poll adopts the account's lock (another window,
+    // another computer, the website): Done hands it back as it hands back one taken
+    // here. It keys on the edit gate, as the silent releases do, not on the claim:
+    // with the adopted claim gone it still releases, where it used to finish here as
+    // `LockHeldElsewhere` and leave the lock held.
+    let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+    let adopt = || {
+        let (temp, state) = remote_readonly_fixture();
+        *state.speleodb.lock() = authed_session_at(&base);
+        let polled = state.speleodb_link_status().map(|s| s.edit_enabled);
+        assert!(
+            matches!(polled, Ok(true)) && state.speleodb_lock_resumed_here(REMOTE_ID),
+            "premise: the poll adopts the account's lock ({polled:?})"
+        );
+        (temp, state)
+    };
+
+    let (_claimed_dir, claimed) = adopt();
+    let with_claim = claimed.speleodb_done(None);
+    let after_claimed = releases(&seen);
+
+    let (_unclaimed_dir, unclaimed) = adopt();
+    let _ = unclaimed.speleodb_forget_lock_acquired_for(REMOTE_ID);
+    let gate_without_claim =
+        unclaimed.edit_enabled() && !unclaimed.speleodb_lock_acquired_here(REMOTE_ID);
+    let without_claim = unclaimed.speleodb_done(None);
+    let after_unclaimed = releases(&seen);
+    println!(
+        "[SDB-ACCT-D1] Done over a lock the poll adopted -> {with_claim:?}, release \
+         requests {after_claimed}; with the claim gone (gate open {gate_without_claim}) \
+         -> {without_claim:?}, release requests {after_unclaimed}"
+    );
+    assert_eq!(format!("{with_claim:?}"), "Ok(Released)");
+    assert_eq!(after_claimed, 1, "the adopted lock is handed back");
+    assert!(gate_without_claim, "premise: an edit session with no claim");
+    assert_eq!(
+        format!("{without_claim:?}"),
+        "Ok(Released)",
+        "Done keys on the edit gate, not the claim"
+    );
+    assert_eq!(after_unclaimed, 2, "and hands that lock back too");
+    assert!(!claimed.edit_enabled() && !unclaimed.edit_enabled());
+}

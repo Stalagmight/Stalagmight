@@ -1870,9 +1870,6 @@ impl AppState {
         // arm's identity-only commit cannot see (the slot never moves). Held across
         // the network span on purpose - see `speleodb_session`.
         let lock_ops = self.speleodb_lock_ops_guard();
-        // [#576 RV4-R-S1] An explicit Start editing is the way back in after a Done
-        // that finished here: the status poll may resume the account's lock again.
-        self.speleodb_clear_finished_here();
         // This operation's unwind slot starts empty. An acquire that inherits an
         // already-held lock, or one that aborts, records nothing - and must
         // leave the stale-context unwind with nothing to hand back, rather than
