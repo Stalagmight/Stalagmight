@@ -250,10 +250,19 @@ impl App {
                 let clean = !self.hint_bits().2;
                 let held = self.held_here();
                 match self.state.speleodb_logout() {
-                    Ok(()) => {
-                        out.note("logout -> Ok");
+                    Ok(report) => {
+                        let warned: Vec<String> = report
+                            .locks_left_held
+                            .into_iter()
+                            .map(|left| left.project_id)
+                            .collect();
+                        out.note(format!("logout -> Ok, locks left held {warned:?}"));
+                        // [#576 Q-W61-3-D1] A release the logout reports as failed is
+                        // not silent: the user is warned and told how to release it.
                         if let (true, Some(project_id)) = (clean, held) {
-                            out.claims.push(Claim::LockReleaseBestEffort { project_id });
+                            if !warned.contains(&project_id) {
+                                out.claims.push(Claim::LockReleaseBestEffort { project_id });
+                            }
                         }
                     }
                     Err(e) => out.refused("logout", &e),

@@ -568,6 +568,25 @@ pub struct SpeleoPushReport {
     pub save_warnings: Vec<ValidationWarning>,
 }
 
+/// [#576 Q-W61-3-D1] The `speleodb_logout` answer: the projects whose write lock the
+/// logout tried to hand back and could not (the server answered the release with an
+/// error, or did not answer). The sign-out happened either way; the frontend warns,
+/// naming each project, so the user can release the lock on the SpeleoDB website or
+/// sign in again and close the project. Empty when every release landed or none was
+/// due.
+#[derive(Debug, Clone, Default, Serialize, TS)]
+pub struct SpeleoLogoutReport {
+    pub locks_left_held: Vec<SpeleoLockLeftHeld>,
+}
+
+/// One project whose write lock a logout could not hand back (see
+/// [`SpeleoLogoutReport`]).
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoLockLeftHeld {
+    pub project_id: String,
+    pub project_name: String,
+}
+
 impl CommandResult {
     pub fn success() -> Self {
         Self {

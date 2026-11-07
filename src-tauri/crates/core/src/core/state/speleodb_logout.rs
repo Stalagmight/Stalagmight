@@ -291,7 +291,12 @@ impl AppState {
     /// error means a residue that can resurrect the session survives on this
     /// machine, which the FE surfaces so the user can retry. Unlike the 401
     /// auto-drop (`AppState::speleodb_forget`), which stays best-effort by design.
-    pub fn speleodb_logout(&self) -> Result<(), SpeleoErrorDto> {
+    ///
+    /// [#576 Q-W61-3-D1] Signs out even when the server refuses (or does not answer)
+    /// the release of the held write lock, and says so: the answer names each project
+    /// whose lock is still held, for the frontend's warning. It used to answer `Ok`
+    /// with the lock still held and nothing said.
+    pub fn speleodb_logout(&self) -> Result<crate::core::SpeleoLogoutReport, SpeleoErrorDto> {
         // ONE lock-ops span over the WHOLE logout - gates, lock release, AND the
         // credential sweep below - because logout is a SpeleoDB lock operation
         // (it ends an edit session and hands its mutex back) and the thing that
@@ -312,7 +317,7 @@ impl AppState {
         // and the release path (`speleodb_release_held_lock_best_effort`) posts
         // directly and touches only the session record.
         let lock_ops = self.speleodb_lock_ops_guard();
-        let gates_dropped = self.speleodb_logout_drop_gates(&lock_ops);
+        let (gates_dropped, left_held) = self.speleodb_logout_drop_gates(&lock_ops);
 
         // Drop the session AND the persisted rehydrate seed FIRST, then report. The
         // ordering is load-bearing: an early return on the credential failure would
@@ -334,7 +339,15 @@ impl AppState {
         // process that dies mid-logout cannot leave the departed account's `true`
         // standing over an empty seed - or, worse, over the NEXT account's email.
         let seed_cleared = self.speleodb_write_account_record(None, None);
-        logout_residue_error(cleared.err().map(|e| e.to_string()), seed_cleared.err())
+        let report = crate::core::SpeleoLogoutReport {
+            locks_left_held: left_held.into_iter().collect(),
+        };
+        logout_residue_error(
+            cleared.err().map(|e| e.to_string()),
+            seed_cleared.err(),
+            &report,
+        )?;
+        Ok(report)
     }
 
     /// [#576 FZ-SDB-3-D1] Logout's hand-back for a session a sign-in is about to
@@ -351,7 +364,16 @@ impl AppState {
         &self,
         lock_ops: &'s super::speleodb_session::LockOpsHeld<'s>,
     ) {
-        let _gates_dropped = self.speleodb_logout_drop_gates(lock_ops);
+        let (_gates_dropped, left_held) = self.speleodb_logout_drop_gates(lock_ops);
+        // The sign-in goes on either way; the log is where a lock the hand-back could
+        // not release is recorded (the release logged the failure itself).
+        if let Some(left) = left_held {
+            tracing::info!(
+                project_id = %left.project_id,
+                purpose = "hand back a session a sign-in replaces (#576 FZ-SDB-3-D1)",
+                "speleodb: the replaced session's write lock is still held on the server"
+            );
+        }
     }
 
     /// [#576 A8] Drop the session (token, keychain entry, plaintext) - inside the
@@ -366,8 +388,9 @@ impl AppState {
         self.speleodb.lock().forget_reporting()
     }
 
-    /// The edit-session half of [`Self::speleodb_logout_drop_gates`].
-    fn speleodb_logout_release_and_drop_gates(&self) {
+    /// The edit-session half of [`Self::speleodb_logout_drop_gates`]: the project
+    /// whose lock the release could not hand back, if any (#576 Q-W61-3-D1).
+    fn speleodb_logout_release_and_drop_gates(&self) -> Option<crate::core::SpeleoLockLeftHeld> {
         match self.speleodb_open_link() {
             // Remote edit session: best-effort RELEASE the lock (needs the token, so
             // before `forget`), then drop the gates. #213: a force-editor holds NO
@@ -383,13 +406,14 @@ impl AppState {
             // whereas a lock freed over stranded edits lets a colleague lock and push,
             // leaving weeks of local survey reachable only through a divergence.
             Ok(_) => {
-                self.speleodb_release_held_lock_best_effort();
+                let left_held = self.speleodb_release_held_lock_reporting();
                 self.set_edit_enabled(false);
                 self.set_force_editing(false);
+                left_held
             }
             // Local-only project (no hand-off link): no lock, nothing to push - keep
             // it editable.
-            Err(SpeleoDbError::NoRemoteProject) => {}
+            Err(SpeleoDbError::NoRemoteProject) => None,
             // Couldn't determine locality (e.g. a poisoned database Mutex): the
             // gate-drop is a SAFETY action, so it must not be skipped just because the
             // link load failed - a logged-out session must not keep editing a project
@@ -398,6 +422,7 @@ impl AppState {
             Err(_) => {
                 self.set_edit_enabled(false);
                 self.set_force_editing(false);
+                None
             }
         }
     }
@@ -436,10 +461,12 @@ mod logout_span {
         /// caller's span - so the forget runs in this span, not merely in a span.
         /// [#576 RV9a-3] The proof's only producer: it lives in this module, whose field
         /// nothing outside can fill, so no gate-less proof can be made for a fresh span.
+        /// [#576 Q-W61-3-D1] With the proof, the project whose held lock the release
+        /// could not hand back, if any.
         pub(super) fn speleodb_logout_drop_gates<'s>(
             &self,
             lock_ops: &'s LockOpsHeld<'s>,
-        ) -> GatesDropped<'s> {
+        ) -> (GatesDropped<'s>, Option<crate::core::SpeleoLockLeftHeld>) {
             // A session boundary even though the project slot never moves (footgun
             // 5.8): the token an in-flight Start Editing would commit a claim over is
             // being forgotten, so the commit guard must see this. Bumped under a brief
@@ -450,10 +477,12 @@ mod logout_span {
                 let _proj_guard = self.project.lock();
                 self.bump_speleodb_session();
             }
-            if self.edit_enabled() {
-                self.speleodb_logout_release_and_drop_gates();
-            }
-            GatesDropped { _span: lock_ops }
+            let left_held = if self.edit_enabled() {
+                self.speleodb_logout_release_and_drop_gates()
+            } else {
+                None
+            };
+            (GatesDropped { _span: lock_ops }, left_held)
         }
     }
 }
@@ -469,9 +498,14 @@ mod logout_span {
 ///
 /// A free function over the two failure strings so the assembly is unit-testable
 /// without a keychain or an unwritable config.
+///
+/// [#576 Q-W61-3-D1] A lock the logout could not release is named in the same
+/// message when a residue is reported too: that answer is an error, and the report
+/// that would carry it is not returned.
 fn logout_residue_error(
     credential: Option<String>,
     seed: Option<String>,
+    report: &crate::core::SpeleoLogoutReport,
 ) -> Result<(), SpeleoErrorDto> {
     let mut problems: Vec<String> = Vec::new();
     if let Some(e) = credential {
@@ -487,6 +521,12 @@ fn logout_residue_error(
     }
     if problems.is_empty() {
         return Ok(());
+    }
+    for left in &report.locks_left_held {
+        problems.push(format!(
+            "the write lock on \"{}\" could not be released and is still held on SpeleoDB",
+            left.project_name
+        ));
     }
     Err(local_dto(SpeleoDbError::Io(format!(
         "Logged out, but {}",
@@ -505,6 +545,7 @@ fn logout_residue_error(
 )]
 mod tests {
     use super::{logout_residue_error, AppState};
+    use crate::core::SpeleoLogoutReport;
 
     /// Make every `config.save()` fail, by squatting the config FILE's path with a
     /// DIRECTORY - the write cannot land no matter how the save is spelled. Returns
@@ -710,7 +751,7 @@ mod tests {
 
     #[test]
     fn a_clean_logout_reports_nothing() {
-        assert!(logout_residue_error(None, None).is_ok());
+        assert!(logout_residue_error(None, None, &SpeleoLogoutReport::default()).is_ok());
     }
 
     #[test]
@@ -718,8 +759,12 @@ mod tests {
         // The seed half used to have no error channel at all: the clear was skipped
         // silently on a poisoned config mutex and logout reported success, leaving the
         // session to re-authenticate itself on the next launch.
-        let credential = logout_residue_error(Some("keychain refused".to_owned()), None)
-            .expect_err("a surviving credential is reported");
+        let credential = logout_residue_error(
+            Some("keychain refused".to_owned()),
+            None,
+            &SpeleoLogoutReport::default(),
+        )
+        .expect_err("a surviving credential is reported");
         assert!(credential.message.contains("could not be removed"));
         assert!(
             !credential.message.contains("sign in again"),
@@ -727,8 +772,12 @@ mod tests {
             credential.message
         );
 
-        let seed = logout_residue_error(None, Some("read-only config".to_owned()))
-            .expect_err("a surviving rehydrate seed is reported on its own");
+        let seed = logout_residue_error(
+            None,
+            Some("read-only config".to_owned()),
+            &SpeleoLogoutReport::default(),
+        )
+        .expect_err("a surviving rehydrate seed is reported on its own");
         assert!(seed.message.contains("sign in again"));
 
         // Both: one message, both facts. Reporting only the first would hide the half
@@ -736,12 +785,36 @@ mod tests {
         let both = logout_residue_error(
             Some("keychain refused".to_owned()),
             Some("read-only config".to_owned()),
+            &SpeleoLogoutReport::default(),
         )
         .expect_err("both residues are reported");
         assert!(
             both.message.contains("could not be removed") && both.message.contains("sign in again"),
             "both residues must survive into the one warning: {}",
             both.message
+        );
+    }
+
+    #[test]
+    fn a_lock_left_held_is_named_beside_a_residue() {
+        // [#576 Q-W61-3-D1] With a residue the answer is an error, and the report is
+        // not returned: the lock the release could not hand back rides the message.
+        let left = SpeleoLogoutReport {
+            locks_left_held: vec![crate::core::SpeleoLockLeftHeld {
+                project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+                project_name: "CaveA".to_owned(),
+            }],
+        };
+        let message = logout_residue_error(Some("keychain refused".to_owned()), None, &left)
+            .expect_err("a residue is reported")
+            .message;
+        assert!(
+            message.contains("could not be removed") && message.contains("\"CaveA\""),
+            "the residue and the lock both: {message}"
+        );
+        assert!(
+            logout_residue_error(None, None, &left).is_ok(),
+            "without a residue the report carries the lock"
         );
     }
 }

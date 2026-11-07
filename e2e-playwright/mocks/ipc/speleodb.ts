@@ -99,7 +99,10 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
           unlinked_copy_path: null,
           warnings: [],
         } satisfies MockReply<'speleodb_unlink'>;
+      // [#576 Q-W61-3-D1] Every release landed: no lock left held to warn about. A
+      // spec seeds a failed one with an override.
       case 'speleodb_logout':
+        return { locks_left_held: [] } satisfies MockReply<'speleodb_logout'>;
       // Strip half of the managed-file prompt: deletes a foreign copy's
       // speleo_link row. No payload; specs assert the invocation itself.
       case 'speleodb_remove_link_at':
@@ -115,8 +118,7 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
       // #215 lock release + delete: no payload.
       case 'speleodb_release_current_lock':
       case 'speleodb_delete_project':
-        return null satisfies MockReply<'speleodb_logout'> &
-          MockReply<'speleodb_remove_link_at'> &
+        return null satisfies MockReply<'speleodb_remove_link_at'> &
           MockReply<'speleodb_release_all_locks'> &
           MockReply<'speleodb_release_lock'> &
           MockReply<'speleodb_release_lock_acquired_here'> &

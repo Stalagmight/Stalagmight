@@ -78,6 +78,7 @@ import type { SpeleoDumpCandidate } from "./SpeleoDumpCandidate";
 import type { SpeleoLinkStatus } from "./SpeleoLinkStatus";
 import type { SpeleoLocalProjectState } from "./SpeleoLocalProjectState";
 import type { SpeleoLoginResult } from "./SpeleoLoginResult";
+import type { SpeleoLogoutReport } from "./SpeleoLogoutReport";
 import type { SpeleoManagedFile } from "./SpeleoManagedFile";
 import type { SpeleoOpenResult } from "./SpeleoOpenResult";
 import type { SpeleoProjectMetadata } from "./SpeleoProjectMetadata";
@@ -251,7 +252,7 @@ export interface IpcCommands {
   speleodb_list_teams: { args: Record<string, never>; result: Array<SpeleoTeamOption>; error: CommandError };
   speleodb_local_project_states: { args: { projectIds?: Array<string> | null }; result: Record<string, SpeleoLocalProjectState>; error: CommandError };
   speleodb_login: { args: { endpoint?: string | null; email?: string | null; password?: string | null; token?: string | null }; result: SpeleoLoginResult; error: CommandError };
-  speleodb_logout: { args: Record<string, never>; result: null; error: CommandError };
+  speleodb_logout: { args: Record<string, never>; result: SpeleoLogoutReport; error: CommandError };
   speleodb_open_file_flags: { args: Record<string, never>; result: OpenFileFlags; error: CommandError };
   speleodb_open_project: { args: { projectId: string; projectName: string; latestCommitSha?: string | null; entryPath?: string | null }; result: SpeleoOpenResult; error: CommandError };
   speleodb_open_project_discarding_local: { args: { projectId: string; projectName: string; latestCommitSha?: string | null; entryPath?: string | null }; result: SpeleoOpenResult; error: CommandError };

@@ -354,6 +354,45 @@ impl AppState {
         }
     }
 
+    /// [#576 Q-W61-3-D1] [`Self::speleodb_release_held_lock_best_effort`] for the
+    /// logout, which signs out whatever the release answers and must then SAY when the
+    /// lock is still held: the project whose release failed, or `None` when nothing
+    /// was due or the release landed. A failure whose reply may have been lost is
+    /// re-read at once (#576 FZ-SDB-6): a lock no longer ours was released after all.
+    /// The claim ends with the release, landed or not, as on every silent release.
+    pub(super) fn speleodb_release_held_lock_reporting(
+        &self,
+    ) -> Option<crate::core::SpeleoLockLeftHeld> {
+        let p = self.speleodb_held_lock_release_params()?;
+        let project_name = self
+            .speleodb_open_link()
+            .map_or_else(|_| p.project_id.clone(), |link| link.project_name);
+        self.speleodb_forget_lock_acquired_for(&p.project_id);
+        let Err(e) = client::release_lock(&p.endpoint, &p.token, p.insecure_http, &p.project_id)
+        else {
+            return None;
+        };
+        if let AfterLockVerb::NotOurs(_) = self.speleodb_reread_after_lock_verb(
+            &p.endpoint,
+            &p.token,
+            p.insecure_http,
+            &p.project_id,
+            &e,
+        ) {
+            return None;
+        }
+        tracing::warn!(
+            error = %e,
+            project_id = %p.project_id,
+            purpose = "tell the user a logout left a write lock held (#576 Q-W61-3-D1)",
+            "speleodb: the logout could not release the write lock; signing out anyway"
+        );
+        Some(crate::core::SpeleoLockLeftHeld {
+            project_id: p.project_id,
+            project_name,
+        })
+    }
+
     /// Release a held lock for a caller that is ABANDONING the project's SpeleoDB
     /// identity (`speleodb_unlink`): same best-effort release as
     /// [`AppState::speleodb_release_held_lock_best_effort`], minus the

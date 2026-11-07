@@ -674,7 +674,9 @@
         "token": "Token",
         "useToken": "Paste an existing token instead of a password",
         "tryLogin": "Log in now",
-        "tryingLogin": "Logging in…"
+        "tryingLogin": "Logging in…",
+        "locksLeftHeld_one": "Signed out, but {{projects}} is still locked on SpeleoDB. Release it on the SpeleoDB website, or sign in and close it.",
+        "locksLeftHeld_other": "Signed out, but {{projects}} are still locked on SpeleoDB. Release them on the SpeleoDB website, or sign in and close them."
       },
       "credentials": {
         "title": "Credential storage",

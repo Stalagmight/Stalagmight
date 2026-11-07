@@ -3818,8 +3818,8 @@
       "async": true,
       "args": [],
       "result": {
-        "rust": "()",
-        "ts": "null"
+        "rust": "SpeleoLogoutReport",
+        "ts": "SpeleoLogoutReport"
       },
       "error": {
         "rust": "CommandError",

@@ -27,8 +27,8 @@ use stalagmight_lib::config::{
 };
 use stalagmight_lib::core::command::{
     Command, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
-    ReversedSection, SpeleoDoneReport, SpeleoPublishReport, SpeleoPushReport, ValidationWarning,
-    WarningSeverity,
+    ReversedSection, SpeleoDoneReport, SpeleoLockLeftHeld, SpeleoLogoutReport, SpeleoPublishReport,
+    SpeleoPushReport, ValidationWarning, WarningSeverity,
 };
 use stalagmight_lib::core::command_error::{CommandError, CommandErrorCode, HistoryStepFailure};
 use stalagmight_lib::core::events::InternalErrorNotice;
@@ -465,6 +465,9 @@ fn main() {
     // [#576 NF-W2SAVE-1] Done / Push answers carrying the pre-push save's warnings
     export::<SpeleoDoneReport>(&out_dir);
     export::<SpeleoPushReport>(&out_dir);
+    // [#576 Q-W61-3-D1] Logout's answer: the locks it could not release
+    export::<SpeleoLogoutReport>(&out_dir);
+    export::<SpeleoLockLeftHeld>(&out_dir);
     // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
     export::<Visibility>(&out_dir);
     export::<SpeleoProjectMetadata>(&out_dir);
@@ -710,6 +713,8 @@ fn main() {
         "PushResult",
         "SpeleoDoneReport",
         "SpeleoPushReport",
+        "SpeleoLogoutReport",
+        "SpeleoLockLeftHeld",
         "Visibility",
         "SpeleoProjectMetadata",
         "SpeleoProjectMetadataPatch",

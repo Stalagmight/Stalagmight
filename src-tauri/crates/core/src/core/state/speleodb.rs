@@ -5919,12 +5919,20 @@ mod tests {
                 "fixture starts clean"
             );
 
-            let _ = state.speleodb_logout();
+            let report = state.speleodb_logout();
 
-            assert_eq!(
-                hits.load(std::sync::atomic::Ordering::SeqCst),
-                1,
-                "a clean held lock is still released on logout"
+            // The release goes out first. [#576 Q-W61-3-D1] The stub never answers
+            // it, so the logout re-reads the holder (a reply that may have been lost,
+            // #576 FZ-SDB-6) - those are the hits after it - and, unable to say the
+            // lock is gone, names it in its answer.
+            let hits = hits.load(std::sync::atomic::Ordering::SeqCst);
+            assert!(
+                hits >= 1,
+                "a clean held lock is still released on logout: {hits}"
+            );
+            assert!(
+                report.is_ok_and(|report| report.locks_left_held.len() == 1),
+                "and a release nobody answered is reported as still held"
             );
             assert!(!state.edit_enabled(), "and the edit gate drops either way");
         });

@@ -31,7 +31,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::config::TokenFallback;
 use crate::core::state::{for_project, ProjectIdentity};
-use crate::core::{AppState, CommandError, SpeleoDoneReport, SpeleoPushReport};
+use crate::core::{AppState, CommandError, SpeleoDoneReport, SpeleoLogoutReport, SpeleoPushReport};
 // [Track A] #186/D-B2: the orchestration `AppState::speleodb_*` methods build the
 // structured SpeleoErrorDto at the call site where the endpoint is known; the
 // commands hand it on as a CommandError carrying its code (#576 C4), so the FE
@@ -205,9 +205,11 @@ pub async fn speleodb_adopt_ariane(
 /// account email (no server call). #270: an `Err` here does NOT mean the logout
 /// failed - the session is always dropped; it means the credential could not be
 /// removed from the OS keychain / plaintext store, so the frontend warns (and can
-/// offer a retry) while treating the user as logged out.
+/// offer a retry) while treating the user as logged out. [#576 Q-W61-3-D1] The `Ok`
+/// answer names each project whose write lock could not be released, for the
+/// frontend's warning (the sign-out happened regardless).
 #[tauri::command]
-pub async fn speleodb_logout(app: AppHandle) -> Result<(), CommandError> {
+pub async fn speleodb_logout(app: AppHandle) -> Result<SpeleoLogoutReport, CommandError> {
     run_blocking(app, AppState::speleodb_logout).await
 }
 

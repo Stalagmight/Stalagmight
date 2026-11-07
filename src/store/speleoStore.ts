@@ -10,6 +10,7 @@ import type {
   SpeleoErrorDto,
   SpeleoLinkStatus,
   SpeleoLoginResult,
+  SpeleoLogoutReport,
   SpeleoProjectSummary,
   SpeleoSessionStatus,
   StartEditingResult,
@@ -25,6 +26,8 @@ import {
   trackDialogComplete,
 } from '../utils/telemetry';
 import { emailsMatch } from '../utils/email';
+import { TOAST_KEYS } from '../utils/toastKeys';
+import i18n from '../i18n';
 import { useProjectStore } from './projectStore';
 import { expectedOpenProject } from './expectedOpenProject';
 import { useUIStore } from './uiStore';
@@ -919,11 +922,27 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // the logout locally in `finally`, then let the rejection propagate to the
         // catch below so the dialog still surfaces that warning. Clearing only on
         // success would leave the UI claiming a session the backend no longer has.
+        let report: SpeleoLogoutReport | null = null;
         try {
-          await invokeIpc('speleodb_logout');
+          report = await invokeIpc('speleodb_logout');
         } finally {
           set({ pendingAuth: null, authError: null });
           get().clearSession();
+        }
+        // [#576 Q-W61-3-D1] Signed out, but a write lock the logout tried to hand back
+        // is still held on the server: say which project, and how to release it. A
+        // warning toast - the sign-out succeeded with a caveat, and nothing in the app
+        // can show the lock once the session is gone.
+        const leftHeld = report?.locks_left_held ?? [];
+        if (leftHeld.length > 0) {
+          useUIStore.getState().showToast(
+            i18n.t('settings.speleodb.account.locksLeftHeld', {
+              count: leftHeld.length,
+              projects: leftHeld.map((left) => `"${left.project_name}"`).join(', '),
+            }),
+            TOAST_KEYS.SPELEODB_LOGOUT_LOCKS_HELD,
+            'warning',
+          );
         }
       } else {
         const r = await invokeIpc('speleodb_login', {
