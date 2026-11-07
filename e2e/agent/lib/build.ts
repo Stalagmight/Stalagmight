@@ -779,7 +779,13 @@ export function runBuildCommand(command: string, options: { cwd: string; env: No
     // stdout too goes to stderr, NEVER to this process's stdout: under the MCP
     // server, stdout is the JSON-RPC stream and any build chatter (pnpm/vite log
     // to stdout) would corrupt the protocol framing.
-    const child = spawn(command, { ...options, shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    // `exec` so the shell becomes the build instead of waiting on it: then the
+    // pid `stopRunningBuilds` signals IS the build. bash does this by itself for
+    // a lone command, dash (`/bin/sh` on Debian/Ubuntu, CI's runners) does not,
+    // and a SIGTERM to the waiting shell left the build running and its pipes
+    // open (#576 RV20-16). cmd.exe has no `exec`; `child.kill` ends it there.
+    const shellCommand = process.platform === 'win32' ? command : `exec ${command}`;
+    const child = spawn(shellCommand, { ...options, shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
     runningBuilds.add(child);
     const write = (text: string): void => {
       process.stderr.write(text);
