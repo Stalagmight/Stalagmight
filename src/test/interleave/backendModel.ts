@@ -320,6 +320,8 @@ export class BackendModel {
         return this.history(command);
       case 'save_display_setting':
         return this.saveDisplaySetting(args ?? {});
+      case 'load_display_settings':
+        return ok(this.storedDisplayRows());
       case 'get_config':
         return ok(structuredClone(this.config));
       case 'patch_config': {
@@ -504,6 +506,18 @@ export class BackendModel {
     target.set(key, { value, writeId });
     this.landed.push({ writeId, key, value, storage, gen: open.gen });
     return ok(null);
+  }
+
+  /**
+   * display_settings.rs load_display_settings: the open project's stored rows, as
+   * stored (no defaults); none with no project open. The frontend re-reads them after
+   * a timed-out flush (#576 Q-W22S-1-D1).
+   */
+  private storedDisplayRows(): Record<string, string> {
+    const open = this.open;
+    if (!open) return {};
+    const stored = open.deferred ? open.cache : this.files.get(open.filePath!)?.display;
+    return Object.fromEntries([...(stored ?? new Map<string, { value: string }>())].map(([key, row]) => [key, row.value]));
   }
 
   /** The stored display value of `key` for the open project, defaults filled in. */

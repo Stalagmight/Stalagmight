@@ -184,7 +184,12 @@ Commands now run **concurrently**, which makes three rules explicit:
   session; the wait is bounded by `PROJECT_SETTING_FLUSH_TIMEOUT_MS` (2 s), and a
   write still queued then is dropped unsent. A display-setting write made once the
   flush started waits until the switch has committed or settled, and is dropped
-  unsent if a new session started meanwhile (it is sent if none did).
+  unsent if a new session started meanwhile (it is sent if none did). When the flush
+  drops writes, the switch then re-reads the stored display settings and shows the
+  stored value of each key whose newest write was dropped, and again once the write
+  it gave up on settles (`store/storedDisplaySettings.ts`). A later flush does not
+  wait for that write again: it drops the writes queued behind it at once (#576
+  Q-W22S-1-D1).
   An edit refused because a switch is under way shows a quiet "Wait for the project
   to finish opening." toast; saves refused the same way stay silent (#576
   Q-RVFc-1-D1).

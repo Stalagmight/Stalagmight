@@ -39,6 +39,17 @@ let droppedUpTo = 0;
 let flushedSwitchesDecided: Promise<void> | null = null;
 /** The chain keys `chainProjectSettingWrite` has used. */
 const projectSettingKeys = new Set<string>();
+/** Per chain key: the number of the newest write made, and of the newest one sent. */
+const lastQueued = new Map<string, number>();
+const lastSent = new Map<string, number>();
+/**
+ * [#576 Q-W22S-1-D1, Q-W44-1] Per chain key: the writes a flush gave up on (the
+ * key's tail when its bound ran out), until they settle, and the newest write a
+ * flush dropped there. A later flush does not wait for such a key again: it drops
+ * the writes queued behind it at once, as the bound would.
+ */
+const stuck = new Map<string, Promise<void>>();
+const droppedUpToByKey = new Map<string, number>();
 
 /**
  * Run `write` after every earlier write chained under `key` has settled, and
@@ -95,11 +106,14 @@ export function chainProjectSettingWrite<T>(
   projectWritesQueued += 1;
   const queued = projectWritesQueued;
   projectSettingKeys.add(key);
+  lastQueued.set(key, queued);
   return chainSettingWrite(key, async () => {
     if (madeDuringSwitch) await madeDuringSwitch;
-    if (queued <= droppedUpTo) return undefined;
+    if (queued <= droppedUpTo || queued <= (droppedUpToByKey.get(key) ?? 0)) return undefined;
     if (madeDuringSwitch && session !== projectSessionEpoch()) return undefined;
-    return stillTheProjectItWasMadeIn(madeFor, session) ? write(madeFor) : undefined;
+    if (!stillTheProjectItWasMadeIn(madeFor, session)) return undefined;
+    lastSent.set(key, queued);
+    return write(madeFor);
   });
 }
 
@@ -110,6 +124,18 @@ export function chainProjectSettingWrite<T>(
  * stalling the switch.
  */
 export const PROJECT_SETTING_FLUSH_TIMEOUT_MS = 2000;
+
+/** What {@link flushProjectSettingWrites} left behind. */
+export interface SettingFlushOutcome {
+  /**
+   * [#576 Q-W22S-1-D1] The chain keys it dropped a write of (one still queued, unsent,
+   * when it gave up): their value on screen may not be what is stored. Empty when
+   * every write queued before it settled in time.
+   */
+  dropped: string[];
+  /** Settles once the writes it gave up on have settled (at once when there are none). */
+  givenUpSettled: Promise<void>;
+}
 
 /**
  * [#576 FZ-FZ-INT-6] Settle the project-setting writes queued so far, before a load
@@ -122,8 +148,12 @@ export const PROJECT_SETTING_FLUSH_TIMEOUT_MS = 2000;
  * Bounded by {@link PROJECT_SETTING_FLUSH_TIMEOUT_MS}: a write still QUEUED (not yet
  * sent) when the bound runs out - one made during the wait included - is dropped
  * unsent; one already sent lands as it would have. With nothing queued it returns at once and arms no timer.
+ *
+ * [#576 Q-W22S-1-D1, Q-W44-1] The writes it gave up on are cleared from later
+ * flushes: one made later still queues behind them (same-key order holds), but the
+ * next flush drops it at once instead of waiting the full bound for them again.
  */
-export function flushProjectSettingWrites(timeoutMs = PROJECT_SETTING_FLUSH_TIMEOUT_MS): Promise<void> {
+export function flushProjectSettingWrites(timeoutMs = PROJECT_SETTING_FLUSH_TIMEOUT_MS): Promise<SettingFlushOutcome> {
   // [#576 W50-NF2] From here until the switch decides, a write made waits for it.
   const decided = switchesSoFarDecided();
   flushedSwitchesDecided = decided;
@@ -132,21 +162,54 @@ export function flushProjectSettingWrites(timeoutMs = PROJECT_SETTING_FLUSH_TIME
   });
   const pending = [...projectSettingKeys].flatMap((key) => {
     const tail = tails.get(key);
-    return tail ? [tail] : [];
+    return tail ? [{ key, tail }] : [];
   });
-  if (pending.length === 0) return Promise.resolve();
+  // A key a flush already gave up on: drop what is queued behind it now, without waiting.
+  const stillStuck = pending.filter(({ key }) => stuck.has(key));
+  const dropped = stillStuck.filter(({ key }) => hasUnsentWrite(key)).map(({ key }) => key);
+  for (const { key } of stillStuck) droppedUpToByKey.set(key, lastQueued.get(key) ?? 0);
+  const waitFor = pending.filter(({ key }) => !stuck.has(key));
+  const stuckSettled = Promise.all(stillStuck.map(({ key }) => stuck.get(key))).then(() => undefined);
+  if (waitFor.length === 0) return Promise.resolve({ dropped, givenUpSettled: stuckSettled });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<boolean>((resolve) => {
     timer = setTimeout(() => resolve(true), timeoutMs);
   });
-  const flushed = Promise.all(pending).then(() => false);
+  const flushed = Promise.all(waitFor.map(({ tail }) => tail)).then(() => false);
   return Promise.race([flushed, timedOut]).then((outOfTime) => {
     clearTimeout(timer);
+    if (!outOfTime) return { dropped, givenUpSettled: stuckSettled };
     // [#576 RVF-c-A2-3] Every write queued AT the timeout, those made during the wait
     // included: one made then queues behind the wedged write too, and would be sent
     // after the switch committed (a reload of the same file takes it).
-    if (outOfTime) droppedUpTo = Math.max(droppedUpTo, projectWritesQueued);
+    droppedUpTo = Math.max(droppedUpTo, projectWritesQueued);
+    const givenUp: Promise<void>[] = [];
+    for (const key of projectSettingKeys) {
+      const tail = tails.get(key);
+      if (!tail || stuck.has(key)) continue;
+      if (hasUnsentWrite(key)) dropped.push(key);
+      stuck.set(key, tail);
+      givenUp.push(tail);
+      void tail.then(() => {
+        if (stuck.get(key) === tail) stuck.delete(key);
+      });
+    }
+    return { dropped, givenUpSettled: Promise.all([stuckSettled, ...givenUp]).then(() => undefined) };
   });
+}
+
+/** Whether a write of `key` was made after the newest one sent: queued, or dropped unsent. */
+function hasUnsentWrite(key: string): boolean {
+  return (lastQueued.get(key) ?? 0) > (lastSent.get(key) ?? 0);
+}
+
+/**
+ * [#576 Q-W22S-1-D1] Whether the newest write of `key` made so far was dropped by a
+ * flush, unsent: the value on screen is that write's, and not what is stored.
+ */
+export function droppedWriteShown(key: string): boolean {
+  const newest = lastQueued.get(key) ?? 0;
+  return newest > (lastSent.get(key) ?? 0) && (newest <= droppedUpTo || newest <= (droppedUpToByKey.get(key) ?? 0));
 }
 
 /**

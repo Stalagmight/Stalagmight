@@ -27,7 +27,7 @@
  */
 import { mutationsSettled } from '../store/mutationQueue';
 import { noteSwitchRequested, savesSettled } from '../store/switchGate';
-import { flushProjectSettingWrites } from './settingWriteChain';
+import { flushProjectSettingWrites, type SettingFlushOutcome } from './settingWriteChain';
 
 /** What a running switch's work can ask about its turn. */
 export interface SwitchTurn {
@@ -60,6 +60,13 @@ export interface SwitchOptions<T> {
   onSuperseded?: () => unknown;
   /** Flush the queued display-setting writes before the work starts (load, close). */
   flushDisplayWrites?: boolean;
+  /**
+   * [#576 Q-W22S-1-D1] When that flush dropped writes (its bound ran out): show the
+   * stored value of their keys, given the chain keys. Called once the work is done,
+   * before the next switch starts, and again once the writes the flush gave up on
+   * have settled (they were sent, and may still land).
+   */
+  afterDroppedDisplayWrites?: (chainKeys: string[]) => Promise<void>;
   /**
    * Share the newest switch requested, while it has not settled, when it has the same
    * key: a load of the same path (a double click, a StrictMode re-mount) runs once.
@@ -123,8 +130,11 @@ export function runProjectSwitch<T>(
   const droppedOutcome = new Promise<T>((resolve) => {
     settleDropped = resolve;
   });
+  let flushed: SettingFlushOutcome | undefined;
   const ran = before
-    .then(() => (options.flushDisplayWrites && !dropped ? flushProjectSettingWrites() : undefined))
+    .then(async () => {
+      if (options.flushDisplayWrites && !dropped) flushed = await flushProjectSettingWrites();
+    })
     .then(async () => {
       if (dropped) return droppedOutcome;
       entry.started = true;
@@ -133,6 +143,14 @@ export function runProjectSwitch<T>(
       } finally {
         settle();
       }
+    })
+    .finally(async () => {
+      // [#576 Q-W22S-1-D1] Also when the switch was dropped while its flush waited.
+      const reread = options.afterDroppedDisplayWrites;
+      if (!reread || !flushed || flushed.dropped.length === 0) return;
+      const { dropped: keys, givenUpSettled } = flushed;
+      await reread(keys).catch(() => undefined);
+      void givenUpSettled.then(() => reread(keys)).catch(() => undefined);
     });
   const result = Promise.race([ran, droppedOutcome]);
   const entry: QueuedSwitch = {

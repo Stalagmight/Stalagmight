@@ -75,6 +75,7 @@ import { runProjectSwitch } from '../utils/projectTransition';
 import { expectedProjectOf, issuedAgainstOf, lostProjectOf, type IssuedAgainst } from './projectIssue';
 import { issueSave } from './switchGate';
 import { refuseEditDuringSwitch } from './switchEditNotice';
+import { showStoredDisplaySettings } from './storedDisplaySettings';
 import { loadRetryingReplacedFile } from './loadRetry';
 import { newLoadToken } from '../utils/loadToken';
 import { createProjectLoadingActions, initialLoadingState, loadCancelledByUser, type LoadingState, type ProjectLoadingActions } from './projectLoadingState';
@@ -1192,6 +1193,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       onSuperseded: () =>
         invokeIpc('cancel_loading', { loadToken }, { purpose: 'cancel project loading' }).catch(() => undefined),
       flushDisplayWrites: true, // [#576 FZ-FZ-INT-6]
+      afterDroppedDisplayWrites: showStoredDisplaySettings, // [#576 Q-W22S-1-D1]
     });
   },
 
@@ -1552,6 +1554,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         return refusedLocally('Already closing');
       },
       flushDisplayWrites: true, // [#576 FZ-FZ-INT-6]
+      afterDroppedDisplayWrites: showStoredDisplaySettings, // [#576 Q-W22S-1-D1]
     });
   },
 

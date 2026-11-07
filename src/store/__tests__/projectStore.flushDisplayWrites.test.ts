@@ -68,6 +68,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  releaseFirst?.(); // a write left held would hold every later write of its key
   for (const load of loads) load.reject({ code: 'CANCELLED', message: 'Loading cancelled' });
   await timerTurns(10);
 });
@@ -187,6 +188,84 @@ describe('a close or a load first flushes the queued display writes (#576 FZ-FZ-
 
     useUIStore.getState().setGridSpacing(50);
     await vi.waitFor(() => expect(sent).toContain('gridSpacing=50'));
+  });
+});
+
+// [#576 Q-W22S-1-D1, Q-W44-1] After a timed-out flush the switch shows what is stored,
+// and the write it gave up on no longer holds later switches for the full bound.
+describe('after a flush gave up (#576 Q-W22S-1-D1)', () => {
+  /** What `load_display_settings` answers: the stored rows. */
+  let stored: Record<string, string>;
+
+  beforeEach(() => {
+    stored = { gridSpacing: '10' };
+    const base = invokeIpcMock.getMockImplementation();
+    invokeIpcMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === 'load_display_settings') {
+        sent.push(command);
+        return Promise.resolve({ ...stored });
+      }
+      return base?.(command, args);
+    });
+  });
+
+  it('a switch that keeps the project open shows the stored value, not the dropped one', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    useUIStore.getState().setGridSpacing(20); // sent, wedged
+    await vi.waitFor(() => expect(releaseFirst).not.toBeNull());
+    useUIStore.getState().setGridSpacing(50); // queued behind it: dropped at the timeout
+    const reload = useProjectStore.getState().loadProject(CAVE_A);
+    await vi.advanceTimersByTimeAsync(PROJECT_SETTING_FLUSH_TIMEOUT_MS + 5);
+    await vi.waitFor(() => expect(loads).toHaveLength(1));
+    loads[0]?.reject({ code: 'ALREADY_OPEN', message: 'Project is already open' });
+    await reload;
+    await vi.advanceTimersByTimeAsync(5);
+
+    expect(useUIStore.getState().gridSpacing, `sent: ${sent.join(', ')}`).toBe(10);
+
+    // The wedged write lands after all: the screen follows what is stored then.
+    stored = { gridSpacing: '20' };
+    releaseFirst?.();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(useUIStore.getState().gridSpacing).toBe(20);
+    expect(sent.filter((s) => s.startsWith('gridSpacing='))).toEqual(['gridSpacing=20']);
+  });
+
+  it('a later switch does not wait for the write the flush gave up on', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    useUIStore.getState().setGridSpacing(20); // sent, wedged
+    await vi.waitFor(() => expect(releaseFirst).not.toBeNull());
+    const reload = useProjectStore.getState().loadProject(CAVE_A);
+    await vi.advanceTimersByTimeAsync(PROJECT_SETTING_FLUSH_TIMEOUT_MS + 5);
+    await vi.waitFor(() => expect(loads).toHaveLength(1));
+    loads[0]?.reject({ code: 'ALREADY_OPEN', message: 'Project is already open' });
+    await reload;
+
+    const closing = useProjectStore.getState().closeProject();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(sent, `sent: ${sent.join(', ')}`).toContain('close_project');
+    expect(await closing).toMatchObject({ success: true });
+    releaseFirst?.();
+  });
+
+  it('a write queued behind it is dropped by the next switch, at once', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    useUIStore.getState().setGridSpacing(20); // sent, wedged
+    await vi.waitFor(() => expect(releaseFirst).not.toBeNull());
+    const reload = useProjectStore.getState().loadProject(CAVE_A);
+    await vi.advanceTimersByTimeAsync(PROJECT_SETTING_FLUSH_TIMEOUT_MS + 5);
+    await vi.waitFor(() => expect(loads).toHaveLength(1));
+    loads[0]?.reject({ code: 'ALREADY_OPEN', message: 'Project is already open' });
+    await reload;
+    useUIStore.getState().setGridSpacing(70); // queued behind the wedged write
+
+    const closing = useProjectStore.getState().closeProject();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(sent, `sent: ${sent.join(', ')}`).toContain('close_project');
+    expect(await closing).toMatchObject({ success: true });
+    releaseFirst?.(); // after the close: the queued write must not follow it
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sent.filter((s) => s.startsWith('gridSpacing='))).toEqual(['gridSpacing=20']);
   });
 });
 
