@@ -4,15 +4,15 @@
     {
       "name": "arm_app_update_restart",
       "module": "app_update",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "()",
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -169,8 +169,8 @@
         "ts": "AppUpdateCheck"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -946,8 +946,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1948,15 +1948,15 @@
     {
       "name": "install_app_update_and_restart",
       "module": "app_update",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "()",
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4358,15 +4358,15 @@
     {
       "name": "unarm_app_update_restart",
       "module": "app_update",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "()",
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {

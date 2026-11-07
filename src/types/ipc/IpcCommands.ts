@@ -119,7 +119,7 @@ import type { WorkspaceMode } from "./WorkspaceMode";
  * (`never`: it does not return a `Result`; `unknown`: its type is not generated yet).
  */
 export interface IpcCommands {
-  arm_app_update_restart: { args: Record<string, never>; result: null; error: string };
+  arm_app_update_restart: { args: Record<string, never>; result: null; error: CommandError };
   attempt_repair: { args: { path: string }; result: RepairResult; error: CommandError };
   calculate_file_hash: { args: { path: string }; result: string; error: CommandError };
   can_redo: { args: Record<string, never>; result: boolean; error: CommandError };
@@ -127,7 +127,7 @@ export interface IpcCommands {
   cancel_loading: { args: Record<string, never>; result: null; error: CommandError };
   check_create_target: { args: { name: string; saveDirectory?: string | null; savePath?: string | null }; result: null; error: CommandError };
   check_duplicate_import: { args: { hash: string }; result: boolean; error: CommandError };
-  check_for_app_update: { args: Record<string, never>; result: AppUpdateCheck; error: string };
+  check_for_app_update: { args: Record<string, never>; result: AppUpdateCheck; error: CommandError };
   check_merge_connectivity: { args: { stationA: StationRef; stationB: StationRef }; result: ConnectivityResult; error: CommandError };
   check_project_integrity: { args: Record<string, never>; result: IntegrityCheckResult; error: CommandError };
   check_salvage_source: { args: { path: string }; result: null; error: CommandError };
@@ -150,7 +150,7 @@ export interface IpcCommands {
   delete_shot_and_split: { args: { sectionId: number; shotId: number; nameA: string; nameB: string }; result: SectionCreated; error: CommandError };
   delete_shot_range_shift: { args: { sectionId: number; startShotId: number; endShotId: number }; result: EditOutcome; error: CommandError };
   delete_shot_range_split: { args: { sectionId: number; startShotId: number; endShotId: number; nameA: string; nameB: string }; result: SectionCreated; error: CommandError };
-  download_app_update: { args: Record<string, never>; result: null; error: string };
+  download_app_update: { args: Record<string, never>; result: null; error: CommandError };
   execute_batch: { args: { commands: Array<Command> }; result: BatchOutcome; error: CommandError };
   execute_compass_import: { args: { path: string; fileHash?: string | null; includeExcluded: boolean; applyCorrections: boolean; commentsOnStations: boolean }; result: ImportOutcome; error: CommandError };
   execute_gpx_import: { args: { path: string; fileHash?: string | null; importWaypoints: boolean; importTracks: boolean; importRoutes: boolean; sectionPlacements: Array<GpxSectionPlacement>; depthInverted: boolean }; result: ImportOutcome; error: CommandError };
@@ -191,7 +191,7 @@ export interface IpcCommands {
   history_discarded: { args: Record<string, never>; result: boolean; error: CommandError };
   import_dmp: { args: { path: string }; result: DmpFile; error: CommandError };
   import_sections: { args: { sections: Array<ImportSectionConfig>; fileHash?: string | null; sectionHashes?: Array<string> | null; existingShotUpdates?: Array<ExistingShotUpdate> | null; virtualShotMode?: VirtualShotMode | null; sourceLabel?: string | null; sourceFileName?: string | null; sectionsFound?: number | null; sourceWarnings?: Array<string> | null }; result: ImportOutcome; error: CommandError };
-  install_app_update_and_restart: { args: Record<string, never>; result: null; error: string };
+  install_app_update_and_restart: { args: Record<string, never>; result: null; error: CommandError };
   is_telemetry_available: { args: Record<string, never>; result: boolean; error: CommandError };
   list_backups: { args: { path: string }; result: Array<BackupInfo>; error: CommandError };
   list_dive_plans: { args: Record<string, never>; result: Array<DivePlanMeta>; error: CommandError };
@@ -291,7 +291,7 @@ export interface IpcCommands {
   take_pending_launch_files: { args: Record<string, never>; result: Array<string>; error: CommandError };
   take_unrecognised_shot_kinds: { args: { loadingId: number }; result: Array<UnrecognisedShotKind>; error: CommandError };
   track_events: { args: { events: Record<string, number>; projectSeq: number }; result: null; error: CommandError };
-  unarm_app_update_restart: { args: Record<string, never>; result: null; error: string };
+  unarm_app_update_restart: { args: Record<string, never>; result: null; error: CommandError };
   undo: { args: Record<string, never>; result: HistoryOutcome; error: CommandError };
   undo_to: { args: { index: number }; result: HistoryOutcome; error: CommandError };
   unmerge_station_pair: { args: { stationA: StationRef; stationB: StationRef }; result: EditOutcome; error: CommandError };

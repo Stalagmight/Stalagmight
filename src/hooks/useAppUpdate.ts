@@ -1,11 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
 import { invokeIpc } from '../utils/ipc';
+import { IPC_EVENTS, listenIpc } from '../utils/ipcEvents';
 import { debugLog } from '../utils/debugLog';
 import { useProjectStore } from '../store/projectStore';
 import { useUpdateStore } from '../store/updateStore';
-import type { AppUpdateCheck } from '../types/ipc/AppUpdateCheck';
-import type { AppUpdateProgress } from '../types/ipc/AppUpdateProgress';
 import type { UpdateTrack } from '../types/ipc/UpdateTrack';
 
 /** How long after config loads before the automatic launch check fires (#579). */
@@ -63,7 +62,7 @@ export async function runAppUpdateCheck(): Promise<AppUpdateCheckOutcome> {
   // (a track switch, a second press of the About button) cannot land.
   const seq = store.beginCheck();
   try {
-    const result = await invokeIpc<AppUpdateCheck>('check_for_app_update', undefined, {
+    const result = await invokeIpc('check_for_app_update', undefined, {
       purpose: 'check for app update',
     });
     // The setters drop a stale write on their own; this is the CALLER's half of
@@ -122,7 +121,7 @@ export function useAppUpdate(): void {
     let unlisten: UnlistenFn | undefined;
     (async () => {
       try {
-        const fn = await listen<AppUpdateProgress>('app-update:download-progress', (event) => {
+        const fn = await listenIpc(IPC_EVENTS.APP_UPDATE_DOWNLOAD_PROGRESS, (event) => {
           useUpdateStore.getState().setProgress(event.payload);
         });
         if (disposed) fn();

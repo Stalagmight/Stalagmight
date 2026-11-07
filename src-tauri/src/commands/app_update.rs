@@ -37,18 +37,23 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::task::Poll;
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::utils::config::BundleType;
-use tauri::{AppHandle, Emitter, State, Url};
+use tauri::{AppHandle, Manager, Runtime, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use ts_rs::TS;
 
+use super::event_sink::emit_event;
+use super::pool;
 use crate::config::UpdateTrack;
-use crate::core::AppState;
+use crate::core::events::AppUpdateDownloadProgress;
+pub use crate::core::events::AppUpdateProgress;
+use crate::core::{AppState, CommandError, CommandErrorCode};
+use crate::models::poison_policy::RecoveringMutex;
 
 /// Endpoint override for the update manifest.
 ///
@@ -75,9 +80,6 @@ const TRUSTED_MANIFEST_HOST: &str = "github.com";
 
 /// Release-notes landing page for an offered version. Tags are `v<version>`.
 const RELEASE_TAG_URL_PREFIX: &str = "https://github.com/Stalagmight/Stalagmight/releases/tag/v";
-
-/// Progress event the frontend listens on during [`download_app_update`].
-pub const DOWNLOAD_PROGRESS_EVENT: &str = "app-update:download-progress";
 
 /// Emit at most one progress event per this many bytes.
 ///
@@ -144,23 +146,6 @@ pub enum AppUpdateStatus {
     },
 }
 
-/// Payload of [`DOWNLOAD_PROGRESS_EVENT`].
-///
-/// `total` is `None` when the server sent no `Content-Length`; the frontend
-/// then has bytes-so-far but no percentage, which is a real state and not an
-/// error.
-#[derive(Debug, Clone, Copy, Serialize, TS)]
-pub struct AppUpdateProgress {
-    /// `number` in TS, not ts-rs's default `bigint` for `u64`: serde_json puts a
-    /// plain JSON number on the wire, so a `bigint` declaration would typecheck
-    /// against arithmetic that throws at runtime. Bounded by
-    /// [`MAX_UPDATE_BYTES`], nowhere near 2^53.
-    #[ts(type = "number")]
-    pub downloaded: u64,
-    #[ts(type = "number | null")]
-    pub total: Option<u64>,
-}
-
 /// Where in the check -> download -> install cycle we are.
 ///
 /// The [`Update`] cannot be rebuilt from anything the frontend holds (it
@@ -193,16 +178,23 @@ struct Pending {
 /// Its own managed struct rather than a field on `AppState`: `AppState` is the
 /// survey document and its undo stack, and this outlives every project the user
 /// opens. `PendingLaunchFiles` sets the same precedent.
-#[derive(Default)]
-pub struct AppUpdateState(Mutex<Pending>);
+///
+/// A [`RecoveringMutex`] like every other lock in the backend (#576 A11,
+/// docs/architecture.md "Mutex Poisoning"): a poisoned cell is recovered and
+/// raises the internal-error banner. The install alone refuses one instead
+/// ([`take_for_install`]), because it would hand whatever a crashed holder left
+/// to the installer.
+pub struct AppUpdateState(RecoveringMutex<Pending>);
+
+impl Default for AppUpdateState {
+    fn default() -> Self {
+        Self(RecoveringMutex::new("app_update", Pending::default()))
+    }
+}
 
 impl AppUpdateState {
-    fn with<T>(&self, f: impl FnOnce(&mut Pending) -> T) -> Result<T, String> {
-        let mut pending = self
-            .0
-            .lock()
-            .map_err(|_| "The update state is unusable; restart the app".to_owned())?;
-        Ok(f(&mut pending))
+    fn with<T>(&self, f: impl FnOnce(&mut Pending) -> T) -> T {
+        f(&mut self.0.lock())
     }
 }
 
@@ -381,7 +373,7 @@ fn download_abort_reason(downloaded: u64, content_length: Option<u64>) -> Option
 /// forbids.
 fn checked_update(update_state: &AppUpdateState) -> Result<(u64, Update), String> {
     update_state
-        .with(|pending| pending.update.clone().map(|u| (pending.generation, u)))?
+        .with(|pending| pending.update.clone().map(|u| (pending.generation, u)))
         .ok_or_else(|| "No update to download; check for updates first".to_owned())
 }
 
@@ -406,7 +398,7 @@ fn store_downloaded_bytes(
         }
         pending.bytes = Some((generation, bytes));
         Ok(())
-    })?
+    })
 }
 
 /// Arm the one-shot install consent. [`arm_app_update_restart`]'s whole body,
@@ -423,7 +415,7 @@ fn arm_restart(update_state: &AppUpdateState) -> Result<(), String> {
         }
         pending.restart_armed = true;
         Ok(())
-    })?
+    })
 }
 
 /// Spend the install consent and take everything the install needs, in ONE
@@ -469,7 +461,24 @@ fn take_installable(pending: &mut Pending) -> Result<(u64, Update, Vec<u8>), Str
 /// The authorised bytes, the [`Update`] that will apply them, and the
 /// generation both belong to.
 fn installable_update(update_state: &AppUpdateState) -> Result<(u64, Update, Vec<u8>), String> {
-    update_state.with(take_installable)?
+    update_state.with(take_installable)
+}
+
+/// What the install takes, refused outright when the cell is poisoned.
+///
+/// The one updater operation that does not recover a poisoned cell (#576 A11):
+/// a crash while the cell was held may have left the bytes, the `Update` and
+/// the generation half-paired, and this is the step that hands them to the
+/// installer - exactly what the generation exists to prevent. Every other step
+/// only reads or replaces the offer, and a re-check rebuilds it from scratch.
+fn take_for_install(update_state: &AppUpdateState) -> Result<(u64, Update, Vec<u8>), CommandError> {
+    update_state.0.refuse_if_poisoned().map_err(|refused| {
+        CommandError::new(
+            CommandErrorCode::RefusedAfterInternalError,
+            format!("The update was not installed: {refused}; restart the app and update again"),
+        )
+    })?;
+    installable_update(update_state).map_err(CommandError::failed)
 }
 
 /// Put bytes back after a failed install - but only if they are still the
@@ -480,16 +489,12 @@ fn installable_update(update_state: &AppUpdateState) -> Result<(u64, Update, Vec
 /// mispairing: old bytes filed under the new generation, ready for the next
 /// arm to hand them to a different version's installer. They are dropped
 /// instead, and the banner's re-check offers the new download.
-fn restore_bytes_if_current(
-    update_state: &AppUpdateState,
-    generation: u64,
-    bytes: Vec<u8>,
-) -> Result<(), String> {
+fn restore_bytes_if_current(update_state: &AppUpdateState, generation: u64, bytes: Vec<u8>) {
     update_state.with(|pending| {
         if pending.generation == generation {
             pending.bytes = Some((generation, bytes));
         }
-    })
+    });
 }
 
 /// Ask this track's manifest whether a newer build exists.
@@ -505,12 +510,21 @@ fn restore_bytes_if_current(
 /// out of the manifests until Developer ID signing is live), and neither is
 /// something the user can act on. A transport failure IS an error, so the
 /// frontend can stay quiet about it rather than claim the app is current.
+///
+/// [#576 C2/C4] `async` (the network wait runs on the async runtime, never on the
+/// main thread) and answers a [`CommandError`]: `FAILED`, with the message
+/// below. The frontend routes on none of them - a failed check goes quietly to
+/// idle - so no update code of its own is needed.
 #[tauri::command]
-pub async fn check_for_app_update(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    update_state: State<'_, AppUpdateState>,
-) -> Result<AppUpdateCheck, String> {
+pub async fn check_for_app_update<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<AppUpdateCheck, CommandError> {
+    check(&app).await.map_err(CommandError::failed)
+}
+
+/// [`check_for_app_update`]'s body.
+async fn check<R: Runtime>(app: &AppHandle<R>) -> Result<AppUpdateCheck, String> {
+    let update_state = app.state::<AppUpdateState>();
     // The plugin is not registered without a pubkey (see `updater_configured`),
     // and `updater_builder()` PANICS on its unmanaged state - so this guard is
     // load-bearing, not defensive.
@@ -527,7 +541,7 @@ pub async fn check_for_app_update(
         return Err(refusal);
     }
     let current_version = app.package_info().version.to_string();
-    let track = state.get_config().general.update_track;
+    let track = app.state::<AppState>().get_config().general.update_track;
     let endpoint = endpoint_for_track(track);
     let url = Url::parse(&endpoint)
         .map_err(|e| format!("Update endpoint '{endpoint}' is not a valid URL: {e}"))?;
@@ -568,7 +582,7 @@ pub async fn check_for_app_update(
             pending.update = None;
             pending.bytes = None;
             pending.restart_armed = false;
-        })?;
+        });
         return Ok(AppUpdateCheck {
             status: AppUpdateStatus::UpToDate,
             current_version,
@@ -584,7 +598,7 @@ pub async fn check_for_app_update(
         pending.update = Some(update);
         pending.bytes = None;
         pending.restart_armed = false;
-    })?;
+    });
 
     Ok(AppUpdateCheck {
         status: AppUpdateStatus::Available {
@@ -601,11 +615,17 @@ pub async fn check_for_app_update(
 /// are held in memory until [`install_app_update_and_restart`] asks for them;
 /// the plugin has already checked them against the baked-in minisign public key
 /// by the time this returns.
+///
+/// [#576 C2/C4] `async`, the download awaited on the async runtime; failures are
+/// `FAILED` [`CommandError`]s.
 #[tauri::command]
-pub async fn download_app_update(
-    app: AppHandle,
-    update_state: State<'_, AppUpdateState>,
-) -> Result<(), String> {
+pub async fn download_app_update<R: Runtime>(app: AppHandle<R>) -> Result<(), CommandError> {
+    download(&app).await.map_err(CommandError::failed)
+}
+
+/// [`download_app_update`]'s body.
+async fn download<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let update_state = app.state::<AppUpdateState>();
     let (generation, update) = checked_update(&update_state)?;
 
     // Shared with the progress closure, which runs inside the download future
@@ -635,7 +655,7 @@ pub async fn download_app_update(
                 if downloaded - emitted_at >= PROGRESS_EMIT_BYTES || content_length != total {
                     emitted_at = downloaded;
                     total = content_length;
-                    emit_progress(&app, downloaded, total);
+                    emit_progress(app, downloaded, total);
                 }
             },
             || {},
@@ -649,9 +669,8 @@ pub async fn download_app_update(
             // The throttle can swallow the tail, and a bar stuck at 97% reads
             // as a hang; the finished size is also the one the frontend can
             // assert on.
-            emit_progress(&app, downloaded, total);
-            store_downloaded_bytes(&update_state, generation, bytes)?;
-            Ok(())
+            emit_progress(app, downloaded, total);
+            store_downloaded_bytes(&update_state, generation, bytes)
         }
         Some(Err(e)) => Err(format!("Update download failed: {e}")),
         // The abort path. `reason` is always set alongside the flag; the
@@ -686,11 +705,13 @@ async fn abortable<F: Future>(mut fut: Pin<&mut F>, abort: &AtomicBool) -> Optio
     .await
 }
 
-fn emit_progress(app: &AppHandle, downloaded: u64, total: Option<u64>) {
-    if let Err(e) = app.emit(
-        DOWNLOAD_PROGRESS_EVENT,
-        AppUpdateProgress { downloaded, total },
-    ) {
+/// [#576 C13] Through the event manifest: the name and payload are
+/// [`AppUpdateDownloadProgress`]'s, so the frontend listens with
+/// `listenIpc(IPC_EVENTS.APP_UPDATE_DOWNLOAD_PROGRESS, ...)`.
+fn emit_progress<R: Runtime>(app: &AppHandle<R>, downloaded: u64, total: Option<u64>) {
+    if let Err(e) =
+        emit_event::<AppUpdateDownloadProgress, R>(app, AppUpdateProgress { downloaded, total })
+    {
         // A dropped progress tick is cosmetic; the download itself carries on.
         tracing::warn!(
             error = %e,
@@ -731,9 +752,14 @@ fn emit_progress(app: &AppHandle, downloaded: u64, total: Option<u64>) {
 ///
 /// Refusing to arm without a current download is the other half: the consent is
 /// bound to one specific, already-verified bundle, not to "whatever is next".
+///
+/// [#576 C2] `async`, the body on the blocking pool like every command's.
 #[tauri::command]
-pub fn arm_app_update_restart(update_state: State<AppUpdateState>) -> Result<(), String> {
-    arm_restart(update_state.inner())
+pub async fn arm_app_update_restart<R: Runtime>(app: AppHandle<R>) -> Result<(), CommandError> {
+    pool::run_stateless(move || {
+        arm_restart(app.state::<AppUpdateState>().inner()).map_err(CommandError::failed)
+    })
+    .await
 }
 
 /// Put the safety catch back.
@@ -743,8 +769,13 @@ pub fn arm_app_update_restart(update_state: State<AppUpdateState>) -> Result<(),
 /// so a restart the user walked away from cannot be completed by a later,
 /// unrelated window close.
 #[tauri::command]
-pub fn unarm_app_update_restart(update_state: State<AppUpdateState>) -> Result<(), String> {
-    update_state.with(|pending| pending.restart_armed = false)
+pub async fn unarm_app_update_restart<R: Runtime>(app: AppHandle<R>) -> Result<(), CommandError> {
+    pool::run_stateless(move || {
+        app.state::<AppUpdateState>()
+            .with(|pending| pending.restart_armed = false);
+        Ok(())
+    })
+    .await
 }
 
 /// Install the downloaded update and relaunch into it.
@@ -761,30 +792,41 @@ pub fn unarm_app_update_restart(update_state: State<AppUpdateState>) -> Result<(
 ///
 /// On failure the bytes are put back, so the restart can be retried - through
 /// the guarded path, which re-arms - without downloading again.
+///
+/// [#576 C2] `async`, the body on the blocking pool like every command's.
 #[tauri::command]
-pub fn install_app_update_and_restart(
-    app: AppHandle,
-    update_state: State<'_, AppUpdateState>,
-) -> Result<(), String> {
-    let (generation, update, bytes) = installable_update(&update_state)?;
+pub async fn install_app_update_and_restart<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<(), CommandError> {
+    pool::run_stateless(move || install_and_restart(&app)).await
+}
+
+/// [`install_app_update_and_restart`]'s body. Never returns on success.
+fn install_and_restart<R: Runtime>(app: &AppHandle<R>) -> Result<(), CommandError> {
+    let update_state = app.state::<AppUpdateState>();
+    let (generation, update, bytes) = take_for_install(&update_state)?;
 
     if let Err(e) = update.install(&bytes) {
         // Filed under the generation they were DOWNLOADED for, not whatever is
         // current now - see `restore_bytes_if_current`.
-        restore_bytes_if_current(&update_state, generation, bytes)?;
-        return Err(format!("Update install failed: {e}"));
+        restore_bytes_if_current(&update_state, generation, bytes);
+        return Err(CommandError::failed(format!("Update install failed: {e}")));
     }
     app.restart();
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test fixtures fail loudly; one test panics a holder to POISON the cell on purpose"
+)]
 mod tests {
     use super::*;
 
     /// The endpoint override is process-global, so the tests that touch it take
     /// this first. Without it they race each other and read one another's value.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Restores whatever the variable held (including "unset") on drop, so a
     /// developer running the suite with a real override exported does not have
@@ -1084,9 +1126,7 @@ mod tests {
         let err = refusal(installable_update(&state));
         assert!(err.contains("not armed"), "{err}");
         // ...and the refusal did not consume the download.
-        assert!(state
-            .with(|pending| pending.bytes.is_some())
-            .expect("lockable"));
+        assert!(state.with(|pending| pending.bytes.is_some()));
     }
 
     /// The arm is one-shot: consumed by the install attempt it authorised, so a
@@ -1097,21 +1137,15 @@ mod tests {
         seed_download(&state, 1);
         arm_restart(&state).expect("arming a ready download should work");
 
-        assert!(state
-            .with(|pending| pending.restart_armed)
-            .expect("lockable"));
+        assert!(state.with(|pending| pending.restart_armed));
 
         // An `Update` cannot be constructed outside a live plugin, so the
         // attempt gets all the way to the LAST check and stops there - which is
         // itself the proof that the arm and the bytes were accepted and taken.
         let attempt = refusal(installable_update(&state));
         assert!(attempt.contains("No update to install"), "{attempt}");
-        assert!(!state
-            .with(|pending| pending.restart_armed)
-            .expect("lockable"));
-        assert!(state
-            .with(|pending| pending.bytes.is_none())
-            .expect("lockable"));
+        assert!(!state.with(|pending| pending.restart_armed));
+        assert!(state.with(|pending| pending.bytes.is_none()));
 
         let second = refusal(installable_update(&state));
         assert!(second.contains("not armed"), "{second}");
@@ -1124,9 +1158,7 @@ mod tests {
         let state = AppUpdateState::default();
         seed_download(&state, 1);
         arm_restart(&state).expect("arming a ready download should work");
-        state
-            .with(|pending| pending.restart_armed = false)
-            .expect("lockable");
+        state.with(|pending| pending.restart_armed = false);
 
         let err = refusal(installable_update(&state));
         assert!(err.contains("not armed"), "{err}");
@@ -1139,26 +1171,20 @@ mod tests {
     #[test]
     fn a_check_during_a_download_refuses_the_late_bytes() {
         let state = AppUpdateState::default();
-        let generation = state
-            .with(|pending| {
-                pending.generation = 7;
-                pending.generation
-            })
-            .expect("lockable");
+        let generation = state.with(|pending| {
+            pending.generation = 7;
+            pending.generation
+        });
 
         // A second check lands mid-download.
-        state
-            .with(|pending| {
-                pending.generation += 1;
-                pending.bytes = None;
-            })
-            .expect("lockable");
+        state.with(|pending| {
+            pending.generation += 1;
+            pending.bytes = None;
+        });
 
         let err = refusal(store_downloaded_bytes(&state, generation, vec![0u8; 8]));
         assert!(err.contains("newer update check"), "{err}");
-        assert!(state
-            .with(|pending| pending.bytes.is_none())
-            .expect("lockable"));
+        assert!(state.with(|pending| pending.bytes.is_none()));
     }
 
     /// ...and from the install's side, for any way a stale pair could still be
@@ -1169,9 +1195,7 @@ mod tests {
         seed_download(&state, 3);
         arm_restart(&state).expect("arming a ready download should work");
         // The check that invalidates it lands after the arm.
-        state
-            .with(|pending| pending.generation = 4)
-            .expect("lockable");
+        state.with(|pending| pending.generation = 4);
 
         let err = refusal(installable_update(&state));
         assert!(err.contains("no longer matches"), "{err}");
@@ -1183,16 +1207,12 @@ mod tests {
     #[test]
     fn a_failed_install_restores_bytes_while_the_offer_stands() {
         let state = AppUpdateState::default();
-        state
-            .with(|pending| pending.generation = 5)
-            .expect("lockable");
+        state.with(|pending| pending.generation = 5);
 
-        restore_bytes_if_current(&state, 5, vec![7u8; 3]).expect("lockable");
+        restore_bytes_if_current(&state, 5, vec![7u8; 3]);
 
         assert_eq!(
-            state
-                .with(|pending| pending.bytes.clone())
-                .expect("lockable"),
+            state.with(|pending| pending.bytes.clone()),
             Some((5, vec![7u8; 3]))
         );
     }
@@ -1205,21 +1225,15 @@ mod tests {
     #[test]
     fn a_failed_install_drops_bytes_a_newer_check_superseded() {
         let state = AppUpdateState::default();
-        state
-            .with(|pending| pending.generation = 5)
-            .expect("lockable");
+        state.with(|pending| pending.generation = 5);
 
         // The install was running under generation 5; a check landed and made
         // it 6 before the failure came back.
-        state
-            .with(|pending| pending.generation = 6)
-            .expect("lockable");
-        restore_bytes_if_current(&state, 5, vec![7u8; 3]).expect("lockable");
+        state.with(|pending| pending.generation = 6);
+        restore_bytes_if_current(&state, 5, vec![7u8; 3]);
 
         assert!(
-            state
-                .with(|pending| pending.bytes.is_none())
-                .expect("lockable"),
+            state.with(|pending| pending.bytes.is_none()),
             "bytes from a superseded offer must not be filed under the new one"
         );
     }
@@ -1284,12 +1298,10 @@ mod tests {
     #[test]
     fn a_download_for_the_current_check_is_stored() {
         let state = AppUpdateState::default();
-        let generation = state.with(|pending| pending.generation).expect("lockable");
+        let generation = state.with(|pending| pending.generation);
         store_downloaded_bytes(&state, generation, vec![1u8; 4]).expect("should store");
         assert_eq!(
-            state
-                .with(|pending| pending.bytes.clone())
-                .expect("lockable"),
+            state.with(|pending| pending.bytes.clone()),
             Some((generation, vec![1u8; 4]))
         );
     }
@@ -1298,11 +1310,49 @@ mod tests {
     /// `Update` (which needs a live plugin). Anything that needs the `Update`
     /// itself is covered by the command-level paths, not here.
     fn seed_download(state: &AppUpdateState, generation: u64) {
-        state
-            .with(|pending| {
-                pending.generation = generation;
-                pending.bytes = Some((generation, vec![0u8; 16]));
+        state.with(|pending| {
+            pending.generation = generation;
+            pending.bytes = Some((generation, vec![0u8; 16]));
+        });
+    }
+
+    /// Poison the cell the way a crash would: a holder panics.
+    fn poison(state: &AppUpdateState) {
+        let _ = std::thread::scope(|s| {
+            s.spawn(|| {
+                let _guard = state.0.lock();
+                panic!("poison the update state on purpose");
             })
-            .expect("lockable");
+            .join()
+        });
+        assert!(state.0.is_poisoned(), "precondition: the cell is poisoned");
+    }
+
+    /// [#576 A11] The install is the one step that refuses a poisoned cell, with
+    /// the code that says why - it would hand the installer whatever a crashed
+    /// holder left. Master refused every step there; the rest now recover.
+    #[test]
+    fn a_poisoned_state_refuses_the_install_and_recovers_for_the_rest() {
+        let state = AppUpdateState::default();
+        seed_download(&state, 3);
+        state.with(|pending| pending.restart_armed = true);
+        poison(&state);
+
+        let refused = take_for_install(&state)
+            .err()
+            .expect("the install must refuse");
+        assert_eq!(refused.code, CommandErrorCode::RefusedAfterInternalError);
+        assert!(
+            state.with(|pending| pending.restart_armed && pending.bytes.is_some()),
+            "a refused install spends nothing"
+        );
+
+        // The other steps read the recovered state and answer as they always do.
+        assert!(
+            arm_restart(&state).is_ok(),
+            "arming a ready download still works"
+        );
+        let err = refusal(checked_update(&state).map(|_| ()));
+        assert!(err.contains("check for updates first"), "{err}");
     }
 }

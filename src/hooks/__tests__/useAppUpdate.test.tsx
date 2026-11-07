@@ -11,8 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/react';
 import { StrictMode } from 'react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc');
 
 const listenMock = vi.hoisted(() => vi.fn(async () => vi.fn()));
 vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));
@@ -20,6 +19,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));
 import { useAppUpdate, resetAppUpdateLaunchCheckForTests, runAppUpdateCheck } from '../useAppUpdate';
 import { useProjectStore } from '../../store/projectStore';
 import { useUpdateStore } from '../../store/updateStore';
+import { invokeIpcMock } from '../../test/factories/ipc';
 import { defaultConfig } from '../../types/config';
 import type { Config } from '../../types/config';
 

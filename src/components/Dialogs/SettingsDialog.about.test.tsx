@@ -9,17 +9,16 @@ import userEvent from '@testing-library/user-event';
 
 import '../../i18n';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
-}));
+vi.mock('../../utils/ipc');
 
 import SettingsDialog from './SettingsDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig } from '../../types/config';
+import { errorMessageOrString, invokeIpcMock, stubGetErrorMessage } from '../../test/factories/ipc';
+
+stubGetErrorMessage(errorMessageOrString);
 
 beforeEach(() => {
   invokeIpcMock.mockReset();

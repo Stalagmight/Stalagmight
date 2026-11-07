@@ -13,8 +13,7 @@ import userEvent from '@testing-library/user-event';
 const openUrlMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: openUrlMock }));
 
-const invokeIpcMock = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc');
 
 const closeMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('@tauri-apps/api/window', () => ({
@@ -25,6 +24,7 @@ import { UpdateBanner } from '../UpdateBanner';
 import { useUpdateStore } from '../../store/updateStore';
 import { useUIStore } from '../../store/uiStore';
 import { resetUpdateRestartForTests } from '../../utils/quit';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
 const INFO = { version: '9.9.9', notesUrl: 'https://example.test/notes' };
 
