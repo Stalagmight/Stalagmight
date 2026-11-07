@@ -74,28 +74,28 @@ fn record_landing(link: &mut crate::models::SpeleoLink, new_base: Option<&str>, 
 }
 
 /// [#576 Q-W44-6-D1] [`record_landing`] in the link row of `made_for.file`, through a
-/// handle of its own: `Ok(false)` when that file holds no link, or a link to another
-/// project or deployment than the push read.
+/// handle of its own: the link as written, or `Ok(None)` when that file holds no link,
+/// or a link to another project or deployment than the push read.
 fn record_landing_in_file(
     made_for: &UploadMadeFor<'_>,
     new_base: Option<&str>,
     push_start: &str,
-) -> Result<bool, String> {
+) -> Result<Option<crate::models::SpeleoLink>, String> {
     let db =
         crate::persistence::Database::open_existing(made_for.file).map_err(|e| e.to_string())?;
     let Some(mut link) = db.load_speleo_link().map_err(|e| e.to_string())? else {
-        return Ok(false);
+        return Ok(None);
     };
     let same_project = link.project_id == made_for.link.project_id
         && crate::speleodb::auth::normalize_endpoint(&link.endpoint)
             == crate::speleodb::auth::normalize_endpoint(&made_for.link.endpoint);
     if !same_project {
-        return Ok(false);
+        return Ok(None);
     }
     record_landing(&mut link, new_base, push_start);
     db.save_speleo_link(Some(&link))
         .map_err(|e| e.to_string())?;
-    Ok(true)
+    Ok(Some(link))
 }
 
 /// Sanitize a push SNAPSHOT copy before upload: clear the dirty bit and strip the
@@ -1567,6 +1567,15 @@ impl AppState {
     /// Only the link: the undo history the commit carried stays in that file (its
     /// stack is not the one in memory), as after a crash between the upload and the
     /// local bookkeeping.
+    ///
+    /// [#576 SDB-ACCT-D1] And the lock: the switch's (or close's) silent release ran
+    /// while this copy was still dirty, so the un-pushed-edits veto kept the lock.
+    /// When the landing leaves the copy clean, that lock is released the way the
+    /// silent release would have released a clean copy: the veto's claim is taken
+    /// out under the same `project` guard as the write, and the reclaim-checked
+    /// release runs detached once the guard is dropped
+    /// ([`Self::speleodb_release_kept_lock_detached`]). A lock the user chose to keep
+    /// ("Keep lock"), or a copy an edit after the push start left dirty, stays held.
     fn speleodb_record_landed_upload_in_file(
         &self,
         made_for: &UploadMadeFor<'_>,
@@ -1587,16 +1596,31 @@ impl AppState {
             return;
         }
         let recorded = record_landing_in_file(made_for, new_base, push_start);
+        let kept_lock = match &recorded {
+            Ok(Some(link)) if !link.has_unpushed_edits => {
+                self.speleodb_take_claim_kept_for_unpushed_edits(&link.project_id, &link.endpoint)
+            }
+            _ => None,
+        };
         drop(open);
+        if let Some((params, claim)) = kept_lock {
+            tracing::info!(
+                project_id = %params.project_id,
+                purpose = "release a lock kept over edits a landed push has uploaded (#576 SDB-ACCT-D1)",
+                "speleodb: the copy switched away from is clean now; releasing the lock the \
+                 silent release kept for its un-pushed edits"
+            );
+            self.speleodb_release_kept_lock_detached(params, claim);
+        }
         match recorded {
-            Ok(true) => tracing::info!(
+            Ok(Some(_)) => tracing::info!(
                 path = %made_for.file.display(),
                 project_id = %made_for.link.project_id,
                 new_base = ?new_base,
                 purpose = "record a push whose project was switched away mid-verb (#576 Q-W44-6-D1)",
                 "speleodb: recorded the landed push in the link of the project it was made for"
             ),
-            Ok(false) => tracing::warn!(
+            Ok(None) => tracing::warn!(
                 path = %made_for.file.display(),
                 project_id = %made_for.link.project_id,
                 purpose = "record a push whose project was switched away mid-verb (#576 Q-W44-6-D1)",

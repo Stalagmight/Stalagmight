@@ -45,6 +45,7 @@
 
 use std::time::Duration;
 
+use super::speleodb_session::KeptFor;
 use super::AppState;
 use crate::speleodb::client;
 use crate::speleodb::SpeleoDbError;
@@ -237,7 +238,7 @@ impl AppState {
             // the stranded-claim janitor cleans up - and it would hand back the
             // mutex this veto just protected, freeing the project for the next
             // editor to lock and push over work that is still only local.
-            self.speleodb_keep_lock_deliberately(&link.project_id);
+            self.speleodb_keep_lock_deliberately(&link.project_id, KeptFor::UnpushedEdits);
             return None;
         }
         // Same reasoning as the link read above: anything `speleodb_active_token`
@@ -328,7 +329,7 @@ impl AppState {
                 purpose = "honour the user's Keep lock choice past the close",
                 "speleodb: keeping the write lock held after closing the project"
             );
-            self.speleodb_keep_lock_deliberately(&link.project_id);
+            self.speleodb_keep_lock_deliberately(&link.project_id, KeptFor::UserChoice);
         }
     }
 
@@ -659,6 +660,57 @@ impl AppState {
         // Drop the receiver: the release still runs on its thread (best-effort); we
         // just don't wait for or read the result.
         let _ = self.speleodb_spawn_lock_release();
+    }
+
+    /// [#576 SDB-ACCT-D1] Release, on a detached thread, a lock the un-pushed-edits
+    /// veto kept at a project switch or close, once a push that was in flight then
+    /// has landed and left that copy clean
+    /// (`AppState::speleodb_take_claim_kept_for_unpushed_edits` took the claim and
+    /// the params). The way the switch releases a clean copy
+    /// ([`Self::speleodb_release_held_lock_detached`]): off the caller's thread,
+    /// reclaim-checked - a session that has reopened the project and claimed its
+    /// lock since keeps it - and with the claim put back when the POST fails, so
+    /// the janitor can retry. No gate to shut: the session that edited under it is
+    /// gone. Without managed state (unit tests, pre-`setup`) the raw POST.
+    pub(super) fn speleodb_release_kept_lock_detached(
+        &self,
+        params: LockReleaseParams,
+        claim: super::speleodb_session::LockClaim,
+    ) {
+        let sink = self.get_event_sink();
+        std::thread::spawn(move || {
+            let ran = sink.is_some_and(|sink| {
+                // Clones for the fallback below: a `false` return means the
+                // closure was never run.
+                let p = params.clone();
+                sink.with_app_state(Box::new(move |state| {
+                    if let Err(e) = state.speleodb_release_unless_reclaimed(&p) {
+                        tracing::warn!(
+                            error = %e,
+                            project_id = %p.project_id,
+                            purpose = "release a lock kept over edits a landed push has uploaded",
+                            "speleodb: the release failed; the claim is kept for a retry"
+                        );
+                        state.speleodb_restore_lock_claim(Some(claim));
+                    }
+                }))
+            });
+            if !ran {
+                if let Err(e) = client::release_lock(
+                    &params.endpoint,
+                    &params.token,
+                    params.insecure_http,
+                    &params.project_id,
+                ) {
+                    tracing::warn!(
+                        error = %e,
+                        project_id = %params.project_id,
+                        purpose = "release a lock kept over edits a landed push has uploaded",
+                        "speleodb: the release failed"
+                    );
+                }
+            }
+        });
     }
 
     /// Release a held write lock with a hard deadline, for the app-exit path: run

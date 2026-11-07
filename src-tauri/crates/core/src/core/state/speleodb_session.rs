@@ -112,7 +112,13 @@ pub(super) struct LockClaim {
     /// Cleared by a fresh acquisition, which replaces the whole claim: taking
     /// the lock again is a new decision, and the next release is the ordinary
     /// one.
-    kept: bool,
+    ///
+    /// [#576 SDB-ACCT-D1] Carries WHY, because one of the two reasons can lapse: a
+    /// push in flight when the veto kept the lock can land afterwards and leave the
+    /// copy clean, and that lock is then released the way the silent release would
+    /// have released a clean copy ([`KeptFor::UnpushedEdits`]). The user's "Keep
+    /// lock" never lapses that way.
+    kept: Option<KeptFor>,
     /// [#576 RV4-R-S3] Whether this claim records a lock the held-lock prompt's
     /// "Continue editing" RESUMED rather than one this process acquired.
     ///
@@ -122,6 +128,16 @@ pub(super) struct LockClaim {
     /// on a second computer while the first is still editing under it, and that
     /// session must not explain the first one's commits away as its own push.
     resumed: bool,
+}
+
+/// Why a claim's lock is being held back on purpose (see [`LockClaim::kept`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KeptFor {
+    /// The close dialog's "Keep lock": the user asked for it.
+    UserChoice,
+    /// The un-pushed-edits veto declined a silent release (close, project switch,
+    /// logout, quit): the copy held edits that were not on the server.
+    UnpushedEdits,
 }
 
 impl LockClaim {
@@ -135,7 +151,7 @@ impl LockClaim {
             project_id: project_id.to_owned(),
             endpoint,
             email,
-            kept: false,
+            kept: None,
             resumed: false,
         }
     }
@@ -156,7 +172,7 @@ impl LockClaim {
 
     /// Whether this lock is deliberately held back (see [`LockClaim::kept`]).
     pub(super) fn is_kept(&self) -> bool {
-        self.kept
+        self.kept.is_some()
     }
 
     /// Whether this claim belongs to the account `(endpoint, email)` names -
@@ -948,16 +964,81 @@ impl AppState {
     /// claims nobody ever decided about. Without the mark the two are the same
     /// state once the project closes (a claim, no project open), so the next
     /// status poll handed the mutex back and the decision was silently undone.
-    pub(super) fn speleodb_keep_lock_deliberately(&self, project_id: &str) {
+    /// `why` records which decision it was (see [`LockClaim::kept`]).
+    pub(super) fn speleodb_keep_lock_deliberately(&self, project_id: &str, why: KeptFor) {
         let mut session = self.speleodb.lock();
         let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
         for claim in &mut session.locks_acquired_here {
             if claim.project_id == project_id
                 && claim.taken_by(endpoint.as_deref(), email.as_deref())
             {
-                claim.kept = true;
+                claim.kept = Some(why);
             }
         }
+    }
+
+    /// [#576 SDB-ACCT-D1] Take out this account's claim on `project_id` (a lock on
+    /// `endpoint`'s deployment) when the un-pushed-edits veto is what kept it, with
+    /// what its release needs: the signed-in account's credentials, read in the
+    /// same session acquisition as the claim is matched and removed.
+    ///
+    /// For a landed push recorded in a file the session has switched away from or
+    /// closed (`AppState::speleodb_record_landed_upload`): the silent release kept
+    /// the lock because that copy was still dirty, the landing has left it clean,
+    /// and the lock is now released the way that release would have released a
+    /// clean copy. The claim comes back with its mark cleared, so a failed release
+    /// that restores it leaves a claim the janitor retries, as after a switch over
+    /// a clean copy. `None` - nothing taken - when no such claim exists: none at
+    /// all, one the user kept on purpose ("Keep lock"), another account's or
+    /// another deployment's, or nobody signed in.
+    pub(super) fn speleodb_take_claim_kept_for_unpushed_edits(
+        &self,
+        project_id: &str,
+        endpoint: &str,
+    ) -> Option<(LockReleaseParams, LockClaim)> {
+        let (live_endpoint, token, email) = self.speleodb_active_account().ok()?;
+        let insecure_http = self.speleodb_insecure_http();
+        let mut session = self.speleodb.lock();
+        // The account read above must still be the one signed in: a login landing
+        // between the two reads would pair its token with another account's claim.
+        let still_signed_in = session
+            .email
+            .as_deref()
+            .is_some_and(|signed_in| signed_in.eq_ignore_ascii_case(&email))
+            && session.endpoint.as_deref().is_some_and(|signed_in| {
+                normalize_endpoint(signed_in) == normalize_endpoint(&live_endpoint)
+            });
+        if !still_signed_in {
+            return None;
+        }
+        let position = session.locks_acquired_here.iter().position(|claim| {
+            claim.project_id == project_id
+                && claim.kept == Some(KeptFor::UnpushedEdits)
+                && claim.on_deployment(endpoint)
+                && claim.taken_by(Some(&live_endpoint), Some(&email))
+        })?;
+        let claim = session.locks_acquired_here.remove(position);
+        // The unwind slot must not hand back a lock this release is ending (the
+        // same rule as `speleodb_forget_lock_acquired_inner`).
+        if session
+            .acquired_by_this_flow
+            .as_ref()
+            .is_some_and(|flow| flow.is_same_lock(&claim))
+        {
+            session.acquired_by_this_flow = None;
+        }
+        Some((
+            LockReleaseParams {
+                endpoint: live_endpoint,
+                token,
+                insecure_http,
+                project_id: project_id.to_owned(),
+            },
+            LockClaim {
+                kept: None,
+                ..claim
+            },
+        ))
     }
 
     /// Put a claim back after a clear whose reason turned out not to happen.
@@ -1840,7 +1921,7 @@ mod tests {
         let state = AppState::new().expect("state");
         sign_in_as(&state, &base, "diver@example.com");
         state.speleodb_note_lock_acquired(Some(ID));
-        state.speleodb_keep_lock_deliberately(ID);
+        state.speleodb_keep_lock_deliberately(ID, super::KeptFor::UserChoice);
 
         state.speleodb_janitor_stranded_claim();
 
