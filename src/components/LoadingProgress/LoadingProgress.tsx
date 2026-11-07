@@ -16,6 +16,14 @@ export interface LoadingProgressProps {
     message: string;
     details?: string | undefined;
   };
+  /**
+   * Set by the project loading window, a blocking modal layer: its error state is
+   * then a modal alert dialog (`role="alertdialog"`, `aria-modal`, labelled by its
+   * heading, described by the message) and its progress state is `aria-modal`.
+   * Left unset where the progress shows inline inside another dialog (the export
+   * dialog), which must not claim to be modal.
+   */
+  modal?: boolean;
 }
 
 /** Clamp a number to [0, 100], treating NaN/Infinity as 0 */
@@ -34,6 +42,7 @@ export function LoadingProgress({
   onCancel,
   onRetry,
   error,
+  modal = false,
 }: LoadingProgressProps) {
   const { t } = useTranslation();
   const [detailsExpanded, setDetailsExpanded] = React.useState(false);
@@ -42,6 +51,7 @@ export function LoadingProgress({
   const titleId = React.useId();
   const phaseId = React.useId();
   const detailsId = React.useId();
+  const messageId = React.useId();
 
   // Ref for cleanup of feedback timeout
   const feedbackTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -90,17 +100,24 @@ export function LoadingProgress({
     return (
       <div
         className="w-80 bg-panel rounded-lg shadow-lg p-6"
-        role="alert"
-        aria-live="assertive"
+        // [NF4] In the loading window the error holds the app until Retry or
+        // Dismiss: a modal alert dialog, named by its heading, that the window
+        // moves focus into - so no live region on top, which would announce it a
+        // second time. Anywhere else it stays an inline alert.
+        role={modal ? 'alertdialog' : 'alert'}
+        aria-modal={modal || undefined}
+        aria-labelledby={modal ? titleId : undefined}
+        aria-describedby={modal ? messageId : undefined}
+        aria-live={modal ? undefined : 'assertive'}
         data-testid="loading-progress"
       >
         {/* Error Title */}
-        <h2 className="text-lg font-medium text-error mb-2">
+        <h2 id={titleId} className="text-lg font-medium text-error mb-2">
           {t('loading.error.title')}
         </h2>
 
         {/* Error Message */}
-        <p className="text-text-secondary mb-3">
+        <p id={messageId} className="text-text-secondary mb-3">
           {error.message}
         </p>
 
@@ -172,6 +189,7 @@ export function LoadingProgress({
     <div
       className="w-80 bg-panel rounded-lg shadow-lg p-6"
       role="dialog"
+      aria-modal={modal || undefined}
       aria-labelledby={titleId}
       aria-describedby={phaseId}
       data-testid="loading-progress"

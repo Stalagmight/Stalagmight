@@ -121,3 +121,20 @@ describe('ProjectLoadingOverlay keyboard focus (W71-NF1)', () => {
     expect(screen.queryByTestId('project-loading-overlay')).toBeNull();
   });
 });
+
+// [NF4] The window's error state holds the app until Retry or Dismiss: a modal
+// alert dialog named by its heading, which focus moves into.
+describe('ProjectLoadingOverlay error state (NF4)', () => {
+  it('is a modal alert dialog named by its heading and described by its message, with focus inside', () => {
+    renderBehind();
+    screen.getByTestId('behind').focus();
+    holdLoad();
+    expect(screen.getByRole('dialog', { name: 'Loading CaveB...' })).toHaveAttribute('aria-modal', 'true');
+    failLoad();
+    const dialog = screen.getByRole('alertdialog', { name: 'Loading error' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAccessibleDescription('Could not read the project file.');
+    expect(dialog).toContainElement(screen.getByTestId('loading-error-details-toggle'));
+    expect(screen.getByTestId('loading-error-details-toggle')).toHaveFocus();
+  });
+});

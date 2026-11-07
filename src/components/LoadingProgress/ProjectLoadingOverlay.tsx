@@ -72,6 +72,7 @@ export function ProjectLoadingOverlay({ retrySource, occupiesScreen = false }: P
   return (
     <LoadingWindow hasError={Boolean(loading.error)}>
       <LoadingProgress
+        modal
         title={
           loading.error
             ? t('globalView.loading.failedTitle')
