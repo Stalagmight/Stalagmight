@@ -555,6 +555,29 @@ function openedProjectCleared(): Partial<ProjectStore> {
 }
 
 /**
+ * [#576 W75-NF1] The open file's flags a load answer carries (`speleodb_open_file_flags`
+ * reads the backend session's own cells), for the ALREADY_OPEN re-read, which has no
+ * load answer. Empty when the read fails: the store keeps what it shows, as the in-place
+ * tree swap does (`speleoTreeReplacement.ts`).
+ */
+async function readOpenFileFlags(): Promise<Partial<ProjectStore>> {
+  try {
+    const flags = await invokeIpc('speleodb_open_file_flags', undefined, {
+      purpose: 're-read the open file flags for a project the store did not show',
+    });
+    if (!flags) return {};
+    return {
+      newerSchemaVersion: flags.newerSchemaVersion,
+      speleoLinkUnreadable: flags.speleoLinkUnreadable,
+      unreadableProjectSettings: flags.unreadableProjectSettings,
+    };
+  } catch (e) {
+    console.error('Failed to read the open file flags for the ALREADY_OPEN re-read:', e);
+    return {};
+  }
+}
+
+/**
  * The per-project UI resets a load runs once the store shows the project it opened,
  * before `setView('single')` paints it. Shared, like {@link openedProjectCleared}, by
  * `loadProject`'s success path and its ALREADY_OPEN re-read (#576 W71-NF3).
@@ -1102,6 +1125,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // [#576 RVF-a-2] The backend has `path` open, but the store may not show it: the
           // backend re-checks "already open" at its commit, after a load of `path` whose
           // answer was not applied. Read what the backend has, as a new session.
+          // [#576 W75-NF1] Also after a webview reload (F5 / Ctrl+R in WebView2): the
+          // backend outlives the page, so the project it kept open is opened from a store
+          // that shows none.
           const reread = get().project?.file_path !== path;
           if (reread) {
             noteProjectSessionChanged();
@@ -1111,10 +1137,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             // resets it again with the rest.
             useGasPlanStore.getState().reset();
             const displaySettings = await readStoredDisplaySettings();
+            // [#576 W75-NF1] The open file's newer-file verdict and unreadable flags come
+            // only with a load answer, which this branch never has: read them from the
+            // backend's session, as the in-place tree swap does.
+            const flags = await readOpenFileFlags();
             await get().refreshProjectState();
             // [#576 W71-NF3] And every other reset a load runs for the project it opens,
             // through the same two helpers; the backend has `path` open from its file.
-            set({ databaseOpen: true, ...openedProjectCleared(), ...LOAD_REPAIRS_CLEARED });
+            set({ databaseOpen: true, ...openedProjectCleared(), ...LOAD_REPAIRS_CLEARED, ...flags });
             resetUiForOpenedProject(displaySettings);
           }
           // #270 (hardening): resolve the edit gate SYNCHRONOUSLY when nothing has
