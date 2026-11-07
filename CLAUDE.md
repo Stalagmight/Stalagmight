@@ -105,6 +105,8 @@ pnpm test:ui:smoke                                        # the @smoke merge gat
 pnpm lint:private-leaks:test && pnpm lint:private-leaks   # no internal/personal refs in the public tree
 pnpm lint:no-em-dash:test && pnpm lint:no-em-dash         # Unicode-dash guard
 pnpm lint:third-party:test && pnpm lint:third-party       # THIRD-PARTY-LICENSES.md matches the lockfiles (regen: pnpm gen:third-party)
+pnpm lint:updater-pubkey:test && pnpm lint:updater-pubkey # the committed updater pubkey and endpoints are well-formed (#579)
+pnpm gen:updater-manifest:test                            # updater manifest generator fixture test (#579)
 pnpm lint:prepush-checklist:test && pnpm lint:prepush-checklist # this block lists every gate CI runs
 ```
 
