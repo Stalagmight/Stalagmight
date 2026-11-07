@@ -1399,7 +1399,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       clearProjectActionSource();
       const message = getErrorMessage(e);
       // [#576 FZ-FZ-INT-1] Not when a newer switch is waiting: nobody is creating this one now.
-      if (get().loading.clientOpId === clientOpId && !turn.superseded) {
+      // The loading state is still this create's (a newer close or delete never touches it,
+      // #576 RVF-c-A1-1): end it here, as loadProject does.
+      if (turn.superseded) {
+        if (get().loading.clientOpId === clientOpId) get().resetLoading();
+        return emptyCommandResult(false, message);
+      }
+      if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(message, commandErrorOf(e)?.details);
       }
       return emptyCommandResult(false, message);

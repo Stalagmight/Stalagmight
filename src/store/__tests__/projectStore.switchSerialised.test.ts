@@ -20,6 +20,7 @@ import { deferred, timerTurns, type Deferred } from '../../test/factories/async'
 import { invokeIpcMock } from '../../test/factories/ipc';
 import { makeProject } from '../../test/factories/survey';
 import { useProjectStore } from '../projectStore';
+import { switchUnderWay } from '../switchGate';
 
 const loadBinaryMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc');
@@ -170,5 +171,36 @@ describe('project switches run one at a time, latest wins (#576 FZ-FZ-INT-1)', (
     expect(await newest).toEqual({ success: true });
     expect(sent).not.toContain('create_project_full');
     expect(sent).not.toContain('close_project');
+  });
+
+  it('a create a close supersedes, which then fails, takes its loading state down (#576 RVF-c-A1-1)', async () => {
+    // A close never touches the loading state, so the superseded create must end its own.
+    useProjectStore.setState({
+      project: makeProject({ created_at: '2026-05-01T10:00:00Z', file_path: '/caves/Open.stalx' }),
+    } as never);
+    const createReply = deferred<never>();
+    const backend = invokeIpcMock.getMockImplementation()!;
+    invokeIpcMock.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      if (command !== 'create_project_full') return backend(command, ...rest);
+      sent.push(command);
+      return createReply.promise;
+    });
+
+    const create = useProjectStore.getState().createProject('New cave');
+    await timerTurns(5);
+    expect(sent).toContain('create_project_full');
+    expect(useProjectStore.getState().loading.isLoading).toBe(true);
+    const close = useProjectStore.getState().closeProject();
+    await timerTurns(5);
+    createReply.reject({ code: 'IO', message: 'disk full' });
+
+    expect(await create).toMatchObject({ success: false, error: 'disk full' });
+    expect(await close).toMatchObject({ success: true });
+    await timerTurns(5);
+    const { loading } = useProjectStore.getState();
+    expect(loading.isLoading, `loading after the failed create: ${JSON.stringify(loading)}`).toBe(false);
+    expect(loading.error).toBeUndefined();
+    expect(switchUnderWay()).toBe(false);
+    expect(sent).toEqual(['cancel_loading', 'create_project_full', 'close_project']);
   });
 });
