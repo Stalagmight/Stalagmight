@@ -363,11 +363,20 @@ pub(crate) fn windows_path_refusal(path: &str, own_name: Option<&str>) -> Option
 /// (also as an `ipv6-literal.net` name, `--1.ipv6-literal.net`), or `own_name` -
 /// alone or as the start of a domain name. A trailing dot (the fully qualified
 /// form) and letter case do not matter.
+///
+/// [#576 PR #594 review] The unspecified address too, `0.0.0.0` in any of
+/// those spellings and `::` (also IPv4-mapped, or as `--.ipv6-literal.net`):
+/// no remote server has it, and what a connection to it reaches is the local
+/// machine's choice. Winsock's `connect` refuses it (`WSAEADDRNOTAVAIL`, "such
+/// as INADDR_ANY or in6addr_any"), but the SMB redirector connects from the
+/// kernel, which that documentation does not cover, and Linux connects it to
+/// this computer (`127.0.0.1`, `::1`). Refusing it costs no user anything.
 fn is_this_computer(server: &str, own_name: Option<&str>) -> bool {
     let server = server.trim_end_matches('.').to_ascii_lowercase();
     if server == "localhost"
         || (server.starts_with("127.") && server.bytes().all(|b| b.is_ascii_digit() || b == b'.'))
-        || ipv4_any_form(&server).is_some_and(|address| address.is_loopback())
+        || ipv4_any_form(&server)
+            .is_some_and(|address| address.is_loopback() || address.is_unspecified())
     {
         return true;
     }
@@ -384,7 +393,11 @@ fn is_this_computer(server: &str, own_name: Option<&str>) -> bool {
         |name| name.split('s').next().unwrap_or_default().replace('-', ":"),
     );
     if v6.parse::<std::net::Ipv6Addr>().is_ok_and(|address| {
-        address.is_loopback() || address.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        address.is_loopback()
+            || address.is_unspecified()
+            || address
+                .to_ipv4_mapped()
+                .is_some_and(|v4| v4.is_loopback() || v4.is_unspecified())
     }) {
         return true;
     }
