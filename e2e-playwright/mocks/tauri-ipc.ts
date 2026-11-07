@@ -3,6 +3,7 @@ import type { CommandError } from '../../src/types/ipc/CommandError';
 import type { RemoteLinkBits } from '../../src/types/ipc/RemoteLinkBits';
 import type { MockCommandFamily, MockCommandName, MockIpcContext, MockReply } from './ipc/types';
 import { defaultConfig } from '../../src/types/ipc/defaultConfig';
+import { appUpdateCommands } from './ipc/appUpdate';
 import { compassImportCommands } from './ipc/compassImport';
 import { configCommands } from './ipc/config';
 import { deletePreviewCommands } from './ipc/deletePreviews';
@@ -57,6 +58,7 @@ const MOCK_COMMAND_FAMILIES: MockCommandFamily[] = [
   exportCommands,
   deletePreviewCommands,
   historyDiscardedCommands,
+  appUpdateCommands,
 ];
 
 /**
