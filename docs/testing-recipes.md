@@ -572,6 +572,15 @@ the gap between them; a check of the generator's pool (which swarm profiles
 exist) keeps its own seeds. A knob that is not an integer (or a count below 1) fails the
 file instead of running no seeds.
 
+That gap is the limit. `customRender.test.ts` is the one file whose two seeded
+loops start apart (seeds 1.. and 101..), so their windows stay disjoint only up
+to a count of 100. Past that they overlap: with
+`STALAGMIGHT_VITEST_SEED_COUNT=500` the second loop's window is the first's plus
+100, so 400 of its seeds are ones the first loop already ran (the same random
+surveys) rather than fresh ones. Nothing fails, but those seeds add no new
+coverage to that loop. Keep the count at 100 or below for that file when its
+two windows should stay disjoint (#576 Q-W44-8).
+
 The real-app replay mode for the agent-harness fuzzers is in
 [Agent Harness](agent-harness.md) (`STALAGMIGHT_FUZZ_DETERMINISM`).
 
