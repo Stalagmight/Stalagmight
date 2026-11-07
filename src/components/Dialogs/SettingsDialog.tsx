@@ -40,6 +40,8 @@ import { humanizeSpeleoError } from '../../utils/speleoError';
 import { AboutMapImagery } from './AboutMapImagery';
 import { configPatches } from '../../utils/configPatches';
 import { useShallow } from 'zustand/react/shallow';
+import { runAppUpdateCheck } from '../../hooks/useAppUpdate';
+import { buildDefaultUpdateTrack } from '../../utils/updateTrack';
 
 /**
  * Deep comparison of two config objects to detect changed field paths.
@@ -96,7 +98,11 @@ export function getCategoryDefaults(
 ): Partial<Config> {
   switch (category) {
     case 'general':
-      return { general: { ...defaultConfig.general } };
+      // `update_track` overridden, not taken from the snapshot: its default is
+      // a property of the BUILD. See `buildDefaultUpdateTrack`.
+      return {
+        general: { ...defaultConfig.general, update_track: buildDefaultUpdateTrack() },
+      };
     case 'units':
       return { units: { ...defaultConfig.units } };
     case 'gas':
@@ -415,6 +421,44 @@ export default function SettingsDialog() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   // About dialog state
   const [showAbout, setShowAbout] = useState(false);
+  // Manual "Check for updates" state (#579) - inline result text, no toast.
+  //
+  // The check itself goes through `runAppUpdateCheck`, the SAME path the launch
+  // hook uses, so it drives the update store as well. Keeping a private result
+  // here made the two disagree in both directions: this text promised "see the
+  // update banner" for a banner the store never learned to show, and the
+  // backend check (which discards any parked download) ran underneath a banner
+  // still offering "Restart to update" - a restart that could then only fail.
+  // What stays local is only the presentation: which sentence to show, and the
+  // version pair to show in it.
+  const [checkUpdatesState, setCheckUpdatesState] = useState<
+    'idle' | 'checking' | 'up_to_date' | 'available' | 'failed'
+  >('idle');
+  const [checkUpdatesVersions, setCheckUpdatesVersions] = useState<{
+    current: string;
+    available: string | null;
+  } | null>(null);
+  const handleCheckUpdates = useCallback(async () => {
+    const previous = checkUpdatesState;
+    setCheckUpdatesState('checking');
+    const outcome = await runAppUpdateCheck();
+    // A newer check (a track switch, a second press) already owns the store, so
+    // this reply was never applied to it. Rendering it anyway would put a line
+    // on screen that contradicts the banner - keep whatever was there before.
+    if (outcome.kind === 'stale') {
+      setCheckUpdatesState(previous === 'checking' ? 'idle' : previous);
+      return;
+    }
+    if (outcome.kind === 'failed') {
+      setCheckUpdatesState('failed');
+      return;
+    }
+    setCheckUpdatesVersions({
+      current: outcome.currentVersion,
+      available: outcome.kind === 'available' ? outcome.version : null,
+    });
+    setCheckUpdatesState(outcome.kind);
+  }, [checkUpdatesState]);
 
   // Initialize local config from store
   useEffect(() => {
@@ -742,7 +786,10 @@ export default function SettingsDialog() {
             <div className="flex justify-between gap-2 px-4 py-3 border-t border-border bg-panel">
               <Button
                 variant="secondary"
-                onClick={() => setShowAbout(true)}
+                onClick={() => {
+                  setCheckUpdatesState('idle');
+                  setShowAbout(true);
+                }}
                 data-testid="settings-about-button"
               >
                 {t('dialogs.about.title')}
@@ -848,6 +895,56 @@ export default function SettingsDialog() {
               a bug report still has to identify which build it came from. */}
           <p className="text-xs text-text-secondary" data-testid="about-commit">
             {t('dialogs.about.build', { commit: __APP_COMMIT__ })}
+          </p>
+          {/* Only shown for a non-stable build - a stable release says nothing
+              extra, matching the version line users already read. */}
+          {__APP_CHANNEL__ !== 'stable' && (
+            <p className="text-xs text-text-secondary" data-testid="about-channel">
+              {t('dialogs.about.channel', { channel: __APP_CHANNEL__ })}
+            </p>
+          )}
+          {/* The PERSISTED track, not the staged `localConfig` one. The check
+              button below runs a backend command that reads the config from
+              disk, so showing the staged value made the line disagree with the
+              behaviour it sits next to: stage Weekly, do not Save, press Check,
+              and the label said Weekly while the query went to Stable. A staged
+              change is called out instead of silently displayed. */}
+          <p className="text-xs text-text-secondary" data-testid="about-update-track">
+            {t('dialogs.about.track', {
+              track: t(`settings.general.updateTrack.options.${config?.general.update_track ?? 'stable'}`),
+            })}
+            {localConfig && config && localConfig.general.update_track !== config.general.update_track && (
+              <span className="ml-1 text-warning" data-testid="about-update-track-pending">
+                {t('dialogs.about.trackPending')}
+              </span>
+            )}
+          </p>
+          <p>
+            <Button
+              variant="secondary"
+              onClick={handleCheckUpdates}
+              disabled={checkUpdatesState === 'checking'}
+              data-testid="about-check-updates"
+            >
+              {t('dialogs.about.checkUpdates')}
+            </Button>
+            {checkUpdatesState !== 'idle' && checkUpdatesState !== 'checking' && (
+              <span
+                className={`ml-2 text-sm ${checkUpdatesState === 'failed' ? 'text-warning' : 'text-text-secondary'}`}
+                data-testid="about-check-updates-result"
+              >
+                {checkUpdatesState === 'up_to_date' &&
+                  checkUpdatesVersions &&
+                  t('dialogs.about.upToDate', { current: checkUpdatesVersions.current })}
+                {checkUpdatesState === 'available' &&
+                  checkUpdatesVersions?.available &&
+                  t('dialogs.about.updateAvailable', {
+                    current: checkUpdatesVersions.current,
+                    version: checkUpdatesVersions.available,
+                  })}
+                {checkUpdatesState === 'failed' && t('dialogs.about.checkFailed')}
+              </span>
+            )}
           </p>
           <p className="text-sm text-text-secondary">{t('dialogs.about.description')}</p>
           <p>

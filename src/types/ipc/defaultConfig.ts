@@ -18,7 +18,9 @@ export const defaultConfig: Config = {
     "onboarding_completed_flows": [],
     "onboarding_first_launch_done": false,
     "telemetry_enabled": false,
-    "telemetry_opt_in_shown": false
+    "telemetry_opt_in_shown": false,
+    "update_track": "stable",
+    "update_check_enabled": true
   },
   "units": {
     "length": "meters",

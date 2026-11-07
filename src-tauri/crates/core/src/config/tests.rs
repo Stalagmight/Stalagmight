@@ -1795,6 +1795,126 @@ fn test_general_config_shortcut_feedback_roundtrip() {
 }
 
 // ========================================================================
+// UpdateTrack / update-check Tests (#579)
+// ========================================================================
+
+#[test]
+fn test_update_track_default_follows_the_build_channel() {
+    // `option_env!` is read when this crate is COMPILED, so the answer here is
+    // a property of how the test binary was built: an ordinary build has no
+    // STALAGMIGHT_CHANNEL and must land on Stable, a weekly CI build compiles
+    // the same expression with `weekly` and must land on Weekly. Pinning both
+    // arms is what catches the default being flipped outright.
+    let expected = match option_env!("STALAGMIGHT_CHANNEL") {
+        Some("weekly") => UpdateTrack::Weekly,
+        _ => UpdateTrack::Stable,
+    };
+    assert_eq!(UpdateTrack::default(), expected);
+    assert_eq!(GeneralConfig::default().update_track, expected);
+}
+
+#[test]
+fn test_update_track_serializes_snake_case() {
+    #[derive(Serialize)]
+    struct Wrapper {
+        value: UpdateTrack,
+    }
+    for (value, expected) in [
+        (UpdateTrack::Stable, "value = \"stable\""),
+        (UpdateTrack::Weekly, "value = \"weekly\""),
+    ] {
+        let serialized = toml::to_string(&Wrapper { value }).expect("Should serialize");
+        assert!(
+            serialized.contains(expected),
+            "expected {expected} in {serialized}"
+        );
+    }
+}
+
+#[test]
+fn test_update_track_deserializes_snake_case() {
+    #[derive(Deserialize)]
+    struct Wrapper {
+        value: UpdateTrack,
+    }
+    for (input, expected) in [
+        ("value = \"stable\"", UpdateTrack::Stable),
+        ("value = \"weekly\"", UpdateTrack::Weekly),
+    ] {
+        let w: Wrapper = toml::from_str(input).expect("Should deserialize");
+        assert_eq!(w.value, expected);
+    }
+}
+
+/// An unrecognised track is REJECTED, not silently coerced - the same contract
+/// `ShortcutFeedback` and every other config enum has (no `#[serde(other)]`
+/// arm). Pinned because a future `other` arm would turn a typo in the config
+/// file into a silent switch of release track.
+#[test]
+fn test_update_track_rejects_an_unknown_value() {
+    #[derive(Debug, Deserialize)]
+    struct Wrapper {
+        #[expect(dead_code)]
+        value: UpdateTrack,
+    }
+    let err = toml::from_str::<Wrapper>("value = \"nightly\"").expect_err("Should reject");
+    assert!(
+        err.to_string().contains("nightly") || err.to_string().contains("unknown variant"),
+        "unhelpful error: {err}"
+    );
+}
+
+#[test]
+fn test_general_config_update_fields_default_when_absent() {
+    let toml_str = r"
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+";
+    let config: GeneralConfig = toml::from_str(toml_str).expect("Should deserialize");
+    assert_eq!(config.update_track, UpdateTrack::default());
+    // The check is opt-OUT: a config written before this field existed must
+    // come back with it on, not off.
+    assert!(config.update_check_enabled);
+}
+
+#[test]
+fn test_general_config_update_fields_explicit() {
+    let toml_str = r#"
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+update_track = "weekly"
+update_check_enabled = false
+"#;
+    let config: GeneralConfig = toml::from_str(toml_str).expect("Should deserialize");
+    assert_eq!(config.update_track, UpdateTrack::Weekly);
+    assert!(!config.update_check_enabled);
+}
+
+#[test]
+fn test_general_config_update_fields_roundtrip() {
+    let mut config = GeneralConfig::default();
+    config.update_track = UpdateTrack::Weekly;
+    config.update_check_enabled = false;
+
+    let serialized = toml::to_string_pretty(&config).expect("Should serialize");
+    let deserialized: GeneralConfig = toml::from_str(&serialized).expect("Should deserialize");
+
+    assert_eq!(deserialized.update_track, UpdateTrack::Weekly);
+    assert!(!deserialized.update_check_enabled);
+
+    // ...and the other direction, so a stable/enabled pair is not just the
+    // struct default leaking through a dropped field.
+    let mut config = GeneralConfig::default();
+    config.update_track = UpdateTrack::Stable;
+    config.update_check_enabled = true;
+    let serialized = toml::to_string_pretty(&config).expect("Should serialize");
+    assert!(serialized.contains("update_track = \"stable\""));
+    assert!(serialized.contains("update_check_enabled = true"));
+}
+
+// ========================================================================
 // File I/O Tests
 // ========================================================================
 

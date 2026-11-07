@@ -164,6 +164,12 @@ pub fn run() {
 
     let builder = builder
         .manage(commands::launch::PendingLaunchFiles::default())
+        // In-app updater state (#579): the checked `Update`, its downloaded
+        // bytes and the one-shot install arm, parked between the four
+        // `app_update` commands. Managed unconditionally (the commands answer
+        // for themselves when the updater is off), and here rather than in
+        // `.setup()` because it needs nothing from the app.
+        .manage(commands::app_update::AppUpdateState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol(
@@ -315,6 +321,28 @@ pub fn run() {
             }
         }
     });
+
+    // In-app updater (#579), registered ONLY when a minisign public key is
+    // committed. This is not a preference: `tauri_plugin_updater::Config` has a
+    // required `pubkey` and no `Default`, so with `plugins.updater` absent from
+    // tauri.conf.json Tauri fails to deserialize the plugin's config and
+    // `build()` below returns an error - the app does not start at all. The
+    // block is deliberately absent while the keypair is being provisioned (see
+    // `.github/workflows/release.yml`'s "Determine updater enablement", which
+    // reads the same key to decide whether to build updater artifacts), so
+    // registering unconditionally would brick every build until it lands.
+    //
+    // The plugin supplies the public key and the Windows install mode; the
+    // ENDPOINT it configures is only a fallback, because `commands::app_update`
+    // overrides it per call with the user's release track.
+    let builder = if commands::app_update::updater_configured() {
+        builder.plugin(tauri_plugin_updater::Builder::new().build())
+    } else {
+        tracing::info!(
+            "In-app updater disabled: no plugins.updater.pubkey in tauri.conf.json (#579)"
+        );
+        builder
+    };
 
     builder
         .setup(|app| {
@@ -583,6 +611,14 @@ pub fn run() {
             commands::survey_geometry::get_survey_geometry_for_file,
             // OS file association / launch-with-file (#424)
             commands::launch::take_pending_launch_files,
+            // In-app updater (#579): check / download / arm / install are
+            // separate steps so the install cannot run before the exit guards
+            // do - the arm is the backend's own proof that it did.
+            commands::app_update::check_for_app_update,
+            commands::app_update::download_app_update,
+            commands::app_update::arm_app_update_restart,
+            commands::app_update::unarm_app_update_restart,
+            commands::app_update::install_app_update_and_restart,
             // Recovery (SPEC 14.4)
             commands::recovery::attempt_repair,
             commands::recovery::list_backups,

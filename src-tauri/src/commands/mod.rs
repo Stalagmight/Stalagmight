@@ -1,3 +1,4 @@
+pub mod app_update;
 pub mod cache;
 pub mod config;
 pub mod debug;

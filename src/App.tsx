@@ -1,6 +1,5 @@
 import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore, selectNewerFileReadOnly } from './store/projectStore';
 import { LoadRepairsBanner } from './components/common/LoadRepairsBanner';
@@ -24,11 +23,12 @@ import {
   finishImportWithoutOrphanSuggestions,
 } from './utils/saveFeedback';
 import { extractFilename } from './utils/path';
+import { applyWindowTitle } from './utils/windowTitle';
 import { routeOpenedFile } from './utils/openOrImport';
 import { useLaunchWithFile } from './utils/launchWithFile';
 import { guardQuit } from './utils/quit';
 import { isDroppableFilePath } from './utils/fileDialogs';
-import { useBeforeUnload, useLoadingProgress, useSpeleoPrePushSave, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
+import { useBeforeUnload, useLoadingProgress, useSpeleoPrePushSave, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale, useAppUpdate } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
 import { registerOnboardingRestart } from './hooks/useOnboardingRestart';
 import { ORIENTATION_FLOW_ID } from './onboarding/flows';
@@ -41,6 +41,7 @@ import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
 import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoUnwindDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, SpeleoDbProjectDialog, SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog, ImportReceiptDialog, ImportAsNewProjectDialog, LaunchOpenConfirmDialog, RewrittenPathOverwritePrompt } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu, ToastStack } from './components/common';
+import { UpdateBanner } from './components/UpdateBanner';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
@@ -163,6 +164,9 @@ function App() {
 
   // Whole-UI zoom via Ctrl+= / Ctrl+- / Ctrl+0 (persisted)
   useUiScale();
+
+  // In-app updater (#579): background launch check + download-progress events.
+  useAppUpdate();
 
   // Splash screen state - visible until config loads, then fades out and unmounts
   const [showSplash, setShowSplash] = useState(true);
@@ -347,12 +351,7 @@ function App() {
           title = `${title} *`;
         }
       }
-      try {
-        await getCurrentWindow().setTitle(title);
-      } catch {
-        // Fallback for dev mode or if Tauri API unavailable
-        document.title = title;
-      }
+      await applyWindowTitle(title);
     };
     updateTitle();
   }, [project, project?.file_path, project?.name, isDirty]);
@@ -817,6 +816,9 @@ function App() {
           </button>
         </div>
       )}
+
+      {/* In-app update banner (#579): available / downloading / ready to restart. */}
+      <UpdateBanner />
 
       {/* Integrity details + repair dialog */}
       {integrityDialogOpen && integrityIssues.length > 0 && (

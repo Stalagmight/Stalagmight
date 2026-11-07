@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useProject } from '../../hooks/useProject';
-import { performQuit } from '../../utils/quit';
+import { abandonUpdateRestart, performQuit } from '../../utils/quit';
 import { holdAutosave } from '../../utils/autosaveHold';
 import { openPendingImport, readPendingImport } from '../../utils/pendingImport';
 import { Button } from '../common/Button';
@@ -109,6 +109,11 @@ export default function UnsavedChangesDialog() {
   // or a load that replaces the screen, where putting the old dialog back would be
   // pointless at best.
   const handleCancel = () => {
+    // [#579] Cancelling here abandons the whole exit, including an update
+    // restart that was riding on it - otherwise the arm survives, and the next
+    // ordinary quit the user makes silently installs the update instead. No-op
+    // (and no IPC) when no restart is in flight, which is the usual case.
+    abandonUpdateRestart();
     if (cancelReturnsTo) openDialog(cancelReturnsTo, cancelReturnsData);
     else closeDialog();
   };

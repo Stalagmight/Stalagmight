@@ -2,6 +2,20 @@
   "generatedBy": "pnpm gen:ipc-types (src-tauri/examples/gen_ipc_types/commands.rs)",
   "commands": [
     {
+      "name": "arm_app_update_restart",
+      "module": "app_update",
+      "async": false,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
       "name": "attempt_repair",
       "module": "recovery",
       "async": true,
@@ -143,6 +157,20 @@
       "error": {
         "rust": "CommandError",
         "ts": "CommandError"
+      }
+    },
+    {
+      "name": "check_for_app_update",
+      "module": "app_update",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "AppUpdateCheck",
+        "ts": "AppUpdateCheck"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
       }
     },
     {
@@ -906,6 +934,20 @@
       "error": {
         "rust": "CommandError",
         "ts": "CommandError"
+      }
+    },
+    {
+      "name": "download_app_update",
+      "module": "app_update",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
       }
     },
     {
@@ -1901,6 +1943,20 @@
       "error": {
         "rust": "CommandError",
         "ts": "CommandError"
+      }
+    },
+    {
+      "name": "install_app_update_and_restart",
+      "module": "app_update",
+      "async": false,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
       }
     },
     {
@@ -4297,6 +4353,20 @@
       "error": {
         "rust": "CommandError",
         "ts": "CommandError"
+      }
+    },
+    {
+      "name": "unarm_app_update_restart",
+      "module": "app_update",
+      "async": false,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
       }
     },
     {

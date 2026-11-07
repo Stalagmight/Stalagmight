@@ -22,6 +22,14 @@
 # An ad-hoc signature carries no certificate and no Team ID, so it says nothing
 # about who built the artifact, and the app is not notarized.
 #
+# When APPLE_SIGNING_IDENTITY is set (real Developer ID signing requested -
+# see the release workflow's Build step), this also runs the checks an
+# ad-hoc signature cannot pass: `spctl -a -vv` (Gatekeeper's own verdict) and
+# `xcrun stapler validate` (confirms the notarization ticket is stapled to
+# the bundle, so Gatekeeper can check it offline). Any failure here means
+# real signing was requested but the shipped bundle would not pass Gatekeeper
+# - that must fail the workflow, not degrade quietly to the ad-hoc checks.
+#
 # Usage:
 #   verify-macos-signature.sh <path-to-dmg>
 #   verify-macos-signature.sh <directory-containing-exactly-one-dmg>
@@ -76,5 +84,19 @@ codesign -dv --verbose=2 "$APP"
 # `codesign -dv` prints a plausible-looking signature for that same broken bundle,
 # so it is not a substitute.
 codesign --verify --deep --strict --verbose=2 "$APP"
+
+if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  echo "APPLE_SIGNING_IDENTITY set - verifying Developer ID signature and notarization staple"
+  spctl -a -vv "$APP"
+  xcrun stapler validate "$APP"
+  # The DMG is what gets double-clicked. Once it carries a Developer ID
+  # signature Gatekeeper assesses the image itself on open, and rejects one
+  # that is signed but not notarized ("source=Unnotarized Developer ID") -
+  # seen on the first real-signing rehearsal, where the .app passed both
+  # checks above. This is the assessment run when the image is opened.
+  echo "verifying the DMG's own notarization"
+  spctl -a -vv -t open --context context:primary-signature "$DMG"
+  xcrun stapler validate "$DMG"
+fi
 
 echo "macOS signature verified: $(basename "$APP") inside $(basename "$DMG")"

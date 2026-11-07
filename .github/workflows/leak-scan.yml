@@ -90,3 +90,20 @@ jobs:
         run: node scripts/check-smoke-features.test.mjs
       - name: Critical-feature smoke canaries
         run: node scripts/check-smoke-features.mjs
+      # Updater pubkey/endpoint tripwire (#579): passes trivially while
+      # plugins.updater is absent from tauri.conf.json, and turns red the
+      # day a placeholder or malformed pubkey is committed in its place.
+      # Pure-Node, no dependencies - same reason it lives here rather than
+      # `check`, which path-ignores nothing this gate needs anyway but is
+      # kept alongside its siblings for consistency.
+      - name: Updater pubkey/endpoint - fixture test
+        run: node scripts/check-updater-pubkey.test.mjs
+      - name: Updater pubkey/endpoint gate
+        run: node scripts/check-updater-pubkey.mjs
+      # Updater manifest generator fixture test (#579): scripts/gen-updater-manifest.mjs
+      # runs only at release time (invoked from the release job's "Publish
+      # updater manifest" step, with real artifacts as input), so there is no
+      # live-repo invariant for a second gate step to check here - only the
+      # fixture test, alongside its sibling updater gate above.
+      - name: Updater manifest generator - fixture test
+        run: node scripts/gen-updater-manifest.test.mjs

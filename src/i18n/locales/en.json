@@ -104,7 +104,22 @@
         "undoHistory": "Undo History",
         "feedback": "Feedback",
         "startup": "Startup",
-        "privacy": "Privacy"
+        "privacy": "Privacy",
+        "updates": "Updates"
+      },
+      "updateCheck": {
+        "label": "Check for updates automatically",
+        "help": "Checks GitHub for new releases shortly after Stalagmight starts. Checking contacts GitHub; nothing is downloaded until you choose to.",
+        "aria": "Enable automatic update checks"
+      },
+      "updateTrack": {
+        "label": "Update track",
+        "help": "Stable releases are the recommended default. Weekly builds get new features sooner, with less testing.",
+        "aria": "Update track preference",
+        "options": {
+          "stable": "Stable",
+          "weekly": "Weekly"
+        }
       },
       "telemetry": {
         "label": "Share anonymous usage statistics",
@@ -2289,6 +2304,13 @@
       "description": "Desktop application for processing underwater cave survey data.",
       "website": "stalagmight.com",
       "close": "Close",
+      "channel": "Channel: {{channel}}",
+      "track": "Update track: {{track}}",
+      "trackPending": "(unsaved change pending)",
+      "checkUpdates": "Check for updates",
+      "upToDate": "You're up to date on Stalagmight {{current}}",
+      "updateAvailable": "You're on Stalagmight {{current}} - {{version}} is available, see the update banner",
+      "checkFailed": "Could not check for updates",
       "mapImagery": {
         "title": "Map imagery"
       }
@@ -3182,6 +3204,18 @@
         "surface_elevation": "entrance elevation",
         "default_azimuth_reference": "default north reference"
       }
+    }
+  },
+  "updateBanner": {
+    "available": "Stalagmight {{version}} is available",
+    "download": "Download",
+    "releaseNotes": "Release notes",
+    "dismiss": "Dismiss",
+    "downloading": "Downloading update…",
+    "restart": "Restart to update",
+    "toasts": {
+      "downloadFailed": "Could not download the update. Try again from the update banner.",
+      "installFailed": "Could not install the update. Download it again from the update banner."
     }
   },
   "integrityRepair": {
