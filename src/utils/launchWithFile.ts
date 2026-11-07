@@ -82,10 +82,12 @@ export function resetLaunchFileQueueForTest(): void {
 }
 
 /**
- * Is the screen occupied - the single dialog slot, a placement flow, or an
+ * Is the screen occupied - the single dialog slot, a placement flow, an
  * independent top-layer overlay (TelemetryOptInDialog, HeldLockResumeDialog,
  * SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog) registered via
- * `useScreenOccupant`?
+ * `useScreenOccupant`, or an import's file still parsing (#576 W62-Q1-D1: the
+ * router would refuse a launched file with the in-progress toast and drop it,
+ * so it waits here instead, until the parse and the flow it opens are done)?
  *
  * Used to be `activeDialog`/`placementMode` only, which left those overlays
  * invisible here: a cold-launch drain (readiness is `config != null`, exactly

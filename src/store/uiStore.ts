@@ -1049,17 +1049,29 @@ export const PANEL_WIDTH_FIELDS = {
 
 /**
  * Does a modal own the screen right now - the single `activeDialog` slot, a
- * placement flow, or an independent top-layer overlay registered via
- * `useScreenOccupant`? The one predicate for "is it safe to open something
- * else without stacking a dialog over a surface the user is mid-answering" -
- * `screenBusy()` in launchWithFile.ts today, and whatever else asks tomorrow.
- * Callable as a plain function (`isScreenBusy(useUIStore.getState())`) or as
- * a selector, same shape as `isMapReadOnly` above.
+ * placement flow, an independent top-layer overlay registered via
+ * `useScreenOccupant`, or an import whose file is still parsing? The one
+ * predicate for "is it safe to open something else without stacking a dialog
+ * over a surface the user is mid-answering" - `screenBusy()` in
+ * launchWithFile.ts today, and whatever else asks tomorrow. Callable as a plain
+ * function (`isScreenBusy(useUIStore.getState())`) or as a selector, same shape
+ * as `isMapReadOnly` above.
+ *
+ * [#576 W62-Q1-D1] The parse counts because its result opens the import's first
+ * dialog when it lands: the screen is spoken for even while nothing is up yet,
+ * and the router refuses a second file meanwhile (`importFlowOwnsScreen`). So an
+ * OS-launched file waits in the launch queue for the parse and the flow it
+ * opens, as it waits behind a dialog, instead of being routed into that refusal.
  */
 export function isScreenBusy(
-  state: Pick<UIStore, 'activeDialog' | 'placementMode' | 'screenOccupants'>,
+  state: Pick<UIStore, 'activeDialog' | 'placementMode' | 'screenOccupants' | 'importParse'>,
 ): boolean {
-  return state.activeDialog !== null || state.placementMode !== null || state.screenOccupants > 0;
+  return (
+    state.activeDialog !== null ||
+    state.placementMode !== null ||
+    state.screenOccupants > 0 ||
+    state.importParse !== null
+  );
 }
 
 /**
