@@ -110,6 +110,34 @@ pub(super) fn scratch_spelling(path: &Path) -> std::io::Result<PathBuf> {
     Ok(std::fs::canonicalize(folder)?.join(name))
 }
 
+/// [#576 RVF-d-10] A scratch name, spelled by [`scratch_spelling`], as the
+/// target parameter of `VACUUM INTO`: TEXT holding the path's own bytes on
+/// Unix. That spelling resolves the folder, so through a link to a folder whose
+/// real name is not UTF-8 (a legacy Latin-1 name, some USB or SMB mounts) it
+/// carries bytes a `&str` cannot hold; `to_string_lossy` turned them into
+/// U+FFFD and sent SQLite to a folder that is not there. SQLite passes the text
+/// to the file system as it is, and `VACUUM INTO` takes TEXT only, never a
+/// BLOB. Elsewhere the path goes as it did, lossily (Windows file names are
+/// UTF-16, and these were never resolved there).
+pub(super) struct VacuumTarget<'a>(pub(super) &'a Path);
+
+impl rusqlite::ToSql for VacuumTarget<'_> {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        use rusqlite::types::ToSqlOutput;
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+            Ok(ToSqlOutput::Borrowed(rusqlite::types::ValueRef::Text(
+                self.0.as_os_str().as_bytes(),
+            )))
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(ToSqlOutput::from(self.0.to_string_lossy().into_owned()))
+        }
+    }
+}
+
 /// [#576 W25-NF1] The flags a connection that creates or writes a scratch name
 /// opens with: rusqlite's defaults (what [`Connection::open`] uses), plus
 /// `SQLITE_OPEN_NOFOLLOW` on Unix (see [`scratch_spelling`]).

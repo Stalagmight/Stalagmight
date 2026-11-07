@@ -3,7 +3,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection, Transaction};
 use std::path::Path;
 
-use super::open::{connect_for_vacuum_into, scratch_spelling};
+use super::open::{connect_for_vacuum_into, scratch_spelling, VacuumTarget};
 use super::{BackupInfo, BackupKind, Database, RestoreOutcome, SalvagedData, SalvagedSection};
 
 /// [#576 C15] Where a restore stages the candidate before installing it: beside
@@ -293,7 +293,7 @@ impl Database {
             .with_context(|| format!("resolve the snapshot's folder {}", dest.display()))?;
         // The destination filename is a bound parameter (supported by VACUUM INTO
         // since SQLite 3.27); this avoids any path-quoting pitfalls.
-        conn.execute("VACUUM INTO ?1", params![dest.to_string_lossy()])
+        conn.execute("VACUUM INTO ?1", params![VacuumTarget(&dest)])
             .context("VACUUM INTO snapshot failed")?;
         Ok(())
     }
@@ -615,7 +615,7 @@ impl Database {
         // [#576 W25-NF1] A link planted there since the clear is refused, not followed.
         let vacuumed = scratch_spelling(&compacted)
             .map_err(anyhow::Error::from)
-            .and_then(|into| Ok(conn.execute("VACUUM INTO ?1", params![into.to_string_lossy()])?));
+            .and_then(|into| Ok(conn.execute("VACUUM INTO ?1", params![VacuumTarget(&into)])?));
         if let Err(e) = vacuumed {
             let _ = std::fs::remove_file(&compacted);
             return Err(e.context(format!(
@@ -735,7 +735,7 @@ impl Database {
         // [#576 W25-NF1] A link planted there since the clear is refused, not followed.
         let vacuumed = scratch_spelling(&staging)
             .map_err(anyhow::Error::from)
-            .and_then(|into| Ok(conn.execute("VACUUM INTO ?1", params![into.to_string_lossy()])?));
+            .and_then(|into| Ok(conn.execute("VACUUM INTO ?1", params![VacuumTarget(&into)])?));
         if let Err(e) = vacuumed {
             remove_with_journal(&staging);
             return Err(e.context("VACUUM failed - database may be too damaged to repair"));

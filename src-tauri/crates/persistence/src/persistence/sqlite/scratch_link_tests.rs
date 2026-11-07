@@ -232,3 +232,58 @@ fn scratch_files_in_a_folder_reached_through_a_link_are_written_as_before() {
         "the folder link is still a link"
     );
 }
+
+/// [#576 RVF-d-10] The same through a link to a folder whose real name is not
+/// UTF-8 (a legacy Latin-1 name, some USB or SMB mounts). The scratch spelling
+/// resolves the link, so `VACUUM INTO` gets the real name, and has to get it
+/// byte for byte: spelled with `to_string_lossy` it named a folder with U+FFFD
+/// in it, which is not there, and the push snapshot, its compaction and the
+/// repair were all refused. A save's temp (`open_scratch`) was never affected:
+/// SQLite's open takes the path as bytes.
+#[test]
+fn scratch_files_in_a_linked_folder_whose_name_is_not_utf8_land_there() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let root = TempDir::new().expect("dir");
+    let real = root.path().join(std::ffi::OsStr::from_bytes(b"caves-\xff"));
+    if let Err(e) = std::fs::create_dir(&real) {
+        // A file system that only takes UTF-8 names (APFS) cannot hold the case.
+        println!("[RVF-d-10] skipped: this file system refuses a non-UTF-8 name ({e})");
+        return;
+    }
+    let linked = root.path().join("caves");
+    symlink(&real, &linked).expect("a link to the folder");
+    let live = project_at(&linked.join("CaveA.stalx"));
+
+    let snapshot = linked.join("snapshot.stalx");
+    let snapshotted = Database::vacuum_snapshot(&live, &snapshot);
+    let compacted = Database::sanitize_push_snapshot(&snapshot, false, None);
+    let repaired = Database::attempt_repair(&live);
+    let in_real: Vec<String> = std::fs::read_dir(&real)
+        .expect("list the real folder")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    println!(
+        "[RVF-d-10] snapshot {snapshotted:?}\n  compaction {compacted:?}\n  repair \
+         {repaired:?}\n  in the real folder: {in_real:?}"
+    );
+    snapshotted.expect("a push snapshot into the linked folder");
+    compacted.expect("its compaction, staged beside it");
+    let (_, ok) = repaired.expect("a repair staged beside the project");
+    assert!(ok, "the repaired project passes its integrity check");
+    let sections = Database::open_existing(&real.join("snapshot.stalx"))
+        .expect("the snapshot opens")
+        .load_project()
+        .expect("the snapshot loads")
+        .sections
+        .len();
+    assert_eq!(
+        sections, 1,
+        "the snapshot in the real folder holds the project"
+    );
+}
