@@ -224,6 +224,15 @@ export const GROUP: SiteGroup = {
       'metrics.iterations': "runScenario's iteration count: scenarioRunOptions' integer or the scenario's defaultIterations",
       'metrics.durationMs': R.COUNT,
       'JSON.stringify(metrics.metrics)': METRICS_JSON,
+      // STALAGMIGHT_FUZZ_DETERMINISM=2sessions (main's two-session block).
+      "[...DETERMINISM_SCENARIOS].join(', ')":
+        'registry names: DETERMINISM_SCENARIOS is the .name of three registered scenarios (scenarios/index.ts:52-56)',
+      'print: line': `${PROGRESS_PRINT}: print is handed only to progressLogger (scenario-run.ts:155, 179)`,
+      'main: replay': "'A' or 'B': runDeterminismPair calls runReplay only with its literal ['A', 'B'] (lib/fuzzDeterminismRun.ts:66, 72)",
+      'pairFailOutput(args.name, err, replayLogs)':
+        "pairFailOutput's FAIL block (lib/shareableFailure.ts): `FAIL: <args.name> threw:`, a registry name getScenario " +
+        'found (:130-134), then shareableFailureText (HELPERS) of the message, as scenarioFailOutput prints one ' +
+        '(pinned in shareableRunnerOutput.test.ts)',
     },
     'e2e/agent/scenarios-smoke.ts': {
       'started.state': STARTED_STATE,

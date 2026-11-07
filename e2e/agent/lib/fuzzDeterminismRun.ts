@@ -16,6 +16,7 @@ import type { ScenarioMetrics } from '../scenarios/framework';
 import { compareRecordStreams, formatDivergence, Masker, recordBody, type DetRecord } from './fuzzDeterminism';
 import { DetProbe, detProbe, setDetProbe } from './fuzzDeterminismProbe';
 import type { FuzzDeterminismMode } from './fuzzKnobs';
+import { valueShape } from './shareableFailure';
 
 export interface DeterminismPairMeta {
   scenario: string;
@@ -70,7 +71,10 @@ export async function runDeterminismPair(
     try {
       metrics = await runReplay(replay);
     } catch (err) {
-      error = err instanceof Error ? err : new Error(String(err));
+      // Not an Error: its shape heads the message and its text goes on a later
+      // line, which the runners withhold (#576 W51).
+      error =
+        err instanceof Error ? err : new Error(`a replay threw ${valueShape(err)}, not an Error\n  ${String(err)}`);
     } finally {
       setDetProbe(null);
     }
@@ -82,23 +86,29 @@ export async function runDeterminismPair(
   const [a, b] = outcomes as [ReplayOutcome, ReplayOutcome];
   const divergence = compareRecordStreams(a.probe.records, b.probe.records);
   if (divergence !== null) {
+    // Lines after the divergence's own, which the runners withhold (#576 W51).
     const verdicts =
       a.error === null && b.error === null
-        ? ''
-        : `\n  replay A ${a.error === null ? 'passed' : `failed: ${headline(a.error)}`}` +
-          `\n  replay B ${b.error === null ? 'passed' : `failed: ${headline(b.error)}`}`;
+        ? []
+        : [
+            `  replay A ${a.error === null ? 'passed' : `failed: ${headline(a.error)}`}`,
+            `  replay B ${b.error === null ? 'passed' : `failed: ${headline(b.error)}`}`,
+          ];
     throw new Error(
-      formatDivergence(
-        {
-          scenario: meta.scenario,
-          seed: meta.seed,
-          iterations: meta.iterations,
-          fixture: meta.fixture,
-          knob: meta.mode === 'one-session' ? '1' : '2sessions',
-          lastAction: lastActionBefore(a.probe.records, divergence.index),
-        },
-        divergence,
-      ) + verdicts,
+      [
+        formatDivergence(
+          {
+            scenario: meta.scenario,
+            seed: meta.seed,
+            iterations: meta.iterations,
+            fixture: meta.fixture,
+            knob: meta.mode === 'one-session' ? '1' : '2sessions',
+            lastAction: lastActionBefore(a.probe.records, divergence.index),
+          },
+          divergence,
+        ),
+        ...verdicts,
+      ].join('\n'),
     );
   }
   if (a.error !== null || b.error !== null) {

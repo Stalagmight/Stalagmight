@@ -15,6 +15,33 @@ const AFTER_APP_PREFIX =
   "the page's or the app's error after an `ipc <one-word command>: `, `eval: ` or `eval compile: ` prefix: " +
   "shareableHeadline (APP_ERROR_HEADLINES[0], shareableFailure.ts) prints it as its length";
 
+/** `runDeterminismPair`'s divergence (fuzzDeterminismRun.ts), keyed by its whole expression. */
+const DIVERGENCE =
+  "formatDivergence( { scenario: meta.scenario, seed: meta.seed, iterations: meta.iterations, fixture: meta.fixture, knob: meta.mode === 'one-session' ? '1' : '2sessions', lastAction: lastActionBefore(a.probe.records, divergence.index), }, divergence, )";
+
+/**
+ * Its first line (fuzzDeterminism.ts:404-405) is the seed, two counts, a record
+ * kind and the record's label. The probe makes every label from literals and
+ * counters (fuzzDeterminismProbe.ts:101, 133-134, 140, 150, 162, 191-192, 201-203)
+ * and what its callers pass: a literal with a loop counter (exportRoundtripFuzz.ts:2182,
+ * 2209, 2238; undoPersistenceFuzz.ts:473; undoRedoFuzz.ts:810), a StepRequest kind
+ * and a FUZZABLE_ACTIONS name runStep checked before the hook runs
+ * (undoFuzzHarness.ts:246, 420; undoRedoFuzzBridge.ts:322), a `T<n>` / `#<n>` /
+ * `boundary` tag (undoFuzzHarness.ts:144, 393; undoPersistenceFuzz.ts:427;
+ * undoRedoFuzz.ts:1445, 1486), an `export*` store action its callers name in
+ * literals (fuzzDeterminismProbe.ts:200 drops the rest), and the table names of the
+ * `.stalx` the app's save just wrote to a fresh file (project_io.rs:781-791
+ * clear_save_temp then Database::open_scratch: the app's own schema).
+ */
+const DIVERGENCE_REASON =
+  'the divergence: line 1 the seed (Number() at both callers, scenarios/index.ts:78, scenario-run.ts:164), two ' +
+  'counts, a DetRecordKind word (fuzzDeterminism.ts:214) and a record label made of harness words, counters, ' +
+  "FUZZABLE_ACTIONS names and the app's own table names (each source cited where printSites/allowLib.ts defines " +
+  'this reason); the path, the two values and the last action ' +
+  "are later lines, withheld; the reproduce: line is the knob literal 1 or 2sessions (fuzzDeterminismRun.ts:105), " +
+  'the fixture as the user named it, folded by the runner (shareableFailureText -> foldLocalPaths; the FIXTURE ' +
+  'policy of allowScenarios.ts), the registry name and the two numbers';
+
 export const GROUP: SiteGroup = {
   covers: ['e2e/agent/lib/'],
   programs: {},
@@ -67,6 +94,14 @@ export const GROUP: SiteGroup = {
       'decoder.end()': R.FOLDED,
       "lines.map((line) => `${foldLocalPaths(line)}\\n`).join('')":
         "the whole lines of the child's output that arrived, each folded by foldLocalPaths inside the map (the docs' rule, #576 RV19b-P8, W47-NF3)",
+    },
+    'e2e/agent/lib/fuzzDeterminismProbe.ts': {
+      'this.states': "the probe's own state-record counter, a number: 0 (fuzzDeterminismProbe.ts:74), += 1 per state() (:112)",
+    },
+    'e2e/agent/lib/fuzzDeterminismRun.ts': {
+      [DIVERGENCE]: DIVERGENCE_REASON,
+      'meta.seed':
+        'the seed, a number: both callers pass Number(...) (scenarios/index.ts:78 into :89-91, scenario-run.ts:164)',
     },
     'e2e/agent/lib/fuzzHarness.ts': {
       'replayTracePath()': R.FOLDED,
@@ -134,6 +169,12 @@ export const GROUP: SiteGroup = {
       'source.slice(0, 80)':
         "the first 80 characters of the harness's own computeImportScreenDigest source (Function.prototype.toString): public tree code",
     },
+    'e2e/agent/lib/junctionDepthOracle.ts': {
+      "lines.join('\\n')":
+        "checkJunctionDepths' message: line 1 is the literal `X6c the depths, tapes or plan changed beyond the junction rule (...)` " +
+        '(junctionDepthOracle.ts:326-327), the counts and each failure are later lines, withheld, and the last is its one ' +
+        "caller's `reproduce: pnpm agent:scenario <SCENARIO> --seed <ctx.seed> --iterations <n>` (exportRoundtripFuzz.ts:890, 1490)",
+    },
     'e2e/agent/lib/mapControls.ts': {
       'request.featureType': "'shot' or 'station': validateRequest refuses any other before the click (mapControls.ts:44)",
       'request.sectionId': 'an integer: validateRequest refuses any other before the click (mapControls.ts:47)',
@@ -168,6 +209,10 @@ export const GROUP: SiteGroup = {
       'integerFlag: flag': "the literal '--seed' at its one call (scenarioRunArgs.ts:68)",
       'positiveIntFlag: flag': "the literal '--iterations' at its one call (scenarioRunArgs.ts:69)",
       'rest[i]': "the flag, printed (`flag <flag> needs a value`) only once it is '--seed' or '--iterations', checked on the line before",
+    },
+    'e2e/agent/lib/seedWindow.ts': {
+      'envInt: name': 'SEED_FIRST_ENV or SEED_COUNT_ENV, the literal env names at its two calls (seedWindow.ts:29, 31)',
+      'envInt: min': 'the literal 0 or 1 at its two calls (seedWindow.ts:29, 31)',
     },
     'e2e/agent/lib/sessionCore.ts': {
       'process.versions.node': "the running Node's version string (digits and dots), a fact about the toolchain, not the app or the user",

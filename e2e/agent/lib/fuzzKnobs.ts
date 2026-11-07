@@ -21,6 +21,7 @@
  * stay in that scenario, next to the code they steer.
  */
 import { DEFAULT_FIXTURE } from './fixtures';
+import { valueShape } from './shareableFailure';
 
 /**
  * Replay a recorded trace instead of drawing moves (`STALAGMIGHT_FUZZ_REPLAY`,
@@ -88,7 +89,8 @@ export function fuzzDeterminism(): FuzzDeterminismMode {
   if (raw === '' || raw === '0') return 'off';
   if (raw === '1') return 'one-session';
   if (raw === '2sessions') return 'two-sessions';
-  throw new Error(`STALAGMIGHT_FUZZ_DETERMINISM=${JSON.stringify(raw)}: expected 1 (one session) or 2sessions`);
+  // The value the user typed prints as its shape (#576 W51), as other knob errors do.
+  throw new Error(`STALAGMIGHT_FUZZ_DETERMINISM=${valueShape(raw)}: expected 1 (one session) or 2sessions`);
 }
 
 /**
@@ -101,7 +103,10 @@ export function fuzzDeterminismPlant(): number | null {
   if (raw === '') return null;
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`STALAGMIGHT_FUZZ_DETERMINISM_PLANT=${JSON.stringify(raw)}: expected a positive integer`);
+    // A number as itself, other text as its shape (#576 W51).
+    throw new Error(
+      `STALAGMIGHT_FUZZ_DETERMINISM_PLANT=${valueShape(Number.isNaN(value) ? raw : value)}: expected a positive integer`,
+    );
   }
   return value;
 }

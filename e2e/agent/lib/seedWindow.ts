@@ -8,6 +8,8 @@
  * The same knobs, read the same way, live in `src/test/seedWindow.ts` for the suites
  * under `src/`; docs/testing-recipes.md lists every seeded suite's knobs.
  */
+import { valueShape } from './shareableFailure';
+
 export const SEED_FIRST_ENV = 'STALAGMIGHT_VITEST_SEED_FIRST';
 export const SEED_COUNT_ENV = 'STALAGMIGHT_VITEST_SEED_COUNT';
 
@@ -15,7 +17,10 @@ function envInt(name: string, min: number): number | undefined {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return undefined;
   const n = Number(raw);
-  if (!Number.isSafeInteger(n) || n < min) throw new Error(`${name}=${raw}: expected an integer >= ${min}`);
+  // A number as itself, other text as its shape (#576 W51): the value is the user's.
+  if (!Number.isSafeInteger(n) || n < min) {
+    throw new Error(`${name}=${valueShape(Number.isNaN(n) ? raw : n)}: expected an integer >= ${min}`);
+  }
   return n;
 }
 
