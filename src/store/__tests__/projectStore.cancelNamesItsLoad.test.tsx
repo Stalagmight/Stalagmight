@@ -71,6 +71,18 @@ let active: Load | null;
 let loads: Load[];
 let holdNextCancel: boolean;
 let held: HeldCancel[];
+let loadWaiters: { count: number; resolve: () => void }[];
+
+/**
+ * Resolves once `count` loads have reached the fake backend. A load imports parts of
+ * the store lazily before it sends its IPC, and how long that takes depends on how
+ * busy the machine is, so the test waits for the load itself, never for a number of
+ * timer turns (#576 W60-NF3: five turns were not enough under load).
+ */
+function loadsSent(count: number): Promise<void> {
+  if (loads.length >= count) return Promise.resolve();
+  return new Promise((resolve) => loadWaiters.push({ count, resolve }));
+}
 
 /** app_state.rs `cancel_loading`: the load in progress, and only by its name. */
 function applyCancel(args: Record<string, unknown> | undefined): void {
@@ -102,12 +114,15 @@ beforeEach(() => {
   loads = [];
   holdNextCancel = false;
   held = [];
+  loadWaiters = [];
   loadBinaryMock.mockImplementation((path: string, loadToken: unknown) => {
     // `start_named_load`: a new load supersedes the one in progress.
     if (active) active.cancelled = true;
     const load: Load = { path, name: loadToken, reply: deferred(), cancelled: false, done: false };
     loads.push(load);
     active = load;
+    for (const waiter of loadWaiters) if (loads.length >= waiter.count) waiter.resolve();
+    loadWaiters = loadWaiters.filter((waiter) => loads.length < waiter.count);
     return load.reply.promise;
   });
   invokeIpcMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
@@ -132,7 +147,7 @@ beforeEach(() => {
 describe('a Cancel names the load it was made for (#576 W44-NF3)', () => {
   it("the loading modal's Cancel for load A, run after load B started, leaves B to open", async () => {
     const opA = useProjectStore.getState().loadProject(CAVE_A);
-    await timerTurns(5);
+    await loadsSent(1);
     const loadA = loads[0]!;
     expect(loadA.path).toBe(CAVE_A);
 
@@ -147,7 +162,7 @@ describe('a Cancel names the load it was made for (#576 W44-NF3)', () => {
     deliver(loadA);
     expect(await opA).toEqual({ success: true });
     const opB = useProjectStore.getState().loadProject(CAVE_B);
-    await timerTurns(5);
+    await loadsSent(2);
     const loadB = loads[1]!;
     expect(loadB.path).toBe(CAVE_B);
 
@@ -184,7 +199,7 @@ describe('a Cancel names the load it was made for (#576 W44-NF3)', () => {
   // loading modal shows the loading state, and B is still loading.
   it("the loading modal's late Cancel for load A leaves B's progress showing", async () => {
     const opA = useProjectStore.getState().loadProject(CAVE_A);
-    await timerTurns(5);
+    await loadsSent(1);
     const loadA = loads[0]!;
 
     holdNextCancel = true;
@@ -195,7 +210,7 @@ describe('a Cancel names the load it was made for (#576 W44-NF3)', () => {
     deliver(loadA);
     expect(await opA).toEqual({ success: true });
     const opB = useProjectStore.getState().loadProject(CAVE_B);
-    await timerTurns(5);
+    await loadsSent(2);
     const loadB = loads[1]!;
     expect(loadB.path).toBe(CAVE_B);
 
@@ -214,7 +229,7 @@ describe('a Cancel names the load it was made for (#576 W44-NF3)', () => {
 
   it('the cancel a superseded load sends names that load', async () => {
     const opA = useProjectStore.getState().loadProject(CAVE_A);
-    await timerTurns(5);
+    await loadsSent(1);
     const loadA = loads[0]!;
     // B is requested while A runs: A is told (`onSuperseded`) and B waits for it.
     const opB = useProjectStore.getState().loadProject(CAVE_B);
@@ -226,7 +241,7 @@ describe('a Cancel names the load it was made for (#576 W44-NF3)', () => {
 
     deliver(loadA);
     await opA;
-    await timerTurns(5);
+    await loadsSent(2);
     deliver(loads[1]!);
     expect(await opB).toEqual({ success: true });
     expect(loads[1]!.name).not.toBe(loadA.name);
@@ -234,16 +249,19 @@ describe('a Cancel names the load it was made for (#576 W44-NF3)', () => {
 
   it("a file import's Cancel names the import its dialog shows", async () => {
     const importAnswer = deferred<unknown>();
-    invokeIpcMock.mockImplementation(async (command: string) => {
-      if (command === 'execute_tml_import') return importAnswer.promise;
+    // Settled when the import's IPC is sent: the test waits for that, not for timer turns.
+    const importSent = deferred<Record<string, unknown> | undefined>();
+    invokeIpcMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'execute_tml_import') {
+        importSent.resolve(args);
+        return importAnswer.promise;
+      }
       return undefined;
     });
     // The dialog starts its progress line, then the import (TmlImportDialog's handleImport).
     useProjectStore.getState().startLoading('CaveT', '/files/CaveT.tml');
     const run = useProjectStore.getState().executeTmlImport('/files/CaveT.tml', null);
-    await timerTurns(3);
-    const sent = invokeIpcMock.mock.calls.find(([command]) => command === 'execute_tml_import');
-    const importName = (sent?.[1] as Record<string, unknown> | undefined)?.loadToken;
+    const importName = (await importSent.promise)?.loadToken;
     expect(typeof importName).toBe('string');
 
     render(<ImportCancelButton data-testid="import-cancel">Cancel</ImportCancelButton>);
