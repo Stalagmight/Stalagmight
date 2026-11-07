@@ -19,7 +19,7 @@ import { setProjectActionSource } from '../../utils/telemetry';
 import { routeOpenedFile } from '../../utils/openOrImport';
 import { openRecentEntry } from './openRecentEntry';
 import { PROJECT_EXTENSION, IMPORT_EXTENSIONS } from '../../utils/fileDialogs';
-import { LoadingProgress } from '../LoadingProgress';
+import { ProjectLoadingOverlay } from '../LoadingProgress';
 import SystemCard from './SystemCard';
 import { resolveSpeleoLock } from './SpeleoLockBadge';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
@@ -46,7 +46,6 @@ import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import { formatNumber } from '../../i18n/format';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
-import { formatPhaseLabel } from '../../utils/loadingPhaseLabel';
 import { useShallow } from 'zustand/react/shallow';
 
 type ViewTab = 'map' | 'list';
@@ -88,8 +87,6 @@ export default function GlobalView() {
     loading,
     loadRecentProjects,
     loadProject,
-    resetLoading,
-    cancelLoading,
     removeFromRecentProjects,
     config,
   } = useProjectStore(
@@ -97,8 +94,6 @@ export default function GlobalView() {
       loading: s.loading,
       loadRecentProjects: s.loadRecentProjects,
       loadProject: s.loadProject,
-      resetLoading: s.resetLoading,
-      cancelLoading: s.cancelLoading,
       removeFromRecentProjects: s.removeFromRecentProjects,
       config: s.config,
     })),
@@ -332,9 +327,9 @@ export default function GlobalView() {
   // entry is untrusted input and must not reach the import parsers.
   //
   // Two recents-adjacent opens deliberately stay outside this path:
-  // - handleRetryLoading (below) re-drives `loadProject` directly on the SAME
-  //   path a previous call already routed and validated; re-routing would gate
-  //   nothing new.
+  // - the loading overlay's Retry (`ProjectLoadingOverlay`) re-drives
+  //   `loadProject` directly on the SAME path a previous call already routed and
+  //   validated; re-routing would gate nothing new.
   // - handlePublishToSpeleoDb (below) calls `loadProject` via an injected
   //   callback so the publish flow can await the load before opening its own
   //   dialog; the router's dialogs would fight that sequencing.
@@ -359,25 +354,6 @@ export default function GlobalView() {
   const handleOpenFromMap = useCallback((filePath: string) => {
     return openRecentEntry(filePath, 'recent-map');
   }, []);
-
-  // Handle cancel during loading
-  const handleCancelLoading = useCallback(async () => {
-    await cancelLoading();
-  }, [cancelLoading]);
-
-  // Handle retry after error
-  const handleRetryLoading = useCallback(async () => {
-    if (loading.projectPath) {
-      // Retry of a recent-projects open; attribute it the same way.
-      setProjectActionSource('recent-list');
-      await loadProject(loading.projectPath);
-    }
-  }, [loading.projectPath, loadProject]);
-
-  // Handle dismiss error (reset loading state)
-  const handleDismissError = useCallback(() => {
-    resetLoading();
-  }, [resetLoading]);
 
   // Handle remove from recent (from metadata panel)
   const handleRemoveFromRecent = useCallback(async (filePath: string) => {
@@ -861,28 +837,8 @@ export default function GlobalView() {
         </div>
       </header>
 
-      {/* Loading Modal Overlay */}
-      {loading.isLoading && (
-        <div className="fixed inset-0 bg-overlay flex items-center justify-center z-50">
-          <LoadingProgress
-            title={
-              loading.error
-                ? t('globalView.loading.failedTitle')
-                : t('globalView.loading.loadingTitle', {
-                  name: loading.projectName ?? t('globalView.loading.projectFallback'),
-                })
-            }
-            phase={formatPhaseLabel(t, loading.phase, loading.phaseIndex, loading.phaseCount)}
-            overallProgress={loading.overallProgress}
-            onCancel={loading.error ? handleDismissError : handleCancelLoading}
-            {...(loading.phaseProgress !== undefined && { phaseProgress: loading.phaseProgress })}
-            {...(loading.phaseCurrent !== undefined && { phaseCurrent: loading.phaseCurrent })}
-            {...(loading.phaseTotal !== undefined && { phaseTotal: loading.phaseTotal })}
-            {...(loading.error ? { error: loading.error } : {})}
-            {...(loading.error && loading.projectPath ? { onRetry: handleRetryLoading } : {})}
-          />
-        </div>
-      )}
+      {/* Loading Modal Overlay (also shown in the project view: App.tsx) */}
+      <ProjectLoadingOverlay retrySource="recent-list" />
 
       {/* Content */}
       <main className="flex-1 overflow-hidden flex">

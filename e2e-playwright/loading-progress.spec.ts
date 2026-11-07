@@ -1,5 +1,7 @@
 import { test, expect } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import { createProject } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 test.describe('Loading Progress', () => {
   test.beforeEach(async ({ page }) => {
@@ -323,6 +325,58 @@ test.describe('Loading Progress', () => {
 
       await expect(page.getByText('Retry')).toBeVisible();
       await expect(page.getByText('Dismiss')).toBeVisible();
+    });
+  });
+
+  // [#576 LOAD-VIEW-D1] A load started from the project view (Discard in the
+  // unsaved-changes prompt) shows the same overlay, over the project: it blocks
+  // the Display menu and the shortcuts, and a failed load's error is on screen
+  // until dismissed. Before, the overlay lived in the project list only.
+  test.describe('In the project view', () => {
+    test('a load shows the overlay over the project, blocks the menus and shortcuts, and its error can be dismissed', async ({ page }) => {
+      await createProject(page, 'CaveA');
+      await page.evaluate(() => {
+        const e2e = (window as unknown as { __E2E_TEST__?: { simulateLoadingProgress?: (payload: Record<string, unknown>) => void } }).__E2E_TEST__;
+        e2e?.simulateLoadingProgress?.({
+          isLoading: true,
+          projectName: 'CaveB',
+          projectPath: '/caves/CaveB.stalx',
+          phase: 'loading_project_data',
+          overallProgress: 25,
+        });
+      });
+
+      await expect(page.getByTestId('loading-progress')).toBeVisible();
+      await expect(page.getByText('Loading CaveB')).toBeVisible();
+      await expect(page.getByTestId('single-system-view')).toBeVisible();
+
+      // The Display menu button is under the overlay: a click there lands on the overlay.
+      const displayMenuReachable = await page.evaluate(() => {
+        const button = document.querySelector('[data-testid="display-menu-button"]');
+        if (!button) return null;
+        const r = button.getBoundingClientRect();
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return top !== null && button.contains(top);
+      });
+      expect(displayMenuReachable).toBe(false);
+
+      // The shortcuts stand down: '?' would open the keyboard-shortcuts dialog.
+      await page.keyboard.press('?');
+      expect(await page.evaluate(() => (window as E2EWindow).__E2E_TEST__.uiStore.getState().screenOccupants)).toBeGreaterThan(0);
+      expect(await page.evaluate(() => (window as E2EWindow).__E2E_TEST__.uiStore.getState().activeDialog)).toBeNull();
+
+      await page.evaluate(() => {
+        const e2e = (window as unknown as { __E2E_TEST__?: { simulateLoadingError?: (msg: string, details?: string) => void } }).__E2E_TEST__;
+        e2e?.simulateLoadingError?.('Could not read the project file.');
+      });
+      await expect(page.getByText('Could not read the project file.')).toBeVisible();
+      await expect(page.getByTestId('loading-error-retry')).toBeVisible();
+
+      await page.getByTestId('loading-error-dismiss').click();
+      await expect(page.getByTestId('loading-progress')).toHaveCount(0);
+      expect(await page.evaluate(() => (window as E2EWindow).__E2E_TEST__.projectStore.getState().loading.isLoading)).toBe(false);
+      expect(await page.evaluate(() => (window as E2EWindow).__E2E_TEST__.uiStore.getState().screenOccupants)).toBe(0);
+      await expect(page.getByTestId('single-system-view')).toBeVisible();
     });
   });
 

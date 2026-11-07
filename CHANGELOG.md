@@ -25,6 +25,7 @@ Update this file every time a new version is tagged.
 
 ### Fixed
 
+- **Opening a project from an open one shows the loading window** - opening another project while one is open (Ctrl+O or a drop, then Discard in the unsaved-changes prompt) now shows the loading window over the project, as the project list does. While it is up, the Display menu and the keyboard shortcuts wait for it. A load that fails shows its error there with Retry and Dismiss; before, the error was not shown anywhere and the project's notices stayed hidden until the next load.
 - **A Cancel stops only the load it was pressed for** - Cancel on the loading screen or in an import dialog could reach the app after that load had already finished and a newer project open, new project or import had started, and cancel that one instead. Each Cancel now names the load it was made for, and a late Cancel no longer hides the progress of the newer load.
 - **SpeleoDB:** projects Stalagmight publishes or adopts are now typed `stalagmight` on SpeleoDB instead of `other`, a type SpeleoDB never builds maps for. Projects already adopted as `other` are relabelled on their next push. Their maps update once SpeleoDB generates maps for Stalagmight projects.
 
