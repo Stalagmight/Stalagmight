@@ -165,6 +165,11 @@ Commands now run **concurrently**, which makes three rules explicit:
   declare, hand on, or put the identity on the wire, and every registered command
   must be classified - an identity carrier, or listed with the reason it does not
   write the open project - so a new one fails until someone decides which it is.
+  The identity names a project and its file, not a session: a request made in an
+  earlier session of the same file (load A, load B, load A) is accepted by the
+  backend, by the display-setting rule's design (#576 RVF-c-C2); the frontend's
+  session epoch (`store/projectSession.ts`, `lostProjectOf`) and switch gate are
+  what keep such a request out.
   The frontend captures the identity when the user issues the edit or the save
   (`store/projectIssue.ts`; the other open-project writers through
   `store/expectedOpenProject.ts`) and keeps both apart from project switches

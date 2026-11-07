@@ -39,6 +39,16 @@
 //! its link writes after the upload, Publish's relocation, the metadata name fold,
 //! the undo-mode write). A refusal reaches the frontend as `PROJECT_CHANGED`
 //! (through `refused_by` for a SpeleoDB verb) with nothing written.
+//!
+//! [#576 RVF-c-C2] What the identity does NOT tell apart: two sessions of the SAME
+//! file. After load A, load B, load A (or a close and reopen of A), a request made
+//! in the first A session has the `created_at` and the path of the new one, and the
+//! commit resets `opened_from` to that path, so it is ACCEPTED and runs against the
+//! freshly loaded A. That is the display-setting rule on purpose (a reload of the
+//! same file opens the project the write was made in, #576 RV8b-3); the backend
+//! keeps no session counter. The frontend tells sessions apart itself
+//! (`projectSessionEpoch`, `lostProjectOf`, and its switch gate), so this check is
+//! the backstop for ANOTHER project or another copy, not for an older session.
 use std::cell::RefCell;
 use std::path::PathBuf;
 
