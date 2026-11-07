@@ -129,7 +129,9 @@
  *                    offered, and changing the treatment - which writes the
  *                    GLOBAL CONFIG mid-import - must not move the undo stack
  *   IMPORT GATE      a second file routed into a screen an import owns must be
- *                    refused (#411's `importFlowOwnsScreen`)
+ *                    refused (#411's `importFlowOwnsScreen`), and every route
+ *                    the gate refused - the parse gate's too, with no import
+ *                    screen up - must say so (`checkGateRefusalToast`)
  *   EXPORT CHORD     Ctrl+E must be inert while a dialog owns the screen -
  *                    judged on the dialog the DISPATCHER saw, not the digest
  *   CLOSE            closing the project at idle must leave nothing behind
@@ -416,6 +418,7 @@ import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import {
   checkAccounting,
   checkFrozenDelete,
+  checkGateRefusalToast,
   checkIpcContract,
   checkPushed,
   checkReceipt,
@@ -1108,6 +1111,11 @@ export const importDialogFuzz: Scenario = {
       /** `dataTableFullScreen` at the same instant. `key:` chords only. */
       fullscreenAtDispatch: boolean | null;
       /**
+       * `importParse !== null` at the same instant (`RouteOutcome.parseAtDispatch`):
+       * the parse gate. Routes only; null on every other move.
+       */
+      parseAtDispatch: boolean | null;
+      /**
        * On a `route`, the toasts it raised, read when it returned
        * (`RouteOutcome.toastsRaised`, #576 HFI2-F3). Null on every other move.
        */
@@ -1153,6 +1161,7 @@ export const importDialogFuzz: Scenario = {
       let dialogAtDispatch: string | null = null;
       let placementAtDispatch: boolean | null = null;
       let fullscreenAtDispatch: boolean | null = null;
+      let parseAtDispatch: boolean | null = null;
       let toastsRaisedAtDispatch: string[] | null = null;
       let handoff: FileHandoff | null = null;
       let digest: ImportScreenDigest;
@@ -1197,6 +1206,7 @@ export const importDialogFuzz: Scenario = {
             performed = true;
             dialogAtDispatch = routed.dialogAtDispatch;
             placementAtDispatch = routed.placementAtDispatch;
+            parseAtDispatch = routed.parseAtDispatch;
             toastsRaisedAtDispatch = routed.toastsRaised;
             // `routeOpenedFile` returns void, so acceptance is read off the
             // values its guards consulted on the same tick: a dialog, placement,
@@ -1317,6 +1327,7 @@ export const importDialogFuzz: Scenario = {
         dialogAtDispatch,
         placementAtDispatch,
         fullscreenAtDispatch,
+        parseAtDispatch,
         toastsRaisedAtDispatch,
         handoff,
       };
@@ -2395,6 +2406,9 @@ export const importDialogFuzz: Scenario = {
               fail('CLOSE: closing the project at idle left state behind', residue.map((line) => `  ${line}`).join('\n'));
             }
           }
+          // Set when the IMPORT GATE branch judges the route itself; the refusal
+          // half after it then leaves the route alone.
+          let importGateJudged = false;
           if (interjectRoute && outcome.performed) {
             // Was the screen still the one the move was CLASSIFIED on when the
             // router actually looked?
@@ -2415,6 +2429,7 @@ export const importDialogFuzz: Scenario = {
             const sameScreenAtDispatch =
               outcome.dialogAtDispatch === dialogBefore && outcome.placementAtDispatch === placementBefore;
             ctx.metric(sameScreenAtDispatch ? 'interjectRouteGuarded' : 'importGateSkipped:screenMovedBeforeDispatch');
+            importGateJudged = sameScreenAtDispatch;
             // The REFUSAL TOAST, not the screen, is the guard's observable
             // effect - and the screen is not a sound test of it. Measured, on
             // the seed-7 five-format run: `create-and-continue-button` starts
@@ -2440,6 +2455,28 @@ export const importDialogFuzz: Scenario = {
               );
             }
           }
+          // IMPORT GATE, the refusal half (#576 W71-NF9): every route the gate
+          // refused must say so. Judged on the handoff the gates read at
+          // dispatch, not on the screen the move was drawn on: the parse gate
+          // refuses with no import screen up, which the branch above never
+          // sees. A route that branch judged keeps its verdict
+          // (`checkGateRefusalToast`), and the toast is read from the same
+          // window, the route's own return tick (#576 HFI2-F3).
+          const refusal = guarded(() =>
+            checkGateRefusalToast({
+              handoff: outcome.handoff,
+              importGateJudged,
+              toastsRaised: outcome.toastsRaisedAtDispatch,
+              digestToasts: digest.toast,
+              key: IMPORT_GATE_TOAST_KEY,
+              gates: {
+                dialogAtDispatch: outcome.dialogAtDispatch,
+                placementAtDispatch: outcome.placementAtDispatch === true,
+                parseAtDispatch: outcome.parseAtDispatch === true,
+              },
+            }),
+          );
+          if (refusal === 'said') ctx.metric('gateRefusalSaid');
         };
 
         for (;;) {

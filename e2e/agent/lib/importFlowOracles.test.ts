@@ -26,6 +26,7 @@ import {
   ImportOracleError,
   MAX_VISIBLE_WARNINGS,
   checkAccounting,
+  checkGateRefusalToast,
   checkIpcContract,
   checkPushed,
   checkReceipt,
@@ -549,6 +550,82 @@ describe('routeHandoff', () => {
           );
         }
       }
+    }
+  });
+});
+
+/**
+ * #576 W71-NF9: IMPORT GATE's refusal half. Every refusal of `routeOpenedFile`
+ * raises `TOAST_KEYS.IMPORT_IN_PROGRESS` ("Finish or cancel the current import
+ * first."), but the screen half of IMPORT GATE judges only routes drawn on a
+ * screen an import owns (`IMPORT_GUARDED_SCREENS`), and the parse gate refuses
+ * with no such screen up. A parse-gate refusal was never checked for its toast.
+ */
+describe('checkGateRefusalToast (IMPORT GATE, refusal half)', () => {
+  /** A synthetic toast key; the oracle takes the real one as an argument. */
+  const GATE = 'test-import-gate';
+  const idle = { dialogAtDispatch: null, placementAtDispatch: false, parseAtDispatch: false };
+  const parsing = { ...idle, parseAtDispatch: true };
+  const check = (over: Partial<Parameters<typeof checkGateRefusalToast>[0]> = {}) =>
+    checkGateRefusalToast({
+      handoff: routeHandoff(parsing),
+      importGateJudged: false,
+      toastsRaised: [],
+      digestToasts: [],
+      key: GATE,
+      gates: parsing,
+      ...over,
+    });
+
+  it('THE REGRESSION (W71-NF9): fails a parse-gate refusal that raised no toast', () => {
+    // No dialog, no placement: nothing on screen for the screen half to judge.
+    expect(() => check()).toThrow(ImportOracleError);
+    expect(() => check()).toThrow(/IMPORT GATE: a route the gate refused did not say so/);
+    expect(() => check()).toThrow(/activeDialog=null placement=false parsing=true/);
+  });
+
+  it('passes a parse-gate refusal that raised the toast', () => {
+    expect(check({ toastsRaised: [GATE] })).toBe('said');
+  });
+
+  it('does not check a route that was not refused, or a move that was not a route', () => {
+    expect(check({ handoff: routeHandoff(idle), gates: idle })).toBe('not-refused');
+    expect(check({ handoff: 'unconsumed' })).toBe('not-refused');
+    expect(check({ handoff: null })).toBe('not-refused');
+  });
+
+  it('reads the toast when the route returned, not off the settled digest (HFI2-F3)', () => {
+    // Raised by the route, faded by the time a wizard calculation let the digest settle.
+    expect(check({ toastsRaised: [GATE], digestToasts: [] })).toBe('said');
+    // Up in the digest from an earlier refusal; this route raised nothing.
+    expect(() => check({ toastsRaised: [], digestToasts: [GATE] })).toThrow(/did not say so/);
+    // Another toast is not the refusal.
+    expect(() => check({ toastsRaised: ['test-other'] })).toThrow(/did not say so/);
+  });
+
+  it("falls back to the digest only when the route's reading is missing", () => {
+    expect(check({ toastsRaised: null, digestToasts: [GATE] })).toBe('said');
+    expect(() => check({ toastsRaised: null, digestToasts: [] })).toThrow(/did not say so/);
+  });
+
+  it('leaves a route the screen half judged to it, so one refusal is not reported twice', () => {
+    // The screen half failed it already, under its own headline, or passed it on the same reading.
+    expect(check({ importGateJudged: true })).toBe('import-gate');
+    expect(check({ importGateJudged: true, toastsRaised: [GATE] })).toBe('import-gate');
+  });
+
+  it('checks every refusal the screen half did not judge, whichever gate refused it', () => {
+    // A dialog outside the import flow (the router's second gate), placement,
+    // and a guarded screen that moved before dispatch: all refused, all toast.
+    for (const gates of [
+      { ...idle, dialogAtDispatch: 'settings' },
+      { ...idle, dialogAtDispatch: 'dmp-import-new' },
+      { ...idle, placementAtDispatch: true },
+      parsing,
+    ]) {
+      const handoff = routeHandoff(gates);
+      expect(() => check({ handoff, gates })).toThrow(/did not say so/);
+      expect(check({ handoff, gates, toastsRaised: [GATE] })).toBe('said');
     }
   });
 });

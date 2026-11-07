@@ -212,6 +212,64 @@ export function routeHandoff(gates: RouteGates): FileHandoff {
 }
 
 /**
+ * What `checkGateRefusalToast` did with a move: `not-refused` (not a route the
+ * gate refused), `import-gate` (left to IMPORT GATE's screen half), `said`.
+ */
+export type GateRefusalCheck = 'not-refused' | 'import-gate' | 'said';
+
+/**
+ * IMPORT GATE, the refusal half (#576 W71-NF9): a route `routeOpenedFile`
+ * refused must SAY so. Each of its refusals raises
+ * `TOAST_KEYS.IMPORT_IN_PROGRESS` ("Finish or cancel the current import
+ * first.") and returns, and that toast is the user's only sign the file was
+ * dropped.
+ *
+ * The screen half (the fuzzer's `interjectRoute` branch) judges a route by the
+ * screen the walk drew it on, and only on the screens an import owns
+ * (`IMPORT_GUARDED_SCREENS`). The parse gate has none: an import's file still
+ * parsing refuses a second one with no dialog up and placement off
+ * (`routeHandoff`), so that refusal was never checked for its toast. This half
+ * judges by the handoff, read on the route's own tick, so it sees every refusal.
+ *
+ * One route is not judged twice. A route the screen half judged
+ * (`importGateJudged`: drawn on a guarded screen that was still the screen at
+ * dispatch) keeps that verdict, under that headline. This half checks the rest:
+ * the parse gate, a dialog outside the import flow (the router's second gate),
+ * and a guarded screen that moved before dispatch and still refused.
+ *
+ * The toast is read where the screen half reads it (`importGateRefusalSeen`):
+ * from the toasts the route raised, on the tick it returned (#576 HFI2-F3), and
+ * not the settled digest, which a wizard calculation can hold past the toast's
+ * life. The digest is the fallback only when that reading is missing.
+ */
+export function checkGateRefusalToast(input: {
+  /** What a file entry point did with the path (`routeHandoff` on a route); null for other moves. */
+  handoff: FileHandoff | null;
+  /** IMPORT GATE's screen half judged this route itself. */
+  importGateJudged: boolean;
+  /** `RouteOutcome.toastsRaised`; null when the route's reading is missing. */
+  toastsRaised: readonly string[] | null | undefined;
+  /** The toast keys of the digest settled after the move: the fallback only. */
+  digestToasts: readonly string[];
+  /** `TOAST_KEYS.IMPORT_IN_PROGRESS`. */
+  key: string;
+  /** What the gates read at dispatch, for the failure detail. */
+  gates: RouteGates;
+}): GateRefusalCheck {
+  if (input.handoff !== 'gate-refused') return 'not-refused';
+  if (input.importGateJudged) return 'import-gate';
+  if (importGateRefusalSeen(input.toastsRaised, input.digestToasts, input.key)) return 'said';
+  const { dialogAtDispatch, placementAtDispatch, parseAtDispatch } = input.gates;
+  fail('IMPORT GATE: a route the gate refused did not say so', [
+    `gates at dispatch: activeDialog=${JSON.stringify(dialogAtDispatch)} placement=${placementAtDispatch} ` +
+      `parsing=${parseAtDispatch}`,
+    `toasts raised by the route: ${JSON.stringify(input.toastsRaised ?? null)}; ` +
+      `after settle: ${JSON.stringify(input.digestToasts)}`,
+    `routeOpenedFile must raise ${input.key} on every refusal (#411, #576 Q-W27-1-D1)`,
+  ]);
+}
+
+/**
  * Did this move hand work to something that can fail? S4's ONE question.
  *
  * S4 asks two things of every move and they had drifted into two decision
