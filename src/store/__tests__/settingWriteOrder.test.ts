@@ -171,12 +171,9 @@ describe('same-setting writes land in the order they were made', () => {
     queueGasConfigWrite({ swim_speed_m_per_min: 20 });
     await flushGasConfigWrite();
 
-    console.log('backend gas after the Plan-mode write:', JSON.stringify({
-      conservative_tank_gas: backendGas.conservative_tank_gas,
-      swim_speed_m_per_min: backendGas.swim_speed_m_per_min,
-    }));
-    expect(backendGas.swim_speed_m_per_min).toBe(20);
-    expect(backendGas.conservative_tank_gas).toBe(false);
+    const sentGas = `backend gas after the Plan-mode write: ${JSON.stringify(backendGas)}`;
+    expect(backendGas.swim_speed_m_per_min, sentGas).toBe(20);
+    expect(backendGas.conservative_tank_gas, sentGas).toBe(false);
     expect(useProjectStore.getState().config?.gas.conservative_tank_gas).toBe(false);
   });
 });

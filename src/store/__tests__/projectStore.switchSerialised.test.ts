@@ -147,10 +147,10 @@ describe('project switches run one at a time, latest wins (#576 FZ-FZ-INT-1)', (
     }
     await Promise.all([opA, opB, opA2]);
 
-    console.log(`[FZ-FZ-INT-1] sent: ${sent.join(', ')}; backend: ${backendOpen}; store: ${useProjectStore.getState().project?.file_path}`);
-    expect(await opB).toEqual({ success: false, superseded: true });
-    expect(useProjectStore.getState().project?.file_path).toBe(backendOpen);
-    expect(backendOpen).toBe(CAVE_A);
+    const trace = `sent: ${sent.join(', ')}; backend: ${backendOpen}; store: ${useProjectStore.getState().project?.file_path}`;
+    expect(await opB, trace).toEqual({ success: false, superseded: true });
+    expect(useProjectStore.getState().project?.file_path, trace).toBe(backendOpen);
+    expect(backendOpen, trace).toBe(CAVE_A);
   });
 
   it('a create or a close still waiting when a newer switch is requested is dropped', async () => {
