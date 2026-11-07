@@ -23,7 +23,7 @@ Update this file every time a new version is tagged.
 
 - **Full-text search, R-tree, DBSTAT and extension loading are also refused while a file is open** - every project file is opened with SQLite set to refuse them, so `stalx-reader` built from crates.io, whose SQLite has them compiled in, keeps a crafted `.stalx` away from their code too; a file whose schema names are not valid UTF-8, or whose schema SQL is not stored as text (a crafted file could hide a CHECK constraint from the unsafe-file check that way), is refused as unsafe, though the recovery dialog's Export Salvageable Data still reads a damaged file whose schema type, name, table name or SQL one flipped bit left stored as a blob, its station comments, loop closures and project settings included ([#619](https://github.com/Stalagmight/Stalagmight/issues/619))
 
-## [0.5.0] - 2026-08-13
+## [0.5.0] - 2026-11-07
 
 The first release with builds for all three platforms. The headline additions are
 **Plan mode**, a gas- and range-aware dive planner built on the survey graph, and
