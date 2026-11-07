@@ -238,7 +238,7 @@ export const GROUP: SiteGroup = {
       'escapeFrom: ESCAPE_BUDGET': 'the number 6 (importDialogModel.ts:507 ESCAPE_BUDGET)',
       'err.message': ORACLE_ERROR,
       "verdict.gates.join(' + ')":
-        "exportChordVerdict's gates (lib/importFlowOracles.ts:275-277): the literals 'placementMode active' and " +
+        "exportChordVerdict's gates (lib/importFlowOracles.ts:309-311): the literals 'placementMode active' and " +
         "'dataTableFullScreen', and `activeDialog=\"<shareableTestId>\"`",
       'move.testid':
         'a test id from a fixed set: orphanMove is move.testid only when ORPHAN_ACCEPTS / ORPHAN_DECLINES has it ' +
