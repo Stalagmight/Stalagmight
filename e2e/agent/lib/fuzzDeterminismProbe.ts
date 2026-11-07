@@ -111,8 +111,12 @@ export class DetProbe {
     const parsed = JSON.parse(await ctx.eval<string>(STATE_SOURCE)) as unknown;
     this.states += 1;
     if (this.replay === 'B' && this.plantAt === this.states) {
-      const planted = plantDifference(parsed);
-      ctx.log(`determinism self-test: replay B planted a difference at ${planted ?? '(no number found)'}`);
+      // The record's number, not the path planted at: a path can carry a quoted
+      // key of the app's data, and this line is a progress line people share
+      // (`shareableRunnerOutput.test.ts` scans it). The divergence it causes
+      // names the record and its path.
+      const found = plantDifference(parsed) !== null;
+      ctx.log(`determinism self-test: replay B planted a difference in state record ${this.states}${found ? '' : ' (no number found)'}`);
     }
     this.push('state', label, parsed);
   }

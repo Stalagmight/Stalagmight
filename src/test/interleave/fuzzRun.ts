@@ -241,8 +241,8 @@ export const ALL_SHAPES: RunOptions = {
 };
 
 /**
- * What CI runs: every shape except those of the open findings. FZ-FZ-INT-1, -4, -6
- * and -7 are fixed (their shapes are on); FZ-FZ-INT-3 is still open.
+ * What CI runs: every shape except those of the open findings. FZ-FZ-INT-1, -3, -4,
+ * -6 and -7 are fixed, so every shape is on.
  */
 export const KNOWN_OPEN_EXCLUDED: RunOptions = {
   overlapSwitches: true,

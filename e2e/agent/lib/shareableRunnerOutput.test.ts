@@ -181,6 +181,9 @@ const HARNESS_VALUES = new Set([
   'ctx.metrics.noops ?? 0',
   'deepest',
   'maxBytes',
+  // fuzzDeterminismProbe.ts: the plant's state-record number and a literal.
+  'this.states',
+  "found ? '' : ' (no number found)'",
 ]);
 
 interface Interpolation {
@@ -263,13 +266,17 @@ describe("a scenario's progress lines share no app text (#576 W23-NF3)", () => {
   });
 
   it('every ctx.log value is a harness value, or the app text at the end of a `failed:` line', () => {
-    const dir = path.join(REPO, 'e2e/agent/scenarios');
-    const all = fs
-      .readdirSync(dir)
-      .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts'))
-      .flatMap((name) => logInterpolations(path.join(dir, name)));
+    // The scenarios, and the harness modules that log through a scenario's
+    // context (the determinism probe's self-test line).
+    const all = ['e2e/agent/scenarios', 'e2e/agent/lib'].flatMap((dir) =>
+      fs
+        .readdirSync(path.join(REPO, dir))
+        .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts'))
+        .flatMap((name) => logInterpolations(path.join(REPO, dir, name))),
+    );
     // The walk found the calls: a parse that saw none would pass vacuously.
     expect(all.length).toBeGreaterThan(40);
+    expect(all.some((value) => value.where.startsWith('fuzzDeterminismProbe.ts:'))).toBe(true);
     const unchecked = all.filter((value) => !HARNESS_VALUES.has(value.text) && !value.afterFailed);
     expect(unchecked.map((value) => `${value.where} \${${value.text}}`)).toEqual([]);
   });
@@ -317,5 +324,52 @@ describe('a matrix cell that died without a FAIL line shares no app text (#576 W
     const { scenarioFailOutput } = await import('./shareableFailure');
     const block = scenarioFailOutput('s', new Error('ipc save_project: qzproject')).trimEnd().split('\n');
     expect(failureDetail({ outLines: block, allLines: block })).toBe(block.join('\n'));
+  });
+});
+
+describe('a two-session determinism failure is kept where its FAIL block says (#576 FZ-SYNC)', () => {
+  const divergence = [
+    'determinism: two replays of seed 5 diverged at trace step 2 (record #4, state "after step 2")',
+    '  first differing path: $.project.ok.sections[0]["qzstation"]',
+    '  replay A: "qzproject"',
+    '  replay B: "qzsection"',
+    '  reproduce: STALAGMIGHT_FUZZ_DETERMINISM=2sessions pnpm agent:scenario s --seed 5 --iterations 3',
+  ].join('\n');
+
+  it("records the full text in every replay's action log, which the withheld count names", async () => {
+    const { pairFailOutput } = await import('./shareableFailure');
+    const events: { log: string; event: string; detail: unknown }[] = [];
+    const replay = (log: string) => ({
+      event: (event: string, detail?: unknown) => {
+        events.push({ log, event, detail });
+      },
+    });
+    const printed = pairFailOutput('s', new Error(divergence), [replay('A'), replay('B')]);
+    expect(names(printed)).toEqual([]);
+    expect(printed.split('\n')).toEqual([
+      'FAIL: s threw:',
+      'determinism: two replays of seed 5 diverged at trace step 2 (record #4, state "after step 2")',
+      "  (3 line(s) withheld: they can quote the app's text - the full failure is in each replay session's actions.jsonl)",
+      '  reproduce: STALAGMIGHT_FUZZ_DETERMINISM=2sessions pnpm agent:scenario s --seed 5 --iterations 3',
+      '',
+    ]);
+    const detail = { scenario: 's', determinism: '2sessions', message: divergence };
+    expect(events).toEqual([
+      { log: 'A', event: 'scenario-failure', detail },
+      { log: 'B', event: 'scenario-failure', detail },
+    ]);
+  });
+
+  it('says the text is nowhere when no replay had an action log', async () => {
+    const { pairFailOutput } = await import('./shareableFailure');
+    expect(pairFailOutput('s', new Error(divergence), [])).toContain(
+      "(3 line(s) withheld: they can quote the app's text - no replay session had an action log to keep the full failure)",
+    );
+  });
+
+  it("is what agent:scenario prints for the pair, with each replay's action log", () => {
+    const source = fs.readFileSync(path.join(REPO, 'e2e/agent/scenario-run.ts'), 'utf8');
+    expect(source).toMatch(/if \(own\.hasRecorder\) replayLogs\.push\(own\.recorder\);/);
+    expect(source).toMatch(/process\.stdout\.write\(pairFailOutput\(args\.name, err, replayLogs\)\);/);
   });
 });

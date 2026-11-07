@@ -1516,7 +1516,9 @@ Key order is compared.
 A failure names the seed, the trace step, the record and the first differing
 path, with a reproduce line. When both replays fail the same way the failure
 says it reproduced; a failure in one replay only is itself a determinism
-failure. `STALAGMIGHT_FUZZ_DETERMINISM_PLANT=N` is the self-test: replay B nudges
+failure. Under `=2sessions` that verdict comes after both sessions stopped, so
+its full text is written into each replay session's `actions.jsonl`, and the
+printed FAIL block says so. `STALAGMIGHT_FUZZ_DETERMINISM_PLANT=N` is the self-test: replay B nudges
 one number in its Nth state record, and the run must fail there. The code is
 `e2e/agent/lib/fuzzDeterminism*.ts`.
 

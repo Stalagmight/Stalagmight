@@ -35,7 +35,7 @@
 import * as path from 'path';
 import { readTrace, restoreTraceEnv, type FuzzTrace } from './lib/fuzzTrace';
 import { parseScenarioArgs, scenarioRunOptions } from './lib/scenarioRunArgs';
-import { progressLogger, scenarioFailOutput, shareableErrorText } from './lib/shareableFailure';
+import { pairFailOutput, progressLogger, scenarioFailOutput, shareableErrorText } from './lib/shareableFailure';
 
 async function main(): Promise<void> {
   const args = parseScenarioArgs(process.argv.slice(2));
@@ -132,6 +132,8 @@ async function main(): Promise<void> {
       process.stdout.write(`   . ${line}\n`);
     };
     const log = progressLogger(print);
+    // Each replay's action log, for the pair's own verdict once both stopped.
+    const replayLogs: { event(event: string, detail?: unknown): void }[] = [];
     let pairFailed = false;
     try {
       const metrics = await runDeterminismPair(
@@ -147,6 +149,7 @@ async function main(): Promise<void> {
         async (replay) => {
           const own = createSession();
           const ownStart = await own.start({ build: 'auto' });
+          if (own.hasRecorder) replayLogs.push(own.recorder);
           log(`replay ${replay}: session ${ownStart.state} (${ownStart.buildMode} build ${ownStart.buildAction})`);
           try {
             const replayMetrics = await runScenario(args.name, own, {
@@ -182,8 +185,9 @@ async function main(): Promise<void> {
       );
     } catch (err) {
       pairFailed = true;
-      // The shareable form, as on the one-session path (#576 W21-NF1).
-      process.stdout.write(scenarioFailOutput(args.name, err));
+      // The shareable form, as on the one-session path (#576 W21-NF1); the full
+      // text goes to each replay's actions.jsonl, as both sessions have stopped.
+      process.stdout.write(pairFailOutput(args.name, err, replayLogs));
     }
     process.exit(pairFailed ? 1 : 0);
   }

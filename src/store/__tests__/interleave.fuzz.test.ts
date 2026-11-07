@@ -5,8 +5,8 @@
  * checked after every step and at quiescence.
  *
  * CI runs the pinned regression traces and the fixed seeds below (seconds), with
- * the shapes of the still-open findings left out (`KNOWN_OPEN_EXCLUDED`: today only
- * FZ-FZ-INT-3's `gasFieldPatches`). Long
+ * the shapes of the still-open findings left out (`KNOWN_OPEN_EXCLUDED`). None is
+ * left out today: FZ-FZ-INT-3's `gasFieldPatches` came back on with its fix. Long
  * runs, on demand (docs/testing-recipes.md):
  *   FZ_INT_SEEDS=2000 FZ_INT_SEED_START=1000 pnpm exec vitest run src/store/__tests__/interleave.fuzz.test.ts
  *   FZ_INT_SECS=600 ...            random seeds for that long

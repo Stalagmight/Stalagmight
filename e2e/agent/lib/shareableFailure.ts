@@ -155,6 +155,31 @@ export function scenarioFailOutput(name: string, err: unknown): string {
   return `FAIL: ${name} threw:\n${shareableFailureText(err instanceof Error ? err.message : String(err))}\n`;
 }
 
+/** Where a two-session failure's full text is: every replay session with an action log. */
+const PAIR_RECORDED = "the full failure is in each replay session's actions.jsonl";
+const PAIR_NOT_RECORDED = 'no replay session had an action log to keep the full failure';
+
+/**
+ * What `agent:scenario` prints for a `STALAGMIGHT_FUZZ_DETERMINISM=2sessions`
+ * failure, after recording its full text (#576 FZ-SYNC). The pair's verdict - a
+ * divergence, or one replay failing alone - is raised after both replays'
+ * sessions stopped, so no session logged it: it goes into every replay's
+ * `actions.jsonl` now, as a `scenario-failure` event, and the FAIL block's
+ * withheld-lines count says where it is only when it is there.
+ */
+export function pairFailOutput(
+  name: string,
+  err: unknown,
+  replays: readonly { event(event: string, detail?: unknown): void }[],
+): string {
+  const message = err instanceof Error ? err.message : String(err);
+  for (const recorder of replays) {
+    recorder.event('scenario-failure', { scenario: name, determinism: '2sessions', message });
+  }
+  const shared = shareableFailureText(message, [], replays.length > 0 ? PAIR_RECORDED : PAIR_NOT_RECORDED);
+  return `FAIL: ${name} threw:\n${shared}\n`;
+}
+
 /**
  * A stack frame - a code location: `at fn (file:line:col)`, `at file:line:col`,
  * `at fn (<anonymous>)`, `at async fn (node:internal/...:1:2)`. The function
