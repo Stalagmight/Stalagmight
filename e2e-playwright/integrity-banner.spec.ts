@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage, createProject } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E for the structural-integrity warn + repair banner (#17). The mock's
@@ -17,6 +18,29 @@ async function seedAndCheck(page: Page, issues: string[]): Promise<void> {
       __E2E_TEST__: { projectStore: { getState: () => { checkProjectIntegrity: () => Promise<string[]> } } };
     }).__E2E_TEST__.projectStore.getState().checkProjectIntegrity();
   });
+}
+
+/**
+ * Press Tab `count` times, then Shift+Tab `count` times, and return every press
+ * after which focus was NOT in the integrity dialog (empty when it held focus).
+ */
+async function focusEscapes(page: Page, count: number): Promise<string[]> {
+  const escapes: string[] = [];
+  for (const key of ['Tab', 'Shift+Tab']) {
+    for (let i = 1; i <= count; i++) {
+      await page.keyboard.press(key);
+      const spot = await page.evaluate(() => {
+        const active = document.activeElement;
+        const dialog = document.querySelector('[data-testid="integrity-dialog"]');
+        return {
+          id: active?.getAttribute('data-testid') ?? active?.tagName.toLowerCase() ?? 'none',
+          inDialog: dialog !== null && active !== null && dialog.contains(active),
+        };
+      });
+      if (!spot.inDialog) escapes.push(`${key} #${i} -> ${spot.id}`);
+    }
+  }
+  return escapes;
 }
 
 test.describe('Structural-integrity banner', () => {
@@ -117,6 +141,61 @@ test.describe('Structural-integrity banner', () => {
     await page.getByTestId('integrity-review-button').click();
     await expect(page.getByTestId('integrity-dialog-repair')).toBeEnabled();
     await expect(page.getByTestId('integrity-dialog-repair-blocked')).toHaveCount(0);
+  });
+
+  // [NF3] The integrity dialog was rendered inside #root, outside the dialog stack:
+  // focus stayed on Review behind it and Tab walked on through the app.
+  test('the integrity dialog holds keyboard focus and gives it back to Review when it closes', async ({ page }) => {
+    await seedAndCheck(page, ['Station merge #0 station_a references missing section 42']);
+    const review = page.getByTestId('integrity-review-button');
+    await review.click();
+    await expect(page.getByTestId('integrity-dialog')).toBeVisible();
+
+    // Focus moves to its first control, and more presses each way than it has
+    // controls (Cancel, Repair) never leave it.
+    await expect(page.getByTestId('integrity-dialog-cancel')).toBeFocused();
+    expect(await focusEscapes(page, 3)).toEqual([]);
+
+    // Cancel closes it, and focus is back on Review.
+    await expect(page.getByTestId('integrity-dialog-cancel')).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('integrity-dialog')).toHaveCount(0);
+    await expect(review).toBeFocused();
+  });
+
+  // [NF3] A dialog stacked over it made #root inert, and the integrity dialog with
+  // it, while the integrity dialog (z-[1000]) still painted on top of that dialog.
+  test('a dialog opened over the integrity dialog is painted above it, and the integrity dialog has the keyboard back when it closes', async ({ page }) => {
+    await seedAndCheck(page, ['Station merge #0 station_a references missing section 42']);
+    await page.getByTestId('integrity-review-button').click();
+    const cancel = page.getByTestId('integrity-dialog-cancel');
+    await cancel.focus();
+    await expect(cancel).toBeFocused();
+
+    await page.evaluate(() => {
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog('error', { title: 'Save failed', message: 'The disk is full.' });
+    });
+    const errorDialog = page.getByTestId('error-dialog');
+    await expect(errorDialog).toBeVisible();
+
+    // Paint order: neither #root nor #dialog-root forms a stacking context, so the
+    // two fixed layers are ordered by their z-index in the root one.
+    const layers = await page.evaluate(() => {
+      const z = (el: Element | null | undefined): number => (el ? Number(getComputedStyle(el).zIndex) : NaN);
+      return {
+        integrity: z(document.querySelector('[data-testid="integrity-dialog"]')),
+        error: z(document.querySelector('[data-testid="error-dialog"]')?.parentElement),
+      };
+    });
+    expect(layers.error).toBeGreaterThan(layers.integrity);
+
+    // Closing the dialog above (its OK) hands the keyboard back to the integrity dialog.
+    await page.getByTestId('error-dialog-body').getByTestId('error-dialog-close').click();
+    await expect(errorDialog).toHaveCount(0);
+    await expect(cancel).toBeFocused();
+    expect(await focusEscapes(page, 3)).toEqual([]);
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('integrity-dialog')).toHaveCount(0);
   });
 
   test('banner can be dismissed without opening the dialog', async ({ page }) => {

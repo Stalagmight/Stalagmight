@@ -5,6 +5,7 @@ import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore, selectNewerFileReadOnly } from './store/projectStore';
 import { LoadRepairsBanner } from './components/common/LoadRepairsBanner';
 import { InternalErrorBanner } from './components/common/InternalErrorBanner';
+import { IntegrityDialog } from './components/common/IntegrityDialog';
 import { useInternalErrorEvent } from './hooks/useInternalErrorEvent';
 import { SETTABLE_UNREADABLE_SETTINGS } from './store/unreadableSettings';
 import { isMoveCarryRefusal } from './store/moveCarry';
@@ -827,71 +828,13 @@ function App() {
 
       {/* Integrity details + repair dialog */}
       {integrityDialogOpen && integrityIssues.length > 0 && (
-        <div
-          className="fixed inset-0 z-[1000] bg-overlay flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="integrity-dialog-title"
-          data-testid="integrity-dialog"
-          onClick={() => !repairingIntegrity && closeIntegrityDialog()}
-        >
-          <div
-            className="bg-panel border border-border rounded-lg shadow-xl w-full max-w-xl max-h-[80vh] flex flex-col"
-            data-testid="integrity-dialog-panel"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-4 py-3 border-b border-border">
-              <h2 id="integrity-dialog-title" className="font-medium text-text-primary">
-                Project integrity ({integrityIssues.length}{' '}
-                {integrityIssues.length === 1 ? 'issue' : 'issues'})
-              </h2>
-            </div>
-            <div className="px-4 py-3 overflow-auto">
-              <p className="text-sm text-text-secondary mb-3">
-                The following problems were found in this project. Repairing drops invalid
-                references and realigns drifted station merges; valid survey data is kept. Save the
-                project afterwards to make the fix permanent.
-              </p>
-              <ul
-                className="list-disc list-inside space-y-1 text-sm text-text-primary"
-                data-testid="integrity-dialog-list"
-              >
-                {integrityIssues.map((issue, i) => (
-                  <li key={i} className="break-words">{issue}</li>
-                ))}
-              </ul>
-            </div>
-            <div className="px-4 py-3 border-t border-border flex justify-end gap-2">
-              {repairBlocked !== null && (
-                <span
-                  id="integrity-repair-blocked"
-                  className="mr-auto self-center text-xs text-text-secondary"
-                  data-testid="integrity-dialog-repair-blocked"
-                >
-                  {t(`integrityRepair.blocked.${repairBlocked}`)}
-                </span>
-              )}
-              <button
-                onClick={() => closeIntegrityDialog()}
-                disabled={repairingIntegrity}
-                className="px-3 py-1.5 rounded border border-border text-sm hover:bg-background disabled:opacity-50"
-                data-testid="integrity-dialog-cancel"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleRepairIntegrity}
-                disabled={repairingIntegrity || repairBlocked !== null}
-                title={repairBlocked !== null ? t(`integrityRepair.blocked.${repairBlocked}`) : undefined}
-                aria-describedby={repairBlocked !== null ? 'integrity-repair-blocked' : undefined}
-                className="px-3 py-1.5 rounded bg-accent text-white text-sm disabled:opacity-50"
-                data-testid="integrity-dialog-repair"
-              >
-                {repairingIntegrity ? 'Repairing…' : 'Repair'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <IntegrityDialog
+          issues={integrityIssues}
+          repairBlocked={repairBlocked}
+          repairing={repairingIntegrity}
+          onClose={closeIntegrityDialog}
+          onRepair={handleRepairIntegrity}
+        />
       )}
 
       {/* Splash screen overlay */}
