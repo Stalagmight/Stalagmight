@@ -42,16 +42,19 @@ mod linux {
     use std::fs;
     use std::io;
 
-    /// Walk /proc, return our process + all WebKit children/grandchildren that
-    /// claim us as ancestor. Reparented WebKit processes are matched by their
-    /// `Name:` field combined with environ/cwd checks where possible; the
-    /// fallback for sandboxed setups is "any process whose name starts with
-    /// `WebKit` and shares our euid".
+    /// Walk /proc, return our process plus every process [`select_webkit`]
+    /// picks: each one whose `Name:` starts with `WebKit` and whose real uid
+    /// (the first `Uid:` field) is ours. Name and uid are the only checks -
+    /// no environ or cwd is read - and because a reparented WebKit process
+    /// must still be found, a same-uid `WebKit*` process is reported whether
+    /// or not its PPid chain leads to us (so a second WebKit app run by the
+    /// same user is counted too).
     pub(super) fn collect() -> io::Result<MemoryStats> {
         let our_pid = std::process::id();
         let backend = read_process(our_pid, "backend")?;
 
-        // Read our own euid from /proc to avoid a libc dependency.
+        // Read our own real uid (the first `Uid:` field) from /proc, to avoid
+        // a libc dependency.
         let our_uid = read_name_ppid_uid(our_pid)
             .map(|(_, _, u)| u)
             .unwrap_or(u32::MAX);

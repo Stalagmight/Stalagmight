@@ -202,7 +202,7 @@ function main() {
     try {
       text = fs.readFileSync(full, 'utf8');
     } catch (e) {
-      console.error(`check-readonly-gates: could not read ${rel}: ${e.message}`);
+      console.error(`check-readonly-gates: could not read ${rel}: ${e.code || e.message}`);
       return 1;
     }
 

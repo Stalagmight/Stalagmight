@@ -23,7 +23,8 @@ export function hasLiveStyle(map: maplibregl.Map | null): boolean {
  * tries to add - and MapLibre refuses every write with "Style is not done
  * loading." (#576 RV18-MAP-1). A write skipped here is not lost: the restore
  * replays the stock style state once that style has loaded (SurveyLayer's
- * replay, `useStyleEpoch` for the React effects).
+ * replay - the closure exclusion of a carry picked up in either window included,
+ * RV19b-M1 - and `useStyleEpoch` for the React effects).
  */
 export function canWriteStyle(map: maplibregl.Map | null): boolean {
   if (!map || !hasLiveStyle(map)) return false;

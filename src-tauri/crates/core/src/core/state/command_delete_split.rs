@@ -684,6 +684,14 @@ impl AppState {
                 .iter()
                 .filter_map(|&i| project.key_for_ref(StationRef::new(section_id, i)))
                 .collect();
+            // Their comment keys, legacy ones included, taken while they still
+            // resolve (#576 RV19a-19): the per-shot delete drops only each
+            // station's canonical key.
+            let doomed_stations: Vec<StationRef> = doomed_indices
+                .iter()
+                .map(|&i| StationRef::new(section_id, i))
+                .collect();
+            let comment_keys = Self::comment_keys_naming(project, &doomed_stations);
 
             for &sid in &range_shot_ids {
                 if let Err(e) = project.remove_shot_with_rewire_excluding_anchors(
@@ -696,6 +704,9 @@ impl AppState {
                     let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                     return CommandResult::failure(e);
                 }
+            }
+            for key in &comment_keys {
+                project.station_comments.remove(key);
             }
             // Single cascade now that every range shot (and any doomed merge) is
             // gone, so a doomed station's intermediate shift never propagates into

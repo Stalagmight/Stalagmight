@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Browser } from 'webdriverio';
 
 import { evalInApp, invokeInApp } from './page';
+import { shareableFailureText } from './shareableFailure';
 
 function executingBrowser(): Browser {
   return {
@@ -68,6 +69,16 @@ describe('invokeInApp', () => {
     await expect(invokeInApp(spreadingBrowser(), 'delete_section')).rejects.toThrow(
       'ipc delete_section: missing required key sectionId',
     );
+  });
+
+  it("keeps the app's error after a prefix the runners withhold, whatever the command is called (#576 W51)", async () => {
+    stubInvoke(() => Promise.reject('qzCaveA not found'));
+    for (const command of ['rename_station', 'plugin:qz|x y']) {
+      const failure = await invokeInApp(spreadingBrowser(), command).catch((e: Error) => e.message);
+      const printed = shareableFailureText(String(failure));
+      expect(printed).not.toContain('qzCaveA');
+      expect(printed).toMatch(/\(17 characters of the app's text withheld\)$/);
+    }
   });
 
   it('returns the value of a command that answers', async () => {

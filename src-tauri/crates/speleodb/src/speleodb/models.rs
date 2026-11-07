@@ -1082,6 +1082,11 @@ pub struct UnpushedLocalEdits {
     /// refused like un-pushed edits; "keep local" then moves it out of the cache
     /// (Save As, then `speleodb_unlink`) instead of opening it in place.
     pub unlinked: bool,
+    /// [#576 W53] The copy is there but could not be read (a hot journal, a lock
+    /// another writer holds, damage), so it may or may not hold un-pushed edits:
+    /// the frontend says that instead of claiming edits, and offers the same two
+    /// branches. `false` for a copy that was read and found dirty.
+    pub state_unknown: bool,
 }
 
 #[cfg(test)]

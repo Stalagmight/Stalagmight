@@ -235,6 +235,54 @@ describe('SpeleoRevisionHistory (#218)', () => {
 });
 
 /**
+ * [#576 W55 NF-W53-1] A View refused because the cached copy could not be read
+ * (`state_unknown`) must say that, not repeat the un-pushed-changes line - which is
+ * still right for a copy that was read and found dirty.
+ */
+describe('SpeleoRevisionHistory - a View refused over a copy that could not be read (#576 W55 NF-W53-1)', () => {
+  const refusal = (stateUnknown: boolean) => ({
+    message: 'could not be read',
+    code: 'SPELEODB_UNPUSHED_LOCAL_EDITS',
+    unpushed_local: {
+      project_id: 'p1',
+      local_path: '/cache/p1.stalx',
+      last_edit_at: null,
+      state_unknown: stateUnknown,
+    },
+  });
+
+  const viewRefusedWith = async (error: unknown): Promise<string> => {
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'speleodb_restore_revision') throw error;
+      return command === 'speleodb_get_revisions' ? REVISIONS : null;
+    });
+    seed('read-only');
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByTestId('speleodb-revision-view-bbbbbbbb2222'));
+    await waitFor(() => expect(showToastMock).toHaveBeenCalled());
+    const [message, , severity] = showToastMock.mock.calls[0] as [string, string, string];
+    expect(severity).toBe('error');
+    return message;
+  };
+
+  it('says the copy could not be read instead of claiming un-pushed changes', async () => {
+    const message = await viewRefusedWith(refusal(true));
+    console.log('[W55] revision View toast (state_unknown):', message);
+    expect(message).toContain('could not be read');
+    expect(message).toContain('A save may have been interrupted, or another program may be using it.');
+    expect(message).not.toContain('This copy has changes that are not on SpeleoDB');
+  });
+
+  it('keeps the un-pushed line for a copy that was read and found dirty', async () => {
+    const message = await viewRefusedWith(refusal(false));
+    expect(message).toContain('This copy has changes that are not on SpeleoDB');
+    expect(message).not.toContain('could not be read');
+  });
+});
+
+/**
  * #576 RV4-FE-SP4 (decided RV2-R-15: Restore revision is refused in the read-only Plan and
  * Export workspaces). The hamburger's SpeleoDB menu reaches this tab outside Survey, where
  * Restore (lock held) and Revert (read-only) were offered with no mode check. Neither is

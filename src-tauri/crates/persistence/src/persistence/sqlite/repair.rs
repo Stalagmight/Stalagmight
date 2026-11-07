@@ -698,7 +698,8 @@ impl Database {
     /// [#576 RV18-1] The schema guard (#608) is not skipped: it reads only the
     /// schema, which SQLite has to parse before it can read any table of a
     /// damaged file anyway, and the salvage that follows must not run SQL the
-    /// file chose.
+    /// file chose. It is the salvage's lenient form (#576 RV19a-12): a type
+    /// cell that lost its case ('Table') is checked, not refused.
     pub fn open_for_recovery(path: &Path) -> Result<Self> {
         tracing::info!("Opening database for recovery at: {:?}", path);
 
@@ -709,7 +710,7 @@ impl Database {
         // Read-only, leaving nothing beside a WAL-mode file (#576 W35-NF-1).
         let conn = super::open::connect_for_reading(path)
             .context("Failed to open database for recovery")?;
-        super::check_schema(&conn)?;
+        super::schema_guard::check_schema_for_salvage(&conn)?;
 
         let db = Self { conn };
         // Skip integrity check intentionally - we know the file may be corrupt
@@ -776,7 +777,11 @@ impl Database {
         }
 
         // 5. Verify result
+        #[cfg(test)]
+        super::open::between_opens::run(path);
         let conn = Connection::open(path).context("Failed to reopen the repaired database")?;
+        // Another open of the file: guarded like the first (#608, #576 RV19a-8).
+        super::check_schema(&conn)?;
         let check: String = conn
             .query_row("PRAGMA quick_check", [], |row| row.get(0))
             .unwrap_or_else(|_| "error".to_string());
@@ -1116,8 +1121,24 @@ impl Database {
         anyhow::bail!("Too many existing backups (max 100)")
     }
 
+    /// Whether the salvage can read the table `name`: a `sqlite_master` row of
+    /// type `table` in any ASCII case. [#576 W52-6] The salvage's schema guard
+    /// checks a type cell that lost its case ('Table') as the table it is
+    /// (`check_schema_for_salvage`, RV19a-12), and SQLite reads it, so the
+    /// summary below reads it too: under [`Self::table_exists`]'s exact match a
+    /// 'Table' project table was reported as "Project table is empty", beside
+    /// the full project the salvage read back from it.
+    fn salvage_table_exists(&self, name: &str) -> Result<bool> {
+        let exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE lower(type) = 'table' AND name = ?1",
+            params![name],
+            |row| row.get(0),
+        )?;
+        Ok(exists > 0)
+    }
+
     pub(super) fn try_read_project_metadata(&self) -> Result<Option<(String, Option<String>)>> {
-        if !self.table_exists("project")? {
+        if !self.salvage_table_exists("project")? {
             return Ok(None);
         }
         let count: i64 = self
@@ -1135,7 +1156,7 @@ impl Database {
     }
 
     pub(super) fn try_read_sections(&self) -> Result<Vec<SalvagedSection>> {
-        if !self.table_exists("sections")? {
+        if !self.salvage_table_exists("sections")? {
             return Ok(Vec::new());
         }
         let mut stmt = self
@@ -1158,7 +1179,7 @@ impl Database {
     }
 
     pub(super) fn try_read_shot_count(&self) -> Result<usize> {
-        if !self.table_exists("shots")? {
+        if !self.salvage_table_exists("shots")? {
             return Ok(0);
         }
         let count: i64 = self
@@ -1168,7 +1189,7 @@ impl Database {
     }
 
     pub(super) fn try_read_merge_count(&self) -> Result<usize> {
-        if !self.table_exists("station_merges")? {
+        if !self.salvage_table_exists("station_merges")? {
             return Ok(0);
         }
         let count: i64 = self

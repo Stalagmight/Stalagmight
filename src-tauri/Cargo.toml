@@ -269,8 +269,11 @@ unwrap_in_result = "deny"
 # Clone-spam, cont.: force explicit Rc::clone(&x) over x.clone(); no Rc clones in vec![x; n].
 clone_on_ref_ptr = "deny"
 rc_clone_in_vec_init = "deny"
-# String nonsense, cont.: String.to_string() is a pointless re-alloc.
-string_to_string = "deny"
+# String nonsense, cont.: String.to_string() is a pointless re-alloc. Its lint,
+# `string_to_string` (denied here until #576 W52-5), was removed from clippy - the
+# pinned 1.97.1 already reports "has been removed: `clippy::implicit_clone` covers
+# those cases" - so the deny enforced nothing. Its successor `implicit_clone` is
+# configured above, at warn.
 # Misc AI footguns: redundant type annotations, mem::forget leaks, lossy float literals.
 redundant_type_annotations = "deny"
 mem_forget = "deny"

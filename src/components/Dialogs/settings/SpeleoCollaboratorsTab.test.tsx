@@ -88,7 +88,7 @@ describe('SpeleoCollaboratorsTab', () => {
   it('renders the user + team roster and the instant-changes note', async () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
-    expect(await screen.findByTestId('speleodb-collab-user-bob@x.com')).toBeInTheDocument();
+    expect(await screen.findByTestId('speleodb-collab-user-1')).toBeInTheDocument();
     expect(screen.getByTestId('speleodb-collab-team-t1')).toHaveTextContent('Divers');
     expect(screen.getByTestId('speleodb-collaborators-changes-note')).toBeInTheDocument();
   });
@@ -98,17 +98,58 @@ describe('SpeleoCollaboratorsTab', () => {
     render(<SpeleoCollaboratorsTab />);
     expect(await screen.findByTestId('speleodb-collaborators-readonly-badge')).toBeInTheDocument();
     expect(screen.queryByTestId('speleodb-collaborators-add-user')).toBeNull();
-    expect(screen.queryByTestId('speleodb-collab-user-remove-offer-bob@x.com')).toBeNull();
+    expect(screen.queryByTestId('speleodb-collab-user-remove-offer-1')).toBeNull();
   });
 
   it('disables its own row (no self grant/remove)', async () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
-    await screen.findByTestId('speleodb-collab-user-me@x.com');
-    expect(screen.queryByTestId('speleodb-collab-user-remove-offer-me@x.com')).toBeNull();
-    expect(screen.queryByTestId('speleodb-collab-user-level-me@x.com')).toBeNull();
+    await screen.findByTestId('speleodb-collab-user-0');
+    expect(screen.queryByTestId('speleodb-collab-user-remove-offer-0')).toBeNull();
+    expect(screen.queryByTestId('speleodb-collab-user-level-0')).toBeNull();
     // But another user's row IS editable.
-    expect(screen.getByTestId('speleodb-collab-user-remove-offer-bob@x.com')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-collab-user-remove-offer-1')).toBeInTheDocument();
+  });
+
+  // A test id is printed wherever a run reports what it clicked (an agent
+  // session's report.md goes to public issues), so it must not carry a
+  // collaborator's email: the user rows and their controls are keyed by position
+  // (#576 W47-NF1), as the publish dialog's are (RV19b-P1a).
+  it('keys the user rows and their controls by position, never by email', async () => {
+    seed('ADMIN');
+    render(<SpeleoCollaboratorsTab />);
+    const testIdsWithEmail = () =>
+      Array.from(document.querySelectorAll('[data-testid]'))
+        .map((el) => el.getAttribute('data-testid') ?? '')
+        .filter((id) => id.includes('@') || id.includes('x.com'));
+
+    await screen.findByText('bob@x.com');
+    expect(testIdsWithEmail()).toEqual([]);
+    expect(screen.getByTestId('speleodb-collab-user-0')).toHaveTextContent('me@x.com');
+    expect(screen.getByTestId('speleodb-collab-user-1')).toHaveTextContent('bob@x.com');
+    expect(screen.getByTestId('speleodb-collab-user-2')).toHaveTextContent('carol@x.com');
+
+    // A staged level (picker options, pending badge, Apply, Cancel) and an armed
+    // Remove bring up the rest of a row's ids.
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-level-1'));
+    expect(testIdsWithEmail()).toEqual([]);
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-level-1-option-READ_AND_WRITE'));
+    expect(screen.getByTestId('speleodb-collab-user-level-pending-1')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-collab-user-level-cancel-1')).toBeInTheDocument();
+    expect(testIdsWithEmail()).toEqual([]);
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-level-apply-1'));
+    await waitFor(() => {
+      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_set_collaborator');
+      expect(call![1]).toEqual({ email: 'bob@x.com', permission: 'READ_AND_WRITE' });
+    });
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-offer-2'));
+    expect(screen.getByTestId('speleodb-collab-user-remove-confirm-2')).toBeInTheDocument();
+    expect(testIdsWithEmail()).toEqual([]);
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-confirm-2'));
+    await waitFor(() => {
+      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_remove_collaborator');
+      expect(call![1]).toEqual({ email: 'carol@x.com' });
+    });
   });
 
   it('adds a collaborator with the chosen email + level', async () => {
@@ -139,7 +180,7 @@ describe('SpeleoCollaboratorsTab', () => {
     render(<SpeleoCollaboratorsTab />);
     const input = await screen.findByTestId('speleodb-collaborators-add-email');
     await userEvent.type(input, 'ali');
-    const suggestion = await screen.findByTestId('speleodb-collaborators-suggestion-alice@x.com');
+    const suggestion = await screen.findByTestId('speleodb-collaborators-suggestion-0');
     expect(suggestion).toHaveTextContent('Alice Diver <alice@x.com>');
     await userEvent.click(suggestion);
     expect(input).toHaveValue('alice@x.com');
@@ -160,15 +201,15 @@ describe('SpeleoCollaboratorsTab', () => {
   it('changes and removes another user with the right payloads', async () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
-    await screen.findByTestId('speleodb-collab-user-level-bob@x.com');
-    await pickOption('speleodb-collab-user-level-bob@x.com', 'READ_AND_WRITE');
-    await userEvent.click(screen.getByTestId('speleodb-collab-user-level-apply-bob@x.com'));
+    await screen.findByTestId('speleodb-collab-user-level-1');
+    await pickOption('speleodb-collab-user-level-1', 'READ_AND_WRITE');
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-level-apply-1'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_set_collaborator');
       expect(call![1]).toEqual({ email: 'bob@x.com', permission: 'READ_AND_WRITE', expectedProject: null });
     });
-    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-offer-bob@x.com'));
-    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-confirm-bob@x.com'));
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-offer-1'));
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-confirm-1'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_remove_collaborator');
       expect(call![1]).toEqual({ email: 'bob@x.com', expectedProject: null });
@@ -216,16 +257,16 @@ describe('SpeleoCollaboratorsTab', () => {
   it('does not remove a collaborator until the armed confirm', async () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
-    await userEvent.click(await screen.findByTestId('speleodb-collab-user-remove-offer-bob@x.com'));
+    await userEvent.click(await screen.findByTestId('speleodb-collab-user-remove-offer-1'));
     // Armed only: the offer control is REPLACED by a distinct confirm one, and
     // nothing has reached the server.
     expect(
-      screen.getByTestId('speleodb-collab-user-remove-confirm-bob@x.com'),
+      screen.getByTestId('speleodb-collab-user-remove-confirm-1'),
     ).toBeInTheDocument();
-    expect(screen.queryByTestId('speleodb-collab-user-remove-offer-bob@x.com')).toBeNull();
+    expect(screen.queryByTestId('speleodb-collab-user-remove-offer-1')).toBeNull();
     expect(notCalled('speleodb_remove_collaborator')).toBe(true);
 
-    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-confirm-bob@x.com'));
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-confirm-1'));
     await waitFor(() =>
       expect(
         invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_remove_collaborator')![1],
@@ -244,57 +285,57 @@ describe('SpeleoCollaboratorsTab', () => {
   it('arms the removal per row, so another row is never armed with it', async () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
-    await userEvent.click(await screen.findByTestId('speleodb-collab-user-remove-offer-bob@x.com'));
+    await userEvent.click(await screen.findByTestId('speleodb-collab-user-remove-offer-1'));
     // Carol's row is untouched by Bob's arming...
-    expect(screen.getByTestId('speleodb-collab-user-remove-offer-carol@x.com')).toBeInTheDocument();
-    expect(screen.queryByTestId('speleodb-collab-user-remove-confirm-carol@x.com')).toBeNull();
+    expect(screen.getByTestId('speleodb-collab-user-remove-offer-2')).toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-collab-user-remove-confirm-2')).toBeNull();
 
     // ...and arming HERS disarms Bob's, so a stray second press cannot land on a
     // row the user has already moved on from.
-    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-offer-carol@x.com'));
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-offer-2'));
     expect(
-      screen.getByTestId('speleodb-collab-user-remove-confirm-carol@x.com'),
+      screen.getByTestId('speleodb-collab-user-remove-confirm-2'),
     ).toBeInTheDocument();
-    expect(screen.getByTestId('speleodb-collab-user-remove-offer-bob@x.com')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-collab-user-remove-offer-1')).toBeInTheDocument();
     expect(notCalled('speleodb_remove_collaborator')).toBe(true);
   });
 
   it('stages a level change instead of re-permissioning on the select', async () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
-    const select = await screen.findByTestId('speleodb-collab-user-level-bob@x.com');
-    await pickOption('speleodb-collab-user-level-bob@x.com', 'READ_AND_WRITE');
+    const select = await screen.findByTestId('speleodb-collab-user-level-1');
+    await pickOption('speleodb-collab-user-level-1', 'READ_AND_WRITE');
     // The picker shows the user's own choice, but says it is not applied, and
     // nothing has been granted server-side.
     expect(select).toHaveTextContent('Read & write');
-    expect(screen.getByTestId('speleodb-collab-user-level-pending-bob@x.com')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-collab-user-level-pending-1')).toBeInTheDocument();
     expect(notCalled('speleodb_set_collaborator')).toBe(true);
   });
 
   it('backs a staged level change out without touching the server', async () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
-    const select = await screen.findByTestId('speleodb-collab-user-level-bob@x.com');
-    await pickOption('speleodb-collab-user-level-bob@x.com', 'ADMIN');
-    await userEvent.click(screen.getByTestId('speleodb-collab-user-level-cancel-bob@x.com'));
+    const select = await screen.findByTestId('speleodb-collab-user-level-1');
+    await pickOption('speleodb-collab-user-level-1', 'ADMIN');
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-level-cancel-1'));
     // Back to server truth, with no pending badge left claiming otherwise.
     expect(select).toHaveTextContent('Read only');
-    expect(screen.queryByTestId('speleodb-collab-user-level-pending-bob@x.com')).toBeNull();
+    expect(screen.queryByTestId('speleodb-collab-user-level-pending-1')).toBeNull();
     expect(notCalled('speleodb_set_collaborator')).toBe(true);
   });
 
   it('drops a staged level change when a removal is armed on the same row', async () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
-    const select = await screen.findByTestId('speleodb-collab-user-level-bob@x.com');
-    await pickOption('speleodb-collab-user-level-bob@x.com', 'ADMIN');
-    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-offer-bob@x.com'));
+    const select = await screen.findByTestId('speleodb-collab-user-level-1');
+    await pickOption('speleodb-collab-user-level-1', 'ADMIN');
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-offer-1'));
     // The competing action wins the single armed slot: the half-made grant is gone
     // and the picker is back on what the server has.
-    expect(screen.queryByTestId('speleodb-collab-user-level-pending-bob@x.com')).toBeNull();
+    expect(screen.queryByTestId('speleodb-collab-user-level-pending-1')).toBeNull();
     expect(select).toHaveTextContent('Read only');
     expect(
-      screen.getByTestId('speleodb-collab-user-remove-confirm-bob@x.com'),
+      screen.getByTestId('speleodb-collab-user-remove-confirm-1'),
     ).toBeInTheDocument();
   });
 
@@ -308,15 +349,15 @@ describe('SpeleoCollaboratorsTab', () => {
       return Promise.resolve(ROSTER);
     });
     render(<SpeleoCollaboratorsTab />);
-    const select = await screen.findByTestId('speleodb-collab-user-level-bob@x.com');
-    await pickOption('speleodb-collab-user-level-bob@x.com', 'READ_AND_WRITE');
-    await userEvent.click(screen.getByTestId('speleodb-collab-user-level-apply-bob@x.com'));
+    const select = await screen.findByTestId('speleodb-collab-user-level-1');
+    await pickOption('speleodb-collab-user-level-1', 'READ_AND_WRITE');
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-level-apply-1'));
     // Error surfaced, and the row is still there (roster not blanked on failure).
     await waitFor(() => expect(showToast).toHaveBeenCalled());
-    expect(screen.getByTestId('speleodb-collab-user-bob@x.com')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-collab-user-1')).toBeInTheDocument();
     // A change that did not take is not left on screen looking applied.
     expect(select).toHaveTextContent('Read only');
-    expect(screen.queryByTestId('speleodb-collab-user-level-pending-bob@x.com')).toBeNull();
+    expect(screen.queryByTestId('speleodb-collab-user-level-pending-1')).toBeNull();
   });
 
   it('shows the load-error state and retries', async () => {
@@ -333,7 +374,7 @@ describe('SpeleoCollaboratorsTab', () => {
     render(<SpeleoCollaboratorsTab />);
     const retry = await screen.findByTestId('speleodb-collaborators-retry');
     await userEvent.click(retry);
-    expect(await screen.findByTestId('speleodb-collab-user-bob@x.com')).toBeInTheDocument();
+    expect(await screen.findByTestId('speleodb-collab-user-1')).toBeInTheDocument();
   });
 
   it('ignores a superseded roster load that answers last', async () => {
@@ -363,7 +404,7 @@ describe('SpeleoCollaboratorsTab', () => {
     await act(async () => {
       pending[1]!.resolve(ROSTER);
     });
-    expect(await screen.findByTestId('speleodb-collab-user-bob@x.com')).toBeInTheDocument();
+    expect(await screen.findByTestId('speleodb-collab-user-1')).toBeInTheDocument();
 
     // ...then the stale one fails. It must not blank the good roster with its error,
     // nor own the `loading` flag the newer request already cleared.
@@ -372,7 +413,7 @@ describe('SpeleoCollaboratorsTab', () => {
     });
     expect(screen.queryByTestId('speleodb-collaborators-error')).toBeNull();
     expect(screen.queryByTestId('speleodb-collaborators-loading')).toBeNull();
-    expect(screen.getByTestId('speleodb-collab-user-bob@x.com')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-collab-user-1')).toBeInTheDocument();
   });
 
   it('disables the web link when there is no signed-in endpoint to open', async () => {

@@ -12,6 +12,7 @@ import * as path from 'path';
 
 import { corpusEntryRel, isCorpusEntryRel, type TraceStep } from '../lib/fuzzTrace';
 import { describeSource, type FileSource, type FuzzMove } from './importDialogGenerators';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 
 /**
  * The step that PUT a move's input file on disk, recorded before the step that
@@ -225,7 +226,7 @@ function replayedMove(step: TraceStep, scenario: string): FuzzMove | null {
       // and only the ones this scenario produces may be dispatched.
       if (step.action === 'closeProject') return { kind: 'closeProject', label: step.label };
       throw new Error(
-        `refusing to replay mutate "${step.action}": ${scenario} replays ` +
+        `refusing to replay mutate "${shareableTestId(step.action)}": ${scenario} replays ` +
           `${REPLAYABLE_UI_ACTIONS.size === 0 ? 'no store actions' : [...REPLAYABLE_UI_ACTIONS].join(', ')}`,
       );
     default:

@@ -32,6 +32,9 @@
  * impossible there. That is what keeps a ddmin-cut trace RUNNABLE.
  */
 import type { ScenarioContext } from './framework';
+import { foldThenCut } from '../lib/fixtureCorpus';
+import { valueShape } from '../lib/shareableFailure';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import {
   DATA_FORMATS,
   IMAGE_FORMATS,
@@ -67,7 +70,7 @@ export function enabledFormats(): ExportFormat[] {
     const found = ALL_FORMATS.find((format) => format === name);
     if (found === undefined) {
       throw new Error(
-        `STALAGMIGHT_FUZZ_EXPORT_FORMATS names "${name}", which is not a format this scenario ` +
+        `STALAGMIGHT_FUZZ_EXPORT_FORMATS names ${valueShape(name)}, which is not a format this scenario ` +
           `exports; known: ${ALL_FORMATS.join(',')}`,
       );
     }
@@ -247,6 +250,11 @@ function weightedPick(ctx: ScenarioContext, formats: readonly ExportFormat[]): E
     if (roll <= 0) return format;
   }
   return formats[formats.length - 1] as ExportFormat;
+}
+
+/** Is `value` a format this scenario exports? A trace's `format` is checked with it before it names anything. */
+export function isExportFormat(value: unknown): value is ExportFormat {
+  return typeof value === 'string' && ALL_FORMATS.some((format) => format === value);
 }
 
 /** Is this a `data`-type export in `ExportControls` terms? */
@@ -550,7 +558,7 @@ export interface ClickOutcome {
 export async function clickControl(ctx: ScenarioContext, testid: string): Promise<ClickOutcome> {
   if (!isAllowedTestId(testid)) {
     throw new Error(
-      `refusing to click "${testid}": not in export-roundtrip-fuzz's allowlist. A recorded trace ` +
+      `refusing to click "${shareableTestId(testid)}": not in export-roundtrip-fuzz's allowlist. A recorded trace ` +
         `can only replay the controls this scenario drives.`,
     );
   }
@@ -577,7 +585,7 @@ export async function selectValue(
   value: string,
 ): Promise<ClickOutcome> {
   if (!isAllowedTestId(testid)) {
-    throw new Error(`refusing to drive select "${testid}": not in export-roundtrip-fuzz's allowlist`);
+    throw new Error(`refusing to drive select "${shareableTestId(testid)}": not in export-roundtrip-fuzz's allowlist`);
   }
   return ctx.eval<ClickOutcome>(
     `
@@ -619,7 +627,7 @@ export async function setCheckbox(
   want: boolean,
 ): Promise<ClickOutcome> {
   if (!isAllowedTestId(testid)) {
-    throw new Error(`refusing to drive checkbox "${testid}": not in export-roundtrip-fuzz's allowlist`);
+    throw new Error(`refusing to drive checkbox "${shareableTestId(testid)}": not in export-roundtrip-fuzz's allowlist`);
   }
   return ctx.eval<ClickOutcome>(
     `
@@ -713,7 +721,7 @@ export async function clickAndAnswerSave(
   path: string | null,
 ): Promise<SaveDialogOutcome> {
   if (!isAllowedTestId(triggerTestId)) {
-    throw new Error(`refusing to arm a save picker on "${triggerTestId}": not in the allowlist`);
+    throw new Error(`refusing to arm a save picker on "${shareableTestId(triggerTestId)}": not in the allowlist`);
   }
   return ctx.eval<SaveDialogOutcome>(
     `
@@ -909,7 +917,7 @@ export interface PreviewState {
  * something the container could not render.
  */
 export async function readPreview(ctx: ScenarioContext): Promise<PreviewState> {
-  return ctx.eval<PreviewState>(
+  const state = await ctx.eval<PreviewState>(
     `
     ${HELPERS}
     const host = q('export-preview') || q('export-mode-preview');
@@ -920,11 +928,14 @@ export async function readPreview(ctx: ScenarioContext): Promise<PreviewState> {
     return {
       mounted: true,
       loading: !!loadingNode,
-      error: errorNode ? (errorNode.textContent || '').slice(0, 300) : null,
+      error: errorNode ? errorNode.textContent || '' : null,
       svgBytes: svg ? svg.outerHTML.length : 0,
     };
   `,
   );
+  // The page sends the whole message: folded, THEN cut, so a cut cannot split a
+  // corpus name the fold then cannot match (#576 RV19b-P3).
+  return state.error === null ? state : { ...state, error: foldThenCut(state.error, 300) };
 }
 
 /** Does the gas plan currently have a route a dive profile could be built from? */

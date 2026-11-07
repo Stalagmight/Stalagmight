@@ -112,14 +112,17 @@ const DEFAULT_CONTENT_TYPE: &str = "image/jpeg";
 /// incompressible 512 px RGBA PNG is about 1 MiB (512 * 512 * 4 bytes plus
 /// framing). 4 MiB is four times that worst case, so no real tile comes near
 /// it, while a provider (or anything between us and it) streaming a huge body
-/// is cut off there instead of at ureq's silent 10 MiB default.
+/// is cut off there instead of at ureq's silent 10 MiB default. The cap counts
+/// the DECODED body ([`read_body_capped`]): ureq's own limit counts the bytes
+/// on the wire, which a gzip-encoded body can be a thousandth of.
 const TILE_BODY_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Most bytes a tilemap response body may hold (#576 W30-NF4), for the reason
 /// [`TILE_BODY_MAX_BYTES`] gives. A tilemap is 128 x 128 availability flags as
 /// compact JSON - `{"data":[1,0,...]}` and a few small fields, about 33 KB -
 /// so 1 MiB is some thirty times that, while a body streaming far more is cut
-/// off here instead of at ureq's silent 10 MiB default.
+/// off here instead of at ureq's silent 10 MiB default. Like the tile cap it
+/// counts the decoded body, not the (possibly gzip) bytes on the wire.
 const TILEMAP_BODY_MAX_BYTES: u64 = 1024 * 1024;
 
 /// Maximum retry attempts for transient network errors (total attempts = 1 + TILE_FETCH_MAX_RETRIES).
@@ -201,6 +204,32 @@ fn classify_body_error(err: &ureq::Error, limit: u64) -> TileFetchError {
         ),
         _ => TileFetchError::transport(format!("Failed to read response body: {err}")),
     }
+}
+
+/// Read a response body whole, refusing one that DECODES to more than `limit`
+/// bytes with ureq's own `BodyExceedsLimit(limit)` (#576 RV19a-1).
+///
+/// ureq's `with_config().limit()` alone does not bound what the caller gets:
+/// ureq asks for `accept-encoding: gzip` (its default `gzip` feature) and
+/// inflates ABOVE that limit, so it counts compressed bytes - 65 KB of gzip
+/// decoded to 64 MiB under a 4 MiB limit. The wire limit stays, so a stream
+/// that never ends but inflates to almost nothing (empty deflate blocks) is
+/// still cut off; the decoded stream is capped on top of it.
+pub fn read_body_capped(body: ureq::Body, limit: u64) -> Result<Vec<u8>, ureq::Error> {
+    use std::io::Read as _;
+    let mut decoded = Vec::new();
+    body.into_with_config()
+        .limit(limit)
+        .reader()
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut decoded)
+        // ureq's own errors (the wire limit, a timeout) arrive wrapped in an
+        // io::Error; `From` unwraps them, as ureq's `read_to_vec` does.
+        .map_err(ureq::Error::from)?;
+    if decoded.len() as u64 > limit {
+        return Err(ureq::Error::BodyExceedsLimit(limit));
+    }
+    Ok(decoded)
 }
 
 /// A body limit as a person reads it: whole MiB from 1 MiB up, exact bytes
@@ -352,17 +381,12 @@ fn fetch_tile_from_url(
 
                 // A failed read returns from here rather than reaching the
                 // retry arm below, so an oversized body is downloaded once.
-                let body = response
-                    .into_body()
-                    .with_config()
-                    .limit(body_limit)
-                    .read_to_vec()
-                    .map_err(|e| {
-                        if let Some(s) = stats {
-                            s.record_error();
-                        }
-                        classify_body_error(&e, body_limit)
-                    })?;
+                let body = read_body_capped(response.into_body(), body_limit).map_err(|e| {
+                    if let Some(s) = stats {
+                        s.record_error();
+                    }
+                    classify_body_error(&e, body_limit)
+                })?;
 
                 if let Some(s) = stats {
                     s.record_success(latency_ms);
@@ -410,6 +434,25 @@ struct TilemapResponse {
     data: Vec<u8>,
 }
 
+/// Why [`fetch_tilemap`] produced no tilemap.
+#[derive(Debug)]
+enum TilemapFetchError {
+    /// The provider answered with a body over [`TILEMAP_BODY_MAX_BYTES`]:
+    /// more than any tilemap can be, so asking again would only be refused
+    /// again (#576 RV19a-10).
+    TooLarge(String),
+    /// Anything else - network, status, a body that did not parse.
+    Failed(String),
+}
+
+impl std::fmt::Display for TilemapFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge(message) | Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
 /// Fetch tilemap data from the provider's tilemap API.
 ///
 /// Returns a Vec<bool> where true = tile available, false = no data.
@@ -419,9 +462,10 @@ fn fetch_tilemap(
     z: u32,
     base_y: u32,
     base_x: u32,
-) -> Result<Vec<bool>, String> {
-    let url = tile_providers::expand_tilemap_url(provider, z, base_y, base_x)
-        .ok_or_else(|| "Provider has no tilemap URL configured".to_string())?;
+) -> Result<Vec<bool>, TilemapFetchError> {
+    let url = tile_providers::expand_tilemap_url(provider, z, base_y, base_x).ok_or_else(|| {
+        TilemapFetchError::Failed("Provider has no tilemap URL configured".to_string())
+    })?;
 
     tracing::debug!(url = %url, provider = %provider.name, z = z, base_y = base_y, base_x = base_x, "Fetching tilemap");
 
@@ -433,23 +477,19 @@ fn fetch_tilemap(
     let response = agent
         .get(&url)
         .call()
-        .map_err(|e| format!("Tilemap network error: {e}"))?;
+        .map_err(|e| TilemapFetchError::Failed(format!("Tilemap network error: {e}")))?;
 
-    let body = response
-        .into_body()
-        .with_config()
-        .limit(TILEMAP_BODY_MAX_BYTES)
-        .read_to_vec()
-        .map_err(|e| match e {
-            ureq::Error::BodyExceedsLimit(_) => format!(
+    let body =
+        read_body_capped(response.into_body(), TILEMAP_BODY_MAX_BYTES).map_err(|e| match e {
+            ureq::Error::BodyExceedsLimit(_) => TilemapFetchError::TooLarge(format!(
                 "Tilemap refused: the response body is larger than the {} limit for a tilemap",
                 describe_body_limit(TILEMAP_BODY_MAX_BYTES)
-            ),
-            _ => format!("Failed to read tilemap response: {e}"),
+            )),
+            _ => TilemapFetchError::Failed(format!("Failed to read tilemap response: {e}")),
         })?;
 
-    let tilemap_response: TilemapResponse =
-        serde_json::from_slice(&body).map_err(|e| format!("Failed to parse tilemap JSON: {e}"))?;
+    let tilemap_response: TilemapResponse = serde_json::from_slice(&body)
+        .map_err(|e| TilemapFetchError::Failed(format!("Failed to parse tilemap JSON: {e}")))?;
 
     // Convert u8 (0/1) to bool
     let data: Vec<bool> = tilemap_response.data.into_iter().map(|v| v != 0).collect();
@@ -457,11 +497,11 @@ fn fetch_tilemap(
     let expected_len =
         (tilemap_cache::TILEMAP_GRID_SIZE * tilemap_cache::TILEMAP_GRID_SIZE) as usize;
     if data.len() != expected_len {
-        return Err(format!(
+        return Err(TilemapFetchError::Failed(format!(
             "Unexpected tilemap data length: got {}, expected {}",
             data.len(),
             expected_len
-        ));
+        )));
     }
 
     Ok(data)
@@ -497,6 +537,19 @@ fn check_tile_availability(
             );
             return Some(available);
         }
+        // A region whose tilemap was refused for its size stays unknown until
+        // that verdict expires, instead of being downloaded again for every
+        // tile in it (#576 RV19a-10).
+        if cache.is_refused(&provider.name, z, y, x) {
+            tracing::trace!(
+                provider = %provider.name,
+                z = z,
+                y = y,
+                x = x,
+                "Tilemap refused earlier for this region, availability unknown"
+            );
+            return None;
+        }
     }
 
     // Cache miss - fetch tilemap for this region
@@ -529,6 +582,13 @@ fn check_tile_availability(
             Some(available)
         }
         Err(e) => {
+            // Only the size refusal is remembered: a network or parse failure
+            // may clear up, so the region is asked again next time.
+            if matches!(e, TilemapFetchError::TooLarge(_)) {
+                tilemap_cache
+                    .lock()
+                    .insert_refused(&provider.name, z, base_y, base_x);
+            }
             tracing::warn!(
                 provider = %provider.name,
                 z = z,
@@ -1150,9 +1210,17 @@ fn refetch_left_it_unknown(result: &Result<TileFetchResponse, TileFetchError>) -
 /// while a header claiming more is refused before anything is allocated.
 const TILE_DECODE_MAX_SIDE: u32 = 4096;
 
-/// Most bytes decoding one tile may allocate (#576 W30-7b): the 8-bit RGBA
+/// Most bytes a tile's decoded image may take (#576 W30-7b): the 8-bit RGBA
 /// buffer of a tile at the side cap (4096 * 4096 * 4 bytes = 64 MiB). A 512 px
 /// RGBA tile needs 1 MiB; the image crate's own default would allow 512 MiB.
+///
+/// It bounds the output buffer, which `ImageReader::decode` reserves against
+/// it, and a PNG decoder's working memory (the image crate hands it to `png`
+/// as its byte limit). It does NOT bound a JPEG decoder's working memory: the
+/// image crate passes zune-jpeg only the side cap, so buffers such as a
+/// progressive image's coefficients (two bytes per sample of each component:
+/// 96 MiB for a 4096 px image with three full-resolution components) sit
+/// outside it, bounded by [`TILE_DECODE_MAX_SIDE`] alone.
 const TILE_DECODE_MAX_ALLOC: u64 = 64 * 1024 * 1024;
 
 /// Decode tile bytes under [`TILE_DECODE_MAX_SIDE`] and
@@ -1633,6 +1701,10 @@ mod body_limit_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod tilemap_body_limit_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod gzip_body_limit_tests;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]

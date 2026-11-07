@@ -201,7 +201,9 @@ dir (`CARGO_TARGET_DIR`, defaulting to `~/.cargo_build` like the rest of
 `e2e/agent/lib/build.ts`. It rebuilds when a source file, `Cargo.toml` or
 `Cargo.lock` is newer than the binary, or when the stamp says something else
 rebuilt it. Cargo output goes to stderr, never stdout, because under the MCP
-server stdout is the JSON-RPC stream.
+server stdout is the JSON-RPC stream - a line at a time with the checkout folded
+to `<repo>` and the home directory to `~`, as the app build's is (#576 W51,
+`e2e/agent/lib/foldedLines.ts`).
 
 ```bash
 cargo test --manifest-path e2e/agent/os/helper/Cargo.toml     # unit tests

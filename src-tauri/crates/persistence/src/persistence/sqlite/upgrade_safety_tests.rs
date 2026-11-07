@@ -531,3 +531,121 @@ fn an_upgrade_is_refused_when_a_link_at_the_partial_name_cannot_be_removed() {
         assert_eq!(b6_user_version(&path), 17, "{planted:?}: not migrated");
     }
 }
+
+/// What Windows asks of a `sync_all`: FlushFileBuffers needs a handle with
+/// GENERIC_WRITE, and a `File::open` handle is GENERIC_READ only. Linux and
+/// macOS fsync either, so a plain `sync_all` here could never fail the way it
+/// did there. Truncating to the current length changes nothing, but needs a
+/// handle opened for writing on every platform (ftruncate on a read-only
+/// descriptor is refused, as SetFileInformationByHandle is without
+/// GENERIC_WRITE), so it stands in for the Windows check.
+fn rvfd1_flush_like_windows(file: &std::fs::File) -> std::io::Result<()> {
+    let len = file.metadata()?.len();
+    file.set_len(len)?;
+    file.sync_all()
+}
+
+/// [#576 RVF-d-1] The pre-upgrade copy is flushed through a handle that can
+/// write. It was flushed through `File::open`, which on Windows is refused
+/// ("Access is denied"), so every older-format project with data failed to
+/// open there. The helper hands its flush the handle that wrote the copy.
+#[test]
+fn the_pre_upgrade_copy_is_flushed_through_a_handle_that_can_write() {
+    let temp = TempDir::new().unwrap();
+    let from = temp.path().join("CaveA.stalx");
+    std::fs::write(&from, b"SQLite format 3\0 then the pages of a project").unwrap();
+    let to = temp.path().join("CaveA.stalx.pre-v17.partial");
+
+    // The stand-in tells the two handles apart: a read-only one, as the old
+    // code flushed, is refused.
+    std::fs::write(&to, b"x").unwrap();
+    let read_only = rvfd1_flush_like_windows(&std::fs::File::open(&to).unwrap());
+    println!("flush through File::open: {read_only:?}");
+    assert!(
+        read_only.is_err(),
+        "the stand-in must refuse a read-only handle"
+    );
+
+    let flushed = super::schema::write_synced_copy(&from, &to, rvfd1_flush_like_windows);
+    println!("flush through write_synced_copy: {flushed:?}");
+    flushed.unwrap();
+    assert!(
+        std::fs::read(&to).unwrap() == std::fs::read(&from).unwrap(),
+        "the copy holds the file's bytes"
+    );
+}
+
+/// [#576 RVF-d-1] The upgrade path end to end with the copy written by
+/// `write_synced_copy`: a partial copy left by an earlier attempt that died is
+/// replaced, not appended to, the kept copy is the file as it was, nothing is
+/// left under the partial name, and (on Unix) the copy keeps the file's mode,
+/// as `std::fs::copy` did.
+#[test]
+fn an_upgrade_replaces_a_partial_copy_left_by_an_earlier_attempt() {
+    let temp = TempDir::new().unwrap();
+    let path = b6_build_file(
+        temp.path(),
+        "CaveA.stalx",
+        "UPDATE project SET schema_version = 17; PRAGMA user_version = 17;",
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let original = std::fs::read(&path).unwrap();
+    let partial = temp.path().join("CaveA.stalx.pre-v17.partial");
+    std::fs::write(&partial, vec![b'x'; original.len() * 2]).unwrap();
+
+    drop(Database::open_existing(&path).unwrap());
+    println!("after the upgrade: {:?}", b6_dir_listing(temp.path()));
+    assert_eq!(b6_user_version(&path), i64::from(SCHEMA_VERSION));
+    let copy = temp.path().join("CaveA.stalx.pre-v17.backup");
+    assert!(
+        std::fs::read(&copy).unwrap() == original,
+        "the kept copy is the file exactly as it was"
+    );
+    assert!(!partial.exists(), "nothing is left under the partial name");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the copy keeps the file's mode");
+    }
+}
+
+/// [#576 RVF-d-1] A read-only older file was never upgradable: the copy was
+/// kept and the upgrade then failed on its first write ("attempt to write a
+/// readonly database"). Its copy is read-only too, so now the flush cannot open
+/// it for writing: the open is still refused, with the copy's reason, and no
+/// copy is left behind. Skipped where file modes do not bind (running as root).
+#[cfg(unix)]
+#[test]
+fn a_read_only_older_file_is_refused_and_leaves_no_copy() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let temp = TempDir::new().unwrap();
+    let path = b6_build_file(
+        temp.path(),
+        "CaveA.stalx",
+        "UPDATE project SET schema_version = 17; PRAGMA user_version = 17;",
+    );
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
+    if std::fs::OpenOptions::new().write(true).open(&path).is_ok() {
+        println!("file modes do not bind for this user; nothing to check");
+        return;
+    }
+    let original = std::fs::read(&path).unwrap();
+
+    let opened = Database::open_existing(&path).map(drop);
+    println!(
+        "open_existing -> {opened:?}; folder {:?}",
+        b6_dir_listing(temp.path())
+    );
+    let message = format!("{:#}", opened.unwrap_err());
+    assert!(
+        message.contains("Could not keep a copy of this project before upgrading it"),
+        "{message}"
+    );
+    assert!(std::fs::read(&path).unwrap() == original, "left as it was");
+    assert_eq!(b6_dir_listing(temp.path()), ["CaveA.stalx"], "no copy kept");
+}

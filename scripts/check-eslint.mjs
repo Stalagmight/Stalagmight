@@ -111,7 +111,7 @@ function loadBaseline(file) {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     return { warnings: parsed.warnings ?? {} };
   } catch (e) {
-    console.error(`check-eslint: ${BASELINE_FILE} is not valid JSON (${e.message}). Regenerate it with: pnpm lint:eslint --update`);
+    console.error(`check-eslint: ${BASELINE_FILE} is not valid JSON (${e.code || e.message}). Regenerate it with: pnpm lint:eslint --update`);
     process.exit(1);
   }
 }

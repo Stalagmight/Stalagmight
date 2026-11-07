@@ -1645,8 +1645,7 @@ impl Database {
         // copy a crash left there is replaced, and one that cannot be removed
         // refuses the upgrade.
         let partial = sibling(&format!(".pre-v{from_version}.partial"));
-        let written = super::repair::copy_to_new_file(path, &partial)
-            .and_then(|_| std::fs::File::open(&partial)?.sync_all())
+        let written = write_synced_copy(path, &partial, std::fs::File::sync_all)
             .and_then(|()| std::fs::rename(&partial, &copy));
         if let Err(e) = written {
             let _ = std::fs::remove_file(&partial);
@@ -1898,4 +1897,34 @@ impl Database {
 
         Ok(())
     }
+}
+
+/// [#576 RVF-d-1] Copy `from` to `to` as a new file, then hand `flush` a handle
+/// on the copy opened for WRITING, so the copy reaches the device before it is
+/// renamed into place. The upgrade copy passes `File::sync_all`.
+///
+/// The flush used to go through `File::open(to)`, which is read-only: on
+/// Windows a GENERIC_READ handle, and `sync_all` there is FlushFileBuffers,
+/// which needs GENERIC_WRITE. That flush was refused, so opening any
+/// older-format project with data failed on Windows with "Could not keep a
+/// copy of this project before upgrading it". Linux and macOS fsync a
+/// read-only descriptor, which is why only Windows saw it.
+///
+/// [#576 RVF-b-1] The copy itself is `repair::copy_to_new_file`, not
+/// `std::fs::copy`: that wrote through a link left at `to` (creating the file a
+/// dangling one named, overwriting the one it led to). It replaces a stale
+/// copy a crash left at `to`, refuses when that cannot be removed, and keeps
+/// the file's mode on Unix (its doc gives the cost: no APFS clone). So on Unix
+/// the copy of a read-only project file is read-only and cannot be reopened
+/// for writing: its upgrade is refused here and leaves no copy. Such a file
+/// was never upgradable - before, the copy was kept and the upgrade then
+/// failed on its first write ("attempt to write a readonly database").
+pub(super) fn write_synced_copy(
+    from: &Path,
+    to: &Path,
+    flush: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    super::repair::copy_to_new_file(from, to)?;
+    let copy = std::fs::OpenOptions::new().write(true).open(to)?;
+    flush(&copy)
 }

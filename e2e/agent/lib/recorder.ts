@@ -11,6 +11,7 @@ import { fileURLToPath } from 'url';
 
 import { redactCorpusValue } from './fixtureCorpus';
 import { isPidAlive } from './procs';
+import { foldLocalPaths } from './shareableFailure';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const ARTIFACTS_ROOT = path.join(repoRoot, '.agent-artifacts', 'sessions');
@@ -100,7 +101,9 @@ export function allocateSessionDir(
     fs.writeFileSync(path.join(dir, OWNER_FILE), String(pid), { flag: 'wx' });
     return { id, dir };
   }
-  throw new Error(`could not allocate a unique session directory under ${root} in ${ALLOCATE_ATTEMPTS} attempts`);
+  throw new Error(
+    `could not allocate a unique session directory under ${foldLocalPaths(root)} in ${ALLOCATE_ATTEMPTS} attempts`,
+  );
 }
 
 export interface SessionStartMeta {

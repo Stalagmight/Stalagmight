@@ -6,8 +6,9 @@
  * a `file://` URL percent-encodes a name (`Caf%C3%A9%20Nord.srv`), and the
  * same name in the other Unicode normal form - a macOS file name comes
  * decomposed, `e` then a combining acute - is different text. Both now fold.
- * Not attempted (and not folded): a change of case, an HTML entity, base64, or
- * a part of a name.
+ * Not attempted (and not folded): a change of case, base64, or a part of a
+ * name. (A form encoder's `+` and an HTML reference fold since RV19b-P5, see
+ * corpusFoldShortNames.test.ts.)
  *
  * Everything here is synthetic: token names and a copy directory that is only a
  * string.

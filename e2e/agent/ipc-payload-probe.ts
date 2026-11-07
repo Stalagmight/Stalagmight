@@ -21,6 +21,7 @@
  */
 import { AppSession } from './session';
 import { evalInApp } from './lib/page';
+import { shareableErrorText, valueShape, withheldAppText } from './lib/shareableFailure';
 
 interface Probe {
   /** serde's message, or null when the call unexpectedly succeeded. */
@@ -62,8 +63,25 @@ const SUSPECTS: readonly { label: string; text: string }[] = [
   { label: 'quote and backslash', text: '"\\' },
 ];
 
+/** The flags this probe takes. An error names one of them, and anything else by its shape (#576 W51). */
+const FLAGS: ReadonlySet<string> = new Set(['--classes', '--shapes', '--char', '--max']);
+const shownFlag = (flag: string | undefined): string => (flag !== undefined && FLAGS.has(flag) ? flag : valueShape(flag));
+
+const DEFAULT_CHAR = 'x';
+/**
+ * The filler as printed (#576 W51): `--char` is the user's text, so it prints
+ * as the default, as a suspect's label, or by its shape.
+ */
+const shownChar = (text: string): string =>
+  text === DEFAULT_CHAR
+    ? JSON.stringify(DEFAULT_CHAR)
+    : (SUSPECTS.find((suspect) => suspect.text === text)?.label ?? valueShape(text));
+
+/** serde's message as printed (#576 W51): it is the app's error text, so its length. */
+const shownError = (error: string | null): string => (error === null ? '(no error)' : withheldAppText(error));
+
 function parseArgs(argv: string[]): { char: string; max: number; classes: boolean; shapes: boolean } {
-  let char = 'x';
+  let char = DEFAULT_CHAR;
   let max = 32 * 1024 * 1024;
   let classes = false;
   let shapes = false;
@@ -78,11 +96,11 @@ function parseArgs(argv: string[]): { char: string; max: number; classes: boolea
       continue;
     }
     const value = argv[i + 1];
-    if (value === undefined) throw new Error(`flag ${flag} needs a value`);
+    if (value === undefined) throw new Error(`flag ${shownFlag(flag)} needs a value`);
     i += 1;
     if (flag === '--char') char = value;
     else if (flag === '--max') max = Number(value);
-    else throw new Error(`unknown flag ${flag}`);
+    else throw new Error(`unknown flag, ${valueShape(flag)}`);
   }
   if (!Number.isInteger(max) || max < 1) throw new Error('--max needs a positive integer');
   return { char, max, classes, shapes };
@@ -165,7 +183,7 @@ async function main(): Promise<number> {
           ),
         );
         process.stdout.write(
-          `  ${result.arrived ? 'arrived  ' : 'TRUNCATED'} ${probeCase.label.padEnd(24)} ${result.error ?? '(no error)'}\n`,
+          `  ${result.arrived ? 'arrived  ' : 'TRUNCATED'} ${probeCase.label.padEnd(24)} ${shownError(result.error)}\n`,
         );
       }
       return 0;
@@ -193,7 +211,7 @@ async function main(): Promise<number> {
           ),
         );
         process.stdout.write(
-          `  ${result.arrived ? 'arrived  ' : 'TRUNCATED'} ${suspect.label.padEnd(32)} ${result.error ?? '(no error)'}\n`,
+          `  ${result.arrived ? 'arrived  ' : 'TRUNCATED'} ${suspect.label.padEnd(32)} ${shownError(result.error)}\n`,
         );
         if (!result.arrived) broken.push(suspect.label);
       }
@@ -206,13 +224,13 @@ async function main(): Promise<number> {
     }
 
     const baseline = await probe(1);
-    process.stdout.write(`  baseline (1 char): arrived=${baseline.arrived} error=${baseline.error}\n`);
+    process.stdout.write(`  baseline (1 char): arrived=${baseline.arrived} error=${shownError(baseline.error)}\n`);
     if (!baseline.arrived) throw new Error('even a 1-character argument did not arrive; the probe is wrong');
 
     const ceiling = await probe(max);
-    process.stdout.write(`  ceiling (${max} chars): arrived=${ceiling.arrived} error=${ceiling.error}\n`);
+    process.stdout.write(`  ceiling (${max} chars): arrived=${ceiling.arrived} error=${shownError(ceiling.error)}\n`);
     if (ceiling.arrived) {
-      process.stdout.write(`\nNO TRUNCATION up to ${max} ${JSON.stringify(char)} characters.\n`);
+      process.stdout.write(`\nNO TRUNCATION up to ${max} ${shownChar(char)} characters.\n`);
       return 0;
     }
 
@@ -227,12 +245,14 @@ async function main(): Promise<number> {
       else bad = middle;
     }
     process.stdout.write(
-      `\nBOUNDARY for ${JSON.stringify(char)}: ${good} arrives, ${bad} does not ` +
+      `\nBOUNDARY for ${shownChar(char)}: ${good} arrives, ${bad} does not ` +
         `(${(good / 1024).toFixed(1)} KiB / ${(bad / 1024).toFixed(1)} KiB).\n`,
     );
   } catch (err) {
     failed = true;
-    process.stdout.write(`probe failed: ${err instanceof Error ? err.stack : String(err)}\n`);
+    // The shareable crash form (#576 W33-NF6): a crash in session setup can quote
+    // the app (an IPC rejection, a page script's error).
+    process.stdout.write(`probe failed: ${shareableErrorText(err)}\n`);
   } finally {
     await session.stop('ipc-payload-probe');
   }
@@ -242,7 +262,9 @@ async function main(): Promise<number> {
 main().then(
   (code) => process.exit(code),
   (err: unknown) => {
-    process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+    // The shareable crash form (#576 W33-NF6): a crash in session setup can quote
+    // the app (an IPC rejection, a page script's error).
+    process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
     process.exit(1);
   },
 );

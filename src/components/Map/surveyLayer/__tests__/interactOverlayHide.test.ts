@@ -106,6 +106,29 @@ describe('InteractOverlayHideController', () => {
     expect(f.visibility['survey-interact-stations']).toBe('none');
   });
 
+  // #576 W38-NF-1: the Stations / Shots toggles write these layers too.
+  it('restores a visibility set during the hide, not the one it captured', () => {
+    const f = makeFakeMap({
+      omit: ['style'],
+      visibility: { 'survey-interact-shots': 'visible', 'survey-interact-stations': 'none' },
+    });
+    const c = new InteractOverlayHideController(f.map, SOURCE, [
+      'survey-interact-shots',
+      'survey-interact-stations',
+    ]);
+    c.hideUntilRetile();
+    c.setLayerVisibility('survey-interact-shots', 'none');
+    c.setLayerVisibility('survey-interact-stations', 'visible');
+    // #576 W38-NF-2: the hide still holds both until the re-tile.
+    expect(f.visibility['survey-interact-stations']).toBe('none');
+    f.emit('sourcedata', { sourceId: SOURCE, isSourceLoaded: true });
+    expect(f.visibility['survey-interact-shots']).toBe('none');
+    expect(f.visibility['survey-interact-stations']).toBe('visible');
+    // With no hide pending it is a plain write.
+    c.setLayerVisibility('survey-interact-shots', 'visible');
+    expect(f.visibility['survey-interact-shots']).toBe('visible');
+  });
+
   it('skips layers that do not exist', () => {
     const f = makeFakeMap({ omit: ['style'], visibility: { 'survey-interact-shots': 'visible' } });
     const c = new InteractOverlayHideController(f.map, SOURCE, [

@@ -14,7 +14,7 @@ export const CONTEXT_RESTORE_GRACE_MS = 5000;
 
 export interface ContextRestoreWatch {
   graceMs: number;
-  /** The context was lost and the map is not back within `graceMs`. */
+  /** The context was lost and the map is not back within `graceMs` of visible time. */
   onUnrecovered: () => void;
   /** It came back after `onUnrecovered` ran (or the watch ended while it was reported). */
   onRecovered: () => void;
@@ -33,23 +33,61 @@ export interface ContextRestoreWatch {
  * from (an unloaded style serializes to nothing), so the restore that follows
  * brings back no style at all, and that is as unrecovered as a restore that
  * never came (#576 RV18-MAP-2).
+ *
+ * Only time the document is visible counts towards `graceMs`. MapLibre loads
+ * that style in a requestAnimationFrame (`Style.loadJSON` -> `browser.frameAsync`),
+ * which a hidden or minimized window does not run while its timers only slow
+ * down: a restore that arrived while hidden was reported although all it waited
+ * for was the first visible frame (#576 RV19b-M2).
  */
 export function watchContextRestore(map: MaplibreMap, opts: ContextRestoreWatch): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  /** The document a loss being timed follows the visibility of (null: none being timed). */
+  let timedDoc: Document | null = null;
+  /** Grace time the loss being timed has left, and when its running timer was armed. */
+  let remaining = 0;
+  let armedAt = 0;
   let reported = false;
   /** A restore came in; its rebuilt style's `style.load` settles the loss. */
   let awaitingLoad = false;
-  const onLost = (): void => {
-    if (timer !== null || reported) return;
+  const arm = (): void => {
+    armedAt = Date.now();
     timer = setTimeout(() => {
       timer = null;
+      stopTiming();
       reported = true;
       opts.onUnrecovered();
-    }, opts.graceMs);
+    }, remaining);
   };
-  const settle = (): void => {
+  const onVisibility = (): void => {
+    if (timedDoc?.visibilityState !== 'hidden') {
+      if (timer === null) arm();
+    } else if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+      remaining = Math.max(0, remaining - (Date.now() - armedAt));
+    }
+  };
+  const stopTiming = (): void => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
+    timedDoc?.removeEventListener('visibilitychange', onVisibility);
+    timedDoc = null;
+  };
+  const onLost = (): void => {
+    if (timer !== null || timedDoc !== null || reported) return;
+    remaining = opts.graceMs;
+    // No document to follow (node, in the unit tests): time it as if visible.
+    if (typeof document === 'undefined') {
+      arm();
+      return;
+    }
+    timedDoc = document;
+    timedDoc.addEventListener('visibilitychange', onVisibility);
+    if (timedDoc.visibilityState !== 'hidden') arm();
+  };
+  const settle = (): void => {
+    stopTiming();
     if (!reported) return;
     reported = false;
     opts.onRecovered();
@@ -76,7 +114,7 @@ export function watchContextRestore(map: MaplibreMap, opts: ContextRestoreWatch)
 
 /**
  * The lost-context notice for one map (survey map, Global View): after
- * {@link CONTEXT_RESTORE_GRACE_MS} without a restore whose style has loaded, an
+ * {@link CONTEXT_RESTORE_GRACE_MS} (visible) without a restore whose style has loaded, an
  * error toast with a "Reload map" action that rebuilds the map on a new WebGL
  * context (`onReload`, which remounts the map). The toast stays until the map
  * comes back by itself, the map is rebuilt or left, or the user dismisses it.

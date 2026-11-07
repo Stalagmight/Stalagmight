@@ -230,6 +230,44 @@ describe('TraceRecorder', () => {
     }
   });
 
+  it("refuses a forged step without quoting the value it carries (#576 W51)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fuzz-trace-test-'));
+    try {
+      const refusal = (step: unknown, v: unknown = TRACE_VERSION): string => {
+        const file = path.join(dir, `forged-${Math.random().toString(36).slice(2)}.json`);
+        fs.writeFileSync(file, JSON.stringify({ v, steps: [step] }));
+        try {
+          readTrace(file);
+        } catch (err) {
+          return (err as Error).message;
+        }
+        throw new Error('the forged trace was accepted');
+      };
+      const forged = [
+        refusal({ kind: '## qzCaveA' }),
+        refusal({ kind: 'ui', testid: ['qzCaveA'], label: 'x' }),
+        refusal({ kind: 'input', testid: 'a', value: 'v', mode: 'qzCaveA', label: 'x' }),
+        refusal({ kind: 'fileDialog', trigger: 'a', dialog: 'qzCaveA', rel: null, label: 'x' }),
+        refusal({ kind: 'genFile', rel: '/home/qzCaveA/x.dmp', spec: {}, label: 'x' }),
+        refusal({ kind: 'route', rel: 'in/../qzCaveA', label: 'x' }),
+        refusal({ kind: 'mapClick', lngLat: [-87.123, 20.456, 7], label: 'x' }),
+        refusal({ kind: 'export', format: 'tml', options: 'qzCaveA', rel: 'a.tml', label: 'x' }),
+        refusal({ kind: 'reload', fixture: 'qzCaveA/x.stalx' }),
+        refusal({ kind: 'undo' }, 'qzCaveA'),
+      ];
+      for (const message of forged) {
+        expect(message).not.toContain('qzCaveA');
+        expect(message).not.toContain('-87.123');
+      }
+      expect(forged[0]).toMatch(/has kind a string of 10 character\(s\), which this build does not run/);
+      expect(forged[6]).toMatch(/has lngLat an array of 3 item\(s\)/);
+      // A number is a number, so a jump width still prints as itself.
+      expect(refusal({ kind: 'undoTo', steps: -5 })).toMatch(/jumps -5 step\(s\)/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a trace written by a different schema version', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fuzz-trace-test-'));
     try {

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::Command;
 use crate::models::{
     GpsCoordinates, LoopClosure, SectionData, SectionId, SectionIdentity, ShotData, ShotId,
-    StationRef,
+    StationKey, StationRef,
 };
 
 mod budget;
@@ -444,6 +444,24 @@ pub enum UndoData {
         previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
     },
 
+    /// [#576 RV19a-2] The stored comment rows a `SetStationComment` replaced,
+    /// key and text, for a station that a key other than its canonical one
+    /// names (a legacy positional `Index` key). The command removes every key
+    /// naming the station, so the inverse `SetStationComment` - which stores
+    /// under the canonical key - would move such a comment to another key, and
+    /// a later undo of the edit that made the legacy key name the station then
+    /// deleted it. Undo puts these rows back exactly; redo re-executes the
+    /// command. Recorded only in that case: every other set keeps its inverse.
+    ///
+    /// FORMAT EVOLUTION (additive variant, no schema bump): a build that
+    /// predates it skips the entry when it loads the history, as it does any
+    /// entry it cannot read (`UndoStack::deserialize_entry`).
+    StationCommentRows {
+        station_ref: StationRef,
+        /// Every row that named the station before the command, in key order.
+        previous: Vec<(StationKey, String)>,
+    },
+
     /// Per-section previous offsets for segment moves (captured at execution time)
     /// Unlike InverseCommand, this stores the exact set of affected sections and their
     /// previous offsets so that undo/redo is correct even if the connectivity graph changes.
@@ -591,6 +609,7 @@ impl UndoData {
             | UndoData::UnmergeInfo { .. }
             | UndoData::ClosureInfo { .. }
             | UndoData::ZeroDatumInfo { .. }
+            | UndoData::StationCommentRows { .. }
             | UndoData::SegmentMoveInfo { .. }
             | UndoData::StationMoveInfo { .. }
             | UndoData::ProjectSnapshot(_)
@@ -659,6 +678,7 @@ impl UndoData {
             UndoData::UnmergeInfo { .. } => "UnmergeInfo",
             UndoData::ClosureInfo { .. } => "ClosureInfo",
             UndoData::ZeroDatumInfo { .. } => "ZeroDatumInfo",
+            UndoData::StationCommentRows { .. } => "StationCommentRows",
             UndoData::SegmentMoveInfo { .. } => "SegmentMoveInfo",
             UndoData::StationMoveInfo { .. } => "StationMoveInfo",
             UndoData::ProjectSnapshot(_) => "ProjectSnapshot",

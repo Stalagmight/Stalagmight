@@ -111,7 +111,10 @@ test('main fails without src/, on a factory mock, on a stale row and on a symlin
     fs.writeFileSync(path.join(root, rel), text);
   };
   try {
-    assert.equal(main(root, quiet, quiet), 1, 'no src/');
+    // Repo-relative, never the absolute root: it names the checkout's location (#576 W51).
+    const missing = [];
+    assert.equal(main(root, quiet, (m) => missing.push(m)), 1, 'no src/');
+    assert.deepEqual(missing, ['check-vitest-ipc-mock: src/ not found (run from the repo root).']);
     // A tree with only the shared idiom: the real ALLOWLIST rows are all stale here.
     write('src/utils/__tests__/a.test.ts', "vi.mock('../ipc');\n");
     for (const rel of Object.keys(ALLOWLIST)) write(rel, "vi.mock('/src/utils/ipc', () => ({}));\n");

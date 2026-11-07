@@ -12,11 +12,12 @@
  * different package names, no collision - so a contributor already carrying
  * `~/.cargo_build` does not grow a second one.
  */
-import { execFile, execFileSync } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { cargoTargetDir } from '../../lib/env';
+import { passLinesFolded } from '../lib/foldedLines';
 
 const osDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -126,26 +127,48 @@ export function checkHelperFreshness(): { fresh: boolean; reasons: string[] } {
 }
 
 /**
- * Build the helper if it is missing or stale. Blocking: this is a one-time
- * cold cost (a handful of small crates), and every os_* action needs it done
- * before it can do anything at all.
- *
- * Build output goes to stderr (fd 2), NEVER inherited stdout: under the MCP
- * server stdout is the JSON-RPC stream and cargo chatter would corrupt the
- * protocol framing.
+ * Build the helper if it is missing or stale. A one-time cold cost (a handful
+ * of small crates), and every os_* action needs it done before it can do
+ * anything at all, so `runHelper` awaits it. The MCP server runs one tool
+ * handler at a time, so two builds do not race.
  */
-export function ensureHelperBuilt(onLog?: (line: string) => void): string {
+export async function ensureHelperBuilt(onLog?: (line: string) => void): Promise<string> {
   const { fresh, reasons } = checkHelperFreshness();
   if (fresh) return helperBinaryPath;
   onLog?.(`Building stalagmight-oshelper (${reasons.join('; ')})...`);
-  execFileSync('cargo', ['build', '--release'], {
-    cwd: helperCrateDir,
-    stdio: ['ignore', 2, 2],
-    env: { ...process.env, CARGO_TARGET_DIR: cargoTargetDir },
-  });
+  await buildHelper();
   writeHelperStamp(onLog);
   onLog?.('Helper build complete.');
   return helperBinaryPath;
+}
+
+/**
+ * `cargo build --release` in the helper crate, its stdout and stderr both passed
+ * to this process's stderr a line at a time with the checkout folded to `<repo>`
+ * and the home directory to `~` (`passLinesFolded`, #576 W51), as `lib/build.ts`
+ * passes the app build's. Inherited, cargo's `Compiling stalagmight-oshelper
+ * (<path>)` named the checkout beside the server's other lines. NEVER this
+ * process's stdout: under the MCP server stdout is the JSON-RPC stream and cargo
+ * chatter would corrupt the protocol framing. Rejects with `Command failed:
+ * cargo build --release`, as the `execFileSync` it replaces threw, when the
+ * build exits non-zero or dies.
+ */
+function buildHelper(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('cargo', ['build', '--release'], {
+      cwd: helperCrateDir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, CARGO_TARGET_DIR: cargoTargetDir },
+    });
+    const write = (text: string): void => {
+      process.stderr.write(text);
+    };
+    const passed = Promise.all([passLinesFolded(child.stdout, write), passLinesFolded(child.stderr, write)]);
+    child.once('error', reject);
+    child.once('close', (code: number | null) => {
+      void passed.then(() => (code === 0 ? resolve() : reject(new Error('Command failed: cargo build --release'))));
+    });
+  });
 }
 
 /**
@@ -266,7 +289,7 @@ export async function runHelper<T extends HelperResult = HelperResult>(
   options: RunHelperOptions = {},
 ): Promise<T> {
   const timeout = options.timeoutMs ?? DEFAULT_HELPER_TIMEOUT_MS;
-  const binary = options.ensureBuilt === false ? helperBinaryPath : ensureHelperBuilt();
+  const binary = options.ensureBuilt === false ? helperBinaryPath : await ensureHelperBuilt();
 
   const { stdout, stderr, failure } = await new Promise<{
     stdout: string;

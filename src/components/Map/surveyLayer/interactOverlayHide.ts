@@ -93,7 +93,9 @@ export const INTERACT_HIDE_FALLBACK_MS = 2000;
  * setData) is the mechanism.
  *
  * Each hidden layer's prior visibility is captured and restored, so a layer the
- * user had hidden (stations / shots visibility toggle) is never forced back on.
+ * user had hidden (stations / shots visibility toggle) is never forced back on;
+ * a toggle flipped while the hide is pending goes through
+ * {@link setLayerVisibility}, which updates what the restore puts back.
  */
 export class InteractOverlayHideController {
   private active = false;
@@ -105,7 +107,8 @@ export class InteractOverlayHideController {
   /**
    * `isLive` reports whether the map still has a style to restore into: false
    * once the map is removed, and while a lost WebGL context has it torn down.
-   * There, `getLayer` would throw, and there is nothing to restore anyway.
+   * There a restore writes nothing - `setLayoutProperty` reads the style
+   * without `?.` and would throw - and there is nothing to restore into anyway.
    */
   constructor(
     private readonly map: InteractHideMap,
@@ -142,12 +145,46 @@ export class InteractOverlayHideController {
    *  when inactive (no-op). */
   restore(): void {
     if (!this.active) return;
+    // A worker restart or context restore puts a rebuilt style in place that is
+    // empty until its `style.load` one frame later, and that copy was serialized
+    // with these layers hidden. A restore landing in that frame (the fallback
+    // timer) finds none of them: keep the capture, still listening, for the
+    // restore that follows the load (SurveyLayer's `beforeLoss`).
+    // `isLive` first: on a torn-down style (the map removed, a lost context)
+    // `getLayer` finds none of the layers either (it returns undefined without
+    // a style), but that is not the loading frame: fall through and drop the
+    // capture. The write below needs the style - `setLayoutProperty` reads it
+    // without `?.` - and there is nothing to restore into anyway.
+    if (
+      this.isLive() &&
+      this.saved.size > 0 &&
+      [...this.saved.keys()].every((id) => !this.map.getLayer(id))
+    ) {
+      return;
+    }
     const saved = [...this.saved];
     this.drop();
     if (!this.isLive()) return;
     for (const [id, vis] of saved) {
       if (this.map.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', vis ?? 'visible');
     }
+  }
+
+  /**
+   * Set an overlay layer's visibility as the user's toggles now want it (the
+   * Stations / Shots toggles own three of the layers). A hide holding the layer
+   * restores this value rather than the one it captured, so a toggle flipped
+   * during the hide is not undone when the hide ends, and the layer stays hidden
+   * until then: writing it now would end the hide early for this layer (a
+   * context restore's replay re-applies the toggles right after its own flush
+   * may have started a hide).
+   */
+  setLayerVisibility(id: string, vis: maplibregl.VisibilitySpecification): void {
+    if (this.active && this.saved.has(id)) {
+      this.saved.set(id, vis);
+      return;
+    }
+    this.map.setLayoutProperty(id, 'visibility', vis);
   }
 
   /** Teardown: restore any hidden layers and drop the timer/listener. */

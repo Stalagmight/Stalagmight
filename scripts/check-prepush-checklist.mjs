@@ -501,14 +501,14 @@ export function checkDrift(read, opts = {}) {
   try {
     packageJson = JSON.parse(read('package.json'));
   } catch (e) {
-    return { problems: [`package.json unreadable: ${e.message}`], gates: 0 };
+    return { problems: [`package.json unreadable: ${e.code || e.message}`], gates: 0 };
   }
   const byCommand = scriptIndex(packageJson);
   let md;
   try {
     md = read(CHECKLIST_FILE);
   } catch (e) {
-    return { problems: [`${CHECKLIST_FILE} unreadable: ${e.message}`], gates: 0 };
+    return { problems: [`${CHECKLIST_FILE} unreadable: ${e.code || e.message}`], gates: 0 };
   }
   const checklist = parseChecklist(md, byCommand);
   if (checklist.error) return { problems: [checklist.error], gates: 0 };
@@ -530,7 +530,7 @@ export function checkDrift(read, opts = {}) {
     try {
       text = read(wf);
     } catch (e) {
-      problems.push(`${wf} unreadable: ${e.message}`);
+      problems.push(`${wf} unreadable: ${e.code || e.message}`);
       continue;
     }
     const calls = extractJobUses(text);

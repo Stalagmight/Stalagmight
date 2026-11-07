@@ -20,6 +20,7 @@ import { fractalStress } from './fractalStress';
 import { fuzzDeterminism, fuzzDeterminismPlant, fuzzFixture } from '../lib/fuzzKnobs';
 import { detProbe } from '../lib/fuzzDeterminismProbe';
 import { runDeterminismPair } from '../lib/fuzzDeterminismRun';
+import { valueShape } from '../lib/shareableFailure';
 
 const SCENARIOS: Scenario[] = [
   seedLargeProject,
@@ -67,10 +68,15 @@ export async function runScenario(
 ): Promise<ScenarioMetrics> {
   const scenario = REGISTRY[name];
   if (!scenario) {
-    throw new Error(`unknown scenario "${name}"; known: ${listScenarios().join(', ') || '(none)'}`);
+    // The name is not one of ours: the caller's text (an MCP argument, a replay
+    // spec's recorded call), so it prints as its shape (#576 W51).
+    throw new Error(`unknown scenario ${valueShape(name)}; known: ${listScenarios().join(', ') || '(none)'}`);
   }
-  const seed = opts.seed ?? 1;
-  const iterations = opts.iterations ?? scenario.defaultIterations;
+  // Numbers whatever the caller read them from (#576 W51): `fuzz-shrink` takes
+  // them out of a trace and a replay spec out of an actions.jsonl, which a
+  // forged copy can fill with text, and both print in the progress lines.
+  const seed = Number(opts.seed ?? 1);
+  const iterations = Number(opts.iterations ?? scenario.defaultIterations);
   // Determinism mode (`lib/fuzzDeterminismRun.ts`): the same seed twice, in
   // this session, unless a caller already installed a replay's probe.
   const mode = fuzzDeterminism();

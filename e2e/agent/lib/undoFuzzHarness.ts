@@ -81,9 +81,11 @@ export type HistoryTraceStep = Extract<TraceStep, { kind: 'undo' | 'redo' | 'und
  */
 export function assertReplayableMutation(action: string): void {
   if (!REPLAYABLE_MUTATIONS.has(action)) {
+    // The name is read back from a trace, which a forged copy writes, so it goes
+    // on a later line, which the runners withhold (#576 W51).
     throw new Error(
-      `trace step names ${action}, which is not a replayable mutation. ` +
-        `A recorded trace may only replay the actions the generators produce.`,
+      `trace step names an action that is not a replayable mutation. ` +
+        `A recorded trace may only replay the actions the generators produce.\n  action: ${action}`,
     );
   }
 }

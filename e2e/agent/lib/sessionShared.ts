@@ -46,7 +46,10 @@ export async function attachBrowser(
           'different Node major does fix it, please record which one in docs/agent-harness.md.',
       );
     }
-    throw new Error(`Failed to attach to ${driverName} on port ${port}: ${msg}`);
+    // WebDriver's error can quote the driver's reply (the binary's path, the
+    // app's text), so it ends a `failed:` headline, which the runners print as
+    // its length (#576 W51).
+    throw new Error(`Failed to attach to ${driverName} on port ${port}; the session request failed: ${msg}`);
   }
 }
 

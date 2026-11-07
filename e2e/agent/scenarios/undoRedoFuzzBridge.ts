@@ -39,6 +39,7 @@
  */
 import type { ScenarioContext } from './framework';
 import { ORACLE_GLOBAL, oracleInjectionSource, type TargetingDigest } from '../lib/fuzzOracleCore';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 
 /**
  * Every `projectStore` action a fuzz step may dispatch, and nothing else.
@@ -320,7 +321,7 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
   // something outside the set is not a failed move - it is not a fuzz step.
   if (!FUZZABLE_ACTIONS.has(request.action)) {
     throw new Error(
-      `refusing to dispatch projectStore.${request.action}: not in the fuzzable action set. ` +
+      `refusing to dispatch projectStore.${shareableTestId(request.action)}: not in the fuzzable action set. ` +
         `A recorded trace can only replay the actions the generators produce.`,
     );
   }

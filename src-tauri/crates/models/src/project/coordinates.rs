@@ -6,6 +6,7 @@ use crate::{
     ClosureRef, ClosureStrategy, Coordinates, Section, SectionId, Station, StationKey, StationRef,
 };
 
+use super::closure::ClosureRemeasure;
 use super::Project;
 
 impl Project {
@@ -546,6 +547,11 @@ impl Project {
     /// partially-adjusted geometry instead of the measured fallback the warning
     /// promises.
     ///
+    /// Only the working copy's station coordinates come back, and they read no
+    /// closure metric, so the solve does not re-measure the copy's closures
+    /// ([`ClosureRemeasure::Skip`]): that was a path search per closure, on
+    /// every cache miss, for values dropped with the copy (#576 W38-NF-3).
+    ///
     /// Cost: the rollback snapshots the working copy once per eligible component,
     /// so a cache-miss solve clones the project `O(eligible components)` times.
     /// In practice that is one or two clones (most surveys are a single connected
@@ -561,9 +567,12 @@ impl Project {
         let mut working = self;
         for anchor in anchors {
             let snapshot = working.clone();
-            if let Err(e) =
-                working.adjust_loop_closures(anchor, ClosureStrategy::LeastSquaresWeighted, config)
-            {
+            if let Err(e) = working.adjust_loop_closures_with(
+                anchor,
+                ClosureStrategy::LeastSquaresWeighted,
+                config,
+                ClosureRemeasure::Skip,
+            ) {
                 working = snapshot;
                 warn!(
                     error = %e,
@@ -1137,6 +1146,17 @@ impl StationLayout {
         }
     }
 }
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+#[expect(
+    clippy::print_stdout,
+    reason = "test module: the regression tests print the values they check"
+)]
+mod view_remeasure_tests;
 
 #[cfg(test)]
 #[expect(

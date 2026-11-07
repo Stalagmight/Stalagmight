@@ -23,6 +23,7 @@ import type { ScenarioContext } from '../scenarios/framework';
 import { redactCorpusText } from './fixtureCorpus';
 import { TraceRecorder, defaultTracePath, readTrace, writeTrace, type FuzzTrace } from './fuzzTrace';
 import { replayTracePath, traceOutPath } from './fuzzKnobs';
+import { foldLocalPaths } from './shareableFailure';
 
 /** What a scenario needs to know about replay, resolved once per run (or cycle). */
 export interface ReplaySetup {
@@ -43,22 +44,28 @@ export interface ReplaySetup {
  * them elsewhere drives moves at things that do not exist there - an invented
  * failure, or a green run, either way not the recorded bug.
  *
- * `rerunWith` is the text between "...this run is on <fixture>; " and
- * `STALAGMIGHT_FUZZ_FIXTURE=` in the fixture refusal. The undo fuzzers explain
+ * `rerunWith` is the text before `STALAGMIGHT_FUZZ_FIXTURE=` on the fixture
+ * refusal's second line. The undo fuzzers explain
  * the ids there and the UI fuzzers do not, and both wordings are kept exactly.
  */
 export function openReplay(scenario: string, fixture: string, rerunWith: string): ReplaySetup {
   const replayPath = replayTracePath();
   const traceOut = traceOutPath();
   const replay: FuzzTrace | null = replayPath ? readTrace(replayPath) : null;
+  // The trace's own scenario and fixture are read back from a file a forged copy
+  // could change, so they go on a later line, which the runners withhold and the
+  // session's actions.jsonl keeps (#576 W51).
   if (replay && replay.scenario !== scenario) {
-    throw new Error(`trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`);
+    throw new Error(
+      `trace ${foldLocalPaths(replayPath)} was recorded by another scenario; run it with that scenario\n` +
+        `  recorded by: ${replay.scenario}`,
+    );
   }
   if (replay && replay.fixture !== fixture) {
     throw new Error(
-      `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${fixture}; ` +
-        `${rerunWith}STALAGMIGHT_FUZZ_FIXTURE=${replay.fixture} ` +
-        `(pnpm agent:scenario --trace restores it for you).`,
+      `trace ${foldLocalPaths(replayPath)} was recorded on another fixture but this run is on ${fixture} ` +
+        `(pnpm agent:scenario --trace restores it for you)\n` +
+        `  ${rerunWith}STALAGMIGHT_FUZZ_FIXTURE=${replay.fixture}`,
     );
   }
   return { replayPath, traceOut, replay };

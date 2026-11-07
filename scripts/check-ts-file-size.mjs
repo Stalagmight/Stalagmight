@@ -242,7 +242,7 @@ function loadBaseline() {
     // clean diagnostic, not an uncaught SyntaxError. `--update` rebuilds from
     // scratch and never calls this, so it can always self-heal a corrupt file.
     console.error(
-      `check-ts-file-size: ${relPosix(BASELINE_PATH)} is not valid JSON (${e.message}). ` +
+      `check-ts-file-size: ${relPosix(BASELINE_PATH)} is not valid JSON (${e.code || e.message}). ` +
         `Fix it, or regenerate with: pnpm lint:ts-file-size --update`,
     );
     process.exit(1);
@@ -325,7 +325,7 @@ export function classify(rel, loc, base) {
 
 function main() {
   if (!fs.existsSync(SRC_DIR)) {
-    console.error(`check-ts-file-size: ${SRC_DIR} not found.`);
+    console.error(`check-ts-file-size: ${relPosix(SRC_DIR)} not found.`);
     return 1;
   }
 

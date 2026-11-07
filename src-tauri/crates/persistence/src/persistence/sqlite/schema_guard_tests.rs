@@ -202,6 +202,110 @@ fn a_legacy_is_virtual_column_still_opens() {
     Database::open_existing(&path).unwrap();
 }
 
+// === Salvage reads a type cell that lost its case (#576 RV19a-12) ===
+
+/// The schema refusal behind a salvage's error, if that is why it failed.
+fn salvage_refused(path: &Path) -> (Result<SalvagedData>, Option<&'static str>) {
+    let salvaged = Database::export_salvageable(path);
+    let refused = salvaged.as_ref().err().and_then(|err| {
+        err.chain()
+            .find_map(|c| c.downcast_ref::<RefusedSchemaObject>())
+            .map(|refused| refused.what)
+    });
+    (salvaged, refused)
+}
+
+/// [#576 RV19a-12] Salvage is for damaged files, so one flipped bit in a type
+/// cell - 'table' -> 'Table', which SQLite still reads and `quick_check`
+/// passes - must not refuse it. The schema guard RV18-1 put on the salvage
+/// compared the type exactly, so the in-app recovery route was gone for that
+/// damage. Every other open keeps the exact spelling.
+#[test]
+fn salvage_reads_a_file_whose_table_type_lost_its_case() {
+    let dir = TempDir::new().unwrap();
+    let path = project_file_with(
+        &dir,
+        "PRAGMA writable_schema = ON;
+         UPDATE sqlite_master SET type = 'Table' WHERE name = 'project';",
+    );
+    let (salvaged, refused) = salvage_refused(&path);
+    let opened = refused_what(Database::open_existing(&path));
+    println!(
+        "type cell 'Table' on the project table: salvage -> {:?} (refused as {refused:?}); \
+         open_existing refused as {opened:?}",
+        salvaged
+            .as_ref()
+            .map(|s| (
+                s.project_name.clone(),
+                s.full_project_json
+                    .as_ref()
+                    .map(|json| json.contains("\"Crafted\"")),
+                s.errors.clone()
+            ))
+            .map_err(|e| format!("{e:#}"))
+    );
+
+    let salvaged = salvaged.unwrap();
+    assert_eq!(
+        salvaged
+            .full_project_json
+            .as_ref()
+            .map(|json| json.contains("\"Crafted\"")),
+        Some(true),
+        "the salvage reads the damaged file's project"
+    );
+    assert_eq!(
+        opened,
+        Some("a schema object of an unexpected type"),
+        "every other open still refuses it"
+    );
+}
+
+/// [#576 RV19a-12] The salvage's leniency is about spelling only: a table or
+/// index typed in another case is checked as one, so it cannot hide what the
+/// guard refuses, and a view or trigger is refused in any case.
+#[test]
+fn salvage_still_refuses_a_hostile_object_whatever_case_its_type_is_in() {
+    for (sql, what) in [
+        (
+            "CREATE TABLE g (a, b AS (zeroblob(10)));
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = 'Table' WHERE name = 'g';",
+            "a table with a generated column",
+        ),
+        (
+            "CREATE TABLE d (x TEXT DEFAULT (hex(zeroblob(10))));
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = 'TABLE' WHERE name = 'd';",
+            "a table with an expression default",
+        ),
+        (
+            "CREATE INDEX e ON shots (length(hex(zeroblob(10))) + length);
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = 'Index' WHERE name = 'e';",
+            "an expression or partial index",
+        ),
+        (
+            "CREATE VIEW w AS SELECT 1;
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = 'View' WHERE name = 'w';",
+            "a view",
+        ),
+        (
+            "CREATE TRIGGER t AFTER UPDATE ON project BEGIN SELECT 1; END;
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = 'TRIGGER' WHERE name = 't';",
+            "a trigger",
+        ),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let path = project_file_with(&dir, sql);
+        let (_, refused) = salvage_refused(&path);
+        println!("salvage of {what} behind a case-variant type: refused as {refused:?}");
+        assert_eq!(refused, Some(what), "{sql}");
+    }
+}
+
 // === The second open of an open sequence keeps its own guard (#576 RV18-2) ===
 
 /// Stamps a saved project as an older format, so `open_existing_to_read` reads
@@ -272,6 +376,39 @@ fn the_read_only_reopen_refuses_a_file_swapped_in_after_the_first_open() {
     assert_eq!(refused, Some("a view"));
 }
 
+/// [#576 RV19a-8] `attempt_repair` renames its repaired copy into place and
+/// opens the file again to `quick_check` it. That second open ran no schema
+/// guard - the pattern every other reopen now guards - so a file swapped in
+/// between the rename and the reopen had its schema's SQL run by the check.
+#[test]
+fn the_repair_reopen_refuses_a_file_swapped_in_after_the_rename() {
+    let dir = TempDir::new().unwrap();
+    let path = project_file_with(&dir, "");
+    project_at(
+        &dir.path().join("swapped.stalx"),
+        "CREATE VIEW v AS SELECT 1;",
+    );
+
+    open::between_opens::set(swap_in_the_hostile_file);
+    let repaired = Database::attempt_repair(&path);
+    let refused = repaired.as_ref().err().and_then(|err| {
+        err.chain()
+            .find_map(|c| c.downcast_ref::<RefusedSchemaObject>())
+            .map(|refused| refused.what)
+    });
+    println!(
+        "file swapped for a hostile one before the repair's verifying reopen: {:?}; refused as \
+         {refused:?}",
+        repaired.as_ref().map_err(|e| format!("{e:#}"))
+    );
+
+    assert!(
+        !dir.path().join("swapped.stalx").exists(),
+        "premise: the swap happened"
+    );
+    assert_eq!(refused, Some("a view"));
+}
+
 // === check_schema_at leaves nothing beside the file (#576 RV18-3) ===
 
 fn files_in(dir: &Path) -> Vec<String> {
@@ -323,4 +460,140 @@ fn check_schema_at_leaves_nothing_beside_a_wal_mode_file() {
         "a missing file is not created"
     );
     assert_eq!(refused, Some("a view"));
+}
+
+/// The bytes of a HOT rollback journal for a database other than the one it
+/// will be put beside: `old(x)`, caught mid-transaction after a cache spill
+/// (so the journal header is synced and SQLite would play it back), as a
+/// crash in the middle of a write leaves it.
+fn a_stale_hot_journal(dir: &Path) -> Vec<u8> {
+    let old = dir.join("old.db");
+    let conn = Connection::open(&old).unwrap();
+    conn.execute_batch(
+        "PRAGMA page_size = 1024; PRAGMA journal_mode = DELETE;
+         CREATE TABLE old(x); INSERT INTO old VALUES ('OLD-FILE');
+         PRAGMA cache_size = 1; BEGIN;
+         INSERT INTO old SELECT hex(randomblob(500)) FROM
+           (WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50)
+            SELECT i FROM n);",
+    )
+    .unwrap();
+    let journal = std::fs::read(repair::sibling(&old, "-journal")).unwrap();
+    conn.execute_batch("ROLLBACK").unwrap();
+    journal
+}
+
+/// [#576 RV19a-3] `check_schema_at` never rolls a journal it finds beside the
+/// file into it. Its one caller checks a SpeleoDB download it has just
+/// extracted, so a journal there can only be a stale one (left by a crash
+/// while an earlier download was being written); a read-write open treated it
+/// as hot and played the OLD file's pages back into the fresh bytes, so the
+/// check passed and the old file became the cache. The check now opens
+/// read-only, where a hot journal makes the read fail instead.
+#[test]
+fn check_schema_at_never_rolls_a_stale_journal_into_the_file() {
+    let dir = TempDir::new().unwrap();
+    let journal = a_stale_hot_journal(dir.path());
+    let path = dir.path().join("download.stalx");
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "PRAGMA page_size = 1024; CREATE TABLE fresh(y);
+             INSERT INTO fresh VALUES ('NEW-DOWNLOAD');",
+        )
+        .unwrap();
+    }
+    let fresh = std::fs::read(&path).unwrap();
+    std::fs::write(repair::sibling(&path, "-journal"), &journal).unwrap();
+
+    let checked = Database::check_schema_at(&path);
+    let changed = std::fs::read(&path).unwrap() != fresh;
+    let tables: Vec<String> =
+        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .and_then(|conn| {
+                conn.prepare("SELECT name FROM sqlite_master")?
+                    .query_map([], |row| row.get(0))?
+                    .collect()
+            })
+            .unwrap_or_default();
+    println!(
+        "fresh file beside a stale hot journal: check_schema_at -> {:?}; \
+         file changed: {changed}; tables read back: {tables:?}",
+        checked.as_ref().map_err(|e| format!("{e:#}"))
+    );
+
+    assert!(
+        !changed,
+        "the check must not write the stale journal's pages into the file"
+    );
+    assert!(
+        checked.is_err(),
+        "a file with a hot journal beside it is refused, not read as if clean"
+    );
+}
+
+/// [#576 W52-6] The salvage's summary reads a table whose type cell lost its
+/// case, as the salvage itself does. Its existence probe matched the type
+/// exactly, so a 'Table' project table was reported as "Project table is
+/// empty" with no name - beside the full project read back from that very
+/// table - and a 'Table' sections or shots table was counted as 0.
+#[test]
+fn the_salvage_summary_reads_a_table_whose_type_lost_its_case() {
+    let dir = TempDir::new().unwrap();
+    let surveyed_at = |name: &str, sql: &str| {
+        let path = dir.path().join(name);
+        let mut project = Project::new("Crafted".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("SectionA".to_string()),
+            shots: vec![
+                crate::models::ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                },
+                crate::models::ShotData {
+                    length: 7.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        project.ensure_shot_uuids();
+        Database::open(&path)
+            .unwrap()
+            .save_project(&project)
+            .unwrap();
+        Connection::open(&path).unwrap().execute_batch(sql).unwrap();
+        path
+    };
+    let summary = |path: &Path| {
+        let salvaged = Database::export_salvageable(path).unwrap();
+        (
+            salvaged.project_name,
+            salvaged.section_count,
+            salvaged.shot_count,
+            salvaged.errors,
+        )
+    };
+    let clean = summary(&surveyed_at("clean.stalx", ""));
+    println!("clean file: salvage summary (name, sections, shots, errors) = {clean:?}");
+    assert_eq!(
+        clean,
+        (Some("Crafted".to_string()), 1, 2, Vec::<String>::new()),
+        "premise: the clean file's summary"
+    );
+    for table in ["project", "sections", "shots"] {
+        let path = surveyed_at(
+            &format!("{table}.stalx"),
+            &format!(
+                "PRAGMA writable_schema = ON;
+                 UPDATE sqlite_master SET type = 'Table' WHERE name = '{table}';"
+            ),
+        );
+        let damaged = summary(&path);
+        println!("type cell 'Table' on {table}: salvage summary = {damaged:?}");
+        assert_eq!(
+            damaged, clean,
+            "{table}: the summary of what the salvage read"
+        );
+    }
 }

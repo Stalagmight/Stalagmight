@@ -157,6 +157,21 @@ impl Project {
         station_a: StationRef,
         station_b: StationRef,
     ) -> Result<ClosurePreview, String> {
+        self.compute_closure_metrics_with(station_a, station_b, || {
+            self.calculate_path_length_between(station_a, station_b)
+        })
+    }
+
+    /// [`Self::compute_closure_metrics`] over a loop walk the caller supplies,
+    /// run only once both endpoints have coordinates. For a caller that has to
+    /// measure under a different graph than the live one: the adjustment
+    /// restamp leaves the closure's own edge out (#576 W36-NF1).
+    pub(super) fn compute_closure_metrics_with(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        loop_length: impl FnOnce() -> f64,
+    ) -> Result<ClosurePreview, String> {
         trace!(
             station_a = ?station_a,
             station_b = ?station_b,
@@ -173,7 +188,7 @@ impl Project {
         let horizontal_misclosure = coords_a.horizontal_distance_to(&coords_b);
         let vertical_misclosure = (coords_a.z - coords_b.z).abs();
         let misclosure_distance = coords_a.distance_to(&coords_b);
-        let path_length = self.calculate_path_length_between(station_a, station_b);
+        let path_length = loop_length();
 
         let error_percentage = if path_length > 0.0 {
             (misclosure_distance / path_length) * 100.0

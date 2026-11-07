@@ -15,6 +15,7 @@ import {
   writeRunTrace,
 } from './fuzzHarness';
 import { TraceRecorder, failureSignature, readTrace, writeTrace } from './fuzzTrace';
+import { shareableFailureText } from './shareableFailure';
 import { moveTraceStep } from '../scenarios/importDialogTrace';
 
 // Shared per-run plumbing of the four fuzz scenarios. The failure texts below
@@ -84,7 +85,7 @@ describe('openReplay', () => {
     process.env.STALAGMIGHT_FUZZ_REPLAY = file;
 
     expect(() => openReplay('scenario-a', 'CaveA.stalx', RERUN_WITH_IDS)).toThrow(
-      new Error(`trace ${file} was recorded by scenario-b; run it with that scenario`),
+      new Error(`trace ${file} was recorded by another scenario; run it with that scenario\n  recorded by: scenario-b`),
     );
   });
 
@@ -94,9 +95,9 @@ describe('openReplay', () => {
 
     expect(() => openReplay('scenario-a', 'CaveA.stalx', RERUN_WITH_IDS)).toThrow(
       new Error(
-        `trace ${file} was recorded on CaveB.stalx but this run is on CaveA.stalx; ` +
-          'its steps carry ids resolved against that project. Re-run with ' +
-          'STALAGMIGHT_FUZZ_FIXTURE=CaveB.stalx (pnpm agent:scenario --trace restores it for you).',
+        `trace ${file} was recorded on another fixture but this run is on CaveA.stalx ` +
+          '(pnpm agent:scenario --trace restores it for you)\n' +
+          '  its steps carry ids resolved against that project. Re-run with STALAGMIGHT_FUZZ_FIXTURE=CaveB.stalx',
       ),
     );
   });
@@ -107,11 +108,31 @@ describe('openReplay', () => {
 
     expect(() => openReplay('scenario-a', 'CaveA.stalx', RERUN_WITH)).toThrow(
       new Error(
-        `trace ${file} was recorded on CaveB.stalx but this run is on CaveA.stalx; ` +
-          're-run with STALAGMIGHT_FUZZ_FIXTURE=CaveB.stalx ' +
-          '(pnpm agent:scenario --trace restores it for you).',
+        `trace ${file} was recorded on another fixture but this run is on CaveA.stalx ` +
+          '(pnpm agent:scenario --trace restores it for you)\n' +
+          '  re-run with STALAGMIGHT_FUZZ_FIXTURE=CaveB.stalx',
       ),
     );
+  });
+
+  it("keeps the trace's own scenario and fixture off the line a runner prints (#576 W51)", () => {
+    // recordedTrace names the file after its scenario, so the forged one is
+    // written under a neutral name: only the header carries the token.
+    const forged = path.join(dir, 'forged.json');
+    fs.copyFileSync(recordedTrace('qzForgedScenario', 'qzCaveB.stalx'), forged);
+    process.env.STALAGMIGHT_FUZZ_REPLAY = forged;
+    const headline = (): string => {
+      try {
+        openReplay('scenario-a', 'CaveA.stalx', RERUN_WITH);
+      } catch (err) {
+        return shareableFailureText((err as Error).message).split('\n')[0] ?? '';
+      }
+      return '';
+    };
+    expect(headline()).toBe(`trace ${forged} was recorded by another scenario; run it with that scenario`);
+    process.env.STALAGMIGHT_FUZZ_REPLAY = recordedTrace('scenario-a', 'qzCaveB.stalx');
+    expect(headline()).toContain('was recorded on another fixture');
+    expect(headline()).not.toContain('qzCaveB');
   });
 });
 

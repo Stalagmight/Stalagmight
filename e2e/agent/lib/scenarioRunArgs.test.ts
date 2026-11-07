@@ -48,6 +48,31 @@ describe('parseScenarioArgs', () => {
     expect(() => parseScenarioArgs(['fractalStress', '--iterations', '0'])).toThrow(/positive integer/);
     expect(() => parseScenarioArgs(['fractalStress', '--seed', '3.7'])).toThrow(/needs an integer/);
     expect(() => parseScenarioArgs([])).toThrow(/usage: pnpm agent:scenario/);
-    expect(() => parseScenarioArgs(['fractalStress', '--bogus'])).toThrow(/unknown flag --bogus/);
+    expect(() => parseScenarioArgs(['fractalStress', '--bogus'])).toThrow(/unknown flag, a string of 7 character\(s\)/);
+  });
+
+  it('prints what the user typed, and what a trace carries, as its shape (#576 W51)', () => {
+    const refusal = (run: () => unknown): string => {
+      try {
+        run();
+      } catch (err) {
+        return (err as Error).message;
+      }
+      return '';
+    };
+    const refusals = [
+      refusal(() => parseScenarioArgs(['fractalStress', '/home/qzCaveA/x.tml'])),
+      refusal(() => parseScenarioArgs(['fractalStress', '--seed', 'qzCaveA'])),
+      refusal(() => parseScenarioArgs(['fractalStress', '--iterations', 'qzCaveA'])),
+      refusal(() => scenarioRunOptions({}, { seed: 'qzCaveA' as unknown as number, iterations: 1 })),
+      refusal(() => scenarioRunOptions({}, { seed: 1, iterations: ['qzCaveA'] as unknown as number })),
+    ];
+    for (const message of refusals) {
+      expect(message).not.toBe('');
+      expect(message).not.toContain('qzCaveA');
+    }
+    expect(refusal(() => parseScenarioArgs(['fractalStress', '--iterations', '0']))).toBe(
+      'flag --iterations needs a positive integer, got 0',
+    );
   });
 });

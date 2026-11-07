@@ -525,6 +525,11 @@ describe('materializeSurveyFile', () => {
         const hostile = { ...spec, name } as GeneratedFileSpec;
         expect(() => materializeSurveyFile(dir, hostile)).toThrow(/plain basename/);
       }
+      // A spec a forged trace carries does not reach the message (#576 W51).
+      const forged = { ...spec, name: 'qzCaveA/x.dmp' } as GeneratedFileSpec;
+      expect(() => materializeSurveyFile(dir, forged)).toThrow(
+        new Error('generated file name must be a plain basename, got one of 13 character(s)'),
+      );
       expect(fs.readdirSync(dir)).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

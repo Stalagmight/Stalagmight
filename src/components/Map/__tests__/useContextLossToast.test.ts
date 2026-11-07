@@ -149,3 +149,123 @@ describe('watchContextRestore', () => {
     expect(unrecovered).toHaveBeenCalledTimes(1);
   });
 });
+
+// #576 RV19b-M2: MapLibre loads the style it rebuilds on a restore in a
+// requestAnimationFrame (Style.loadJSON -> browser.frameAsync), and a hidden
+// document runs none, so a restore that arrives while the window is hidden or
+// minimized gets its `style.load` only on the first visible frame. Only visible
+// time counts towards the grace period.
+describe('watchContextRestore while the document is hidden', () => {
+  /** A document stand-in (the suite runs under node): visibility + its listeners. */
+  class FakeDocument extends EventTarget {
+    visibilityState: DocumentVisibilityState = 'visible';
+    listeners = 0;
+    override addEventListener(...args: Parameters<EventTarget['addEventListener']>): void {
+      if (args[0] === 'visibilitychange' && args[1]) this.listeners += 1;
+      super.addEventListener(...args);
+    }
+    override removeEventListener(...args: Parameters<EventTarget['removeEventListener']>): void {
+      if (args[0] === 'visibilitychange' && args[1]) this.listeners -= 1;
+      super.removeEventListener(...args);
+    }
+  }
+  let doc: FakeDocument;
+  /** A restore's style load is waiting on its animation frame. */
+  let framePending: boolean;
+  const setVisibility = (state: DocumentVisibilityState): void => {
+    doc.visibilityState = state;
+    doc.dispatchEvent(new Event('visibilitychange'));
+  };
+  /** MapLibre's restore: the event, and the rebuilt style's load queued for the next frame. */
+  const restoreQueued = (): void => {
+    fake.fire('webglcontextrestored');
+    framePending = true;
+  };
+  /** An animation frame, for the 1 s step it stands in for: a hidden document runs none. */
+  const tick = (): void => {
+    vi.advanceTimersByTime(1000);
+    if (doc.visibilityState !== 'visible' || !framePending) return;
+    framePending = false;
+    fake.fire('style.load');
+  };
+
+  beforeEach(() => {
+    framePending = false;
+    doc = new FakeDocument();
+    vi.stubGlobal('document', doc);
+    detach();
+    detach = watchContextRestore(fake.map, {
+      graceMs: CONTEXT_RESTORE_GRACE_MS,
+      onUnrecovered: unrecovered,
+      onRecovered: recovered,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('does not report a restore whose style waits on the hidden window for its frame', () => {
+    setVisibility('hidden');
+    fake.fire('webglcontextlost');
+    restoreQueued();
+    // A minute hidden: no frame runs, so the rebuilt style does not load.
+    for (let s = 0; s < 60; s++) tick();
+    expect(framePending).toBe(true);
+    console.log('[RV19b-M2] reports after a restore in a hidden window + 60 s hidden:', unrecovered.mock.calls.length);
+    expect(unrecovered).not.toHaveBeenCalled();
+
+    setVisibility('visible');
+    tick(); // the first visible frame loads the rebuilt style
+    expect(framePending).toBe(false);
+    vi.advanceTimersByTime(10_000);
+    expect(unrecovered).not.toHaveBeenCalled();
+    expect(recovered).not.toHaveBeenCalled();
+    expect(doc.listeners).toBe(0);
+  });
+
+  it('still reports a restore that brings no loaded style back within five seconds of visible time', () => {
+    // RV18-MAP-2's second loss in the loading frame: no style.load ever follows.
+    fake.fire('webglcontextlost');
+    fake.fire('webglcontextrestored');
+    fake.fire('webglcontextlost');
+    fake.fire('webglcontextrestored');
+    vi.advanceTimersByTime(3000);
+    setVisibility('hidden');
+    vi.advanceTimersByTime(60_000);
+    console.log('[RV19b-M2] reports after 3 s visible + 60 s hidden:', unrecovered.mock.calls.length);
+    expect(unrecovered).not.toHaveBeenCalled();
+
+    setVisibility('visible');
+    vi.advanceTimersByTime(1999);
+    expect(unrecovered).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(unrecovered).toHaveBeenCalledTimes(1);
+    expect(doc.listeners).toBe(0);
+    // A style that does load after all takes the report back.
+    fake.fire('style.load');
+    expect(recovered).toHaveBeenCalledTimes(1);
+  });
+
+  it('a loss while hidden starts its grace period when the window is shown', () => {
+    setVisibility('hidden');
+    fake.fire('webglcontextlost');
+    vi.advanceTimersByTime(60_000);
+    expect(unrecovered).not.toHaveBeenCalled();
+    setVisibility('visible');
+    vi.advanceTimersByTime(4999);
+    expect(unrecovered).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(unrecovered).toHaveBeenCalledTimes(1);
+  });
+
+  it('detach while the grace period is paused drops the visibility listener', () => {
+    fake.fire('webglcontextlost');
+    setVisibility('hidden');
+    detach();
+    expect(doc.listeners).toBe(0);
+    setVisibility('visible');
+    vi.advanceTimersByTime(10_000);
+    expect(unrecovered).not.toHaveBeenCalled();
+  });
+});

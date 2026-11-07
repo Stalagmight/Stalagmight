@@ -970,8 +970,12 @@ import error quoting the path it was handed - is folded by one per-process list
 matched in every form JSON and Rust's `{:?}` write it in, at any depth: a
 quote or backslash escaped, any control or non-ASCII character as itself,
 `\u{hex}` or `\uXXXX`, #576 RV16-1, RV17-1; percent-encoded as a `file://`
-URL writes it, and in both Unicode normal forms, NFC and NFD, RV18-W23-5 - but
-not a change of case, an HTML entity, base64 or a part of a name) that the
+URL writes it, and in both Unicode normal forms, NFC and NFD, RV18-W23-5; a
+space as a form encoder's `+`, and any character but a letter, a digit and
+`-._~` as an HTML character reference, `&#233;`, `&#xE9;` or `&amp;`,
+RV19b-P5 - but not a change of case, another named HTML entity, base64 or a
+part of a name; a name folds from three characters, or from two with one
+outside ASCII, RV19b-P4) that the
 scenario's failure message, `agent:scenario`'s FAIL/findings lines,
 `fuzz-shrink`'s output, the sweep's findings (`findings/` JSON included), every
 line of the session's `actions.jsonl` (a tool's params and result, its error,
@@ -982,12 +986,15 @@ cutting it, RV18-W23-6) and every MCP tool result and error all pass through
 `state/` snapshot the recorder writes (`Recorder.writeState`; a store snapshot
 taken after a corpus import carries the copy's path). Not covered, because they
 are not published: the copies themselves and the app's own log files.
-Screenshots (`screenshots/`, and the one in each `findings/` entry) are images
-of the app, so nothing can fold them: they may show a corpus file name wherever
-the UI prints one. No report or trace embeds them - `report.md` names the
-`screenshots/` folder and the `findings/` entries by path only, and a fuzz
-trace carries no image - so look at one before you publish it. Attach the
-trace and the printed failure, not the session directory.
+Screenshots (`screenshots/`, the one in each `findings/` entry, and a
+journey's checkpoints in `journeys/<journey>/`) are images of the app, so
+nothing can fold them: they show a corpus file name wherever the UI prints one,
+and the app's own text - station, section and project names - wherever the UI
+shows it. They are not for sharing (see the list below, #576 W33-NF5). No
+report or trace embeds them - `report.md` lists `screenshots/` and the
+`findings/` entries by path only, labelled not for sharing, and a fuzz trace
+carries no image. Attach the trace and the printed failure, not the session
+directory.
 
 **What a run shares carries codes, counts and code locations (#576 HFI2-F2,
 W21-NF1, W21-NF2).** The app's text names the data it is about - a section, a
@@ -1006,7 +1013,11 @@ locations:
   and classifier ids, and one count line for each run of other lines
   (`lib/shareableFailure.ts`). It is fail-closed: a line is kept only if its
   shape is one the harness writes, so a new oracle that quotes the app is
-  covered. An `ipc <command>:` / `eval:` / `javascript error:` headline keeps
+  covered. A shape is the whole line's, not its label, since the app's text
+  can start `trace:` too (#576 RV19b-P2): a `reproduce:` line runs `pnpm
+  agent:...` or `run_scenario("...")`, a `trace:` line is one path to a
+  `.json` trace, and a diff path is lower-case field names and indices. An
+  `ipc <command>:` / `eval:` / `javascript error:` headline keeps
   the prefix and the length of the app's text. Every line it keeps has the
   checkout folded to `<repo>` and the home directory to `~`
   (`foldLocalPaths`), so a `reproduce:` line's fixture path or a session
@@ -1021,11 +1032,51 @@ locations:
   checks every value a `ctx.log` call interpolates against the list of harness
   values (counts, seeds, ids, paths) or that rule. The full line is a
   `scenario-progress` event in `actions.jsonl`.
+- `agent:journeys` prints its progress lines (`   · <line>`) the same way
+  (#576 W33-NF1): a failed check's observed detail ends a `- failed:` line and
+  a failed checkpoint's error a `(non-gating) failed:` line, so both print as
+  their length. Its PASS/FAIL line gives an `aborted:` reason in the headline
+  form, its further lines counted (`journeys/framework.ts`
+  `journeyVerdictLine`). `shareableRunnerOutput.test.ts` checks every value the
+  framework's lines interpolate, and that every check label and checkpoint
+  name is a literal. The full lines are `scenario-progress` events in
+  `actions.jsonl`; the full checks and reason are in the session's
+  `uat/run.jsonl`.
+- `agent:journeys -- --ledger` commits its run record to `docs/uat/runs/` in
+  the same form (#576 W39-NF1, `journeys/ledger.ts` `ledgerRecord`): a failed
+  check's observed detail as its length, the abort reason as the verdict line
+  prints it, and each sweep finding as its severity, kind and code. It keeps
+  only the fields it names, so a field added to a journey result later stays
+  in `uat/run.jsonl` until it is added there.
 - A harness crash - a runner's `fatal:` line, `fuzz-shrink`'s `shrink
-  failed:` - prints the error's name, its headline in the same form, and its
-  stack frames, folded; the other lines of its message are counted
-  (`shareableErrorText`). A crash in session setup can carry an IPC rejection
-  or a page script's error, so the raw stack is not printed.
+  failed:`, and the `fatal:` line of `agent:smoke`, `agent:mcp`,
+  `agent:bridge`, `agent:mcp:smoke` (whose `unexpected exception` check too,
+  #576 W39-NF3), `ipc-payload-probe.ts` (whose `probe failed:` too, #576
+  W33-NF6) and `session-http-probe.ts` (its `FAILED:` line, #576 W51) -
+  prints the error's name, its headline
+  in the same form, and its stack frames, folded; the other lines of its
+  message are counted (`shareableErrorText`). A crash in session setup can
+  carry an IPC rejection or a page script's error, so the raw stack is not
+  printed, by these or any other file of the harness
+  (`shareableRunnerOutput.test.ts`).
+- `agent:mcp:smoke`'s check lines (#576 W41-NF1) print a count the smoke
+  took and the names of the tools it found missing as they are, the
+  crash-marker finding as `finding.json` carries it, `app_start`'s error as a
+  crash headline, and any other value a tool returned (a store value, the seed
+  result, a map position) as its length (`mcpSmokeOutput.test.ts`). The tools
+  that return those record their full results in the session's
+  `actions.jsonl`. The server's stderr - an `app_start` build's output, whose
+  cargo `Compiling` and Tauri `Built application at:` lines name the checkout -
+  is passed through a line at a time with the checkout folded to `<repo>` and
+  the home directory to `~` (#576 RV19b-P8, `lib/foldedLines.ts`), and so is
+  it by `agent:bridge`, which inherited it before (#576 W51).
+- A session that builds - `agent:scenario`, `agent:journeys`, `agent:smoke`
+  and the MCP server's `app_start`, and the Tier 2 OS helper's `cargo build
+  --release` (`os/helper.ts`, #576 W51) - passes `pnpm tauri build`'s stdout and
+  stderr to its own stderr the same way, a line at a time with the checkout
+  folded to `<repo>` and the home directory to `~`, and folds its `Rebuilding:`
+  reasons and build log lines too (#576 W47-NF3, `lib/build.ts`
+  `runBuildCommand`, `buildOutput.test.ts`).
 - `fuzz-matrix` prints a failed cell's FAIL block as the child wrote it. For
   a cell that died without one, it prints the last lines of the child's output
   fail-closed (`shareableTail`): the session and verdict lines, progress lines
@@ -1042,17 +1093,99 @@ locations:
   field-name keys, string lengths, value types, array lengths; only a boolean
   or null keeps its value, and a key that is not a lowercase-led identifier is
   only counted), and a `type_text` step the length of its text (#576
-  RV18-W23-3).
+  RV18-W23-3). So does every other value a step carries (#576 W33-NF2): an
+  `eval` / `driver_script` step gives its script's length, a `seed` step the
+  length of the project name it chose and a fixture's extension only (as a
+  `file_dialog_answer` step gives a file), a `select_option` step the length
+  of the chosen value, and a map position - `map_click`'s `lngLat`,
+  `map_view`'s `set` - its shape, since a coordinate is where the cave is.
+  Screen coordinates, a seed and an iteration count, a button or a dialog's
+  kind, and command, store, action, scenario and screenshot names stay when
+  they have the form the harness writes them in - a number, a word of the
+  tool's fixed set, identifier characters - and so do the header's session
+  id, commit, display and each step's number and tool; any other value, which
+  only a forged or hand-edited log holds, is its shape (#576 W49-NF1). A
+  test id or a selector keeps its structure and the words the
+  app's own source uses (#576 RV19b-P1, `scripts/lib/shareable-selector.mjs`):
+  a test id - and an `#id`, an `id=` value or an attribute's value in a
+  selector - keeps each word between `-` and `_` that is a number or a word of
+  the production source under `src/`, and the span from the first other word
+  to the last is its length
+  (`testid=publish-to-speleodb-dialog-collab-remove-<17 characters>`,
+  `system-card-<25 characters>` for a card keyed by a file path). Text a
+  selector matches is its length whatever its words: WebdriverIO's `=text`,
+  `*=text`, `span=text`, `aria/label`, an xpath string that is not an
+  attribute's value (`//td[text()='<13 characters>']`), and the value of an
+  attribute that holds text, such as `aria-label`, `title` or `placeholder`.
+  Tags, classes, combinators and xpath axes stay, their words judged as a test
+  id's are. A `press_keys` step lists its named
+  keys (`["Control", 1 character]`, `[5 characters, "Enter"]`): `browser.keys`
+  types any key that is not a WebDriver key name, so a run of single
+  characters can spell a name, and each such run is a count of characters
+  (#576 W39-NF2). An `os_keys` step lists its chord the same way: its
+  modifiers and named keys, and any other key - a letter, a digit - as a count
+  of characters (`["cmd", 1 character]`), since a run of one-key chords spells
+  text too (#576 RV19b-P6).
+- What a runner echoes back prints as its shape, its length or a count (#576 W51,
+  `valueShape` in `lib/shareableFailure.ts`): a refused flag or argument of
+  `fuzz-matrix`, `fuzz-shrink`, `agent:scenario` and `ipc-payload-probe.ts`, an
+  unknown scenario or journey name, a bad `STALAGMIGHT_AGENT_PLATFORM`,
+  `STALAGMIGHT_AGENT_WINDOW_RECT` or `STALAGMIGHT_AGENT_DISPLAYS` entry, and
+  what a trace file holds when it is refused or printed back (its header's
+  scenario, seed and iterations, a refused step value). A trace's knob name
+  prints when it reads `STALAGMIGHT_[A-Z0-9_]+`, its values, the fixture and
+  every path folded. A store value a scenario reports on the first line of an
+  error - an open dialog, an undo entry's command type - keeps only the words
+  of the app's source, as a test id does; a section name or a leftover temp
+  file prints as its length or a count, and a metric key holds codes only
+  (`mapSkip:<code>`). `agent:smoke`'s `started:` line is folded and its
+  integrity check gives `<n> message(s), save_blocked=<bool>`;
+  `ipc-payload-probe.ts` gives serde's rejection as its length.
+- Every print and write site is checked in the source, not one at a time
+  (#576 W51, `e2e/agent/lib/printSites/`). `printSites.test.ts` scans every
+  non-test file of `e2e/agent`, `e2e/lib` and `scripts/` for what prints or
+  writes - `console.*`, `process.stdout`/`stderr.write`, `ctx.log`, a
+  `ctx.metric` key (the PASS/FAIL line prints the metrics), an error's
+  message (a runner prints its first line), a `report.md` step, a
+  file write or copy, a child process whose output is ours (`stdio:
+  'inherit'`, `execSync`'s default stderr), a sink handed on as a value - and
+  fails on any value that reaches a shareable one unless it goes through a
+  helper above, sits where the runner withholds it (after the first
+  ` failed: ` of a first line, or on a later line), or has an entry in its
+  group's allow-list (`allowRunners.ts`, `allowLib.ts`, `allowScenarios.ts`,
+  `allowScripts.ts`) saying why it is a code, a count, a length, an integer, a
+  word the harness writes or a path folded by `foldLocalPaths`. A bare name is
+  allowed only in the function it was checked in, a path only folded. Every
+  file write is listed as shareable or private, every private one by a name
+  in the list below, and every shell, Python, PowerShell and Rust program
+  under those directories is classified too. A new site fails the test until
+  it is one of those.
 
 **Not for sharing** - the full text, for triage where the run happened: the
 session's `actions.jsonl` (each `finding` event with its detail, each
 `scenario-failure` event with the whole failure message, each
-`scenario-progress` event with the whole progress line), the screenshots
-(`screenshots/`, `findings/<n>/screenshot.png`), the crash-marker copies in
-`findings/<n>/`, the `state/` snapshots, `tauri-driver.log`, and the app's own
-log files. `report.md`'s Evidence list still names `actions.jsonl` and
-`tauri-driver.log` for whoever triages the run, labelled local triage only, not
-for sharing (#576 RV18-W23-7).
+`scenario-progress` event with the whole progress line), `agent:journeys`'
+`uat/run.jsonl` (each check's detail, each abort reason), the screenshots
+(`screenshots/`, `findings/<n>/screenshot.png`, the journey checkpoints in
+`journeys/<journey>/`), the crash-marker copies in
+`findings/<n>/`, the `state/` snapshots, `tauri-driver.log`
+(`tauri-wd.log` on macOS), and the app's own log files. Also private, each
+written where a run or a tool runs (#576 W51): the fixture copies,
+the corpus copies and
+the generated survey files a run puts under its session directory;
+the E2E build stamp beside the built binary (it records the checkout's
+absolute path); the app's own config.toml, which a session's profile setup
+rewrites; the MCP server's tool results, which the agent driving it reads
+(store values, eval results, the app's errors, `app_start`'s paths), and
+the MCP bridge's `requests.jsonl` and `responses.jsonl`, their copy on disk;
+the replay spec `generate-replay.mjs` writes (replay.spec.ts: each step's
+exact parameters - typed text, scripts, IPC arguments); the dev server's
+agent bridge files under .agent-bridge/ (its token, the mirrored webview
+console, eval results); and the coverage merge's outputs under
+docs/coverage/ (istanbul JSON keyed by absolute source paths).
+`report.md`'s Evidence list still names `actions.jsonl`,
+`tauri-driver.log` and `screenshots/` for whoever triages the run, labelled
+local triage only, not for sharing (#576 RV18-W23-7, W33-NF5).
 
 **`corpusId` labels; `corpusHash` resolves.** The 5-hex crc20 is 20 bits, which
 is ample for telling two files apart in one run's output and far too little to

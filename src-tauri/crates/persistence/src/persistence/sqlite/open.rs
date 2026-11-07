@@ -59,14 +59,24 @@ pub fn with_stalx_extension(path: PathBuf) -> PathBuf {
 /// with neither a `-wal` nor a `-journal` beside it. A read-only connection to
 /// that creates the `-wal` and `-shm` and cannot remove them when it closes
 /// (#576 RV8a-3, RV18-3), so it is opened READ_WRITE without CREATE instead,
-/// with `query_only` on: no statement can write through it, and with no `-wal`
-/// nothing is committed outside the file, so its last close has nothing to
-/// checkpoint into the file and removes the sidecars the open made. Every
-/// other file keeps the read-only open: a rollback-journal file's creates
-/// nothing, a hot journal still fails it with `SQLITE_READONLY_ROLLBACK`
-/// (which callers of [`Database::open_for_metadata`] rely on), and a WAL-mode
-/// file whose `-wal` is there - a live writer's, or one a crash left - is read
-/// as it was, never checkpointed by a reader.
+/// with `query_only` on: it refuses INSERT, UPDATE, DELETE and schema changes,
+/// so no statement the openers run writes through it (`query_only` does not
+/// stop `PRAGMA journal_mode`, which rewrites the header; no caller runs one,
+/// #576 RV19a-7). With no `-wal` nothing is committed outside the file, so
+/// its last close has nothing to checkpoint into the file and removes the
+/// sidecars the open made. Every other file keeps the read-only open: a
+/// rollback-journal file's creates nothing, a hot journal still fails it with
+/// `SQLITE_READONLY_ROLLBACK` (which callers of
+/// [`Database::open_for_metadata`] rely on), and a WAL-mode file whose `-wal`
+/// is there - a live writer's, or one a crash left - is read as it was, not
+/// checkpointed by a reader. The `-wal` is looked for beside the file a
+/// symlink points at, where SQLite keeps it (#576 RV19a-7).
+///
+/// One window stays open (#576 RV19a-7): a writer that starts on the file
+/// between the check and this connection's close commits into a `-wal`, and
+/// this connection, closing last, checkpoints those frames into the file. That
+/// is the writer's committed data, written where it would have gone anyway -
+/// not a corruption - but it is a write made by a reader's close.
 pub(super) fn connect_for_reading(path: &Path) -> rusqlite::Result<Connection> {
     use rusqlite::OpenFlags;
     if !wal_mode_with_nothing_beside(path) {
@@ -178,6 +188,10 @@ pub(super) fn connect_for_vacuum_into(path: &Path) -> Result<Connection> {
 /// Whether `path` is a SQLite database in WAL journal mode - the header's
 /// write and read format bytes (offsets 18 and 19) are 2 - with no `-wal` and
 /// no `-journal` beside it. Unreadable or not a database: no.
+///
+/// On unix "beside it" means beside the file a symlink resolves to: SQLite's
+/// unix VFS resolves the database path before it names the `-wal`, so looking
+/// beside the link missed a writer's `-wal` (#576 RV19a-7).
 fn wal_mode_with_nothing_beside(path: &Path) -> bool {
     use std::io::Read as _;
     let mut head = [0u8; 20];
@@ -185,9 +199,13 @@ fn wal_mode_with_nothing_beside(path: &Path) -> bool {
     let wal_mode = read.is_ok()
         && head.starts_with(b"SQLite format 3\0")
         && head.get(18..20) == Some(&[2u8, 2][..]);
+    #[cfg(unix)]
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    #[cfg(not(unix))]
+    let resolved = path.to_path_buf();
     wal_mode
-        && !super::repair::sibling(path, "-wal").exists()
-        && !super::repair::sibling(path, "-journal").exists()
+        && !super::repair::sibling(&resolved, "-wal").exists()
+        && !super::repair::sibling(&resolved, "-journal").exists()
 }
 
 impl Database {
@@ -531,16 +549,18 @@ impl Database {
     /// that arrive from elsewhere before anything else touches them, e.g. a
     /// SpeleoDB download about to replace the local cache.
     ///
-    /// [#576 RV18-3] READ_WRITE without CREATE, though it writes nothing, for
-    /// the reason [`Self::upgraded_copy_in_memory`] gives (#576 RV8a-3): a
-    /// read-only connection to a file in WAL journal mode creates the `-wal` /
-    /// `-shm` beside it and cannot remove them when it closes, and no open may
-    /// follow this check to remove them. A read-write one removes them on its
-    /// last close, and without CREATE a missing file is an error, not a new empty
-    /// one. The one write it can make is the one every open makes: rolling back
-    /// a hot journal, which any read of the file would do first.
+    /// Opened through `connect_for_reading` (#576 RV19a-3), so the check
+    /// leaves nothing beside the file (#576 RV18-3: no open may follow it to
+    /// remove a `-wal` / `-shm` a read-only connection to a WAL-mode file
+    /// would make) and does not replay anything into it. A missing file is an
+    /// error, not a new empty one. A journal found beside the file is NOT
+    /// rolled back into
+    /// it: the file was just written by the caller, so such a journal can only
+    /// be a stale one left by a crash under the same name, and replaying it put
+    /// the old file's pages into the new one. The read-only open fails on it
+    /// (`SQLITE_READONLY_ROLLBACK`) and the file is refused instead.
     pub fn check_schema_at(path: &Path) -> Result<()> {
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        let conn = connect_for_reading(path)
             .with_context(|| format!("open {} to check its schema", path.display()))?;
         super::check_schema(&conn)
     }
@@ -688,8 +708,10 @@ impl Database {
             anyhow::bail!("Not a Stalagmight project file: {}", path.display());
         }
 
-        // Open in read-only mode - no writes possible - leaving nothing beside a
-        // WAL-mode file (#576 W35-NF-1).
+        // Open for reading - read-only, or `query_only` for a WAL-mode file
+        // with nothing beside it, which this path runs nothing past - leaving
+        // nothing beside a WAL-mode file (#576 W35-NF-1; the limits are on
+        // `connect_for_reading`, #576 RV19a-7).
         let conn = connect_for_reading(path).context("Failed to open database read-only")?;
         super::check_schema(&conn)?;
 
@@ -770,8 +792,10 @@ impl Database {
 
 /// Test-only seam (#576 RV18-2): a hook that runs between the two opens of one
 /// existing file - the refusing first open of [`Database::open_existing_to_read`]
-/// and its copy into memory, and the handle [`Database::into_read_only`] drops
-/// and its read-only reopen - with no connection to the file held. A test swaps
+/// and its copy into memory, the handle [`Database::into_read_only`] drops
+/// and its read-only reopen, and the rename of [`Database::attempt_repair`]'s
+/// repaired copy and its verifying reopen (#576 RV19a-8) - with no connection
+/// to the file held. A test swaps
 /// the file there: the only way a file reaches the second open's schema guard,
 /// because the first open refuses a hostile one itself.
 #[cfg(test)]
@@ -788,7 +812,7 @@ pub(super) mod between_opens {
         HOOK.with(|slot| slot.set(Some(hook)));
     }
 
-    pub(super) fn run(path: &Path) {
+    pub(in crate::persistence::sqlite) fn run(path: &Path) {
         if let Some(hook) = HOOK.with(Cell::take) {
             hook(path);
         }

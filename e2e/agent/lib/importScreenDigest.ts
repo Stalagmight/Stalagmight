@@ -199,7 +199,11 @@ export interface ImportScreenDigest {
   selRows: number[];
   /** `data-toast-key` of every live toast - stable, unlike the i18n text. */
   toast: string[];
-  /** First error text on screen (wizard error, error dialog, GPS error). */
+  /**
+   * First error text on screen (wizard error, error dialog, GPS error), whole:
+   * it can quote a corpus copy's path, so whatever prints it folds it and
+   * THEN cuts it (`foldThenCut`, #576 W33-NF3).
+   */
   err: string | null;
   /** Is the React error boundary showing its fallback? */
   boundary: boolean;
@@ -274,9 +278,12 @@ export async function computeImportScreenDigest(
     return rect.width > 0 && rect.height > 0;
   };
   const shown = (testid: string): boolean => visible(one(testid));
+  // The whole text, not a prefix (#576 W33-NF3): the page cannot fold corpus
+  // names, and a name cut here reached Node's fold as a stub no fold matches.
+  // The Node side folds it and then cuts it.
   const textOf = (testid: string): string | null => {
     const el = one(testid);
-    return el ? (el.textContent || '').trim().slice(0, 300) : null;
+    return el ? (el.textContent || '').trim() : null;
   };
 
   // ---- stores -------------------------------------------------------------

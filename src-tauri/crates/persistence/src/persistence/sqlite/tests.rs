@@ -72,8 +72,24 @@ fn save_project_tables_is_what_the_core_save_writes() {
 /// `LIBSQLITE3_FLAGS`, which the repo-root `.cargo/config.toml` sets for every
 /// cargo command run inside the clone. Not ignored, so a build that misses it
 /// (cargo started outside the clone, the `[env]` entry dropped) fails here.
+///
+/// Except in a packaged copy of this crate (#576 RV19a-17): the copy crates.io
+/// serves, or `cargo vendor` makes, carries the `Cargo.toml.orig` that `cargo
+/// package` writes and none of this repo's `.cargo/config.toml`, so the flags
+/// this pins are not in play there and the test would fail for every consumer
+/// who runs it. There it says so and returns.
 #[test]
 fn bundled_sqlite_omits_virtual_table_modules_and_extension_loading() {
+    if Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("Cargo.toml.orig")
+        .exists()
+    {
+        println!(
+            "packaged copy of stalagmight-persistence: the repo's LIBSQLITE3_FLAGS do not \
+             apply here, nothing to pin"
+        );
+        return;
+    }
     let conn = Connection::open_in_memory().unwrap();
     let options: Vec<String> = conn
         .prepare("PRAGMA compile_options")

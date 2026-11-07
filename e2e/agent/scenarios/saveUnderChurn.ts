@@ -49,7 +49,9 @@ export const saveUnderChurn: Scenario = {
         if (dirty) throw new Error(`isDirty still true after save ${i}`);
 
         const leftovers = fs.readdirSync(dir).filter((n) => n.endsWith('.stalx.tmp'));
-        if (leftovers.length) throw new Error(`leftover temp file(s) after save ${i}: ${leftovers.join(', ')}`);
+        // Counted, not named: a leftover temp file's name is the app's text
+        // (docs/agent-harness.md, #576 W51).
+        if (leftovers.length) throw new Error(`leftover temp file(s) after save ${i}: ${leftovers.length}`);
       }
 
       // Reopen to prove the on-disk file round-trips.

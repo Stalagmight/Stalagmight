@@ -4063,7 +4063,8 @@
       "lockToRestore": "The project is read-only. View opens a revision for inspection (the SpeleoDB Update returns you to the latest). Revert takes the write lock, uploads the chosen revision as a new revision, and releases it again.",
       "forceEditActive": "You are force-editing without the write lock. Finish or discard those edits (reconnect or save a local copy) before you can view or restore a revision.",
       "unknownAuthor": "unknown author",
-      "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - take the write lock and upload your changes first, or use Revert (that route asks before replacing them)."
+      "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - take the write lock and upload your changes first, or use Revert (that route asks before replacing them).",
+      "viewBlockedByUnreadable": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. Viewing a revision replaces that copy, so nothing was replaced - if another program is using the file, close it and try again, or use Revert (that route asks before replacing it)."
     },
     "restore": {
       "title": "Restore revision {{sha}}",
@@ -4072,6 +4073,7 @@
       "unsavedWarning": "You have unsaved changes that will be discarded.",
       "confirmButton": "Restore revision",
       "discardWarning": "The working copy has changes that are not on SpeleoDB - including any earlier restore you have not pushed. Restoring this revision replaces them, and they are not on the server, so this cannot be undone.",
+      "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. Restoring this revision replaces that copy, so any such changes would be lost, and this cannot be undone.",
       "discardOffer": "Replace my changes & restore",
       "discardConfirm": "Yes, replace my changes & restore",
       "restoring": "Restoring…",
@@ -4140,6 +4142,7 @@
       "consequence": "Your project history is not rewritten - the revert lands as a new revision on top of the current one. When it finishes the project is read-only again, exactly as it is now.",
       "unsavedWarning": "You have changes that are not saved to disk. Save or discard them first - a revert replaces the working copy, so it cannot keep them.",
       "unpushedWarning": "This copy has changes that are not on SpeleoDB. A revert replaces them, and they are not on the server, so this cannot be undone.",
+      "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. A revert replaces that copy, so any such changes would be lost, and this cannot be undone.",
       "messageLabel": "Commit message",
       "commitMessage": "Revert to revision {{sha}}",
       "confirmButton": "Revert",
@@ -4161,6 +4164,7 @@
         "restoreFailed": "The write lock was released and nothing was changed.",
         "restoreFailedLockHeld": "You still hold the write lock, because this copy has changes that are not on SpeleoDB.",
         "lockStillHeld": "The write lock was kept, because releasing it would leave your unpushed changes unprotected.",
+        "lockStillHeldUnreadable": "The write lock was kept, because releasing it would leave any changes in that copy unprotected.",
         "pushFailed": "Revision {{sha}} is in your working copy and you still hold the write lock, but it could not be uploaded. That upload is all that is left, so retry it below.",
         "pushUnconfirmed": "The upload could not be confirmed, so the revert may or may not have reached SpeleoDB. Your working copy and the write lock are both kept, so retry it below - a revert that did land is recognised as yours rather than uploaded a second time.",
         "notEditing": "Revision {{sha}} is in your working copy, but your SpeleoDB session ended before it could be uploaded, so nothing was published and no write lock is held. Close this dialog, sign in again, then start editing to upload it."
@@ -4228,7 +4232,13 @@
       "keepLocal": "Keep the local copy & open it",
       "takeRemote": "Take the server copy & discard my changes",
       "discardWarning": "Taking the server copy permanently deletes the changes made to \"{{name}}\" on this computer. They are not on SpeleoDB, so there is no other copy and this cannot be undone.",
-      "takeRemoteConfirm": "Yes, discard my changes"
+      "takeRemoteConfirm": "Yes, discard my changes",
+      "unreadable": {
+        "title": "The copy on this computer could not be read",
+        "message": "\"{{name}}\" has already been opened on this computer, but that local copy could not be read, so we cannot tell whether it has changes SpeleoDB has never seen. A save may have been interrupted, or another program may be using it. Nothing has been downloaded yet.",
+        "keepHint": "Keeping the local copy downloads nothing and overwrites nothing. Opening it lets an interrupted save roll back to the last one that finished; if another program is using the file, close it first.",
+        "discardWarning": "Taking the server copy permanently replaces the copy of \"{{name}}\" on this computer. It could not be read, so any changes in it that are not on SpeleoDB would be lost, and this cannot be undone."
+      }
     },
     "transport": {
       "refused": "Could not reach SpeleoDB at {{endpoint}} - the server refused the connection. Check that it is running and that the address is right.",

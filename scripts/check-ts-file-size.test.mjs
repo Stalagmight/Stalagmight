@@ -196,6 +196,28 @@ test('listSrcFiles walks untracked files, prunes tests/generated/node_modules, r
   }
 });
 
+// Every gate prints a symlink's target. One that is absolute or leaves the root
+// names a path on the machine, not the checkout's text (#576 W51).
+test('walkFiles gives a symlink target outside the root as a placeholder, one inside as written', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'src-files-out-'));
+  try {
+    fs.mkdirSync(path.join(root, 'src', 'a'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src', 'b.ts'), 'x');
+    fs.symlinkSync('/qzhome/qzuser/CaveA/x.ts', path.join(root, 'src', 'abs.ts'));
+    fs.symlinkSync('../../qzCaveA/x.ts', path.join(root, 'src', 'up.ts'));
+    fs.symlinkSync('../b.ts', path.join(root, 'src', 'a', 'in.ts'));
+    const { symlinks } = walkFiles(root, 'src', { exts: ['.ts'] });
+    assert.deepEqual(symlinks, [
+      { rel: 'src/a/in.ts', target: '../b.ts' },
+      { rel: 'src/abs.ts', target: '<outside the checkout>' },
+      { rel: 'src/up.ts', target: '<outside the checkout>' },
+    ]);
+    assert.doesNotMatch(symlinks.map(symlinkProblem).join('\n'), /qz/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // --- scope: src/ plus the e2e trees (#576 E8-D2) ------------------------------
 
 test('the ratchet measures e2e-playwright/ and e2e/ (specs included) but not generated replays', () => {

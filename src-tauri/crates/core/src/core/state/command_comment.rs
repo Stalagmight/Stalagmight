@@ -22,19 +22,33 @@ impl AppState {
             .map(|(_, text)| text)
     }
 
+    /// Every stored comment key that names one of `stations`: the canonical key
+    /// and any legacy positional `Index` key (#576 W30-NF1). A delete takes them
+    /// BEFORE it removes the stations - a key no longer resolves to a station
+    /// that is gone - and drops them once it has succeeded (#576 RV19a-19).
+    pub(super) fn comment_keys_naming(
+        project: &Project,
+        stations: &[StationRef],
+    ) -> Vec<StationKey> {
+        project
+            .station_comments
+            .keys()
+            .filter(|key| {
+                project
+                    .resolve_key(key)
+                    .is_some_and(|sr| stations.contains(&sr))
+            })
+            .cloned()
+            .collect()
+    }
+
     /// [#576 W30-NF1] Make `comment` station `sr`'s whole comment: every stored
     /// key that names the station is removed, then a non-empty comment is stored
     /// under its canonical key. Touching the canonical key alone left a comment
     /// under a legacy key in place - a clear did nothing, and a new comment was
     /// joined to the old one instead of replacing it.
     fn replace_station_comment(project: &mut Project, sr: StationRef, comment: Option<String>) {
-        let naming: Vec<StationKey> = project
-            .station_comments
-            .keys()
-            .filter(|key| key.section_id == sr.section_id && project.key_is_ref(key, sr))
-            .cloned()
-            .collect();
-        for key in &naming {
+        for key in &Self::comment_keys_naming(project, &[sr]) {
             project.station_comments.remove(key);
         }
         if let Some(text) = comment.filter(|text| !text.is_empty()) {

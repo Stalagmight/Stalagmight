@@ -476,6 +476,112 @@ fn save_remints_duplicate_shot_uuids_before_persisting() {
     assert!(!saved.has_critical_integrity_violations());
 }
 
+/// `project` serialized as a PRE-ANCHOR build wrote it: every cross-reference
+/// a positional `{section_id, station_index}` (#576 W52-1). This build writes
+/// `{section_id, anchor}`, so a test of the legacy restore has to build the old
+/// shape itself; one written with an `Index` anchor is a snapshot this build
+/// could have taken. Only `Index` and `SectionStart` anchors have a position
+/// without resolving them.
+fn pre_anchor_snapshot(project: &Project) -> String {
+    fn to_positional(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(anchor) = map.remove("anchor") {
+                    let index = match &anchor {
+                        serde_json::Value::String(start) if start == "SectionStart" => 0,
+                        serde_json::Value::Object(index) => index["Index"].as_u64().unwrap(),
+                        other => unreachable!("anchor {other} has no position"),
+                    };
+                    map.insert("station_index".to_string(), index.into());
+                }
+                map.values_mut().for_each(to_positional);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(to_positional),
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(project).unwrap();
+    to_positional(&mut value);
+    let snapshot = value.to_string();
+    assert!(
+        snapshot.contains("\"station_index\":"),
+        "the snapshot holds a positional key: {snapshot}"
+    );
+    snapshot
+}
+
+/// [#576 W52-1] `restore_snapshot_into` tells a pre-anchor snapshot by the
+/// positional `"station_index":` key, so no snapshot this build writes may
+/// hold one: it would be re-anchored, and a key the snapshot recorded (a
+/// comment row past the end, still `Index`) would move onto another shot.
+/// Every cross-reference collection is filled, an `Index` key among them, and
+/// a comment carries the marker's text.
+#[test]
+fn a_snapshot_this_build_writes_never_holds_the_positional_key_shape() {
+    use crate::models::{GpsCoordinates, LoopClosure, StationMerge, ZeroDatum};
+    let mut project = Project::new("CaveA".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(1.0), shot(2.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(3.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    let key = |section, index| {
+        project
+            .key_for_ref(StationRef::new(section, index))
+            .unwrap()
+    };
+    let (a1, a2, b0, b1) = (key(a, 1), key(a, 2), key(b, 0), key(b, 1));
+    project.station_merges.push(StationMerge {
+        station_a: a2,
+        station_b: b0,
+        merged_at: chrono::Utc::now(),
+    });
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: a1.clone(),
+        station_b: b1.clone(),
+        path_length: 1.0,
+        misclosure_distance: 0.1,
+        error_percentage: 10.0,
+        horizontal_misclosure: 0.1,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: b1.clone(),
+        gps: GpsCoordinates {
+            latitude: 1.0,
+            longitude: 2.0,
+            depth_reference: 0.0,
+        },
+    });
+    project.station_offsets.insert(a1, (1.0, 2.0, 3.0));
+    project
+        .station_comments
+        .insert(b1, "\"station_index\": 7".to_string());
+    project.station_comments.insert(
+        StationKey::new(a, StationAnchor::Index(9)),
+        "comment past the end".to_string(),
+    );
+    project.set_section_offset(b, (5.0, 6.0));
+
+    let snapshot = AppState::serialize_project_snapshot(&project).unwrap();
+    println!("snapshot: {snapshot}");
+    assert!(
+        !snapshot.contains("\"station_index\":"),
+        "a snapshot this build writes holds the pre-anchor key shape"
+    );
+}
+
 #[test]
 fn restore_snapshot_canonicalizes_legacy_index_anchors() {
     // A snapshot persisted by a PRE-ANCHOR build can carry positional Index
@@ -491,16 +597,31 @@ fn restore_snapshot_canonicalizes_legacy_index_anchors() {
         })
         .id;
     project.ensure_shot_uuids();
-    // A station offset stored in the legacy positional (Index) form.
+    // A station offset and a comment stored in the legacy positional form.
     project
         .station_offsets
         .insert(StationKey::new(s, StationAnchor::Index(2)), (1.0, 2.0, 3.0));
-    let snapshot = serde_json::to_string(&project).unwrap();
+    project.station_comments.insert(
+        StationKey::new(s, StationAnchor::Index(2)),
+        "comment on station 2".to_string(),
+    );
+    let snapshot = pre_anchor_snapshot(&project);
 
     let mut slot = project_slot::ProjectSlot::default();
     assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
     let restored = slot.into_project().unwrap();
 
+    // The re-anchor keeps the comment, on the station it named.
+    let station_2 = restored.key_for_ref(StationRef::new(s, 2)).unwrap();
+    assert_eq!(
+        restored
+            .station_comments
+            .get(&station_2)
+            .map(String::as_str),
+        Some("comment on station 2"),
+        "the canonicalized comment stays on station 2: {:?}",
+        restored.station_comments
+    );
     // No Index anchor survives into the live project after restore.
     let mut saw_index = false;
     restored.for_each_station_ref(|_label, key| {
@@ -890,7 +1011,7 @@ fn restore_snapshot_mints_null_uuids_before_reanchor() {
     project
         .station_offsets
         .insert(StationKey::new(s, StationAnchor::Index(2)), (1.0, 2.0, 3.0));
-    let snapshot = serde_json::to_string(&project).unwrap();
+    let snapshot = pre_anchor_snapshot(&project);
 
     let mut slot = project_slot::ProjectSlot::default();
     assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));

@@ -28,7 +28,7 @@ use crate::test_fixtures::state_with_null_sink;
 
 /// Append a shot to the section, so a comment row at index 3 (past the end of
 /// the file's two shots) names the new end station.
-fn append_shot(state: &AppState, sid: u32) {
+pub(super) fn append_shot(state: &AppState, sid: u32) {
     let last = *shot_ids(state).last().unwrap();
     let appended = state.execute(Command::CreateShot {
         section_id: sid,
@@ -58,17 +58,17 @@ fn prepend_shot(state: &AppState, sid: u32) {
     assert!(prepended.success, "prepend: {:?}", prepended.error);
 }
 
-fn undo(state: &AppState) {
+pub(super) fn undo(state: &AppState) {
     let undone = state.undo();
     assert!(undone.success, "undo: {:?}", undone.error);
 }
 
-fn redo(state: &AppState) {
+pub(super) fn redo(state: &AppState) {
     let redone = state.redo();
     assert!(redone.success, "redo: {:?}", redone.error);
 }
 
-fn station_holder(sr: StationRef) -> CommentHolder {
+pub(super) fn station_holder(sr: StationRef) -> CommentHolder {
     CommentHolder::Station { station_ref: sr }
 }
 
@@ -280,4 +280,170 @@ fn swapping_a_comment_held_under_two_keys_swaps_the_joined_text() {
         "undo trades them back"
     );
     assert_eq!(after_redo, swapped_state, "redo trades them again");
+}
+
+/// Every stored comment row as `key=text`, sorted: the keys themselves, not
+/// what a station shows, so a comment that changed key is visible.
+pub(super) fn stored_rows(state: &AppState) -> Vec<String> {
+    let mut rows: Vec<String> = state
+        .get_project_state()
+        .unwrap()
+        .station_comments
+        .iter()
+        .map(|(key, text)| format!("{key:?}={text}"))
+        .collect();
+    rows.sort();
+    rows
+}
+
+/// [#576 RV19a-2] Undo of a set or a clear puts back the exact keys it changed.
+/// Its undo was the inverse `SetStationComment` with the old joined text, which
+/// stored that text under the station's CANONICAL key, not the legacy `Index`
+/// key it came from. Undoing the append that made the legacy key name the
+/// station then removed the canonical key with the shot, and the comment the
+/// file held was gone. The append alone, undone, keeps it.
+#[test]
+fn undoing_a_comment_change_restores_the_legacy_key_it_replaced() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
+    for (label, comment) in [
+        ("clear", None),
+        ("set", Some("comment set in the app".to_string())),
+    ] {
+        let state = state_with_null_sink();
+        state.do_load_project_full(path.clone()).unwrap();
+        let loaded = stored_rows(&state);
+        append_shot(&state, sid);
+        let station = StationRef::new(sid, 3);
+        let changed = state.execute(Command::SetStationComment {
+            station_ref: station,
+            comment: comment.clone(),
+        });
+        assert!(changed.success, "{label}: {:?}", changed.error);
+        let after_change = stored_rows(&state);
+        undo(&state);
+        let after_undo = stored_rows(&state);
+        undo(&state);
+        let after_undo_append = stored_rows(&state);
+        redo(&state);
+        redo(&state);
+        let after_redo = stored_rows(&state);
+        println!("{label}: loaded              {loaded:?}");
+        println!("{label}: after the {label:<5}      {after_change:?}");
+        println!("{label}: undo                {after_undo:?}");
+        println!("{label}: undo the append     {after_undo_append:?}");
+        println!("{label}: redo, redo          {after_redo:?}");
+
+        assert_eq!(
+            after_undo, loaded,
+            "{label}: undo restores the comment under the key it was stored under"
+        );
+        assert_eq!(
+            after_undo_append, loaded,
+            "{label}: undoing the append as well keeps the file's comment"
+        );
+        assert_eq!(
+            after_redo, after_change,
+            "{label}: redoing both gives the changed comment again"
+        );
+    }
+}
+
+/// [#576 RV19a-2] The rows the undo records survive the persisted form the
+/// undo history is saved in, legacy `Index` key included.
+#[test]
+fn the_recorded_comment_rows_survive_the_persisted_undo_history() {
+    use crate::core::{UndoData, UndoEntry, UndoStack};
+    use crate::models::{StationAnchor, StationKey};
+
+    let previous = vec![(
+        StationKey::new(4, StationAnchor::Index(3)),
+        "comment past the end".to_string(),
+    )];
+    let entry = UndoEntry {
+        replayed_at: None,
+        command_bytes: None,
+        command: Command::SetStationComment {
+            station_ref: StationRef::new(4, 3),
+            comment: None,
+        },
+        undo_data: UndoData::StationCommentRows {
+            station_ref: StationRef::new(4, 3),
+            previous: previous.clone(),
+        },
+        timestamp: None,
+    };
+    let (command, data, stamp) = UndoStack::serialize_entry_with_timestamp(&entry).unwrap();
+    println!("persisted undo data: {data}");
+    let back =
+        UndoStack::deserialize_entry_with_timestamp(&command, &data, stamp.as_deref()).unwrap();
+    let UndoData::StationCommentRows {
+        station_ref,
+        previous: restored,
+    } = back.undo_data
+    else {
+        unreachable!("reloaded as {}", back.undo_data.variant_name());
+    };
+    assert_eq!(station_ref, StationRef::new(4, 3));
+    assert_eq!(restored, previous);
+}
+
+/// [#576 RV19a-19] Deleting a station deletes its comment under every key that
+/// names it. The delete removed only the station's canonical key, so a comment
+/// held under a legacy `Index` key stayed behind and, once the shot was gone,
+/// named the next station along - a comment the user never put there. Both
+/// the single delete and the range delete.
+#[test]
+fn deleting_a_station_deletes_a_comment_held_under_a_legacy_key() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
+    for how in ["delete shot", "delete range"] {
+        let state = state_with_null_sink();
+        state.do_load_project_full(path.clone()).unwrap();
+        append_shot(&state, sid);
+        append_shot(&state, sid);
+        let station = StationRef::new(sid, 3);
+        let next = StationRef::new(sid, 4);
+        assert_eq!(
+            (shown_comment(&state, station), shown_comment(&state, next)),
+            (Some("comment past the end".to_string()), None),
+            "fixture: the legacy key names station 3, station 4 has no comment"
+        );
+
+        // Shot 2 runs from station 2 to station 3; deleting it removes station
+        // 3 and rewires shot 3 to start from station 2, so station 4 becomes 3.
+        let doomed = shot_ids(&state)[2];
+        let deleted = if how == "delete shot" {
+            state.execute(Command::DeleteShot {
+                section_id: sid,
+                shot_id: doomed,
+            })
+        } else {
+            state.execute_delete_shot_range_shift(sid, doomed, doomed)
+        };
+        assert!(deleted.success, "{how}: {:?}", deleted.error);
+        let after_delete = shown_comment(&state, station);
+        let rows = stored_rows(&state);
+        undo(&state);
+        let after_undo = shown_comment(&state, station);
+        println!("{how}: station 3 removed -> index 3 now shows {after_delete:?}");
+        println!("{how}: stored rows after the delete: {rows:?}");
+        println!("{how}: undo -> station 3 shows {after_undo:?}");
+
+        assert_eq!(
+            after_delete, None,
+            "{how}: the comment of the deleted station must not move to the next one"
+        );
+        assert!(
+            rows.is_empty(),
+            "{how}: no row of the deleted station is left: {rows:?}"
+        );
+        assert_eq!(
+            after_undo.as_deref(),
+            Some("comment past the end"),
+            "{how}: undo brings the station and its comment back"
+        );
+    }
 }

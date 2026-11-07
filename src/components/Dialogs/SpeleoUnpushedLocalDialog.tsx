@@ -29,6 +29,12 @@ import type { SpeleoProjectSummary, UnpushedLocalEdits } from '../../types/ipc.g
  * The stakes are spelled out concretely - the project name and when the local copy
  * was last edited - because a vague prompt is what makes people click the wrong
  * button on an irreversible choice.
+ *
+ * [#576 W53] The backend refuses the same way when the local copy is there but could
+ * not be read (`state_unknown`: a hot journal after a crash, a lock another program
+ * holds), since un-pushed edits cannot be ruled out. The choice is the same, but the
+ * copy says the file could not be read and how to get past it, rather than telling
+ * the user about changes they may never have made.
  */
 export default function SpeleoUnpushedLocalDialog() {
   const { t } = useTranslation();
@@ -84,6 +90,7 @@ export default function SpeleoUnpushedLocalDialog() {
     else closeDialog();
   };
 
+  const unreadable = unpushedLocal.state_unknown === true;
   const lastEditAt = unpushedLocal.last_edit_at;
   const parsed = lastEditAt ? new Date(lastEditAt) : null;
   const lastEditedLine =
@@ -197,7 +204,9 @@ export default function SpeleoUnpushedLocalDialog() {
 
   return (
     <DialogWrapper
-      title={t('speleodb.unpushedLocal.title')}
+      title={
+        unreadable ? t('speleodb.unpushedLocal.unreadable.title') : t('speleodb.unpushedLocal.title')
+      }
       // Not dismissable while a branch is in flight - the same hardening
       // SpeleoQuitDialog / SpeleoCloseDialog carry. DialogWrapper routes BOTH
       // Escape and a backdrop click here, so an Escape while
@@ -210,12 +219,18 @@ export default function SpeleoUnpushedLocalDialog() {
     >
       <div className="space-y-4">
         <p className="text-sm text-text-secondary">
-          {t('speleodb.unpushedLocal.message', { name: summary.name })}
+          {unreadable
+            ? t('speleodb.unpushedLocal.unreadable.message', { name: summary.name })
+            : t('speleodb.unpushedLocal.message', { name: summary.name })}
         </p>
         <p className="text-sm text-text-primary" data-testid="speleodb-unpushed-local-last-edited">
           {lastEditedLine}
         </p>
-        <p className="text-xs text-text-secondary">{t('speleodb.unpushedLocal.keepHint')}</p>
+        <p className="text-xs text-text-secondary">
+          {unreadable
+            ? t('speleodb.unpushedLocal.unreadable.keepHint')
+            : t('speleodb.unpushedLocal.keepHint')}
+        </p>
         {unlinked && (
           <p className="text-xs text-text-secondary" data-testid="speleodb-unpushed-local-unlinked-hint">
             {t('speleodb.unpushedLocal.unlinkedHint')}
@@ -228,7 +243,9 @@ export default function SpeleoUnpushedLocalDialog() {
             role="alert"
             data-testid="speleodb-unpushed-local-discard-warning"
           >
-            {t('speleodb.unpushedLocal.discardWarning', { name: summary.name })}
+            {unreadable
+              ? t('speleodb.unpushedLocal.unreadable.discardWarning', { name: summary.name })
+              : t('speleodb.unpushedLocal.discardWarning', { name: summary.name })}
           </div>
         )}
 

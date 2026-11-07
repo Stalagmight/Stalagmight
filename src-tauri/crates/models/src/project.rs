@@ -53,7 +53,7 @@ mod anchor_fuzz;
 #[expect(clippy::print_stdout)]
 mod cache_coherence_tests;
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod closure_determinism_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]

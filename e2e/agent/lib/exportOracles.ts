@@ -1550,6 +1550,10 @@ export interface ModeSnapshot {
   hasEligibleClosures: boolean;
 }
 
+/** `AppMode` and `GeometryMode` (`src/store/uiStore.ts`): the words X9 prints as they are. */
+const APP_MODES: ReadonlySet<string> = new Set(['survey', 'plan', 'export']);
+const GEOMETRY_MODES: ReadonlySet<string> = new Set(['measured', 'closureAdjusted']);
+
 /**
  * X9 - Export mode forces the read-only map, the adjusted geometry when there is
  * any to adjust, and gives the previous state back.
@@ -1578,15 +1582,19 @@ export function checkExportModeInvariants(
   args: { before: ModeSnapshot; during: ModeSnapshot; after: ModeSnapshot },
   reproduce: string,
 ): void {
+  // The modes are read off the app's store: a value outside the store's own
+  // words prints as its length, never as text (#576 W51).
   if (args.during.appMode !== 'export') {
-    throw new ExportOracleError(
-      `X9 entering Export mode left appMode at "${args.during.appMode}"\n  ${reproduce}`,
-    );
+    const shown = APP_MODES.has(args.during.appMode) ? args.during.appMode : `${String(args.during.appMode).length} characters`;
+    throw new ExportOracleError(`X9 entering Export mode left appMode at "${shown}"\n  ${reproduce}`);
   }
   if (args.during.hasEligibleClosures && args.during.geometryMode !== 'closureAdjusted') {
+    const shown = GEOMETRY_MODES.has(args.during.geometryMode)
+      ? args.during.geometryMode
+      : `${String(args.during.geometryMode).length} characters`;
     throw new ExportOracleError(
       `X9 Export mode did not force closure-adjusted geometry (geometryMode=` +
-        `"${args.during.geometryMode}") on a project that HAS an adjustable closure\n` +
+        `"${shown}") on a project that HAS an adjustable closure\n` +
         `    the export renders what the map shows, and in Export mode the map is the\n` +
         `    adjusted survey; exporting measured geometry from that screen would produce\n` +
         `    a file that does not match the preview beside it.\n` +

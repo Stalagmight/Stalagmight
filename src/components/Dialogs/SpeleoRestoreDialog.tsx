@@ -54,6 +54,10 @@ export default function SpeleoRestoreDialog() {
   // changes" made a second Enter (or the tail of a double click) permanently destroy
   // un-pushed survey work that the user never chose to destroy.
   const [needsDiscard, setNeedsDiscard] = useState(false);
+  // [#576 W55 NF-W53-1] The same refusal arrives when the copy is there but could not
+  // be read (`state_unknown`: a hot journal after a crash, a lock another program
+  // holds). The discard route is the same; only the warning says what is known.
+  const [copyUnreadable, setCopyUnreadable] = useState(false);
   // The separate arming step for that route, on its own control - the same
   // arm-then-confirm shape SpeleoUnpushedLocalDialog and SpeleoQuitDialog use for
   // their destructive verbs.
@@ -121,8 +125,10 @@ export default function SpeleoRestoreDialog() {
       // A refusal over un-pushed edits is not a dead end: arm the explicit
       // discard step instead of showing the raw "local edits never pushed" line
       // about changes this dialog is already about to replace.
-      if (unpushedLocalEdits(e)) {
+      const refusal = unpushedLocalEdits(e);
+      if (refusal) {
         setNeedsDiscard(true);
+        setCopyUnreadable(refusal.state_unknown === true);
         setError(null);
       } else {
         setError(humanizeSpeleoError(e, t('speleodb.restore.failed')));
@@ -206,7 +212,9 @@ export default function SpeleoRestoreDialog() {
             role="alert"
             data-testid="speleodb-restore-discard-warning"
           >
-            {t('speleodb.restore.discardWarning')}
+            {copyUnreadable
+              ? t('speleodb.restore.unreadableWarning')
+              : t('speleodb.restore.discardWarning')}
           </p>
         )}
         {error && (

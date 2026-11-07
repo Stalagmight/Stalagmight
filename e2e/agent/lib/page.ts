@@ -62,7 +62,17 @@ export async function invokeInApp<T = unknown>(
     command,
     args,
   );
-  if (isPageError(raw)) throw new Error(`ipc ${command}: ${raw.__agentError}`);
+  // `ipc <command>: <the app's error>`: the runners keep that prefix and print
+  // the rest as its length, for a one-word command - every Tauri command is one.
+  // Any other name (a typo, a plugin path) ends a `failed:` headline instead,
+  // which they print the same way (#576 W51).
+  if (isPageError(raw)) {
+    throw new Error(
+      /^\w+$/.test(command)
+        ? `ipc ${command}: ${raw.__agentError}`
+        : `ipc of a ${command.length}-character command failed: ${raw.__agentError}`,
+    );
+  }
   return (raw as { value: T }).value;
 }
 

@@ -384,9 +384,10 @@ impl InflationBudget {
 
     /// Take `bytes` out of the budget, or fail without taking anything.
     ///
-    /// `fetch_update` rather than a load followed by a store: two threads reserving
-    /// concurrently off the same observed remainder would each believe they fit, and
-    /// the budget would be overspent by exactly the amount it is meant to bound.
+    /// `try_update` (formerly `fetch_update`, deprecated in Rust 1.99) rather than a
+    /// load followed by a store: two threads reserving concurrently off the same
+    /// observed remainder would each believe they fit, and the budget would be
+    /// overspent by exactly the amount it is meant to bound.
     ///
     /// The message deliberately shares NO distinctive phrase with the pre-scan's: a test
     /// that asserts on "load budget" cannot tell which of the two refused it, and one
@@ -395,7 +396,7 @@ impl InflationBudget {
     fn reserve(&self, bytes: u64) -> Result<()> {
         use std::sync::atomic::Ordering;
         self.remaining
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(bytes)
             })
             .map_err(|left| {
@@ -896,6 +897,15 @@ mod upgrade_safety_tests;
               values are the evidence a run captures"
 )]
 mod scratch_link_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod resolved_rekey_tests;
 
 #[cfg(test)]
 #[expect(

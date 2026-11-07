@@ -64,6 +64,15 @@ export class DragPreviewController {
    * saved the stale exclusion as the layer's "real" filter.
    */
   private filtersAwaitingRestore = new Map<string, maplibregl.FilterSpecification | undefined>();
+  /**
+   * The active carry's loop-closure exclusion, when its pick-up could not write
+   * it: the WebGL context was lost, or a rebuilt style had not loaded yet
+   * (`canWriteStyle`). {@link replayAfterContextRestore} puts it on once that
+   * style has loaded, while the carry is still on; its drop forgets it, as
+   * nothing was saved for it (#576 RV19b-M1). Without this the bulk closures
+   * layer drew the carried closures at their old place for the rest of the carry.
+   */
+  private closureExclusionAwaitingStyle: maplibregl.FilterSpecification | null = null;
   // Unified drag-preview source (#mem drag fixes): ONE GeoJSON source holding
   // every moving GEOMETRY feature for the active drag - stations (points), shots
   // (lines), loop-closure indicator lines - rebuilt from captured originals each
@@ -205,18 +214,11 @@ export class DragPreviewController {
     // the custom layers via the drag exclusion in installDragPreview.)
     // (Not while the WebGL context is lost: no style to filter, #576 NF-MAP-5; nor
     // while a rebuilt style loads: it holds no layer yet and refuses the write,
-    // RV18-MAP-1.)
-    if (canWriteStyle(this.map)) {
-      const existingClosureFilter = this.map.getFilter(AUX_IDS.loopClosuresLayerId);
-      this.dragSavedFilters.set(AUX_IDS.loopClosuresLayerId, existingClosureFilter ?? undefined);
-      const eitherEndpointExclusion: maplibregl.FilterSpecification = ['!', ['any',
-        ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
-        ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
-      ]] as unknown as maplibregl.FilterSpecification;
-      this.map.setFilter(AUX_IDS.loopClosuresLayerId, (existingClosureFilter && typeof existingClosureFilter === 'object')
-        ? (['all', existingClosureFilter, eitherEndpointExclusion] as unknown as maplibregl.FilterSpecification)
-        : eitherEndpointExclusion);
-    }
+    // RV18-MAP-1. The exclusion then waits for that style to load, RV19b-M1.)
+    this.excludeClosures(['!', ['any',
+      ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
+      ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
+    ]] as unknown as maplibregl.FilterSpecification);
 
     // Capture the moving geometry once. Everything in the segment moves uniformly.
     // Attached text (labels / comments / section names) is not captured - it is
@@ -487,16 +489,10 @@ export class DragPreviewController {
         ['==', ['get', 'stationB'], keyB],
       ] as unknown as maplibregl.FilterSpecification);
     }
-    if (closureExclusions.length > 0 && canWriteStyle(this.map)) {
-      const closureExclusion: maplibregl.FilterSpecification = ['!',
+    if (closureExclusions.length > 0) {
+      this.excludeClosures(['!',
         ['any', ...closureExclusions],
-      ] as unknown as maplibregl.FilterSpecification;
-      const existingClosureFilter = this.map.getFilter(AUX_IDS.loopClosuresLayerId);
-      this.dragSavedFilters.set(AUX_IDS.loopClosuresLayerId, existingClosureFilter ?? undefined);
-      const composedClosure: maplibregl.FilterSpecification = (existingClosureFilter && typeof existingClosureFilter === 'object')
-        ? (['all', existingClosureFilter, closureExclusion] as unknown as maplibregl.FilterSpecification)
-        : closureExclusion;
-      this.map.setFilter(AUX_IDS.loopClosuresLayerId, composedClosure);
+      ] as unknown as maplibregl.FilterSpecification);
     }
 
     // Hide the moving originals from the custom layer. installDragPreview applies
@@ -508,6 +504,29 @@ export class DragPreviewController {
       affectedSectionIds,
     });
     return movingStations.map(s => s.station_ref);
+  }
+
+  /**
+   * Hide the carried closures from the bulk closures layer: save its filter for
+   * the drop and compose `exclusion` onto it. A filter this carry already saved
+   * is the original and stays so - after a restore it is the one adopted from a
+   * carry the loss cancelled, while the live filter is the serialized style's,
+   * that carry's exclusion still in it. Without a writable style the exclusion
+   * waits for {@link replayAfterContextRestore} (#576 RV19b-M1).
+   */
+  private excludeClosures(exclusion: maplibregl.FilterSpecification): void {
+    if (!canWriteStyle(this.map)) {
+      this.closureExclusionAwaitingStyle = exclusion;
+      return;
+    }
+    const layerId = AUX_IDS.loopClosuresLayerId;
+    const original = this.dragSavedFilters.has(layerId)
+      ? this.dragSavedFilters.get(layerId)
+      : (this.map.getFilter(layerId) ?? undefined);
+    this.dragSavedFilters.set(layerId, original);
+    this.map.setFilter(layerId, (original && typeof original === 'object')
+      ? (['all', original, exclusion] as unknown as maplibregl.FilterSpecification)
+      : exclusion);
   }
 
   /** Point the custom-render layer at (or off, with null) the active drag's
@@ -672,6 +691,8 @@ export class DragPreviewController {
 
     this.dragPreviewSet = null;
     this.dragSavedFilters.clear();
+    // Never written, so nothing to put back.
+    this.closureExclusionAwaitingStyle = null;
     this.dragPreviewActive = false;
     // Drop the custom-render exclusion and rebuild full buffers so the moved
     // features reappear at their committed positions (mirrors the filter restore).
@@ -679,13 +700,15 @@ export class DragPreviewController {
   }
 
   /**
-   * After a WebGL context restore (SurveyLayer.replayAfterContextRestore): put
-   * back the filters a carry ended during the loss could not restore. A carry
-   * picked up during the loss and still in flight saved nothing (no style to
-   * read), so it adopts them and restores them at its own drop instead.
+   * After a WebGL context restore or a worker restart, once the rebuilt style
+   * has loaded (SurveyLayer.replayAfterContextRestore): put back the filters a
+   * carry ended during the loss could not restore. A carry picked up during the
+   * loss or the loading frame and still in flight saved nothing (no style to
+   * read): it adopts them as its originals, restored at its own drop instead, and
+   * the closure exclusion its pick-up could not write goes on now (#576 RV19b-M1).
    */
   replayAfterContextRestore(): void {
-    if (this.filtersAwaitingRestore.size === 0 || !canWriteStyle(this.map)) return;
+    if (!canWriteStyle(this.map)) return;
     for (const [layerId, saved] of this.filtersAwaitingRestore) {
       if (this.dragPreviewActive) {
         if (!this.dragSavedFilters.has(layerId)) this.dragSavedFilters.set(layerId, saved);
@@ -694,5 +717,10 @@ export class DragPreviewController {
       }
     }
     this.filtersAwaitingRestore.clear();
+    const exclusion = this.closureExclusionAwaitingStyle;
+    this.closureExclusionAwaitingStyle = null;
+    if (exclusion && this.dragPreviewActive && this.map.getLayer(AUX_IDS.loopClosuresLayerId)) {
+      this.excludeClosures(exclusion);
+    }
   }
 }

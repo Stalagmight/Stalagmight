@@ -1,5 +1,5 @@
 use crate::core::{Command, UndoData};
-use crate::models::{ClosureStrategy, SectionId, SectionUpdates, ShotId, ShotUpdates};
+use crate::models::{ClosureStrategy, SectionId, SectionUpdates, ShotId, ShotUpdates, StationKey};
 
 use super::AppState;
 
@@ -438,15 +438,43 @@ impl AppState {
             // For station comment, inverse is restoring the previous comment:
             // the station's whole comment, every key that names it joined
             // (#576 W30-NF1), as the forward command replaces all of them.
+            //
+            // [#576 RV19a-2] That inverse stores the text under the CANONICAL
+            // key, so it is exact only when no other key names the station.
+            // When one does (a legacy `Index` key), record the rows themselves:
+            // the inverse moved such a comment to the canonical key, and undoing
+            // the append that made the legacy key name the station then deleted
+            // it with the shot.
             Command::SetStationComment {
                 station_ref,
                 comment: _,
             } => {
-                let previous_comment = AppState::station_comment(project, *station_ref);
-                UndoData::InverseCommand(Command::SetStationComment {
-                    station_ref: *station_ref,
-                    comment: previous_comment,
-                })
+                let canonical = project.key_for_ref(*station_ref);
+                let mut previous: Vec<(StationKey, String)> = project
+                    .station_comments
+                    .iter()
+                    .filter(|(key, _)| {
+                        key.section_id == station_ref.section_id
+                            && project.key_is_ref(key, *station_ref)
+                    })
+                    .map(|(key, text)| (key.clone(), text.clone()))
+                    .collect();
+                if previous
+                    .iter()
+                    .any(|(key, _)| Some(key) != canonical.as_ref())
+                {
+                    previous.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    UndoData::StationCommentRows {
+                        station_ref: *station_ref,
+                        previous,
+                    }
+                } else {
+                    let previous_comment = AppState::station_comment(project, *station_ref);
+                    UndoData::InverseCommand(Command::SetStationComment {
+                        station_ref: *station_ref,
+                        comment: previous_comment,
+                    })
+                }
             }
 
             // Move commands use inverse commands

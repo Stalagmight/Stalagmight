@@ -37,6 +37,15 @@ const PORT = Number(args.port ?? 9229);
 const INTERVAL_S = Number(args.interval ?? 0); // 0 = manual only
 const TOP = Number(args.top ?? 25);
 
+/**
+ * An error as this tool prints it (#576 W51): its message - the inspector's
+ * protocol error, or this tool's own - but a system error by its code (an fs
+ * error's message names the --file path) and a parse error by its name (its
+ * message quotes the snapshot, which holds the app's strings). Never the stack:
+ * its frames name the checkout's absolute path.
+ */
+const errText = (e) => (e?.code ? e.code : e instanceof SyntaxError ? e.name : String(e?.message ?? e));
+
 // ---------- Inspector connection ---------------------------------------------
 
 async function findTarget() {
@@ -212,19 +221,23 @@ async function main() {
   if (args.file) {
     const paths = args.file.split(',').map((p) => p.trim()).filter(Boolean);
     let prev = null;
-    for (const p of paths) {
-      console.log(`\nparsing ${p} …`);
+    for (const [i, p] of paths.entries()) {
+      // By position, not by path: the path is the caller's own, and can name
+      // their directories (#576 W51).
+      const label = `--file ${i + 1} of ${paths.length}`;
+      console.log(`\nparsing ${label} …`);
       const raw = fs.readFileSync(p, 'utf8');
       const snap = JSON.parse(raw);
       const agg = aggregate(snap);
-      reportSnapshot(p, agg, prev);
+      reportSnapshot(label, agg, prev);
       prev = agg;
     }
     return;
   }
 
   const target = await findTarget();
-  console.log(`connecting to ${target.webSocketDebuggerUrl ?? target.url ?? '<unknown>'} (${target.title ?? ''})`);
+  // The page title is the app's: it names the open project's file (src/App.tsx).
+  console.log(`connecting to ${target.webSocketDebuggerUrl ?? target.url ?? '<unknown>'} (title: ${String(target.title ?? '').length} chars)`);
   const ws = new WebSocket(target.webSocketDebuggerUrl ?? `ws://127.0.0.1:${PORT}/devtools/page/${target.id}`);
   await new Promise((res, rej) => {
     ws.addEventListener('open', res, { once: true });
@@ -271,7 +284,7 @@ async function main() {
 
   if (INTERVAL_S > 0) {
     setInterval(() => {
-      snapAndReport(`auto +${INTERVAL_S}s`).catch((e) => console.error('snapshot err', e));
+      snapAndReport(`auto +${INTERVAL_S}s`).catch((e) => console.error('snapshot err', errText(e)));
     }, INTERVAL_S * 1000);
   }
 
@@ -280,11 +293,11 @@ async function main() {
   console.log('\nPress Enter to take a labelled snapshot. Type a label first to name it. Ctrl+C to exit.');
   rl.on('line', (line) => {
     const label = line.trim() || 'manual';
-    snapAndReport(label).catch((e) => console.error('snapshot err', e));
+    snapAndReport(label).catch((e) => console.error('snapshot err', errText(e)));
   });
 }
 
 main().catch((e) => {
-  console.error(e);
+  console.error(`heap-profile: ${errText(e)}`);
   process.exit(1);
 });

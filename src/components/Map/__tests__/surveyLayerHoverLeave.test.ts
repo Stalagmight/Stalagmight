@@ -67,7 +67,7 @@ describe('SurveyLayer hover vs pointer leave', () => {
   it('a move queued before the pointer leaves does not hover after it', async () => {
     // Move over a station, then leave the canvas before the next frame.
     fake.fire('mousemove', { point: { x: 5, y: 5 } });
-    fake.canvas.dispatchEvent(new Event('mouseleave'));
+    fake.canvas.dispatchEvent(new Event('mouseout'));
     vi.advanceTimersByTime(50);
     await microtasks(3);
 
@@ -76,10 +76,31 @@ describe('SurveyLayer hover vs pointer leave', () => {
 
   it('a later move after the leave hovers again', async () => {
     fake.fire('mousemove', { point: { x: 5, y: 5 } });
-    fake.canvas.dispatchEvent(new Event('mouseleave'));
+    fake.canvas.dispatchEvent(new Event('mouseout'));
     fake.fire('mousemove', { point: { x: 6, y: 5 } });
     vi.advanceTimersByTime(50);
     await microtasks(3);
     expect(onStationHover).toHaveBeenLastCalledWith({ section_id: 1, station_index: 2 });
+  });
+
+  // #576 W39-NF4: one move from the map onto a panel row. The browser fires the
+  // canvas's mouseout, during which React enters the row and MapHoverSync hands
+  // the row's hover to the layer, and only then the canvas's mouseleave. The
+  // leave must clear the map's hover before the row's, not the row's after it.
+  it("a panel row's hover pushed in as the pointer leaves outlasts the leave", async () => {
+    fake.fire('mousemove', { point: { x: 5, y: 5 } });
+    vi.advanceTimersByTime(50);
+    await microtasks(3);
+    expect(onStationHover).toHaveBeenLastCalledWith({ section_id: 1, station_index: 2 });
+
+    fake.canvas.dispatchEvent(new Event('mouseout'));
+    await microtasks(3); // the checkpoint after the canvas's own listener
+    const callsBefore = onStationHover.mock.calls.length;
+    layer.setHoveredStation({ section_id: 1, station_index: 5 }); // the row, via MapHoverSync
+    fake.canvas.dispatchEvent(new Event('mouseleave'));
+    await microtasks(3);
+
+    expect(onStationHover.mock.calls.slice(callsBefore)).toEqual([]);
+    expect((layer as unknown as { hoveredStationId: string | null }).hoveredStationId).toBe('1:5');
   });
 });

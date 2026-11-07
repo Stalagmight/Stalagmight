@@ -231,11 +231,11 @@ describe('PublishToSpeleoDbDialog', () => {
 
     // Pick a suggestion from the debounced typeahead, choose a level, and queue it.
     await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), 'ali');
-    await userEvent.click(await screen.findByTestId('publish-to-speleodb-dialog-collab-suggestion-alice@x.com'));
+    await userEvent.click(await screen.findByTestId('publish-to-speleodb-dialog-collab-suggestion-0'));
     expect(screen.getByTestId('publish-to-speleodb-dialog-collab-email')).toHaveValue('alice@x.com');
     await pickOption('publish-to-speleodb-dialog-collab-add-level', 'READ_AND_WRITE');
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
-    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-alice@x.com')).toBeInTheDocument();
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-0')).toHaveTextContent('alice@x.com');
 
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
 
@@ -287,7 +287,7 @@ describe('PublishToSpeleoDbDialog', () => {
       target: { value: 'carol@x.com' },
     });
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
-    await pickOption('publish-to-speleodb-dialog-collab-level-carol@x.com', 'ADMIN');
+    await pickOption('publish-to-speleodb-dialog-collab-level-0', 'ADMIN');
 
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
 
@@ -296,6 +296,49 @@ describe('PublishToSpeleoDbDialog', () => {
       expect(call).toBeTruthy();
       expect(call![1]).toEqual({ email: 'carol@x.com', permission: 'ADMIN', expectedProject: null });
     });
+  });
+
+  // A test id is printed wherever a run reports what it clicked (an agent
+  // session's report.md goes to public issues), so it must not carry a
+  // collaborator's email: the rows and the suggestions are keyed by position
+  // (#576 RV19b-P1).
+  it('keys the collaborator rows and suggestions by position, never by email', async () => {
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_search_users') {
+        return Promise.resolve([
+          { email: 'alice@x.com', label: 'Alice Diver <alice@x.com>' },
+          { email: 'bob@x.com', label: 'Bob Diver <bob@x.com>' },
+        ]);
+      }
+      return Promise.resolve({ users: [], teams: [] });
+    });
+    render(<PublishToSpeleoDbDialog />);
+    const testIdsWithEmail = () =>
+      Array.from(document.querySelectorAll('[data-testid]'))
+        .map((el) => el.getAttribute('data-testid') ?? '')
+        .filter((id) => id.includes('@') || id.includes('x.com'));
+
+    await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), 'div');
+    await screen.findByText('Bob Diver <bob@x.com>');
+    expect(testIdsWithEmail()).toEqual([]);
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-suggestion-1')).toHaveTextContent('Bob Diver');
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-suggestion-0'));
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-email')).toHaveValue('alice@x.com');
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), {
+      target: { value: 'carol@x.com' },
+    });
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
+
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-0')).toHaveTextContent('alice@x.com');
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-1')).toHaveTextContent('carol@x.com');
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-level-1')).toBeInTheDocument();
+    expect(testIdsWithEmail()).toEqual([]);
+
+    // Removing the first row moves the second into its place.
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-remove-0'));
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-0')).toHaveTextContent('carol@x.com');
+    expect(screen.queryByTestId('publish-to-speleodb-dialog-collab-1')).toBeNull();
   });
 
   it('removes a queued collaborator so it is never granted', async () => {
@@ -313,10 +356,10 @@ describe('PublishToSpeleoDbDialog', () => {
       target: { value: 'dave@x.com' },
     });
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
-    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-dave@x.com')).toBeInTheDocument();
+    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-0')).toHaveTextContent('dave@x.com');
 
-    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-remove-dave@x.com'));
-    expect(screen.queryByTestId('publish-to-speleodb-dialog-collab-dave@x.com')).toBeNull();
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-remove-0'));
+    expect(screen.queryByTestId('publish-to-speleodb-dialog-collab-0')).toBeNull();
 
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
 

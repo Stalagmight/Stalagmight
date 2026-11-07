@@ -29,6 +29,13 @@ const HARNESS_WORDED = new Set([
   'memory-growth',
   'unresponsive',
 ]);
+/**
+ * One line of the oracle's own wording (`oracles.ts`): words, numbers and
+ * `;:()*+.-`. A forged or hand-edited log can put any text under one of those
+ * kinds - a newline and a `## heading` start a markdown line of their own in
+ * report.md - so a message outside it is withheld like any other (#576 W51).
+ */
+const ORACLE_WORDING = /^[\w ;:()*+.-]{0,200}$/;
 const LOG_KINDS = new Set(['log-warn', 'log-error']);
 /** `oracles.ts` LEFTOVER_TEMP_SUFFIXES: a leftover's code-defined part. */
 const TEMP_SUFFIXES = ['.stalx.tmp', '.download.tmp', '.vacuum.tmp'];
@@ -46,7 +53,7 @@ const foldHome = (text) => (home && text.startsWith(home) ? `$HOME${text.slice(h
 
 function shareableMessage(kind, finding) {
   const message = typeof finding.message === 'string' ? finding.message : '';
-  if (HARNESS_WORDED.has(kind)) return message;
+  if (HARNESS_WORDED.has(kind) && ORACLE_WORDING.test(message)) return message;
   if (kind === 'crash-marker' && MARKER_MESSAGE.test(message)) return message;
   if (kind === 'leftover-temp') {
     const leftovers = isObject(finding.detail) ? finding.detail.leftovers : undefined;

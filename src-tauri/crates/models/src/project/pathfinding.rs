@@ -48,23 +48,25 @@ impl Project {
         // lookup would contain every section).
         let merge_adj = self.build_station_merge_adjacency();
 
-        let closure_adj = if include_closures {
-            let mut adj: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
-            for closure in &self.loop_closures {
-                let (Some(a), Some(b)) = (
-                    self.resolve_key(&closure.station_a),
-                    self.resolve_key(&closure.station_b),
-                ) else {
-                    continue;
-                };
-                adj.entry(a).or_default().push(b);
-                adj.entry(b).or_default().push(a);
-            }
-            Some(adj)
-        } else {
-            None
-        };
+        let closure_adj = include_closures.then(|| self.build_station_closure_adjacency());
         self.path_length_dijkstra(station_a, station_b, &merge_adj, closure_adj.as_ref())
+    }
+
+    /// Every loop closure as a zero-cost edge both ways, in `loop_closures`
+    /// order: the closure half of the graph [`Self::path_length_dijkstra`] walks.
+    pub(super) fn build_station_closure_adjacency(&self) -> HashMap<StationRef, Vec<StationRef>> {
+        let mut adj: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for closure in &self.loop_closures {
+            let (Some(a), Some(b)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) else {
+                continue;
+            };
+            adj.entry(a).or_default().push(b);
+            adj.entry(b).or_default().push(a);
+        }
+        adj
     }
 
     /// Shortest survey-distance from `station_a` to `station_b`: shots are
@@ -173,8 +175,16 @@ impl Project {
 
         // No path found (shouldn't happen if sections are connected)
         // Fall back to sum of all reachable section lengths.
+        //
+        // [#576 RV19a-9] Not through a closure joining exactly these two
+        // stations: a walk that found no route had none in its graph (the
+        // restamp lifts the measured closure's own edge out; creation measures
+        // before the closure exists), so counting the sections behind one
+        // summed the far side too - a restamp came out longer than creation.
+        // Any other caller would have walked such an edge at zero cost and
+        // never got here, so for them nothing changes.
         let fallback_sections = if closure_adj.is_some() {
-            self.get_connected_section_ids(station_a.section_id)
+            self.connected_section_ids_without_pair(station_a, station_b)
         } else {
             self.get_merged_section_ids(station_a.section_id)
         };

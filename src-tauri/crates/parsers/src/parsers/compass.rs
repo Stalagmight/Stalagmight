@@ -48,7 +48,8 @@ use crate::parsers::station_graph::{
     PlacementPolicy,
 };
 
-/// Distances/LRUD at or above this are Compass "missing data" sentinels.
+/// LRUDs and angles at or above this are Compass "missing data" sentinels. Not
+/// lengths: a length has no missing marker (see `length_missing`).
 const MISSING_VALUE_THRESHOLD: f64 = 990.0;
 /// Angles at or below this are Compass "missing data" sentinels.
 const MISSING_ANGLE_THRESHOLD: f64 = -900.0;
@@ -662,7 +663,15 @@ pub struct InvalidShotCounts {
 /// `build_ctx` would emit are scratch - `build_preview` already carries the
 /// parser's own warnings and must not duplicate conversion-time ones it
 /// isn't otherwise running.
-fn invalid_shot_counts(survey: &Survey, file_state: &CompassFileState) -> InvalidShotCounts {
+///
+/// The shots it counts are also named in `dropped`, a line per corrections
+/// case (#576 RVF-d-2), so the preview says which legs will not land, not only
+/// how many.
+fn invalid_shot_counts(
+    survey: &Survey,
+    file_state: &CompassFileState,
+    dropped: &mut Vec<String>,
+) -> InvalidShotCounts {
     let opts_corrected = CompassImportOptions {
         include_excluded: false,
         apply_corrections: true,
@@ -678,6 +687,9 @@ fn invalid_shot_counts(survey: &Survey, file_state: &CompassFileState) -> Invali
     let ctx_uncorrected = build_ctx(survey, file_state, None, &opts_uncorrected, &mut scratch);
 
     let mut counts = InvalidShotCounts::default();
+    let mut dropped_either_way = Vec::new();
+    let mut dropped_corrected_only = Vec::new();
+    let mut dropped_uncorrected_only = Vec::new();
     for shot in &survey.shots {
         let excluded = parse_flags(shot.flags.as_ref()).exclude_all;
         let length_corrected = shot_length_m(shot, &ctx_corrected);
@@ -697,8 +709,79 @@ fn invalid_shot_counts(survey: &Survey, file_state: &CompassFileState) -> Invali
                 counts.non_excluded_uncorrected += 1;
             }
         }
+        match (length_corrected <= 0.0, length_uncorrected <= 0.0) {
+            (true, true) => dropped_either_way.push(shot_label(shot)),
+            (true, false) => dropped_corrected_only.push(shot_label(shot)),
+            (false, true) => dropped_uncorrected_only.push(shot_label(shot)),
+            (false, false) => {}
+        }
     }
+    let name = &survey.name;
+    dropped.extend(dropped_length_line(
+        name,
+        &dropped_either_way,
+        "",
+        "will not be imported",
+    ));
+    dropped.extend(dropped_length_line(
+        name,
+        &dropped_corrected_only,
+        " once the survey's length correction is applied",
+        "will not be imported while corrections are applied",
+    ));
+    dropped.extend(dropped_length_line(
+        name,
+        &dropped_uncorrected_only,
+        " without the survey's length correction",
+        "will not be imported while corrections are not applied",
+    ));
     counts
+}
+
+/// How many shots one preview line names before it only counts the rest: a
+/// project ties its surveys together with zero-length connector shots, so one
+/// survey can drop many (#576 RVF-d-2).
+const MAX_NAMED_DROPPED_SHOTS: usize = 10;
+
+fn shot_label(shot: &Shot) -> String {
+    format!("{} -> {}", shot.from, shot.to)
+}
+
+/// The preview line naming a survey's shots the import drops for their length
+/// (#576 RVF-d-2), or `None` when there are none. True under every toggle: a
+/// shot dropped either way is not imported whatever the dialog says (an
+/// `X`-flagged one is not imported unless excluded shots are included, and then
+/// it is dropped for its length), and one that only the survey's length
+/// correction decides says under which corrections setting it is dropped.
+fn dropped_length_line(
+    survey: &str,
+    shots: &[String],
+    cause: &str,
+    outcome: &str,
+) -> Option<String> {
+    match shots {
+        [] => None,
+        [shot] => Some(format!(
+            "Survey '{survey}': shot {shot} has no usable length{cause}, so it {outcome}."
+        )),
+        _ => {
+            let named = shots
+                .iter()
+                .take(MAX_NAMED_DROPPED_SHOTS)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = match shots.len().saturating_sub(MAX_NAMED_DROPPED_SHOTS) {
+                0 => String::new(),
+                n => format!(" and {n} more"),
+            };
+            Some(format!(
+                "Survey '{survey}': {} shots have no usable length{cause}, so they {outcome}: \
+                 {named}{more}.",
+                shots.len()
+            ))
+        }
+    }
 }
 
 fn add_invalid_shot_counts(a: InvalidShotCounts, b: InvalidShotCounts) -> InvalidShotCounts {
@@ -721,10 +804,12 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
         .iter()
         .map(|s| excluded_shot_count(&s.survey))
         .sum::<u32>();
+    // The parser's own warnings, then one line per shot dropped for its length.
+    let mut warnings = parsed.warnings.clone();
     let per_survey_invalid_counts: Vec<InvalidShotCounts> = parsed
         .surveys
         .iter()
-        .map(|s| invalid_shot_counts(&s.survey, &s.state))
+        .map(|s| invalid_shot_counts(&s.survey, &s.state, &mut warnings))
         .collect();
     let invalid_shot_counts_total = per_survey_invalid_counts
         .iter()
@@ -764,7 +849,7 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
         declination_mode: format!("{:?}", parsed.declination_mode),
         length_unit,
         surveys,
-        warnings: parsed.warnings.clone(),
+        warnings,
     }
 }
 
@@ -828,10 +913,14 @@ fn angle_missing(raw: f64) -> bool {
     !raw.is_finite() || raw <= MISSING_ANGLE_THRESHOLD || raw >= MISSING_VALUE_THRESHOLD
 }
 
-/// Length variant of the sentinel test: lengths use only the "+999" half of
-/// the sentinel range, plus the shared non-finite guard.
+/// A length is missing only when it is not a number: the shared non-finite
+/// guard, and no sentinel. Compass's "Survey Data File Format" page gives a
+/// missing marker for a bearing or inclination with backsights (-999) and for
+/// an LRUD (negative), but none for a length, "a single floating point number"
+/// in decimal feet. Reading 990 ft and above as missing dropped real long legs
+/// (#576 RVF-d-2).
 fn length_missing(raw: f64) -> bool {
-    !raw.is_finite() || raw >= MISSING_VALUE_THRESHOLD
+    !raw.is_finite()
 }
 
 /// A stored LRUD in meters. A `.DAT` stores LRUDs in decimal feet whatever the
@@ -4525,3 +4614,8 @@ mod negative_lrud_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod reading_bound_tests;
+
+// #576 RVF-d-2: a length has no missing marker; a dropped leg is on the preview.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod length_tests;

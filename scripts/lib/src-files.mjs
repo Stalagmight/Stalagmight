@@ -55,7 +55,12 @@ export function walkFiles(root, dir, { exts, skip = () => false } = {}) {
         } catch {
           // keep '?': the link is reported either way
         }
-        symlinks.push({ rel, target });
+        // Every gate prints the target. One that is absolute or leaves the root
+        // names a path on this machine - the home directory, the user's own
+        // folders - not the checkout's text, so it prints as a placeholder (#576 W51).
+        const resolved = path.relative(root, path.resolve(path.dirname(child), target));
+        const leaves = path.isAbsolute(target) || path.isAbsolute(resolved) || resolved === '..' || resolved.startsWith(`..${path.sep}`);
+        symlinks.push({ rel, target: leaves ? '<outside the checkout>' : target });
       } else if (e.isDirectory()) {
         visit(child);
       } else if (e.isFile() && (!exts || exts.some((x) => e.name.endsWith(x)))) {

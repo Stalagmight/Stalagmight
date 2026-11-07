@@ -35,7 +35,27 @@
 import * as path from 'path';
 import { readTrace, restoreTraceEnv, type FuzzTrace } from './lib/fuzzTrace';
 import { parseScenarioArgs, scenarioRunOptions } from './lib/scenarioRunArgs';
-import { pairFailOutput, progressLogger, scenarioFailOutput, shareableErrorText } from './lib/shareableFailure';
+import {
+  foldLocalPaths,
+  pairFailOutput,
+  progressLogger,
+  scenarioFailOutput,
+  shareableErrorText,
+  valueShape,
+} from './lib/shareableFailure';
+
+/**
+ * Values from outside as printed before the registry is loaded (#576 W51) - the
+ * CLI, and a trace from wherever the user got it: a scenario name of the
+ * registry's shape (lower-case words, digits and dashes, as `fuzz-matrix
+ * --scenario` validates it), a knob name of the harness's (`STALAGMIGHT_` and
+ * upper-case words) and a revision print as they are, anything else by its
+ * shape (`valueShape`: a number as itself).
+ */
+const scenarioName = (name: string): string => (/^[a-z][a-z0-9-]{1,63}$/.test(name) ? name : valueShape(name));
+const envKey = (key: string): string => (/^STALAGMIGHT_[A-Z0-9_]{1,64}$/.test(key) ? key : valueShape(key));
+const gitRev = (rev: unknown): string =>
+  typeof rev === 'string' && /^(?:[0-9a-f]{7,40}|unknown)$/.test(rev) ? rev.slice(0, 12) : valueShape(rev);
 
 async function main(): Promise<void> {
   const args = parseScenarioArgs(process.argv.slice(2));
@@ -52,9 +72,9 @@ async function main(): Promise<void> {
     trace = readTrace(tracePath);
     if (trace.scenario !== args.name) {
       throw new Error(
-        `trace ${tracePath} was recorded by "${trace.scenario}", not "${args.name}"; ` +
+        `trace ${foldLocalPaths(tracePath)} was recorded by "${scenarioName(trace.scenario)}", not "${scenarioName(args.name)}"; ` +
           `its steps carry that scenario's resolved ids. Run it as: ` +
-          `pnpm agent:scenario ${trace.scenario} --trace ${args.trace}`,
+          `pnpm agent:scenario ${scenarioName(trace.scenario)} --trace ${foldLocalPaths(args.trace)}`,
       );
     }
     // The recording's own environment is part of the repro. Every knob is read
@@ -77,11 +97,11 @@ async function main(): Promise<void> {
     const restored = applied.filter(([key]) => changed.has(key));
     const runAt = scenarioRunOptions(args, trace);
     process.stdout.write(
-      `replaying ${trace.steps.length} step(s) recorded by ${trace.scenario} on ${trace.fixture} ` +
-        `(seed ${trace.seed}, ${trace.iterations} iteration(s), rev ${trace.gitRev.slice(0, 12)}); ` +
+      `replaying ${trace.steps.length} step(s) recorded by ${scenarioName(trace.scenario)} on ${foldLocalPaths(String(trace.fixture))} ` +
+        `(seed ${valueShape(trace.seed)}, ${valueShape(trace.iterations)} iteration(s), rev ${gitRev(trace.gitRev)}); ` +
         `running at seed ${String(runAt.seed)}, ${String(runAt.iterations)} iteration(s)\n` +
         (restored.length > 0
-          ? `  restored from the trace: ${restored.map(([key, value]) => `${key}=${value}`).join(' ')}\n`
+          ? `  restored from the trace: ${restored.map(([key, value]) => `${envKey(key)}=${foldLocalPaths(String(value))}`).join(' ')}\n`
           : '') +
         // Printed for the same reason `restored` is: a knob the shell set and
         // the recording did not is a difference between this run and that one,
@@ -89,10 +109,10 @@ async function main(): Promise<void> {
         // recording. The recording ran on those knobs' DEFAULTS.
         (cleared.length > 0
           ? `  cleared ${cleared.length} knob(s) the recording did not have, back to their defaults: ` +
-            `${cleared.join(', ')}\n`
+            `${cleared.map(envKey).join(', ')}\n`
           : '') +
         (refused.length > 0
-          ? `  REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.join(', ')}\n`
+          ? `  REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.map(envKey).join(', ')}\n`
           : ''),
     );
   }
@@ -109,7 +129,8 @@ async function main(): Promise<void> {
   const { findingsSummary, runSweep, newOracleState } = await import('./lib/oracles');
   const scenario = getScenario(args.name);
   if (!scenario) {
-    throw new Error(`unknown scenario "${args.name}"; known: ${listScenarios().join(', ')}`);
+    // Not a registry name, so its shape (#576 W51): it is the user's text.
+    throw new Error(`unknown scenario, ${valueShape(args.name)}; known: ${listScenarios().join(', ')}`);
   }
 
   // Determinism mode (`lib/fuzzDeterminismRun.ts`). `=1` pairs inside
@@ -139,8 +160,9 @@ async function main(): Promise<void> {
       const metrics = await runDeterminismPair(
         {
           scenario: args.name,
-          seed: runAt.seed ?? 1,
-          iterations: runAt.iterations ?? scenario.defaultIterations,
+          // Numbers whatever the trace held (#576 W51), as `runScenario` reads them.
+          seed: Number(runAt.seed ?? 1),
+          iterations: Number(runAt.iterations ?? scenario.defaultIterations),
           fixture: fuzzFixture(),
           mode: 'two-sessions',
           plantAt: fuzzDeterminismPlant(),

@@ -70,7 +70,7 @@ Production code may not use (see `[workspace.lints.clippy]` for the full list + 
 
 - **Panic safety:** `unwrap_used`, `expect_used`, `panic`, `unwrap_in_result`
 - **Debug artifacts:** `dbg_macro`, `todo`, `unimplemented`, `print_stdout`, `print_stderr`
-- **Clone/string spam:** `inefficient_to_string`, `clone_on_ref_ptr`, `string_to_string`, `rc_clone_in_vec_init`
+- **Clone/string spam:** `inefficient_to_string`, `clone_on_ref_ptr`, `rc_clone_in_vec_init` (`string_to_string` was denied here until clippy removed it; its successor `implicit_clone`, which also flags `String.to_string()`, is at warn)
 - **Hygiene:** `wildcard_imports`, `allow_attributes` (you can't silence lints with `#[allow]`), `wildcard_dependencies`, `redundant_type_annotations`, `mem_forget`, `lossy_float_literal`, `needless_pass_by_ref_mut`, `semicolon_if_nothing_returned`, `explicit_into_iter_loop`
 - **Async footguns:** `await_holding_lock`, `await_holding_refcell_ref`
 - **`[workspace.lints.rust]`:** `unsafe_code`, `unused_must_use`, `unused_qualifications`, `unreachable_pub`

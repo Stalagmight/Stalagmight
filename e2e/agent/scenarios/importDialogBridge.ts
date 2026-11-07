@@ -45,6 +45,8 @@ import {
   type ImportScreenSpec,
 } from '../lib/importScreenDigest';
 import { toastKeysRaised } from '../lib/importFlowOracles';
+import { valueShape } from '../lib/shareableFailure';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import { SELECT_TESTIDS, TESTID_INVENTORY } from './importDialogModel';
 
 /**
@@ -528,7 +530,7 @@ export const HELPERS = `
 export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepOutcome> {
   if (!isDispatchable(move)) {
     throw new Error(
-      `refusing to drive ${move.kind} on "${move.testid}": not in the import fuzzer's allowlist. ` +
+      `refusing to drive ${move.kind} on "${shareableTestId(move.testid)}": not in the import fuzzer's allowlist. ` +
         `A recorded trace can only replay the controls the generators produce.`,
     );
   }
@@ -848,7 +850,7 @@ export async function answerKeyboardFileDialog(
   value: string | null,
 ): Promise<DialogOutcome> {
   if (!ARMABLE_KEYS.has(chord)) {
-    throw new Error(`refusing to arm a picker for "${chord}": not in the import fuzzer's armable-key set`);
+    throw new Error(`refusing to arm a picker for ${valueShape(chord)}: not in the import fuzzer's armable-key set`);
   }
   return ctx.eval<DialogOutcome>(
     `

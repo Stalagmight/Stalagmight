@@ -49,6 +49,13 @@ const ATTRIBUTION_TTL: Duration = Duration::from_hours(24);
 /// there is nothing to gain from retrying tightly.
 const ATTRIBUTION_FAILURE_BACKOFF: Duration = Duration::from_mins(5);
 
+/// Most bytes the service-metadata response may decode to (#576 RV19a-11).
+/// Esri's real document is about 11 KB, so 1 MiB is some ninety times that,
+/// while a body streaming far more is refused here instead of being read up
+/// to ureq's silent 10 MiB default - a default that counts the gzip bytes on
+/// the wire, so it never bounded the decoded body at all.
+const ATTRIBUTION_BODY_MAX_BYTES: u64 = 1024 * 1024;
+
 /// Characters removed from a remote attribution before it is displayed.
 ///
 /// `char::is_control` alone is Unicode category Cc only, which leaves the
@@ -128,10 +135,11 @@ fn fetch_copyright_text(url: &str) -> Result<String, String> {
         .call()
         .map_err(|e| format!("Attribution network error: {e}"))?;
 
-    let body = response
-        .into_body()
-        .read_to_vec()
-        .map_err(|e| format!("Failed to read attribution response: {e}"))?;
+    // Over the ceiling this is ureq's `BodyExceedsLimit`, whose message names
+    // the limit; either way the caller falls back to the compiled-in string.
+    let body =
+        stalagmight_tiles::read_body_capped(response.into_body(), ATTRIBUTION_BODY_MAX_BYTES)
+            .map_err(|e| format!("Failed to read attribution response: {e}"))?;
 
     parse_copyright_text(&body)
 }
@@ -261,7 +269,7 @@ pub fn get_attribution(provider_name: &str) -> TileAttribution {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod tests {
     use super::*;
 
@@ -404,5 +412,65 @@ mod tests {
             text.ends_with('\u{2026}'),
             "a clipped credit must not present itself as the whole list"
         );
+    }
+
+    /// A loopback stub answering every request with `200 OK` and `body` as
+    /// JSON. Returns a service-metadata URL on it.
+    fn serve_service_info(body: Vec<u8>) -> String {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/MapServer?f=json", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    match stream.read(&mut byte) {
+                        Ok(1) => head.extend_from_slice(&byte),
+                        _ => break,
+                    }
+                }
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                // The client hangs up once it hits its ceiling; a failed
+                // write is that, not a stub fault.
+                let _ = stream.write_all(reply.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        url
+    }
+
+    /// #576 RV19a-11: the service metadata is read under an explicit ceiling.
+    /// A valid document padded to over 2 MiB (JSON allows trailing
+    /// whitespace) was read whole under ureq's silent 10 MiB default.
+    #[test]
+    fn a_service_info_body_over_the_ceiling_is_refused() {
+        let mut body = br#"{"copyrightText":"Source: Esri"}"#.to_vec();
+        body.resize(body.len() + 2 * 1024 * 1024, b' ');
+        let len = body.len();
+        let result = fetch_copyright_text(&serve_service_info(body));
+        println!("{len}-byte service-info body: {result:?}");
+        assert!(
+            result.is_err(),
+            "a body over the ceiling must be refused, got {result:?}"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("larger than") && err.contains("1048576"),
+            "the refusal must name the limit, got {err}"
+        );
+    }
+
+    /// An ordinary document is still read and parsed.
+    #[test]
+    fn a_service_info_body_under_the_ceiling_is_parsed() {
+        let body = br#"{"currentVersion":11.4,"copyrightText":"Source: Esri"}"#.to_vec();
+        let result = fetch_copyright_text(&serve_service_info(body));
+        println!("ordinary service-info body: {result:?}");
+        assert_eq!(result.unwrap(), "Source: Esri");
     }
 }

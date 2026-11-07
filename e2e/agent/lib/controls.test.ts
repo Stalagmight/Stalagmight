@@ -4,6 +4,7 @@ const evalInAppMock = vi.hoisted(() => vi.fn());
 vi.mock('./page', () => ({ evalInApp: evalInAppMock }));
 
 import { answerFileDialog, hoverElement, mapClick, selectOption, targetSelector, testIdSelector } from './controls';
+import { shareableFailureText } from './shareableFailure';
 import type { Browser } from 'webdriverio';
 
 function fakeBrowser(elements: Record<string, Record<string, ReturnType<typeof vi.fn>>>) {
@@ -128,5 +129,23 @@ describe('agent controls', () => {
 
     evalInAppMock.mockResolvedValueOnce({ error: 'map point is outside the visible viewport at right edge' });
     await expect(mapClick(browser, [1, 1])).rejects.toThrow('right edge');
+  });
+
+  it("keeps the point and the page's target off the line a runner prints (#576 W51)", async () => {
+    const browser = fakeBrowser({});
+    const headline = async (run: Promise<unknown>): Promise<string> => {
+      const err = await run.then(() => new Error('resolved'), (e: unknown) => e as Error);
+      return shareableFailureText(err.message).split('\n')[0] ?? '';
+    };
+    evalInAppMock.mockResolvedValueOnce({ error: 'map point is outside the visible viewport: [-87.123, 20.456]' });
+    const refused = await headline(mapClick(browser, [-87.123, 20.456]));
+    expect(refused).toMatch(/^map click failed: \(\d+ characters of the app's text withheld\)$/);
+
+    evalInAppMock
+      .mockResolvedValueOnce({ x: 320, y: 240, interaction: 'maplibre', interactionSequenceBefore: 2 })
+      .mockResolvedValueOnce('div[data-testid=system-card-qzCaveA]')
+      .mockResolvedValueOnce(2);
+    const missed = await headline(mapClick(browser, [-87.123, 20.456]));
+    expect(missed).toBe('map maplibre handler did not process the click');
   });
 });

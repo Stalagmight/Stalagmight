@@ -68,6 +68,9 @@ impl UndoStack {
                 ..
             } => affected_sections.len() * 16 + previous_offsets.len() * BYTES_PER_OFFSET,
             UndoData::StationMoveInfo { .. } => 2 * BYTES_PER_SHOT,
+            UndoData::StationCommentRows { previous, .. } => {
+                previous.iter().map(|(_, text)| 128 + text.len()).sum()
+            }
             UndoData::InverseCommand(_) | UndoData::None => 0,
         };
         // Restored rows deliberately do not reserialize their command just to rebuild

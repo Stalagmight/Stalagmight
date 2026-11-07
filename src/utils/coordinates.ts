@@ -8,8 +8,9 @@ import { normalizeAzimuth } from './azimuth';
 // table's GPS column and GlobalView must invert THAT projection: this file used
 // a 6371000 m sphere, which drew a datum ~3 m per km away from its own fix
 // (#576 D36). Constants and operation order mirror geo.rs, so the two sides
-// agree within 1e-13 degrees (pinned by the parity tables in
-// __tests__/coordinates.test.ts, geo.rs and survey_geometry.rs).
+// agree to well under 1e-9 degrees: the parity table holds geo.rs's
+// `local_to_gps` to it within 1e-12 degrees and `enuToGps` within 1e-10
+// (__tests__/coordinates.test.ts reads it from geo.rs).
 const WGS84_A = 6378137.0;
 const WGS84_E2 = 0.00669437999014;
 

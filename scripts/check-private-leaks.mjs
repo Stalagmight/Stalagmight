@@ -289,7 +289,10 @@ export function main() {
   try {
     files = listTracked(REPO_ROOT);
   } catch (e) {
-    console.error(`check-private-leaks: could not list tracked files (run from a git repo): ${e.message}`);
+    // The first line only (`Command failed: ...`): the rest repeats the child's
+    // stderr, which already reached the terminal and can name the checkout's
+    // absolute path (#576 W51).
+    console.error(`check-private-leaks: could not list tracked files (run from a git repo): ${e.message.split('\n')[0]}`);
     return 1;
   }
   return report(scan(files, makeReader(REPO_ROOT)));

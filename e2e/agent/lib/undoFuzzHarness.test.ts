@@ -348,10 +348,12 @@ describe('replay-step rules', () => {
     expect(() => assertReplayableMutation('createSection')).not.toThrow();
     expect(() => assertReplayableMutation('saveProject')).toThrow(
       new Error(
-        'trace step names saveProject, which is not a replayable mutation. ' +
-          'A recorded trace may only replay the actions the generators produce.',
+        'trace step names an action that is not a replayable mutation. ' +
+          'A recorded trace may only replay the actions the generators produce.\n  action: saveProject',
       ),
     );
+    // The name a trace carries stays off the line a runner prints (#576 W51).
+    expect(() => assertReplayableMutation('## qzCaveA')).toThrow(/^trace step names an action that[^\n]*\n {2}action: ## qzCaveA$/);
   });
 
   it('assertHistoryStep lets only the four history kinds through, naming the scenario otherwise', () => {

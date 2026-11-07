@@ -1235,6 +1235,9 @@ function MapCanvas({ onReloadMap, initialCenter }: MapCanvasProps) {
   // Wire up setActiveTool - depend on mapLoaded to ensure it runs after layer creation
   useEffect(() => {
     if (surveyLayerRef.current) {
+      // Under Pan/Zoom setActiveTool also drops the shot/station hover and, through
+      // onShotHover/onStationHover, nulls the store's too: read them first.
+      const { hoveredShot, hoveredStation } = useUIStore.getState();
       surveyLayerRef.current.setActiveTool(activeTool);
       // Under Pan/Zoom setActiveTool drops the layer's section hover. A switch TO
       // Pan/Zoom clears the store's in the same update, so this re-applies null;
@@ -1242,6 +1245,14 @@ function MapCanvas({ onReloadMap, initialCenter }: MapCanvasProps) {
       // first) pushed in the hover of a panel row still under the pointer, which
       // must stay painted (#576 W26-NF2).
       surveyLayerRef.current.setHoveredSection(useUIStore.getState().hoveredSectionId);
+      // Put back the data-table/detail row hover that clear took from store and
+      // map on load. A switch TO Pan/Zoom had already cleared the store, so this
+      // restores nothing and a map-pointer hover stays cleared (#576 W33-NF8).
+      const ui = useUIStore.getState();
+      if (ui.hoveredShot !== hoveredShot) ui.setHoveredShot(hoveredShot);
+      if (ui.hoveredStation !== hoveredStation) ui.setHoveredStation(hoveredStation);
+      surveyLayerRef.current.setHoveredShot(hoveredShot?.sectionId ?? null, hoveredShot?.shotId ?? null);
+      surveyLayerRef.current.setHoveredStation(hoveredStation);
     }
   }, [activeTool, mapLoaded]);
 

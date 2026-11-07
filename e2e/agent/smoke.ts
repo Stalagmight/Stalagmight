@@ -12,6 +12,7 @@ import { readStore } from './lib/stores';
 import { LogCursor } from './lib/logs';
 import { invokeInApp } from './lib/page';
 import { isPortFree } from './lib/procs';
+import { foldLocalPaths, shareableErrorText } from './lib/shareableFailure';
 
 function log(msg: string): void {
   process.stderr.write(`[smoke] ${msg}\n`);
@@ -27,7 +28,9 @@ async function main(): Promise<void> {
 
   const buildMode = (process.env.AGENT_BUILD as 'auto' | 'skip' | 'force') || 'auto';
   const started = await session.start({ build: buildMode });
-  log(`started: ${JSON.stringify(started)}`);
+  // Folded (#576 W51): the session and profile directories, the checkout that
+  // built the binary and a rebuild reason all name paths under the home directory.
+  log(`started: ${foldLocalPaths(JSON.stringify(started))}`);
   check('session ready', session.state === 'ready');
 
   // Screenshot.
@@ -52,9 +55,15 @@ async function main(): Promise<void> {
 
   // IPC integrity command round-trips.
   const integrity = await session.exclusive(() =>
-    invokeInApp(session.browser, 'check_project_integrity'),
+    invokeInApp<{ messages?: unknown; save_blocked?: unknown } | undefined>(session.browser, 'check_project_integrity'),
   );
-  check('check_project_integrity IPC works', integrity !== undefined, JSON.stringify(integrity).slice(0, 80));
+  // Its shape only (#576 W51): an integrity message names the project's data.
+  const messages = integrity?.messages;
+  check(
+    'check_project_integrity IPC works',
+    integrity !== undefined,
+    `${Array.isArray(messages) ? messages.length : 'no'} message(s), save_blocked=${integrity?.save_blocked === true}`,
+  );
 
   // Crash-oracle self-test: trigger a backend thread panic; the app must
   // survive, the ring buffer must get a PANIC line, and a crash marker file
@@ -95,6 +104,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`[smoke] fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W33-NF6): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`[smoke] fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });

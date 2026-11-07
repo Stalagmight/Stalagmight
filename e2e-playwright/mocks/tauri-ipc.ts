@@ -2572,6 +2572,3 @@ export async function setupTauriMocks(page: Page): Promise<void> {
     content: `(${installTauriIpcMock.toString()})([${families}], ${buildMockShot.toString()}, ${JSON.stringify(INERT_COMMANDS)}, ${openerMockSource()});`,
   });
 }
-
-export { createMockProject, createMockSection } from './ipc/mockProject';
-export type { MockProject, MockSection, MockShot } from './ipc/mockProject';

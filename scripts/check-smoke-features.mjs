@@ -257,7 +257,7 @@ export function checkFeatures(read) {
   try {
     md = read(LIST_FILE);
   } catch (e) {
-    return { problems: [`${LIST_FILE} unreadable: ${e.message}`], covered: [] };
+    return { problems: [`${LIST_FILE} unreadable: ${e.code || e.message}`], covered: [] };
   }
   const { rows, error } = parseFeatureList(md);
   if (error) return { problems: [error], covered: [] };

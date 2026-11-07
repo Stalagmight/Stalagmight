@@ -155,6 +155,20 @@ test('stats carry the run count', () => {
   assert.equal(rep.stats.tests, 1);
 });
 
+// stdout names the env path by its variable: the path is the caller's, and can
+// name their own directories (#576 W51).
+test('the summary line names $PW_TIMING_OUTPUT, not the path in it', () => {
+  const logged = [];
+  const log = console.log;
+  console.log = (...a) => logged.push(a.join(' '));
+  try {
+    run([]);
+  } finally {
+    console.log = log;
+  }
+  assert.deepEqual(logged, ['\n[pw-timing] wrote 1 test timings to $PW_TIMING_OUTPUT']);
+});
+
 // The reports above were written under `dir`; remove it so a run leaves
 // nothing behind in TMPDIR (#576 E18(b)).
 rmSync(dir, { recursive: true, force: true });

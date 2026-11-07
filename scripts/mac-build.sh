@@ -46,8 +46,10 @@ fi
 [[ -f "$PROJECT_DIR/package.json" ]] || die "Not a valid project directory: $PROJECT_DIR"
 
 # Ask cargo where it actually writes rather than assuming src-tauri/target.
-# A per-clone .cargo/config.toml can redirect target-dir (this repo's clones put
-# it on an external disk), and cargo resolves that config from the working
+# CARGO_TARGET_DIR, $CARGO_HOME/config.toml or a .cargo/config.toml above the
+# clone can redirect target-dir (this repo's machines put it on an external
+# disk; per-machine settings stay out of the committed .cargo/config.toml, see
+# docs/toolchain.md), and cargo resolves config files from the working
 # directory, which is why this runs from inside PROJECT_DIR. Getting it wrong is
 # silent: the signing and reporting steps below just find nothing.
 CARGO_TARGET="$(cd "$PROJECT_DIR/src-tauri" && cargo metadata --format-version 1 --no-deps 2>/dev/null \

@@ -75,7 +75,7 @@ describe('unknown SpeleoDB permission tiers (#576 B16)', () => {
       Promise.resolve(cmd === 'speleodb_list_teams' ? [] : ROSTER),
     );
     render(<SpeleoCollaboratorsTab />);
-    const bob = await screen.findByTestId('speleodb-collab-user-bob@x.com');
+    const bob = await screen.findByTestId('speleodb-collab-user-1');
     expect(bob).toHaveTextContent('Unknown');
     expect(bob).not.toHaveTextContent('speleodb.collaborators.levels');
     expect(screen.getByTestId('speleodb-collab-team-t1')).toHaveTextContent('Unknown');
@@ -87,11 +87,11 @@ describe('unknown SpeleoDB permission tiers (#576 B16)', () => {
       Promise.resolve(cmd === 'speleodb_list_teams' ? [] : ROSTER),
     );
     render(<SpeleoCollaboratorsTab />);
-    const picker = await screen.findByTestId('speleodb-collab-user-level-bob@x.com');
+    const picker = await screen.findByTestId('speleodb-collab-user-level-1');
     expect(picker).toHaveTextContent('Unknown');
     await userEvent.click(picker);
     const unknownOption = screen.getByTestId(
-      'speleodb-collab-user-level-bob@x.com-option-UNKNOWN',
+      'speleodb-collab-user-level-1-option-UNKNOWN',
     );
     // Shown as the current value, but not selectable: it is never sent back.
     expect(unknownOption).toHaveAttribute('aria-disabled', 'true');

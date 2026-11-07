@@ -1129,6 +1129,10 @@ impl AppState {
         // edit always serializes the key, so it still restores correctly.
         let snapshot_has_surface_elevation = snapshot.contains("\"surface_elevation\":");
         let current_surface_elevation = slot.as_ref().and_then(|p| p.surface_elevation);
+        // A pre-anchor build wrote every cross-reference as a positional
+        // `StationRef` (`{section_id, station_index}`); this build writes
+        // `StationKey`s (`{section_id, anchor}`). See the canonicalization below.
+        let snapshot_is_pre_anchor = snapshot.contains("\"station_index\":");
         // [#303] Where the file lives is a property of THIS machine, not of the survey, so
         // `serialize_project_snapshot` clears it rather than write a username into every
         // pushed commit. Carry the live value across on the way back, or an undo would leave
@@ -1192,28 +1196,40 @@ impl AppState {
                 restored.file_path = current_file_path;
                 restored.rebuild_section_index();
                 restored.rebuild_shot_uuid_index();
-                // A snapshot blob persisted by a PRE-ANCHOR build can carry
-                // transitional positional `Index` cross-reference anchors (undo/redo
-                // history is persisted to SQLite and reloaded across sessions, and the
-                // back-compat StationKey deserializer accepts the legacy
-                // `{section_id, station_index}` shape). The live-model invariant is
-                // "no Index anchors": a later shot insert/delete only shifts
-                // AfterShot/SectionStart refs, so a live Index ref would silently start
-                // resolving to the wrong station. Canonicalize such a snapshot - the
-                // same step the load path runs - to AfterShot/SectionStart.
+                // A snapshot blob persisted by a PRE-ANCHOR build stores every
+                // cross-reference positionally (undo/redo history is persisted to
+                // SQLite and reloaded across builds, and the back-compat StationKey
+                // deserializer reads the legacy `{section_id, station_index}` shape as
+                // a transitional `Index` anchor). A later shot insert/delete leaves an
+                // `Index` key at its position, so it would silently start naming
+                // another station. Canonicalize such a snapshot - the same step the
+                // load path runs - to AfterShot/SectionStart. The re-anchor drops no
+                // comment: two that land on one key are joined
+                // (`Project::map_station_refs`).
                 //
-                // CRITICALLY, gate this on the snapshot actually being LEGACY (an Index
-                // anchor is present). A CURRENT same-session snapshot is already
-                // canonical, so mint/reanchor would be no-ops - but ensure_unique would
-                // RE-MINT intentional duplicate UUIDs, e.g. the pre-repair state that an
-                // undo of a duplicate_shot_uuid Repair must restore EXACTLY. Skipping
-                // the block when there is no Index anchor keeps current snapshots
-                // byte-for-byte (so undo/redo is a true before/after pair) while legacy
-                // snapshots are still fully canonicalized. (For a legacy snapshot,
-                // ensure_shot_uuids runs FIRST: a pre-v6 blob can have uuid:null shots,
-                // and ensure_unique only dedups existing UUIDs - without minting nulls,
-                // reanchor can't canonicalize the Index anchor of a null-uuid station.)
-                let has_legacy_index = {
+                // CRITICALLY, gate this on the snapshot being PRE-ANCHOR, not on an
+                // `Index` anchor alone (#576 W52-1). A snapshot this build wrote can
+                // hold one too: a key that did not resolve at the open (a comment row
+                // past the end of its section) stays `Index` in the live project, and
+                // every snapshot taken while it is there records it. Re-anchoring that
+                // snapshot moved the key onto whatever shot then sat at its position -
+                // one an append had added, so undoing the append deleted the comment
+                // with the shot. And ensure_unique would RE-MINT intentional duplicate
+                // UUIDs, e.g. the pre-repair state that an undo of a duplicate_shot_uuid
+                // Repair must restore EXACTLY. So a snapshot this build wrote is
+                // restored with its keys and UUIDs exactly as recorded (undo/redo is a
+                // true before/after pair). This build never writes the positional
+                // shape - `StationKey` serializes `{section_id, anchor}`, and no other
+                // field of a `Project` is named `station_index`
+                // (`a_snapshot_this_build_writes_never_holds_the_positional_key_shape`
+                // pins it) - and a JSON string cannot fake it, as its quotes are
+                // escaped. The `Index` check stays beside it, so a pre-anchor snapshot
+                // whose refs all sit at a section start is left as before. (For a
+                // pre-anchor snapshot, ensure_shot_uuids runs FIRST: a pre-v6 blob can
+                // have uuid:null shots, and ensure_unique only dedups existing UUIDs -
+                // without minting nulls, reanchor can't canonicalize the Index anchor
+                // of a null-uuid station.)
+                let has_legacy_index = snapshot_is_pre_anchor && {
                     let mut found = false;
                     restored.for_each_station_ref(|_, key| {
                         if matches!(key.anchor, StationAnchor::Index(_)) {

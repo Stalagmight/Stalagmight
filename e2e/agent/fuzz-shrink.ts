@@ -51,7 +51,7 @@ import {
   type TraceStep,
 } from './lib/fuzzTrace';
 import { ddmin, type ShrinkVerdict } from './lib/fuzzShrink';
-import { shareableErrorText } from './lib/shareableFailure';
+import { foldLocalPaths, shareableErrorText, valueShape } from './lib/shareableFailure';
 // Safe to import statically, unlike the scenarios below: this module freezes
 // nothing at import and reads `STALAGMIGHT_FUZZ_CORPUS_DIR` at call time, which
 // its own tests pin.
@@ -63,6 +63,20 @@ interface Args {
   maxTests: number;
   out: string | null;
 }
+
+/** The flags this runner takes. An error names one of them, and anything else by its shape (#576 W51). */
+const FLAGS: ReadonlySet<string> = new Set(['--release', '--max-tests', '--out']);
+const shownFlag = (flag: string | undefined): string => (flag !== undefined && FLAGS.has(flag) ? flag : valueShape(flag));
+
+/**
+ * A trace's header fields as printed (#576 W51). A trace is a file from wherever
+ * the user got it: a knob name prints when it has the harness's shape
+ * (`STALAGMIGHT_` and upper-case words) and a revision when it is one, anything
+ * else by its shape (`valueShape`: a number as itself).
+ */
+const envKey = (key: string): string => (/^STALAGMIGHT_[A-Z0-9_]{1,64}$/.test(key) ? key : valueShape(key));
+const gitRev = (rev: unknown): string =>
+  typeof rev === 'string' && /^(?:[0-9a-f]{7,40}|unknown)$/.test(rev) ? rev.slice(0, 12) : valueShape(rev);
 
 function parseArgs(argv: string[]): Args {
   const [trace, ...rest] = argv;
@@ -77,11 +91,11 @@ function parseArgs(argv: string[]): Args {
       continue;
     }
     const value = rest[i + 1];
-    if (value === undefined) throw new Error(`flag ${flag} needs a value`);
+    if (value === undefined) throw new Error(`flag ${shownFlag(flag)} needs a value`);
     i += 1;
     if (flag === '--max-tests') args.maxTests = Number(value);
     else if (flag === '--out') args.out = path.resolve(value);
-    else throw new Error(`unknown flag ${flag}`);
+    else throw new Error(`unknown flag, ${valueShape(flag)}`);
   }
   return args;
 }
@@ -109,7 +123,7 @@ async function main(): Promise<number> {
   const { refused, cleared } = restoreTraceEnv(trace.env);
   if (refused.length > 0) {
     process.stdout.write(
-      `REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.join(', ')}\n`,
+      `REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.map(envKey).join(', ')}\n`,
     );
   }
   if (cleared.length > 0) {
@@ -118,7 +132,7 @@ async function main(): Promise<number> {
     // between the two runs and every replay in the shrink inherits it.
     process.stdout.write(
       `CLEARED ${cleared.length} knob(s) the recording did not have, back to their defaults: ` +
-        `${cleared.join(', ')}\n`,
+        `${cleared.map(envKey).join(', ')}\n`,
     );
   }
 
@@ -139,17 +153,18 @@ async function main(): Promise<number> {
   const { getScenario, runScenario } = await import('./scenarios');
   const { AppSession } = await import('./session');
   if (!getScenario(trace.scenario)) {
-    throw new Error(`trace names scenario "${trace.scenario}", which this build does not have`);
+    // Not a registry name, so its shape (#576 W51): the trace is a file from wherever the user got it.
+    throw new Error(`trace names scenario ${valueShape(trace.scenario)}, which this build does not have`);
   }
 
   const session = new AppSession();
   const started = await session.start({ build: 'auto' });
   process.stdout.write(
     `session ${started.state} (${started.buildMode} build ${started.buildAction})\n` +
-      `trace ${args.trace}\n` +
-      `  scenario=${trace.scenario} seed=${trace.seed} fixture=${trace.fixture} ` +
-      `steps=${trace.steps.length} rev=${trace.gitRev.slice(0, 12)}\n` +
-      `  env=${JSON.stringify(trace.env)}\n`,
+      `trace ${foldLocalPaths(args.trace)}\n` +
+      `  scenario=${trace.scenario} seed=${valueShape(trace.seed)} fixture=${foldLocalPaths(String(trace.fixture))} ` +
+      `steps=${trace.steps.length} rev=${gitRev(trace.gitRev)}\n` +
+      `  env=${Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${foldLocalPaths(String(value))}`).join(' ')}\n`,
   );
 
   // Said BEFORE the baseline replay, not after it, and it RESOLVES the ids
@@ -281,10 +296,12 @@ async function main(): Promise<number> {
           `${result.stats.divergent} failed DIFFERENTLY and were rejected`,
         `  wall clock: ${(wallMs / 1000).toFixed(1)} s, ${Math.round(perReplay)} ms per replay ` +
           `(${replayTimesMs.length} replays incl. the baseline)`,
-        `  minimal trace: ${outPath}`,
+        // Folded (#576 W51): the minimal trace sits beside the one the user gave,
+        // and a step's `rel` or label can carry a path.
+        `  minimal trace: ${foldLocalPaths(outPath)}`,
         '',
         'minimal action list:',
-        describeSteps(minimal),
+        foldLocalPaths(describeSteps(minimal)),
         '',
       ].join('\n'),
     );

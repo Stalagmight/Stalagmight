@@ -49,6 +49,22 @@ describe('session ids (#576 HFI-14)', () => {
     expect(sessionIdFor(instant, 404520, 'abcdef')).not.toBe(sessionIdFor(instant, 404616, 'abcdef'));
   });
 
+  it('names the root it gave up on with the home directory folded to ~ (#576 W51)', () => {
+    const home = process.env.HOME;
+    process.env.HOME = root;
+    try {
+      const sessions = path.join(root, 'qzUser', 'sessions');
+      const deps = { now: () => instant, pid: 4242, tail: () => 'aaaaaa' };
+      allocateSessionDir(sessions, deps);
+      expect(() => allocateSessionDir(sessions, deps)).toThrow(
+        new Error('could not allocate a unique session directory under ~/qzUser/sessions in 16 attempts'),
+      );
+    } finally {
+      if (home === undefined) delete process.env.HOME;
+      else process.env.HOME = home;
+    }
+  });
+
   it('hands two creates in the SAME millisecond two directories, each with its own owner', () => {
     // The worst case the old id could not survive: one clock reading for both
     // creates. Here even the pid and the first random draw are the same, so the

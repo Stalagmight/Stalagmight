@@ -298,7 +298,10 @@ test('main fails without e2e-playwright/ and on a symlinked spec; passes a clean
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'no-sleep-'));
   const quiet = () => {};
   try {
-    assert.equal(main(root, quiet, quiet), 1);
+    // Repo-relative, never the absolute root: it names the checkout's location (#576 W51).
+    const missing = [];
+    assert.equal(main(root, quiet, (m) => missing.push(m)), 1);
+    assert.deepEqual(missing, ['check-e2e-no-sleep: e2e-playwright/ not found (run from the repo root).']);
     fs.mkdirSync(path.join(root, 'e2e-playwright'));
     fs.writeFileSync(path.join(root, 'e2e-playwright', 'a.spec.ts'), "await expect(page.getByTestId('x')).toBeVisible();\n");
     assert.equal(main(root, quiet, quiet), 0);

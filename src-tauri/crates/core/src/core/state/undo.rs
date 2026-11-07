@@ -468,6 +468,39 @@ impl AppState {
                 }
             }
 
+            UndoData::StationCommentRows {
+                station_ref,
+                previous,
+            } => {
+                // [#576 RV19a-2] Put back the exact rows the set replaced: drop
+                // whatever names the station now (the row the command stored
+                // under the canonical key, if any), then restore each recorded
+                // row under its own key - a legacy `Index` key stays one.
+                let mut proj_guard = self.project.lock();
+                match proj_guard.as_mut() {
+                    Some(project) => {
+                        let naming: Vec<crate::models::StationKey> = project
+                            .station_comments
+                            .keys()
+                            .filter(|key| {
+                                key.section_id == station_ref.section_id
+                                    && project.key_is_ref(key, *station_ref)
+                            })
+                            .cloned()
+                            .collect();
+                        for key in &naming {
+                            project.station_comments.remove(key);
+                        }
+                        for (key, text) in previous {
+                            project.station_comments.insert(key.clone(), text.clone());
+                        }
+                        project.touch();
+                        CommandResult::success()
+                    }
+                    None => CommandResult::failure("No project open".to_string()),
+                }
+            }
+
             UndoData::SegmentMoveInfo {
                 previous_offsets, ..
             } => {
@@ -983,6 +1016,7 @@ impl AppState {
             | UndoData::MergeInfo { .. }
             | UndoData::UnmergeInfo { .. }
             | UndoData::ZeroDatumInfo { .. }
+            | UndoData::StationCommentRows { .. }
             | UndoData::StationMoveInfo { .. }
             | UndoData::ProjectSnapshot(_)
             | UndoData::None => {

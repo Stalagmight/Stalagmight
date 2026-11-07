@@ -635,6 +635,7 @@ import {
 import { mustBeRejected } from './undoRedoFuzzImportActions';
 import { materializeSurveyFile, type GeneratedFileSpec } from '../lib/surveyFileSpecs';
 import { FILE_ARG_ACTIONS, TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
+import { foldLocalPaths, valueShape } from '../lib/shareableFailure';
 import { initModel, injectOracle, type StepResponse } from './undoRedoFuzzBridge';
 
 // The shared env knobs (`replayTracePath`, `traceOutPath`, `fuzzFixture`,
@@ -772,7 +773,9 @@ async function runFuzz(
   const fixture = fuzzFixture();
   const { stripped } = await loadFixtureWithoutUndoHistory(ctx, fixture);
   const strippedRows = Object.values(stripped.cleared).reduce((sum, n) => sum + n, 0);
-  ctx.setMetric(`fixture:${fixture}`, 1);
+  // Folded (#576 W51): a metric key prints in the runner's PASS line
+  // unfolded, and the fixture is the knob as the user wrote it.
+  ctx.setMetric(`fixture:${foldLocalPaths(fixture)}`, 1);
   ctx.setMetric('strippedUndoRows', strippedRows);
 
   await requireAutoSaveOff(ctx);
@@ -889,7 +892,7 @@ async function runFuzz(
     const root = path.resolve(filesRoot);
     const target = path.resolve(root, rel);
     if (target !== root && !target.startsWith(root + path.sep)) {
-      throw new Error(`generated file path ${JSON.stringify(rel)} escapes ${root}`);
+      throw new Error(`generated file path ${valueShape(rel)} escapes ${root}`);
     }
     return target;
   };
@@ -918,7 +921,7 @@ async function runFuzz(
     const rel = args[0];
     if (typeof rel !== 'string' || rel === '') {
       throw new Error(
-        `${action} takes an input file path as args[0], got ${JSON.stringify(rel ?? null)}`,
+        `${action} takes an input file path as args[0], got ${valueShape(rel)}`,
       );
     }
     return [resolveSessionPath(rel), ...args.slice(1)];

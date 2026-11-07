@@ -218,7 +218,7 @@ describe('useRevertRevision - refusing before it takes anything', () => {
 
     const outcome = await run();
 
-    expect(outcome).toEqual({ kind: 'needs_discard', lockHeld: false });
+    expect(outcome).toEqual({ kind: 'needs_discard', lockHeld: false, stateUnknown: false });
     expect(issued()).toEqual([]);
   });
 
@@ -308,7 +308,26 @@ describe('useRevertRevision - unwinding a failed restore', () => {
 
     const outcome = await run();
 
-    expect(outcome).toEqual({ kind: 'needs_discard', lockHeld: true });
+    expect(outcome).toEqual({ kind: 'needs_discard', lockHeld: true, stateUnknown: false });
+    expect(issued()).not.toContain('speleodb_done');
+  });
+
+  it('carries a copy that could not be read through, and still keeps the lock (#576 W55)', async () => {
+    // [NF-W53-1] Same refusal, same unwind - the copy could not be read, so it cannot be
+    // shown clean and the lock stays - but the outcome says so, so the dialog can word
+    // it as unreadable rather than as un-pushed changes.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: rejects({
+        ...UNPUSHED_REFUSAL,
+        unpushed_local: { ...UNPUSHED_REFUSAL.unpushed_local, last_edit_at: null, state_unknown: true },
+      }),
+      speleodb_done: ok(report({ kind: 'released' })),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'needs_discard', lockHeld: true, stateUnknown: true });
     expect(issued()).not.toContain('speleodb_done');
   });
 

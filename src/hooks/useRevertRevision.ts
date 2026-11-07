@@ -76,7 +76,11 @@ type PublishArgs = Pick<RevertRevisionArgs, 'message' | 'shortSha'> & {
  */
 export type RevertOutcome =
   | { kind: 'reverted' }
-  | { kind: 'needs_discard'; lockHeld: boolean }
+  /** `stateUnknown` [#576 W55 NF-W53-1]: the restore was refused because the copy could
+      not be read (`UnpushedLocalEdits.state_unknown`), not because it was read dirty -
+      the dialog words the discard step for that. False for the pre-flight, which
+      refuses on a dirty bit it did read. */
+  | { kind: 'needs_discard'; lockHeld: boolean; stateUnknown: boolean }
   /** The open project holds edits that are not on DISK. Nothing was taken and
       nothing was changed - see the pre-flight for why this is its own answer and
       not a `needs_discard`. */
@@ -234,7 +238,7 @@ export function useRevertRevision() {
       // store rather than from a render snapshot - an autosave or a poll can have
       // flipped the bit since the dialog last rendered.
       if (!discardLocal && (useSpeleoStore.getState().link?.hasUnpushedEdits ?? false)) {
-        return { kind: 'needs_discard', lockHeld: false };
+        return { kind: 'needs_discard', lockHeld: false, stateUnknown: false };
       }
 
       // [#258] Ask which file BEFORE acquiring, for the same reason the un-pushed
@@ -415,7 +419,13 @@ export function useRevertRevision() {
           // not held by THIS one either.
           lockHeld = !(doneFinished(kind) || kind === 'not_editing');
         }
-        if (unpushedLocalEdits(e)) return { kind: 'needs_discard', lockHeld };
+        if (refusedForLocalEdits) {
+          return {
+            kind: 'needs_discard',
+            lockHeld,
+            stateUnknown: refusedForLocalEdits.state_unknown === true,
+          };
+        }
         // [#258] After the unwind, not before it: the release must have HAPPENED, and
         // `lockHeld` being false is the evidence that a composite retry can re-acquire.
         // While the copy is dirty the lock is deliberately kept and the retry's own

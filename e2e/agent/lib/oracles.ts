@@ -191,13 +191,6 @@ function cutAfterFold(text: string, limit: number): string {
   return redactCorpusText(text).slice(0, limit);
 }
 
-/**
- * How much of the error-boundary text the page hands back: far past the 300
- * characters a finding keeps, so a name that straddles 300 reaches the fold
- * whole (`cutAfterFold`), yet bounded, since the fallback can hold a stack.
- */
-const PAGE_TEXT_CAP = 16384;
-
 interface LogsSince {
   entries: { seq: number; ts_ms: number; line: string }[];
   latest_seq: number;
@@ -232,11 +225,14 @@ export async function cheapSweep(target: OracleTarget, state: OracleState): Prom
   // 2 + 3. One exclusive block: DOM error-boundary probe, then new ring lines.
   try {
     const probe = await target.exclusive(async () => {
+      // The page sends the whole text: Node folds it, THEN cuts it (`cutAfterFold`).
+      // A cut in the page could split a corpus name the fold then cannot match
+      // (#576 RV19b-P3).
       const dom = await evalInApp<{ errorBoundary: boolean; text?: string }>(
         target.browser,
         `
         const el = document.querySelector('[data-testid="error-boundary-fallback"]');
-        return { errorBoundary: !!el, text: el ? (el.textContent || '').slice(0, ${PAGE_TEXT_CAP}) : undefined };
+        return { errorBoundary: !!el, text: el ? el.textContent || '' : undefined };
       `,
       );
       const logs = await invokeInApp<LogsSince>(target.browser, 'get_recent_logs_since', {

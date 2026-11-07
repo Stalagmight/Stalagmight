@@ -191,3 +191,50 @@ describe('SpeleoRestoreDialog - a second restore (#270)', () => {
     );
   });
 });
+
+/**
+ * [#576 W55 NF-W53-1] The backend refuses the same way when the cached copy is there but
+ * could not be read (a hot journal after a crash, a lock another program holds), with
+ * `state_unknown` set. The discard step must say that, not claim changes the copy may
+ * never have had. The two-press discard and its labels stay as they are.
+ */
+describe('SpeleoRestoreDialog - a copy that could not be read (#576 W55 NF-W53-1)', () => {
+  const refusal = (stateUnknown: boolean) => ({
+    message: 'could not be read',
+    code: 'SPELEODB_UNPUSHED_LOCAL_EDITS',
+    unpushed_local: {
+      project_id: 'p1',
+      local_path: '/cache/p1.stalx',
+      last_edit_at: null,
+      state_unknown: stateUnknown,
+    },
+  });
+
+  it('says the copy could not be read instead of claiming un-pushed changes', async () => {
+    invokeIpcMock.mockRejectedValue(refusal(true));
+    render(<SpeleoRestoreDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-restore-confirm-btn'));
+
+    const warning = (await screen.findByTestId('speleodb-restore-discard-warning')).textContent;
+    console.log('[W55] restore discard warning (state_unknown):', warning);
+    expect(warning).toContain('could not be read');
+    expect(warning).toContain('A save may have been interrupted, or another program may be using it.');
+    expect(warning).not.toContain('The working copy has changes that are not on SpeleoDB');
+    // Same offer, same label: only the warning's wording follows the flag.
+    expect(screen.getByTestId('speleodb-restore-discard-offer-btn')).toHaveTextContent(
+      'Replace my changes & restore',
+    );
+  });
+
+  it('keeps the un-pushed wording for a copy that was read and found dirty', async () => {
+    invokeIpcMock.mockRejectedValue(refusal(false));
+    render(<SpeleoRestoreDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-restore-confirm-btn'));
+
+    const warning = (await screen.findByTestId('speleodb-restore-discard-warning')).textContent;
+    expect(warning).toContain('The working copy has changes that are not on SpeleoDB');
+    expect(warning).not.toContain('could not be read');
+  });
+});

@@ -4,6 +4,7 @@
  * that can be tested without the app lives here).
  */
 import type { FuzzTrace } from './fuzzTrace';
+import { valueShape } from './shareableFailure';
 
 export interface ScenarioRunArgs {
   name: string;
@@ -28,14 +29,13 @@ export const SCENARIO_RUN_USAGE =
  * exercised nothing.
  */
 export function integerFlag(flag: string, raw: string): number {
-  if (!/^-?\d+$/.test(raw)) throw new Error(`flag ${flag} needs an integer, got "${raw}"`);
+  if (!/^-?\d+$/.test(raw)) throw new Error(`flag ${flag} needs an integer, got ${valueShape(raw)}`);
   return Number(raw);
 }
 
 export function positiveIntFlag(flag: string, raw: string): number {
-  if (!/^\d+$/.test(raw) || Number(raw) < 1) {
-    throw new Error(`flag ${flag} needs a positive integer, got "${raw}"`);
-  }
+  if (!/^\d+$/.test(raw)) throw new Error(`flag ${flag} needs a positive integer, got ${valueShape(raw)}`);
+  if (Number(raw) < 1) throw new Error(`flag ${flag} needs a positive integer, got ${Number(raw)}`);
   return Number(raw);
 }
 
@@ -59,7 +59,9 @@ export function parseScenarioArgs(argv: string[]): ScenarioRunArgs {
       args.trace = value;
       continue;
     }
-    if (flag !== '--seed' && flag !== '--iterations') throw new Error(`unknown flag ${flag}`);
+    // What the user typed prints as its shape: stderr is pasted, and a stray
+    // argument can be a path or a name (#576 W51).
+    if (flag !== '--seed' && flag !== '--iterations') throw new Error(`unknown flag, ${valueShape(flag)}`);
     const raw = rest[i + 1];
     if (raw === undefined) throw new Error(`flag ${flag} needs a value`);
     i += 1;
@@ -88,11 +90,11 @@ export function scenarioRunOptions(
   // A trace is a file from wherever the user got it: its numbers get the same
   // checks the flags do, rather than a 0-iteration "PASS".
   if (trace && args.seed === undefined && !Number.isInteger(trace.seed)) {
-    throw new Error(`the trace's seed ${JSON.stringify(trace.seed)} is not an integer; pass --seed`);
+    throw new Error(`the trace's seed ${valueShape(trace.seed)} is not an integer; pass --seed`);
   }
   if (trace && args.iterations === undefined && !(Number.isInteger(trace.iterations) && trace.iterations >= 1)) {
     throw new Error(
-      `the trace's iteration count ${JSON.stringify(trace.iterations)} is not a positive integer; pass --iterations`,
+      `the trace's iteration count ${valueShape(trace.iterations)} is not a positive integer; pass --iterations`,
     );
   }
   const seed = args.seed ?? trace?.seed;

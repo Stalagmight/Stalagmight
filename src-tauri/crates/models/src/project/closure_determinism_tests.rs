@@ -188,19 +188,16 @@ fn random_pairs(rng: &mut Lcg, stations: &[StationRef], n: usize) -> Vec<(Statio
         .collect()
 }
 
+/// Pairs a preview could ask about (many in two components no route joins).
+/// A stored closure's own endpoints are measured in the test after this one:
+/// here the walk would ride the closure's own zero-cost edge and always give 0
+/// (#576 RV19a-15).
 #[test]
 fn closure_metrics_are_bit_identical_on_every_call_on_random_projects() {
     for seed in 0..1000 {
         let (mut p, stations) = random_survey(seed);
         p.redrive_offsets_after_load();
-        // Every stored closure's endpoints, then pairs a preview could ask about
-        // (many in two components no route joins).
-        let mut pairs: Vec<(StationRef, StationRef)> = p
-            .loop_closures
-            .iter()
-            .filter_map(|c| Some((p.resolve_key(&c.station_a)?, p.resolve_key(&c.station_b)?)))
-            .collect();
-        pairs.extend(random_pairs(&mut Lcg(!seed), &stations, 10));
+        let pairs = random_pairs(&mut Lcg(!seed), &stations, 10);
         for (k, &(a, b)) in pairs.iter().enumerate() {
             let Ok(first) = p.compute_closure_metrics(a, b) else {
                 continue;
@@ -215,6 +212,57 @@ fn closure_metrics_are_bit_identical_on_every_call_on_random_projects() {
             }
         }
     }
+}
+
+/// [#576 RV19a-15] Every stored closure's endpoints, measured as creation
+/// measured them: on the project without the closures that join that pair.
+/// Measured with them in, the walk rode the closure's own zero-cost edge, so
+/// every call gave path length 0 and the bit comparison could not fail. The
+/// test now also requires that it saw real walks - some path length above 0 -
+/// so it cannot go vacuous again.
+#[test]
+fn stored_closure_pairs_measure_bit_identically_without_their_own_edge() {
+    let mut walked = 0usize;
+    for seed in 0..1000 {
+        let (mut p, _) = random_survey(seed);
+        p.redrive_offsets_after_load();
+        let pairs: Vec<(StationRef, StationRef)> = p
+            .loop_closures
+            .iter()
+            .filter_map(|c| Some((p.resolve_key(&c.station_a)?, p.resolve_key(&c.station_b)?)))
+            .collect();
+        for (k, &(a, b)) in pairs.iter().enumerate() {
+            let mut without = p.clone();
+            without.loop_closures = p
+                .loop_closures
+                .iter()
+                .filter(|c| {
+                    let ends = (p.resolve_key(&c.station_a), p.resolve_key(&c.station_b));
+                    ends != (Some(a), Some(b)) && ends != (Some(b), Some(a))
+                })
+                .cloned()
+                .collect();
+            let Ok(first) = without.compute_closure_metrics(a, b) else {
+                continue;
+            };
+            if first.path_length > 0.0 {
+                walked += 1;
+            }
+            for _ in 0..8 {
+                let again = without.compute_closure_metrics(a, b).unwrap();
+                assert_same_bits(
+                    preview_values(&first),
+                    preview_values(&again),
+                    &format!("seed {seed} stored pair {k}"),
+                );
+            }
+        }
+    }
+    println!("stored closure pairs measured on a real walk (path length > 0): {walked}");
+    assert!(
+        walked > 0,
+        "no stored pair was measured on a real walk: the check went vacuous"
+    );
 }
 
 /// The metrics a project STORES: the importer's batch creation, single

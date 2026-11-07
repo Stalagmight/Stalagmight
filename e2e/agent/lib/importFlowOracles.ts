@@ -31,9 +31,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { foldThenCut } from './fixtureCorpus';
 import type { ImportScreenDigest } from './importScreenDigest';
 import { describeDiffs, diffSnapshots } from './projectSnapshot';
 import { isLeftoverTempName } from './oracles';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 
 /** What a flow looked like before it started and after it ended. */
 export interface FlowBounds {
@@ -269,7 +271,8 @@ export function exportChordVerdict(
   if (screenAfter !== 'export-modal') return { kind: 'none' };
   if (gates.dialogAtDispatch === 'export') return { kind: 'already-open' };
   const on: string[] = [];
-  if (gates.dialogAtDispatch !== null) on.push(`activeDialog="${gates.dialogAtDispatch}"`);
+  // A store value (`activeDialog: string | null`): it prints as a test id does (#576 W51).
+  if (gates.dialogAtDispatch !== null) on.push(`activeDialog="${shareableTestId(gates.dialogAtDispatch)}"`);
   if (gates.placementAtDispatch === true) on.push('placementMode active');
   if (gates.fullscreenAtDispatch === true) on.push('dataTableFullScreen');
   if (on.length > 0) return { kind: 'opened-behind-gate', gates: on };
@@ -301,7 +304,8 @@ export function receiptClaimFrom(digest: ImportScreenDigest): ReceiptClaim | nul
   if (!digest.receipt) return null;
   const parsed = parseReceiptSummary(digest.receipt.summary);
   return {
-    summary: digest.receipt.summary,
+    // A failure quotes it: folded, then cut to the 300 the page used to cut at (#576 W33-NF3).
+    summary: foldThenCut(digest.receipt.summary, 300),
     sections: parsed.sections,
     shots: parsed.shots,
     shown: digest.receipt.shown,

@@ -264,6 +264,41 @@ test.describe('Non-interactive tools', () => {
     ).toBeNull();
   });
 
+  // [#576 W33-NF8] The tool effect now puts back a panel row's shot/station hover
+  // that setActiveTool's Pan/Zoom clear took away. A map-pointer hover must still
+  // go on a switch to Pan, in the store AND on the map, with the pointer held still.
+  test('Switching to pan with the pointer on a station clears its map highlight', async ({ page }) => {
+    await page.keyboard.press('s');
+    await waitForActiveTool(page, 'select');
+    const pos = await getStationPosition(page);
+    expect(pos).not.toBeNull();
+    const canvasBox = await getCanvasBoundingBox(page);
+    // getStyle(), not getSource(): the latter hands back a MapLibre class instance.
+    const hover = (): Promise<{ store: unknown; overlay: number }> =>
+      page.evaluate(() => {
+        const w = window as unknown as {
+          __E2E_TEST__: { uiStore: { getState: () => { hoveredStation: unknown } } };
+          __stalagmight_map__?: { getStyle: () => { sources: Record<string, unknown> } };
+        };
+        const src = w.__stalagmight_map__?.getStyle().sources['survey-interact'] as
+          | { data?: { features?: Array<{ properties?: { kind?: string } | null }> } }
+          | undefined;
+        return {
+          store: w.__E2E_TEST__.uiStore.getState().hoveredStation,
+          overlay: (src?.data?.features ?? []).filter((f) => f.properties?.kind === 'station').length,
+        };
+      });
+
+    await page.mouse.move(canvasBox.x + pos!.x, canvasBox.y + pos!.y, { steps: 4 });
+    await expect.poll(async () => (await hover()).overlay).toBe(1);
+    expect((await hover()).store).not.toBeNull();
+
+    await page.keyboard.press('p');
+    await waitForActiveTool(page, 'pan');
+    await expect.poll(async () => (await hover()).overlay).toBe(0);
+    expect((await hover()).store).toBeNull();
+  });
+
   test('Ctrl+A does nothing when pan active', async ({ page }) => {
     // Switch to pan tool
     await page.keyboard.press('p');

@@ -215,8 +215,8 @@ impl AppState {
         all_warnings
     }
 
-    /// Pin the position-keyed ignores of JUST-reversed sections to the physical shot
-    /// they were taken on.
+    /// Keep the position-keyed ignores of JUST-reversed sections on the physical shot
+    /// they were taken on, and pin them to it once its UUID is on disk.
     ///
     /// A resolved-warning row with a NULL `shot_uuid` is keyed by `(section_id, shot_id)`,
     /// and the reverse deliberately keeps shot IDs attached to POSITIONS rather than to
@@ -234,16 +234,16 @@ impl AppState {
     /// by `shots[p].id` belongs to `shots[N - 1 - p]`, whose id is now
     /// `shots[N - 1 - p].id`.
     ///
-    /// [#576 FZ-PERSIST-2] Every such row is first MOVED to that id, so it follows its
-    /// shot whether or not the shot's UUID is on disk; then the ones whose shot's UUID IS
-    /// on disk are pinned to it. Pinning alone left the rows of a shot not saved yet
-    /// where they were: one reverse moved its ignore to the mirrored shot, and reversing
-    /// back (or Undo) then pinned it there for good - by the UUID of the mirrored shot,
-    /// which is on disk. The section's UUID-keyed rows move to their shots' ids in the
-    /// same transaction, so the mirrored shot's own ignore with the same code is out of
-    /// the way (left in place, it failed the move). If the move still cannot be
-    /// made (a target slot holds a row that does not move, such as an ignore of a deleted
-    /// shot), no row moves and only the mirror pin is applied, as before.
+    /// [#576 RVF-d-3] Every such row is first MOVED to that id, so it follows its shot
+    /// whether or not the shot's UUID is on disk; then the ones whose shot's UUID IS on
+    /// disk are pinned to it. Pinning alone left the row of a shot not saved yet where it
+    /// was, so the mirrored shot's warning was hidden instead of its own, and the next save
+    /// (or a reverse back, which pins by the mirror) bound the ignore to the mirrored shot
+    /// for good. The section's UUID-keyed rows move in the same transaction: to their
+    /// shots' ids, and an ignore of a deleted shot out of the way of a row landing on its
+    /// slot (see `Database::rekey_position_resolved_warnings`). If the move still fails
+    /// (the database refuses the write), no row moves and only the mirror pin is applied,
+    /// as before: the row of a shot not saved yet then stays on the mirrored shot.
     ///
     /// The map is rebuilt from the CURRENT project on every call, so it is not "its own
     /// inverse" in any useful sense: what makes undo/redo of a reverse safe to re-run is
@@ -313,10 +313,11 @@ impl AppState {
         // was minted in memory and not yet saved, would otherwise get that transient value
         // written into the persisted warning row - and if the reverse is discarded, or the app
         // exits before the next save, the following load mints a DIFFERENT UUID and the ignore
-        // is orphaned onto a shot that no longer exists (issue #57 / Codex). Those shots simply
-        // keep their position-keyed rows, which the save carry-over re-keys once the UUIDs are
-        // durable. A failed lookup is treated as "not persisted": skipping a pin costs nothing
-        // now that the row has moved with its shot; writing a bad one costs it outright.
+        // is orphaned onto a shot that no longer exists (issue #57 / Codex). Those shots keep
+        // their position-keyed rows, now at their own ids, which the save carry-over re-keys
+        // once the UUIDs are durable. A failed lookup is treated as "not persisted": skipping
+        // a pin costs nothing once the row has moved with its shot; writing a bad one costs
+        // it outright.
         let pins: Slots = pins
             .into_iter()
             .filter(|((section_id, _), uuid)| {

@@ -1827,8 +1827,10 @@ export function materializeSurveyFile(
   const files = renderSurveyFiles(spec);
   for (const file of files) {
     if (file.name !== path.basename(file.name) || file.name === '' || file.name.startsWith('.')) {
+      // A spec can come back from a trace, which a forged copy writes, so the
+      // name prints as its length (#576 W51).
       throw new Error(
-        `generated file name must be a plain basename, got ${JSON.stringify(file.name)}`,
+        `generated file name must be a plain basename, got one of ${file.name.length} character(s)`,
       );
     }
   }

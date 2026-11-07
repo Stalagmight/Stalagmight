@@ -3710,11 +3710,13 @@ mod tests {
                 local_path,
                 last_edit_at,
                 unlinked: false,
-            } => Some((project_id, local_path, last_edit_at)),
+                state_unknown,
+            } => Some((project_id, local_path, last_edit_at, state_unknown)),
             _ => None,
         };
-        let (project_id, local_path, last_edit_at) =
+        let (project_id, local_path, last_edit_at, state_unknown) =
             refusal.expect("expected the un-pushed-edits refusal");
+        assert!(!state_unknown, "the copy was read, and read as dirty");
         assert_eq!(project_id, GUARD_ID, "the refusal names the project");
         assert_eq!(
             local_path,
@@ -3737,6 +3739,7 @@ mod tests {
             local_path: "/cache/speleodb/p/project.stalx".to_owned(),
             last_edit_at: Some("2026-07-26T09:00:00Z".to_owned()),
             unlinked: false,
+            state_unknown: false,
         });
         assert_eq!(
             dto.action,
@@ -3751,6 +3754,39 @@ mod tests {
         assert_eq!(
             payload.last_edit_at.as_deref(),
             Some("2026-07-26T09:00:00Z")
+        );
+        assert!(!payload.state_unknown, "a copy read as dirty");
+        assert_eq!(
+            dto.message, "this project has local edits that were never pushed to SpeleoDB",
+            "the dirty refusal keeps its line"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_copy_crosses_ipc_as_the_same_routing_signal_flagged_unknown() {
+        // [#576 W53] The guard's other refusal routes exactly like the dirty one (the
+        // frontend still offers keep-local or take-remote), but the payload says the
+        // copy could not be read, and the message says so instead of claiming edits.
+        let dto = local_dto(SpeleoDbError::WouldDiscardLocalEdits {
+            project_id: GUARD_ID.to_owned(),
+            local_path: "/cache/speleodb/p/project.stalx".to_owned(),
+            last_edit_at: None,
+            unlinked: false,
+            state_unknown: true,
+        });
+        assert_eq!(
+            dto.action,
+            crate::speleodb::SpeleoDbAction::UnpushedLocalEdits
+        );
+        let payload = dto
+            .unpushed_local
+            .expect("the refusal carries what the choice needs");
+        assert_eq!(payload.local_path, "/cache/speleodb/p/project.stalx");
+        assert!(payload.state_unknown, "flagged as unreadable on the wire");
+        assert!(
+            dto.message.contains("could not be read") && !dto.message.contains("never pushed"),
+            "the message names what is known, not edits: {:?}",
+            dto.message
         );
     }
 
@@ -3839,8 +3875,14 @@ mod tests {
             .guard_local_edits(GUARD_ID, &unreadable)
             .expect_err("an unreadable local copy must not be treated as clean");
         assert!(
-            matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
-            "expected the un-pushed-edits refusal, got {err:?}"
+            matches!(
+                err,
+                SpeleoDbError::WouldDiscardLocalEdits {
+                    state_unknown: true,
+                    ..
+                }
+            ),
+            "expected the refusal for a copy that could not be read, got {err:?}"
         );
     }
 
@@ -9435,6 +9477,15 @@ mod tests {
             local_path: "/cache/project.stalx".to_owned(),
             last_edit_at: None,
             unlinked: false,
+            state_unknown: false,
+        };
+        // [#576 W53] The copy that could not be read may hold that work just as well.
+        let unreadable = SpeleoDbError::WouldDiscardLocalEdits {
+            project_id: REMOTE_ID.to_owned(),
+            local_path: "/cache/project.stalx".to_owned(),
+            last_edit_at: None,
+            unlinked: false,
+            state_unknown: true,
         };
         let corrupt = SpeleoDbError::Parse("not a zip".to_owned());
         let cases = [
@@ -9451,6 +9502,11 @@ mod tests {
             (
                 "the cache copy refusing",
                 super::unwind_keeps_lock(false, Some(&refusal)),
+                true,
+            ),
+            (
+                "the cache copy refusing as unreadable",
+                super::unwind_keeps_lock(false, Some(&unreadable)),
                 true,
             ),
             (

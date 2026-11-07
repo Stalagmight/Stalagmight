@@ -176,10 +176,16 @@ fn a_prepend_that_brings_an_orphan_comment_onto_a_station_shows_what_the_save_wr
 }
 
 /// The file holds one comment past the end of the section. A shot appended to
-/// the section gives it that station, and a comment set there in the app is
-/// stored under the station's canonical key beside the past-the-end one.
+/// the section gives it that station, and a comment set there in the app
+/// REPLACES the past-the-end one (#576 W30-NF1): the set removes every key
+/// that names the station, so the station shows, the save writes and the
+/// reopen shows exactly the new text. (Before W30-NF1 the set stored the new
+/// text under the canonical key beside the past-the-end one, and the two were
+/// joined. With the set replacing, this test no longer exercises the
+/// one-row-per-station display rule - the prepend test above does - #576
+/// RV19a-14.)
 #[test]
-fn a_comment_set_where_an_orphan_comment_landed_shows_what_the_save_writes() {
+fn a_comment_set_where_an_orphan_comment_landed_replaces_it() {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
     let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
@@ -209,9 +215,10 @@ fn a_comment_set_where_an_orphan_comment_landed_shows_what_the_save_writes() {
     println!("station {station:?} shows:   {shown:?}");
     println!("the save writes:        {written:?}");
     println!("the reopen shows:       {reopened:?}");
-    assert!(
-        written.is_some(),
-        "the save writes a comment for the station"
+    assert_eq!(
+        written.as_deref(),
+        Some("comment set in the app"),
+        "the save writes the new comment alone: it replaced the past-the-end one"
     );
     assert_eq!(
         shown, written,

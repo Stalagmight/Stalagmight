@@ -59,7 +59,7 @@ import {
   type CellVerdict,
 } from './lib/fuzzMatrixReport';
 import { RUN_START_ENV, runStartMs } from './lib/recorder';
-import { shareableErrorText } from './lib/shareableFailure';
+import { foldLocalPaths, shareableErrorText, shareableFailureText } from './lib/shareableFailure';
 import {
   BASE_PORT,
   INHERITED_ENV_BLOCKLIST,
@@ -117,13 +117,18 @@ interface RunResult {
   detail: string;
 }
 
+/**
+ * In the crash form (#576 W51): the headline as a `fatal:` line prints it,
+ * folded, and any further line counted - a message can carry a path the user gave.
+ */
 function bail(message: string): never {
-  process.stderr.write(`${message}\n${USAGE}\n`);
+  process.stderr.write(`${shareableFailureText(message, [], 'the rest of the message is not printed')}\n${USAGE}\n`);
   process.exit(2);
 }
 
+/** `KEY=value`, folded (#576 W51): an axis value is the user's, and a knob can take a path. */
 function axisLabel(axis: AxisValue | null): string {
-  return axis ? `${axis.key}=${axis.value}` : '';
+  return axis ? foldLocalPaths(`${axis.key}=${axis.value}`) : '';
 }
 
 const live = new Set<ChildProcess>();
@@ -148,7 +153,7 @@ function runOne(
   const { fixture, seed, axis } = cell;
   const startedAt = Date.now();
   process.stdout.write(
-    `${label} start ${fixture} seed=${seed}${axis ? ` ${axisLabel(axis)}` : ''} slot=${slot} ` +
+    `${label} start ${foldLocalPaths(fixture)} seed=${seed}${axis ? ` ${axisLabel(axis)}` : ''} slot=${slot} ` +
       `port=${BASE_PORT + slot * PORT_STRIDE} display=:${TOP_DISPLAY - slot}\n`,
   );
 
@@ -198,7 +203,8 @@ function runOne(
       const passed = verdict === 'pass';
 
       let headline = '';
-      if (spawnError) headline = `spawn failed: ${spawnError.message}`;
+      // Folded (#576 W51): a spawn error names the tsx binary in the checkout.
+      if (spawnError) headline = `spawn failed: ${foldLocalPaths(spawnError.message)}`;
       else if (timedOut) headline = `timed out after ${Math.round(CHILD_TIMEOUT_MS / 60000)}min (process group killed)`;
       else if (!passed && failIndex >= 0) {
         headline = failHeadline(outLines, failIndex);
@@ -229,7 +235,7 @@ function secs(ms: number): string {
 
 function printDone(result: RunResult, label: string): void {
   process.stdout.write(
-    `${label} ${result.verdict === 'lost' ? 'LOST ' : result.passed ? 'PASS ' : 'FAIL '} ${result.fixture} seed=${result.seed}` +
+    `${label} ${result.verdict === 'lost' ? 'LOST ' : result.passed ? 'PASS ' : 'FAIL '} ${foldLocalPaths(result.fixture)} seed=${result.seed}` +
       `${result.axis ? ` ${axisLabel(result.axis)}` : ''} ` +
       `(${secs(result.durationMs)})${result.passed ? '' : ` ${result.headline}`}\n`,
   );
@@ -239,9 +245,9 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
   const withAxis = results.some((r) => r.axis !== null);
   const rows = results.map((r) =>
     [
-      r.fixture,
+      foldLocalPaths(r.fixture),
       String(r.seed),
-      ...(withAxis ? [r.axis ? r.axis.value : ''] : []),
+      ...(withAxis ? [r.axis ? foldLocalPaths(r.axis.value) : ''] : []),
       r.verdict === 'lost' ? 'LOST' : r.passed ? 'PASS' : 'FAIL',
       secs(r.durationMs),
       r.headline,
@@ -262,10 +268,13 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
   if (failures.length) {
     process.stdout.write('\n=== repro commands ===\n');
     for (const failure of failures) {
-      const prefix = `STALAGMIGHT_FUZZ_FIXTURE=${failure.fixture}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}`;
+      // Folded (#576 W51): a fixture, and a `reproduce:` line Node printed itself
+      // in an uncaught error, can name a path under the home directory.
+      const fixture = foldLocalPaths(failure.fixture);
+      const prefix = `STALAGMIGHT_FUZZ_FIXTURE=${fixture}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}`;
       process.stdout.write(
-        `${failure.fixture} seed=${failure.seed}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}: ` +
-          `${failure.reproduce || `(no reproduce line) ${prefix} pnpm agent:scenario ${opts.scenario} --seed ${failure.seed}`}\n`,
+        `${fixture} seed=${failure.seed}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}: ` +
+          `${foldLocalPaths(failure.reproduce) || `(no reproduce line) ${prefix} pnpm agent:scenario ${opts.scenario} --seed ${failure.seed}`}\n`,
       );
       // ALWAYS, not just when there is no repro line. A matrix cell's child
       // process and its session are gone by the time anyone reads this, so a
@@ -322,7 +331,7 @@ function parseOrBail(argv: string[]): Options {
 async function main(): Promise<void> {
   const opts = parseOrBail(process.argv.slice(2));
   for (const note of opts.notes) process.stdout.write(`${note}\n`);
-  if (!fs.existsSync(TSX_BIN)) bail(`tsx not found at ${TSX_BIN}; run pnpm install`);
+  if (!fs.existsSync(TSX_BIN)) bail(`tsx not found at ${foldLocalPaths(TSX_BIN)}; run pnpm install`);
   const dropped = INHERITED_ENV_BLOCKLIST.filter((key) => process.env[key] !== undefined);
   if (dropped.length > 0) {
     process.stdout.write(
@@ -369,7 +378,9 @@ async function main(): Promise<void> {
     const first = cells[0]!;
     next = 1;
     const label = `[1/${cells.length}]`;
-    process.stdout.write(`${label} warm-up alone (rebuild needed: ${freshness.reasons.join('; ')})\n`);
+    // Folded (#576 W51), as session.ts folds its `Rebuilding:` line: a reason can
+    // name the checkout a build stamp came from.
+    process.stdout.write(`${label} warm-up alone (rebuild needed: ${foldLocalPaths(freshness.reasons.join('; '))})\n`);
     const warm = await runOne(first, 0, opts, label);
     results.push(warm);
     printDone(warm, label);

@@ -323,6 +323,8 @@ import {
   type UndoVariant,
 } from './undoPersistenceCoverage';
 import { TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
+import { foldLocalPaths } from '../lib/shareableFailure';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import { initModel, injectOracle, type StepResponse } from './undoRedoFuzzBridge';
 
 // The env knobs (`replayTracePath`, `traceOutPath`, `fuzzFixture`,
@@ -368,7 +370,9 @@ export const undoPersistenceFuzz: Scenario = {
   async run(ctx, { iterations }) {
     // Resolved once per RUN, not once per process - see the env-knob rule above.
     const fixture = fuzzFixture();
-    ctx.setMetric(`fixture:${fixture}`, 1);
+    // Folded (#576 W51): a metric key prints in the runner's PASS line
+    // unfolded, and the fixture is the knob as the user wrote it.
+    ctx.setMetric(`fixture:${foldLocalPaths(fixture)}`, 1);
     ctx.setMetric('plannedVariants', PLANNED_VARIANTS.length);
     const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-persist-fuzz-'));
 
@@ -766,7 +770,10 @@ async function runIteration(
       const error = res.commandError ?? res.actionError ?? 'unknown';
       note(`${tag} ${label} ${direction}[${consumed ?? '?'}] -> FAILED [${error}]`);
       fail(
-        `${direction} at depth ${cursor} failed outright (entry ${consumed ?? 'unknown'})`,
+        // The entry's commandType is the backend's word: it prints as a test
+        // id does, the words of the app's source and other text as its
+        // length (#576 W51).
+        `${direction} at depth ${cursor} failed outright (entry ${shareableTestId(consumed ?? 'unknown')})`,
         `  error: ${error}`,
       );
     }

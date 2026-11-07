@@ -451,7 +451,7 @@ export function scan(files, readFile) {
 
 export function main(root = REPO_ROOT, log = console.log, err = console.error) {
   if (!fs.existsSync(path.join(root, SCAN_DIR))) {
-    err(`check-e2e-no-sleep: ${path.join(root, SCAN_DIR)} not found (run from the repo root).`);
+    err(`check-e2e-no-sleep: ${SCAN_DIR}/ not found (run from the repo root).`);
     return 1;
   }
   const { files, symlinks } = walkFiles(root, SCAN_DIR, { exts: ['.ts', '.tsx'] });

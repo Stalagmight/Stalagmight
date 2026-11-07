@@ -56,6 +56,7 @@ type ArmedAction =
 function RosterRowActions({
   kind,
   id,
+  testKey,
   name,
   current,
   levels,
@@ -68,6 +69,10 @@ function RosterRowActions({
   kind: 'user' | 'team';
   /** Row identity: the email for a user, the team id for a team. */
   id: string;
+  /** What this row's test ids are keyed by: the position for a user, never the
+   *  email (a test id is printed where a run reports what it clicked; #576
+   *  W47-NF1), the team id for a team. */
+  testKey: string;
   /** Human-readable subject of this row, for the per-row aria labels. */
   name: string;
   /** The tier the SERVER currently has for this row. */
@@ -83,7 +88,7 @@ function RosterRowActions({
   const row = `${kind}:${id}`;
   const staged = armed?.kind === 'level' && armed.row === row ? armed.permission : null;
   const removeArmed = armed?.kind === 'remove' && armed.row === row;
-  const testId = (part: string) => `speleodb-collab-${kind}-${part}-${id}`;
+  const testId = (part: string) => `speleodb-collab-${kind}-${part}-${testKey}`;
 
   return (
     <>
@@ -341,8 +346,10 @@ export function SpeleoCollaboratorsTab() {
           </p>
 
           <ul className="space-y-1" data-testid="speleodb-collaborators-users">
-            {roster.users.map((u) => (
-              <li key={u.email} className="flex items-center gap-2" data-testid={`speleodb-collab-user-${u.email}`}>
+            {/* Rows are keyed by position in their test ids: a test id is printed where a
+                run reports what it clicked, and must not carry an email (#576 W47-NF1). */}
+            {roster.users.map((u, i) => (
+              <li key={u.email} className="flex items-center gap-2" data-testid={`speleodb-collab-user-${i}`}>
                 <span className="flex-1 min-w-0 truncate text-sm">
                   {u.email}
                   {u.is_self && (
@@ -353,6 +360,7 @@ export function SpeleoCollaboratorsTab() {
                   <RosterRowActions
                     kind="user"
                     id={u.email}
+                    testKey={String(i)}
                     name={u.email}
                     current={u.permission}
                     levels={USER_LEVELS}
@@ -400,6 +408,7 @@ export function SpeleoCollaboratorsTab() {
                     <RosterRowActions
                       kind="team"
                       id={g.team_id}
+                      testKey={g.team_id}
                       name={g.team_name}
                       current={g.permission}
                       levels={TEAM_LEVELS}

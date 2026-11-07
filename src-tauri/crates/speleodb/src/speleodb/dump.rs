@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use super::models::SpeleoDumpCandidate;
 use super::SpeleoDbError;
+use crate::models::zip_entry_bound::{entry_count_excess, EntryExcess, MAX_END_CANDIDATES};
 
 /// Hard ceiling on a single extracted dump entry. The `.stalx` is a SQLite DB;
 /// a few hundred MB is far past any real cave project but small enough that a
@@ -35,9 +36,11 @@ const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 ///
 /// A real dump is a `.stalx`, an `ariane.tml` and a handful of `misc/` files, so
 /// 10 000 is several orders of magnitude of headroom over anything legitimate while
-/// still bounding the walk. (The check necessarily lands AFTER `ZipArchive::new`,
-/// which parses the whole central directory eagerly - the `zip` crate exposes no
-/// hook to bound that - so it caps the amplification, not the parse itself.)
+/// still bounding the walk. `ZipArchive::new` parses the whole central directory
+/// eagerly, and the `zip` crate exposes no hook to bound that, so the limit is
+/// enforced on the raw bytes BEFORE that parse (#576 W52-4), by the check the `.tml`
+/// reader runs too ([`entry_count_excess`]); the count after it stays as defence in
+/// depth.
 const MAX_ENTRIES: usize = 10_000;
 
 /// How many openable entries a picker may be asked to present. [#258 review]
@@ -231,8 +234,28 @@ impl<'a> Dump<'a> {
     /// same way [`Self::extract_entry_capped`] is - building ten thousand real ZIP
     /// entries to exercise one comparison buys nothing).
     fn open_capped(zip_bytes: &'a [u8], max_entries: usize) -> Result<Self, SpeleoDbError> {
-        let archive = zip::ZipArchive::new(Cursor::new(zip_bytes))
+        let mut reader = Cursor::new(zip_bytes);
+        let excess = entry_count_excess(&mut reader, max_entries as u64)
+            .map_err(|e| SpeleoDbError::Parse(format!("dump could not be read: {e}")))?;
+        if let Some(excess) = excess {
+            let over = match excess {
+                EntryExcess::Declared(declared) => format!("declares {declared} entries"),
+                EntryExcess::DirectoryRecords(records) => {
+                    format!("holds {records} central-directory records")
+                }
+                EntryExcess::EndRecords => {
+                    format!("holds more than {MAX_END_CANDIDATES} ZIP64 end records or locators")
+                }
+            };
+            return Err(SpeleoDbError::Parse(format!(
+                "dump {over}, over the {max_entries}-entry limit"
+            )));
+        }
+        let archive = zip::ZipArchive::new(reader)
             .map_err(|e| SpeleoDbError::Parse(format!("dump is not a valid ZIP: {e}")))?;
+        // Defence in depth only: the check above bounded the parse, and this
+        // counts unique names (the `zip` crate keys its entries by name), so
+        // duplicates would slip past it.
         let entries = archive.len();
         if entries > max_entries {
             return Err(SpeleoDbError::Parse(format!(
@@ -442,6 +465,9 @@ impl<'a> Dump<'a> {
         // Best-effort: makes the rename itself durable. A failure here means the
         // content is on the device but the directory entry may not be, which is the
         // pre-existing behaviour and not worth failing an otherwise-complete replace.
+        // On Windows opening a directory as a file fails, so this is skipped there
+        // (its filesystem journals the rename anyway); a read-only handle is all a
+        // directory fsync takes on Unix (#576 RVF-d-1).
         if let Some(parent) = dest.parent() {
             if let Ok(dir) = std::fs::File::open(parent) {
                 let _ = dir.sync_all();
@@ -452,7 +478,11 @@ impl<'a> Dump<'a> {
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "unit test fixtures")]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "unit test fixtures, and the printed outcome is the evidence a run captures"
+)]
 mod tests {
     use super::{
         chosen_candidate, classify, download_temp_path, has_stalx_suffix, is_ariane_tml,
@@ -999,6 +1029,80 @@ mod tests {
                 "existing={existing}: dest is a real file, not the planted link"
             );
             assert_eq!(std::fs::read(&dest).expect("dest readable"), b"NEW");
+        }
+    }
+
+    /// A 22-byte end-of-central-directory record without a comment.
+    fn end_record(entries: u16, directory_len: u32, directory_at: u32) -> Vec<u8> {
+        let mut record = b"PK\x05\x06".to_vec();
+        record.extend_from_slice(&[0; 4]); // this disk, the directory's disk
+        record.extend_from_slice(&entries.to_le_bytes()); // on this disk
+        record.extend_from_slice(&entries.to_le_bytes()); // in all
+        record.extend_from_slice(&directory_len.to_le_bytes());
+        record.extend_from_slice(&directory_at.to_le_bytes());
+        record.extend_from_slice(&[0; 2]);
+        record
+    }
+
+    /// A ZIP64 end record declaring `entries`, then a locator pointing at
+    /// offset 0 (not at the record) and a 32-bit end record deferring to ZIP64.
+    fn zip64_end_away_from_the_locator(entries: u64) -> Vec<u8> {
+        let mut end = b"PK\x06\x06".to_vec();
+        end.extend_from_slice(&44u64.to_le_bytes()); // the record's size after this field
+        end.extend_from_slice(&[45, 0, 45, 0]); // made by / needs version 4.5
+        end.extend_from_slice(&[0; 8]); // this disk, the directory's disk
+        end.extend_from_slice(&entries.to_le_bytes()); // on this disk
+        end.extend_from_slice(&entries.to_le_bytes()); // in all
+        end.extend_from_slice(&[0; 16]); // the directory's size and offset
+        end.extend_from_slice(b"PK\x06\x07");
+        end.extend_from_slice(&[0; 4]); // the ZIP64 record's disk
+        end.extend_from_slice(&0u64.to_le_bytes()); // where it claims the record is
+        end.extend_from_slice(&1u32.to_le_bytes()); // disks in all
+        end.extend(end_record(u16::MAX, u32::MAX, u32::MAX));
+        end
+    }
+
+    /// [#576 W52-4] The entry limit holds before the ZIP parse, by the check
+    /// the `.tml` reader runs (`stalagmight_models::zip_entry_bound`). Checked
+    /// on `archive.len()` after `ZipArchive::new`, it came after the parse had
+    /// built a record per declared entry, and that counts unique names: six
+    /// directory records all named `f.txt` were parsed and then let through a
+    /// five-entry limit. And a ZIP64 end record the reader finds away from
+    /// where the locator points had it reserve room for every entry declared
+    /// before the parse failed on its own.
+    #[test]
+    fn the_entry_limit_holds_before_the_zip_parse() {
+        let one = make_zip(&[("f.txt", b"")]);
+        let end = one.len() - 22;
+        let directory_at = u32::from_le_bytes(one[end + 16..end + 20].try_into().expect("u32"));
+        let (local, record) = one[..end].split_at(directory_at as usize);
+        let mut same_name = local.to_vec();
+        same_name.extend(record.repeat(6));
+        same_name.extend(end_record(6, record.len() as u32 * 6, directory_at));
+        let parsed = zip::ZipArchive::new(std::io::Cursor::new(&same_name[..])).map(|a| a.len());
+        println!(
+            "premise: the ZIP reader parses six records named f.txt and keeps {parsed:?} name(s)"
+        );
+
+        let mut zip64 = vec![0u8; 400];
+        zip64.extend(zip64_end_away_from_the_locator(6));
+
+        for (label, bytes) in [
+            ("six records all named f.txt", &same_name),
+            (
+                "a ZIP64 end record away from the locator declaring 6",
+                &zip64,
+            ),
+        ] {
+            let outcome = Dump::open_capped(bytes, 5)
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+            println!("{label}: {outcome:?}");
+            let refused = outcome.expect_err("over the five-entry limit");
+            assert!(
+                refused.contains("declares 6 entries, over the 5-entry limit"),
+                "{label}: refused naming the count and the limit, got {refused:?}"
+            );
         }
     }
 }

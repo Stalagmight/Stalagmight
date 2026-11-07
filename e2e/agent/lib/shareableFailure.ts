@@ -52,12 +52,21 @@ export function foldLocalPaths(text: string): string {
   return out;
 }
 
-/** Lines the harness writes from its own vocabulary, kept whole. */
+/**
+ * Lines the harness writes from its own vocabulary, kept whole. Each shape is
+ * the harness's, not only its label (#576 RV19b-P2): a line of the app's text
+ * can start `trace: `, `reproduce: ` or `at ` too.
+ */
 const KEPT_LINES: readonly RegExp[] = [
-  /^\s*reproduce: /, // the command that re-runs it
-  /^\s*trace: /, // where the trace went
-  // A diff path - a code location in the data model: field names, indices.
-  /^\s*at [A-Za-z_]\w*(?:\[(?:\d+|\*)\]|\.(?:[A-Za-z_]\w*|\d+))*$/,
+  // The command that re-runs it: `pnpm agent:<runner>` or the MCP tool, after
+  // any environment it needs. What follows is the harness's own words, seeds
+  // and the fixture, which the corpus and path folds above already covered.
+  /^\s*reproduce: (?:[A-Z][A-Z0-9_]*=\S+ )*(?:pnpm agent:[a-z][\w:-]* |run_scenario\(")/,
+  // Where the trace went: one path, to a JSON trace.
+  /^\s*trace: \S+\.json$/,
+  // A diff path - a code location in the data model: field names (lower-case
+  // led, as the snapshot's are) and indices, a root and at least one step.
+  /^\s*at [a-z][A-Za-z0-9_]*(?:\[(?:\d+|\*)\]|\.(?:[a-z][A-Za-z0-9_]*|\d+))+$/,
   // The move tail's heading, a count. The headings the scenarios write
   // (`fuzzHarness.failureText`'s callers, `exportRoundtripFuzz`), and only
   // those: lower-case words are not enough, `last 3 moves into <a name>:` is
@@ -89,13 +98,38 @@ const APP_ERROR_HEADLINES: readonly RegExp[] = [
 /** What `shareableFailureText` leaves of the app's text in a headline. */
 const WITHHELD_TEXT = /^\(\d+ characters of the app's text withheld\)$/;
 
+/**
+ * What a shareable artifact keeps of the app's own `text`: its length. A failed
+ * journey check's observed detail is all app text, so the committed UAT record
+ * keeps it this way (#576 W39-NF1). Projecting twice changes nothing.
+ */
+export function withheldAppText(text: string): string {
+  return WITHHELD_TEXT.test(text) ? text : `(${text.length} characters of the app's text withheld)`;
+}
+
+/**
+ * A value read back from a file someone else may have written - a trace, a
+ * recorded call - as an error's headline prints it (#576 W51): a number, a
+ * boolean, `null` or `undefined` as itself, anything else as its type and size.
+ * Never its text: a forged copy chooses that, and the headline is pasted into
+ * issues.
+ */
+export function valueShape(value: unknown): string {
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (typeof value === 'string') return value === '' ? 'an empty string' : `a string of ${value.length} character(s)`;
+  if (Array.isArray(value)) return `an array of ${value.length} item(s)`;
+  return typeof value === 'object' ? 'an object' : `a ${typeof value}`;
+}
+
 /** `headline` with the app's text after an `APP_ERROR_HEADLINES` prefix replaced by its length. */
 function shareableHeadline(headline: string): string {
   for (const shape of APP_ERROR_HEADLINES) {
     const app = shape.exec(headline);
     if (!app) continue;
     const [, prefix = '', text = ''] = app;
-    return WITHHELD_TEXT.test(text) ? headline : `${prefix}: (${text.length} characters of the app's text withheld)`;
+    return `${prefix}: ${withheldAppText(text)}`;
   }
   return headline;
 }

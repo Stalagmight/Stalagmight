@@ -127,6 +127,7 @@ export default class TimingReporter {
     const path = process.env.PW_TIMING_OUTPUT || 'playwright-report/timing.json';
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(out, null, 2));
-    console.log(`\n[pw-timing] wrote ${merged.size} test timings to ${path}`);
+    // The env path is the caller's and can name their own directories (#576 W51).
+    console.log(`\n[pw-timing] wrote ${merged.size} test timings to ${process.env.PW_TIMING_OUTPUT ? '$PW_TIMING_OUTPUT' : 'playwright-report/timing.json'}`);
   }
 }

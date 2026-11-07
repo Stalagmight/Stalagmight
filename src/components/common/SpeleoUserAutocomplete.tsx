@@ -43,6 +43,7 @@ export function SpeleoUserAutocomplete({
   ariaLabel?: string;
   inputTestId: string;
   listTestId: string;
+  /** Each suggestion is `<prefix>-<position>`: a test id never carries the email (#576 RV19b-P1). */
   suggestionTestIdPrefix: string;
 }) {
   const [suggestions, setSuggestions] = useState<SpeleoUserSuggestion[]>([]);
@@ -120,7 +121,7 @@ export function SpeleoUserAutocomplete({
           className="absolute z-10 mt-1 w-full max-h-48 overflow-auto bg-background border border-border rounded shadow-lg"
           data-testid={listTestId}
         >
-          {suggestions.map((s) => (
+          {suggestions.map((s, i) => (
             <li key={s.email}>
               <button
                 type="button"
@@ -129,7 +130,7 @@ export function SpeleoUserAutocomplete({
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => pick(s.email)}
                 className="w-full text-left px-2 py-1 text-sm truncate hover:bg-surface"
-                data-testid={`${suggestionTestIdPrefix}-${s.email}`}
+                data-testid={`${suggestionTestIdPrefix}-${i}`}
               >
                 {s.label}
               </button>

@@ -46,7 +46,9 @@ const jsonlPath = fs.existsSync(input) && fs.statSync(input).isDirectory()
   ? path.join(input, 'actions.jsonl')
   : input;
 if (!fs.existsSync(jsonlPath)) {
-  process.stderr.write(`no actions.jsonl at ${jsonlPath}\n`);
+  // Not the path itself: it is the one the caller gave, which can sit outside
+  // the checkout and name the user's own directories (#576 W51).
+  process.stderr.write('no actions.jsonl at <sessionDirOrJsonl>\n');
   process.exit(1);
 }
 
@@ -253,7 +255,7 @@ push('');
 
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, lines.join('\n'));
-process.stdout.write(`wrote ${outPath} (${actions.length} actions)\n`);
+process.stdout.write(`wrote ${getFlag('--out') ? 'the --out file' : '<sessionDir>/replay.spec.ts'} (${actions.length} actions)\n`);
 process.stdout.write('note: no in-repo runner yet - see e2e/agent/replays/README.md\n');
 
 // Recorded params inlined into a one-line comment. JSON never contains a raw

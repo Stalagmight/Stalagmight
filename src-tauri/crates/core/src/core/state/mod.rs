@@ -364,7 +364,9 @@ mod rename_during_save_tests;
     clippy::unwrap_used,
     clippy::indexing_slicing,
     clippy::float_cmp,
-    reason = "test module: panics on a failed assumption are the point"
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
 )]
 mod reverse_tests;
 #[cfg(test)]
@@ -673,6 +675,14 @@ mod side_table_write_during_save_tests;
     reason = "test module: the printed keys are the evidence a run captures"
 )]
 mod sidecar_key_coverage_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              comment keys are the evidence a run captures"
+)]
+mod snapshot_restore_comment_key_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

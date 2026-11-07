@@ -1064,6 +1064,21 @@ describe('X9 export-mode invariants', () => {
     ).toThrow(/closure-adjusted/);
   });
 
+  it("prints a mode only when it is one of the store's own words (#576 W51)", () => {
+    const headline = (during: ModeSnapshot): string => {
+      try {
+        checkExportModeInvariants({ before: survey, during, after: survey }, REPRO);
+      } catch (err) {
+        return (err as Error).message.split('\n')[0] ?? '';
+      }
+      return '';
+    };
+    expect(headline({ ...exporting, appMode: 'plan' })).toBe('X9 entering Export mode left appMode at "plan"');
+    expect(headline({ ...exporting, appMode: 'qzCaveA' })).toBe('X9 entering Export mode left appMode at "7 characters"');
+    expect(headline({ ...exporting, geometryMode: 'qzCaveA' })).not.toContain('qzCaveA');
+    expect(headline({ ...exporting, geometryMode: 'measured' })).toContain('(geometryMode="measured")');
+  });
+
   it('EXEMPTS a project with no eligible closure from the geometry half', () => {
     // MapCanvas reverts closureAdjusted to measured there by design ("the
     // adjusted view is meaningless without an eligible closure"), so asserting

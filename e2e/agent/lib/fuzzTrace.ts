@@ -110,7 +110,7 @@ import { createHash } from 'crypto';
 
 import { shortId } from './crc32';
 import { detProbe } from './fuzzDeterminismProbe';
-import { shareableFailureText } from './shareableFailure';
+import { foldLocalPaths, shareableFailureText, valueShape } from './shareableFailure';
 
 /** Current trace schema. Bumped when a step shape changes incompatibly. */
 export const TRACE_VERSION = 4;
@@ -568,7 +568,9 @@ function recordedEnv(): Record<string, string> {
 
 function gitRev(): string {
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    // stderr discarded, as `build.ts`'s `gitHeadFor` does: the HEAD we could not
+    // read is 'unknown' below, and git's own error can name the checkout.
+    return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch {
     return 'unknown';
   }
@@ -788,7 +790,7 @@ export function writeTrace(filePath: string, trace: FuzzTrace): string {
     if (step.kind !== 'corpusFile') return;
     if (!CORPUS_ID.test(step.corpusId)) {
       throw new Error(
-        `refusing to write ${filePath}: step ${index + 1} names a corpus file by something ` +
+        `refusing to write ${foldLocalPaths(filePath)}: step ${index + 1} names a corpus file by something ` +
           `other than its id, and a trace is an artifact people attach to bug reports`,
       );
     }
@@ -797,7 +799,7 @@ export function writeTrace(filePath: string, trace: FuzzTrace): string {
     // exactly why it is refused at the same door as the id.
     if (step.corpusHash !== undefined && !CORPUS_HASH.test(step.corpusHash)) {
       throw new Error(
-        `refusing to write ${filePath}: step ${index + 1} carries a corpusHash that is not a ` +
+        `refusing to write ${foldLocalPaths(filePath)}: step ${index + 1} carries a corpusHash that is not a ` +
           `path hash (16 hex characters), and a trace is an artifact people attach to bug reports`,
       );
     }
@@ -805,7 +807,7 @@ export function writeTrace(filePath: string, trace: FuzzTrace): string {
   const leak = corpusNameLeakAt(trace.steps);
   if (leak >= 0) {
     throw new Error(
-      `refusing to write ${filePath}: step ${leak + 1} opens a file inside a corpus copy by its name ` +
+      `refusing to write ${foldLocalPaths(filePath)}: step ${leak + 1} opens a file inside a corpus copy by its name ` +
         `rather than as <dir>/${CORPUS_ENTRY_SEGMENT}, and a trace is an artifact people attach to bug reports`,
     );
   }
@@ -849,7 +851,7 @@ const INPUT_MODES = new Set(['type', 'select', 'check']);
 /** A field that must be a non-empty string. */
 function requireText(value: unknown, field: string, where: string): string {
   if (typeof value !== 'string' || value === '') {
-    throw new Error(`${where} has ${field} ${JSON.stringify(value)}; must be a non-empty string`);
+    throw new Error(`${where} has ${field} ${valueShape(value)}; must be a non-empty string`);
   }
   return value;
 }
@@ -878,10 +880,10 @@ function requireSessionRelative(value: unknown, field: string, where: string): v
     text.startsWith('\\') ||
     /^[A-Za-z]:/.test(text)
   ) {
-    throw new Error(`${where} has an absolute ${field} ${JSON.stringify(text)}; must be session-relative`);
+    throw new Error(`${where} has an absolute ${field} ${valueShape(text)}; must be session-relative`);
   }
   if (text.split(/[/\\]/).some((segment) => segment === '..')) {
-    throw new Error(`${where} has ${field} ${JSON.stringify(text)} escaping the session directory`);
+    throw new Error(`${where} has ${field} ${valueShape(text)} escaping the session directory`);
   }
 }
 
@@ -934,11 +936,11 @@ function requireCorpusHash(value: unknown, field: string, where: string): void {
  * every v2 `rel` becomes a path the replayer writes to or opens.
  */
 function validateStep(step: unknown, index: number, filePath: string): void {
-  const where = `trace ${filePath} step ${index + 1}`;
+  const where = `trace ${foldLocalPaths(filePath)} step ${index + 1}`;
   if (typeof step !== 'object' || step === null) throw new Error(`${where} is not an object`);
   const candidate = step as Partial<TraceStep> & Record<string, unknown>;
   if (typeof candidate.kind !== 'string' || !STEP_KINDS.has(candidate.kind)) {
-    throw new Error(`${where} has kind ${JSON.stringify(candidate.kind)}, which this build does not run`);
+    throw new Error(`${where} has kind ${valueShape(candidate.kind)}, which this build does not run`);
   }
   if (candidate.kind === 'mutate') {
     if (typeof candidate.action !== 'string') {
@@ -954,31 +956,31 @@ function validateStep(step: unknown, index: number, filePath: string): void {
   if (candidate.kind === 'undoTo' || candidate.kind === 'redoTo') {
     const steps = candidate.steps;
     if (typeof steps !== 'number' || !Number.isSafeInteger(steps) || steps < 1) {
-      throw new Error(`${where} jumps ${JSON.stringify(steps)} step(s); must be a positive integer`);
+      throw new Error(`${where} jumps ${valueShape(steps)} step(s); must be a positive integer`);
     }
   }
   if (candidate.kind === 'ui') {
     requireText(candidate.testid, 'testid', where);
     requireText(candidate.label, 'label', where);
     if (candidate.double !== undefined && typeof candidate.double !== 'boolean') {
-      throw new Error(`${where} has double ${JSON.stringify(candidate.double)}; must be a boolean`);
+      throw new Error(`${where} has double ${valueShape(candidate.double)}; must be a boolean`);
     }
   }
   if (candidate.kind === 'input') {
     requireText(candidate.testid, 'testid', where);
     requireText(candidate.label, 'label', where);
     if (typeof candidate.value !== 'string') {
-      throw new Error(`${where} has value ${JSON.stringify(candidate.value)}; must be a string`);
+      throw new Error(`${where} has value ${valueShape(candidate.value)}; must be a string`);
     }
     if (typeof candidate.mode !== 'string' || !INPUT_MODES.has(candidate.mode)) {
-      throw new Error(`${where} has input mode ${JSON.stringify(candidate.mode)}, which this build does not run`);
+      throw new Error(`${where} has input mode ${valueShape(candidate.mode)}, which this build does not run`);
     }
   }
   if (candidate.kind === 'fileDialog') {
     requireText(candidate.trigger, 'trigger', where);
     requireText(candidate.label, 'label', where);
     if (candidate.dialog !== 'open' && candidate.dialog !== 'save') {
-      throw new Error(`${where} has dialog ${JSON.stringify(candidate.dialog)}; must be 'open' or 'save'`);
+      throw new Error(`${where} has dialog ${valueShape(candidate.dialog)}; must be 'open' or 'save'`);
     }
     const rel = candidate.rel;
     if (rel !== null) {
@@ -1030,7 +1032,7 @@ function validateStep(step: unknown, index: number, filePath: string): void {
   if (candidate.kind === 'mapClick') {
     const at = candidate.lngLat;
     if (!Array.isArray(at) || at.length !== 2 || !at.every((value) => typeof value === 'number' && Number.isFinite(value))) {
-      throw new Error(`${where} has lngLat ${JSON.stringify(at)}; must be two finite numbers`);
+      throw new Error(`${where} has lngLat ${valueShape(at)}; must be two finite numbers`);
     }
     requireText(candidate.label, 'label', where);
   }
@@ -1039,7 +1041,7 @@ function validateStep(step: unknown, index: number, filePath: string): void {
     requireSessionRelative(candidate.rel, 'rel', where);
     requireText(candidate.label, 'label', where);
     if (typeof candidate.options !== 'object' || candidate.options === null) {
-      throw new Error(`${where} has export options ${JSON.stringify(candidate.options)}; must be an object`);
+      throw new Error(`${where} has export options ${valueShape(candidate.options)}; must be an object`);
     }
   }
   if (candidate.kind === 'oracle') {
@@ -1050,7 +1052,7 @@ function validateStep(step: unknown, index: number, filePath: string): void {
     requireText(candidate.oracle, 'oracle', where);
     requireText(candidate.label, 'label', where);
     if (typeof candidate.inputs !== 'object' || candidate.inputs === null) {
-      throw new Error(`${where} has oracle inputs ${JSON.stringify(candidate.inputs)}; must be an object`);
+      throw new Error(`${where} has oracle inputs ${valueShape(candidate.inputs)}; must be an object`);
     }
   }
   if (candidate.kind === 'reload') {
@@ -1059,7 +1061,7 @@ function validateStep(step: unknown, index: number, filePath: string): void {
     // takes the basename, so this is belt and braces - but it is the difference
     // between a rule and a coincidence of another module's implementation.
     if (/[/\\]/.test(fixture) || fixture === '..') {
-      throw new Error(`${where} names fixture ${JSON.stringify(fixture)}; must be a bare fixture name`);
+      throw new Error(`${where} names fixture ${valueShape(fixture)}; must be a bare fixture name`);
     }
   }
 }
@@ -1067,15 +1069,15 @@ function validateStep(step: unknown, index: number, filePath: string): void {
 export function readTrace(filePath: string): FuzzTrace {
   const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as FuzzTrace;
   if (parsed.v !== TRACE_VERSION) {
-    throw new Error(`trace ${filePath} is schema v${parsed.v}; this build reads v${TRACE_VERSION}`);
+    throw new Error(`trace ${foldLocalPaths(filePath)} is schema v${valueShape(parsed.v)}; this build reads v${TRACE_VERSION}`);
   }
-  if (!Array.isArray(parsed.steps)) throw new Error(`trace ${filePath} has no steps array`);
+  if (!Array.isArray(parsed.steps)) throw new Error(`trace ${foldLocalPaths(filePath)} has no steps array`);
   parsed.steps.forEach((step, index) => validateStep(step, index, filePath));
   // Same non-quoting rule as `requireCorpusId`: the value is a survey's name.
   const leak = corpusNameLeakAt(parsed.steps);
   if (leak >= 0) {
     throw new Error(
-      `trace ${filePath} step ${leak + 1} opens a file inside a corpus copy by its name. A trace names ` +
+      `trace ${foldLocalPaths(filePath)} step ${leak + 1} opens a file inside a corpus copy by its name. A trace names ` +
         `a corpus entry as <dir>/${CORPUS_ENTRY_SEGMENT}, never by its file name; re-record it on this build.`,
     );
   }

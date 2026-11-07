@@ -288,3 +288,64 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
     );
   });
 });
+
+/**
+ * [#576 W53] The backend refuses the same way when the cached copy is there but could
+ * not be read (a hot journal after a crash, a lock another program holds): it cannot
+ * rule out un-pushed edits. The prompt must say that, not tell the user about changes
+ * they may never have made, and must still offer the same two branches.
+ */
+describe('SpeleoUnpushedLocalDialog: a local copy that could not be read (#576 W53)', () => {
+  const UNREADABLE = {
+    project_id: 'p1',
+    local_path: '/cache/p1/project.stalx',
+    last_edit_at: null,
+    state_unknown: true,
+  };
+
+  beforeEach(() => {
+    useUIStore.setState({ dialogData: { summary: SUMMARY, unpushedLocal: UNREADABLE } });
+  });
+
+  it('says the copy could not be read and how to recover, without claiming changes', () => {
+    render(<SpeleoUnpushedLocalDialog />);
+    const text = screen.getByTestId('speleodb-unpushed-local-dialog').textContent ?? '';
+    expect(text).toContain('The copy on this computer could not be read');
+    expect(text).toContain('Cenote Azul');
+    expect(text).toContain('roll back to the last one that finished');
+    expect(text).not.toContain('Changes on this computer are not on SpeleoDB');
+    expect(text).not.toContain('that local copy has changes SpeleoDB has never seen');
+    expect(text).not.toContain('with your changes intact');
+  });
+
+  it('still opens local_path on keep-local, with NO SpeleoDB command', async () => {
+    render(<SpeleoUnpushedLocalDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-keep'));
+
+    await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1/project.stalx'));
+    expect(speleoCalls()).toEqual([]);
+  });
+
+  it('warns that taking the server copy replaces a copy it could not read', async () => {
+    render(<SpeleoUnpushedLocalDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+
+    expect(speleoCalls()).toEqual([]);
+    const warning =
+      screen.getByTestId('speleodb-unpushed-local-discard-warning').textContent ?? '';
+    expect(warning).toContain('Cenote Azul');
+    expect(warning).toContain('could not be read');
+    expect(warning).not.toContain('permanently deletes the changes made');
+  });
+
+  it('keeps the un-pushed wording for a copy that was read and found dirty', () => {
+    useUIStore.setState({
+      dialogData: { summary: SUMMARY, unpushedLocal: { ...UNPUSHED, state_unknown: false } },
+    });
+    render(<SpeleoUnpushedLocalDialog />);
+    const text = screen.getByTestId('speleodb-unpushed-local-dialog').textContent ?? '';
+    expect(text).toContain('Changes on this computer are not on SpeleoDB');
+    expect(text).toContain('that local copy has changes SpeleoDB has never seen');
+    expect(text).not.toContain('could not be read');
+  });
+});

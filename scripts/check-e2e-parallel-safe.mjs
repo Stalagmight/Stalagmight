@@ -318,7 +318,7 @@ export function checkPremise(configText) {
 
 export function main(root = REPO_ROOT, log = console.log, err = console.error) {
   if (!fs.existsSync(path.join(root, SCAN_DIR))) {
-    err(`check-e2e-parallel-safe: ${path.join(root, SCAN_DIR)} not found (run from the repo root).`);
+    err(`check-e2e-parallel-safe: ${SCAN_DIR}/ not found (run from the repo root).`);
     return 1;
   }
   const { files, symlinks } = walkFiles(root, SCAN_DIR, { exts: ['.ts', '.tsx'] });

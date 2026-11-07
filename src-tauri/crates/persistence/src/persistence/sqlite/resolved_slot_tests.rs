@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use chrono::Utc;
 
 use super::{Database, ResolvedWarning};
-use crate::models::{Project, SectionData};
+use crate::models::{Project, SectionData, FEATURE_ID_STRIDE};
 
 fn ignore(shot_uuid: Option<&str>, comment: &str) -> ResolvedWarning {
     ResolvedWarning {
@@ -94,8 +94,13 @@ fn a_position_keyed_ignore_still_replaces_the_position_keyed_one_in_its_slot() {
 
 /// [#576 FZ-PERSIST-2] The re-key a section reverse uses to keep position-keyed
 /// ignores on their shots: moves swap slots, leave a uuid-keyed row whose uuid
-/// names no shot of the section (an ignore of a deleted shot) where it is, and
-/// are all-or-nothing.
+/// names no shot of the section (an ignore of a deleted shot) where it is
+/// unless a moving row with its code lands on its slot, and are all-or-nothing.
+///
+/// [#576 RVF-d-3] Such a row in the way used to fail the whole move; it now
+/// moves out of the way, to the highest free slot of the section's window
+/// (`rekey_position_resolved_warnings`). The move that fails whole is one onto
+/// a slot a row that does not move holds: a position-keyed row of no `from`.
 #[test]
 fn position_keyed_ignores_move_with_their_shots_all_or_nothing() {
     let db = database_with_one_section();
@@ -152,12 +157,32 @@ fn position_keyed_ignores_move_with_their_shots_all_or_nothing() {
         "a swap trades the position-keyed rows and leaves the uuid-keyed one"
     );
 
-    // A move onto a slot whose ignore with the same code stays put fails whole.
+    // A move onto the slot of the deleted shot's ignore with the same code
+    // moves that ignore out of the way, to the top of the section's window.
     db.save_resolved_warning(&at(3, "B", None, "shot three"))
+        .unwrap();
+    let moved = db
+        .rekey_position_resolved_warnings(&[(0, 3, 1)], &shots)
+        .unwrap();
+    assert_eq!(moved, 1);
+    assert_eq!(
+        slots(&db),
+        vec![
+            row(1, "A", "shot two"),
+            row(1, "B", "shot three"),
+            row(2, "A", "shot one"),
+            row(FEATURE_ID_STRIDE - 1, "B", "kept"),
+        ],
+        "the position-keyed row lands and the deleted shot's ignore makes way"
+    );
+
+    // A move onto a slot whose ignore with the same code stays put (a
+    // position-keyed row of no move) fails whole.
+    db.save_resolved_warning(&at(3, "A", None, "shot three, A"))
         .unwrap();
     let before = slots(&db);
     assert!(db
-        .rekey_position_resolved_warnings(&[(0, 3, 1)], &shots)
+        .rekey_position_resolved_warnings(&[(0, 3, 2)], &shots)
         .is_err());
     assert_eq!(
         slots(&db),

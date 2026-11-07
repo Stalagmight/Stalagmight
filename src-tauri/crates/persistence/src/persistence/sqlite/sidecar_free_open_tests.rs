@@ -174,3 +174,59 @@ fn the_wal_mode_open_still_refuses_writes_and_leaves_a_live_writer_alone() {
     assert_eq!(after, with_writer, "the writer's sidecars stay");
     assert!(unchanged, "and its change is not checkpointed under it");
 }
+
+/// [#576 RV19a-7] A reader handed a SYMLINK to a WAL-mode file looks for the
+/// `-wal` where SQLite keeps it: beside the link's target. The check looked
+/// beside the link, saw nothing, and took the read-write `query_only` open,
+/// whose last close then checkpointed a crashed writer's committed frames into
+/// the target - a reader writing the file.
+#[cfg(unix)]
+#[test]
+fn a_reader_through_a_symlink_never_checkpoints_the_targets_wal() {
+    use rusqlite::config::DbConfig;
+
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir(dir.path().join("real")).unwrap();
+    let target = wal_mode_project(&dir.path().join("real"), "CaveA.stalx");
+    {
+        // A writer that "crashes": its committed frames stay in the -wal.
+        let writer = Connection::open(&target).unwrap();
+        writer
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+            .unwrap();
+        writer
+            .execute_batch(
+                "PRAGMA wal_autocheckpoint = 0;
+                 UPDATE project SET name = 'Renamed by the writer';",
+            )
+            .unwrap();
+    }
+    let link = dir.path().join("Linked.stalx");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let bytes = std::fs::read(&target).unwrap();
+    let beside_target = files_in(&dir.path().join("real"));
+
+    let name = Database::open_for_metadata(&link)
+        .unwrap()
+        .try_read_project_metadata()
+        .unwrap()
+        .map(|(name, _)| name);
+    let after = files_in(&dir.path().join("real"));
+    let unchanged = std::fs::read(&target).unwrap() == bytes;
+    println!(
+        "through a symlink: the read sees {name:?}; beside the target {beside_target:?} -> \
+         {after:?}; target bytes unchanged: {unchanged}"
+    );
+
+    assert_eq!(name.as_deref(), Some("Renamed by the writer"));
+    assert_eq!(
+        beside_target,
+        ["CaveA.stalx", "CaveA.stalx-shm", "CaveA.stalx-wal"],
+        "fixture: the crashed writer's sidecars beside the target"
+    );
+    assert!(
+        unchanged,
+        "the reader must not checkpoint the writer's frames into the target"
+    );
+    assert_eq!(after, beside_target, "and leaves the writer's -wal for it");
+}

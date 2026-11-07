@@ -21,6 +21,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { Scenario, ScenarioContext } from './framework';
 import { hasProject } from './common';
+import { withheldAppText } from '../lib/shareableFailure';
 import {
   buildActualMergeSet,
   buildExpectedMergeSet,
@@ -102,8 +103,9 @@ export const fractalStress: Scenario = {
     backendSections.forEach((backend, index) => {
       const expectedName = sections[index]?.name;
       if (backend.name !== expectedName) {
+        // The store's name is the app's text, so it prints as its length (#576 W51).
         throw new Error(
-          `section order diverged at index ${index}: store has "${backend.name}", ` +
+          `section order diverged at index ${index}: store has ${backend.name === null ? 'no name' : withheldAppText(backend.name)}, ` +
             `the generator made "${expectedName}" - the index->id map would lie`,
         );
       }

@@ -261,7 +261,12 @@ export default class GlobalSurveyLayer {
       this.contextMenuOpen = false;
       this.hideTooltip();
     };
-    this.map.getCanvas().addEventListener('mouseleave', this.boundMapLeave);
+    // `mouseout`, not `mouseleave`, as the survey map does (#576 W39-NF4,
+    // W41-NF2): the canvas has no children, so both fire on the same moves, but
+    // React enters a panel row (onMouseEnter) from this mouseout as it bubbles to
+    // the root, and mouseleave comes after that. Handled here, the map's hover is
+    // cleared before a row could set one, not after.
+    this.map.getCanvas().addEventListener('mouseout', this.boundMapLeave);
 
     // Context menu handler for right-click
     this.boundContextMenu = (e: MouseEvent) => {
@@ -563,7 +568,7 @@ export default class GlobalSurveyLayer {
       this.map.off('mousemove', this.boundMouseMove);
     }
     if (this.boundMapLeave) {
-      this.map.getCanvas().removeEventListener('mouseleave', this.boundMapLeave);
+      this.map.getCanvas().removeEventListener('mouseout', this.boundMapLeave);
     }
     if (this.boundContextMenu) {
       this.map.getCanvas().removeEventListener('contextmenu', this.boundContextMenu);

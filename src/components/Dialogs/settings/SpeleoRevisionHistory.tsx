@@ -151,9 +151,14 @@ export function SpeleoRevisionHistory() {
       // dirty bit can flip between render and click (an auto-save, a poll), so the
       // race still has to say the same thing the hint does rather than fall through
       // to the backend's raw line.
+      // [#576 W55 NF-W53-1] Unless the copy could not be read (`state_unknown`): then
+      // nothing is known about un-pushed changes, and the toast says that instead.
+      const refusal = unpushedLocalEdits(e);
       showToast(
-        unpushedLocalEdits(e)
-          ? t('speleodb.revisions.viewBlockedByUnpushed')
+        refusal
+          ? refusal.state_unknown === true
+            ? t('speleodb.revisions.viewBlockedByUnreadable')
+            : t('speleodb.revisions.viewBlockedByUnpushed')
           : humanizeSpeleoError(e, t('speleodb.restore.failed')),
         TOAST_KEYS.SPELEODB_RESTORE,
         'error',

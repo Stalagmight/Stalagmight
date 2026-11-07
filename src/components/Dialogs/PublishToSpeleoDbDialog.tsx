@@ -357,11 +357,13 @@ export default function PublishToSpeleoDbDialog() {
 
           {collaborators.length > 0 && (
             <ul className="space-y-1 mb-2" data-testid="publish-to-speleodb-dialog-collaborators">
-              {collaborators.map((c) => (
+              {/* Rows are keyed by position in their test ids: a test id is printed where a
+                  run reports what it clicked, and must not carry an email (#576 RV19b-P1). */}
+              {collaborators.map((c, i) => (
                 <li
                   key={c.email}
                   className="flex items-center gap-2"
-                  data-testid={`publish-to-speleodb-dialog-collab-${c.email}`}
+                  data-testid={`publish-to-speleodb-dialog-collab-${i}`}
                 >
                   <span className="flex-1 min-w-0 truncate text-sm">{c.email}</span>
                   <Select
@@ -371,14 +373,14 @@ export default function PublishToSpeleoDbDialog() {
                     options={USER_LEVELS.map((p) => ({ value: p, label: t(`speleodb.collaborators.levels.${p}`) }))}
                     size="sm"
                     aria-label={t('speleodb.collaborators.levelFor', { name: c.email })}
-                    data-testid={`publish-to-speleodb-dialog-collab-level-${c.email}`}
+                    data-testid={`publish-to-speleodb-dialog-collab-level-${i}`}
                   />
                   <button
                     type="button"
                     disabled={publishing}
                     onClick={() => removeCollaborator(c.email)}
                     className="text-error text-xs hover:underline disabled:opacity-60"
-                    data-testid={`publish-to-speleodb-dialog-collab-remove-${c.email}`}
+                    data-testid={`publish-to-speleodb-dialog-collab-remove-${i}`}
                   >
                     {t('speleodb.collaborators.remove')}
                   </button>

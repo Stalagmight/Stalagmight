@@ -120,7 +120,7 @@ export function scan(files, readFile, allowlist = ALLOWLIST) {
 
 export function main(root = REPO_ROOT, log = console.log, err = console.error) {
   if (!fs.existsSync(path.join(root, 'src'))) {
-    err(`check-vitest-ipc-mock: ${path.join(root, 'src')} not found (run from the repo root).`);
+    err('check-vitest-ipc-mock: src/ not found (run from the repo root).');
     return 1;
   }
   const files = [];

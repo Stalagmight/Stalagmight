@@ -412,7 +412,7 @@ function loadBaseline() {
     // clean diagnostic, not an uncaught SyntaxError. `--update` rebuilds from
     // scratch and never calls this, so it can always self-heal a corrupt file.
     console.error(
-      `check-rust-file-size: ${relPosix(BASELINE_PATH)} is not valid JSON (${e.message}). ` +
+      `check-rust-file-size: ${relPosix(BASELINE_PATH)} is not valid JSON (${e.code || e.message}). ` +
         `Fix it, or regenerate with: pnpm lint:rust-file-size --update`,
     );
     process.exit(1);
@@ -503,7 +503,7 @@ export function classify(rel, loc, base, limits = PROD_LIMITS) {
 function main() {
   const primary = path.join(TAURI_DIR, 'src');
   if (!fs.existsSync(primary)) {
-    console.error(`check-rust-file-size: ${primary} not found.`);
+    console.error(`check-rust-file-size: ${relPosix(primary)} not found.`);
     return 1;
   }
 
