@@ -42,6 +42,7 @@ vi.mock('../../utils/ipc');
 import TmlImportDialog from './TmlImportDialog';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { useProjectStore } from '../../store/projectStore';
+import { noteProjectSessionChanged } from '../../store/projectSession';
 import { useUIStore } from '../../store/uiStore';
 import { refusedBy } from '../../store/commandResult';
 import type { CommandResult, TmlFile, TmlShot, ValidationWarning } from '../../types/commands';
@@ -611,6 +612,27 @@ describe('TmlImportDialog discard failures (#411 fix round)', () => {
 
     expect(deleteProject).not.toHaveBeenCalled();
     expect(closeProject).not.toHaveBeenCalled();
+    expect(closeDialog).toHaveBeenCalled();
+    expect(importContext()).toBeNull();
+  });
+
+  // [#576 RVF-c-A2-4] Two copies of one project file share `created_at`: a switch to
+  // another copy (another file, a new session) is another project too.
+  it('bails when another copy of the project the prompt was raised for is open now', async () => {
+    openEmptyImportProject();
+    useProjectStore.setState({
+      databaseOpen: true,
+      project: emptyProject({ file_path: '/tmp/new.stalx' }),
+    });
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+    await userEvent.click(await screen.findByTestId('tml-import-cancel'));
+
+    noteProjectSessionChanged();
+    useProjectStore.setState({ project: emptyProject({ file_path: '/tmp/new copy.stalx' }) });
+    await userEvent.click(screen.getByTestId('tml-import-residue-discard'));
+
+    expect(deleteProject, 'deleted the copy the prompt was raised for').not.toHaveBeenCalled();
+    expect(closeProject, 'closed the other copy').not.toHaveBeenCalled();
     expect(closeDialog).toHaveBeenCalled();
     expect(importContext()).toBeNull();
   });

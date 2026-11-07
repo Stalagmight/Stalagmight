@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { isMoveCarryRefusal } from '../../store/moveCarry';
+import { issuedAgainstOf, lostProjectOf, type IssuedAgainst } from '../../store/projectIssue';
 import { useUIStore } from '../../store/uiStore';
 import { getErrorMessage } from '../../utils/ipc';
 import {
@@ -54,11 +55,12 @@ interface TmlImportDialogProps {
 interface DiscardTarget {
   /** null while the initial save is deferred - nothing on disk, so close, don't delete. */
   savedPath: string | null;
-  /** The project's `created_at`, compared at Discard so a project switch between
-   *  raising the prompt and clicking Discard cannot redirect the delete. Only part of
-   *  the identity the store's edit guard keeps (key, file and session: `lostProjectOf`,
-   *  `store/projectIssue.ts`, #576 RVF-a-1); the delete names `savedPath`, captured here too. */
-  createdAt: string | null;
+  /** The open project's identity, compared at Discard so a project switch between
+   *  raising the prompt and clicking Discard cannot redirect the delete: the one the
+   *  store's edit guard keeps (key, file and session: `lostProjectOf`,
+   *  `store/projectIssue.ts`), so a switch to another copy of the same project file is
+   *  a switch too (#576 RVF-a-1, RVF-c-A2-4). The delete names `savedPath`, captured here too. */
+  issued: IssuedAgainst;
 }
 
 /** Why the dialog is asking what to do with the just-created empty project. */
@@ -94,7 +96,7 @@ function discardTarget(): DiscardTarget {
   const { project, databaseOpen } = useProjectStore.getState();
   return {
     savedPath: databaseOpen ? (project?.file_path ?? null) : null,
-    createdAt: project?.created_at ?? null,
+    issued: issuedAgainstOf(project),
   };
 }
 
@@ -475,12 +477,16 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     // This is the app's only file-deleting API, so the "created for this import
     // and still empty" condition is re-checked HERE, at the click, not just when
     // the prompt was raised; and the project must still be the one the snapshot
-    // was taken from, so a switch in between cannot redirect the delete at
-    // another file. (`file_path` is no identity: the backend RESERVES one for a
-    // deferred project that has never been written.)
+    // was taken from, so a switch in between - to another copy of the same file
+    // too - cannot redirect the delete at another file. (`file_path` alone is no
+    // identity: the backend RESERVES one for a deferred project that has never
+    // been written, and a Save As moves it within the session.) Unlike the edit
+    // guard, a missing project on either side bails too.
+    const open = useProjectStore.getState().project;
     if (
       !isEmptyImportProject() ||
-      (useProjectStore.getState().project?.created_at ?? null) !== residue.project.createdAt
+      (open?.created_at ?? null) !== residue.project.issued.key ||
+      lostProjectOf(residue.project.issued, open)
     ) {
       // The flow is over here too: leaving `importContext` set would have the
       // next import that sets none (GPX/Compass/Walls) inherit 'new-project'
