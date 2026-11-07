@@ -126,9 +126,12 @@ async function main(): Promise<void> {
   if (determinism === 'two-sessions') {
     const { runDeterminismPair } = await import('./lib/fuzzDeterminismRun');
     const runAt = scenarioRunOptions(args, trace);
-    const log = (line: string): void => {
+    // Shareable progress lines (#576 W23-NF3), as on the one-session path; a
+    // replay's own lines also go to its session's actions.jsonl.
+    const print = (line: string): void => {
       process.stdout.write(`   . ${line}\n`);
     };
+    const log = progressLogger(print);
     let pairFailed = false;
     try {
       const metrics = await runDeterminismPair(
@@ -146,13 +149,28 @@ async function main(): Promise<void> {
           const ownStart = await own.start({ build: 'auto' });
           log(`replay ${replay}: session ${ownStart.state} (${ownStart.buildMode} build ${ownStart.buildAction})`);
           try {
-            const replayMetrics = await runScenario(args.name, own, { ...runAt, log });
+            const replayMetrics = await runScenario(args.name, own, {
+              ...runAt,
+              log: progressLogger(print, own.hasRecorder ? own.recorder : undefined),
+            });
             const sweep = await runSweep(own, newOracleState(), { full: true, recorder: own.recorder });
             const fatal = sweep.findings.filter((finding) => finding.severity === 'fatal');
             if (fatal.length > 0) {
-              throw new Error(`replay ${replay}: fatal findings=${redactCorpusText(JSON.stringify(fatal))}`);
+              // Counts per severity, kind and code only (#576 HFI2-F2); the
+              // findings' text is in this replay's actions.jsonl.
+              throw new Error(`replay ${replay}: fatal findings=${findingsSummary(fatal)}`);
             }
             return replayMetrics;
+          } catch (err) {
+            // The full text goes to this replay's actions.jsonl (#576 W21-NF1).
+            if (own.hasRecorder) {
+              own.recorder.event('scenario-failure', {
+                scenario: args.name,
+                replay,
+                message: err instanceof Error ? err.message : String(err),
+              });
+            }
+            throw err;
           } finally {
             await own.stop('scenario-run');
           }
@@ -164,9 +182,8 @@ async function main(): Promise<void> {
       );
     } catch (err) {
       pairFailed = true;
-      process.stdout.write(
-        `FAIL: ${args.name} threw:\n${redactCorpusText(err instanceof Error ? err.message : String(err))}\n`,
-      );
+      // The shareable form, as on the one-session path (#576 W21-NF1).
+      process.stdout.write(scenarioFailOutput(args.name, err));
     }
     process.exit(pairFailed ? 1 : 0);
   }
