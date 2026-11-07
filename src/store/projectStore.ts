@@ -21,6 +21,7 @@ import { useGlobalViewStore } from './globalViewStore';
 import { speleoState } from './speleoStoreHandle';
 import { emptyCommandResult, isProjectChangedRefusal, PROJECT_CHANGED_REFUSAL as PROJECT_CHANGED, refusedLocally, settleCommand, type CommandOutcome } from './commandResult';
 import { useExportStore } from './exportStore';
+import { useGasPlanStore } from './gasPlanStore';
 import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
 import { runSerialized } from './mutationQueue';
 import {
@@ -1081,6 +1082,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // answer was not applied. Read what the backend has, as a new session.
           if (get().project?.file_path !== path) {
             noteProjectSessionChanged();
+            // A new session gets the plan reset a load gets in `applyDisplaySettings`, which
+            // this branch never reaches (and `setView` below keeps the plan by design, #244).
+            // Before the await, as there: a pending anchor reply then finds its pins gone.
+            useGasPlanStore.getState().reset();
             await get().refreshProjectState();
           }
           // #270 (hardening): resolve the edit gate SYNCHRONOUSLY when nothing has
