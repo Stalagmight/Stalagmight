@@ -32,7 +32,7 @@ function signedInWithLogoutPending() {
  * (#576 SIGNOUT-PROMPT-D1 - the prompt has its own tests). */
 function logoutAnswers(report: unknown) {
   invokeIpcMock.mockImplementation(async (cmd: string) =>
-    cmd === 'speleodb_sign_out_locks' ? { releasable: [], unpushed: [] } : report,
+    cmd === 'speleodb_sign_out_locks' ? { releasable: [], unpushed: [], in_use_elsewhere: [] } : report,
   );
 }
 

@@ -257,7 +257,8 @@ fn lost_unread_then_another(line: &str) -> (u16, &'static str) {
 /// land (or the lock moved on): nothing is claimed and the mark is dropped, so a
 /// later poll that finds the lock ours (taken elsewhere on this account) reopens the
 /// gate over an ADOPTED lock (#576 SDB-ACCT-D1: a resumed claim, not this session's
-/// acquisition), and the quit hands that lock back.
+/// acquisition). [#576 SDB-2MACHINE-D1] No edit is made under it here, so the quit
+/// leaves it with the session that took it.
 #[test]
 fn a_poll_that_finds_another_holder_drops_the_mark() {
     let (_temp, state, seen, _listener) = start_lost_unread(lost_unread_then_another);
@@ -279,8 +280,8 @@ fn a_poll_that_finds_another_holder_drops_the_mark() {
     );
     assert_eq!(
         quit(&state, &seen, "another holder"),
-        1,
-        "the quit hands the adopted lock back (#576 SDB-QUIT-D1)"
+        0,
+        "the quit leaves an adopted lock with no edit made here held (#576 SDB-2MACHINE-D1)"
     );
 }
 
@@ -339,7 +340,8 @@ fn ours_then_lost_unread_then_ours(line: &str) -> (u16, &'static str) {
 /// after it were lost. The acquire is marked unconfirmed in this case too (W29 marked
 /// only an acquire whose probe saw the lock not ours), as the adopted kind: the poll
 /// settles it into an adopted claim - the release, not the authorship of a lock taken
-/// here - and the quit hands the lock back.
+/// here. [#576 SDB-2MACHINE-D1] With no edit made under it here, the quit leaves it
+/// held (it was the account's before this session's acquire).
 #[test]
 fn a_lost_acquire_over_the_accounts_own_lock_is_marked_too() {
     let (_temp, state, seen, _listener) = start_lost_unread(ours_then_lost_unread_then_ours);
@@ -364,5 +366,8 @@ fn a_lost_acquire_over_the_accounts_own_lock_is_marked_too() {
         "the poll adopts the lock, no authorship"
     );
     assert!(!still_marked, "the mark is settled");
-    assert_eq!(released, 1, "the quit hands the lock back");
+    assert_eq!(
+        released, 0,
+        "the quit leaves an adopted lock with no edit made here held"
+    );
 }

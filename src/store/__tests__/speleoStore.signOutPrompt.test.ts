@@ -82,15 +82,17 @@ const PATHS: Path[] = [
 
 /** The backend: `held` are the locks the sign-out would hand back; `leftHeld` what
  *  its release could not release; `unpushed` the locks it keeps for un-pushed edits
- *  (#576 SIGNOUT-PROMPT-D2). */
+ *  (#576 SIGNOUT-PROMPT-D2); `inUseElsewhere` the adopted locks with no edit made
+ *  here (#576 SDB-2MACHINE-D1). */
 function backend(
   path: Path,
   held: SpeleoLockLeftHeld[],
   leftHeld: SpeleoLockLeftHeld[] = [],
   unpushed: SpeleoLockLeftHeld[] = [],
+  inUseElsewhere: SpeleoLockLeftHeld[] = [],
 ) {
   invokeIpcMock.mockImplementation(async (cmd: string) => {
-    if (cmd === path.ask) return { releasable: held, unpushed };
+    if (cmd === path.ask) return { releasable: held, unpushed, in_use_elsewhere: inUseElsewhere };
     if (cmd === 'speleodb_logout') return { locks_left_held: leftHeld };
     if (cmd === 'speleodb_login')
       return {
@@ -100,7 +102,7 @@ function backend(
         storage: 'keychain',
         keychain: 'available',
         needs_storage_choice: false,
-        replaced_session: held.length + unpushed.length > 0,
+        replaced_session: held.length + unpushed.length + inUseElsewhere.length > 0,
         locks_left_held: leftHeld,
       };
     // The re-seed after a replaced session: never answers.
@@ -162,6 +164,7 @@ describe.each(PATHS)('sign-out prompt: $kind (#576 SIGNOUT-PROMPT-D1)', (path) =
       kind: path.kind,
       releasable: [CAVE_A, CAVE_B],
       unpushed: [],
+      in_use_elsewhere: [],
     });
     expect(callsTo(path.act)).toHaveLength(0);
     expect(useSpeleoStore.getState().session?.userEmail).toBe('old@x');
@@ -234,6 +237,7 @@ describe.each(PATHS)('sign-out prompt: $kind (#576 SIGNOUT-PROMPT-D1)', (path) =
       kind: path.kind,
       releasable: [CAVE_A],
       unpushed: [CAVE_C],
+      in_use_elsewhere: [],
     });
     expect(callsTo(path.act)).toHaveLength(0);
     useSpeleoStore.getState().answerSignOutPrompt('keep');
@@ -252,6 +256,7 @@ describe.each(PATHS)('sign-out prompt: $kind (#576 SIGNOUT-PROMPT-D1)', (path) =
       kind: path.kind,
       releasable: [],
       unpushed: [CAVE_C],
+      in_use_elsewhere: [],
     });
     expect(callsTo(path.act)).toHaveLength(0);
     // The dialog's "Sign out" answers `release`: the veto keeps the lock.
@@ -270,5 +275,38 @@ describe.each(PATHS)('sign-out prompt: $kind (#576 SIGNOUT-PROMPT-D1)', (path) =
     expect(result).toEqual({ ok: false, cancelled: true });
     expect(callsTo(path.act)).toHaveLength(0);
     expect(useSpeleoStore.getState().session?.userEmail).toBe('old@x');
+  });
+
+  // [#576 SDB-2MACHINE-D1] A lock adopted from the account with no edit made here is
+  // in use elsewhere: it alone still raises the prompt, and Keep leaves it held.
+  it('in use elsewhere only: still asks, and Keep signs out without releasing', async () => {
+    backend(path, [], [], [], [CAVE_B]);
+
+    const applied = useSpeleoStore.getState().applyPendingAuth('https://x/');
+    await vi.waitFor(() => expect(useSpeleoStore.getState().signOutPrompt).not.toBeNull());
+
+    expect(useSpeleoStore.getState().signOutPrompt).toEqual({
+      kind: path.kind,
+      releasable: [],
+      unpushed: [],
+      in_use_elsewhere: [CAVE_B],
+    });
+    expect(callsTo(path.act)).toHaveLength(0);
+    useSpeleoStore.getState().answerSignOutPrompt('keep');
+    expect((await applied).ok).toBe(true);
+    expect(callsTo(path.act)).toHaveLength(1);
+    expect(callsTo(path.act)[0]).toMatchObject({ releaseLocks: false });
+    expect(path.signedOut()).toBe(true);
+  });
+
+  it('in use elsewhere: Release and sign out releases it', async () => {
+    backend(path, [], [], [], [CAVE_B]);
+
+    const result = await applyAnswering('release');
+
+    expect(result.ok).toBe(true);
+    expect(callsTo(path.act)).toHaveLength(1);
+    expect(callsTo(path.act)[0]).toMatchObject({ releaseLocks: true });
+    expect(path.signedOut()).toBe(true);
   });
 });

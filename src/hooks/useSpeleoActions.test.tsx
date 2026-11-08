@@ -270,6 +270,27 @@ describe('useSpeleoActions - the release toast reflects whether anything was upl
       'success',
     );
   });
+
+  // [#576 SDB-2MACHINE-D1] An adopted lock with no edit made here is left with the
+  // session using it: say so, rather than "released", and still save to disk.
+  it('says the lock stays in use elsewhere when Done left it held', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    seedLink(false);
+    invokeIpcMock.mockResolvedValue(report({ kind: 'lock_held_elsewhere' }));
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done();
+    });
+
+    expect(showToast).toHaveBeenCalledWith(
+      'Editing finished here; the lock stays in use elsewhere.',
+      'speleodb-released',
+      'success',
+    );
+    expect(saveProjectMock).toHaveBeenCalled();
+  });
 });
 
 /**

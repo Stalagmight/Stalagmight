@@ -1773,6 +1773,11 @@ mod adopt_order {
 
             match self.speleodb_done(Some(ADOPT_COMMIT_MESSAGE.to_owned())) {
                 Ok(DoneResult::Released) => AdoptUpload::Pushed,
+                // [#576 SDB-2MACHINE-D1] Not reached in practice: the adoption's Done
+                // uploads (the copy is dirty by construction), and an upload is an
+                // edit made under the lock, so even an adopted lock is released. Kept
+                // as the arm it was before #576 W72: landed, the lock left held.
+                Ok(DoneResult::LockHeldElsewhere) => AdoptUpload::PushedLockHeld,
                 Ok(DoneResult::DivergenceNeeded) => AdoptUpload::Diverged,
                 // Both mean the same thing to a caller with nothing left to retry with:
                 // the bytes did not land. The lock stays held, by `speleodb_done`'s own

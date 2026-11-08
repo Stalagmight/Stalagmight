@@ -132,6 +132,17 @@ pub(super) struct LockClaim {
     /// on a second computer while the first is still editing under it, and that
     /// session must not explain the first one's commits away as its own push.
     resumed: bool,
+    /// [#576 SDB-2MACHINE-D1] Whether this session made an edit under this lock: a
+    /// mutation accepted while editing (the survey, its settings), or a push of the
+    /// copy's edits the server confirmed. In memory only, like the claim.
+    ///
+    /// Read for a resumed (ADOPTED) claim only: close, switch, quit and Done hand an
+    /// adopted lock back once this is set, and otherwise leave it held. A lock this
+    /// session merely saw on the account (the status poll's reopen while another
+    /// computer of the account edits under it) is that other session's to release.
+    /// Carried over when the same account's claim on the same project is recorded
+    /// again (the in-place reloads), and gone with the claim.
+    edited: bool,
 }
 
 /// Why a claim's lock is being held back on purpose (see [`LockClaim::kept`]).
@@ -157,6 +168,7 @@ impl LockClaim {
             email,
             kept: None,
             resumed: false,
+            edited: false,
         }
     }
 
@@ -172,6 +184,23 @@ impl LockClaim {
     /// Whether this claim records a resumed lock (see [`LockClaim::resumed`]).
     pub(super) fn is_resumed(&self) -> bool {
         self.resumed
+    }
+
+    /// [#576 SDB-2MACHINE-D1] Record that this session made an edit under the lock
+    /// (see [`LockClaim::edited`]).
+    pub(super) fn note_edited(&mut self) {
+        self.edited = true;
+    }
+
+    /// Whether this session made an edit under the lock (see [`LockClaim::edited`]).
+    pub(super) fn is_edited(&self) -> bool {
+        self.edited
+    }
+
+    /// [#576 SDB-2MACHINE-D1] An ADOPTED lock with no edit made here: the one claim
+    /// close, switch, quit and Done leave held (see [`LockClaim::edited`]).
+    pub(super) fn is_unused_adoption(&self) -> bool {
+        self.resumed && !self.edited
     }
 
     /// Whether this lock is deliberately held back (see [`LockClaim::kept`]).
@@ -426,6 +455,28 @@ impl AppState {
         self.speleodb_session_generation.load(Ordering::SeqCst)
     }
 
+    /// [#576 SDB-2MACHINE-D1, RV4-R-S1] Record that a Done finished editing the open
+    /// project HERE and left the account's lock held elsewhere, for this session
+    /// generation only (see `AppState::speleodb_finished_here`).
+    pub(super) fn speleodb_mark_finished_here(&self) {
+        let generation = self.speleodb_session_generation();
+        self.speleodb_finished_here
+            .store(generation.wrapping_add(1), Ordering::SeqCst);
+    }
+
+    /// Whether a Done finished editing the open project here in the CURRENT
+    /// session generation - the inherited-lock reopen must then leave the gate shut.
+    pub(super) fn speleodb_finished_here(&self) -> bool {
+        let generation = self.speleodb_session_generation();
+        self.speleodb_finished_here.load(Ordering::SeqCst) == generation.wrapping_add(1)
+    }
+
+    /// Drop the "finished here" mark: an explicit Start editing is the user asking
+    /// to edit here again.
+    pub(super) fn speleodb_clear_finished_here(&self) {
+        self.speleodb_finished_here.store(0, Ordering::SeqCst);
+    }
+
     /// [#576 NF-W4C-3-EDIT] Shut the edit gate for an Ariane adoption's hand-over,
     /// in the current session generation (see `AppState::speleodb_adoption_gate`).
     /// Called inside the adoption's `command_lock` span, so no edit can land between
@@ -566,6 +617,9 @@ impl AppState {
             // still never hands it back. A claim this session already holds on the
             // project is kept as it is: a second Start Editing over a lock taken here
             // finds it "ours" too, and must not downgrade that claim to an adopted one.
+            // [#576 SDB-2MACHINE-D1] Close, switch, quit and Done hand an adopted lock
+            // back only once this session has made an edit under it
+            // (`LockClaim::edited`); until then it is another session's of the account.
             if !self.speleodb_lock_acquired_here(project_id) {
                 self.speleodb_note_resumed_lock(project_id);
             }
@@ -736,6 +790,10 @@ impl AppState {
     /// claim (resumed: the release, not the authorship shortcut), so the quit and
     /// every other release verb hand it back. It used to open the gate with no
     /// claim, and the silent releases, which read the claim, left the lock held.
+    /// [#576 SDB-2MACHINE-D1] Close, switch, quit and Done hand it back once an edit
+    /// has been made under it here; until then it is left with the session of the
+    /// account that is using it. After a Done that finished here so, the reopen
+    /// stays shut for the rest of the session (`speleodb_finished_here`).
     pub(super) fn speleodb_reopen_gate_for_inherited_lock(
         &self,
         link: &crate::models::SpeleoLink,
@@ -749,6 +807,13 @@ impl AppState {
         // the previous account's token and opened the edit gate for the new one -
         // free to mutate a project whose mutex their credentials do not hold.
         let lock_ops = self.speleodb_lock_ops_guard();
+        // [#576 SDB-2MACHINE-D1, RV4-R-S1] A Done finished editing here and left the
+        // adopted lock with the account (no edit was made under it here): that edit
+        // session is over, whatever the server says about the account's lock. Only a
+        // new open or an explicit Start editing resumes it.
+        if self.speleodb_finished_here() {
+            return false;
+        }
         // One read, so the holder comparison below cannot pair one account's
         // endpoint with another's email (`speleodb_active_account`).
         let Ok((endpoint, token, me)) = self.speleodb_active_account() else {
@@ -1141,9 +1206,16 @@ impl AppState {
                 // Unusable ids first, whoever they belong to: one that can never
                 // be joined into a URL can never be released either, so clearing
                 // is its only safe end and nobody's later sign-in helps.
+                // [#576 SDB-2MACHINE-D1] So is an ADOPTED claim no edit was made
+                // under (not kept on purpose): its lock is the session's of the
+                // account that is using it, so it ends with this session and is
+                // never handed back from here. A close usually ends it already (the
+                // silent release's gate); this catches one stranded with the gate
+                // shut, as a 401 drop leaves it.
                 let mut session = self.speleodb.lock();
                 session.locks_acquired_here.retain(|claim| {
                     super::speleodb::validate_project_id(&claim.project_id).is_ok()
+                        && (claim.is_kept() || !claim.is_unused_adoption())
                 });
                 if session.locks_acquired_here.is_empty() {
                     return;

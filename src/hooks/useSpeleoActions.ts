@@ -544,6 +544,15 @@ export function useSpeleoActions(): SpeleoActions {
             noteNoAnchorIfNeeded();
             await flushToDiskAfterPush();
             break;
+          case 'lock_held_elsewhere':
+            // [#576 SDB-2MACHINE-D1] Finished here with nothing to upload, but the lock
+            // was adopted from the account (another computer or session holds it) and
+            // no edit was made under it here, so it is left with that session - say so,
+            // rather than "released".
+            showToast(t('speleodb.editBar.toasts.lockHeldElsewhere'), TOAST_KEYS.SPELEODB_RELEASED, 'success');
+            noteNoAnchorIfNeeded();
+            await flushToDiskAfterPush();
+            break;
           case 'push_unconfirmed':
             // #200 seam: applyDone raised the push_unconfirmed banner.
             break;

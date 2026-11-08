@@ -799,6 +799,12 @@ pub enum DoneResult {
     /// AND the lock are retained so a later retry recovers via ancestry (#193) -
     /// no edits are lost.
     PushUnconfirmed,
+    /// [#576 SDB-2MACHINE-D1] Nothing to push, and editing has ended HERE, but the
+    /// write lock was NOT released: this session ADOPTED it from the account (another
+    /// Stalagmight session, another computer, the website) and made no edit under
+    /// it, so it is left with the session that is using it. Like [`Self::Released`]
+    /// nothing local is left un-pushed; unlike it, the account still holds the lock.
+    LockHeldElsewhere,
 }
 
 /// Outcome of `speleodb_update` (#197): a read-only refresh of the open project

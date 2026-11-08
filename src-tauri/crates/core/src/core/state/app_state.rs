@@ -264,6 +264,17 @@ pub struct AppState {
     /// [`Self::adjusted_cache_generation`] / `unrecognised_shot_kinds`, applied to
     /// the one slot that never had it. See `core::state::speleodb_session`.
     pub(super) speleodb_session_generation: AtomicU64,
+    /// [#576 SDB-2MACHINE-D1, RV4-R-S1] The session generation, plus one, in which a
+    /// Done finished editing HERE while the account's lock stayed held elsewhere
+    /// (`DoneResult::LockHeldElsewhere`: an adopted lock no edit was made under);
+    /// 0 for none. One generation is one open project, so the generation names the
+    /// project too. The status poll's inherited-lock reopen honours it: the poll
+    /// cannot otherwise tell "finished here by Done" from "the account holds the
+    /// lock", and would switch editing back on under the other session's lock.
+    /// Lapses at the next session boundary (a new open, a close, a logout bump the
+    /// generation); an explicit Start editing clears it. Transient, never persisted;
+    /// an atomic, so it is no lock cell.
+    pub(super) speleodb_finished_here: AtomicU64,
     /// [#576 W75-NF7] The open file's TREE generation: bumped when a SpeleoDB pull
     /// replaced the file of the open project in place (`replace_cache_stalx_*`, the
     /// pull, the fast-forward and the revision swap), never by an edit or a save.
@@ -401,6 +412,7 @@ impl AppState {
             adjusted_cache: RecoveringMutex::with_monitor("adjusted_cache", None, &poison),
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
+            speleodb_finished_here: AtomicU64::new(0),
             tree_generation: AtomicU64::new(0),
             speleodb_adoption_gate: AtomicU64::new(0),
             #[cfg(test)]
@@ -731,22 +743,36 @@ impl AppState {
     /// (Sync/Release) does. `last_edit_at` is refreshed on EVERY accepted
     /// mutation (not idempotent) because guardrail-7 compares it to push-start to
     /// decide whether a landed-by-ancestry push may clear the dirty bit.
+    ///
+    /// [#576 SDB-2MACHINE-D1] An edit of a remote project is also an edit made under
+    /// its lock: an adopted lock is this session's to hand back from then on
+    /// (`AppState::speleodb_note_edit_under_open_lock`, after the database guard
+    /// drops).
     pub(super) fn mark_remote_dirty(&self) {
-        let db_guard = self.database.lock();
-        let Some(db) = db_guard.as_ref() else {
-            return; // no open database (e.g. unsaved project) - nothing to stamp
+        let remote = {
+            let db_guard = self.database.lock();
+            let Some(db) = db_guard.as_ref() else {
+                return; // no open database (e.g. unsaved project) - nothing to stamp
+            };
+            // One targeted UPDATE: set the dirty bit + refresh last_edit_at (the g7
+            // push-start comparison needs the LATEST edit time, so this runs every edit,
+            // not idempotently). A local-only project has no link row → 0 rows → no-op,
+            // so this stays cheap on the hot edit path (no SELECT, no DDL, no full upsert).
+            let now = chrono::Utc::now().to_rfc3339();
+            match db.touch_speleo_link_dirty(&now) {
+                Ok(remote) => remote,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "flip SpeleoDB dirty bit after a remote edit",
+                        "mark_remote_dirty: failed to persist has_unpushed_edits"
+                    );
+                    false
+                }
+            }
         };
-        // One targeted UPDATE: set the dirty bit + refresh last_edit_at (the g7
-        // push-start comparison needs the LATEST edit time, so this runs every edit,
-        // not idempotently). A local-only project has no link row → 0 rows → no-op,
-        // so this stays cheap on the hot edit path (no SELECT, no DDL, no full upsert).
-        let now = chrono::Utc::now().to_rfc3339();
-        if let Err(e) = db.touch_speleo_link_dirty(&now) {
-            tracing::warn!(
-                error = %e,
-                purpose = "flip SpeleoDB dirty bit after a remote edit",
-                "mark_remote_dirty: failed to persist has_unpushed_edits"
-            );
+        if remote {
+            self.speleodb_note_edit_under_open_lock();
         }
     }
 

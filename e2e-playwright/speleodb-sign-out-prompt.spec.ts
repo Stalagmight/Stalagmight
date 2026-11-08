@@ -14,7 +14,7 @@ import type { SpeleoSignOutLocks } from '../src/types/ipc/SpeleoSignOutLocks';
  * account panel shows the form while signed in once a sign-in is staged). The mock
  * answers which locks are held through an override; the backend half (what each
  * answer releases) is pinned in Rust (sdb_silent_release_claim_tests,
- * sdb_login_handback_tests).
+ * sdb_login_handback_tests, sdb_two_machine_tests).
  */
 
 const OLD = 'old@example.invalid';
@@ -68,9 +68,11 @@ interface Backend {
   leftHeld?: SpeleoLockLeftHeld[];
   /** [#576 SIGNOUT-PROMPT-D2] The locks the sign-out keeps for un-pushed edits. */
   unpushed?: SpeleoLockLeftHeld[];
+  /** [#576 SDB-2MACHINE-D1] Adopted locks with no edit made here: in use elsewhere. */
+  inUseElsewhere?: SpeleoLockLeftHeld[];
 }
 
-const NONE: SpeleoSignOutLocks = { releasable: [], unpushed: [] };
+const NONE: SpeleoSignOutLocks = { releasable: [], unpushed: [], in_use_elsewhere: [] };
 
 /** The command each path signs out with. */
 const ACT: Record<Kind, 'speleodb_logout' | 'speleodb_login'> = {
@@ -84,7 +86,11 @@ const ACT: Record<Kind, 'speleodb_logout' | 'speleodb_login'> = {
  */
 async function stageAndSave(page: Page, kind: Kind, backend: Backend): Promise<void> {
   const leftHeld = backend.leftHeld ?? [];
-  const locks: SpeleoSignOutLocks = { releasable: backend.held, unpushed: backend.unpushed ?? [] };
+  const locks: SpeleoSignOutLocks = {
+    releasable: backend.held,
+    unpushed: backend.unpushed ?? [],
+    in_use_elsewhere: backend.inUseElsewhere ?? [],
+  };
   await setIpcOverrides(page, {
     speleodb_session: SIGNED_IN,
     speleodb_sign_out_locks: kind === 'logout' ? locks : NONE,
@@ -292,6 +298,50 @@ for (const kind of ['logout', 'switch'] as const) {
       expect(calls).toHaveLength(1);
       expect(calls[0]!.args).toMatchObject({ releaseLocks: true });
       expect(await sessionEmail(page)).toBe(signedOutAs);
+    });
+
+    // [#576 SDB-2MACHINE-D1] A lock adopted from the account with no edit made here
+    // (another computer edits under it) is named apart, as in use elsewhere: Keep
+    // leaves it with that session, and Release still hands it back.
+    test('in use elsewhere: named apart, kept by Keep, released only by Release', async ({
+      page,
+    }, testInfo) => {
+      await stageAndSave(page, kind, { held: [], inUseElsewhere: [CAVE_B] });
+      try {
+        await expect(page.getByTestId(PROMPT)).toBeVisible();
+        await expect(page.getByTestId('speleodb-sign-out-in-use-elsewhere')).toHaveText(
+          'CaveB is in use elsewhere and no edits were made here; its lock stays held unless you release it.',
+        );
+        await expect(page.getByTestId('speleodb-sign-out-message')).toBeHidden();
+        await expect(page.getByTestId('speleodb-sign-out-keep')).toHaveText('Keep lock and sign out');
+        await expect(page.getByTestId('speleodb-sign-out-release')).toHaveText('Release and sign out');
+        await expect(page.getByTestId('speleodb-sign-out-ok')).toBeHidden();
+        expect(await getIpcCalls(page, ACT[kind])).toEqual([]);
+      } finally {
+        await shoot(page, testInfo, `sign-out-prompt-in-use-elsewhere-${kind}.png`);
+      }
+      await page.getByTestId('speleodb-sign-out-keep').click();
+      await expect(page.getByTestId('settings-dialog')).toBeHidden();
+      const calls = await getIpcCalls(page, ACT[kind]);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.args).toMatchObject({ releaseLocks: false });
+      expect(await sessionEmail(page)).toBe(signedOutAs);
+    });
+
+    test('in use elsewhere beside a releasable lock: both named, Release releases', async ({ page }) => {
+      await stageAndSave(page, kind, { held: [CAVE_A], inUseElsewhere: [CAVE_B] });
+      await expect(page.getByTestId('speleodb-sign-out-message')).toHaveText(
+        'You hold the lock on CaveA. Release it before signing out?',
+      );
+      await expect(page.getByTestId('speleodb-sign-out-in-use-elsewhere')).toHaveText(
+        'CaveB is in use elsewhere and no edits were made here; its lock stays held unless you release it.',
+      );
+      await expect(page.getByTestId('speleodb-sign-out-keep')).toHaveText('Keep locks and sign out');
+      await page.getByTestId('speleodb-sign-out-release').click();
+      await expect(page.getByTestId('settings-dialog')).toBeHidden();
+      const calls = await getIpcCalls(page, ACT[kind]);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.args).toMatchObject({ releaseLocks: true });
     });
   });
 }

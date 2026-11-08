@@ -171,7 +171,8 @@ user's, however they acquired it - in another Stalagmight session, on another
 machine, or on the SpeleoDB website. How the lock was acquired is the user's
 responsibility. A session that finds the account holding the lock of the project it
 has open edits under it (the status poll's inherited-lock reopen, or Start editing),
-and that lock is then released like one this session took. Editing the same project
+and that lock is then released like one this session took - once an edit has been
+made under it here (#576 SDB-2MACHINE-D1, below). Editing the same project
 from two sessions of one account at the same time is the user's call; the guard
 below keeps the other session's commits from being read as our own push, so they
 show up as a divergence rather than being uploaded over.
@@ -188,8 +189,10 @@ middle of a push whose reply was lost, your own landed upload also reads as a
 conflict (the claim is in memory only); resolve it with "Take the SpeleoDB
 version" or "Save my version as a local copy".
 
-**Release (#576 SDB-ACCT-D1, SDB-QUIT-D1):** every release hands back the lock the
-session edits under, whether this session took it or ADOPTED it from the account:
+**Release (#576 SDB-ACCT-D1, SDB-QUIT-D1, SDB-2MACHINE-D1):** every release hands
+back the lock the session edits under, whether this session took it or ADOPTED it
+from the account (an adopted one once an edit has been made under it here, see the
+two-computer rule below):
 Done, close, project switch, logout, a sign-in that replaces the session, deleting
 the open project, and the quit - an update restart included: it exits through the
 same `release_held_lock_on_exit` (`RunEvent::ExitRequested`, or on Windows the
@@ -197,14 +200,40 @@ updater's `on_before_exit` hook, which exits the process itself), so it releases
 under the same rule, once (#579). When the status poll's inherited-lock reopen or a
 Start editing (plain, or the held-lock prompt's "Continue editing") opens the gate
 over a lock the account already held, the session records an adopted claim for it,
-and Done and the silent releases (close, switch, logout, replacing sign-in, quit)
-release whenever the edit gate is open (not force-editing), claim or not; the
-un-pushed-edits veto still keeps a lock over edits not on the server (Done pushes
-them first). A revision View is refused while the gate is open over such a lock as
+and Done and the silent releases (close, switch, quit) release whenever the edit gate
+is open (not force-editing), claim or not - except over an adopted claim with no edit
+made here (below) - and so do logout and a replacing sign-in when the sign-out prompt
+is answered "Release and sign out"; the un-pushed-edits veto still keeps a lock over
+edits not on the server (Done pushes them first).
+
+**Two computers on one account (#576 SDB-2MACHINE-D1):** computer A edits under the
+lock, and on computer B the status poll sees the account's lock and adopts it. Close,
+switch, quit and Done on B hand an ADOPTED lock back only once B has made an edit
+under it - a survey or settings mutation accepted while editing, or an upload of the
+copy's edits the server confirmed (`LockClaim::edited`, in memory; the gate's
+`speleodb_lock_adopted_unused`). A lock B merely saw on the account stays held, so A
+keeps it: no release request, and the claim ends with B's session, so the
+stranded-claim janitor does not hand it back after a close either (it drops such a
+claim unreleased, one a 401 drop stranded behind a shut gate included). Done there
+finishes editing on B and answers `LockHeldElsewhere` ("Editing finished here; the
+lock stays in use elsewhere."), and the status poll does not adopt the lock again
+until a new open or an explicit Start editing (`speleodb_finished_here`). A lock B
+took itself is released as before, and so is a gate open with no claim at all. The
+sign-out prompt (below) still lists an adopted lock: one with no edit made here
+apart, as in use elsewhere (`in_use_elsewhere`), kept by "Keep locks and sign out"
+and released only when the user picks "Release and sign out". Deleting the open
+project still releases it: the delete is a deliberate, confirmed act that destroys
+the copy and its link, like unlink and take-remote. One cost: a lock this app took
+before a restart reads as adopted afterwards (the claim is in memory), so a quit with
+no edit made since leaves it held; the held-lock prompt at the next sign-in offers
+to release it.
+
+A revision View is refused while the gate is open over such a lock as
 over one taken here (FZ-SDB-4). This replaces decision RV2-R-13, under which only a
 lock this session took was released and a session whose gate the reopen had opened
-left it with the account (Done's former `LockHeldElsewhere` answer, gone with the
-poll's "finished here" guard it needed). A logout whose release the server refuses
+left it with the account (Done's `LockHeldElsewhere` answer, which SDB-2MACHINE-D1
+brings back with the poll's "finished here" guard it needs, for an adopted lock with
+no edit made here only). A logout whose release the server refuses
 (or does not answer) still signs out, and its answer names the project, which the
 frontend warns about with how to release it (#576 Q-W61-3-D1); a sign-in that replaces
 the session does the same for its hand-back: it signs in, and its answer names the

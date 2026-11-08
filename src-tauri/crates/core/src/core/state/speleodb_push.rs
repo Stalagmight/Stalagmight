@@ -539,15 +539,39 @@ impl AppState {
                     );
                     return Ok(DoneResult::PushUnconfirmed);
                 }
-                // [#576 SDB-ACCT-D1, SDB-QUIT-D1] No claim check: the open gate (not
-                // force-editing, both checked above) under a lock the server names our
-                // account as holding is the edit session, and its lock is released
-                // whether this session took it or adopted it from the account (another
-                // window or computer, the website, this app before a restart) - the
-                // rule close, switch, logout and quit release by. Done used to release
-                // only a lock this session held a claim on (decision RV2-R-13) and
-                // finish without one as `LockHeldElsewhere`.
+                // [#576 SDB-ACCT-D1, SDB-QUIT-D1] The open gate (not force-editing,
+                // both checked above) under a lock the server names our account as
+                // holding is the edit session, and its lock is released whether this
+                // session took it or adopted it from the account (another window or
+                // computer, the website, this app before a restart) - the rule close,
+                // switch and quit release by. Done used to release only a lock this
+                // session held a claim on (decision RV2-R-13).
                 //
+                // [#576 SDB-2MACHINE-D1] Except an ADOPTED lock this session made no
+                // edit under: two computers on one account, A editing under the lock
+                // and this session (B) having only seen it on the account. Done
+                // finishes editing here and leaves the lock with A, as close, switch
+                // and quit do (`speleodb_lock_adopted_unused`). The upload this Done
+                // made, if any, is an edit made here. Marked "finished here" BEFORE
+                // the gate shuts, so a status poll that sees the gate shut also sees
+                // why, and does not adopt the account's lock again in this session.
+                if link.has_unpushed_edits {
+                    self.speleodb_note_edit_under_lock(&link.project_id);
+                }
+                if self.speleodb_lock_adopted_unused(&link.project_id) {
+                    self.speleodb_mark_finished_here();
+                    self.set_edit_enabled(false);
+                    let _ = self.speleodb_forget_lock_acquired_for(&link.project_id);
+                    tracing::info!(
+                        project_id = %link.project_id,
+                        purpose = "leave an adopted lock with the session using it \
+                                   (#576 SDB-2MACHINE-D1)",
+                        "speleodb done: the lock was adopted from the account and no edit \
+                         was made under it here; editing ended here and the lock was left \
+                         with the account"
+                    );
+                    return Ok(DoneResult::LockHeldElsewhere);
+                }
                 // Edits are safely on the server; release the lock and go
                 // read-only. Drop the edit gate only after a confirmed release -
                 // if release fails the lock is still held, so a retry of Done
@@ -691,6 +715,9 @@ impl AppState {
             save_warnings,
         )? {
             PushOutcome::Confirmed => {
+                // [#576 SDB-2MACHINE-D1] The upload is an edit made under the lock: an
+                // adopted lock is this session's to hand back from here on.
+                self.speleodb_note_edit_under_lock(&link.project_id);
                 // A late edit after push_start leaves the dirty bit set (not yet on
                 // the server); report PushUnconfirmed so a retry re-pushes it. The
                 // lock is retained either way.

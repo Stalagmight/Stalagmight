@@ -1067,6 +1067,18 @@ impl AppState {
     fn speleodb_record_claim(&self, project_id: Option<&str>, by_this_flow: bool, resumed: bool) {
         let mut session = self.speleodb.lock();
         let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
+        // [#576 SDB-2MACHINE-D1] An edit made under the lock survives the claim being
+        // recorded again for the same project (the update's fast-forward and a
+        // revision Restore reload the copy and record it anew): it is the same edit
+        // session, and an adopted lock it edited under stays this session's to hand
+        // back.
+        let edited_before = project_id.is_some_and(|id| {
+            session.locks_acquired_here.iter().any(|claim| {
+                claim.project_id == id
+                    && claim.taken_by(endpoint.as_deref(), email.as_deref())
+                    && claim.is_edited()
+            })
+        });
         session.locks_acquired_here.retain(|claim| {
             if !claim.taken_by(endpoint.as_deref(), email.as_deref()) {
                 return true;
@@ -1084,6 +1096,9 @@ impl AppState {
             let mut claim = super::speleodb_session::LockClaim::taken(project_id, endpoint, email);
             if resumed {
                 claim = claim.into_resumed();
+            }
+            if edited_before {
+                claim.note_edited();
             }
             if by_this_flow {
                 // Recorded in the SAME session acquisition as the claim itself,
@@ -1949,6 +1964,10 @@ impl AppState {
         // arm's identity-only commit cannot see (the slot never moves). Held across
         // the network span on purpose - see `speleodb_session`.
         let lock_ops = self.speleodb_lock_ops_guard();
+        // [#576 SDB-2MACHINE-D1, RV4-R-S1] An explicit Start editing is the way back in
+        // after a Done that finished here: the status poll may adopt the account's
+        // lock again.
+        self.speleodb_clear_finished_here();
         // This operation's unwind slot starts empty. An acquire that inherits an
         // already-held lock, or one that aborts, records nothing - and must
         // leave the stale-context unwind with nothing to hand back, rather than

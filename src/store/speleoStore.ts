@@ -286,7 +286,9 @@ export type SignOutChoice = 'release' | 'keep' | 'cancel';
  * session holds, asked about before a logout (`logout`) or before a sign-in as
  * another account or server replaces the session (`switch`). `releasable` are the
  * locks the sign-out would hand back; [#576 SIGNOUT-PROMPT-D2] `unpushed` those it
- * keeps whatever the answer, because the project has edits not on SpeleoDB yet.
+ * keeps whatever the answer, because the project has edits not on SpeleoDB yet;
+ * [#576 SDB-2MACHINE-D1] `in_use_elsewhere` those this session adopted from the
+ * account and made no edit under, kept unless the user picks Release.
  */
 export interface SignOutPrompt extends SpeleoSignOutLocks {
   kind: 'logout' | 'switch';
@@ -296,21 +298,31 @@ export interface SignOutPrompt extends SpeleoSignOutLocks {
 let signOutPromptAnswer: ((choice: SignOutChoice) => void) | null = null;
 
 /**
- * Ask before a sign-out when this session holds any lock - one to release, or one
- * kept for un-pushed edits (D2) - and wait for the answer; with none, `release`
- * (nothing to ask). A prompt raised over one still unanswered answers that one
- * Cancel, so no sign-out is left waiting forever.
+ * Ask before a sign-out when this session holds any lock - one to release, one
+ * kept for un-pushed edits (D2), or one in use elsewhere (SDB-2MACHINE-D1) - and
+ * wait for the answer; with none, `release` (nothing to ask). A prompt raised over
+ * one still unanswered answers that one Cancel, so no sign-out is left waiting
+ * forever.
  */
 function askSignOut(
   set: (patch: { signOutPrompt: SignOutPrompt | null }) => void,
   kind: SignOutPrompt['kind'],
   locks: SpeleoSignOutLocks,
 ): Promise<SignOutChoice> {
-  if (locks.releasable.length === 0 && locks.unpushed.length === 0) return Promise.resolve('release');
+  if (locks.releasable.length === 0 && locks.unpushed.length === 0 && locks.in_use_elsewhere.length === 0) {
+    return Promise.resolve('release');
+  }
   signOutPromptAnswer?.('cancel');
   return new Promise((resolve) => {
     signOutPromptAnswer = resolve;
-    set({ signOutPrompt: { kind, releasable: locks.releasable, unpushed: locks.unpushed } });
+    set({
+      signOutPrompt: {
+        kind,
+        releasable: locks.releasable,
+        unpushed: locks.unpushed,
+        in_use_elsewhere: locks.in_use_elsewhere,
+      },
+    });
   });
 }
 
@@ -864,12 +876,14 @@ export const asPushKind = (kind: PushResult['kind']): PushKind => kind;
 export const asDoneKind = (kind: DoneResult['kind']): DoneKind => kind;
 
 /**
- * Whether a Done finished the edit session with the work on the server and the lock
- * handed back (`released`). The exit prompts and the Done dialog move on for it;
+ * Whether a Done finished the edit session with the work on the server: `released`
+ * (the lock handed back), or [#576 SDB-2MACHINE-D1] `lock_held_elsewhere` - nothing
+ * to upload, and the lock, adopted from the account with no edit made here, left
+ * with the session using it. The exit prompts and the Done dialog move on for both;
  * every other kind left the work (or the lock) where a retry still needs it.
  */
 export function doneFinished(kind: DoneKind | null | undefined): boolean {
-  return kind === 'released';
+  return kind === 'released' || kind === 'lock_held_elsewhere';
 }
 
 /**
@@ -1827,6 +1841,25 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               hasUnpushedEdits: false,
               unwound: false,
               lockHolder: null,
+              lockedByOther: false,
+              remoteState: 'up_to_date',
+              serverError: null,
+            },
+            chainTargetGeneration: state.chainTargetGeneration + 1,
+            divergence: null,
+            banner: null,
+          };
+        case 'lock_held_elsewhere':
+          // [#576 SDB-2MACHINE-D1] Editing has ended here with nothing to upload, as
+          // for `released` - but the lock was adopted from the account and no edit was
+          // made under it here, so it stays with the session using it: the holder is
+          // NOT cleared (the poll keeps it fresh).
+          return {
+            link: {
+              ...state.link,
+              editState: 'read-only',
+              hasUnpushedEdits: false,
+              unwound: false,
               lockedByOther: false,
               remoteState: 'up_to_date',
               serverError: null,

@@ -393,7 +393,7 @@ impl AppState {
 
     /// [#576 SIGNOUT-PROMPT-D1] The write locks this session holds at a sign-out, for
     /// the prompt that asks first: the open project's lock while this session edits
-    /// under it (the edit gate open, not force-editing, a remote link, a token). Both
+    /// under it (the edit gate open, not force-editing, a remote link, a token). All
     /// lists empty when there is nothing to ask about.
     ///
     /// The same conditions as the silent release's snapshot
@@ -401,6 +401,12 @@ impl AppState {
     /// SIGNOUT-PROMPT-D2] A lock over un-pushed edits is kept by that snapshot's veto
     /// whatever the answer, so it is listed apart (`unpushed`): the prompt says it
     /// stays held, and offers no release for it.
+    ///
+    /// [#576 SDB-2MACHINE-D1] A lock this session ADOPTED from the account and made
+    /// no edit under (`speleodb_lock_adopted_unused`) is listed apart too
+    /// (`in_use_elsewhere`): another session of the account is using it, so the
+    /// prompt says it stays held unless the user picks Release - which still releases
+    /// it (`speleodb_sign_out_lock_release_params`).
     pub fn speleodb_sign_out_locks(&self) -> crate::core::SpeleoSignOutLocks {
         let mut locks = crate::core::SpeleoSignOutLocks::default();
         if !self.edit_enabled() || self.force_editing() {
@@ -419,12 +425,15 @@ impl AppState {
         {
             return locks;
         }
+        let adopted_unused = self.speleodb_lock_adopted_unused(&link.project_id);
         let held = crate::core::SpeleoLockLeftHeld {
             project_id: link.project_id,
             project_name: link.project_name,
         };
         if link.has_unpushed_edits {
             locks.unpushed.push(held);
+        } else if adopted_unused {
+            locks.in_use_elsewhere.push(held);
         } else {
             locks.releasable.push(held);
         }

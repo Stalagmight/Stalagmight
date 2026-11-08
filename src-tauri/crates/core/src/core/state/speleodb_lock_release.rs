@@ -16,7 +16,8 @@
 //! the lock still gets to drop it, un-pushed edits or not.
 //!
 //! `speleodb_logout` is NOT in that list: it releases through
-//! [`AppState::speleodb_release_held_lock_best_effort`], veto included. Logging
+//! [`AppState::speleodb_release_held_lock_reporting`] (the sign-out snapshot,
+//! [`AppState::speleodb_sign_out_lock_release_params`]), veto included. Logging
 //! out is not the same act as surrendering the lock - unlike the abandon verbs it
 //! neither deletes the link row nor discards the edits - and the lock it leaves
 //! held is recoverable, because the next login's scan raises the held-lock prompt
@@ -42,6 +43,16 @@
 //! acquired a lock is their responsibility. The silent releases and the delete used
 //! to ask for this session's claim as well (decision RV2-R-13, #576 RV4-R-S2 and
 //! RV5-F4-4), so an adopted lock was left held at quit.
+//!
+//! [#576 SDB-2MACHINE-D1] With one exception, for two computers signed in to one
+//! account: computer A edits under the lock, and on computer B the status poll sees
+//! the account's lock and adopts it. Close, switch and quit (and Done, which
+//! releases on its own path) hand an ADOPTED lock back only once this session has
+//! made an edit under it ([`AppState::speleodb_lock_adopted_unused`]); a lock this
+//! session merely saw on the account stays held, so A keeps it. A lock this session
+//! took is released as before. The sign-out (a logout, a replacing sign-in) asks
+//! first and releases what the user picks Release for, an unused adopted lock
+//! included; the delete and the abandon verbs release it as before.
 
 use std::time::Duration;
 
@@ -126,9 +137,16 @@ pub(super) fn reply_may_be_lost(err: &SpeleoDbError) -> bool {
 /// sees which act they are looking at instead of decoding a bare `bool`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReleaseIntent {
-    /// A SILENT release nobody asked for (close, project switch, quit, logout):
-    /// vetoed when the project still holds un-pushed edits.
+    /// A SILENT release nobody asked for (close, project switch, quit): vetoed when
+    /// the project still holds un-pushed edits, and [#576 SDB-2MACHINE-D1] declined
+    /// for an adopted lock this session made no edit under.
     Silent,
+    /// [#576 SIGNOUT-PROMPT-D1, SDB-2MACHINE-D1] The sign-out's release (a logout, a
+    /// sign-in that replaces the session), sent only when the user answered the
+    /// sign-out prompt with "Release and sign out": vetoed over un-pushed edits like
+    /// a silent release, but an adopted lock with no edit made here is released, as
+    /// the user picked Release for it.
+    SignOut,
     /// A DELIBERATE abandon of the project's SpeleoDB identity (`speleodb_unlink`,
     /// `speleodb_take_remote`): the user has said outright they are walking away
     /// from the local work, so there is no future push for the veto to protect.
@@ -136,7 +154,9 @@ enum ReleaseIntent {
     /// [#576 RV5-F4-4] Deleting the OPEN project's local file
     /// (`AppState::delete_project`). An abandon of the local work, so no
     /// un-pushed-edits veto. [#576 SDB-ACCT-D1] It hands back the lock the session
-    /// edits under, adopted or taken, like every other release here.
+    /// edits under, adopted or taken. [#576 SDB-2MACHINE-D1] An adopted one with no
+    /// edit made here too: the delete is a deliberate, confirmed act that destroys
+    /// the copy and its link, so no later path could hand the lock back from it.
     DeleteLocal,
 }
 
@@ -144,13 +164,23 @@ impl AppState {
     /// Snapshot of what a best-effort lock release needs, or `None` when no held
     /// remote edit session is active - or when releasing would strand local work.
     /// [#576 SDB-QUIT-D1] An edit session under a lock this session adopted from the
-    /// account is a held one: its lock is released too.
+    /// account is a held one: its lock is released too. [#576 SDB-2MACHINE-D1] Once
+    /// this session has made an edit under it: an adopted lock with no edit made here
+    /// is left held, and its claim ends with the session.
     /// Cheap + non-blocking (reads the open link + config, no network), so a caller
     /// that must not block on the OLD project's server - the app-exit path, a
     /// project switch - can hand the actual HTTP release to a bounded / detached
     /// thread. Reads the link BEFORE the caller tears down or swaps the database.
     pub(super) fn speleodb_held_lock_release_params(&self) -> Option<LockReleaseParams> {
         self.speleodb_lock_release_params(ReleaseIntent::Silent)
+    }
+
+    /// [#576 SIGNOUT-PROMPT-D1, SDB-2MACHINE-D1] The snapshot for the sign-out's
+    /// release: the silent one's, un-pushed-edits veto included, except that an
+    /// adopted lock with no edit made here is released too - the sign-out prompt
+    /// listed it, and the user picked "Release and sign out".
+    pub(super) fn speleodb_sign_out_lock_release_params(&self) -> Option<LockReleaseParams> {
+        self.speleodb_lock_release_params(ReleaseIntent::SignOut)
     }
 
     /// The same snapshot WITHOUT the un-pushed-edits veto, for a deliberate
@@ -208,13 +238,16 @@ impl AppState {
                 return None;
             }
         };
-        // [#576 SDB-QUIT-D1] No claim check: the open gate (not force-editing) is the
-        // edit session, and its lock is released whether this session took it or
-        // adopted it from the account (another window or computer, the website, this
-        // app before a restart; decision SDB-ACCT-D1). This used to release only a
-        // lock with this session's claim (decision RV2-R-13, #576 RV4-R-S2, and for a
-        // delete RV5-F4-4), and the poll's reopen opened the gate without one, so a
-        // clean close, switch, logout, replacing sign-in or quit left it held.
+        // [#576 SDB-QUIT-D1] The open gate (not force-editing) is the edit session,
+        // and its lock is released whether this session took it or adopted it from
+        // the account (another window or computer, the website, this app before a
+        // restart; decision SDB-ACCT-D1). This used to release only a lock with this
+        // session's claim (decision RV2-R-13, #576 RV4-R-S2, and for a delete
+        // RV5-F4-4), and the poll's reopen opened the gate without one, so a clean
+        // close, switch, logout, replacing sign-in or quit left it held.
+        // [#576 SDB-2MACHINE-D1] The one claim read here is an ADOPTED one with no
+        // edit made under it: a silent release leaves that lock held (below, once
+        // the reads that can fail have run).
         //
         // Data-safety asymmetry, deliberate: never SILENTLY release a lock whose
         // project still has un-pushed local edits. The two failure modes are not
@@ -227,7 +260,9 @@ impl AppState {
         // releases once a re-check confirms the push landed); this gate is what the
         // silent paths get instead. The user-driven verbs listed in the module doc
         // bypass this gate on purpose, so "discard my edits and release" still works.
-        if intent == ReleaseIntent::Silent && link.has_unpushed_edits {
+        if matches!(intent, ReleaseIntent::Silent | ReleaseIntent::SignOut)
+            && link.has_unpushed_edits
+        {
             tracing::info!(
                 project_id = %link.project_id,
                 purpose = "avoid stranding un-pushed local edits behind a freed lock",
@@ -279,12 +314,86 @@ impl AppState {
             );
             return None;
         }
+        // [#576 SDB-2MACHINE-D1] Two computers on one account: A edits under the lock,
+        // and this session (B) adopted it from the account - the status poll's
+        // inherited-lock reopen, or Start editing over it - and made no edit under
+        // it. The lock is A's to hand back: a close, switch or quit here leaves it
+        // held. The claim ends with this session, so the stranded-claim janitor does
+        // not hand it back after the close either. A lock this session took, or
+        // edited under, is released as before.
+        if intent == ReleaseIntent::Silent && self.speleodb_lock_adopted_unused(&link.project_id) {
+            tracing::info!(
+                project_id = %link.project_id,
+                purpose = "leave an adopted lock with the session using it (#576 SDB-2MACHINE-D1)",
+                "speleodb: skipping the silent lock release; the lock was adopted from the \
+                 account and no edit was made under it here"
+            );
+            let _ = self.speleodb_forget_lock_acquired_for(&link.project_id);
+            return None;
+        }
         Some(LockReleaseParams {
             endpoint,
             token,
             insecure_http: self.speleodb_insecure_http(),
             project_id: link.project_id,
         })
+    }
+
+    /// [#576 SDB-2MACHINE-D1] Whether the signed-in account's claim on `project_id`
+    /// is an ADOPTED lock this session made no edit under
+    /// (`LockClaim::is_unused_adoption`): the lock the account held when this
+    /// session opened editing over it - another computer or Stalagmight session of
+    /// the account, the website - and that this session has only seen. Close,
+    /// switch, quit and Done leave such a lock held; the sign-out prompt lists it
+    /// apart. A lock this session took, or one it made an edit under, is not one.
+    pub(super) fn speleodb_lock_adopted_unused(&self, project_id: &str) -> bool {
+        let session = self.speleodb.lock();
+        session.locks_acquired_here.iter().any(|claim| {
+            claim.project_id == project_id
+                && claim.taken_by(session.endpoint.as_deref(), session.email.as_deref())
+                && claim.is_unused_adoption()
+        })
+    }
+
+    /// [#576 SDB-2MACHINE-D1] Record that this session made an edit under the
+    /// signed-in account's lock on `project_id` (`LockClaim::edited`): from then on
+    /// an adopted lock is this session's to hand back. A no-op without a claim.
+    pub(super) fn speleodb_note_edit_under_lock(&self, project_id: &str) {
+        let mut session = self.speleodb.lock();
+        let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
+        for claim in &mut session.locks_acquired_here {
+            if claim.project_id == project_id
+                && claim.taken_by(endpoint.as_deref(), email.as_deref())
+            {
+                claim.note_edited();
+            }
+        }
+    }
+
+    /// [#576 SDB-2MACHINE-D1] [`Self::speleodb_note_edit_under_lock`] for the OPEN
+    /// project, called after a mutation of a remote project landed
+    /// (`AppState::mark_remote_dirty`, the undo-history setting). Runs on every edit,
+    /// so the link (a database read) is read only while this account holds an
+    /// adopted claim no edit has been made under yet: in practice, once per adopted
+    /// edit session. Editing only: a force-editor holds no lock to have edited under.
+    /// No lock is held across another here.
+    pub(super) fn speleodb_note_edit_under_open_lock(&self) {
+        if !self.edit_enabled() || self.force_editing() {
+            return;
+        }
+        let pending = {
+            let session = self.speleodb.lock();
+            session.locks_acquired_here.iter().any(|claim| {
+                claim.taken_by(session.endpoint.as_deref(), session.email.as_deref())
+                    && claim.is_unused_adoption()
+            })
+        };
+        if !pending {
+            return;
+        }
+        if let Ok(link) = self.speleodb_open_link() {
+            self.speleodb_note_edit_under_lock(&link.project_id);
+        }
     }
 
     /// [#576 FZ-SDB-6-D1] After a lock verb (a release, Done's release, an acquire)
@@ -380,10 +489,13 @@ impl AppState {
     /// was due or the release landed. A failure whose reply may have been lost is
     /// re-read at once (#576 FZ-SDB-6): a lock no longer ours was released after all.
     /// The claim ends with the release, landed or not, as on every silent release.
+    /// [#576 SIGNOUT-PROMPT-D1, SDB-2MACHINE-D1] Sent only for the prompt's "Release
+    /// and sign out", so an adopted lock with no edit made here is released as well
+    /// (the sign-out snapshot).
     pub(super) fn speleodb_release_held_lock_reporting(
         &self,
     ) -> Option<crate::core::SpeleoLockLeftHeld> {
-        let p = self.speleodb_held_lock_release_params()?;
+        let p = self.speleodb_sign_out_lock_release_params()?;
         let project_name = self
             .speleodb_open_link()
             .map_or_else(|_| p.project_id.clone(), |link| link.project_name);
@@ -973,6 +1085,11 @@ mod tests {
             .speleodb_start_editing()
             .map(|_| ())
             .map_err(|e| e.message);
+        // The stub names our account as the holder before the acquire, so Start
+        // editing adopted the lock; [#576 SDB-2MACHINE-D1] a close hands an adopted
+        // lock back only after an edit made here. Record it as taken here, the lock
+        // this half is about.
+        same.speleodb_note_lock_acquired(Some(REMOTE_ID));
         let same_offered = same.speleodb_sign_out_locks().releasable.len();
         same.speleodb_release_held_lock_best_effort();
         let same_sent = releases(&z_seen);

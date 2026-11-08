@@ -56,7 +56,7 @@ function loginAnswers(left: SpeleoLockLeftHeld[]) {
     // outcome is asserted.
     if (cmd === 'speleodb_link_status') return new Promise(() => {});
     // No lock to ask about first (#576 SIGNOUT-PROMPT-D1): no sign-out prompt.
-    if (cmd === 'speleodb_sign_in_hand_back_locks') return { releasable: [], unpushed: [] };
+    if (cmd === 'speleodb_sign_in_hand_back_locks') return { releasable: [], unpushed: [], in_use_elsewhere: [] };
     return [];
   });
 }

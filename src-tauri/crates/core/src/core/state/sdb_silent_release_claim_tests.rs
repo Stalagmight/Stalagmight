@@ -7,8 +7,10 @@
 //! another Stalagmight session, another machine or the SpeleoDB website was left held
 //! by a clean close or a quit. Decisions SDB-ACCT-D1 and SDB-QUIT-D1 supersede it:
 //! such a lock is the user's, editing under it is an edit session, and quitting
-//! releases any lock this session edits under, adopted ones included. Driven against
-//! the loopback recording stub; all data is synthetic.
+//! releases any lock this session edits under, adopted ones included. [#576
+//! SDB-2MACHINE-D1] An adopted one once an edit has been made under it here
+//! (`sdb_two_machine_tests`). Driven against the loopback recording stub; all data is
+//! synthetic.
 
 use std::time::Duration;
 
@@ -49,10 +51,14 @@ fn adopted_by_the_poll(base: &str) -> (tempfile::TempDir, AppState) {
 }
 
 /// The poll adopts the account's lock: an edit session with a claim of its own, for
-/// the release only (no authorship), and the silent releases hand it back. Before
-/// SDB-ACCT-D1 the reopen recorded no claim and close, quit and logout sent nothing.
+/// the release only (no authorship). Before SDB-ACCT-D1 the reopen recorded no claim
+/// and close, quit and logout sent nothing. [#576 SDB-2MACHINE-D1] With no edit made
+/// under it here, close and quit leave it held (another computer of the account may
+/// be editing under it), and the logout releases it: the sign-out prompt's "Release
+/// and sign out" is the answer it runs with (`speleodb_logout(true)`).
+/// `sdb_two_machine_tests` pins the rest of the rule.
 #[test]
-fn close_quit_and_logout_hand_back_a_lock_the_poll_adopted() {
+fn close_and_quit_keep_and_logout_hands_back_a_lock_the_poll_adopted() {
     let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
 
     let (_close_dir, closing) = adopted_by_the_poll(&base);
@@ -77,9 +83,12 @@ fn close_quit_and_logout_hand_back_a_lock_the_poll_adopted() {
         adopted,
         "the adopted lock is claimed, without the authorship of a lock taken here"
     );
-    assert_eq!(after_close, 1, "a clean close hands the adopted lock back");
-    assert_eq!(after_quit, 2, "so does the quit");
-    assert_eq!(after_logout, 3, "and the logout");
+    assert_eq!(
+        after_close, 0,
+        "a clean close leaves the adopted lock with no edit made here held"
+    );
+    assert_eq!(after_quit, 0, "so does the quit");
+    assert_eq!(after_logout, 1, "the logout's Release hands it back");
 }
 
 /// [#579 x #576 SDB-QUIT-D1] An update restart exits through the quit's release

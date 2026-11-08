@@ -21,6 +21,11 @@ import { DialogWrapper } from './DialogWrapper';
  * every sign-out, so it is named on a line of its own and offered no release. When
  * such locks are all there is, the prompt only informs: Sign out or Cancel.
  *
+ * [#576 SDB-2MACHINE-D1] A lock this session adopted from the account (another
+ * computer or session of the account holds it) and made no edit under is named on a
+ * line of its own too, as in use elsewhere: Keep leaves it with that session, and
+ * Release still hands it back with the others.
+ *
  * An INDEPENDENT top-layer overlay (`signOutPrompt`), not the shared `activeDialog`
  * slot, for the storage prompt's reason: the sign-out is applied from the Settings
  * account panel, which must survive a Cancel with everything it staged.
@@ -34,7 +39,9 @@ export default function SpeleoSignOutDialog() {
   if (!prompt) return null;
 
   const names = (locks: { project_name: string }[]) => locks.map((lock) => lock.project_name).join(', ');
-  const count = prompt.releasable.length;
+  // Every lock a Release would hand back: the releasable ones and those in use
+  // elsewhere (SDB-2MACHINE-D1).
+  const count = prompt.releasable.length + prompt.in_use_elsewhere.length;
   const offersRelease = count > 0;
   const switching = prompt.kind === 'switch';
 
@@ -49,9 +56,20 @@ export default function SpeleoSignOutDialog() {
         {switching && (
           <p className="text-sm text-text-secondary">{t('speleodb.signOutLocks.switchNote')}</p>
         )}
-        {offersRelease && (
+        {prompt.releasable.length > 0 && (
           <p className="text-sm text-text-primary" data-testid="speleodb-sign-out-message">
-            {t('speleodb.signOutLocks.message', { count, projects: names(prompt.releasable) })}
+            {t('speleodb.signOutLocks.message', {
+              count: prompt.releasable.length,
+              projects: names(prompt.releasable),
+            })}
+          </p>
+        )}
+        {prompt.in_use_elsewhere.length > 0 && (
+          <p className="text-sm text-text-primary" data-testid="speleodb-sign-out-in-use-elsewhere">
+            {t('speleodb.signOutLocks.inUseElsewhere', {
+              count: prompt.in_use_elsewhere.length,
+              projects: names(prompt.in_use_elsewhere),
+            })}
           </p>
         )}
         {prompt.unpushed.length > 0 && (

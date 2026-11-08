@@ -90,6 +90,9 @@ impl AppState {
         drop(db_guard);
         drop(project_guard);
         drop(commands);
+        // [#576 SDB-2MACHINE-D1] It dirtied the copy like a survey edit, so it is an
+        // edit made under the lock too.
+        self.speleodb_note_edit_under_open_lock();
         self.sync_undo_depth_limit();
         tracing::info!(
             mode = ?mode,
