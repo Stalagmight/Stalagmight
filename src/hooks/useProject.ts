@@ -8,7 +8,7 @@ import { saveFailureOf, surfaceSaveFailure } from '../utils/saveFeedback';
 import { openOrImport } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
-import { needsSpeleoHandBackPrompt } from '../utils/quit';
+import { editsSettledForExit, needsSpeleoHandBackPrompt } from '../utils/quit';
 
 export function useProject() {
   const { setView, openDialog } = useUIStore(
@@ -40,7 +40,9 @@ export function useProject() {
   // hamburger-menu path and the keyboard dispatchers share one implementation
   // (the New-project unsaved-changes guard, the picker/route flow, and the
   // Save-As + overwrite-confirm flow each live in exactly one place).
-  const handleNewProject = useCallback(() => newProjectGuarded(), []);
+  const handleNewProject = useCallback(() => {
+    void newProjectGuarded();
+  }, []);
 
   const handleSaveProjectAs = useCallback(
     (opts?: { closeAfterSave?: boolean }) => saveProjectAs(opts),
@@ -89,13 +91,22 @@ export function useProject() {
     // OTHER hand-back exits (open-another-.stalx, New Project) now use, and its
     // unpushed-work half is literally shared with `guardQuit`, so none of the four
     // can silently diverge again.
+    //
+    // [#576 W84] Both guards read state an edit sets only once its IPC and the
+    // refresh after it have returned, and leaving the grid for Close is the blur
+    // that commits a cell being edited, so that edit can still be in flight here.
+    // The close waits for it (`runProjectSwitch`), so it landed on this project,
+    // which then closed with the edit unsaved and no prompt. Wait for the edits
+    // queued so far first, as quitting does; one that has not settled in time
+    // counts as unsaved work.
+    const editsSettled = await editsSettledForExit();
     if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
       openDialog('speleodb-close');
       return { success: false, error: 'Showing dialog' };
     }
     // Check for unsaved changes - use getState() to get current value, not stale closure
-    const currentIsDirty = useProjectStore.getState().isDirty;
-    debugLog('[useProject] handleCloseProject called, isDirty:', currentIsDirty);
+    const currentIsDirty = useProjectStore.getState().isDirty || !editsSettled;
+    debugLog('[useProject] handleCloseProject called, isDirty:', currentIsDirty, 'editsSettled:', editsSettled);
     if (currentIsDirty) {
       // Open styled dialog - the dialog will handle the actual close
       openDialog('unsaved-changes');

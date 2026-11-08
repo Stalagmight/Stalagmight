@@ -118,6 +118,11 @@ const EXIT_EDITS_SETTLE_TIMEOUT_MS = 5_000;
  * `false` when {@link EXIT_EDITS_SETTLE_TIMEOUT_MS} passed first: the caller then
  * cannot trust `isDirty`, and treats the project as dirty. Never rejects. Edits
  * queued after the call are not waited for, as in `mutationsSettled`.
+ *
+ * [#576 W84] The three hand-back exits wait the same way before their guards
+ * (`handleCloseProject`, `newProjectGuarded`, `routeOpenedFile` opening a
+ * `.stalx`): the project switch they start waits for that edit too, so it lands
+ * on the project being replaced, which then goes with the edit unsaved.
  */
 export function editsSettledForExit(): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;

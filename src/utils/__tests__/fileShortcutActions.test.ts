@@ -33,16 +33,17 @@ describe('runFileShortcutAction("new_file")', () => {
     expect(useUIStore.getState().activeDialog).toBe('new-project');
   });
 
-  it('opens new-project directly when the open project is clean', () => {
+  // With a project open the guard first waits for the edits queued so far (#576 W84).
+  it('opens new-project directly when the open project is clean', async () => {
     useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
     runFileShortcutAction('new_file');
-    expect(useUIStore.getState().activeDialog).toBe('new-project');
+    await vi.waitFor(() => expect(useUIStore.getState().activeDialog).toBe('new-project'));
   });
 
-  it('defers to the unsaved-changes dialog when a dirty project is open (Ctrl+N guard)', () => {
+  it('defers to the unsaved-changes dialog when a dirty project is open (Ctrl+N guard)', async () => {
     useProjectStore.setState({ project: { name: 'X' } as never, isDirty: true });
     runFileShortcutAction('new_file');
-    expect(useUIStore.getState().activeDialog).toBe('unsaved-changes');
+    await vi.waitFor(() => expect(useUIStore.getState().activeDialog).toBe('unsaved-changes'));
     expect(useUIStore.getState().dialogData).toMatchObject({ pendingNewProject: true });
   });
 });
