@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use chrono::Utc;
 
 use super::{Database, ResolvedWarning};
-use crate::models::{Project, SectionData, FEATURE_ID_STRIDE};
+use crate::models::{Project, SectionData, ShotData, FEATURE_ID_STRIDE};
 
 fn ignore(shot_uuid: Option<&str>, comment: &str) -> ResolvedWarning {
     ResolvedWarning {
@@ -41,6 +41,36 @@ fn database_with_one_section() -> Database {
         ..Default::default()
     });
     db.save_project(&project).unwrap();
+    db
+}
+
+/// [`database_with_one_section`] whose section holds a saved shot for each of
+/// `uuids`, so an ignore keyed by one of them is the ignore of a shot in the
+/// file. [#576 RV20-1] A uuid the file does not hold is parked and does not
+/// follow its shot (`save_resolved_warning_parked`), so a test of a saved
+/// shot's ignore needs the shot saved.
+fn database_with_saved_shots(uuids: &[&str]) -> Database {
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("CaveA".to_owned(), None);
+    project.add_section(SectionData {
+        color: "#000".to_owned(),
+        shots: uuids
+            .iter()
+            .map(|uuid| ShotData {
+                length: 1.0,
+                uuid: Some((*uuid).to_owned()),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    });
+    db.save_project(&project).unwrap();
+    for uuid in uuids {
+        assert!(
+            db.shot_uuid_is_persisted(0, uuid).unwrap(),
+            "premise: {uuid} is in the file"
+        );
+    }
     db
 }
 
@@ -198,7 +228,7 @@ fn position_keyed_ignores_move_with_their_shots_all_or_nothing() {
 /// mirrored shot instead.
 #[test]
 fn uuid_keyed_ignores_move_with_their_shots_out_of_the_way() {
-    let db = database_with_one_section();
+    let db = database_with_saved_shots(&["uuid-s"]);
     let at = |shot_id: u32, shot_uuid: Option<&str>, comment: &str| ResolvedWarning {
         shot_id,
         warning_code: "MISSING_LRUD".to_owned(),
@@ -279,7 +309,7 @@ fn uuid_keyed_ignores_move_with_their_shots_out_of_the_way() {
 /// that shot's uuid - replacing that shot's own ignore and losing its own.
 #[test]
 fn a_reverse_moves_a_position_keyed_ignore_onto_the_slot_a_uuid_keyed_one_leaves() {
-    let db = database_with_one_section();
+    let db = database_with_saved_shots(&["uuid-b"]);
     let at = |shot_id: u32, shot_uuid: Option<&str>, comment: &str| ResolvedWarning {
         shot_id,
         ..ignore(shot_uuid, comment)
