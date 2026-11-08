@@ -17,7 +17,27 @@ import { useUIStore } from '../store/uiStore';
 import { useUpdateStore } from '../store/updateStore';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import { holdAutosave } from '../utils/autosaveHold';
+import { flushGasConfigWrite } from '../utils/gasConfigDisk';
 import i18n from '../i18n';
+
+/**
+ * [#576 W86] How long an update install waits for the pending gas-config write. A
+ * config write takes milliseconds; this only bounds one that is stuck, because the
+ * install window has no way out and must not wait on it for ever.
+ */
+const GAS_CONFIG_FLUSH_TIMEOUT_MS = 5_000;
+
+/** Flush the gas-config writer and wait for it to land, bounded; never rejects. */
+function settleGasConfigWrite(): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, GAS_CONFIG_FLUSH_TIMEOUT_MS);
+  });
+  const written = flushGasConfigWrite().catch((e: unknown) => {
+    console.error('[useBeforeUnload] gas config write before the install failed:', e);
+  });
+  return Promise.race([written, timedOut]).finally(() => clearTimeout(timer));
+}
 
 /**
  * Hook to show a confirmation dialog when the user tries to close the app window
@@ -290,6 +310,10 @@ export function useBeforeUnload(
             // successful one ends the process.
             useUpdateStore.getState().setInstalling(true);
             try {
+              // [#576 W86] A gas field committed in the last 450 ms is still in its
+              // debounce: write it now, before the install, so the value is saved and
+              // its write cannot land under the install (the hold keeps new ones out).
+              await settleGasConfigWrite();
               await invokeIpc('install_app_update_and_restart', undefined, {
                 purpose: 'install downloaded app update and restart',
               });
