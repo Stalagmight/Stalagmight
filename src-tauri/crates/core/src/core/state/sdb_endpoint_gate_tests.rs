@@ -144,10 +144,12 @@ fn the_poll_never_reopens_the_gate_over_a_copy_linked_to_another_server() {
          (edit_enabled, holder) {reported:?}, (gate, force, claim) {after:?}, adopted \
          {resumed}. Same server as {spelled} vs {z}: {same_reported:?}, {same_after:?}"
     );
+    // [#576 W90] The poll no longer asks the signed-in server about such a copy at
+    // all (`sdb_endpoint_read_tests`), so it reads no holder either.
     assert_eq!(
         reported,
-        Ok((false, Some("u@x".to_owned()))),
-        "the poll reads the holder but leaves the copy read-only"
+        Ok((false, None)),
+        "the poll asks nothing and leaves the copy read-only"
     );
     assert_eq!(after, (false, false, false), "the gate stays shut");
     assert!(!resumed, "and nothing is adopted");

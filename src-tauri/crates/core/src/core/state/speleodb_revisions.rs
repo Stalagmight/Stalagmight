@@ -505,13 +505,20 @@ impl AppState {
     /// automated project-creation commit is dropped - so a project with nothing but
     /// that commit yields an empty list. Both live in [`sync::display_history`], which
     /// touches this view only; every fence reads the raw history. No lock required
-    /// (reading history is permission-free).
+    /// (reading history is permission-free). [#576 W90] The open copy of another
+    /// server than the one signed in to gets an empty list, with nothing sent
+    /// ([`Self::speleodb_names_a_copy_of_another_server`]).
     pub fn speleodb_get_revisions(
         &self,
         project_id: String,
     ) -> Result<Vec<SpeleoRevision>, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        // [#576 W90] The open copy of another server: this server's history for its
+        // id is not this copy's. Nothing is sent; an empty history, nothing to show.
+        if self.speleodb_names_a_copy_of_another_server(&project_id, &endpoint) {
+            return Ok(Vec::new());
+        }
         let insecure_http = self.speleodb_insecure_http();
         let (_, commits) = self
             .speleodb_server_head(&endpoint, &token, insecure_http, &project_id)

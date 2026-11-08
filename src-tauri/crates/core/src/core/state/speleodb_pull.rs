@@ -456,6 +456,10 @@ impl AppState {
     /// resolver, which will only honour it for the revision it belongs to. The cost is
     /// the download this used to skip - which the probe was already prepared to make
     /// on every miss, and still no lock.
+    ///
+    /// [#576 W90] Asked about the open copy of another server than the one signed in
+    /// to, it answers `None` with nothing sent
+    /// ([`Self::speleodb_names_a_copy_of_another_server`]).
     pub fn speleodb_dump_candidates(
         &self,
         project_id: String,
@@ -474,6 +478,11 @@ impl AppState {
         let Ok((endpoint, token)) = self.speleodb_active_token() else {
             return Ok(None);
         };
+        // [#576 W90] The open copy of another server: this server's dump for its id
+        // is not this copy's. Nothing is sent, and no question.
+        if self.speleodb_names_a_copy_of_another_server(&project_id, &endpoint) {
+            return Ok(None);
+        }
         let insecure_http = self.speleodb_insecure_http();
         let downloaded = match &hexsha {
             // Validated at the entry by `probe_inputs_valid`, exactly like the restore

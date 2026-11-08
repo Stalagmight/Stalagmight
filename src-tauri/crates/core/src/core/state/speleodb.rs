@@ -688,6 +688,9 @@ impl AppState {
     /// routed through [`Self::speleodb_handle_auth`] - a transient 401 on this
     /// passive probe must not auto-drop the session (mirrors
     /// [`Self::speleodb_lock_holder`]).
+    ///
+    /// [#576 W90] A copy linked to another server than the one signed in to gets no
+    /// enrichment at all: nothing is sent, and the network fields read as signed out.
     pub fn speleodb_link_status(&self) -> Result<SpeleoLinkStatus, SpeleoErrorDto> {
         let link = match self.speleodb_open_link() {
             Ok(link) => link,
@@ -757,6 +760,18 @@ impl AppState {
         let (permission, lock_holder, remote_state, access_denied, server_error, exclude_geojson) =
             if validate_project_id(&link.project_id).is_ok() {
                 match self.speleodb_active_token() {
+                    // [#576 W90] A copy linked to another server than the one signed
+                    // in to: this server's answer for that project id is not about
+                    // this copy. Nothing is sent, and the fields read as signed out
+                    // (nothing to show; the gate is left as it is).
+                    Ok((endpoint, _))
+                        if !super::speleodb_session::on_the_signed_in_server(
+                            &link.endpoint,
+                            Some(&endpoint),
+                        ) =>
+                    {
+                        (None, None, RemoteState::Unknown, false, None, false)
+                    }
                     Ok((endpoint, token)) => {
                         let insecure_http = self.speleodb_insecure_http();
                         match client::get_project(

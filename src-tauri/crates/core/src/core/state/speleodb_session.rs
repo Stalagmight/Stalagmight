@@ -399,9 +399,7 @@ pub(super) fn refuse_a_copy_on_another_server(
     link_endpoint: &str,
     signed_in: Option<&str>,
 ) -> Result<(), SpeleoDbError> {
-    if signed_in
-        .is_some_and(|endpoint| normalize_endpoint(endpoint) == normalize_endpoint(link_endpoint))
-    {
+    if on_the_signed_in_server(link_endpoint, signed_in) {
         return Ok(());
     }
     let elsewhere = signed_in
@@ -412,7 +410,37 @@ pub(super) fn refuse_a_copy_on_another_server(
     )))
 }
 
+/// Whether a copy linked to `link_endpoint` belongs to the server signed in to
+/// (`signed_in`, `None` when signed out): [`refuse_a_copy_on_another_server`]'s
+/// test, through [`normalize_endpoint`], for the read verbs that skip such a copy
+/// rather than refuse it.
+pub(super) fn on_the_signed_in_server(link_endpoint: &str, signed_in: Option<&str>) -> bool {
+    signed_in
+        .is_some_and(|endpoint| normalize_endpoint(endpoint) == normalize_endpoint(link_endpoint))
+}
+
 impl AppState {
+    /// [#576 W90] Whether `project_id` names the OPEN copy and that copy is linked
+    /// to another server than `endpoint`, the one signed in to.
+    ///
+    /// The read verbs that take a project id - the revision history, the dump
+    /// question before a Revert - ask the signed-in server about it with the
+    /// session's token. For the open copy of another server that asks the wrong
+    /// server about a project of its id, so they skip it quietly, with the answer
+    /// they give when there is nothing to show. Any other id (a project picked from
+    /// the signed-in server's own list) is asked about as before. A copy whose link
+    /// cannot be read is not skipped: the read fails or answers as it always did.
+    pub(super) fn speleodb_names_a_copy_of_another_server(
+        &self,
+        project_id: &str,
+        endpoint: &str,
+    ) -> bool {
+        self.speleodb_open_link().is_ok_and(|link| {
+            link.project_id == project_id
+                && !on_the_signed_in_server(&link.endpoint, Some(endpoint))
+        })
+    }
+
     /// Record a session boundary. Call ONLY while holding the `project` mutex
     /// (rule 1 above); every call site takes a `_proj_guard`-shaped local or
     /// sits inside a block that owns one.
