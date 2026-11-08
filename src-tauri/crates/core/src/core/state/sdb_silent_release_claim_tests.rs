@@ -81,6 +81,32 @@ fn close_quit_and_logout_hand_back_a_lock_the_poll_adopted() {
     assert_eq!(after_logout, 3, "and the logout");
 }
 
+/// [#579 x #576 SDB-QUIT-D1] An update restart exits through the quit's release
+/// (`release_held_lock_on_exit`: `RunEvent::ExitRequested`, or on Windows the
+/// updater's `on_before_exit` hook; the hook exits the process, so one of the two
+/// runs). After the quit prompt's "Discard & release" (`speleodb_release_current_lock`,
+/// which shuts the gate), that exit release finds nothing to hand back: the lock is
+/// released once, not again on the way out.
+#[test]
+fn the_exit_release_after_discard_and_release_sends_nothing_more() {
+    let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+    let (_dir, restarting) = editing_fixture(&base);
+
+    let released = restarting
+        .speleodb_release_current_lock()
+        .map_err(|e| e.message);
+    let after_discard = release_requests(&seen).len();
+    restarting.speleodb_release_held_lock_bounded(Duration::from_secs(5));
+    let after_exit = release_requests(&seen).len();
+    println!(
+        "[SDB-QUIT-D1] update restart after Discard & release ({released:?}): release \
+         requests {after_discard}, after the exit release {after_exit}"
+    );
+    assert!(released.is_ok(), "{released:?}");
+    assert_eq!(after_discard, 1, "Discard & release hands the lock back");
+    assert_eq!(after_exit, 1, "and the exit release does not again");
+}
+
 /// The rule is the edit session, not the claim: an open gate (not force-editing)
 /// over the account's lock with no claim at all is released on close and on quit
 /// too. It used to be skipped ("this session did not take the lock").

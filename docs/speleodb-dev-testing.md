@@ -191,7 +191,10 @@ version" or "Save my version as a local copy".
 **Release (#576 SDB-ACCT-D1, SDB-QUIT-D1):** every release hands back the lock the
 session edits under, whether this session took it or ADOPTED it from the account:
 Done, close, project switch, logout, a sign-in that replaces the session, deleting
-the open project, and the quit. When the status poll's inherited-lock reopen or a
+the open project, and the quit - an update restart included: it exits through the
+same `release_held_lock_on_exit` (`RunEvent::ExitRequested`, or on Windows the
+updater's `on_before_exit` hook, which exits the process itself), so it releases
+under the same rule, once (#579). When the status poll's inherited-lock reopen or a
 Start editing (plain, or the held-lock prompt's "Continue editing") opens the gate
 over a lock the account already held, the session records an adopted claim for it,
 and Done and the silent releases (close, switch, logout, replacing sign-in, quit)
