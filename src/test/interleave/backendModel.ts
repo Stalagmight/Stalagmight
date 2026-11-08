@@ -510,8 +510,11 @@ export class BackendModel {
 
   /**
    * display_settings.rs load_display_settings: the open project's stored rows, as
-   * stored (no defaults); none with no project open. The frontend re-reads them after
-   * a timed-out flush (#576 Q-W22S-1-D1).
+   * stored (no defaults) - the database's, else the cache of a project with none
+   * (display_settings.rs:30-41, commands/config.rs:385); none with no project open,
+   * since every session commit clears the cache (session_commit.rs:218-221). The
+   * frontend re-reads them after a timed-out flush (#576 Q-W22S-1-D1) and on an
+   * ALREADY_OPEN re-read of another project (#576 W71-NF3).
    */
   private storedDisplayRows(): Record<string, string> {
     const open = this.open;

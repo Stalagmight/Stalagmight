@@ -259,6 +259,11 @@ const REGRESSION_SEEDS: Array<{ id: string; seed: number; options: Partial<RunOp
   { id: 'FZ-FARM-1424528', seed: 1424528, options: FARM_SHAPES },
   // The switch gate held edits until the load's whole aftermath ran (FZ-W22-GATE).
   { id: 'FZ-W22-GATE', seed: 53, options: {} },
+  // The farm job fzint-vitest-all-shapes (fcd23af03): a close's display flush timed out,
+  // and its re-read of the stored settings (showStoredDisplaySettings) sent
+  // load_display_settings, which the scheduler did not route to the model: answered
+  // undefined, unchecked ("unmodelled").
+  { id: 'FZ-FARM-6452743', seed: 6452743, options: ALL_SHAPES },
 ];
 
 
@@ -311,6 +316,7 @@ describe('interleaving fuzzer (#576 FZ-INT)', () => {
   it.each(REGRESSION_SEEDS)('regression seed $seed ($id) holds every invariant', async ({ seed, options }) => {
     const result = await runActions(generate(seed), { ...KNOWN_OPEN_EXCLUDED, ...options });
     expect(result.violations.map((v) => `[${v.inv}] ${v.msg}`)).toEqual([]);
+    expect(result.unmodelled.filter((c) => !KNOWN_UNMODELLED.has(c))).toEqual([]);
   });
 
   it.runIf(Boolean(env.FZ_INT_TRACE))('replays FZ_INT_TRACE (a printed action list)', async () => {

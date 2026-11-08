@@ -196,7 +196,7 @@ const MODELLED = new Set([
   'cancel_loading', 'load_project_full_binary', 'create_project_full', 'close_project', 'save_project',
   'get_project_state_binary', 'can_undo', 'can_redo', 'create_section', 'set_surface_elevation', 'undo', 'redo',
   'import_sections', 'get_project_warnings',
-  'save_display_setting', 'get_config', 'patch_config', 'update_gas_config', 'update_panel_sizes',
+  'save_display_setting', 'load_display_settings', 'get_config', 'patch_config', 'update_gas_config', 'update_panel_sizes',
 ]);
 
 /**
