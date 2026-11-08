@@ -87,3 +87,7 @@ in determines how you write it, and picking wrong is the most common rework.
 implementation; they are snapshots of intent, not maintained afterwards, so
 trust the pages above over a plan. `branding/` is the brand pack - logos,
 social image, and design tokens.
+
+`user-guide/` is not developer documentation: it is the user guide published
+at https://stalagmight.com/docs/. Its [README](user-guide/README.md) is the
+authoring guide.
