@@ -8,7 +8,8 @@ import {
   consumeQuitConfirmation,
   consumeUpdateRestartArmed,
   abandonUpdateRestart,
-  editsSettledForExit,
+  editsSettledForCloseRequest,
+  isCloseRequestDeciding,
   isUpdateRestartArmed,
 } from '../utils/quit';
 import { invokeIpc } from '../utils/ipc';
@@ -77,13 +78,6 @@ export function useBeforeUnload(
   // Dropped on any un-confirmed close request, so an attempt the user abandoned at
   // the dialog cannot lend its answer to a later one.
   const tier1Confirmed = useRef(false);
-  // [#576 W83] Set while a close request waits for the edits queued before it.
-  // Another un-confirmed request in that window is the same exit asked twice (a
-  // second X, Restart pressed during a quit) and is dropped: two passes that both
-  // got past the guard would both reach the one-way tail, and with an update
-  // restart armed the second would destroy the window under the install the first
-  // started. The arm itself stays set, so the pass that is waiting carries it.
-  const awaitingEdits = useRef(false);
   // [#576 W85] How many passes have reached the one-way tail. A pass that waited for
   // queued edits ends when another one got there in the meantime: that pass answered
   // this request too, whether its destroy or install went through or failed. A failed
@@ -157,10 +151,15 @@ export function useBeforeUnload(
           // Quit" would re-open the dialog it came from, forever.
           const preConfirmed = consumeQuitConfirmation();
 
-          // [#576 W83] The exit already waiting on queued edits answers this request
-          // too - see `awaitingEdits`. A confirmed quit is not dropped: it comes from a
-          // prompt the user just answered, and it takes the window itself.
-          if (!preConfirmed && awaitingEdits.current) {
+          // [#576 W83, W86] A close request already at the exit gate (waiting for the
+          // queued edits, or for a hand-back exit to decide first) answers this one too:
+          // it is the same exit asked twice (a second X, Restart pressed during a quit).
+          // Two passes that both got past the guard would both reach the one-way tail,
+          // and with an update restart armed the second would destroy the window under
+          // the install the first started. The arm itself stays set, so the pass that is
+          // waiting carries it. A confirmed quit is not dropped: it comes from a prompt
+          // the user just answered, and it takes the window itself.
+          if (!preConfirmed && isCloseRequestDeciding()) {
             debugLog('[useBeforeUnload] Close requested while waiting for queued edits, ignoring');
             return;
           }
@@ -227,11 +226,14 @@ export function useBeforeUnload(
           // clean project, and the exit went ahead with no prompt and dropped it. Wait
           // for the edits queued before this request first; one that has not settled
           // in time counts as unsaved work.
+          //
+          // [#576 W86] Through the exit gate the three hand-back exits share, so one exit
+          // decides at a time: a Close / New / Open asked for meanwhile is dropped, and
+          // one already deciding decides first, then this request decides against what
+          // it left (its prompt replaces that exit's; the quit is never lost).
           if (!preConfirmed && guardRef.current) {
-            awaitingEdits.current = true;
             const tailRunsBefore = tailRuns.current;
-            const editsSettled = await editsSettledForExit();
-            awaitingEdits.current = false;
+            const editsSettled = await editsSettledForCloseRequest();
             // A confirmed quit that arrived during the wait has taken the window, or
             // tried to and failed (see `tailRuns`): running the guard now would prompt
             // again, or destroy the window straight after a failed install.
