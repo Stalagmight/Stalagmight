@@ -259,6 +259,70 @@ test.describe('Panel Interactions', () => {
     await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 
+  test('clicking a section color dot recolors the section without selecting it (#654)', async ({ page }) => {
+    await createProjectWithSections(page);
+    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
+    const sectionId = Number((await sectionRow.getAttribute('data-testid'))!.replace('section-row-', ''));
+    const dot = page.getByTestId(`section-color-${sectionId}`);
+    const readColor = () =>
+      page.evaluate((id) => {
+        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        return state.project.sections.find((s: any) => s.id === id).color as string;
+      }, sectionId);
+    const before = await readColor();
+
+    // The dot is a control of its own: clicking it does not select the row.
+    await dot.click();
+    await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
+
+    // Steps through the open picker (`input`) commit nothing; only the
+    // confirmed pick (`change`) does, so one pick is one undo step.
+    const pick = (type: 'input' | 'change') =>
+      dot.evaluate((el, t) => {
+        (el as HTMLInputElement).value = '#ff0000';
+        el.dispatchEvent(new Event(t, { bubbles: true }));
+      }, type);
+    await pick('input');
+    expect(await readColor()).toBe(before);
+    await pick('change');
+    await expect.poll(readColor).toBe('#ff0000');
+    await expect(dot).toHaveValue('#ff0000');
+  });
+
+  test('section color dot is inert while editing is blocked (#654)', async ({ page }) => {
+    await createProjectWithSections(page);
+    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
+    const sectionId = Number((await sectionRow.getAttribute('data-testid'))!.replace('section-row-', ''));
+    const dot = page.getByTestId(`section-color-${sectionId}`);
+    await expect(dot).toBeEnabled();
+
+    const before = await page.evaluate((id) => {
+      const state = (window as any).__E2E_TEST__.projectStore.getState();
+      return state.project.sections.find((s: any) => s.id === id).color as string;
+    }, sectionId);
+
+    // A remote SpeleoDB project opened without the write lock is read-only
+    // (Plan/Export would also block, but they hide this panel).
+    await page.evaluate(() =>
+      (window as any).__E2E_TEST__.speleoStore.getState().setLinkOnOpen({ permission: 'READ_AND_WRITE' }),
+    );
+    await expect(dot).toBeDisabled();
+
+    // A pick confirmed after editing became blocked (the system picker was
+    // already open) is refused at commit time, and the dot reverts.
+    await dot.evaluate((el) => {
+      (el as HTMLInputElement).value = '#00ff00';
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await expect(dot).toHaveValue(before.toLowerCase());
+    expect(
+      await page.evaluate((id) => {
+        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        return state.project.sections.find((s: any) => s.id === id).color as string;
+      }, sectionId),
+    ).toBe(before);
+  });
+
   test('section picker in the data-table sub-header switches sections', async ({ page }) => {
     await createProjectWithSections(page);
     await page.keyboard.press('Control+3');

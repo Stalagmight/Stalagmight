@@ -10,7 +10,7 @@ import {
   type SurveyData,
   type SectionMetadata,
 } from '../../types/survey-data';
-import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -167,6 +167,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // Subscribing here rebuilds the id -> metadata lookup below whenever the data
   // changes, without any component re-render caused by reading it per row.
   const surveyData = useProjectStore((s) => s.surveyData);
+  const updateSection = useProjectStore((s) => s.updateSection);
 
   // O(1) section-id -> metadata lookup, built once per surveyData change. This
   // replaces the former per-row `surveyData.sections.find(...)`, which made a
@@ -446,6 +447,15 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     setHoveredSectionId(null);
   }, [setHoveredSectionId]);
 
+  // The row's color dot commits through the same update_section command as the
+  // Edit Section dialog. Re-checked at commit time: the mode can change while the
+  // system picker is open, and Plan/Export have no server-side backstop.
+  const handleSectionColorChange = useCallback(async (sectionId: SectionId, color: string) => {
+    if (isEditingBlockedNow()) return false;
+    setSource('sections-panel');
+    return (await updateSection(sectionId, { color })).success;
+  }, [updateSection]);
+
   const handleFocusButtonMouseDown = useCallback((e: React.MouseEvent) => {
     // Stop propagation so the row's own mouse-down handling doesn't double-fire.
     e.stopPropagation();
@@ -590,8 +600,10 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                     onFocus={handleSectionFocus}
                     onKeyDown={handleKeyDown}
                     onEnterFocus={handleEnterFocusClick}
-                    onEnterFocusMouseDown={handleFocusButtonMouseDown}
-                    onEnterFocusDoubleClick={handleFocusButtonDoubleClick}
+                    onControlMouseDown={handleFocusButtonMouseDown}
+                    onControlDoubleClick={handleFocusButtonDoubleClick}
+                    colorEditable={!editingBlocked}
+                    onColorChange={handleSectionColorChange}
                     onLongPress={openSectionContextMenu}
                     optionRefs={optionRefs}
                   />
@@ -689,8 +701,13 @@ interface SectionRowProps {
   onFocus: (sectionId: SectionId, index: number) => void;
   onKeyDown: (e: React.KeyboardEvent, index: number) => void;
   onEnterFocus: (section: Section, e: React.MouseEvent) => void;
-  onEnterFocusMouseDown: (e: React.MouseEvent) => void;
-  onEnterFocusDoubleClick: (e: React.MouseEvent) => void;
+  /** Stop a click on a control inside the row (focus button, color dot) from
+   *  also selecting or zooming the row. */
+  onControlMouseDown: (e: React.MouseEvent) => void;
+  onControlDoubleClick: (e: React.MouseEvent) => void;
+  colorEditable: boolean;
+  /** Resolves false when the color was not applied, so the dot can revert. */
+  onColorChange: (sectionId: SectionId, color: string) => Promise<boolean>;
   onLongPress: (sectionId: number, x: number, y: number) => void;
   optionRefs: React.MutableRefObject<(HTMLLIElement | null)[]>;
 }
@@ -716,8 +733,10 @@ const SectionRow = memo(function SectionRow({
   onFocus,
   onKeyDown,
   onEnterFocus,
-  onEnterFocusMouseDown,
-  onEnterFocusDoubleClick,
+  onControlMouseDown,
+  onControlDoubleClick,
+  colorEditable,
+  onColorChange,
   onLongPress,
   optionRefs,
 }: SectionRowProps) {
@@ -735,6 +754,26 @@ const SectionRow = memo(function SectionRow({
   );
 
   const longPressHandlers = useLongPress(handleLongPress);
+
+  // The dot is an uncontrolled color input. React's onChange is the DOM `input`
+  // event, which fires on every step while the system picker is open; only the
+  // native `change` (the pick is confirmed) commits, so one pick is one undo
+  // step. The effect also resyncs the dot when the color changes elsewhere
+  // (undo, Edit Section).
+  const colorRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const input = colorRef.current;
+    if (!input) return;
+    input.value = section.color;
+    const commit = () => {
+      if (input.value.toLowerCase() === section.color.toLowerCase()) return;
+      void onColorChange(section.id, input.value).then((applied) => {
+        if (!applied) input.value = section.color;
+      });
+    };
+    input.addEventListener('change', commit);
+    return () => input.removeEventListener('change', commit);
+  }, [section.id, section.color, onColorChange]);
 
   // One ref serves three roles: the panel's roving-tabindex/optionRefs registry,
   // the virtualizer's height measurement (needs the `data-index` attribute set
@@ -776,17 +815,25 @@ const SectionRow = memo(function SectionRow({
         className="flex items-center gap-2"
         data-testid={`section-item-${section.id}`}
       >
-        <span
-          className="w-3 h-3 rounded-full flex-shrink-0"
-          style={{ backgroundColor: section.color }}
+        <input
+          ref={colorRef}
+          type="color"
+          className="color-dot w-3 h-3 rounded-full flex-shrink-0"
+          disabled={!colorEditable}
+          onMouseDown={onControlMouseDown}
+          onDoubleClick={onControlDoubleClick}
+          tabIndex={-1}
+          title={colorEditable ? t('sections.actions.color') : undefined}
+          aria-label={t('sections.actions.color')}
+          data-testid={`section-color-${section.id}`}
         />
         <span className="flex-1 truncate">
           {section.name ?? t('sections.defaultName', { id: section.id })}
         </span>
         <IconButton
           onClick={(e) => onEnterFocus(section, e)}
-          onMouseDown={onEnterFocusMouseDown}
-          onDoubleClick={onEnterFocusDoubleClick}
+          onMouseDown={onControlMouseDown}
+          onDoubleClick={onControlDoubleClick}
           icon={<ExternalLinkIcon size={12} />}
           size="sm"
           variant="ghost"

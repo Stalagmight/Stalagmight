@@ -2647,6 +2647,7 @@
   "sections": {
     "actions": {
       "add": "Add section",
+      "color": "Change section color",
       "delete": "Delete section",
       "focus": "Focus this section",
       "zoom": "Click to select · double-click to zoom to this section"
