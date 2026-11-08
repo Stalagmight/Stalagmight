@@ -24,7 +24,10 @@ import { DialogWrapper } from './DialogWrapper';
  * [#576 SDB-2MACHINE-D1] A lock this session adopted from the account (another
  * computer or session of the account holds it) and made no edit under is named on a
  * line of its own too, as in use elsewhere: Keep leaves it with that session, and
- * Release still hands it back with the others.
+ * Release still hands it back with the others. When such locks are all there is,
+ * Keep is the default (the focused, Enter answer), so a stray Enter cannot take the
+ * lock from the computer editing under it; with any lock taken or edited here in
+ * the list, Release stays the default.
  *
  * An INDEPENDENT top-layer overlay (`signOutPrompt`), not the shared `activeDialog`
  * slot, for the storage prompt's reason: the sign-out is applied from the Settings
@@ -43,6 +46,9 @@ export default function SpeleoSignOutDialog() {
   // elsewhere (SDB-2MACHINE-D1).
   const count = prompt.releasable.length + prompt.in_use_elsewhere.length;
   const offersRelease = count > 0;
+  // [#576 SDB-2MACHINE-D1] Only locks in use elsewhere: Keep is the default answer.
+  const keepByDefault =
+    prompt.in_use_elsewhere.length > 0 && prompt.releasable.length === 0 && prompt.unpushed.length === 0;
   const switching = prompt.kind === 'switch';
 
   return (
@@ -89,15 +95,20 @@ export default function SpeleoSignOutDialog() {
           </Button>
           {offersRelease ? (
             <>
-              <Button variant="secondary" onClick={() => answer('keep')} data-testid="speleodb-sign-out-keep">
+              {/* The primary variant carries [data-primary-action], which the
+                  dialog focuses: a stray Enter answers with it. Release by default,
+                  the sign-out's behaviour before it asked; Keep when every lock is
+                  in use elsewhere (SDB-2MACHINE-D1). */}
+              <Button
+                variant={keepByDefault ? 'primary' : 'secondary'}
+                onClick={() => answer('keep')}
+                data-testid="speleodb-sign-out-keep"
+              >
                 {t('speleodb.signOutLocks.keep', { count })}
               </Button>
-              {/* Primary + [data-primary-action]: a stray Enter hands the locks back,
-                  the sign-out's behaviour before it asked. */}
               <Button
-                variant="primary"
+                variant={keepByDefault ? 'secondary' : 'primary'}
                 onClick={() => answer('release')}
-                data-primary-action=""
                 data-testid="speleodb-sign-out-release"
               >
                 {t('speleodb.signOutLocks.release')}

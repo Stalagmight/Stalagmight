@@ -221,7 +221,9 @@ until a new open or an explicit Start editing (`speleodb_finished_here`). A lock
 took itself is released as before, and so is a gate open with no claim at all. The
 sign-out prompt (below) still lists an adopted lock: one with no edit made here
 apart, as in use elsewhere (`in_use_elsewhere`), kept by "Keep locks and sign out"
-and released only when the user picks "Release and sign out". Deleting the open
+and released only when the user picks "Release and sign out". When every lock the
+prompt lists is in use elsewhere, Keep is its default (focused, Enter) answer, so a
+stray Enter cannot release it; otherwise Release stays the default. Deleting the open
 project still releases it: the delete is a deliberate, confirmed act that destroys
 the copy and its link, like unlink and take-remote. One cost: a lock this app took
 before a restart reads as adopted afterwards (the claim is in memory), so a quit with

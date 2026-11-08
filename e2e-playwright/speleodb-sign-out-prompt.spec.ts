@@ -328,6 +328,19 @@ for (const kind of ['logout', 'switch'] as const) {
       expect(await sessionEmail(page)).toBe(signedOutAs);
     });
 
+    // Nor may a stray Enter take it: with only locks in use elsewhere, Keep is the
+    // default answer the prompt focuses.
+    test('in use elsewhere only: Keep is the default, and Enter keeps the lock', async ({ page }) => {
+      await stageAndSave(page, kind, { held: [], inUseElsewhere: [CAVE_B] });
+      await expect(page.getByTestId('speleodb-sign-out-keep')).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expect(page.getByTestId('settings-dialog')).toBeHidden();
+      const calls = await getIpcCalls(page, ACT[kind]);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.args).toMatchObject({ releaseLocks: false });
+      expect(await sessionEmail(page)).toBe(signedOutAs);
+    });
+
     test('in use elsewhere beside a releasable lock: both named, Release releases', async ({ page }) => {
       await stageAndSave(page, kind, { held: [CAVE_A], inUseElsewhere: [CAVE_B] });
       await expect(page.getByTestId('speleodb-sign-out-message')).toHaveText(
@@ -337,6 +350,8 @@ for (const kind of ['logout', 'switch'] as const) {
         'CaveB is in use elsewhere and no edits were made here; its lock stays held unless you release it.',
       );
       await expect(page.getByTestId('speleodb-sign-out-keep')).toHaveText('Keep locks and sign out');
+      // A lock taken here is in the list: Release stays the default.
+      await expect(page.getByTestId('speleodb-sign-out-release')).toBeFocused();
       await page.getByTestId('speleodb-sign-out-release').click();
       await expect(page.getByTestId('settings-dialog')).toBeHidden();
       const calls = await getIpcCalls(page, ACT[kind]);
