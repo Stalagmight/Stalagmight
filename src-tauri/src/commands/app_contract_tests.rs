@@ -711,6 +711,13 @@ const NOT_OPEN_PROJECT_WRITERS: &[(&str, &str)] = &[
 /// with the reason. A module that gains a writer must list its other commands in
 /// [`NOT_OPEN_PROJECT_WRITERS`] one by one.
 const NOT_OPEN_PROJECT_WRITER_MODULES: &[(&str, &str)] = &[
+    (
+        "app_update",
+        "the in-app updater (#579): check, download, arm and unarm write only the \
+         process-wide updater state (`AppUpdateState`, never `AppState`), and the \
+         install writes the app bundle; the exit guards protect the open project \
+         before the install runs",
+    ),
     ("cache", "map tiles and their cache"),
     ("debug", "a debug-only crash trigger"),
     (
