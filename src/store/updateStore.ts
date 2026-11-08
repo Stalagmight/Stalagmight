@@ -140,6 +140,11 @@ export function afterUpdateInstallHold(then: () => void): void {
   });
 }
 
+/** [#576 W86] {@link afterUpdateInstallHold} as a promise, for an async flow that waits. */
+export function updateInstallHoldLifted(): Promise<void> {
+  return new Promise((resolve) => afterUpdateInstallHold(resolve));
+}
+
 export const useUpdateStore = create<UpdateStore>((set, get) => ({
   ...INITIAL_STATE,
 
