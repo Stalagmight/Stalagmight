@@ -164,8 +164,9 @@ export interface HandBackSettle {
   /** False when the queued edits did not settle in time: the project counts as dirty. */
   editsSettled: boolean;
   /**
-   * A newer exit or a switch was requested during the wait (latest wins), or an
-   * update is installing: this exit does nothing at all.
+   * A newer exit or a switch was requested during the wait (latest wins), an update
+   * is installing, or a quit, the window X or an update restart is at the exit gate
+   * (its prompt or exit answers this one too): this exit does nothing at all.
    */
   superseded: boolean;
   /**
@@ -175,6 +176,31 @@ export interface HandBackSettle {
    */
   screenTaken: boolean;
 }
+
+/**
+ * [#576 W86 x FZ-FZ-INT-1] The exit gate, shared by the close listener
+ * (`useBeforeUnload`: quit, the window X, the update restart) and the hand-back exits.
+ *
+ * Among the hand-back exits and project switches the latest wins: several hand-back
+ * exits can wait at once, and one a newer exit or a switch overtook drops itself
+ * after its wait ({@link settleEditsBeforeHandBack}). A close request is never
+ * dropped for them, since a quit must not be lost: it waits until every hand-back exit
+ * waiting at the gate has decided (a prompt, the close or switch it started, or
+ * dropping itself), then waits for the edits queued by then and decides against the
+ * state that left ({@link editsSettledForCloseRequest}). Its prompt replaces a
+ * hand-back exit's - quitting subsumes the close - and with nothing to protect it
+ * quits. A hand-back exit asked for while a close request is at the gate is dropped:
+ * the app is going away.
+ *
+ * Without the gate both waited on the same edits, and the close listener resumes a
+ * few microtasks before a hand-back caller, so the hand-back prompt landed last
+ * whichever was asked for first: the quit's `pendingQuit` was gone, and for an update
+ * restart its arm stayed set behind a close prompt.
+ */
+const handBackExitsDeciding = new Set<Promise<void>>();
+
+/** A close request (quit, the window X, an update restart) waiting at the exit gate or deciding. */
+let closeRequestAtGate = false;
 
 /**
  * [#576 W84 x FZ-FZ-INT-1] The wait every hand-back exit (Close, New Project over
@@ -188,6 +214,10 @@ export interface HandBackSettle {
  *   would request its switch first and the newer one would run second. Each takes
  *   a ticket (`noteProjectExitRequested`); one a newer exit, a switch request, or
  *   an update install overtook during the wait reports `superseded`.
+ * - A quit is never lost ([#576 W86], the exit gate above): one asked for during the
+ *   wait waits for this exit to decide, then decides itself; while a quit, the
+ *   window X or an update restart is at the gate, this exit reports `superseded`
+ *   at once and waits for nothing.
  * - One dialog at a time: a dialog that took the screen during the wait is not
  *   replaced (`screenTaken`, compared against the slot as it was at the call, so
  *   the re-entries that run while their own dialog is up - LaunchOpenConfirmDialog's
@@ -198,12 +228,20 @@ export interface HandBackSettle {
  *   the caller has decided by the time it looks again.
  *
  * Call it before the caller's first await, so the slot it compares against is the
- * one the user asked from.
+ * one the user asked from, and decide synchronously once it resolves: the gate is let
+ * go just before it does, and a quit waiting there decides only after its own wait
+ * for the edits, so the caller's decision always lands first.
  */
 export async function settleEditsBeforeHandBack(): Promise<HandBackSettle> {
+  if (closeRequestAtGate) return { editsSettled: true, superseded: true, screenTaken: false };
   const ticket = noteProjectExitRequested();
   const ui = useUIStore.getState();
   const { activeDialog, dialogData } = ui;
+  let decided!: () => void;
+  const deciding = new Promise<void>((resolve) => {
+    decided = resolve;
+  });
+  handBackExitsDeciding.add(deciding);
   ui.addScreenOccupant();
   try {
     const editsSettled = await editsSettledForExit();
@@ -216,57 +254,8 @@ export async function settleEditsBeforeHandBack(): Promise<HandBackSettle> {
     };
   } finally {
     useUIStore.getState().removeScreenOccupant();
-  }
-}
-
-/**
- * [#576 W85, W86] The one exit gate: the exit that is waiting for the queued edits and
- * then decides, if any. Shared by the close listener (`useBeforeUnload`: quit, the
- * window X, the update restart) and the three hand-back exits, so one exit decides at
- * a time. `decided` settles when it lets go.
- */
-let exitDeciding: { exit: 'close-request' | 'hand-back'; decided: Promise<void> } | null = null;
-
-/** [#576 W86] A close request waiting for a hand-back exit's decision: it decides next. */
-let closeRequestWaiting = false;
-
-/**
- * Take the gate; the returned release lets it go. Released in the same microtask run
- * that resumes the caller, so no event can arrive between the release and the decision
- * the caller then makes.
- */
-function takeExitGate(exit: 'close-request' | 'hand-back'): () => void {
-  let release!: () => void;
-  const decided = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  exitDeciding = { exit, decided };
-  return () => {
-    exitDeciding = null;
-    release();
-  };
-}
-
-/**
- * [#576 W85] {@link editsSettledForExit} for the three hand-back exits, one exit at
- * a time: `null` when another exit is already deciding, and the caller drops itself.
- *
- * Each exit decides after the wait, but the screen-owned checks in front of it (a
- * dialog open, the shortcut hooks' modal gate) were passed before it. A second exit
- * asked for during the wait - Ctrl+N twice, a double-click on a Recents entry, Close
- * then New - passed them too, and its prompt replaced the first one's in the single
- * dialog slot, dropping the first call's request (the file to open, the new project).
- * The exit already waiting owns the answer, as a dialog that owns the screen owns a
- * shortcut. [#576 W86] That includes a quit, the window X or an update restart
- * waiting or deciding ({@link editsSettledForCloseRequest}): the app is going away.
- */
-export async function editsSettledForHandBack(): Promise<boolean | null> {
-  if (exitDeciding || closeRequestWaiting) return null;
-  const release = takeExitGate('hand-back');
-  try {
-    return await editsSettledForExit();
-  } finally {
-    release();
+    handBackExitsDeciding.delete(deciding);
+    decided();
   }
 }
 
@@ -275,30 +264,26 @@ export async function editsSettledForHandBack(): Promise<boolean | null> {
  * deciding at the gate? Another one is then the same exit asked twice, and is dropped.
  */
 export function isCloseRequestDeciding(): boolean {
-  return closeRequestWaiting || exitDeciding?.exit === 'close-request';
+  return closeRequestAtGate;
 }
 
 /**
- * [#576 W86] {@link editsSettledForExit} for the close listener, through the same gate
- * as the hand-back exits. A quit must not be lost, so unlike them it is never dropped
- * for a hand-back exit: it waits for that exit's decision (a prompt, or the close or
- * switch started), then waits for the edits queued by then and decides against the
- * state the decision left. Its prompt replaces the exit's - quitting subsumes the
- * close - and with nothing to protect it quits. While it waits, a hand-back exit asked
- * for is dropped. The caller checks {@link isCloseRequestDeciding} first.
+ * [#576 W86] {@link editsSettledForExit} for the close listener, through the exit gate
+ * the hand-back exits share. A quit must not be lost, so unlike them it is never
+ * dropped, for a hand-back exit or for a switch: it waits until every hand-back exit
+ * waiting has decided (a prompt, the close or switch started, or dropping itself as
+ * superseded), then waits for the edits queued by then and decides against the state
+ * that left. Its prompt replaces the exit's - quitting subsumes the close - and with
+ * nothing to protect it quits. While it is at the gate, a hand-back exit asked for is
+ * dropped. The caller checks {@link isCloseRequestDeciding} first.
  */
 export async function editsSettledForCloseRequest(): Promise<boolean> {
-  closeRequestWaiting = true;
+  closeRequestAtGate = true;
   try {
-    while (exitDeciding) await exitDeciding.decided;
-  } finally {
-    closeRequestWaiting = false;
-  }
-  const release = takeExitGate('close-request');
-  try {
+    while (handBackExitsDeciding.size > 0) await Promise.all([...handBackExitsDeciding]);
     return await editsSettledForExit();
   } finally {
-    release();
+    closeRequestAtGate = false;
   }
 }
 

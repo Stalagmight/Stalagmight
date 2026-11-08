@@ -188,7 +188,13 @@ Commands now run **concurrently**, which makes three rules explicit:
   the switch has put its project on screen (`SwitchTurn.committed`) or settled; and
   switches run one at a time - one still waiting when a newer one is requested is
   dropped, and a running load is cancelled (latest wins). A cancelled load keeps its
-  loading state until it ends: its answer can still commit. A load or a
+  loading state until it ends: its answer can still commit. An exit that leaves the
+  project (Close, New Project, opening a `.stalx`, the import-as-new hand-over) first
+  waits for the queued edits so its guard reads a settled dirty flag; the latest
+  wins there too, and a switch requested meanwhile also overtakes it. A quit, the
+  window close or an update restart is never dropped for either: it waits for the
+  hand-back exits waiting to decide, then decides itself, and a hand-back exit asked
+  for while it does is dropped (`utils/quit.ts`, the exit gate). A load or a
   close first flushes the queued display-setting writes, so each lands in its own
   session; the wait is bounded by `PROJECT_SETTING_FLUSH_TIMEOUT_MS` (2 s), and a
   write still queued then is dropped unsent. A display-setting write made once the

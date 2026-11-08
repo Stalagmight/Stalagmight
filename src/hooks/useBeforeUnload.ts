@@ -247,10 +247,11 @@ export function useBeforeUnload(
           // for the edits queued before this request first; one that has not settled
           // in time counts as unsaved work.
           //
-          // [#576 W86] Through the exit gate the three hand-back exits share, so one exit
-          // decides at a time: a Close / New / Open asked for meanwhile is dropped, and
-          // one already deciding decides first, then this request decides against what
-          // it left (its prompt replaces that exit's; the quit is never lost).
+          // [#576 W86] Through the exit gate the hand-back exits share: a Close / New /
+          // Open asked for meanwhile is dropped, and the ones already waiting decide
+          // first (the latest of them wins), then this request decides against what
+          // they left (its prompt replaces theirs; the quit is never lost, whatever
+          // exit or switch was asked for meanwhile).
           if (!preConfirmed && guardRef.current) {
             const tailRunsBefore = tailRuns.current;
             const editsSettled = await editsSettledForCloseRequest();

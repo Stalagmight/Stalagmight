@@ -371,15 +371,18 @@ describe('Import as new project waits for the edits queued before it', () => {
 });
 
 /**
- * [#576 W85] One hand-back exit decides at a time. Each one waits for the queued
+ * [#576 W85 x FZ-FZ-INT-1] One hand-back exit decides. Each one waits for the queued
  * edits and decides after the wait, but the screen-owned checks in front of it (a
  * dialog open, the shortcut hooks' modal gate) were all passed before it. A second
  * exit asked for during the wait - Ctrl+N twice, a double-click on a Recents entry,
- * Close then New - passed them too, and its prompt replaced the first one's in the
- * single dialog slot, with the first call's request gone. The first exit owns the
- * answer; a later one is dropped, as a shortcut is while a dialog owns the screen.
+ * Close then New - passed them too, and both prompted: the later prompt replaced the
+ * earlier one's data in the single dialog slot. #594 (W85) kept the first and dropped
+ * the later one; on this branch the latest switch wins (`runProjectSwitch`), so the
+ * hand-back exits follow it: the one asked for last decides, and every earlier one
+ * still waiting does nothing (`settleEditsBeforeHandBack`'s ticket). Either way there
+ * is one prompt, and it carries one request whole.
  */
-describe('a second hand-back exit asked for during the wait is dropped', () => {
+describe('a later hand-back exit asked for during the wait supersedes the earlier one', () => {
   const OTHER_2 = '/cave/other-2.stalx';
 
   /** Every `unsaved-changes` prompt opened from here on (`openDialog` installs fresh data each time). */
@@ -415,7 +418,7 @@ describe('a second hand-back exit asked for during the wait is dropped', () => {
     expect(ui().dialogData).toMatchObject({ pendingNewProject: true });
   });
 
-  it('two opens during the wait (a double-click on Recents): one prompt, for the file opened first', async () => {
+  it('two opens during the wait (a double-click on Recents): one prompt, for the file opened last', async () => {
     const edit = holdEdit();
     const { done: editDone } = await startEdit();
     const prompts = recordPrompts();
@@ -430,11 +433,11 @@ describe('a second hand-back exit asked for during the wait is dropped', () => {
     await settle(Promise.all([first, second]));
 
     expect(prompts).toHaveLength(1);
-    expect(ui().dialogData).toMatchObject({ pendingOpenPath: OTHER });
+    expect(ui().dialogData).toMatchObject({ pendingOpenPath: OTHER_2 });
     expect(loadProject).not.toHaveBeenCalled();
   });
 
-  it('Close, then New Project during the wait: one prompt, the close one', async () => {
+  it('Close, then New Project during the wait: one prompt, the New Project one', async () => {
     const { result } = renderHook(() => useProject());
     const edit = holdEdit();
     const { done: editDone } = await startEdit();
@@ -451,11 +454,12 @@ describe('a second hand-back exit asked for during the wait is dropped', () => {
 
     expect(prompts).toHaveLength(1);
     expect(ui().activeDialog).toBe('unsaved-changes');
-    expect(ui().dialogData.pendingNewProject).toBeUndefined();
+    expect(ui().dialogData.pendingNewProject).toBe(true);
+    expect((await closing).success).toBe(false);
     expect(calls(CLOSE)).toBe(0);
   });
 
-  it('control: once the first exit has decided, the next one is asked as usual', async () => {
+  it('control: once an exit has decided, the next one is asked as usual', async () => {
     await newProjectGuarded();
     expect(ui().activeDialog).toBe('new-project');
     useUIStore.getState().closeDialog();

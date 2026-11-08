@@ -1,24 +1,23 @@
 // @vitest-environment jsdom
 /**
  * [#576 W86] Quit, the window close and the update restart share one gate with the
- * three hand-back exits (Close, New Project, opening another `.stalx`): one exit waits
- * for the queued edits and decides at a time.
+ * three hand-back exits (Close, New Project, opening another `.stalx`).
  *
- * W85 serialised the hand-back exits among themselves (`editsSettledForHandBack`) and
- * the close listener among its own requests (`awaitingEdits`), but not the two
- * against each other. A quit and a hand-back exit waiting at the same time both
+ * Before it, the hand-back exits and the close listener each waited for the queued
+ * edits on their own. A quit and a hand-back exit waiting at the same time both
  * prompted, and the later prompt replaced the earlier one's data in the single dialog
  * slot. The close listener resumes a few microtasks earlier than a hand-back caller,
  * so the hand-back's prompt landed last whichever was asked for first: the quit's
  * `pendingQuit` was gone, and for an update restart its arm stayed set behind a
  * close prompt.
  *
- * Now a hand-back exit asked for while a close request decides is dropped, as a
- * second hand-back exit is. A close request asked for while a hand-back exit decides
- * is NOT dropped (a quit must not be lost): it waits for that exit's decision, then
- * waits for the edits and decides itself against the state that decision left. Its
- * prompt then replaces the exit's (the app is going away, which subsumes the close),
- * and with nothing to protect it quits.
+ * Now a hand-back exit asked for while a close request is at the gate is dropped. A
+ * close request asked for while hand-back exits wait is NOT dropped (a quit must not
+ * be lost): it waits for their decisions, then waits for the edits and decides itself
+ * against the state those decisions left. Its prompt then replaces the exit's (the
+ * app is going away, which subsumes the close), and with nothing to protect it quits.
+ * Among the hand-back exits themselves the latest wins, as between project switches
+ * on this branch (`exitGate.latestWins.test.tsx`).
  *
  * Driven with the REAL guard, the REAL store and the REAL close listener, holding the
  * edit's IPC open by hand.
