@@ -19,3 +19,19 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true, features = ["v5"] }
+serde = { workspace = true, features = ["derive"], optional = true }
+
+[package.metadata.docs.rs]
+# Show the `serde` feature's Serialize impls on docs.rs.
+features = ["serde"]
+
+[features]
+# Derives `serde::Serialize` on the survey types, e.g. to hand a `Survey` to a
+# non-Rust consumer as JSON. The JSON contract is in the crate docs.
+serde = ["dep:serde"]
+
+[dev-dependencies]
+# Turns the `serde` feature on for this crate's own tests, so the plain
+# `cargo test --workspace` gate runs the JSON-shape test.
+stalx-reader = { path = ".", features = ["serde"] }
+serde_json = { workspace = true }

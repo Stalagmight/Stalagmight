@@ -45,7 +45,37 @@
 //! }
 //! # Ok::<(), stalx_reader::ReadError>(())
 //! ```
+//!
+//! # JSON
+//!
+//! The off-by-default `serde` feature derives `serde::Serialize` on [`Survey`]
+//! and everything in it, so `serde_json::to_string(&survey)` hands the survey
+//! to a consumer outside Rust. The JSON is the Rust types, field for field:
+//!
+//! - Field names are the Rust field names. Renaming or removing one is a
+//!   breaking change (a new `0.x` minor, while the crate is pre-1.0). A
+//!   compatible release (`0.1.x`) can add fields, so a consumer should ignore
+//!   unknown keys.
+//! - An absent `Option` is `null`, never a missing key.
+//! - [`ShotKind`], [`Direction`] and [`North`] are snake_case strings
+//!   (`"normal"`, `"in"`, `"magnetic"`).
+//! - [`CorrectionSource`] is an object tagged on `"kind"`:
+//!   `{"kind": "not_recorded"}`, `{"kind": "model", "epoch_year": 2025}`.
+//! - Every enum is `#[non_exhaustive]`, so a compatible release can also add a
+//!   string value or a `"kind"` tag: a consumer with a closed enum should
+//!   treat an unknown one as an error it handles, not a crash.
+//! - [`LoopClosure::id`] is an integer that can exceed 2^53, beyond what a
+//!   JavaScript number holds exactly; the app assigns small sequential ids.
+//! - A non-finite float would serialize as `null`. The reader refuses
+//!   non-finite datum coordinates and depths, and the app's loader zeroes a
+//!   non-finite required shot measurement and drops an optional one to `None`,
+//!   so only a computed value could hit this.
+//!
+//! The feature is serialize-only: this crate reads `.stalx` files and never
+//! builds a [`Survey`] from JSON.
 
+#[cfg(all(test, feature = "serde"))]
+mod json_tests;
 mod survey;
 
 use std::io::{Read, Write};
@@ -446,8 +476,9 @@ fn check_row_counts(conn: &rusqlite::Connection, limits: CountLimits) -> Result<
 
 /// Refuse zero datums no survey can have, before any geometry uses them.
 fn validate_values(project: &stalagmight_models::Project) -> Result<(), ReadError> {
-    // Shot measurements need no check here: the loader already replaces a
-    // non-finite one with 0, as the app shows it (`Shot::sanitize_non_finite`).
+    // Shot measurements need no check here: the loader already zeroes a
+    // non-finite required one and drops an optional one to `None`, as the app
+    // shows it (`Shot::sanitize_non_finite`).
     let bad = |what: String| Err(ReadError::invalid(InvalidKind::InvalidValue, what));
     for datum in &project.zero_datums {
         let (lat, lon) = (datum.gps.latitude, datum.gps.longitude);
@@ -455,6 +486,12 @@ fn validate_values(project: &stalagmight_models::Project) -> Result<(), ReadErro
         if !((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)) {
             return bad(format!(
                 "zero datum on section {}: latitude/longitude out of range",
+                datum.station_ref.section_id
+            ));
+        }
+        if !datum.gps.depth_reference.is_finite() {
+            return bad(format!(
+                "zero datum on section {}: depth is not a finite number",
                 datum.station_ref.section_id
             ));
         }

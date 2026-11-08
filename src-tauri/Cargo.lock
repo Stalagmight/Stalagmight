@@ -4817,8 +4817,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "rusqlite",
+ "serde",
+ "serde_json",
  "stalagmight-models",
  "stalagmight-persistence",
+ "stalx-reader",
  "tempfile",
  "thiserror 1.0.69",
  "uuid",

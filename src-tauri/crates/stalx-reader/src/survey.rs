@@ -39,6 +39,7 @@ use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, Sur
 /// on every save; leave it out of any content hash.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Survey {
     /// The file's schema version as uploaded, read before the private copy is
     /// migrated forward (`PRAGMA user_version`, or the project row's own version
@@ -71,6 +72,7 @@ pub struct Survey {
 /// A station: `index` 0 is the section's start, index `i` is the end of shot `i - 1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct StationId {
     pub section_id: u32,
     pub index: u32,
@@ -78,6 +80,7 @@ pub struct StationId {
 
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Section {
     pub id: u32,
     pub name: Option<String>,
@@ -102,6 +105,8 @@ pub struct Section {
 /// Provenance of a section's azimuth correction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(tag = "kind", rename_all = "snake_case"))]
 pub enum CorrectionSource {
     /// No azimuth reference is recorded at all.
     NotRecorded,
@@ -117,6 +122,7 @@ pub enum CorrectionSource {
 
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Shot {
     /// Stable identity across revisions. See [`Shot::uuid_derived`].
     pub uuid: String,
@@ -144,6 +150,8 @@ pub struct Shot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum ShotKind {
     /// A surveyed leg of the cave line.
     Normal,
@@ -155,6 +163,8 @@ pub enum ShotKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum Direction {
     In,
     Out,
@@ -162,6 +172,8 @@ pub enum Direction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum North {
     Magnetic,
     True,
@@ -171,6 +183,7 @@ pub enum North {
 /// Two stations that are the same physical point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct StationMerge {
     pub a: StationId,
     pub b: StationId,
@@ -179,6 +192,7 @@ pub struct StationMerge {
 /// A station with a known GPS position.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ZeroDatum {
     pub station: StationId,
     pub latitude: f64,
@@ -195,6 +209,7 @@ pub struct ZeroDatum {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct LoopClosure {
     pub id: u64,
     pub a: StationId,
@@ -203,6 +218,7 @@ pub struct LoopClosure {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct StationComment {
     pub station: StationId,
     pub text: String,
@@ -228,6 +244,7 @@ pub struct StationComment {
 ///   wherever the user's offsets put it, so its georeference is not meaningful.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct StationPosition {
     pub station: StationId,
     pub x: f64,

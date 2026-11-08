@@ -13,6 +13,9 @@ Status: DRAFT for review by the SpeleoDB maintainer and the Stalagmight SpeleoDB
 - **Ownership:** SpeleoDB owns the survey shape, the mapping and all GeoJSON properties.
   Stalagmight owns the crate API (semver) and keeps it reading every `.stalx` version it ships.
 - **Dropped:** a Stalagmight interchange JSON (#592) and client-uploaded GeoJSON (#220/#221).
+- **Later (#626):** an opt-in `serde` feature serializes the crate's own types as JSON, for
+  consumers outside Rust. It is a view of the crate API under the same semver, not the separately
+  versioned interchange format #592 proposed; the consumer still owns its survey shape.
 
 ## Current state (verified 2026-10-29)
 

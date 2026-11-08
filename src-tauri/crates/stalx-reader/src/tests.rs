@@ -661,6 +661,8 @@ fn impossible_datum_coordinates_are_invalid_values() {
         "UPDATE zero_datums SET latitude = 120.0;",
         "UPDATE zero_datums SET longitude = -181.0;",
         "UPDATE zero_datums SET latitude = 9e999;",
+        "UPDATE zero_datums SET depth_reference = 9e999;",
+        "UPDATE zero_datums SET depth_reference = -9e999;",
     ] {
         let err = read_file(&with_schema_sql(sql)).unwrap_err();
         assert_eq!(
