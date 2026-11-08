@@ -366,6 +366,20 @@ export async function routeOpenedFile(
       return;
     }
 
+    // [#576 W87a-1] A project load holds the screen too: its loading window is a
+    // screen occupant, which the shortcut hooks and the OS-launch queue stand down
+    // for. A dropped file is a native webview event and got past it: a `.dmp`
+    // dropped while project B loaded over A opened A's import wizard over the
+    // loading window, for the backend to refuse later (PROJECT_CHANGED). Every
+    // routed file but a `.stalx` is refused while a load is in progress (a failed
+    // one included, until it is dismissed), and says why. A `.stalx` is a newer
+    // switch, and the latest switch wins. The re-entries above keep their
+    // exception: each continues a flow that is already on screen.
+    if (store.loading.isLoading && !reentryOwnsScreen && !lowerPath.endsWith('.stalx')) {
+      ui.showToast(i18n.t('importGate.loadInProgress'), TOAST_KEYS.IMPORT_IN_PROGRESS, 'warning');
+      return;
+    }
+
     // Past the gates: this is now the user's latest pick (see `latestRouteToken`).
     token = ++latestRouteToken;
 

@@ -3277,6 +3277,7 @@
   },
   "importGate": {
     "inProgress": "Finish or cancel the current import first.",
+    "loadInProgress": "Wait for the project to finish opening.",
     "parsing": "Reading {{fileName}}..."
   },
   "newSection": {
