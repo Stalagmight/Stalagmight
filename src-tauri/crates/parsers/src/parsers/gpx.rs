@@ -1070,7 +1070,8 @@ fn shots_from_points(points: &[(f64, f64, Option<f64>)], depth_inverted: bool) -
 
 /// `placement` with its import-side station renumbered from a point index to
 /// the station that point became ([`PointShots::station_of`]). An index past
-/// the last point is left as it is, for the core to refuse as before.
+/// the last point is left as it is, for the core to refuse as before. A
+/// `FromImporting` placement never gets here: [`resolve_placement`] refuses it.
 fn renumber_placement(placement: ImportPlacement, station_of: &[u32]) -> ImportPlacement {
     let station = |i: u32| station_of.get(i as usize).copied().unwrap_or(i);
     match placement {
@@ -1392,6 +1393,12 @@ pub fn convert_gpx_to_import_configs(
 ///
 /// Uses user-provided placement from Step 2 if available, otherwise falls back
 /// to zero-datum at the first point.
+///
+/// [#576 W87b] A placement on another section of the same batch
+/// (`FromImporting`) is refused. The GPX dialog never sends one (it places every
+/// section at a zero datum), and its target station would name a GPS point, which
+/// the repeated-point drop and the sections that import nothing renumber without
+/// this placement following (`renumber_placement` maps only its own station).
 fn resolve_placement(
     section_index: u32,
     placements: &[GpxSectionPlacement],
@@ -1399,6 +1406,13 @@ fn resolve_placement(
     default_name: impl FnOnce() -> Option<String>,
 ) -> Result<(ImportPlacement, Option<String>, String)> {
     if let Some(p) = placements.iter().find(|p| p.section_index == section_index) {
+        if matches!(p.placement, ImportPlacement::FromImporting { .. }) {
+            anyhow::bail!(
+                "GPX section {section_index} cannot be placed on another section of the same \
+                 import; place it at a zero datum, at the origin, on an existing station or \
+                 manually"
+            );
+        }
         return Ok((p.placement.clone(), p.name.clone(), p.color.clone()));
     }
 

@@ -164,3 +164,50 @@ fn a_placement_station_is_renumbered_past_the_dropped_points() {
         assert_eq!(station_index, station, "point {point}");
     }
 }
+
+/// [#576 W87b] A placement on another section of the same batch (`FromImporting`)
+/// is refused for GPX with an error that says so. The GPX dialog never sends one;
+/// through the IPC its target station named a POINT of the target track, which the
+/// repeated-point drop renumbers without it following: here point 3 of track 0 is
+/// its station 2 once point 2 is dropped, and the placement went on naming 3, a
+/// station track 0 does not have.
+#[test]
+fn a_placement_on_another_section_of_the_batch_is_refused() {
+    let xml = r#"<?xml version="1.0"?><gpx version="1.1">
+        <trk><name>Target</name><trkseg>
+            <trkpt lat="0" lon="0"><ele>1</ele></trkpt>
+            <trkpt lat="0" lon="0.0001"><ele>1</ele></trkpt>
+            <trkpt lat="0" lon="0.0001"><ele>1</ele></trkpt>
+            <trkpt lat="0" lon="0.0002"><ele>1</ele></trkpt>
+        </trkseg></trk>
+        <trk><name>Placed</name><trkseg>
+            <trkpt lat="0.001" lon="0"><ele>1</ele></trkpt>
+            <trkpt lat="0.001" lon="0.0001"><ele>1</ele></trkpt>
+        </trkseg></trk>
+    </gpx>"#;
+    let gpx = parse_gpx_str(xml).unwrap();
+    let on_target = GpxSectionPlacement {
+        section_index: 1,
+        placement: ImportPlacement::FromImporting {
+            import_station: 0,
+            target_section_index: 0,
+            target_station_index: 3,
+        },
+        name: None,
+        color: "#000000".to_string(),
+    };
+    let converted = convert_gpx_to_import_configs(&gpx, false, true, false, &[on_target], false);
+    match &converted {
+        Ok((configs, _)) => println!(
+            "converted: target track stations {}, placement {:?}",
+            configs.first().map_or(0, |c| c.shots.len() + 1),
+            configs.get(1).map(|c| &c.placement)
+        ),
+        Err(e) => println!("refused: {e}"),
+    }
+    let message = converted.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(
+        message.contains("GPX section 1 cannot be placed on another section of the same import"),
+        "refused with a clear error: {message:?}"
+    );
+}
