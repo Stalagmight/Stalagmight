@@ -413,6 +413,36 @@ checks the committed block on every run: a placeholder, malformed base64, or
 a non-https/non-`github.com` endpoint fails the gate. A config without the
 block passes it, and the app then starts with the updater off.
 
+### What the install step does not guarantee
+
+The in-app install (`install_app_update_and_restart`) hands the verified bytes
+to tauri-plugin-updater's `Update::install`, which replaces the app itself. Two
+of its platform paths are not atomic in the plugin version we ship (2.9.0,
+`src/updater.rs`). This is upstream behaviour, written down here, not worked
+around (#576 W85b-LOW):
+
+- **macOS - a failed move into place does not restore the old app.** The
+  `.app.tar.gz` is unpacked into a temp directory, the installed `.app` is renamed
+  into a second temp directory as its backup, and the new bundle is renamed to the
+  app's path. If that last rename fails, the error is returned with nothing
+  renaming the backup back, and both temp directories are deleted on that return,
+  the backup with them: the app is gone from where it was installed. When the
+  first rename is refused for permissions, the admin AppleScript fallback runs
+  `rm -rf` on the app before `mv -f`, with the same result if the move fails. The
+  user reinstalls from the release's `.dmg`.
+- **Linux - the AppImage is rewritten in place.** The running AppImage is renamed
+  into a temp directory on the same device as its backup, and the new AppImage is
+  written straight to the original path (`std::fs::write`), not staged beside it
+  and renamed. A write that fails puts the backup back, but a kill or a power loss
+  during the write leaves a partly written AppImage at the path, with the old one
+  left in that temp directory (`/tmp` is tried first, and a reboot may clear it).
+  The user downloads the AppImage from the release page again.
+
+On Windows the plugin starts the NSIS installer and exits; what that installer
+does on a failure is outside this list. The trust-side residual risks (the
+offered version is not signed, the size cap can be overshot) are in the module
+docs of `src-tauri/src/commands/app_update.rs`.
+
 ### Keypair custody
 
 The signing keypair is a minisign key generated and held by the maintainer

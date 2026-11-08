@@ -56,6 +56,37 @@
 //!   and every chunk the stream already had ready is buffered before then: the
 //!   memory held can pass the cap by what arrived in that one poll before the
 //!   abort is seen. The cap bounds the download near 512 MiB, not at it.
+//!
+//! ## What the install step does not guarantee
+//!
+//! [`install_app_update_and_restart`] hands the verified bytes to the plugin's
+//! `Update::install`, which replaces the app itself; nothing here wraps it. Two
+//! of its platform paths are not atomic (tauri-plugin-updater 2.9.0,
+//! `src/updater.rs`), and neither is changed here:
+//!
+//! - **macOS: a failed move into place does not restore the old app.** The
+//!   `.app.tar.gz` is unpacked into one temp directory, the installed `.app` is
+//!   renamed into a second one as its backup, and the new bundle is then renamed
+//!   to the app's path (`install_inner`, :1106-1195). When that second rename
+//!   fails, the error returns at once with nothing renaming the backup back, and
+//!   both temp directories are `TempDir`s dropped on that return, so the backup
+//!   is deleted with them: the app is gone from where it was installed. Where the
+//!   first rename is refused for permissions, the admin AppleScript runs
+//!   `rm -rf` on the app before its `mv -f`, with the same result if the move
+//!   fails. The way back is the `.dmg` from the release page.
+//! - **Linux: the AppImage is rewritten in place.** The running AppImage is
+//!   renamed into a temp directory on the same device as its backup, and the new
+//!   one is written straight to the original path with `std::fs::write`, not
+//!   staged beside it and renamed (`install_appimage`, :863-932). A write that
+//!   fails puts the backup back; a process killed or a machine losing power
+//!   during the write leaves a partly written AppImage at the path, with the old
+//!   one left in that temp directory (under `/tmp` first, which a reboot may
+//!   clear). The way back is the AppImage from the release page.
+//!
+//! On Windows the plugin starts the NSIS installer and exits (`install_inner`,
+//! :674); what that installer does when it fails is not covered here.
+//! [#576 W85b-LOW] Upstream behaviour, documented rather than worked around: see
+//! also docs/releasing.md, "What the install step does not guarantee".
 
 use std::future::Future;
 use std::pin::Pin;
