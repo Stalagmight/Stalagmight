@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 use super::speleodb::{
-    authed_session_at, editing_fixture, remote_readonly_fixture, routing_stub,
+    authed_session_at, editing_fixture, link_open_copy_to, remote_readonly_fixture, routing_stub,
     FREE_MUTEX_AT_BASE_BODY, HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY,
     HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
 };
@@ -406,6 +406,7 @@ fn start_against(route: fn(&str) -> (u16, &'static str)) -> Observed {
     let (base, _listener, seen) = routing_stub(route);
     let (_temp, state) = remote_readonly_fixture();
     *state.speleodb.lock() = authed_session_at(&base);
+    link_open_copy_to(&state, &base);
     let answer = format!(
         "{:?}",
         state.speleodb_start_editing().map_err(|e| e.message)

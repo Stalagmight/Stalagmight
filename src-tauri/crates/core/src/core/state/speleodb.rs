@@ -1949,6 +1949,11 @@ impl AppState {
         };
         let account = lock_ops.read_account().transpose().map_err(local_dto)?;
         let (endpoint, token) = account.get().clone();
+        // [#576 W88] Before the probe and the acquire: both, and every lock verb after
+        // them, send this account's token to `endpoint` naming the LINK's project, so a
+        // copy linked to another server is refused before anything reaches this one.
+        super::speleodb_session::refuse_a_copy_on_another_server(&link.endpoint, Some(&endpoint))
+            .map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
         // Whether the acquire below is OURS to claim - probed BEFORE it, because the
@@ -4917,6 +4922,7 @@ mod tests {
         let (base, _listener) = always_answering_stub(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
         assert!(
             !state.speleodb_lock_acquired_here(REMOTE_ID),
             "precondition: this process has taken no lock - it opened the project \
@@ -5055,6 +5061,7 @@ mod tests {
         );
         let (_temp, state) = remote_readonly_fixture();
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
         assert!(
             !state.speleodb_lock_acquired_here(REMOTE_ID),
             "a read-only open records nothing"
@@ -5108,6 +5115,7 @@ mod tests {
         let (base, _listener) = always_answering_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
         let (_temp, state) = remote_readonly_fixture();
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
 
         assert!(
             matches!(
@@ -5159,6 +5167,7 @@ mod tests {
         let (base, _listener, seen) = recording_stub(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -5219,6 +5228,7 @@ mod tests {
         let (base, _listener, seen) = recording_stub(FREE_MUTEX_DIVERGED_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -5262,6 +5272,7 @@ mod tests {
         let (base, _listener, seen) = recording_stub(OTHER_HOLDER_DIVERGED_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -5304,6 +5315,7 @@ mod tests {
         let (base, _listener, seen) = recording_stub(HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY);
         let (_temp, state) = remote_readonly_fixture();
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
 
         assert!(
             matches!(
@@ -5348,6 +5360,7 @@ mod tests {
         let (base, _listener, seen) = recording_stub(SAME_ACCOUNT_UPPERCASE_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -5387,6 +5400,7 @@ mod tests {
         let (base, _listener) = always_answering_stub(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
         state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
         // The session ends somewhere this file cannot hook (here: the reopen after a
@@ -5746,6 +5760,7 @@ mod tests {
         let (base, _listener, seen) = stub_failing_the_lock_probe(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -5801,6 +5816,7 @@ mod tests {
         let (base, _listener, seen) = stub_failing_the_lock_probe(CLEAN_DIVERGED_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(false);
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -5836,6 +5852,7 @@ mod tests {
         let (base, _listener, seen) = recording_stub(FREE_MUTEX_DIVERGED_BODY);
         let (_temp, state) = remote_readonly_fixture();
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
 
         state
             .speleodb_start_editing()
@@ -6126,6 +6143,7 @@ mod tests {
         let (base, _listener) = holder_changes_after_the_first_read(REMOTE_ID, Some("u@x"));
         let (_temp, state) = remote_readonly_fixture();
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
         assert!(!state.edit_enabled(), "fixture opens read-only");
 
         let status = state.speleodb_link_status().expect("status");

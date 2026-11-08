@@ -178,6 +178,7 @@ fn view_is_refused_over_a_lock_this_session_adopted() {
     let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
     let (_adopted_dir, adopted) = super::speleodb::remote_readonly_fixture();
     *adopted.speleodb.lock() = super::speleodb::authed_session_at(&base);
+    super::speleodb::link_open_copy_to(&adopted, &base);
     let polled = adopted.speleodb_link_status().map(|s| s.edit_enabled);
     assert!(
         matches!(polled, Ok(true)),

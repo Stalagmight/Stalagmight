@@ -166,6 +166,9 @@ fn start_editing_stamps_its_verify_whatever_an_autosave_is_doing() {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
     let state = AppState::new().unwrap();
+    // [#576 W88] The commit opens the gate only for a session signed in to the server
+    // the copy is linked to.
+    *state.speleodb.lock() = super::speleodb::authed_session_at(&link().endpoint);
     let path = temp.path().join("linked.stalx");
     linked_file(&path);
     assert!(state.open_project(path).success);
@@ -248,6 +251,12 @@ fn link_writers_wait_for_a_command_in_flight() {
         assert!(published.is_ok());
     });
 
+    // [#576 W88] Signed in to the copy's server for the commit only (it opens the gate
+    // for no other session), and out again, so the unlink below hands nothing back.
+    let signed_out = std::mem::replace(
+        &mut *state.speleodb.lock(),
+        super::speleodb::authed_session_at(&link().endpoint),
+    );
     let generation = state.speleodb_session_generation();
     let commit = waits_for_command_lock(&state, || {
         assert!(state
@@ -259,6 +268,7 @@ fn link_writers_wait_for_a_command_in_flight() {
             )
             .is_ok());
     });
+    *state.speleodb.lock() = signed_out;
 
     let unlink = waits_for_command_lock(&state, || {
         assert!(state.speleodb_unlink_in_place().is_ok());

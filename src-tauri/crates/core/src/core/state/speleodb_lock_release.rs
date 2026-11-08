@@ -260,12 +260,11 @@ impl AppState {
             }
         };
         // [#576 W87b] The release sends the SESSION's token to the session's server
-        // and names the LINK's project, so the two must be the same server. Nothing
-        // that opens the gate compares them: Start editing on a copy linked to
-        // server X while signed in to server Y opens it (`speleodb_commit_editing`
-        // checks the generation and the project id only), and so does a Restore's
-        // reopen after a sign-in to Y landed inside it (`reopen_for_restore`). A
-        // release sent then hands Y's token and X's project id to Y.
+        // and names the LINK's project, so the two must be the same server. A release
+        // sent otherwise hands Y's token and X's project id to Y. [#576 W88] The gate
+        // no longer opens over such a copy (`refuse_a_copy_on_another_server`, in
+        // Start editing, `speleodb_commit_editing` and `reopen_for_restore`); this
+        // stays as the release's own check.
         if crate::speleodb::auth::normalize_endpoint(&link.endpoint)
             != crate::speleodb::auth::normalize_endpoint(&endpoint)
         {
@@ -912,18 +911,17 @@ mod tests {
         );
     }
 
-    /// [#576 W87b] Nothing that opens the edit gate compares the copy's link with the
-    /// signed-in server: Start editing on a copy linked to server X, while signed in to
-    /// server Y that answers for the same project id, opens it
-    /// (`speleodb_commit_editing` checks the generation and the project id only). Every
-    /// silent release then sent Y's token and X's project id to Y. It is skipped now,
-    /// with a warning, the sign-out prompt offers no release for it, and a link to the
-    /// SAME server spelled another way still releases.
+    /// [#576 W87b] An edit session over a copy linked to server X, while signed in to
+    /// server Y that answers for the same project id: every silent release sent Y's
+    /// token and X's project id to Y. It is skipped now, with a warning, the sign-out
+    /// prompt offers no release for it, and a link to the SAME server spelled another
+    /// way still releases. ([#576 W88] Start editing used to open such a session; it
+    /// refuses now, so the gate is opened by hand here.)
     #[test]
     fn a_copy_linked_to_another_server_is_not_released_on_the_signed_in_one() {
         use crate::core::state::speleodb::{
             authed_session_at, logged_events, recording_stub, remote_readonly_fixture,
-            HELD_BY_SAME_ACCOUNT_AT_BASE_BODY,
+            HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
         };
         let releases = |seen: &std::sync::Mutex<Vec<String>>| {
             seen.lock()
@@ -939,10 +937,11 @@ mod tests {
         let (y, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
         let (_temp, state) = remote_readonly_fixture();
         *state.speleodb.lock() = authed_session_at(&y);
-        let started = state
-            .speleodb_start_editing()
-            .map(|_| ())
-            .map_err(|e| e.message);
+        // [#576 W88] Start editing refuses this copy now (`sdb_endpoint_gate_tests`), so
+        // the edit session the release would end is set up by hand, as Start editing
+        // used to leave it: the gate open and the account's lock adopted.
+        state.set_edit_enabled(true);
+        state.speleodb_note_resumed_lock(REMOTE_ID);
         let linked_to = state.speleodb_open_link().map(|link| link.endpoint).ok();
         let gate = (state.edit_enabled(), state.force_editing());
         let offered = state.speleodb_sign_out_locks().releasable.len();
@@ -978,15 +977,16 @@ mod tests {
         same.speleodb_release_held_lock_best_effort();
         let same_sent = releases(&z_seen);
         println!(
-            "[W87b] linked to {linked_to:?}, signed in to {y}: start editing -> {started:?}, \
-             gate (edit, force) {gate:?}; release params (silent, abandon, delete) {params:?}; \
+            "[W87b] linked to {linked_to:?}, signed in to {y}: gate (edit, force) {gate:?}; \
+             release params (silent, abandon, delete) {params:?}; \
              sign-out prompt offers {offered}; release POSTs to the signed-in server {sent}; \
              logged {logs:?}. Same server as {spelled} vs {z}: start editing -> \
              {same_started:?}, offered {same_offered}, release POSTs {same_sent}"
         );
-        assert!(
-            started.is_ok() && gate == (true, false),
-            "premise: Start editing opens the gate over a link to another server"
+        assert_eq!(
+            gate,
+            (true, false),
+            "premise: the gate is open over a link to another server"
         );
         assert_eq!(
             linked_to.as_deref(),

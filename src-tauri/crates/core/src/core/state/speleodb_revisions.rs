@@ -1066,8 +1066,32 @@ mod restore_order {
         /// [#576 SDB-ACCT-D1] Every other edit session is claimed as an ADOPTED lock
         /// (a resumed claim), as the commit claims it: the release verbs hand it
         /// back, the authorship shortcut stays off.
+        ///
+        /// [#576 W88] Not over a copy linked to another server than the one signed in
+        /// now, or with nobody signed in: the restore holds no lock-ops span, so a
+        /// sign-in elsewhere or a 401 auto-drop can land inside it, and an open gate
+        /// would then lock, push and release on the session's server under this copy's
+        /// project id. The restored copy stays read-only, nothing claimed, and says why
+        /// in the log. Checked under `project`, as the commit checks it.
         pub(super) fn reopen_for_restore(&self, state: &AppState, restore: bool, project_id: &str) {
             if restore {
+                let _proj_guard = state.project.lock();
+                if let Ok(link) = state.speleodb_open_link() {
+                    let signed_in = state.speleodb.lock().endpoint.clone();
+                    if let Err(e) = super::super::speleodb_session::refuse_a_copy_on_another_server(
+                        &link.endpoint,
+                        signed_in.as_deref(),
+                    ) {
+                        tracing::warn!(
+                            error = %e,
+                            project_id = %project_id,
+                            purpose = "never reopen editing over a copy of another server",
+                            "speleodb restore: the session changed during the restore; \
+                             leaving the restored copy read-only"
+                        );
+                        return;
+                    }
+                }
                 state.set_edit_enabled(true);
                 if self.captured.had_lock_record && !self.captured.had_resumed_record {
                     state.speleodb_note_lock_acquired(Some(project_id));
@@ -1429,8 +1453,9 @@ mod tests {
         use super::super::speleodb::authed_session_at;
         let fresh = || {
             let (state, temp) = linked_state();
-            // A claim is stamped with the account that took it.
-            *state.speleodb.lock() = authed_session_at("http://x/");
+            // A claim is stamped with the account that took it, signed in to the server
+            // the copy is linked to (#576 W88).
+            *state.speleodb.lock() = authed_session_at("https://example.invalid");
             // Where the reload leaves it: a fresh load of a remote project is read-only.
             state.set_edit_enabled(false);
             (state, temp)
@@ -1491,6 +1516,56 @@ mod tests {
              chain thought it was"
         );
     }
+
+    /// [#576 W88] A Restore holds no lock-ops span, so a sign-in to another server (or
+    /// a 401 auto-drop) can land inside it: the reload then leaves a copy linked to the
+    /// server the restore started on while the session is somewhere else, or nowhere.
+    /// Its reopen opened the gate anyway, so the next push, Done or release sent the
+    /// session's token to the session's server naming this copy's project. It stays
+    /// read-only now, with nothing claimed; the same server spelled another way still
+    /// reopens.
+    #[test]
+    fn a_restore_never_reopens_the_gate_over_a_copy_linked_to_another_server() {
+        use super::super::speleodb::authed_session_at;
+        // `linked_state` links its copy to `https://example.invalid`.
+        let reopened = |signed_in: Option<&str>| {
+            let (state, _temp) = linked_state();
+            if let Some(endpoint) = signed_in {
+                *state.speleodb.lock() = authed_session_at(endpoint);
+            }
+            // Where the reload leaves it: a fresh load of a remote project is read-only.
+            state.set_edit_enabled(false);
+            restore_order::Reloaded::for_tests(true, false).reopen_for_restore(
+                &state,
+                true,
+                FIXTURE_PROJECT_ID,
+            );
+            (
+                state.edit_enabled(),
+                state.speleodb_lock_acquired_here(FIXTURE_PROJECT_ID),
+            )
+        };
+        let elsewhere = reopened(Some("http://y.invalid/"));
+        let signed_out = reopened(None);
+        let same_server = reopened(Some("HTTPS://Example.invalid:443/"));
+        println!(
+            "[W88 item 1, Restore reopen] linked to https://example.invalid: signed in to \
+             http://y.invalid/ -> (gate, claim) {elsewhere:?}; signed out -> {signed_out:?}; \
+             signed in to HTTPS://Example.invalid:443/ -> {same_server:?}"
+        );
+        assert_eq!(
+            elsewhere,
+            (false, false),
+            "signed in to another server: the restored copy stays read-only, unclaimed"
+        );
+        assert_eq!(signed_out, (false, false), "signed out: the same");
+        assert_eq!(
+            same_server,
+            (true, true),
+            "the same server spelled another way reopens and hands the record back"
+        );
+    }
+
     #[test]
     fn validate_hexsha_accepts_git_ids_rejects_traversal() {
         // #218 restore: a full 40-hex commit id and a shorter prefix both pass.

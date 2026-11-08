@@ -470,6 +470,14 @@ mod sdb_delete_release_claim_tests;
     reason = "test module: panics on a failed assumption are the point, and the printed \
               values are the evidence a run captures"
 )]
+mod sdb_endpoint_gate_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
 mod sdb_endpoint_tests;
 #[cfg(test)]
 #[expect(

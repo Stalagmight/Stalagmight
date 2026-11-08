@@ -383,6 +383,31 @@ mod stand_down {
     }
 }
 
+/// [#576 W88] Refuse an edit session over a copy linked to another server than the
+/// one signed in (`signed_in`, `None` when signed out). Every lock verb sends the
+/// session's token to the session's server and names the LINK's project - the
+/// acquire, the push, Done's release, the release verbs - so editing a copy linked
+/// to server X while signed in to server Y would lock, push and release on Y under
+/// X's project id. Compared through [`normalize_endpoint`], as the silent release
+/// (`speleodb_lock_release_params`) and the landing record (`record_landing_in_file`)
+/// compare them: the same server spelled another way is the same server.
+pub(super) fn refuse_a_copy_on_another_server(
+    link_endpoint: &str,
+    signed_in: Option<&str>,
+) -> Result<(), SpeleoDbError> {
+    if signed_in
+        .is_some_and(|endpoint| normalize_endpoint(endpoint) == normalize_endpoint(link_endpoint))
+    {
+        return Ok(());
+    }
+    let elsewhere = signed_in
+        .map(|endpoint| format!(", not to {endpoint} where you are signed in"))
+        .unwrap_or_default();
+    Err(SpeleoDbError::refused(format!(
+        "this copy belongs to {link_endpoint}{elsewhere}; sign in to that server to edit it"
+    )))
+}
+
 impl AppState {
     /// Record a session boundary. Call ONLY while holding the `project` mutex
     /// (rule 1 above); every call site takes a `_proj_guard`-shaped local or
@@ -510,6 +535,12 @@ impl AppState {
         if open.project_id != project_id {
             return Err(SpeleoDbError::SessionMoved);
         }
+        // [#576 W88] And the copy must be linked to the server signed in now
+        // ([`refuse_a_copy_on_another_server`]): the poll's inherited-lock reopen and
+        // the update's restore commit here with no check of their own. Read under
+        // `project` (the session mutex sits below it), beside the gate it decides.
+        let signed_in = self.speleodb.lock().endpoint.clone();
+        refuse_a_copy_on_another_server(&open.endpoint, signed_in.as_deref())?;
         self.set_edit_enabled(true);
         // AFTER the gate opens, never before - a status poll landing in between
         // would see a shut gate and clear the record again
@@ -1420,6 +1451,9 @@ mod tests {
     fn a_commit_without_acquired_here_opens_the_gate_without_a_claim() {
         let temp = tempfile::TempDir::new().expect("temp");
         let state = AppState::new().expect("state");
+        // [#576 W88] The commit opens the gate only for a session signed in to the
+        // copy's server.
+        sign_in_unreachable(&state);
         open_linked(&state, temp.path(), "a.stalx", ID);
         let (entry_gen, link) = state
             .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
@@ -1435,8 +1469,9 @@ mod tests {
             .expect("commit lands");
 
         assert!(state.edit_enabled());
+        // [#576 SDB-ACCT-D1] Signed in, the inherited lock is claimed - as ADOPTED.
         assert!(
-            !state.speleodb_lock_acquired_here(ID),
+            !state.speleodb_lock_taken_here(ID),
             "an inherited lock is an edit session, not an acquisition"
         );
     }
@@ -2044,10 +2079,16 @@ mod tests {
         // frees the mutex out from under it.
         let temp = tempfile::TempDir::new().expect("temp");
         let state = AppState::new().expect("state");
+        // [#576 W88] The commit opens the gate only for a session signed in to the
+        // copy's server; it then claims the inherited lock as ADOPTED (#576
+        // SDB-ACCT-D1), so the claim is dropped again: this test is about the live
+        // session eye, a gate open without a record.
+        sign_in_unreachable(&state);
         open_linked(&state, temp.path(), "a.stalx", ID);
         state
             .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, false)
             .expect("the inherited successor's commit");
+        let _ = state.speleodb_forget_lock_acquired_for(ID);
         assert!(
             !state.speleodb_lock_acquired_here(ID),
             "fixture: an inherited session has no acquisition record"
@@ -2089,6 +2130,8 @@ mod tests {
         // A DIFFERENT project's live session says nothing about this lock.
         state.close_project();
         open_linked(&state, temp.path(), "b.stalx", OTHER_ID);
+        // [#576 W88] Signed in to the copy's server, which the commit requires.
+        sign_in_unreachable(&state);
         state
             .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, OTHER_ID, false)
             .expect("the other project's session");

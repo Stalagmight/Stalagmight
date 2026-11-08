@@ -17,7 +17,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::speleodb::{
-    authed_session_at, recording_stub, remote_readonly_fixture, routing_stub,
+    authed_session_at, link_open_copy_to, recording_stub, remote_readonly_fixture, routing_stub,
     FREE_MUTEX_AT_BASE_BODY, HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
 };
 use crate::speleodb::StartEditingResult;
@@ -36,6 +36,7 @@ fn continue_editing_claims_the_resumed_lock_so_done_releases_it() {
     let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
     let (_temp, state) = remote_readonly_fixture();
     *state.speleodb.lock() = authed_session_at(&base);
+    link_open_copy_to(&state, &base);
 
     let started = state
         .speleodb_resume_held_lock_editing()
@@ -70,6 +71,7 @@ fn plain_start_editing_over_the_accounts_lock_adopts_it_so_done_releases_it() {
     let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
     let (_temp, state) = remote_readonly_fixture();
     *state.speleodb.lock() = authed_session_at(&base);
+    link_open_copy_to(&state, &base);
 
     let started = state.speleodb_start_editing().expect("start editing");
     let (claimed, taken) = (
@@ -120,6 +122,7 @@ fn a_second_start_editing_keeps_the_lock_this_session_took() {
     let (base, _listener, _seen) = routing_stub(free_then_ours);
     let (_temp, state) = remote_readonly_fixture();
     *state.speleodb.lock() = authed_session_at(&base);
+    link_open_copy_to(&state, &base);
 
     let first = state.speleodb_start_editing().expect("first start editing");
     let taken_first = state.speleodb_lock_taken_here(REMOTE_ID);
@@ -153,6 +156,7 @@ fn done_releases_a_lock_the_poll_adopted_whatever_the_claim_says() {
     let adopt = || {
         let (temp, state) = remote_readonly_fixture();
         *state.speleodb.lock() = authed_session_at(&base);
+        link_open_copy_to(&state, &base);
         let polled = state.speleodb_link_status().map(|s| s.edit_enabled);
         assert!(
             matches!(polled, Ok(true)) && state.speleodb_lock_resumed_here(REMOTE_ID),

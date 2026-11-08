@@ -15,7 +15,7 @@
 use std::io::{Read as _, Write as _};
 use std::sync::{Arc, Mutex};
 
-use super::speleodb::{authed_session_at, remote_readonly_fixture, REMOTE_ID};
+use super::speleodb::{authed_session_at, link_open_copy_to, remote_readonly_fixture, REMOTE_ID};
 use crate::speleodb::{DoneResult, RemoteState, StartEditingResult};
 
 /// Our own account holds the lock and the server tip IS our BASE.
@@ -82,6 +82,7 @@ fn a_resumed_lock_does_not_explain_another_sessions_commit_away() {
     let (base, _listener, body, seen) = switchable_stub(AT_BASE);
     let (_temp, state) = remote_readonly_fixture();
     *state.speleodb.lock() = authed_session_at(&base);
+    link_open_copy_to(&state, &base);
 
     // "Continue editing" from the held-lock prompt, over our account's lock.
     let started = state.speleodb_resume_held_lock_editing().unwrap();
