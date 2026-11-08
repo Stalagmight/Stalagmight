@@ -1,10 +1,13 @@
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { isProjectChangedRefusal } from '../../store/commandResult';
 import { useProject } from '../../hooks/useProject';
 import { abandonUpdateRestart, performQuit } from '../../utils/quit';
 import { holdAutosave } from '../../utils/autosaveHold';
 import { openPendingImport, readPendingImport } from '../../utils/pendingImport';
+import { toastProjectChanged } from '../../utils/projectChangedNotice';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -12,11 +15,12 @@ import { useShallow } from 'zustand/react/shallow';
 
 export default function UnsavedChangesDialog() {
   const { t } = useTranslation();
-  const { closeDialog, setView, openDialog, dialogData } = useUIStore(
+  const { closeDialog, setView, openDialog, showToast, dialogData } = useUIStore(
     useShallow((s) => ({
       closeDialog: s.closeDialog,
       setView: s.setView,
       openDialog: s.openDialog,
+      showToast: s.showToast,
       dialogData: s.dialogData,
     })),
   );
@@ -102,6 +106,20 @@ export default function UnsavedChangesDialog() {
     const result = await handleSaveProject();
     if (result && result.success) {
       performQuit();
+      return;
+    }
+    // [#576 W87a-NF2] A save refused because a project switch is under way (the switch
+    // gate, or the backend's PROJECT_CHANGED) is no failure to report, so
+    // `handleSaveProject` shows nothing for it, and the window must not close over the
+    // unsaved work either. Say why, as the SpeleoDB exit prompts do: the quiet notice
+    // an edit refused during a switch gets, and for the backend's code a user-started
+    // verb's short line. Then put this prompt back as it was, so Save & Quit can be
+    // pressed again once the switch has settled, and Cancel still abandons the exit
+    // (an update restart riding on it included) - unless another dialog took the slot.
+    if (isProjectChangedRefusal(result)) {
+      if (result?.code === 'PROJECT_CHANGED') toastProjectChanged(result);
+      else showToast(t('editGate.switchPendingNotice'), TOAST_KEYS.EDIT_DURING_SWITCH, 'info');
+      if (useUIStore.getState().activeDialog === null) openDialog('unsaved-changes', dialogData);
     }
   };
 

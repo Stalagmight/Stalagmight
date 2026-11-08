@@ -207,7 +207,10 @@ Commands now run **concurrently**, which makes three rules explicit:
   Q-W22S-1-D1).
   An edit refused because a switch is under way shows a quiet "Wait for the project
   to finish opening." toast; saves refused the same way stay silent (#576
-  Q-RVFc-1-D1).
+  Q-RVFc-1-D1), except a save pressed on an exit prompt (Save & Quit on the
+  unsaved-changes prompt, "Save changes locally" on the SpeleoDB close and quit
+  prompts), which shows the same toast and leaves the prompt up to press again
+  (#576 W87a-4, W87a-NF1, W87a-NF2).
 - **A read of the project is a settled read.** A command mutates the project and
   then settles it (orphan conversion, frame renormalisation, the reconcile, the undo
   push) under one `command_lock` span but several `project` acquisitions, so a read
