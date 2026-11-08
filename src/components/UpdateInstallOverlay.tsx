@@ -21,7 +21,9 @@ import { useScreenOccupant } from '../hooks/useScreenOccupant';
  * - sits on the dialog stack (`pushDialog`), so `#root` - the menus, toolbar, map
  *   and panels - is inert and painted under it;
  * - takes focus and swallows every key that reaches it, so nothing bubbles on to
- *   a window-level handler.
+ *   a window-level handler;
+ * - stays the top of that stack: a dialog asked for meanwhile opens only once the
+ *   hold lifts (`uiStore.openDialog`, #576 W86).
  *
  * It follows the loading window's and the integrity dialog's conventions (#576):
  * the focused element is the dialog itself (role, `aria-modal` and its labels sit

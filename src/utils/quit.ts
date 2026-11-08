@@ -164,8 +164,9 @@ export interface HandBackSettle {
   /** False when the queued edits did not settle in time: the project counts as dirty. */
   editsSettled: boolean;
   /**
-   * A newer exit or a switch was requested during the wait (latest wins), or an
-   * update is installing: this exit does nothing at all.
+   * A newer exit or a switch was requested during the wait (latest wins), an update
+   * is installing, or a quit, the window X or an update restart is at the exit gate
+   * (its prompt or exit answers this one too): this exit does nothing at all.
    */
   superseded: boolean;
   /**
@@ -175,6 +176,31 @@ export interface HandBackSettle {
    */
   screenTaken: boolean;
 }
+
+/**
+ * [#576 W86 x FZ-FZ-INT-1] The exit gate, shared by the close listener
+ * (`useBeforeUnload`: quit, the window X, the update restart) and the hand-back exits.
+ *
+ * Among the hand-back exits and project switches the latest wins: several hand-back
+ * exits can wait at once, and one a newer exit or a switch overtook drops itself
+ * after its wait ({@link settleEditsBeforeHandBack}). A close request is never
+ * dropped for them, since a quit must not be lost: it waits until every hand-back exit
+ * waiting at the gate has decided (a prompt, the close or switch it started, or
+ * dropping itself), then waits for the edits queued by then and decides against the
+ * state that left ({@link editsSettledForCloseRequest}). Its prompt replaces a
+ * hand-back exit's - quitting subsumes the close - and with nothing to protect it
+ * quits. A hand-back exit asked for while a close request is at the gate is dropped:
+ * the app is going away.
+ *
+ * Without the gate both waited on the same edits, and the close listener resumes a
+ * few microtasks before a hand-back caller, so the hand-back prompt landed last
+ * whichever was asked for first: the quit's `pendingQuit` was gone, and for an update
+ * restart its arm stayed set behind a close prompt.
+ */
+const handBackExitsDeciding = new Set<Promise<void>>();
+
+/** A close request (quit, the window X, an update restart) waiting at the exit gate or deciding. */
+let closeRequestAtGate = false;
 
 /**
  * [#576 W84 x FZ-FZ-INT-1] The wait every hand-back exit (Close, New Project over
@@ -188,6 +214,10 @@ export interface HandBackSettle {
  *   would request its switch first and the newer one would run second. Each takes
  *   a ticket (`noteProjectExitRequested`); one a newer exit, a switch request, or
  *   an update install overtook during the wait reports `superseded`.
+ * - A quit is never lost ([#576 W86], the exit gate above): one asked for during the
+ *   wait waits for this exit to decide, then decides itself; while a quit, the
+ *   window X or an update restart is at the gate, this exit reports `superseded`
+ *   at once and waits for nothing.
  * - One dialog at a time: a dialog that took the screen during the wait is not
  *   replaced (`screenTaken`, compared against the slot as it was at the call, so
  *   the re-entries that run while their own dialog is up - LaunchOpenConfirmDialog's
@@ -198,12 +228,20 @@ export interface HandBackSettle {
  *   the caller has decided by the time it looks again.
  *
  * Call it before the caller's first await, so the slot it compares against is the
- * one the user asked from.
+ * one the user asked from, and decide synchronously once it resolves: the gate is let
+ * go just before it does, and a quit waiting there decides only after its own wait
+ * for the edits, so the caller's decision always lands first.
  */
 export async function settleEditsBeforeHandBack(): Promise<HandBackSettle> {
+  if (closeRequestAtGate) return { editsSettled: true, superseded: true, screenTaken: false };
   const ticket = noteProjectExitRequested();
   const ui = useUIStore.getState();
   const { activeDialog, dialogData } = ui;
+  let decided!: () => void;
+  const deciding = new Promise<void>((resolve) => {
+    decided = resolve;
+  });
+  handBackExitsDeciding.add(deciding);
   ui.addScreenOccupant();
   try {
     const editsSettled = await editsSettledForExit();
@@ -216,6 +254,36 @@ export async function settleEditsBeforeHandBack(): Promise<HandBackSettle> {
     };
   } finally {
     useUIStore.getState().removeScreenOccupant();
+    handBackExitsDeciding.delete(deciding);
+    decided();
+  }
+}
+
+/**
+ * [#576 W86] Is a close request (quit, the window X, an update restart) waiting or
+ * deciding at the gate? Another one is then the same exit asked twice, and is dropped.
+ */
+export function isCloseRequestDeciding(): boolean {
+  return closeRequestAtGate;
+}
+
+/**
+ * [#576 W86] {@link editsSettledForExit} for the close listener, through the exit gate
+ * the hand-back exits share. A quit must not be lost, so unlike them it is never
+ * dropped, for a hand-back exit or for a switch: it waits until every hand-back exit
+ * waiting has decided (a prompt, the close or switch started, or dropping itself as
+ * superseded), then waits for the edits queued by then and decides against the state
+ * that left. Its prompt replaces the exit's - quitting subsumes the close - and with
+ * nothing to protect it quits. While it is at the gate, a hand-back exit asked for is
+ * dropped. The caller checks {@link isCloseRequestDeciding} first.
+ */
+export async function editsSettledForCloseRequest(): Promise<boolean> {
+  closeRequestAtGate = true;
+  try {
+    while (handBackExitsDeciding.size > 0) await Promise.all([...handBackExitsDeciding]);
+    return await editsSettledForExit();
+  } finally {
+    closeRequestAtGate = false;
   }
 }
 
@@ -290,6 +358,15 @@ export function consumeUpdateRestartArmed(): boolean {
   const armed = updateRestartArmed;
   updateRestartArmed = false;
   return armed;
+}
+
+/**
+ * [#576 W85] Is an update restart armed? A peek, not a consume: the close listener
+ * holds the project still from the restart's close request on (`useBeforeUnload`),
+ * and only its tail consumes the arm.
+ */
+export function isUpdateRestartArmed(): boolean {
+  return updateRestartArmed;
 }
 
 /**

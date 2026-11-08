@@ -111,6 +111,18 @@ async function holdInstall(page: import('@playwright/test').Page): Promise<void>
   });
 }
 
+/** The dialog slot, as the specs reach it through the exposed UI store. */
+interface UiStoreWindow {
+  __E2E_TEST__: {
+    uiStore: {
+      getState: () => {
+        activeDialog: string | null;
+        openDialog: (dialog: string, data?: Record<string, unknown>) => void;
+      };
+    };
+  };
+}
+
 /** The page-side handle `holdShotEdit` leaves for releasing the held edit. */
 interface EditHoldWindow {
   __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown, opts?: unknown) => Promise<unknown> };
@@ -258,11 +270,16 @@ test.describe('In-app update banner', () => {
    * without a word. From the moment the install starts the app is held still: a
    * shortcut does nothing (Ctrl+Z sends no undo), and a failed install gives the
    * app back with the existing failure toast.
+   *
+   * "Sends no undo" is read off the mutation queue, not a timer: undo and redo run
+   * on one first-in first-out queue, and Ctrl+Z puts its undo on it inside the key
+   * handler. So once the redo pressed after the install failed has reached the
+   * backend, an undo the held Ctrl+Z had queued would have reached it first.
    */
   test('while the update installs, shortcuts do nothing; a failed install lifts the hold', async ({ page }) => {
     await dirtyProjectWithReadyUpdate(page);
     await holdInstall(page);
-    await recordIpcCalls(page, ['install_app_update_and_restart', 'undo']);
+    await recordIpcCalls(page, ['install_app_update_and_restart', 'undo', 'redo']);
     const count = async (cmd: string) => (await getIpcCalls(page, cmd)).length;
 
     await page.getByTestId('update-banner-restart').click();
@@ -271,9 +288,8 @@ test.describe('In-app update banner', () => {
     await simulateCloseRequested(page);
     await expect.poll(() => count('install_app_update_and_restart')).toBe(1);
 
+    // The sentinel: Ctrl+Z sends an undo whenever the app is not held.
     await page.keyboard.press('Control+z');
-    // settle: an undo that is never sent leaves nothing to poll for
-    await page.waitForTimeout(500);
     expect(await count('undo')).toBe(0);
     const overlay = page.getByTestId('update-install-overlay');
     await expect(overlay).toBeVisible();
@@ -289,8 +305,58 @@ test.describe('In-app update banner', () => {
     await expect(overlay).toHaveCount(0);
     await expect(page.locator('[data-toast-key="app-update-install-failed"]')).toBeVisible();
     await expect(page.getByTestId('update-banner-download')).toBeVisible();
+
+    // The control: a redo queued behind anything the sentinel queued. Once it is sent,
+    // the sentinel's undo would have been sent before it.
+    await page.keyboard.press('Control+y');
+    await expect.poll(() => count('redo')).toBe(1);
+    expect(await getIpcCalls(page), 'the held Ctrl+Z sent nothing before the redo').toEqual(
+      [expect.objectContaining({ cmd: 'install_app_update_and_restart' }), expect.objectContaining({ cmd: 'redo' })],
+    );
+
     await page.keyboard.press('Control+z');
     await expect.poll(() => count('undo')).toBe(1);
+  });
+
+  /**
+   * [#576 W86] A dialog the app asks for while the update installs (a SpeleoDB verb
+   * answering, a load's prompt, an async failure's error) needs no click or key press,
+   * so the screen hold cannot stop it. It opened above the install window and took
+   * input there; it now waits, and opens once a failed install gives the app back,
+   * beside the install's own failure toast.
+   */
+  test('a dialog asked for during the install waits; a failed install shows it with the failure toast', async ({ page }) => {
+    await dirtyProjectWithReadyUpdate(page);
+    await holdInstall(page);
+    await recordIpcCalls(page, ['install_app_update_and_restart']);
+
+    await page.getByTestId('update-banner-restart').click();
+    await simulateCloseRequested(page);
+    await page.getByTestId('unsaved-changes-discard').click();
+    await simulateCloseRequested(page);
+    await expect.poll(async () => (await getIpcCalls(page, 'install_app_update_and_restart')).length).toBe(1);
+    const overlay = page.getByTestId('update-install-overlay');
+    await expect(overlay).toBeVisible();
+
+    // `openDialog` is synchronous, so the slot read right after it is the answer.
+    const slot = await page.evaluate(() => {
+      const ui = (window as unknown as UiStoreWindow).__E2E_TEST__.uiStore;
+      ui.getState().openDialog('error', { title: 'Open', message: 'Asked for during the install' });
+      return ui.getState().activeDialog;
+    });
+    expect(slot, 'no dialog takes the slot above the install window').toBeNull();
+    await expect(overlay).toBeFocused();
+    await expect(page.getByTestId('error-dialog')).toHaveCount(0);
+
+    await page.evaluate(() => {
+      (window as unknown as InstallHoldWindow).__E2E_INSTALL__?.reject({
+        code: 'FAILED',
+        message: 'Update install failed: disk full',
+      });
+    });
+    await expect(overlay).toHaveCount(0);
+    await expect(page.getByTestId('error-dialog')).toContainText('Asked for during the install');
+    await expect(page.locator('[data-toast-key="app-update-install-failed"]')).toBeVisible();
   });
 
   /**

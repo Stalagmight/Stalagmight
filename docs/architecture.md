@@ -188,7 +188,13 @@ Commands now run **concurrently**, which makes three rules explicit:
   the switch has put its project on screen (`SwitchTurn.committed`) or settled; and
   switches run one at a time - one still waiting when a newer one is requested is
   dropped, and a running load is cancelled (latest wins). A cancelled load keeps its
-  loading state until it ends: its answer can still commit. A load or a
+  loading state until it ends: its answer can still commit. An exit that leaves the
+  project (Close, New Project, opening a `.stalx`, the import-as-new hand-over) first
+  waits for the queued edits so its guard reads a settled dirty flag; the latest
+  wins there too, and a switch requested meanwhile also overtakes it. A quit, the
+  window close or an update restart is never dropped for either: it waits for the
+  hand-back exits waiting to decide, then decides itself, and a hand-back exit asked
+  for while it does is dropped (`utils/quit.ts`, the exit gate). A load or a
   close first flushes the queued display-setting writes, so each lands in its own
   session; the wait is bounded by `PROJECT_SETTING_FLUSH_TIMEOUT_MS` (2 s), and a
   write still queued then is dropped unsent. A display-setting write made once the
@@ -201,7 +207,10 @@ Commands now run **concurrently**, which makes three rules explicit:
   Q-W22S-1-D1).
   An edit refused because a switch is under way shows a quiet "Wait for the project
   to finish opening." toast; saves refused the same way stay silent (#576
-  Q-RVFc-1-D1).
+  Q-RVFc-1-D1), except a save pressed on an exit prompt (Save & Quit on the
+  unsaved-changes prompt, "Save changes locally" on the SpeleoDB close and quit
+  prompts), which shows the same toast and leaves the prompt up to press again
+  (#576 W87a-4, W87a-NF1, W87a-NF2).
 - **A read of the project is a settled read.** A command mutates the project and
   then settles it (orphan conversion, frame renormalisation, the reconcile, the undo
   push) under one `command_lock` span but several `project` acquisitions, so a read

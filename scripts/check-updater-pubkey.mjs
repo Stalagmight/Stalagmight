@@ -1,14 +1,13 @@
 // Updater pubkey/endpoint sanity gate (issue #579).
 //
-// `src-tauri/tauri.conf.json`'s `plugins.updater` block does not exist yet -
-// the real minisign keypair lands in a follow-up commit once it is generated
-// (see docs/releasing.md). This gate is a tripwire for that day: IF the
-// block exists, its `pubkey` must be non-placeholder, valid base64, and
-// every `endpoints` entry must be an https `github.com` URL. With the block
-// absent (today) it passes trivially, so it costs nothing now and turns a
-// typo or a leftover placeholder pubkey red the moment the block is
-// committed, rather than surfacing later as a client-side verification
-// failure nobody can reproduce from the repo alone.
+// `src-tauri/tauri.conf.json` commits the `plugins.updater` block (the
+// minisign public key and the stable endpoint, see docs/releasing.md). The
+// block's `pubkey` must be non-placeholder, valid base64 of a minisign key,
+// and every `endpoints` entry must be an https `github.com` URL, so a typo or
+// a placeholder pubkey goes red here rather than surfacing later as a
+// client-side verification failure nobody can reproduce from the repo alone.
+// A config without the block passes: the app then starts with the updater
+// off (`updater_configured` in src-tauri/src/commands/app_update.rs).
 //
 // Usage:  node scripts/check-updater-pubkey.mjs   (or: pnpm lint:updater-pubkey)
 

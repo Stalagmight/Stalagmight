@@ -75,7 +75,7 @@
     "e2e-playwright/measure-tool.spec.ts": 106,
     "e2e-playwright/merge-closure-dialogs.spec.ts": 380,
     "e2e-playwright/merge-projects.spec.ts": 124,
-    "e2e-playwright/mocks/tauri-ipc.ts": 1971,
+    "e2e-playwright/mocks/tauri-ipc.ts": 1875,
     "e2e-playwright/move-carry-integrity.spec.ts": 415,
     "e2e-playwright/move-comment-palette.spec.ts": 409,
     "e2e-playwright/move-drag-zoom-tracking.spec.ts": 366,

@@ -3,11 +3,14 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { doneFinished, isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
+import { isProjectChangedRefusal } from '../../store/commandResult';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { getErrorMessage } from '../../utils/ipc';
+import { toastProjectChanged } from '../../utils/projectChangedNotice';
 import { handBackProject, holdsWriteLock, type PendingExit } from '../../utils/quit';
 import { readPendingImport } from '../../utils/pendingImport';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
@@ -33,6 +36,7 @@ export default function SpeleoCloseDialog() {
   const closeDialog = useUIStore((s) => s.closeDialog);
   const openDialog = useUIStore((s) => s.openDialog);
   const dialogData = useUIStore((s) => s.dialogData);
+  const showToast = useUIStore((s) => s.showToast);
   const link = useSpeleoStore((s) => s.link);
   const saveProject = useProjectStore((s) => s.saveProject);
   const isDirtyLocal = useProjectStore((s) => s.isDirty);
@@ -77,6 +81,17 @@ export default function SpeleoCloseDialog() {
     try {
       const result = await saveProject();
       if (!result?.success) {
+        // [#576 W87a-NF1] A save refused because a project switch is under way is no
+        // failure to report, so `surfaceSaveFailure` shows nothing for it; the user
+        // pressed a button, though, and the prompt stays open. Say why, as
+        // SpeleoQuitDialog does: the quiet notice an edit refused during a switch gets
+        // (`switchEditNotice.ts`), and for the backend's own PROJECT_CHANGED a
+        // user-started verb's short line. The project is not handed back.
+        if (isProjectChangedRefusal(result)) {
+          if (result.code === 'PROJECT_CHANGED') toastProjectChanged(result);
+          else showToast(t('editGate.switchPendingNotice'), TOAST_KEYS.EDIT_DURING_SWITCH, 'info');
+          return false;
+        }
         // Surface WHY the save failed (integrity block -> Review & Repair, a real
         // IO error -> error dialog; a permission denial is already surfaced by
         // saveProject) instead of silently keeping this dialog open with no
