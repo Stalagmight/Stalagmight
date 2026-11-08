@@ -163,27 +163,45 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 - Reset to defaults per category
 
 ### 2.10 Updates & Telemetry
-- In-app auto-update: on launch (once per process, after a short delay), on demand from
-  the About dialog, and whenever the release track is switched in Settings, the app
-  checks a manifest published on GitHub Releases (fetched over https; the manifest
-  itself is NOT signed) and offers to download a newer build. The downloaded BUNDLE is
-  minisign-verified against a public key baked into the running binary before it is
-  written to disk or installed - never the manifest. Two user-selectable tracks -
-  `stable` (the default for an ordinary build) and `weekly` (the Monday prerelease
-  builds, the default for a build compiled with `STALAGMIGHT_CHANNEL=weekly`) - each
-  resolve to their own manifest. The launch check can be turned off in Settings >
-  General; the manual "Check for updates" button in About and switching tracks both
-  ignore that setting. Installing routes through the same unsaved-changes / SpeleoDB
-  write-lock quit guards as any other app close - it is never a silent restart. The
-  mechanism is present but INERT until the update signing key is committed
-  (`plugins.updater.pubkey` is absent today; see [releasing.md](releasing.md#update-artifacts-and-signing))
-  - every check refuses with a named error before it builds an endpoint at all, and
-  the network behavior above applies once that config lands.
+- In-app auto-update (#579, #631). The app checks a manifest published on GitHub
+  Releases (fetched over https; the manifest itself is NOT signed). The downloaded
+  bundle is minisign-verified against a public key baked into the running binary
+  before anything installs it.
+  - **When it checks:** about 10 seconds after launch, then every 4 hours while the
+    app is open (a 5-minute timer compares wall-clock time, so a machine waking from
+    sleep catches up within minutes), on demand from About's "Check for updates", and
+    whenever the update track is switched.
+  - **"Update automatically"** (Settings > General, on by default): a found update
+    downloads in the background with no banner until it is ready. Turned off, no
+    automatic checks run; About's check and a track switch still check, and the
+    banner then offers Download, which the user must click.
+  - **Installing:** on macOS and Linux a downloaded update installs when the app
+    quits, after the usual quit guards, so the next launch runs it. The banner says
+    "Stalagmight X will be installed when you quit" and offers "Restart now". Nothing
+    restarts the app on its own. Two cases keep "Restart to update" instead: Windows
+    (the updater's NSIS installer always relaunches the app, which on quit would
+    reopen the window the user just closed) and a Mac whose app folder the user
+    cannot write to (the install would raise an administrator prompt after the
+    window had closed).
+  - **Restart** routes through the same unsaved-changes / SpeleoDB write-lock quit
+    guards as any other app close.
+  - **"Hide"** on the banner hides it for that version for the rest of the session;
+    About's "Check for updates" brings it back, and a newer version shows again. A
+    hidden, downloaded update still installs on quit; turning "Update automatically"
+    off is how a user declines updates.
+  - **Tracks:** `stable` (the default for an ordinary build) and `weekly` (the default
+    for a build compiled with `STALAGMIGHT_CHANNEL=weekly`) each resolve to their own
+    manifest. No weekly builds are published yet, so the weekly track finds nothing.
+  - **Packages that cannot self-update:** a copy installed from a `.deb`, `.rpm` or
+    `.msi` refuses with a message to install the new version the same way. The
+    updater replaces an AppImage, an NSIS-installed Windows app, or a macOS `.app`.
+  - Release-side mechanics (signing, manifests, rollback) are in
+    [releasing.md](releasing.md#update-artifacts-and-signing).
 - Opt-in telemetry only
 - No external network calls except tile servers, the MapLibre stylesheet (unpkg.com)
   and glyph fonts (fonts.openmaptiles.org), SpeleoDB sync, the update manifest/artifact
-  fetch (GitHub Releases; the launch check is disableable via the update-check setting,
-  but a manual check or a track switch always reaches it), and opt-in telemetry
+  fetch (GitHub Releases; "Update automatically" turns off the automatic checks, but a
+  manual check or a track switch always reaches it), and opt-in telemetry
 
 ### 2.11 Recovery
 - Auto-save only (no crash recovery dialog)
@@ -1658,7 +1676,7 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 
 | Category | Contents |
 |----------|----------|
-| General | Language/number/date formats, auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference, splash screen and onboarding, telemetry opt-in (telemetry-enabled builds), automatic update-check toggle and release track (stable/weekly) |
+| General | Language/number/date formats, auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference, splash screen and onboarding, telemetry opt-in (telemetry-enabled builds), "Update automatically" and the update track (stable/weekly) |
 | Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 10 color themes |
 | Units | Length/depth/angle units, decimal precision |
 | Gas planning | Swim speed, jump RMV multiplier, whether reference legs count toward gas |

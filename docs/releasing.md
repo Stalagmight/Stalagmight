@@ -371,23 +371,23 @@ before it can be handed to anyone.
 
 ## Update artifacts and signing
 
-`bundle.createUpdaterArtifacts` is **not** set in `tauri.conf.json` - it is
-enabled CI-side only, in the release workflow's `build` job, and only once a
-real `plugins.updater.pubkey` is committed there (issue #579 provisioning).
-This is deliberate, not incidental: `tauri-cli` base64-decodes that pubkey
-with a hard failure at bundle time whenever `createUpdaterArtifacts` is on,
-so turning it on in the checked-in config before the real key exists breaks
-every build, on every platform, including a contributor's local
-`pnpm tauri build`. Keeping enablement CI-side means local dev builds never
-need a signing key at all, today or after the key lands.
+The real `plugins.updater.pubkey` is committed in `tauri.conf.json` (#586),
+and every release since v0.5.0 ships signed update artifacts.
+`bundle.createUpdaterArtifacts` is still **not** set in the checked-in
+config - it is enabled CI-side only, in the release workflow's `build` job.
+`tauri-cli` signs every artifact whenever `createUpdaterArtifacts` is on and
+fails the bundle without the private key, so turning it on in the checked-in
+config would break a contributor's local `pnpm tauri build`. Keeping
+enablement CI-side means local builds never need the signing key.
 
 Each `build` leg derives whether updater artifacts are enabled for that run
 (`UPDATER_ON`) from `plugins.updater.pubkey` in the checked-out
-`tauri.conf.json` - non-empty means on. While the pubkey is pending, every
-build runs exactly as it did before #579 and a `::warning::` says so in the
-log. Once enabled, each leg emits, alongside the installers already listed
-above, a signed update bundle per platform plus a detached `.sig` (Tauri
-signs every package type it bundles, not only the updater's own artifact):
+`tauri.conf.json` - non-empty means on, which is now every run. The off path
+(no pubkey: build exactly as before #579, with a `::warning::` in the log) is
+kept as a guard rather than a state the repo is in. Each leg emits,
+alongside the installers already listed above, a signed update bundle per
+platform plus a detached `.sig` (Tauri signs every package type it bundles,
+not only the updater's own artifact):
 
 | Platform | Update artifact | Signature |
 |----------|------------------|-----------|
@@ -401,31 +401,38 @@ Linux `.deb.sig`/`.rpm.sig`) exist because Tauri signs whatever it bundles,
 not because anything consumes them yet. When `UPDATER_ON` is true, the
 `build` job's collect step asserts at least one `.sig` landed and the
 `release` job's completeness check requires the full platform-specific set
-above; both are skipped while the pubkey is pending, since no `.sig` exists
-to require.
+above; both would be skipped on the no-pubkey guard path, since no `.sig`
+exists to require.
 
-**The updater plugin is wired up, but still waiting on the real key.**
-`lib.rs` registers `tauri_plugin_updater` only when
-`commands::app_update::updater_configured()` finds a non-empty
-`plugins.updater.pubkey` in the checked-in `tauri.conf.json` - the plugin's
-own `Config` has a required `pubkey` with no `Default`, so registering it
-unconditionally before the key exists would fail `Builder::build()` and stop
-every build, released or local, from starting at all. Only `check_for_app_update`
-consults that gate directly and answers with a named "no update signing key"
-error while it is absent; `download_app_update`, `arm_app_update_restart` and
-`install_app_update_and_restart` each refuse on their own missing precondition
-instead ("No update to download; check for updates first", "restart was not
-armed", etc. - see the state machine in `app_update.rs`), which is unreachable
-in practice because nothing calls them before a successful check. The net
-effect is the same: the Settings > General Updates section and About's manual
-check are present in every build but inert until the key lands.
-`arm_app_update_restart` / `unarm_app_update_restart` are the two commands
-either side of that state machine that take and release the one-shot install
-consent; they never touch the pubkey gate. `scripts/check-updater-pubkey.mjs`
-(`pnpm lint:updater-pubkey`, gated in CI) is a tripwire for that commit: it
-passes trivially while `plugins.updater` is absent, and the day the real key
-lands, a placeholder, malformed base64, or a non-https/non-`github.com`
-endpoint fails the gate immediately.
+**The updater plugin is live.** `lib.rs` registers `tauri_plugin_updater`
+only when `commands::app_update::updater_configured()` finds a non-empty
+`plugins.updater.pubkey` in the checked-in `tauri.conf.json`. The gate stays
+because the plugin's own `Config` has a required `pubkey` with no `Default`:
+a fork or a branch that removes the key would otherwise fail
+`Builder::build()` and not start at all. With the key absent,
+`check_for_app_update` answers with a named "no update signing key" error and
+the rest of the cycle is unreachable, since nothing downloads or installs
+without a successful check first. `scripts/check-updater-pubkey.mjs`
+(`pnpm lint:updater-pubkey`, gated in CI) fails on a placeholder, malformed
+base64, or a non-https/non-`github.com` endpoint.
+
+What the app does with an update - when it checks, the background download,
+installing on quit, and the platform exceptions - is in
+[SPEC 2.10](SPEC.md#210-updates--telemetry). Two release-side facts follow
+from it:
+
+- **A published stable release reaches users without a click.** Once
+  `latest-stable.json` points at it, every install with "Update
+  automatically" on downloads it within about 4 hours of the next check, and
+  on macOS and Linux installs it at the next quit. Treat publishing to a
+  track as shipping, and test on a release candidate first (an `-rc` tag
+  never touches a manifest).
+- **Only some packages can update themselves.** The updater replaces an
+  AppImage, an NSIS-installed Windows app, or a macOS `.app`. A copy
+  installed from a `.deb`, `.rpm` or `.msi` refuses to self-update with a
+  message saying to install the new version the same way, and a release
+  binary with no bundle marker (a bare `cargo build`) refuses outright
+  (`self_update_refusal` in `app_update.rs`).
 
 ### Keypair custody
 
@@ -443,7 +450,7 @@ download carrying the new public key.
 
 | Secret | Required for | Effect when unset |
 |--------|---------------|---------------------|
-| `TAURI_SIGNING_PRIVATE_KEY` | Every `build` leg, once `plugins.updater.pubkey` is committed | The `build` job fails fast with a named error. Tauri itself already refuses to sign without this key - this guard exists only to fail earlier with a clearer, named message instead of chasing Tauri's own error. While the pubkey is pending this secret is not required at all |
+| `TAURI_SIGNING_PRIVATE_KEY` | Every `build` leg (the pubkey is committed) | The `build` job fails fast with a named error. Tauri itself already refuses to sign without this key - this guard exists only to fail earlier with a clearer, named message instead of chasing Tauri's own error. Only the no-pubkey guard path skips it |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Only if the key above has a password | Passed through empty otherwise |
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Real Developer ID signing + notarization of the macOS leg | Absent (or `APPLE_SIGNING_IDENTITY` empty) leaves the macOS leg exactly as it was before #579: ad-hoc signed via the checked-in `signingIdentity: "-"`, not notarized |
 
@@ -709,8 +716,8 @@ pnpm tauri signer generate -w /tmp/stalagmight-updater-test.key
 export TAURI_SIGNING_PRIVATE_KEY=/tmp/stalagmight-updater-test.key
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=
 
-# 3. Temporarily set plugins.updater.pubkey in src-tauri/tauri.conf.json to
-#    the public key from step 1 - do not commit this. Then build with updater
+# 3. Temporarily replace plugins.updater.pubkey in src-tauri/tauri.conf.json
+#    with the public key from step 1 - do not commit this. Then build with updater
 #    artifacts turned on, the same --config merge the release workflow uses:
 pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}' --debug
 # tauri-bundler signs the bundle automatically here, using the key exported
@@ -747,9 +754,37 @@ and restart-arm/quit-guard flow. The final install step is NOT proven by it:
 `.app`/`.exe`/`.AppImage` a real update installs over - so "Restart to
 update" on a dev build is exercising the same IPC calls but not the actual
 file-replacement path. Proving the install leg itself needs a packaged build
-(step 2's `pnpm tauri build`, launched from its bundle output rather than via
-`dev.sh`) and, on macOS, is further limited by ad-hoc signing rather than a
-real Developer ID (see the Secrets table above) until #226 lands.
+(step 3's `pnpm tauri build`, launched from its bundle output rather than via
+`dev.sh`).
+
+⚠ **On macOS and Linux, quitting a dev build that holds a downloaded update
+attempts the install-on-quit leg against wherever that binary runs from.**
+Turn "Update automatically" off before the check, and choose Download by
+hand only when you mean to test the install from a packaged build.
+
+#### Rehearsing a real update from a release candidate
+
+A release build only honors `STALAGMIGHT_UPDATE_URL` when it is an https
+`github.com` URL, and an asset on a GitHub release satisfies that. So a
+candidate can be rehearsed against real signed artifacts without touching
+either track's manifest:
+
+1. Tag `vX.Y.Z-rcN` as usual. The release publishes signed artifacts but no
+   manifest (an `-rc` tag matches neither track).
+2. Generate a manifest for the candidate with
+   `scripts/gen-updater-manifest.mjs` (`--tag vX.Y.Z-rcN`, `--version X.Y.Z`,
+   `--dir` holding the downloaded artifacts and their `.sig` files) and
+   upload it to the candidate's own release as an extra asset.
+3. Launch an installed older version from a terminal, so the variable reaches
+   it, e.g. on macOS
+   `STALAGMIGHT_UPDATE_URL=https://github.com/Stalagmight/Stalagmight/releases/download/vX.Y.Z-rcN/<manifest>.json /Applications/Stalagmight.app/Contents/MacOS/stalagmight`.
+
+The version files carry no `-rc` suffix, so the candidate's manifest version
+is a plain `X.Y.Z` and an older install sees it as newer. To exercise the
+candidate's OWN install-on-quit path, install the candidate and point it at a
+manifest whose `--version` is one patch higher but whose artifacts are the
+candidate's own: the signature still verifies, so it downloads and installs
+on quit.
 
 ## Testing the release tooling
 

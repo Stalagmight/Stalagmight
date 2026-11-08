@@ -41,7 +41,7 @@ against this page first.
 | Surface | Use for | Persistence | Examples in the codebase |
 |---|---|---|---|
 | Modal dialog | User must acknowledge/decide before continuing; data at risk | Until dismissed; app inert behind it | `ErrorDialog`, `ImportReceiptDialog` (only when the receipt has a warning, is empty, converted units, or created a zero datum, #411), corruption recovery |
-| Banner / indicator | Ongoing conditions | Until the condition clears | integrity banner (`App.tsx`), `SpeleoBanner`, `OfflineIndicator`, read-only badges (`MapTopLeftOverlay`), `UpdateBanner` (#579: available/downloading/ready for an in-app update; a failed check gets no BANNER and goes quietly to idle - but a manual check from About's Updates section reports failure inline in the dialog itself, `SettingsDialog.tsx`) |
+| Banner / indicator | Ongoing conditions | Until the condition clears | integrity banner (`App.tsx`), `SpeleoBanner`, `OfflineIndicator`, read-only badges (`MapTopLeftOverlay`), `UpdateBanner` (#579, #631: available / downloading / ready for an in-app update. A background download shows no banner until the update is ready; a download the user started shows progress. A failed check gets no banner and goes quietly to idle, but a manual check from About reports failure inline in the dialog itself, `SettingsDialog.tsx`; a failed manual download is a toast) |
 | Toast | Transient outcome of an action whose result is off-screen or non-obvious | Auto-dismiss (5-9 s by kind) | save confirmations, blocked-edit notice, export results, warning-free non-converted import receipt (#411) |
 | Log only | Internal, recoverable, debug | n/a | `console.warn`/`console.error` |
 
