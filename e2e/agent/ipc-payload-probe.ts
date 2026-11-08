@@ -133,6 +133,14 @@ async function main(): Promise<number> {
    * `import_sections` is invoked with a config that is missing every required
    * field on purpose - it can never reach the app's state, so the probe is
    * read-only with respect to the project.
+   *
+   * [#576 W87a-3] Every call here sends no `expectedProject`, on purpose. Tauri
+   * deserializes all of a command's arguments before its body runs (the
+   * `tauri::command` wrapper calls the function with `arg?` for each), and the
+   * project check is in the body (`pool::run_mutation`). These bodies never get
+   * that far, so the error is serde's whether a project is open or not. Naming the
+   * open project would add one more argument that could fail first, and would let
+   * a body that did deserialize write to that project.
    */
   const probe = async (length: number): Promise<Probe> =>
     session.exclusive(() =>
