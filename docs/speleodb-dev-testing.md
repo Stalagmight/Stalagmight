@@ -541,7 +541,7 @@ It refuses to start unless every condition below holds, before it sends anything
 | `STALAGMIGHT_SPELEODB_FUZZ_MINUTES` | Stop starting new seeds after this long (default: no limit). |
 | `STALAGMIGHT_SPELEODB_FUZZ_SHRINK` / `_SHRINK_BUDGET` | Shrink failures (default on) / at most this many replays (40). |
 | `STALAGMIGHT_SPELEODB_FUZZ_DIR` | The app's folders for the run (default: a temp dir per process). |
-| `STALAGMIGHT_SPELEODB_FUZZ_TRACE_DIR` | Where traces and step lists go. |
+| `STALAGMIGHT_SPELEODB_FUZZ_TRACE_DIR` | Where traces and step lists go (default: a private temp dir per process, kept after the run). |
 | `STALAGMIGHT_SPELEODB_FUZZ_REPLAY` | A saved step list for the replay entry point. |
 
 ```bash

@@ -270,15 +270,79 @@ fn harness() -> Harness {
     }
 }
 
+/// Where traces and step lists go: `STALAGMIGHT_SPELEODB_FUZZ_TRACE_DIR`, or by
+/// default a folder of this process's own in the temp dir, kept after the run so
+/// its traces can be read.
+///
+/// [#576 W87b] The default used to be one fixed name,
+/// `<temp>/stalagmight-sdb-fuzz-traces`, written through `create_dir_all` and
+/// `fs::write`, which follow links: on a shared temp dir another user could
+/// create that folder, or a link at it, ahead of a run and have the traces
+/// written where they chose. The default is now made once per process, under a
+/// random name and owner-only (`tempfile`, which refuses a name that exists).
 fn trace_dir() -> PathBuf {
-    let dir = PathBuf::from(env_or(
-        "STALAGMIGHT_SPELEODB_FUZZ_TRACE_DIR",
-        &std::env::temp_dir()
-            .join("stalagmight-sdb-fuzz-traces")
-            .to_string_lossy(),
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    dir
+    static DEFAULT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let overridden = env_or("STALAGMIGHT_SPELEODB_FUZZ_TRACE_DIR", "");
+    if !overridden.is_empty() {
+        let dir = PathBuf::from(overridden);
+        let _ = std::fs::create_dir_all(&dir);
+        return dir;
+    }
+    DEFAULT
+        .get_or_init(|| {
+            let mut folder = tempfile::Builder::new();
+            folder.prefix("stalagmight-sdb-fuzz-traces-");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                folder.permissions(std::fs::Permissions::from_mode(0o700));
+            }
+            folder.tempdir().map_or_else(
+                |e| panic!("FZ-SDB: could not create a private trace folder: {e}"),
+                tempfile::TempDir::keep,
+            )
+        })
+        .clone()
+}
+
+/// [#576 W87b] The default trace folder is this process's own: not the fixed
+/// `<temp>/stalagmight-sdb-fuzz-traces` another user could plant ahead of a run,
+/// a real folder rather than a link, owner-only, and one folder for every entry
+/// point of the process. No other test of this binary writes there, so the empty
+/// folder is removed at the end.
+#[test]
+fn the_default_trace_folder_is_private_to_this_process() {
+    if std::env::var_os("STALAGMIGHT_SPELEODB_FUZZ_TRACE_DIR").is_some() {
+        println!("FZ-SDB: skipped: STALAGMIGHT_SPELEODB_FUZZ_TRACE_DIR is set");
+        return;
+    }
+    let dir = trace_dir();
+    let again = trace_dir();
+    let fixed = std::env::temp_dir().join("stalagmight-sdb-fuzz-traces");
+    let meta = std::fs::symlink_metadata(&dir).expect("the trace folder exists");
+    #[cfg(unix)]
+    let (mode, owner, me) = {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let probe = tempfile::tempfile().expect("a file of this user's");
+        let me = probe.metadata().expect("its metadata").uid();
+        (meta.permissions().mode() & 0o777, meta.uid(), me)
+    };
+    #[cfg(unix)]
+    println!(
+        "FZ-SDB: default trace folder {} (again {}); mode {mode:o}, owner {owner}, this \
+         user {me}",
+        dir.display(),
+        again.display()
+    );
+    let _ = std::fs::remove_dir(&dir);
+    assert_ne!(dir, fixed, "not the fixed name every run used to share");
+    assert_eq!(dir, again, "one folder for the whole process");
+    assert!(meta.is_dir(), "a real folder, not a link");
+    #[cfg(unix)]
+    {
+        assert_eq!(mode & 0o077, 0, "owner-only: {mode:o}");
+        assert_eq!(owner, me, "owned by this user");
+    }
 }
 
 fn save_steps(path: &Path, steps: &[Step]) {
