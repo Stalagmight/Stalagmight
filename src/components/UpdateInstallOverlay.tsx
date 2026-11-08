@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useUpdateStore, selectUpdateInstalling } from '../store/updateStore';
@@ -23,6 +23,15 @@ import { useScreenOccupant } from '../hooks/useScreenOccupant';
  * - takes focus and swallows every key that reaches it, so nothing bubbles on to
  *   a window-level handler.
  *
+ * It follows the loading window's and the integrity dialog's conventions (#576):
+ * the focused element is the dialog itself (role, `aria-modal` and its labels sit
+ * on it, so focus never rests on an element with no role or name), it portals
+ * into `#dialog-root` or, failing that, `document.body` (never nothing while it
+ * holds the screen as an occupant), and when it goes away it hands focus back to
+ * the element that had it, if that is still there and focus went with the window.
+ * It needs no Tab trap (`useFocusTrap`): it holds nothing focusable, and
+ * `holdKey` already swallows Tab.
+ *
  * The editing gate and the mutation queue read the same flag
  * (`selectUpdateInstalling`), so an edit that does not come through the keyboard
  * or a control is refused too. It has no buttons: an install cannot be cancelled.
@@ -45,6 +54,10 @@ function InstallingWindow() {
   const { t } = useTranslation();
   const version = useUpdateStore((s) => s.info?.version ?? null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // The element that had focus when the window opened, read at the first render
+  // (as DialogWrapper and the loading window do), so a Strict Mode effect replay
+  // cannot re-read it from inside the window.
+  const triggerRef = useRef<Element | null>(document.activeElement);
   const titleId = useId();
   const bodyId = useId();
 
@@ -58,24 +71,33 @@ function InstallingWindow() {
     return () => popDialog(el);
   }, []);
 
-  const portalTarget = document.getElementById('dialog-root');
-  if (!portalTarget) return null;
+  // Give focus back when the window goes (a failed install), after popDialog has
+  // lifted `inert` from `#root`: only when focus went with the window (it is on
+  // the body now), as the loading window does.
+  useEffect(() => {
+    const trigger = triggerRef.current;
+    return () => {
+      const active = document.activeElement;
+      if (active !== null && active !== document.body) return;
+      if (trigger instanceof HTMLElement && trigger.isConnected) trigger.focus();
+    };
+  }, []);
 
   return createPortal(
     <div
       ref={containerRef}
       className="fixed inset-0 z-50 flex items-center justify-center"
+      role="alertdialog"
+      aria-modal="true"
+      aria-busy="true"
+      aria-labelledby={titleId}
+      aria-describedby={bodyId}
       tabIndex={-1}
       onKeyDown={holdKey}
       data-testid="update-install-overlay"
     >
       <div className="absolute inset-0 bg-overlay" />
       <div
-        role="alertdialog"
-        aria-modal="true"
-        aria-busy="true"
-        aria-labelledby={titleId}
-        aria-describedby={bodyId}
         className="relative w-80 max-w-[calc(100vw-2rem)] bg-panel border border-border rounded-lg shadow-xl p-6"
         data-testid="update-install-panel"
       >
@@ -94,6 +116,6 @@ function InstallingWindow() {
         </div>
       </div>
     </div>,
-    portalTarget,
+    document.getElementById('dialog-root') ?? document.body,
   );
 }

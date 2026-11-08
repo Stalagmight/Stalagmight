@@ -77,4 +77,44 @@ describe('UpdateInstallOverlay', () => {
     expect(container.hasAttribute('inert')).toBe(false);
     expect(useUIStore.getState().screenOccupants).toBe(0);
   });
+
+  // [#576 merge] The loading window's and the integrity dialog's conventions: the
+  // focused element is the dialog, named; focus goes back where it was; and the
+  // window shows even without `#dialog-root`, never holding the screen unseen.
+  it('is focused as a named alert dialog and gives focus back when the install fails', () => {
+    render(<App />);
+    const control = screen.getByTestId('app-control');
+    control.focus();
+
+    act(() => useUpdateStore.getState().setInstalling(true));
+
+    const dialog = screen.getByRole('alertdialog', { name: /9\.9\.9/ });
+    expect(dialog).toBe(screen.getByTestId('update-install-overlay'));
+    expect(document.activeElement).toBe(dialog);
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(dialog.getAttribute('aria-busy')).toBe('true');
+
+    act(() => useUpdateStore.getState().setInstalling(false));
+
+    expect(document.activeElement).toBe(control);
+  });
+
+  it('shows over document.body when there is no #dialog-root', () => {
+    const root = document.getElementById('dialog-root');
+    root?.remove();
+    try {
+      render(<App />);
+      act(() => useUpdateStore.getState().setInstalling(true));
+
+      const overlay = screen.getByTestId('update-install-overlay');
+      expect(overlay.parentElement).toBe(document.body);
+      expect(document.activeElement).toBe(overlay);
+      expect(useUIStore.getState().screenOccupants).toBe(1);
+
+      act(() => useUpdateStore.getState().setInstalling(false));
+      expect(screen.queryByTestId('update-install-overlay')).toBeNull();
+    } finally {
+      if (root) document.body.appendChild(root);
+    }
+  });
 });
