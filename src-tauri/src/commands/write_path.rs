@@ -265,7 +265,17 @@ fn location_refusal(path: &Path, project: bool, dirs: &AppDirs, walk: Walk<'_>) 
             .iter()
             .any(|p| dir_forms.iter().any(|d| starts_with_dir(p, d, walk.rules)))
     };
-    let managed = project && dirs.managed_projects.as_deref().is_some_and(inside);
+    // The managed-project exception holds only when EVERY form is inside the
+    // cache - as spelled and as the write would land. A path spelled under the
+    // cache whose links lead into another app-internal folder is judged like
+    // any other path, not let through by its spelling (Codex review on #594).
+    let wholly_inside = |dir: &Path| {
+        let dir_forms = path_forms(dir, walk).unwrap_or_else(|| vec![lexical(&absolute(dir))]);
+        forms
+            .iter()
+            .all(|p| dir_forms.iter().any(|d| starts_with_dir(p, d, walk.rules)))
+    };
+    let managed = project && dirs.managed_projects.as_deref().is_some_and(wholly_inside);
     if !managed && dirs.internal.iter().any(|d| inside(d)) {
         return Some("that is inside the app's own settings, data or cache folder".to_owned());
     }
