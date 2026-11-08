@@ -433,6 +433,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           speleo_link_unreadable: extras.speleo_link_unreadable,
           unreadable_project_settings: extras.unreadable_project_settings,
           load_repairs: extras.load_repairs,
+          // `BinaryEnvelope::tree_generation` (#576 W75-NF7): the mock never swaps a
+          // tree in place, so the open file's generation stays at AppState's 0.
+          tree_generation: 0,
           project_header: {
             name: state.project.name ?? 'Test Project',
             location: state.project.location ?? null,
