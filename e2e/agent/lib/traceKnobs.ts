@@ -70,6 +70,10 @@ export const TRACE_KNOBS: Readonly<Record<string, TraceKnob>> = {
   STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P: NUMBER,
   STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P: NUMBER,
   STALAGMIGHT_FUZZ_IMPORT_SUGGESTIVE_P: NUMBER,
+  // The determinism mode (`fuzzKnobs.ts` fuzzDeterminism / fuzzDeterminismPlant):
+  // what `fuzzDeterminism` accepts, and the plant's record number.
+  STALAGMIGHT_FUZZ_DETERMINISM: { shape: /^(?:0|1|2sessions)$/, what: 'a determinism mode (0, 1, 2sessions)' },
+  STALAGMIGHT_FUZZ_DETERMINISM_PLANT: NUMBER,
 };
 
 /** Is `value` one `key` takes: a registered knob, and its shape (or empty)? */

@@ -39,7 +39,8 @@ const DIVERGENCE_REASON =
   "FUZZABLE_ACTIONS names and the app's own table names (each source cited where printSites/allowLib.ts defines " +
   'this reason); the path, the two values and the last action ' +
   "are later lines, withheld; the reproduce: line is the knob literal 1 or 2sessions (fuzzDeterminismRun.ts:105), " +
-  'the fixture as the user named it, folded by the runner (shareableFailureText -> foldLocalPaths; the FIXTURE ' +
+  'the fixture as the user named it, folded by the runner (shareableFailureText -> foldLocalPaths, and ' +
+  "foldPrivateFixtures: fuzzFixture() notes the name, so one the repo does not track prints as its tag; the FIXTURE " +
   'policy of allowScenarios.ts), the registry name and the two numbers';
 
 export const GROUP: SiteGroup = {
@@ -94,12 +95,13 @@ export const GROUP: SiteGroup = {
         "the whole lines of the child's output that arrived, each folded by foldLocalPaths inside the map (the docs' rule, #576 RV19b-P8, W47-NF3)",
     },
     'e2e/agent/lib/fuzzDeterminismProbe.ts': {
-      'this.states': "the probe's own state-record counter, a number: 0 (fuzzDeterminismProbe.ts:74), += 1 per state() (:112)",
+      'state: this.states': "the probe's own state-record counter, a number: 0 (fuzzDeterminismProbe.ts:74), += 1 per state() (:112)",
     },
     'e2e/agent/lib/fuzzDeterminismRun.ts': {
-      [DIVERGENCE]: DIVERGENCE_REASON,
-      'meta.seed':
-        'the seed, a number: both callers pass Number(...) (scenarios/index.ts:78 into :89-91, scenario-run.ts:164)',
+      [`runDeterminismPair: ${DIVERGENCE}`]: DIVERGENCE_REASON,
+      'runDeterminismPair: meta.seed':
+        'the seed, a number: both callers pass Number(...) (scenarios/index.ts:78 into :89-91, scenario-run.ts:173)',
+      'runDeterminismPair: replay': "'A' or 'B': the loop runs over the literal ['A', 'B'] (fuzzDeterminismRun.ts:66)",
     },
     'e2e/agent/lib/fuzzHarness.ts': {
       'openReplay: replayTracePath()': R.FOLDED,
@@ -185,12 +187,6 @@ export const GROUP: SiteGroup = {
     'e2e/agent/lib/importScreenDigest.ts': {
       'importScreenInjectionSource: source.slice(0, 80)':
         "the first 80 characters of the harness's own computeImportScreenDigest source (Function.prototype.toString): public tree code",
-    },
-    'e2e/agent/lib/junctionDepthOracle.ts': {
-      "lines.join('\\n')":
-        "checkJunctionDepths' message: line 1 is the literal `X6c the depths, tapes or plan changed beyond the junction rule (...)` " +
-        '(junctionDepthOracle.ts:326-327), the counts and each failure are later lines, withheld, and the last is its one ' +
-        "caller's `reproduce: pnpm agent:scenario <SCENARIO> --seed <ctx.seed> --iterations <n>` (exportRoundtripFuzz.ts:890, 1490)",
     },
     'e2e/agent/lib/mapControls.ts': {
       'mapFeatureClick: request.featureType': "'shot' or 'station': validateRequest refuses any other before the click (mapControls.ts:44)",
