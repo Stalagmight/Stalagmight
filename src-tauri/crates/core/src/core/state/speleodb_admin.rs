@@ -14,6 +14,7 @@
 
 use super::speleodb::validate_project_id;
 use super::speleodb_lock_release::AfterLockVerb;
+use super::speleodb_session::refuse_a_copy_on_another_server;
 use super::AppState;
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
@@ -34,7 +35,13 @@ impl AppState {
     /// Resolve the `(link, endpoint, token, insecure_http)` tuple every admin call
     /// needs: the open project's persisted link plus the active session, or an IPC
     /// error DTO when there is no remote project / no usable token.
-    fn speleodb_admin_context(
+    ///
+    /// [#576 W89] Also the admin verbs' one endpoint check: every call sends the
+    /// session's token to the session's server and names the link's project, so a
+    /// copy linked to another server than the one signed in is refused here, before
+    /// any request ([`refuse_a_copy_on_another_server`], as Start editing). The
+    /// project metadata verbs (`speleodb_project`) read their context here too.
+    pub(super) fn speleodb_admin_context(
         &self,
     ) -> Result<(crate::models::SpeleoLink, String, String, bool), SpeleoErrorDto> {
         let link = self.speleodb_open_link().map_err(admin_dto)?;
@@ -43,6 +50,7 @@ impl AppState {
         // the edit verbs; reused so this entry point can't forget it).
         validate_project_id(&link.project_id).map_err(admin_dto)?;
         let (endpoint, token) = self.speleodb_active_token().map_err(admin_dto)?;
+        refuse_a_copy_on_another_server(&link.endpoint, Some(&endpoint)).map_err(admin_dto)?;
         let insecure_http = self.speleodb_insecure_http();
         Ok((link, endpoint, token, insecure_http))
     }
@@ -52,7 +60,7 @@ impl AppState {
     /// read in one `command_lock` span with the identity check, so a change made for
     /// another project than the open one is refused with `PROJECT_CHANGED` before
     /// anything is sent. The span ends before the request.
-    fn speleodb_admin_write_context(
+    pub(super) fn speleodb_admin_write_context(
         &self,
         what: &str,
     ) -> Result<(crate::models::SpeleoLink, String, String, bool), SpeleoErrorDto> {

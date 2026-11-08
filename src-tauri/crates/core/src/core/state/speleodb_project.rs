@@ -133,9 +133,9 @@ impl AppState {
     /// (the server has no retroactive re-render for the current tip; the FE
     /// confirmation states this). A 403 surfaces as an error the button reports.
     pub fn speleodb_set_exclude_geojson(&self, exclude: bool) -> Result<(), SpeleoErrorDto> {
-        let link = self.speleodb_link_made_for("Changing web-viewer rendering")?;
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
+        // [#576 W89] The admin verbs' context, and with it their endpoint check.
+        let (link, endpoint, token, insecure_http) =
+            self.speleodb_admin_write_context("Changing web-viewer rendering")?;
         let payload = serde_json::json!({ "exclude_geojson": exclude }).to_string();
         // [#576 B5] Mapped through the PATCH's own row. It used to borrow GetProject
         // ("purely cosmetic reuse"), which made a refused PATCH read-only access and a
@@ -161,9 +161,8 @@ impl AppState {
     /// metadata is permission-free); routed through the auth handler so a dead token
     /// here forces re-login (mirrors the other project-scoped reads).
     pub fn speleodb_get_project_metadata(&self) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
+        // [#576 W89] The admin verbs' context, and with it their endpoint check.
+        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
         let project = self
             .speleodb_handle_auth(
                 Endpoint::GetProject,
@@ -182,9 +181,9 @@ impl AppState {
         &self,
         patch: SpeleoProjectMetadataPatch,
     ) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
-        let link = self.speleodb_link_made_for("Editing the project details")?;
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
+        // [#576 W89] The admin verbs' context, and with it their endpoint check.
+        let (link, endpoint, token, insecure_http) =
+            self.speleodb_admin_write_context("Editing the project details")?;
 
         // Reject a blank rename at the boundary: the server requires a non-empty name,
         // and a folded "" would wipe the embedded `.stalx` name. `None` (unchanged) is

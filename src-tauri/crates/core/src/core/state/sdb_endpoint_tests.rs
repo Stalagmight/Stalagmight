@@ -194,10 +194,12 @@ fn a_delete_with_the_session_on_another_server_is_refused_before_anything_is_sen
     );
     let err = result.expect_err("a delete with the session on another server is refused");
     assert_eq!(err.code, crate::models::CommandErrorCode::SpeleodbFatal);
+    // [#576 W89] Refused by the admin verbs' shared endpoint check now, before the
+    // client's own (which stays): the wording every other verb gives.
     assert!(
-        err.message.contains(&format!(
-            "This project lives on {copy_server}/; sign in there"
-        )),
+        err.message
+            .contains(&format!("this copy belongs to {copy_server}/"))
+            && err.message.contains("sign in to that server"),
         "the error names the copy's server: {}",
         err.message
     );

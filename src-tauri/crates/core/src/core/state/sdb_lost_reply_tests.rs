@@ -236,6 +236,9 @@ fn release_lost_reply_over_a_lock_we_were_not_editing_under_fails() {
     let (base, _listener, seen) = routing_stub(admin_taken_by_a_colleague);
     let (_temp, state) = remote_readonly_fixture();
     *state.speleodb.lock() = authed_session_at(&base);
+    // [#576 W89] The copy lives on the server signed in to: Release lock refuses a
+    // copy of another server before sending anything.
+    link_open_copy_to(&state, &base);
     let answer = format!(
         "{:?}",
         state.speleodb_release_current_lock().map_err(|e| e.message)

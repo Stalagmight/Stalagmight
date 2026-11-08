@@ -467,6 +467,16 @@ mod sdb_delete_release_claim_tests;
 #[expect(
     clippy::expect_used,
     clippy::print_stdout,
+    clippy::result_large_err,
+    reason = "test module: panics on a failed assumption are the point, the printed \
+              values are the evidence a run captures, and the closures return the \
+              verbs' own large SpeleoErrorDto"
+)]
+mod sdb_endpoint_admin_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \
               values are the evidence a run captures"
 )]
