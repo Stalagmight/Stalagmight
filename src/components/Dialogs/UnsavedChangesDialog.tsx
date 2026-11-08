@@ -98,12 +98,20 @@ export default function UnsavedChangesDialog() {
     }
   };
 
-  // [#576 PREPR-594-3-LOW] Say why Save & Quit did not quit, and put this prompt back
-  // as it was (unless another dialog took the slot), so the same button can be pressed
-  // again and Cancel still abandons the exit.
+  // Put this prompt back as it was after a refused Save & Quit, so the same button can
+  // be pressed again and Cancel still abandons the exit. [#576 FUZZ-MERGE2-NF] When
+  // another dialog took the slot meanwhile, the prompt does not come back, and with it
+  // the exit is over: an update restart riding on it is abandoned too, or its arm
+  // stayed set and the next ordinary quit installed the update unasked.
+  const keepPromptOrEndExit = () => {
+    if (useUIStore.getState().activeDialog === null) openDialog('unsaved-changes', dialogData);
+    else abandonUpdateRestart();
+  };
+
+  // [#576 PREPR-594-3-LOW] Say why Save & Quit did not quit, and keep the prompt.
   const refuseEditPending = () => {
     showToast(t('dialogs.unsavedChanges.editPending'), TOAST_KEYS.EXIT_EDIT_PENDING, 'info');
-    if (useUIStore.getState().activeDialog === null) openDialog('unsaved-changes', dialogData);
+    keepPromptOrEndExit();
   };
 
   const handleSaveAndQuit = async () => {
@@ -144,8 +152,14 @@ export default function UnsavedChangesDialog() {
     if (isProjectChangedRefusal(result)) {
       if (result?.code === 'PROJECT_CHANGED') toastProjectChanged(result);
       else showToast(t('editGate.switchPendingNotice'), TOAST_KEYS.EDIT_DURING_SWITCH, 'info');
-      if (useUIStore.getState().activeDialog === null) openDialog('unsaved-changes', dialogData);
+      keepPromptOrEndExit();
+      return;
     }
+    // [#576 FUZZ-MERGE2-NF] Any other failure - a save that failed (surfaced by
+    // `handleSaveProject`), a Save As cancelled or handed to the overwrite prompt
+    // (`null`) - leaves no Save & Quit to press again: the exit is over, and an update
+    // restart riding on it is abandoned with it.
+    abandonUpdateRestart();
   };
 
   // Cancel / X / backdrop only. Discard and Save & Quit both end in `performQuit()`

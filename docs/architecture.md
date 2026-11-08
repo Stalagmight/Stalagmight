@@ -194,7 +194,11 @@ Commands now run **concurrently**, which makes three rules explicit:
   wins there too, and a switch requested meanwhile also overtakes it. A quit, the
   window close or an update restart is never dropped for either: it waits for the
   hand-back exits waiting to decide, then decides itself, and a hand-back exit asked
-  for while it does is dropped (`utils/quit.ts`, the exit gate). A load or a
+  for while it does is dropped (`utils/quit.ts`, the exit gate). That drop shows
+  nothing of its own, by design: the quit takes precedence, and its prompt (whose
+  Cancel keeps the project open), the app going away, or a failed install's message
+  is the one surface for both (docs/notifications.md, "One event, one surface";
+  #576 FUZZ-MERGE2-NF). A load or a
   close first flushes the queued display-setting writes, so each lands in its own
   session; the wait is bounded by `PROJECT_SETTING_FLUSH_TIMEOUT_MS` (2 s), and a
   write still queued then is dropped unsent. A display-setting write made once the

@@ -217,7 +217,11 @@ let closeRequestAtGate = false;
  * - A quit is never lost ([#576 W86], the exit gate above): one asked for during the
  *   wait waits for this exit to decide, then decides itself; while a quit, the
  *   window X or an update restart is at the gate, this exit reports `superseded`
- *   at once and waits for nothing.
+ *   at once and waits for nothing. [#576 FUZZ-MERGE2-NF] Its caller then drops it
+ *   without a toast, deliberately: the quit takes precedence, and what it does next
+ *   is the one surface for both requests (docs/notifications.md, "One event, one
+ *   surface"): its prompt, which replaces the exit's and whose Cancel keeps the
+ *   project open, or the app going away, or a failed install's own message.
  * - One dialog at a time: a dialog that took the screen during the wait is not
  *   replaced (`screenTaken`, compared against the slot as it was at the call, so
  *   the re-entries that run while their own dialog is up - LaunchOpenConfirmDialog's

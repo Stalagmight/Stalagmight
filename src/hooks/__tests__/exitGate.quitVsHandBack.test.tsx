@@ -294,6 +294,37 @@ describe('a hand-back exit asked for while a close request waits is dropped', ()
     expect(useProjectStore.getState().loadProject).not.toHaveBeenCalled();
   });
 
+  // [#576 FUZZ-MERGE2-NF] Pin: the drop says nothing of its own, by design. The quit takes
+  // precedence and its prompt is the one surface for both requests (docs/notifications.md,
+  // "One event, one surface"); Cancel there keeps the project open, as the dropped exit
+  // would have had it until its own prompt was answered.
+  it.each(HAND_BACK_EXITS)('Quit first, then %s: the drop raises no toast, and the quit prompt answers it', async (_name, start) => {
+    render(<App />);
+    await vi.advanceTimersByTimeAsync(0);
+    const { result } = renderHook(() => useProject());
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    quitApp();
+    const quitting = closeRequested();
+    await vi.advanceTimersByTimeAsync(0);
+    const exiting = start(() => result.current.handleCloseProject());
+    await vi.advanceTimersByTimeAsync(0);
+    // Dropped at once, before the edit lands, and silently.
+    expect(ui().toasts).toEqual([]);
+    expect(ui().activeDialog).toBeNull();
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(Promise.all([quitting, exiting]));
+
+    expect(ui().toasts).toEqual([]);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData).toEqual({ pendingQuit: true });
+    expect(calls(CLOSE)).toBe(0);
+    expect(destroyMock).not.toHaveBeenCalled();
+  });
+
   it('Close while an update restart waits is dropped: the restart prompts, and its arm is not left behind a close prompt', async () => {
     render(<App />);
     await vi.advanceTimersByTimeAsync(0);
