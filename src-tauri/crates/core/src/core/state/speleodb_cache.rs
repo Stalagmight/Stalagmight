@@ -224,7 +224,10 @@ fn settle_sidecars(dest: &Path) -> std::io::Result<()> {
         return Ok(());
     }
     if is_present(dest) {
-        if let Ok(conn) = open_to_settle(dest) {
+        let opened = open_to_settle(dest);
+        #[cfg(test)]
+        record_settle_open(&opened);
+        if let Ok(conn) = opened {
             let _ = conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()));
             drop(conn);
         }
@@ -282,6 +285,53 @@ thread_local! {
     /// was only logged - leaves the install.
     static SKIP_REMOVAL_AFTER_RENAME: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
+
+    /// Test seam (#576 PR #594 review): while `Some`, [`settle_sidecars`]
+    /// records here, on this thread, what each of its opens of `dest` gave. The
+    /// settle's own outcome on disk is the same with or without the hardening
+    /// (its one statement reads no SQL the file chose, and the guard's read
+    /// rolls a journal back like any other), so only the connection itself
+    /// shows which open the settle used.
+    static SETTLE_OPENS: std::cell::RefCell<Option<Vec<SettleOpen>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// What one open of [`settle_sidecars`] gave, as [`SETTLE_OPENS`] records it.
+#[cfg(test)]
+#[derive(Debug)]
+enum SettleOpen {
+    /// A connection, with what the untrusted-file probes found wrong on it
+    /// and its two schema-guard settings.
+    Opened {
+        probe_failures: Vec<String>,
+        defensive: bool,
+        trusted_schema: bool,
+    },
+    /// No connection: the open's error.
+    Refused(String),
+}
+
+/// Record `opened` in [`SETTLE_OPENS`] when a test armed it. Generic over the
+/// error so the record does not depend on which open produced it.
+#[cfg(test)]
+fn record_settle_open<E: std::fmt::Display>(opened: &Result<rusqlite::Connection, E>) {
+    use rusqlite::config::DbConfig;
+    use stalagmight_persistence::persistence::sqlite::untrusted_sql_probes;
+    SETTLE_OPENS.with_borrow_mut(|seen| {
+        let Some(seen) = seen else { return };
+        seen.push(match opened {
+            Ok(conn) => SettleOpen::Opened {
+                probe_failures: untrusted_sql_probes::refusal_failures(conn, "settle"),
+                defensive: conn
+                    .db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE)
+                    .unwrap_or(false),
+                trusted_schema: conn
+                    .db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA)
+                    .unwrap_or(true),
+            },
+            Err(e) => SettleOpen::Refused(e.to_string()),
+        });
+    });
 }
 
 /// Remove the SQLite sidecars (`-journal`, `-wal`, `-shm`) beside `path`. One
@@ -1444,77 +1494,104 @@ mod tests {
         );
     }
 
+    /// [`discard_replace`] over `dest` with the install stopped right after its
+    /// rename and [`SETTLE_OPENS`] armed: the replace's result, and what each
+    /// open the settle made of the old cache gave.
+    fn discard_replace_recording_settle(
+        dest: &Path,
+    ) -> (
+        Result<HashMap<String, String>, SpeleoDbError>,
+        Vec<SettleOpen>,
+    ) {
+        let state = AppState::new().expect("state");
+        SETTLE_OPENS.with_borrow_mut(|seen| *seen = Some(Vec::new()));
+        SKIP_REMOVAL_AFTER_RENAME.with(|skip| skip.set(true));
+        let replaced = discard_replace(&state, dest);
+        SKIP_REMOVAL_AFTER_RENAME.with(|skip| skip.set(false));
+        let opens = SETTLE_OPENS
+            .with_borrow_mut(Option::take)
+            .unwrap_or_default();
+        (replaced, opens)
+    }
+
     /// [#576 PR #594 review] The connection the settle reads the old cache
     /// through gets the hardening every other open of an existing file does:
     /// the cache is a server download, a file from outside the app. It was
     /// opened raw, with no authorizer, no defensive mode and `trusted_schema`
-    /// on. The probes are persistence's (`untrusted_sql_probes`); on the repo's
-    /// build only the authorizer refuses a `CREATE VIRTUAL TABLE` with
-    /// SQLITE_AUTH, so they fail without it.
+    /// on. Driven through the discard-replace, over an old cache behind its
+    /// own hot journal, so the settle has a sidecar to settle and opens the
+    /// file. The probes are persistence's (`untrusted_sql_probes`), run on the
+    /// connection the settle opened; on the repo's build only the authorizer
+    /// refuses a `CREATE VIRTUAL TABLE` with SQLITE_AUTH, so they fail without
+    /// it.
     #[test]
     fn the_settle_opens_the_old_cache_with_the_untrusted_file_hardening() {
-        use rusqlite::config::DbConfig;
-        use stalagmight_persistence::persistence::sqlite::untrusted_sql_probes;
         let temp = tempfile::TempDir::new().expect("temp");
         let dest = temp.path().join("project.stalx");
-        seed_linked_stalx(&dest, false);
+        seed_behind_its_own_hot_journal(temp.path(), &dest);
 
-        let conn = open_to_settle(&dest).expect("the settle opens a cache this build saved");
-        let failures = untrusted_sql_probes::refusal_failures(&conn, "settle");
-        let defensive = conn
-            .db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE)
-            .expect("read defensive mode");
-        let trusted_schema = conn
-            .db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA)
-            .expect("read trusted_schema");
-        println!(
-            "settle connection: defensive {defensive}, trusted_schema {trusted_schema}, \
-             probe failures {failures:#?}"
-        );
-        assert!(failures.is_empty(), "{failures:#?}");
-        assert!(defensive, "defensive mode is on");
-        assert!(!trusted_schema, "trusted_schema is off");
-    }
-
-    /// [#576 PR #594 review] The hardened settle still settles an old cache
-    /// whose schema the guard refuses (a view, which the app never writes):
-    /// the guard's read of `sqlite_master` rolls the hot journal back before
-    /// it refuses, so nothing of the old cache is left beside the new one, even
-    /// with the install stopped right after its rename.
-    #[test]
-    fn the_settle_rolls_back_the_journal_of_a_cache_the_schema_guard_refuses() {
-        let temp = tempfile::TempDir::new().expect("temp");
-        let dest = temp.path().join("project.stalx");
-        seed_behind_its_own_hot_journal_after(temp.path(), &dest, "CREATE VIEW v AS SELECT 1;");
-        // The settle's open on a twin of the pair, so the replace below still
-        // meets the journal.
-        let twin = temp.path().join("twin.stalx");
-        std::fs::copy(&dest, &twin).expect("copy the cache");
-        std::fs::copy(sidecar_of(&dest, "-journal"), sidecar_of(&twin, "-journal"))
-            .expect("copy its journal");
-        let refused = open_to_settle(&twin)
-            .map(drop)
-            .map_err(|e| format!("{e:#}"));
-        let journal_hot = looks_hot(&sidecar_of(&twin, "-journal")).expect("read the journal");
-
-        let state = AppState::new().expect("state");
-        SKIP_REMOVAL_AFTER_RENAME.with(|skip| skip.set(true));
-        let replaced = discard_replace(&state, &dest);
-        SKIP_REMOVAL_AFTER_RENAME.with(|skip| skip.set(false));
+        let (replaced, opens) = discard_replace_recording_settle(&dest);
         let left = sidecars_left(&dest);
         let name = Database::open_existing(&dest)
             .and_then(|db| db.load_project())
             .map(|project| project.name);
         println!(
-            "old cache with a view, behind its hot journal: the settle's open -> {refused:?}; \
-             journal still hot after it: {journal_hot}; replace -> {:?}; sidecars beside the \
-             new cache: {left:?}; the cache then holds {:?}",
+            "old cache behind its hot journal: the settle's opens -> {opens:#?}; replace -> \
+             {:?}; sidecars beside the new cache: {left:?}; the cache then holds {:?}",
             replaced.as_ref().map_err(ToString::to_string),
             name.as_ref().map_err(|e| format!("{e:#}")),
         );
 
-        assert!(refused.is_err(), "the guard refuses the view");
-        assert!(!journal_hot, "its read rolled the journal back first");
+        assert!(
+            matches!(
+                opens.as_slice(),
+                [SettleOpen::Opened {
+                    probe_failures,
+                    defensive: true,
+                    trusted_schema: false,
+                }] if probe_failures.is_empty()
+            ),
+            "the settle opens the old cache once, with the probes refused, defensive mode on \
+             and trusted_schema off: {opens:#?}"
+        );
+        replaced.expect("the download replaces the cache");
+        assert!(left.is_empty(), "no sidecar beside the new cache: {left:?}");
+        assert_eq!(name.expect("the cache opens"), "Server Copy");
+    }
+
+    /// [#576 PR #594 review] The settle's open refuses an old cache whose
+    /// schema the guard refuses (a view, which the app never writes), and the
+    /// settle still settles it: the guard's read of `sqlite_master` rolls the
+    /// hot journal back before it refuses, so nothing of the old cache is left
+    /// beside the new one, even with the install stopped right after its
+    /// rename. A journal still hot after the open would have refused the
+    /// install (`settle_sidecars`), so the replace going through is that
+    /// rollback. A raw open takes the view, and the settle reads past it.
+    #[test]
+    fn the_settle_rolls_back_the_journal_of_a_cache_the_schema_guard_refuses() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        seed_behind_its_own_hot_journal_after(temp.path(), &dest, "CREATE VIEW v AS SELECT 1;");
+
+        let (replaced, opens) = discard_replace_recording_settle(&dest);
+        let left = sidecars_left(&dest);
+        let name = Database::open_existing(&dest)
+            .and_then(|db| db.load_project())
+            .map(|project| project.name);
+        println!(
+            "old cache with a view, behind its hot journal: the settle's opens -> {opens:#?}; \
+             replace -> {:?}; sidecars beside the new cache: {left:?}; the cache then holds {:?}",
+            replaced.as_ref().map_err(ToString::to_string),
+            name.as_ref().map_err(|e| format!("{e:#}")),
+        );
+
+        assert!(
+            matches!(
+                opens.as_slice(),
+                [SettleOpen::Refused(why)] if why.contains("defines a view")
+            ),
+            "the settle's one open of the old cache is the guard refusing the view: {opens:#?}"
+        );
         replaced.expect("the download replaces the cache");
         assert!(left.is_empty(), "no sidecar beside the new cache: {left:?}");
         assert_eq!(name.expect("the cache opens"), "Server Copy");

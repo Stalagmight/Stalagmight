@@ -220,6 +220,89 @@ export async function settleEditsBeforeHandBack(): Promise<HandBackSettle> {
 }
 
 /**
+ * [#576 W85, W86] The one exit gate: the exit that is waiting for the queued edits and
+ * then decides, if any. Shared by the close listener (`useBeforeUnload`: quit, the
+ * window X, the update restart) and the three hand-back exits, so one exit decides at
+ * a time. `decided` settles when it lets go.
+ */
+let exitDeciding: { exit: 'close-request' | 'hand-back'; decided: Promise<void> } | null = null;
+
+/** [#576 W86] A close request waiting for a hand-back exit's decision: it decides next. */
+let closeRequestWaiting = false;
+
+/**
+ * Take the gate; the returned release lets it go. Released in the same microtask run
+ * that resumes the caller, so no event can arrive between the release and the decision
+ * the caller then makes.
+ */
+function takeExitGate(exit: 'close-request' | 'hand-back'): () => void {
+  let release!: () => void;
+  const decided = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  exitDeciding = { exit, decided };
+  return () => {
+    exitDeciding = null;
+    release();
+  };
+}
+
+/**
+ * [#576 W85] {@link editsSettledForExit} for the three hand-back exits, one exit at
+ * a time: `null` when another exit is already deciding, and the caller drops itself.
+ *
+ * Each exit decides after the wait, but the screen-owned checks in front of it (a
+ * dialog open, the shortcut hooks' modal gate) were passed before it. A second exit
+ * asked for during the wait - Ctrl+N twice, a double-click on a Recents entry, Close
+ * then New - passed them too, and its prompt replaced the first one's in the single
+ * dialog slot, dropping the first call's request (the file to open, the new project).
+ * The exit already waiting owns the answer, as a dialog that owns the screen owns a
+ * shortcut. [#576 W86] That includes a quit, the window X or an update restart
+ * waiting or deciding ({@link editsSettledForCloseRequest}): the app is going away.
+ */
+export async function editsSettledForHandBack(): Promise<boolean | null> {
+  if (exitDeciding || closeRequestWaiting) return null;
+  const release = takeExitGate('hand-back');
+  try {
+    return await editsSettledForExit();
+  } finally {
+    release();
+  }
+}
+
+/**
+ * [#576 W86] Is a close request (quit, the window X, an update restart) waiting or
+ * deciding at the gate? Another one is then the same exit asked twice, and is dropped.
+ */
+export function isCloseRequestDeciding(): boolean {
+  return closeRequestWaiting || exitDeciding?.exit === 'close-request';
+}
+
+/**
+ * [#576 W86] {@link editsSettledForExit} for the close listener, through the same gate
+ * as the hand-back exits. A quit must not be lost, so unlike them it is never dropped
+ * for a hand-back exit: it waits for that exit's decision (a prompt, or the close or
+ * switch started), then waits for the edits queued by then and decides against the
+ * state the decision left. Its prompt replaces the exit's - quitting subsumes the
+ * close - and with nothing to protect it quits. While it waits, a hand-back exit asked
+ * for is dropped. The caller checks {@link isCloseRequestDeciding} first.
+ */
+export async function editsSettledForCloseRequest(): Promise<boolean> {
+  closeRequestWaiting = true;
+  try {
+    while (exitDeciding) await exitDeciding.decided;
+  } finally {
+    closeRequestWaiting = false;
+  }
+  const release = takeExitGate('close-request');
+  try {
+    return await editsSettledForExit();
+  } finally {
+    release();
+  }
+}
+
+/**
  * Set by {@link requestUpdateRestart}: unlike {@link quitConfirmedUntil} it does
  * NOT pre-confirm the close (an update restart still has to run every exit
  * guard, same as a plain quit), so it is consumed only in `useBeforeUnload`'s
@@ -290,6 +373,15 @@ export function consumeUpdateRestartArmed(): boolean {
   const armed = updateRestartArmed;
   updateRestartArmed = false;
   return armed;
+}
+
+/**
+ * [#576 W85] Is an update restart armed? A peek, not a consume: the close listener
+ * holds the project still from the restart's close request on (`useBeforeUnload`),
+ * and only its tail consumes the arm.
+ */
+export function isUpdateRestartArmed(): boolean {
+  return updateRestartArmed;
 }
 
 /**

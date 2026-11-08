@@ -283,3 +283,184 @@ describe('Opening another .stalx waits for the edits queued before it', () => {
     await settle(editDone);
   });
 });
+
+/**
+ * [#576 W85] "Import as new project" decides after a good parse whether the close
+ * must ask first, and a prompt it raises carries the parsed file (`pendingImport`,
+ * #576 HFI-4-D2). It read `isDirty` without waiting, so an edit in flight read as a
+ * clean project and the close was asked for at once: that close waits for the edit,
+ * finds the project dirty and asks WITHOUT the file, and the import ended there.
+ */
+describe('Import as new project waits for the edits queued before it', () => {
+  const TML = '/cave/CaveA.tml';
+  const PARSED = { cave_name: 'CaveA', sections: [] };
+
+  /** The confirm dialog as the router opened it, then "Close and import" with the real guarded close. */
+  function confirmImportAsNew(closeCurrent: () => Promise<{ success: boolean }>): Promise<void> {
+    useProjectStore.setState({ parseTml: vi.fn(async () => PARSED) as never });
+    useUIStore.setState({ activeDialog: 'import-as-new-project', dialogData: { path: TML, fileName: 'CaveA.tml' } });
+    return routeOpenedFile(TML, 'Open Failed', { importAsNew: { closeCurrent } });
+  }
+
+  it('an edit in flight when the parse lands: the prompt carries the parsed file, and the project stays open', async () => {
+    const { result } = renderHook(() => useProject());
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const importing = confirmImportAsNew(() => result.current.handleCloseProject());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls(CLOSE)).toBe(0);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(importing);
+
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData.pendingImport).toMatchObject({ filePath: TML, importType: 'tml', tmlFile: PARSED });
+    expect(calls(CLOSE)).toBe(0);
+    expect(useProjectStore.getState().project).not.toBeNull();
+  });
+
+  it('an edit that never settles counts as unsaved work, and the prompt still carries the parsed file', async () => {
+    const { result } = renderHook(() => useProject());
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const importing = confirmImportAsNew(() => result.current.handleCloseProject());
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settle(importing);
+
+    expect(useProjectStore.getState().isDirty).toBe(false);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData.pendingImport).toMatchObject({ filePath: TML, importType: 'tml' });
+    expect(calls(CLOSE)).toBe(0);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+  });
+
+  it('a confirm cancelled while the edit is still landing drops the file: no prompt, the project stays', async () => {
+    const { result } = renderHook(() => useProject());
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const importing = confirmImportAsNew(() => result.current.handleCloseProject());
+    await vi.advanceTimersByTimeAsync(0);
+    // The confirm's Cancel, while the router still waits on the edit.
+    useUIStore.getState().closeDialog();
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(importing);
+
+    expect(ui().activeDialog).toBeNull();
+    expect(calls(CLOSE)).toBe(0);
+    expect(useProjectStore.getState().project).not.toBeNull();
+  });
+
+  it('control: a clean project with nothing in flight closes and opens the new-project dialog with the file', async () => {
+    const { result } = renderHook(() => useProject());
+
+    await settle(confirmImportAsNew(() => result.current.handleCloseProject()));
+
+    expect(calls(CLOSE)).toBe(1);
+    expect(ui().activeDialog).toBe('new-project-for-import');
+    expect(ui().dialogData).toMatchObject({ filePath: TML, importType: 'tml' });
+  });
+});
+
+/**
+ * [#576 W85] One hand-back exit decides at a time. Each one waits for the queued
+ * edits and decides after the wait, but the screen-owned checks in front of it (a
+ * dialog open, the shortcut hooks' modal gate) were all passed before it. A second
+ * exit asked for during the wait - Ctrl+N twice, a double-click on a Recents entry,
+ * Close then New - passed them too, and its prompt replaced the first one's in the
+ * single dialog slot, with the first call's request gone. The first exit owns the
+ * answer; a later one is dropped, as a shortcut is while a dialog owns the screen.
+ */
+describe('a second hand-back exit asked for during the wait is dropped', () => {
+  const OTHER_2 = '/cave/other-2.stalx';
+
+  /** Every `unsaved-changes` prompt opened from here on (`openDialog` installs fresh data each time). */
+  function recordPrompts(): Array<Record<string, unknown>> {
+    const opened: Array<Record<string, unknown>> = [];
+    unsubscribe = useUIStore.subscribe((s, prev) => {
+      if (s.activeDialog === 'unsaved-changes' && s.dialogData !== prev.dialogData) opened.push(s.dialogData);
+    });
+    return opened;
+  }
+  let unsubscribe: (() => void) | null = null;
+  afterEach(() => {
+    unsubscribe?.();
+    unsubscribe = null;
+  });
+
+  it('New Project twice (Ctrl+N, Ctrl+N): one prompt', async () => {
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+    const prompts = recordPrompts();
+
+    const first = newProjectGuarded();
+    await vi.advanceTimersByTimeAsync(0);
+    const second = newProjectGuarded();
+    await vi.advanceTimersByTimeAsync(0);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(Promise.all([first, second]));
+
+    expect(prompts).toHaveLength(1);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData).toMatchObject({ pendingNewProject: true });
+  });
+
+  it('two opens during the wait (a double-click on Recents): one prompt, for the file opened first', async () => {
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+    const prompts = recordPrompts();
+
+    const first = routeOpenedFile(OTHER, 'Open Failed', { allow: 'project-only' });
+    await vi.advanceTimersByTimeAsync(0);
+    const second = routeOpenedFile(OTHER_2, 'Open Failed', { allow: 'project-only' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(Promise.all([first, second]));
+
+    expect(prompts).toHaveLength(1);
+    expect(ui().dialogData).toMatchObject({ pendingOpenPath: OTHER });
+    expect(loadProject).not.toHaveBeenCalled();
+  });
+
+  it('Close, then New Project during the wait: one prompt, the close one', async () => {
+    const { result } = renderHook(() => useProject());
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+    const prompts = recordPrompts();
+
+    const closing = result.current.handleCloseProject();
+    await vi.advanceTimersByTimeAsync(0);
+    const starting = newProjectGuarded();
+    await vi.advanceTimersByTimeAsync(0);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(Promise.all([closing, starting]));
+
+    expect(prompts).toHaveLength(1);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData.pendingNewProject).toBeUndefined();
+    expect(calls(CLOSE)).toBe(0);
+  });
+
+  it('control: once the first exit has decided, the next one is asked as usual', async () => {
+    await newProjectGuarded();
+    expect(ui().activeDialog).toBe('new-project');
+    useUIStore.getState().closeDialog();
+
+    await routeOpenedFile(OTHER);
+    expect(ui().activeDialog).toBe('launch-open-confirm');
+  });
+});

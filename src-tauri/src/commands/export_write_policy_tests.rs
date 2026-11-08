@@ -102,6 +102,52 @@ fn an_export_through_a_link_to_a_file_of_another_type_is_refused_and_writes_noth
     assert_eq!(names_in(dir.path()), ["CaveX.stalx", "victim.stalx"]);
 }
 
+/// [#576 PR #594 review] The same refusal for a link to a file that is no
+/// survey file at all: a `.txt` note, and dotfiles - a shell startup file, and
+/// one named `.tml`, which is all extension to a suffix match but has no
+/// extension to the policy (as a name of its own it is refused too). Each is
+/// left exactly as it was, and so is the link. Every case runs before the
+/// verdict, so a run shows what each one did.
+#[cfg(unix)]
+#[test]
+fn an_export_through_a_link_to_a_text_file_or_a_dotfile_is_refused_and_writes_nothing() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let dir = TempDir::new().expect("tempdir");
+    let app = app_with_project(dir.path());
+    let mut wrong = Vec::new();
+    for victim_name in ["notes.txt", ".profile", ".tml"] {
+        let victim = dir.path().join(victim_name);
+        for name in ["cave.tml", "cave.tmlu"] {
+            std::fs::write(&victim, OLD).expect("the victim");
+            let link = dir.path().join(name);
+            std::os::unix::fs::symlink(&victim, &link).expect("the link");
+
+            let outcome = run(export::export_tml(h(&app), link.clone()));
+            let victim_kept = std::fs::read(&victim).is_ok_and(|bytes| bytes == OLD);
+            let link_kept = std::fs::read_link(&link).is_ok_and(|to| to == victim);
+            println!(
+                "{name} -> {victim_name}: {:?}; victim kept: {victim_kept}; link kept: {link_kept}",
+                outcome.as_ref().map_err(|e| &e.message)
+            );
+            let refused_as_a_link = outcome
+                .as_ref()
+                .is_err_and(|e| e.message.contains(&format!("is a link to {victim_name}")));
+            if !(refused_as_a_link && victim_kept && link_kept) {
+                wrong.push(format!("{name} -> {victim_name}"));
+            }
+            std::fs::remove_file(&link).expect("drop the link");
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "not refused as a link to another type, or not left as it was: {wrong:?}"
+    );
+    assert_eq!(
+        names_in(dir.path()),
+        [".profile", ".tml", "CaveX.stalx", "notes.txt"]
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn an_export_through_a_link_to_an_ariane_file_replaces_that_file_by_rename_and_keeps_the_link() {

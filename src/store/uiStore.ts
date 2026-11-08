@@ -24,6 +24,7 @@ import type { DisplaySettings } from '../types/loading';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 import { useGasPlanStore } from './gasPlanStore';
 import { useExportStore } from './exportStore';
+import { afterUpdateInstallHold, selectUpdateInstalling, useUpdateStore } from './updateStore';
 
 // Import tool utilities for internal use and re-export for convenience
 import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
@@ -1108,6 +1109,35 @@ function persistDisplaySetting(key: string, value: string, failure: string): Pro
   );
 }
 
+/**
+ * [#576 W86] The dialog asked for while an update installs, opened once the hold
+ * lifts (`afterUpdateInstallHold`). Opening it at once put it on top of the dialog
+ * stack, above the "Installing update" window, where it took input and its actions
+ * ran under the install: a SpeleoDB divergence answered by a verb still in flight, a
+ * load's corrupt-file prompt, an async failure's error - nothing a click or key press
+ * has to reach the app for. Deferred rather than refused: a successful install ends
+ * the process, so it never opens; a failed one gives the app back, and the dialog the
+ * app asked for is the one the user still has to see. The restart's own exit prompt
+ * takes this path too: its guard asks while the hold is up, then lifts it.
+ *
+ * One request, as the single `activeDialog` slot holds one: a later one replaces it,
+ * and a `closeDialog` drops it, so what opens is what the slot would have shown.
+ */
+let dialogAfterInstall: { dialog: string; data: Record<string, unknown> } | null = null;
+let dialogAfterInstallWaiting = false;
+
+function openDialogAfterInstall(dialog: string, data: Record<string, unknown>): void {
+  dialogAfterInstall = { dialog, data };
+  if (dialogAfterInstallWaiting) return;
+  dialogAfterInstallWaiting = true;
+  afterUpdateInstallHold(() => {
+    dialogAfterInstallWaiting = false;
+    const next = dialogAfterInstall;
+    dialogAfterInstall = null;
+    if (next) useUIStore.getState().openDialog(next.dialog, next.data);
+  });
+}
+
 export const useUIStore = create<UIStore>((set) => ({
   // View state
   view: 'global',
@@ -2152,6 +2182,11 @@ export const useUIStore = create<UIStore>((set) => ({
   dialogData: {},
   dmpImportWizardPhase: null,
   openDialog: (activeDialog, dialogData = {}) => {
+    // [#576 W86] Not above the update install window: opened once its hold lifts.
+    if (selectUpdateInstalling(useUpdateStore.getState())) {
+      openDialogAfterInstall(activeDialog, dialogData);
+      return;
+    }
     const prev = useUIStore.getState().activeDialog;
     // Re-opening the dialog already on screen is a data refresh, not a chain and
     // not a new open, so gate the BOOKKEEPING - never the state. `dialogData` is
@@ -2183,6 +2218,7 @@ export const useUIStore = create<UIStore>((set) => ({
     set({ activeDialog, dialogData, dmpImportWizardPhase: null, ...MEASURE_CLEARED });
   },
   closeDialog: () => {
+    dialogAfterInstall = null;
     const { activeDialog: dialogName, activeTool, placementMode } = useUIStore.getState();
     if (dialogName) checkDialogCancel(dialogName);
     setDwellState(placementMode ? 'placement' : `tool.${activeTool}`);

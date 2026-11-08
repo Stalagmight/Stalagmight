@@ -24,7 +24,7 @@ import { useExportStore } from './exportStore';
 import { useGasPlanStore } from './gasPlanStore';
 import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
 import { runSerialized } from './mutationQueue';
-import { refuseEditWhileUpdateInstalls } from './updateStore';
+import { refuseEditWhileUpdateInstalls, selectUpdateInstalling, updateInstallHoldLifted, useUpdateStore } from './updateStore';
 import {
   noteOpenTreeGeneration,
   noteProjectDirtied,
@@ -953,6 +953,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // made for it (the loading modal's, the superseded cancel below) name it.
     const loadToken = newLoadToken();
     return runProjectSwitch<LoadProjectOutcome>(async (turn) => {
+      // [#576 W86] Not under an update install. A load asked for during one - the reload
+      // after a SpeleoDB Update or a start-editing fast-forward, an open whose close was
+      // still running - waits here, past the switch's own waits and before anything is
+      // cancelled or opened: a successful install ends the process, a failed one gives
+      // the app back and the load runs. Queued, not refused: the backend has usually
+      // moved already (a fast-forward swaps the tree in place), and a refused reload
+      // would leave the frontend showing a tree the backend no longer has.
+      while (selectUpdateInstalling(useUpdateStore.getState())) await updateInstallHoldLifted();
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or

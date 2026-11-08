@@ -51,10 +51,11 @@ interface UpdateStore {
    */
   downloadVersion: string | null;
   /**
-   * An update restart is installing (#579 x #576): set by `useBeforeUnload` the
-   * moment every exit guard has passed and the install starts, cleared only when
-   * the install fails and the app stays up. A successful install ends the process,
-   * so it is never cleared on that path.
+   * An update restart is installing (#579 x #576): set by `useBeforeUnload` once the
+   * restart's close request is past the tier-1 confirm, so through the exit guard's
+   * wait for queued edits too (#576 W85), and cleared on every way out that does not
+   * install - the guard's prompt, a failed install. A successful install ends the
+   * process, so it is never cleared on that path.
    *
    * Independent of `status` on purpose: a check reply landing mid-install rewrites
    * `status` (`setUpToDate` drops to idle), and that must not lift the hold. While
@@ -117,6 +118,31 @@ export const selectUpdateInstalling = (s: Pick<UpdateStore, 'installing'>): bool
 export function refuseEditWhileUpdateInstalls(): CommandRefused | null {
   if (!selectUpdateInstalling(useUpdateStore.getState())) return null;
   return refusedLocally(i18n.t('updateInstall.editRefused'));
+}
+
+/**
+ * [#576 W86] Run `then` once no update install holds the app: at once when none
+ * does, otherwise inside the store update that lifts the hold (a failed install, or
+ * the restart's guard prompting), so what waited lands in the same render the
+ * install window leaves in. A successful install ends the process, and nothing
+ * waiting runs. `openDialog` and `loadProject` wait here: a dialog or a load asked
+ * for during the install, with no click or key press reaching the app.
+ */
+export function afterUpdateInstallHold(then: () => void): void {
+  if (!selectUpdateInstalling(useUpdateStore.getState())) {
+    then();
+    return;
+  }
+  const unsubscribe = useUpdateStore.subscribe((state) => {
+    if (selectUpdateInstalling(state)) return;
+    unsubscribe();
+    then();
+  });
+}
+
+/** [#576 W86] {@link afterUpdateInstallHold} as a promise, for an async flow that waits. */
+export function updateInstallHoldLifted(): Promise<void> {
+  return new Promise((resolve) => afterUpdateInstallHold(resolve));
 }
 
 export const useUpdateStore = create<UpdateStore>((set, get) => ({

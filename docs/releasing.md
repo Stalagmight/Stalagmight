@@ -405,15 +405,13 @@ not because anything consumes them yet. When `UPDATER_ON` is true, the
 above; both are skipped while the pubkey is pending, since no `.sig` exists
 to require.
 
-**The updater plugin is not wired up yet.** Once the real pubkey and its
-GitHub-hosted `latest-stable.json` endpoint are committed to
-`plugins.updater`, the plugin itself still needs registering in `lib.rs`
-before anything reads either value at runtime - that, generating and
-publishing `latest-stable.json`, and replacing the pubkey are later steps in
-the #579 arc. `scripts/check-updater-pubkey.mjs` (`pnpm lint:updater-pubkey`,
-gated in CI) is a tripwire for that commit: it passes trivially while
-`plugins.updater` is absent, and the day it lands, a placeholder, malformed
-base64, or a non-https/non-`github.com` endpoint fails the gate immediately.
+**The pubkey and the stable endpoint are committed** to `plugins.updater`,
+and `lib.rs` registers the updater plugin whenever that key is there
+(`updater_configured` in `src-tauri/src/commands/app_update.rs`).
+`scripts/check-updater-pubkey.mjs` (`pnpm lint:updater-pubkey`, gated in CI)
+checks the committed block on every run: a placeholder, malformed base64, or
+a non-https/non-`github.com` endpoint fails the gate. A config without the
+block passes it, and the app then starts with the updater off.
 
 ### Keypair custody
 
