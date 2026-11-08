@@ -17,6 +17,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as ts from 'typescript';
 
+import { foldLocalPaths } from './fold-local-paths.mjs';
+
 const args = process.argv.slice(2);
 if (args.length < 2) {
   console.error('Usage: slice-ts.mjs <file> --toc | --fn <name> | --class <name> | --interface <name> | --component <name> | --lines <range>');
@@ -28,9 +30,9 @@ const mode = args[1];
 const target = args[2];
 
 if (!fs.existsSync(filePath)) {
-  // Not the path itself: it is the caller's, and can name their own
-  // directories outside the checkout (#576 W51).
-  console.error('File not found: <file>');
+  // Folded: the path is the caller's, and can name their own directories
+  // (#576 W51, W58).
+  console.error(`File not found: ${foldLocalPaths(filePath)}`);
   process.exit(1);
 }
 

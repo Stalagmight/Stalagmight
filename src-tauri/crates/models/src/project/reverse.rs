@@ -198,9 +198,14 @@ pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
 /// identity on a set of distinct keys.
 ///
 /// A frozen key keeps naming its pre-reverse station: wrong, but present and
-/// visible, which beats one of them vanishing.  No traced path reaches this today
-/// (load, snapshot restore and the offset redrive all canonicalize `Index`
-/// anchors first), so the ordinary reverse pays one pass that finds nothing.
+/// visible, which beats one of them vanishing.  The load's re-anchor turns every
+/// `Index` anchor that names a station into its canonical key, but one past the
+/// end of its section names none and stays `Index`; and a snapshot restore keeps
+/// the keys an anchor-shape snapshot recorded, `Index` included (only a
+/// pre-anchor snapshot is re-anchored first - core's `restore_snapshot_into`).
+/// A prepend that brings the end station onto such a key's index gives that
+/// station two keys, and a reverse then lands here.  The ordinary reverse pays
+/// one pass that finds nothing.
 fn frozen_remaps(
     stored: &HashSet<StationKey>,
     rebuilt: &HashMap<StationKey, StationKey>,

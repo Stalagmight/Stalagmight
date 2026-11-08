@@ -10,6 +10,8 @@ import type { SettingsCategoryProps } from './types';
 import { isFieldChanged, createNumericHandler, createToggleHandler, createSelectHandler, parseIntRadix10 } from './types';
 import { defaultConfig } from '../../../types/config';
 import type { ShortcutFeedback } from '../../../types/config';
+import type { UpdateTrack } from '../../../types/ipc/UpdateTrack';
+import { buildDefaultUpdateTrack } from '../../../utils/updateTrack';
 import { isTelemetryAvailable } from '../../../utils/telemetry';
 import { restartOnboardingProgress } from '../../../hooks/useOnboardingRestart';
 
@@ -119,6 +121,17 @@ export function GeneralSettings({
   // --- Telemetry ---
   const handleTelemetryToggle = createToggleHandler(onChange,
     (v) => ({ general: { ...config.general, telemetry_enabled: v } }));
+
+  // --- Updates (#579) ---
+  const handleUpdateCheckToggle = createToggleHandler(onChange,
+    (v) => ({ general: { ...config.general, update_check_enabled: v } }));
+  const handleUpdateTrackChange = createSelectHandler(onChange,
+    (v) => ({ general: { ...config.general, update_track: v as UpdateTrack } }));
+
+  // Not `defaultConfig.general.update_track` - that snapshot always says
+  // "stable" while the Rust default is build-dependent. See
+  // `buildDefaultUpdateTrack`, which the category-wide reset shares.
+  const defaultUpdateTrack: UpdateTrack = buildDefaultUpdateTrack();
 
   // The first-launch flag alone is enough to offer a restart: guides can arm and
   // then never fire (no project opened that session), leaving nothing completed
@@ -404,6 +417,45 @@ export function GeneralSettings({
           </SettingRow>
         </SettingsSection>
       )}
+
+      <SettingsSection title={t('settings.general.sections.updates')} data-testid="section-updates">
+        <SettingRow
+          label={t('settings.general.updateCheck.label')}
+          helpText={t('settings.general.updateCheck.help')}
+          isChanged={isFieldChanged(changedFields, 'general.update_check_enabled')}
+          onReset={() => onChange({ general: { ...config.general, update_check_enabled: defaultConfig.general.update_check_enabled } })}
+          isDefault={config.general.update_check_enabled === defaultConfig.general.update_check_enabled}
+          data-testid="setting-update-check"
+        >
+          <Toggle
+            checked={config.general.update_check_enabled}
+            onChange={handleUpdateCheckToggle}
+            aria-label={t('settings.general.updateCheck.aria')}
+            data-testid="toggle-update-check"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.general.updateTrack.label')}
+          helpText={t('settings.general.updateTrack.help')}
+          isChanged={isFieldChanged(changedFields, 'general.update_track')}
+          onReset={() => onChange({ general: { ...config.general, update_track: defaultUpdateTrack } })}
+          isDefault={config.general.update_track === defaultUpdateTrack}
+          data-testid="setting-update-track"
+        >
+          <Select
+            value={config.general.update_track}
+            onChange={handleUpdateTrackChange}
+            options={[
+              { value: 'stable', label: t('settings.general.updateTrack.options.stable') },
+              { value: 'weekly', label: t('settings.general.updateTrack.options.weekly') },
+            ]}
+            className="w-40"
+            aria-label={t('settings.general.updateTrack.aria')}
+            data-testid="select-update-track"
+          />
+        </SettingRow>
+      </SettingsSection>
     </div>
   );
 }

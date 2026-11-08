@@ -20,8 +20,11 @@
  * Knobs only ONE scenario reads (its stream selector, its per-episode sizes)
  * stay in that scenario, next to the code they steer.
  */
+import * as path from 'path';
+
 import { DEFAULT_FIXTURE } from './fixtures';
 import { valueShape } from './shareableFailure';
+import { noteFixtureName } from './privateFixtures';
 
 /**
  * Replay a recorded trace instead of drawing moves (`STALAGMIGHT_FUZZ_REPLAY`,
@@ -47,7 +50,12 @@ export function traceOutPath(): string {
  * guard and stays the only one.
  */
 export function fuzzFixture(): string {
-  return process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
+  // The basename, as this comment always said (#576 W58 Q1): the reproduce
+  // lines and the trace header print and record what this returns.
+  const fixture = path.basename(process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE);
+  // A fixture the repo does not track prints as its tag in shareable output.
+  noteFixtureName(fixture);
+  return fixture;
 }
 
 /**

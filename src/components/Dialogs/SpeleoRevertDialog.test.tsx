@@ -534,10 +534,8 @@ describe('SpeleoRevertDialog - a copy that could not be read (#576 W55 NF-W53-1)
     expect(lockNote).not.toContain('your unpushed changes');
     // The lock is still kept over a copy nobody could read, and nothing was uploaded.
     expect(issued()).not.toContain('speleodb_done');
-    // Same offer, same label: only the wording follows the flag.
-    expect(screen.getByTestId('speleodb-revert-discard-offer-btn')).toHaveTextContent(
-      'Replace my changes & revert',
-    );
+    // Same discard route on offer; its labels are pinned in the W59 block below.
+    expect(screen.getByTestId('speleodb-revert-discard-offer-btn')).toBeInTheDocument();
   });
 
   it('keeps the un-pushed wording for a copy that was read and found dirty', async () => {
@@ -545,5 +543,37 @@ describe('SpeleoRevertDialog - a copy that could not be read (#576 W55 NF-W53-1)
     expect(warning).toContain('This copy has changes that are not on SpeleoDB');
     expect(warning).not.toContain('could not be read');
     expect(lockNote).toContain('your unpushed changes');
+  });
+
+  /**
+   * [#576 W59 Q-W53-2-D1] When the copy could not be read nobody knows whether it holds
+   * changes, so neither press of the two-press discard may call them "my changes": both
+   * name the local copy instead. A copy that was read and found dirty keeps the labels.
+   */
+  describe('discard labels (#576 W59)', () => {
+    const discardLabels = async (stateUnknown: boolean) => {
+      await refusedMidFlight(refusal(stateUnknown));
+      const offer = screen.getByTestId('speleodb-revert-discard-offer-btn').textContent;
+      // The arming press: it only re-labels the control, it sends nothing.
+      const before = issued().length;
+      await userEvent.click(screen.getByTestId('speleodb-revert-discard-offer-btn'));
+      expect(issued().length).toBe(before);
+      const confirm = screen.getByTestId('speleodb-revert-discard-confirm-btn').textContent;
+      return { offer, confirm };
+    };
+
+    it('names the local copy, not "my changes", on both presses', async () => {
+      const { offer, confirm } = await discardLabels(true);
+      console.log('[W59] revert discard labels (state_unknown):', offer, '|', confirm);
+      expect(offer).toBe('Replace the local copy & revert');
+      expect(confirm).toBe('Yes, replace the local copy & revert');
+    });
+
+    it('keeps the "my changes" labels for a copy that was read and found dirty', async () => {
+      const { offer, confirm } = await discardLabels(false);
+      console.log('[W59] revert discard labels (dirty):', offer, '|', confirm);
+      expect(offer).toBe('Replace my changes & revert');
+      expect(confirm).toBe('Yes, replace my changes & revert');
+    });
   });
 });

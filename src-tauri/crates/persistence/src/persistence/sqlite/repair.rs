@@ -39,6 +39,19 @@ pub(super) fn sibling(path: &Path, suffix: &str) -> std::path::PathBuf {
     path.with_file_name(name)
 }
 
+/// [#576 Q-W42-1-D1] The file Repair rewrites: where `path` points when `path`
+/// itself is a symlink (through a chain of links), else `path` as given. A link
+/// that does not resolve is returned as given, to fail at the backup copy as it
+/// always did.
+fn repair_target(path: &Path) -> std::path::PathBuf {
+    let is_link = std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink());
+    if is_link {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// SQLite's rollback journal for `path`.
 fn journal_of(path: &Path) -> std::path::PathBuf {
     sibling(path, "-journal")
@@ -224,9 +237,10 @@ impl Database {
     /// schema guard (#608) runs here, before quick_check evaluates the file's
     /// CHECKs or anything else reads it: a file every open would refuse is never
     /// offered as usable, nor installed over the project.
-    pub(super) fn for_candidate_check(conn: Connection) -> Result<Self> {
+    pub(super) fn for_candidate_check(mut conn: Connection) -> Result<Self> {
         conn.busy_timeout(CANDIDATE_BUSY_TIMEOUT)
             .context("Failed to set the busy timeout on a restore candidate")?;
+        super::deny_stripped_sqlite_features(&mut conn)?;
         super::check_schema(&conn)?;
         Ok(Self { conn })
     }
@@ -721,14 +735,26 @@ impl Database {
     /// readable page.
     ///
     /// Always creates a backup first (`path.stalx.backup`, with numeric
-    /// suffixes to avoid overwriting existing backups).
+    /// suffixes to avoid overwriting existing backups), beside `path` as given,
+    /// where the recovery dialog lists backups.
+    ///
+    /// [#576 Q-W42-1-D1] A `path` that is a symlink is repaired where it points
+    /// ([`repair_target`]): the rewrite is renamed over the link's target and
+    /// the link stays a link, as a save through the link writes the target.
+    /// Renaming it over `path` itself replaced the link with the repaired copy
+    /// and left the target unrepaired.
     ///
     /// Returns `(backup_path, integrity_ok)`.
     pub fn attempt_repair(path: &Path) -> Result<(std::path::PathBuf, bool)> {
         tracing::info!("Attempting repair of: {:?}", path);
+        let opened = path;
+        let target = repair_target(opened);
+        // Every step below reads and rewrites the file itself; only the backup
+        // is named after (and kept beside) the path as opened.
+        let path = target.as_path();
 
         // 1. Create backup (never overwrite existing backups)
-        let backup_path = Self::create_numbered_backup(path)?;
+        let backup_path = Self::create_numbered_backup_of(path, opened)?;
         tracing::info!("Created backup at: {:?}", backup_path);
 
         // 2. Open read-write (skip our integrity check wrapper). [#576 RV18-1] The
@@ -736,7 +762,9 @@ impl Database {
         // index or the final quick_check a CHECK: a file every open refuses is
         // left as it is, beside the plain copy step 1 took of it.
         // [#576 W25-NF1] Opened for the `VACUUM INTO` below: see `connect_for_vacuum_into`.
-        let conn = connect_for_vacuum_into(path).context("Failed to open database for repair")?;
+        let mut conn =
+            connect_for_vacuum_into(path).context("Failed to open database for repair")?;
+        super::deny_stripped_sqlite_features(&mut conn)?;
         super::check_schema(&conn)?;
 
         // 3. Rebuild indexes
@@ -779,8 +807,9 @@ impl Database {
         // 5. Verify result
         #[cfg(test)]
         super::open::between_opens::run(path);
-        let conn = Connection::open(path).context("Failed to reopen the repaired database")?;
+        let mut conn = Connection::open(path).context("Failed to reopen the repaired database")?;
         // Another open of the file: guarded like the first (#608, #576 RV19a-8).
+        super::deny_stripped_sqlite_features(&mut conn)?;
         super::check_schema(&conn)?;
         let check: String = conn
             .query_row("PRAGMA quick_check", [], |row| row.get(0))
@@ -842,7 +871,7 @@ impl Database {
         }
 
         // Full project (best-effort)
-        match db.load_project() {
+        match db.load_project_for_salvage() {
             Ok(project) => {
                 salvaged.full_project_json = serde_json::to_string(&project).ok();
             }
@@ -1099,22 +1128,35 @@ impl Database {
         anyhow::bail!("Too many earlier pre-restore copies beside the project")
     }
 
-    /// Create a numbered backup: file.stalx.backup, .backup.1, .backup.2, etc.
+    /// [`Self::create_numbered_backup_of`] a file under its own name (the tests'
+    /// form; Repair names the copy after the path as opened).
+    #[cfg(test)]
+    pub(super) fn create_numbered_backup(path: &Path) -> Result<std::path::PathBuf> {
+        Self::create_numbered_backup_of(path, path)
+    }
+
+    /// Create a numbered backup of the file `source`, named after (and placed
+    /// beside) `named_after`: `<named_after>.stalx.backup`, `.backup.1`,
+    /// `.backup.2`, etc.
     ///
-    /// [#576 NF-W3-3] With the project's rollback journal, when it has one: a
+    /// [#576 NF-W3-3] With the file's rollback journal, when it has one: a
     /// project frozen mid-write holds pages its journal undoes, so the main
     /// file copied alone is torn, while the pair opens as the last committed
     /// state (the restore list never offers the journal on its own).
-    pub(super) fn create_numbered_backup(path: &Path) -> Result<std::path::PathBuf> {
-        let base = path.with_extension("stalx.backup");
+    ///
+    /// [#576 Q-W42-1-D1] Repair through a symlink backs up the link's target -
+    /// whose rollback journal sits beside the target, not the link - under the
+    /// link's name, where the recovery dialog lists backups.
+    fn create_numbered_backup_of(source: &Path, named_after: &Path) -> Result<std::path::PathBuf> {
+        let base = named_after.with_extension("stalx.backup");
         if !base.exists() {
-            copy_with_journal(path, &base)?;
+            copy_with_journal(source, &base)?;
             return Ok(base);
         }
         for i in 1..100 {
-            let numbered = path.with_extension(format!("stalx.backup.{i}"));
+            let numbered = named_after.with_extension(format!("stalx.backup.{i}"));
             if !numbered.exists() {
-                copy_with_journal(path, &numbered)?;
+                copy_with_journal(source, &numbered)?;
                 return Ok(numbered);
             }
         }
@@ -1127,10 +1169,15 @@ impl Database {
     /// (`check_schema_for_salvage`, RV19a-12), and SQLite reads it, so the
     /// summary below reads it too: under [`Self::table_exists`]'s exact match a
     /// 'Table' project table was reported as "Project table is empty", beside
-    /// the full project the salvage read back from it.
-    fn salvage_table_exists(&self, name: &str) -> Result<bool> {
+    /// the full project the salvage read back from it. [#619] So too a `type`
+    /// or `name` cell one flipped bit left stored as a BLOB of the same bytes,
+    /// which the guard reads as text: `lower` and the CAST read it as text too.
+    /// The salvage's whole-project load finds its optional tables this way too
+    /// (`TableLookup::Salvage`).
+    pub(super) fn salvage_table_exists(&self, name: &str) -> Result<bool> {
         let exists: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE lower(type) = 'table' AND name = ?1",
+            "SELECT COUNT(*) FROM sqlite_master \
+             WHERE lower(type) = 'table' AND CAST(name AS TEXT) = ?1",
             params![name],
             |row| row.get(0),
         )?;

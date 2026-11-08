@@ -74,6 +74,11 @@ impl AppState {
         // own folders or a system folder alike, and whether or not the originals
         // are archived afterwards.
         let mut source_projects: Vec<Project> = Vec::new();
+        // [#576 W57-NF2] What each source's read reset or dropped (non-finite
+        // values, GPS tie points, comments past the end of their section): the
+        // merged file is written from what the read kept, so the answer names the
+        // source, as an open's receipt does.
+        let mut source_repairs: Vec<crate::core::MergeSourceRepairs> = Vec::new();
         for path in &source_paths {
             let db = match Database::open_existing_to_read(path) {
                 Ok(db) => db,
@@ -104,8 +109,15 @@ impl AppState {
                     path.display()
                 ));
             }
-            match db.load_project() {
-                Ok(mut project) => {
+            match db.load_project_with_report() {
+                Ok((mut project, report)) => {
+                    if !report.repairs.is_empty() {
+                        source_repairs.push(crate::core::MergeSourceRepairs {
+                            path: path.display().to_string(),
+                            name: project.name.clone(),
+                            repairs: report.repairs,
+                        });
+                    }
                     project.file_path = Some(path.clone());
                     // Assign IDs to any legacy closures that have id=0
                     project.assign_closure_ids();
@@ -524,6 +536,7 @@ impl AppState {
         }
 
         let mut result = CommandResult::success();
+        result.merge_source_repairs = source_repairs;
         if let Some(message) = surface_elevation_warning {
             result.warnings.push(crate::core::ValidationWarning {
                 code: "SURFACE_ELEVATION_MISMATCH".to_string(),

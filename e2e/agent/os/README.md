@@ -202,7 +202,8 @@ dir (`CARGO_TARGET_DIR`, defaulting to `~/.cargo_build` like the rest of
 `Cargo.lock` is newer than the binary, or when the stamp says something else
 rebuilt it. Cargo output goes to stderr, never stdout, because under the MCP
 server stdout is the JSON-RPC stream - a line at a time with the checkout folded
-to `<repo>` and the home directory to `~`, as the app build's is (#576 W51,
+to `<repo>`, the home directory to `~`, `CARGO_TARGET_DIR` to `<target>` and the
+temp directory to `<tmp>`, as the app build's is (#576 W51, W58,
 `e2e/agent/lib/foldedLines.ts`).
 
 ```bash

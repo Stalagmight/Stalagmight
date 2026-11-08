@@ -110,8 +110,23 @@ fn probe_ownership(ctx: &PlnxContext) -> Result<Ownership, String> {
         return Ok(Ownership::Fresh);
     }
     let stored = PlnxStore::probe_stored_project_created_at(&ctx.path)
-        .map_err(|e| format!("Could not read the dive-plan file: {e}"))?;
+        .map_err(|e| plnx_open_error("Could not read the dive-plan file", &e))?;
     Ok(classify_ownership(stored, ctx))
+}
+
+/// The message for a failed open of the `.plnx`: `generic` and the cause, or -
+/// [#576 Q-W35-1-D1] when the file was refused for its schema (RV18-4, a view or
+/// trigger the app never creates) - the unsafe-file wording a hostile `.stalx`
+/// gets, so the plans pane says what was found and why the file was not opened.
+fn plnx_open_error(generic: &str, err: &anyhow::Error) -> String {
+    match crate::core::loading::refused_schema(err) {
+        Some(refused) => crate::core::loading::unsafe_file_message(
+            refused,
+            "The dive-plan file beside this project",
+            "The project itself is not affected.",
+        ),
+        None => format!("{generic}: {err}"),
+    }
 }
 
 fn to_meta(m: PlnxMeta) -> DivePlanMeta {
@@ -602,8 +617,8 @@ impl AppState {
         if probe_ownership(&ctx)? == Ownership::Foreign {
             return Ok(Vec::new());
         }
-        let store =
-            PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
+        let store = PlnxStore::open(&ctx.path)
+            .map_err(|e| plnx_open_error("Could not open dive plans", &e))?;
         let rows = store
             .list()
             .map_err(|e| format!("Could not read dive plans: {e}"))?;
@@ -620,8 +635,8 @@ impl AppState {
         if probe_ownership(&ctx)? == Ownership::Foreign {
             return Err("These dive plans belong to a different project.".to_string());
         }
-        let store =
-            PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
+        let store = PlnxStore::open(&ctx.path)
+            .map_err(|e| plnx_open_error("Could not open dive plans", &e))?;
         let row = store
             .get(id)
             .map_err(|e| format!("Could not read the dive plan: {e}"))?
@@ -716,8 +731,8 @@ impl AppState {
         let persisted = self.to_persisted(&snapshot)?;
         let json = serde_json::to_string(&persisted)
             .map_err(|e| format!("Could not serialize the dive plan: {e}"))?;
-        let store =
-            PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
+        let store = PlnxStore::open(&ctx.path)
+            .map_err(|e| plnx_open_error("Could not open dive plans", &e))?;
         if ownership_before_open == Ownership::Fresh {
             store
                 .ensure_identity(&ctx.project_created_at, &ctx.project_name)
@@ -746,8 +761,8 @@ impl AppState {
         if probe_ownership(&ctx)? == Ownership::Foreign {
             return Err("These dive plans belong to a different project.".to_string());
         }
-        let store =
-            PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
+        let store = PlnxStore::open(&ctx.path)
+            .map_err(|e| plnx_open_error("Could not open dive plans", &e))?;
         if !store
             .delete(id)
             .map_err(|e| format!("Could not delete the dive plan: {e}"))?
@@ -951,7 +966,9 @@ mod tests {
     #![expect(
         clippy::unwrap_used,
         clippy::expect_used,
-        reason = "tests build from known-valid literals; a failed unwrap should fail the test"
+        clippy::print_stdout,
+        reason = "tests build from known-valid literals; a failed unwrap should fail the test, \
+                  and the printed messages are the evidence a run captures"
     )]
     use super::*;
     use crate::models::SectionData;
@@ -2634,5 +2651,80 @@ mod tests {
             .plan_refs_for_anchors(vec![anchor; MAX_PLAN_ANCHOR_BATCH + 1])
             .unwrap_err();
         assert!(err.contains("Too many plan anchors"), "got: {err}");
+    }
+
+    /// [#576 Q-W35-1-D1] A `.plnx` whose schema defines a view or a trigger is
+    /// refused (RV18-4) by every dive-plan command with the unsafe-file wording
+    /// a hostile `.stalx` gets (`LoadError::unsafe_file`), naming what it holds
+    /// and saying the file was changed by another program - not the plans
+    /// pane's generic "Could not read the dive-plan file: ..." - and the file
+    /// is left as it was.
+    #[test]
+    fn a_hostile_plnx_is_refused_with_the_unsafe_file_wording() {
+        let shared = "Stalagmight never creates these, so the file was changed by another \
+                      program, and opening it could let it run its own database commands.";
+        let stalx_wording = crate::core::LoadError::unsafe_file(
+            &crate::persistence::RefusedSchemaObject {
+                what: "a view",
+                name: "v".to_string(),
+            },
+            "cave.stalx",
+        )
+        .message;
+        assert!(stalx_wording.contains(shared), "got: {stalx_wording}");
+
+        for (sql, what) in [
+            ("CREATE VIEW v AS SELECT 1;", "a view named \"v\""),
+            (
+                "CREATE TRIGGER t AFTER INSERT ON dive_plans BEGIN SELECT 1; END;",
+                "a trigger named \"t\"",
+            ),
+        ] {
+            let temp = TempDir::new().unwrap();
+            let plnx_path = temp.path().join("cave.plnx");
+            let mut project = Project::new("Mine".to_string(), None);
+            project.file_path = Some(temp.path().join("cave.stalx"));
+            {
+                let store = PlnxStore::open(&plnx_path).unwrap();
+                store
+                    .ensure_identity(&project.created_at.utc().to_rfc3339(), "Mine")
+                    .unwrap();
+            }
+            rusqlite::Connection::open(&plnx_path)
+                .unwrap()
+                .execute_batch(sql)
+                .unwrap();
+            let bytes_before = std::fs::read(&plnx_path).unwrap();
+            let state = AppState::new().unwrap();
+            *state.project.lock() = Some(project).into();
+
+            let snapshot: DivePlanSnapshot = serde_json::from_str("{}").unwrap();
+            let refusals = [
+                ("list", state.list_dive_plans().map(|_| ()).unwrap_err()),
+                ("load", state.load_dive_plan(1).map(|_| ()).unwrap_err()),
+                (
+                    "save",
+                    state
+                        .save_dive_plan(None, "New".to_string(), snapshot)
+                        .map(|_| ())
+                        .unwrap_err(),
+                ),
+                ("delete", state.delete_dive_plan(1).unwrap_err()),
+            ];
+            for (command, err) in &refusals {
+                println!("{command}: {err}");
+                assert!(
+                    err.starts_with("The dive-plan file beside this project was not opened: "),
+                    "{command} got: {err}"
+                );
+                assert!(err.contains(what), "{command} got: {err}");
+                assert!(err.contains(shared), "{command} got: {err}");
+            }
+            assert_eq!(
+                std::fs::read(&plnx_path).unwrap(),
+                bytes_before,
+                "a refused .plnx is left as it was"
+            );
+        }
     }
 }

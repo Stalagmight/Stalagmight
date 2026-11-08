@@ -29,7 +29,7 @@ export const R = {
   REPO: 'a repo-relative path, a line number or a rule of the public tree (repo tooling; never the app or its data)',
   REPO_TEXT: 'text of a tracked file of the public tree, or of a lint rule (repo tooling; never the app or its data)',
   DEV_TOOL: 'output of a developer tool run on the public tree (git, cargo, tsc, eslint, pnpm); no app data',
-  FOLDED: 'a path the harness made or was given, printed through foldLocalPaths (the checkout as <repo>, the home directory as ~)',
+  FOLDED: 'a path the harness made or was given, printed through foldLocalPaths (the checkout as <repo>, the home directory as ~, CARGO_TARGET_DIR as <target>, the temp dir as <tmp>)',
   FORWARD: 'the parameter of a wrapper whose calls are sinks of their own (`WRAPPERS`), checked there',
   SHAPED: 'a value already in the shareable form, made by an approved helper earlier in the same function',
 } as const;
@@ -60,6 +60,7 @@ export const HELPERS: Readonly<Record<string, string>> = {
   shareableTail: "the last lines of a child's output, fail-closed",
   withheldAppText: "the app's text as its length",
   valueShape: 'a value read back from a file as a number, a boolean, null, or its type and size, never its text',
+  cliValueShape: 'a refused command-line token: itself only when shaped like a flag or a number, else valueShape (#576 W58 Q4)',
   findingsSummary: 'findings as counts per severity, kind and code',
   failureDetail: "a matrix cell's failure: the child's FAIL block, or its tail fail-closed",
   matrixSummary: "the matrix's summary: counts and durations",
@@ -68,6 +69,10 @@ export const HELPERS: Readonly<Record<string, string>> = {
   shareableFinding: "a finding's shareable projection (scripts/lib/shareable-finding.mjs)",
   shareableSelector: 'a selector: its structure and the words of the production source, other text as its length',
   shareableTestId: 'a test id: the words of the production source, other text as its length',
+  shareableFixtureName: 'a fixture name: itself when the repo tracks it, else its <private-fixture#xxxxx> tag (#576 W58 Q1)',
+  shareableTracePath:
+    "a trace step's path: a relative one itself when the repo tracks it, else its <private-path#xxxxx> tag; an absolute one folded (#576 W74-NF2)",
+  shareableKnobValue: "a trace knob's value: itself only when traceKnobs.ts registers the knob and the value has its shape, else valueShape (#576 W58 Q9)",
   shareableSignature: 'the signature of the shareable failure text',
   describeSignature: "a signature's fields, each from shareableSignature",
 };
@@ -78,8 +83,11 @@ export const HELPERS: Readonly<Record<string, string>> = {
  * and `R.FOLDED` holds for them only.
  */
 export const FOLDS: Readonly<Record<string, string>> = {
-  foldLocalPaths: 'the checkout folded to <repo> and the home directory to ~',
+  foldLocalPaths:
+    'the checkout folded to <repo>, the home directory to ~, CARGO_TARGET_DIR to <target> and the temp dir to <tmp> ' +
+    '(scripts/lib/fold-local-paths.mjs: the harness imports it through lib/shareableFailure.ts, the scripts/*.mjs tools directly)',
   redactCorpusText: "a private corpus entry's path and names folded to its corpus id",
+  foldPrivateFixtures: 'a fixture name the repo does not track folded to its <private-fixture#xxxxx> tag (#576 W58 Q1)',
 };
 
 /** Helpers that hand the function they are given only folded text, each with why. */
@@ -155,9 +163,13 @@ export function scanOptions(groups: readonly SiteGroup[]): ScanOptions {
 /** The kinds whose values reach a shareable sink. */
 const VALUE_KINDS: ReadonlySet<SinkKind> = new Set(['stream', 'progress', 'error', 'return']);
 
-/** How an allow-list keys a value: a bare identifier or a call of a parameter by its function, anything else as written. */
+/**
+ * How an allow-list keys a value: `<function>: <expression as written>`. Every value is
+ * keyed by the function it is written in (`fnName`), so an entry checked in one
+ * function - an error's message, a field of a record - allows nothing in another (#576 RV20-10).
+ */
 export function valueKey(value: PrintValue): string {
-  return value.bare ? `${value.fn}: ${value.text}` : value.text;
+  return `${value.fn}: ${value.text}`;
 }
 
 /** The key of a file or passthrough site. */
@@ -172,6 +184,12 @@ export interface CheckResult {
   stale: string[];
   /** `<file>:<line> <key>`: a file write or passthrough nothing lists. */
   unlisted: string[];
+  /**
+   * `<file>:<line> ...`: a listed sink handed on whose holder is not a declared
+   * wrapper, or a wrapper its file exports - calls the scan cannot see as sites.
+   * No entry can allow one (#576 RV20-12).
+   */
+  unguarded: string[];
   /** How each site is made safe, for the audit table. */
   audit: AuditRow[];
 }
@@ -194,6 +212,7 @@ export function checkSites(
   const used = new Set<string>();
   const unchecked: string[] = [];
   const unlisted: string[] = [];
+  const unguarded: string[] = [];
   const audit: AuditRow[] = [];
   for (const site of sites) {
     const where = `${site.file}:${site.line}`;
@@ -201,11 +220,20 @@ export function checkSites(
       audit.push({ site: where, kind: site.kind, sink: site.sink, class: 'page', how: "runs in the app's webview: the app's console, read by the log oracle" });
       continue;
     }
+    if (site.kind === 'passthrough' && site.sink === 'export') {
+      unguarded.push(`${where} ${site.target ?? ''}: a wrapper is a sink in its own file only`);
+      audit.push({ site: where, kind: site.kind, sink: site.sink, class: 'shareable', how: 'UNGUARDED' });
+      continue;
+    }
     if (site.kind === 'passthrough') {
       const key = siteKey(site);
       const reason = passthrough[site.file]?.[key];
       if (reason === undefined) unlisted.push(`${where} ${key}`);
       else used.add(`${site.file}\u0000passthrough\u0000${key}`);
+      // Its listing holds only for one held in a declared wrapper, whose calls are checked sites (an unlisted one fails already).
+      if (reason !== undefined && site.sink === 'reference' && !site.held) {
+        unguarded.push(`${where} ${key}: held in ${site.holders?.join(', ') || 'nothing'}, not a declared wrapper`);
+      }
       audit.push({ site: where, kind: site.kind, sink: site.sink, class: 'shareable', how: reason ?? 'UNLISTED' });
       continue;
     }
@@ -257,5 +285,5 @@ export function checkSites(
   for (const [file, entries] of Object.entries(passthrough)) {
     for (const key of Object.keys(entries)) if (!used.has(`${file}\u0000passthrough\u0000${key}`)) stale.push(`${file} passthrough ${key}`);
   }
-  return { unchecked, stale, unlisted, audit };
+  return { unchecked, stale, unlisted, unguarded, audit };
 }

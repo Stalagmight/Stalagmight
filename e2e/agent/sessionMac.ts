@@ -199,6 +199,7 @@ export class MacSession extends SessionCore {
           'tauri:options': { application: macWrapperPath },
         },
         'tauri-wd',
+        this.recorder,
       );
     } catch (err) {
       await this.stop('attach-failed');

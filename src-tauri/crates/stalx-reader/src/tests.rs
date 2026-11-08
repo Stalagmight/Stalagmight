@@ -10,6 +10,7 @@ use stalagmight_models::station::{GpsCoordinates, LoopClosure as ModelClosure, S
 use stalagmight_models::{
     ClosureStrategy, Project, SectionData, ShotData, ShotKind as ModelShotKind, SurveyDirection,
 };
+use stalagmight_persistence::persistence::sqlite::untrusted_sql_probes;
 use stalagmight_persistence::persistence::Database;
 use tempfile::TempDir;
 
@@ -23,11 +24,20 @@ thread_local! {
     /// a slow or panicking post-load step.
     pub(super) static AFTER_LOAD: std::cell::RefCell<Box<dyn Fn()>> =
         std::cell::RefCell::new(Box::new(|| {}));
+    /// Handed the connection `inspect` reads the file's schema with, once its
+    /// hardening is in place and before the schema guard runs.
+    pub(super) static ON_INSPECT: std::cell::RefCell<Box<dyn Fn(&rusqlite::Connection)>> =
+        std::cell::RefCell::new(Box::new(|_| {}));
 }
 
 /// Install an [`AFTER_LOAD`] hook for the rest of this test's thread.
 fn after_load(hook: impl Fn() + 'static) {
     AFTER_LOAD.with(|slot| *slot.borrow_mut() = Box::new(hook));
+}
+
+/// Install an [`ON_INSPECT`] hook for the rest of this test's thread.
+fn on_inspect(hook: impl Fn(&rusqlite::Connection) + 'static) {
+    ON_INSPECT.with(|slot| *slot.borrow_mut() = Box::new(hook));
 }
 
 fn invalid_kind(err: &ReadError) -> Option<InvalidKind> {
@@ -392,6 +402,29 @@ fn a_dangling_cross_reference_is_dropped_and_counted() {
     assert_eq!(survey.unresolved_references, 1);
 }
 
+/// [#576 Q-W30-3-D1] The loader now drops a comment row past the end of its
+/// section itself (and lists it on the app's load receipt). A reader still
+/// sees exactly what it saw: the orphan is left out of `station_comments` and
+/// counted in `unresolved_references`, beside the comment that is kept.
+#[test]
+fn an_orphaned_comment_is_still_left_out_and_counted() {
+    let path = with_schema_sql(
+        "INSERT INTO station_comments (section_id, station_index, comment)
+         SELECT section_id, 999, 'past the end' FROM station_comments;",
+    );
+
+    let survey = read_file(&path).unwrap();
+
+    assert_eq!(
+        survey.station_comments.len(),
+        1,
+        "{:?}",
+        survey.station_comments
+    );
+    assert_eq!(survey.station_comments[0].text, "lead");
+    assert_eq!(survey.unresolved_references, 1);
+}
+
 #[test]
 fn generated_columns_are_refused() {
     // 2 MiB per row from a tiny file; allowed with trusted_schema off.
@@ -634,6 +667,34 @@ fn the_private_copy_goes_in_the_given_temp_dir_and_is_removed() {
 }
 
 #[test]
+fn an_older_file_is_upgraded_without_a_second_copy_in_the_private_dir() {
+    // The app keeps a `.pre-v<N>.backup` beside a file it upgrades; the private
+    // copy is thrown away after the read, so one there would only double the
+    // temp space and time a read needs. Listed while the read is under way.
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &full_project());
+    set_user_version(&path, 17);
+    let scratch = TempDir::new().unwrap();
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (root, names) = (scratch.path().to_path_buf(), std::rc::Rc::clone(&seen));
+    after_load(move || {
+        for private in std::fs::read_dir(&root).unwrap() {
+            for entry in std::fs::read_dir(private.unwrap().path()).unwrap() {
+                let name = entry.unwrap().file_name();
+                names.borrow_mut().push(name.to_string_lossy().into_owned());
+            }
+        }
+    });
+
+    let survey = read_file_with(&path, &ReadOptions::default().temp_dir(scratch.path())).unwrap();
+
+    assert_eq!(survey.schema_version, 17, "the upgrade ran on the copy");
+    let seen = seen.borrow();
+    assert!(seen.iter().any(|name| name == "project.stalx"), "{seen:?}");
+    assert!(!seen.iter().any(|name| name.contains(".pre-v")), "{seen:?}");
+}
+
+#[test]
 fn the_correction_source_tells_a_recorded_zero_from_nothing_recorded() {
     use stalagmight_models::{AzimuthReference, CorrectionSource as Source};
 
@@ -669,6 +730,27 @@ fn impossible_datum_coordinates_are_invalid_values() {
             "{sql}: {err}"
         );
     }
+}
+
+#[test]
+fn a_datum_with_finite_coordinates_and_an_infinite_depth_is_refused_naming_depth() {
+    // The loader drops a datum with ANY non-finite coordinate, depth included,
+    // so the refusal must not blame the latitude/longitude alone.
+    let err = read_file(&with_schema_sql(
+        "UPDATE zero_datums SET depth_reference = 9e999;",
+    ))
+    .unwrap_err();
+
+    assert!(
+        matches!(
+            &err,
+            ReadError::Invalid {
+                kind: InvalidKind::InvalidValue,
+                detail,
+            } if detail == "zero datum: non-finite latitude, longitude or depth"
+        ),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -818,6 +900,51 @@ fn schema_expressions_a_migration_would_evaluate_are_refused() {
             "{sql}: {err}"
         );
     }
+}
+
+#[test]
+fn a_schema_cell_not_stored_as_text_is_refused() {
+    // [#619] SQLite parses a `sql` cell stored as a BLOB like text, so this
+    // CHECK is enforced either way; stored as text it is refused, and a BLOB
+    // must not hide it. A `tbl_name` stored as a BLOB is refused too.
+    let check = "CREATE TABLE c (x CHECK (length(hex(zeroblob(4000000))) > 0));";
+    for sql in [
+        check.to_string(),
+        format!(
+            "{check}
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET sql = CAST(sql AS BLOB) WHERE name = 'c';"
+        ),
+        "PRAGMA writable_schema = ON;
+         UPDATE sqlite_master SET tbl_name = CAST(tbl_name AS BLOB) WHERE name = 'shots';"
+            .to_string(),
+    ] {
+        let result = read_file(&with_schema_sql(&sql));
+        assert_eq!(
+            result.as_ref().err().and_then(invalid_kind),
+            Some(InvalidKind::RefusedSchemaObject),
+            "{sql}: {:?}",
+            result.map(|survey| survey.sections.len())
+        );
+    }
+}
+
+#[test]
+fn a_table_name_that_is_not_utf8_is_refused() {
+    // [#619] SQLite never reads the `tbl_name` of an autoindex row, which has
+    // no SQL, so this file loads and passes quick_check; it was read before.
+    let result = read_file(&with_schema_sql(
+        "CREATE TABLE extra (tag TEXT UNIQUE);
+         PRAGMA writable_schema = ON;
+         UPDATE sqlite_master SET tbl_name = 'extra' || CAST(x'ff' AS TEXT)
+         WHERE name = 'sqlite_autoindex_extra_1';",
+    ));
+    assert_eq!(
+        result.as_ref().err().and_then(invalid_kind),
+        Some(InvalidKind::RefusedSchemaObject),
+        "{:?}",
+        result.map(|survey| survey.sections.len())
+    );
 }
 
 #[test]
@@ -978,4 +1105,39 @@ fn schema_rows_retyped_in_another_case_are_refused() {
             "{sql}: {err}"
         );
     }
+}
+
+// === [#619] The inspect connection has the load's authorizer ===
+
+/// The connection `inspect` opens itself, which parses the file's schema
+/// before the load does, refuses what the load's connection refuses, whether
+/// or not the linked SQLite has it: persistence's `untrusted_sql_probes`, the
+/// probes its own `untrusted_sql_tests` run on every opener. CI runs this on a
+/// build without the repo's `LIBSQLITE3_FLAGS` too, with
+/// `STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE` set, which makes it check that the
+/// modules really are compiled in.
+#[test]
+fn the_inspect_connection_refuses_what_the_build_flags_strip() {
+    untrusted_sql_probes::check_the_linked_sqlite();
+
+    let failures = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let probed = std::rc::Rc::new(std::cell::Cell::new(false));
+    {
+        let (failures, probed) = (std::rc::Rc::clone(&failures), std::rc::Rc::clone(&probed));
+        on_inspect(move |conn| {
+            probed.set(true);
+            failures
+                .borrow_mut()
+                .extend(untrusted_sql_probes::refusal_failures(conn, "inspect"));
+        });
+    }
+    let dir = TempDir::new().unwrap();
+    read_file(&save(&dir, &full_project())).unwrap();
+
+    assert!(probed.get(), "inspect never handed its connection over");
+    assert!(
+        failures.borrow().is_empty(),
+        "not refused when prepared on the inspect connection:\n{}",
+        failures.borrow().join("\n")
+    );
 }

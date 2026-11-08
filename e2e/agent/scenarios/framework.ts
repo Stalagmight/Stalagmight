@@ -18,6 +18,7 @@ import * as path from 'path';
 import { invokeInApp, evalInApp } from '../lib/page';
 import { readStore, callStoreAction, type StoreName } from '../lib/stores';
 import { materializeFixture } from '../lib/fixtures';
+import { fixtureTag, isTrackedFixture } from '../lib/privateFixtures';
 
 /** Minimal session surface a scenario needs; AppSession satisfies it. */
 export interface ScenarioTarget {
@@ -107,6 +108,7 @@ export function makeContext(
   // that a forged copy can fill with text, and `ctx.seed` prints in progress
   // and reproduce lines.
   const effectiveSeed = Number(seed) || 1;
+  const privateFixturesSaid = new Set<string>();
   const rand = mulberry32(effectiveSeed);
   const metrics: Record<string, number> = {};
   const fixtureDir = target.sessionDir
@@ -137,6 +139,18 @@ export function makeContext(
       metrics[key] = value;
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    fixturePath: (name) => materializeFixture(name, fixtureDir),
+    fixturePath: (name) => {
+      const opened = materializeFixture(name, fixtureDir);
+      // A fixture the repo does not track prints as its tag in shareable output
+      // (#576 W58 Q1). Its full name goes to the log once - the runner records
+      // the full line in actions.jsonl and prints it folded - so the tag can be
+      // traced back where the run happened.
+      const base = path.basename(name);
+      if (!isTrackedFixture(base) && !privateFixturesSaid.has(base)) {
+        privateFixturesSaid.add(base);
+        onLog?.(`opened fixture ${base}, which the repo does not track: shareable output names it ${fixtureTag(base)}`);
+      }
+      return opened;
+    },
   };
 }

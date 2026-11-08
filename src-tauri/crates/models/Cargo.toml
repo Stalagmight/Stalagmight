@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Stalagmight survey data model. Internal to Stalagmight, published only so `stalx-reader` can depend on it; no semver promise - use stalx-reader."
 repository = "https://github.com/Stalagmight/Stalagmight"
 edition.workspace = true
+rust-version = "1.89.0"
 license.workspace = true
 
 # Opt into the workspace lint tables (see the workspace root manifest) so the

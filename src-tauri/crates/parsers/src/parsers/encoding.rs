@@ -17,6 +17,8 @@
 
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -205,9 +207,46 @@ thread_local! {
 /// which the kernel revokes the lease itself.
 const LEASE_BREAK_WAIT: Duration = Duration::from_secs(60);
 
+thread_local! {
+    /// The Cancel flag of the import parsing on this thread, while
+    /// [`with_cancel_flag`] runs it (#576 RV20-17).
+    static CANCEL_FLAG: std::cell::RefCell<Option<Arc<AtomicBool>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `parse` with `cancel` as its Cancel flag: the wait for a lease in
+/// [`open_regular_file`] (up to [`LEASE_BREAK_WAIT`]) gives up as soon as the
+/// flag is set, instead of holding a cancelled import until the open returns
+/// (#576 RV20-17). The importers parse on the calling thread, so the flag is
+/// kept per thread, for the duration of `parse` only; the one set before is
+/// restored after it, a panic included.
+pub fn with_cancel_flag<T>(cancel: &Arc<AtomicBool>, parse: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Arc<AtomicBool>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            CANCEL_FLAG.with(|flag| *flag.borrow_mut() = previous);
+        }
+    }
+    let _restore = Restore(CANCEL_FLAG.with(|flag| flag.replace(Some(Arc::clone(cancel)))));
+    parse()
+}
+
+/// Whether the import parsing on this thread has been cancelled: its flag (see
+/// [`with_cancel_flag`]) is set. `false` outside [`with_cancel_flag`].
+pub fn cancel_pressed() -> bool {
+    CANCEL_FLAG.with(|flag| {
+        flag.borrow()
+            .as_ref()
+            .is_some_and(|cancel| cancel.load(Ordering::SeqCst))
+    })
+}
+
 /// `options.open(path)`, retried while a lease holds it up (on unix, where
 /// [`open_regular_file`] opens without blocking) until `wait` has passed;
 /// after that the last attempt's error, the same EWOULDBLOCK, is returned.
+/// Given up at once, between attempts, when the import's Cancel is pressed
+/// ([`with_cancel_flag`], #576 RV20-17): the retries are at most 100 ms apart.
 fn open_waiting_out_a_lease(
     options: &std::fs::OpenOptions,
     path: &Path,
@@ -222,6 +261,11 @@ fn open_waiting_out_a_lease(
                     && e.kind() == std::io::ErrorKind::WouldBlock
                     && Instant::now() < deadline =>
             {
+                if cancel_pressed() {
+                    return Err(std::io::Error::other(
+                        "the import was cancelled while another program held the file",
+                    ));
+                }
                 std::thread::sleep(pause);
                 pause = (pause * 2).min(Duration::from_millis(100));
             }
@@ -880,5 +924,48 @@ mod lease_tests {
             waited >= Duration::from_millis(200) && waited < Duration::from_millis(1500),
             "gave up after {waited:?}"
         );
+    }
+
+    /// [#576 RV20-17] A Cancel pressed while the open waits out a lease ends the
+    /// wait at once. The wait watched nothing but its deadline, so a cancelled
+    /// import sat in it until the lease broke (up to 60 s) - here a lease held
+    /// for 3 s, with Cancel pressed 200 ms in.
+    #[test]
+    fn a_cancel_ends_the_wait_for_a_lease_at_once() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cave.dat");
+        std::fs::write(&path, b"#UNITS").unwrap();
+        let Some(holder) = hold_write_lease(&path) else {
+            return;
+        };
+        let releaser = release_after(holder, Duration::from_secs(3));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let presser = {
+            let cancel = Arc::clone(&cancel);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                cancel.store(true, Ordering::SeqCst);
+            })
+        };
+
+        let started = Instant::now();
+        let opened = super::with_cancel_flag(&cancel, || open_regular_file(&path))
+            .map(|_| ())
+            .map_err(|e| format!("{e:#}"));
+        let waited = started.elapsed();
+        presser.join().unwrap();
+        releaser.join().unwrap();
+        println!(
+            "Cancel pressed 0.2 s into a lease held 3 s: {opened:?} after {:.3} s",
+            waited.as_secs_f64()
+        );
+        assert!(
+            waited < Duration::from_secs(1),
+            "the wait ran on past the Cancel, for {:.3} s",
+            waited.as_secs_f64()
+        );
+        assert!(opened.is_err(), "a cancelled open hands back no file");
     }
 }

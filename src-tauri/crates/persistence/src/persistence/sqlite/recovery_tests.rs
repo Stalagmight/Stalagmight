@@ -549,6 +549,95 @@ fn repair_is_refused_when_a_link_at_its_backup_name_cannot_be_removed() {
     }
 }
 
+/// [#576 Q-W42-1-D1] A project opened through a symlink is repaired where the
+/// link points: the rewrite is renamed over the link's TARGET (a new inode
+/// there), and the link stays a link to it. Renaming the rewrite over the path
+/// as opened replaced the link with the repaired copy and left the target as
+/// it was. The numbered backup stays beside the path as opened, where the
+/// recovery dialog lists backups.
+#[cfg(unix)]
+#[test]
+fn repair_through_a_symlink_repairs_the_target_and_keeps_the_link() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let temp = TempDir::new().unwrap();
+    let store = temp.path().join("store");
+    std::fs::create_dir(&store).unwrap();
+    let target = store.join("CaveA.stalx");
+    project_file(&target, "Original");
+    let link = temp.path().join("CaveA-link.stalx");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let target_inode_before = std::fs::metadata(&target).unwrap().ino();
+
+    let (backup, ok) = Database::attempt_repair(&link).unwrap();
+    let link_is_a_link = std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink();
+    let target_inode_after = std::fs::metadata(&target).unwrap().ino();
+    println!(
+        "repair ok={ok}; link still a link: {link_is_a_link}, pointing at {:?}; target inode \
+         {target_inode_before} -> {target_inode_after}; target holds: {}; backup {:?}",
+        std::fs::read_link(&link).ok(),
+        project_name(&target),
+        backup.strip_prefix(temp.path()).unwrap_or(&backup),
+    );
+    assert!(ok);
+    assert!(link_is_a_link, "the link must stay a link");
+    assert_eq!(std::fs::read_link(&link).unwrap(), target);
+    assert_ne!(
+        target_inode_before, target_inode_after,
+        "the link's target must be the repaired rewrite"
+    );
+    assert_eq!(project_name(&link), "Original");
+    assert_eq!(backup.parent(), Some(temp.path()));
+    assert_eq!(project_name(&backup), "Original");
+    for dir in [temp.path(), store.as_path()] {
+        let left: Vec<String> = files_in(dir)
+            .into_iter()
+            .filter(|name| name.contains("repair-staging"))
+            .collect();
+        assert!(left.is_empty(), "staging left in {dir:?}: {left:?}");
+    }
+}
+
+/// [#576 Q-W42-1-D1, NF-W3-3] Through a symlink the hot rollback journal sits
+/// beside the TARGET (SQLite resolves the link before naming it), so the
+/// backup Repair keeps beside the link must be the target's file with the
+/// target's journal: copied alone, the backup held the torn pages.
+#[cfg(unix)]
+#[test]
+fn repair_through_a_symlink_backs_up_the_target_with_its_journal() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("old.stalx");
+    project_file(&source, "Original");
+    let store = temp.path().join("store");
+    std::fs::create_dir(&store).unwrap();
+    let target = store.join("CaveA.stalx");
+    torn_copy(&source, &target);
+    let journal_before = std::fs::read(journal_of(&target)).unwrap();
+    let link = temp.path().join("CaveA-link.stalx");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let (backup, ok) = Database::attempt_repair(&link).unwrap();
+    let backup_journal = std::fs::read(journal_of(&backup)).ok();
+    println!(
+        "repair ok={ok}; backup {:?} journal kept: {}; backup reads: {}; target reads: {}",
+        backup.strip_prefix(temp.path()).unwrap_or(&backup),
+        backup_journal.as_deref() == Some(journal_before.as_slice()),
+        project_name(&backup),
+        project_name(&target)
+    );
+    assert!(
+        backup_journal
+            .as_deref()
+            .is_some_and(|journal| journal == journal_before.as_slice()),
+        "the backup keeps the target's journal, unchanged"
+    );
+    assert_eq!(project_name(&backup), "Original");
+    assert_eq!(project_name(&target), "Original");
+}
+
 /// [#576 B27(f)] A source-level tripwire, like the push snapshot's: Repair must
 /// never fall back to a plain `VACUUM`.
 #[test]
@@ -561,6 +650,76 @@ fn repair_never_runs_a_plain_vacuum() {
         !body.contains("\"VACUUM;\"") && body.contains("VACUUM INTO"),
         "attempt_repair must compact with VACUUM INTO a sibling, not a plain VACUUM"
     );
+}
+
+/// [#576 Q-W30-2-D1] A project that cannot be read as a whole is salvaged as
+/// its sections only, and the export says so (`project_included: false`), for
+/// the recovery dialog to say plainly that shots and merges are not in the
+/// file - although the counts still name the merges the file holds. An intact
+/// project is exported whole.
+#[test]
+fn a_project_that_cannot_load_is_exported_as_its_sections_only_and_says_so() {
+    let temp = TempDir::new().unwrap();
+    let intact = temp.path().join("CaveA.stalx");
+    project_with_two_sections_and_a_merge(&intact);
+    let damaged = temp.path().join("CaveB.stalx");
+    project_with_two_sections_and_a_merge(&damaged);
+    // The shots table is gone: the project no longer loads, while its
+    // sections and merges still read.
+    Connection::open(&damaged)
+        .unwrap()
+        .execute_batch("ALTER TABLE shots RENAME TO shots_gone;")
+        .unwrap();
+
+    let (whole_file, whole) = Database::export_salvageable(&intact).unwrap().into_export();
+    let (file, partial) = Database::export_salvageable(&damaged)
+        .unwrap()
+        .into_export();
+    println!("intact:  {whole:?}");
+    println!("damaged: {partial:?}");
+    println!("the damaged project's file holds: {file}");
+
+    assert!(whole.project_included);
+    assert!(whole_file.contains("\"station_merges\""));
+    assert!(!partial.project_included);
+    let sections: serde_json::Value = serde_json::from_str(&file).unwrap();
+    let sections = sections.as_array().unwrap();
+    assert_eq!(sections.len(), 2, "the two sections are in the file");
+    assert!(sections
+        .iter()
+        .all(|section| section.get("shots").is_none()));
+    assert!(!file.contains("station_merges"));
+    assert_eq!(partial.merge_count, 1, "the merge is counted, not included");
+}
+
+/// Two sections (two shots each) joined by one station merge, saved to `path`.
+fn project_with_two_sections_and_a_merge(path: &Path) {
+    use crate::models::{SectionData, ShotData, StationRef};
+    let shot = |azimuth: f64| ShotData {
+        length: 4.0,
+        azimuth_in: azimuth,
+        azimuth_out: (azimuth + 180.0) % 360.0,
+        depth_in: 2.0,
+        depth_out: 2.0,
+        ..Default::default()
+    };
+    let mut project = Project::new("CaveA".to_string(), None);
+    let mut add = |azimuth: f64| {
+        project
+            .add_section(SectionData {
+                shots: vec![shot(azimuth), shot(azimuth)],
+                ..Default::default()
+            })
+            .id
+    };
+    let (trunk, branch) = (add(0.0), add(90.0));
+    project
+        .merge_stations(StationRef::new(trunk, 2), StationRef::new(branch, 0))
+        .unwrap();
+    Database::open(path)
+        .unwrap()
+        .save_project(&project)
+        .unwrap();
 }
 
 // === A hostile schema is refused on the recovery paths too (#608) ===

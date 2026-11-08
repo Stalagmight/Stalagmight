@@ -116,6 +116,26 @@ and it fails on such a build. The release workflow also runs it on each
 platform's build leg, because the strip works by a later `-U` cancelling
 libsqlite3-sys's own `-D`, which each C compiler (MSVC on Windows) must honour.
 
+The flags are defence in depth for the app build only. They do not travel with
+a published crate, so a crates.io build of `stalagmight-persistence` or
+`stalx-reader` has every module compiled in, and libsqlite3-sys has no feature
+that leaves them out. What those builds rely on is a SQLite authorizer (#619):
+every connection persistence opens on an existing file installs it before its
+first statement (`deny_stripped_sqlite_features` in `schema_guard.rs`), as does
+the connection `stalx-reader` opens itself to inspect a file, and it
+refuses creating or dropping a virtual table, reading DBSTAT and the other
+eponymous tables of those modules, and calling the functions FTS, R-tree and
+extension loading register, whatever the build. Its tests,
+`persistence::sqlite::untrusted_sql_tests::every_untrusted_open_refuses_what_the_build_flags_strip`
+and stalx-reader's
+`tests::the_inspect_connection_refuses_what_the_build_flags_strip`,
+run in every `cargo test --workspace`, and the CI `check` job runs them once more
+on a build with `LIBSQLITE3_FLAGS` emptied by `--config` (a command-line value
+wins over `force = true`), in its own target dir, with
+`STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE=1` so they fail unless the modules really
+are there. That step also fails unless both tests ran and passed: an `--exact`
+name that matches nothing runs no test and passes, which a rename would do.
+
 Per-machine cargo settings (a target dir on another disk, a linker) do not
 belong in the committed file. Use `$CARGO_HOME/config.toml`, the
 `CARGO_TARGET_DIR` variable, or a `.cargo/config.toml` in a directory above the

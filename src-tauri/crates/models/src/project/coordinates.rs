@@ -807,7 +807,9 @@ impl Project {
         // positional `Index` beside the canonical key, or `Index(0)` beside
         // `SectionStart`. The re-anchor on open and on a snapshot restore joins
         // the keys that resolve, but one that does not (a row past the end of its
-        // section) stays `Index`, and an edit that gives the section that station
+        // section) stays `Index` - the open drops such a row since #576
+        // Q-W30-3-D1, yet undo history an older build persisted can still restore
+        // one - and an edit that gives the section that station
         // (a shot prepended or appended) makes it name a station that has, or then
         // gets, a key of its own; nothing re-anchors it then. The rule: a station
         // shows what the save writes for it - the comments of all its keys joined,

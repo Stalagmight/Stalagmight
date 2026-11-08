@@ -21,7 +21,7 @@ import { listJourneys, getJourney } from './journeys';
 import { journeyVerdictLine, runJourney } from './journeys/framework';
 import { ledgerRecord, type JourneyRecord, type RunRecord } from './journeys/ledger';
 import { findingsSummary, runSweep, newOracleState } from './lib/oracles';
-import { foldLocalPaths, progressLogger, shareableErrorText, valueShape } from './lib/shareableFailure';
+import { cliValueShape, foldLocalPaths, progressLogger, shareableErrorText } from './lib/shareableFailure';
 import { callStoreAction } from './lib/stores';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -85,7 +85,7 @@ async function main(): Promise<void> {
   for (const name of names) {
     if (!getJourney(name)) {
       // Not a registry name, so its shape (#576 W51): `--only` is the user's text.
-      process.stderr.write(`unknown journey, ${valueShape(name)}; known: ${listJourneys().join(', ')}\n`);
+      process.stderr.write(`unknown journey, ${cliValueShape(name)}; known: ${listJourneys().join(', ')}\n`);
       process.exit(2);
     }
   }

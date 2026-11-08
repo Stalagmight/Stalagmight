@@ -4,6 +4,7 @@
  * both exercises the load path under the harness and leaves a seeded project for
  * follow-on scenarios.
  */
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import type { Scenario } from './framework';
 import { ensureProjectLoaded } from './common';
 
@@ -24,7 +25,8 @@ export const seedLargeProject: Scenario = {
     `);
     ctx.setMetric('sections', counts.sections);
     ctx.setMetric('stations', counts.stations);
-    ctx.log(`loaded ${counts.sections} sections / ${counts.stations} stations, view=${counts.view}`);
+    // The page's view keeps only the words of the app's source (#576 W58 Q11).
+    ctx.log(`loaded ${counts.sections} sections / ${counts.stations} stations, view=${shareableTestId(counts.view)}`);
 
     if (counts.sections < 1) throw new Error('fixture loaded with zero sections');
     if (counts.stations < 1) throw new Error('fixture loaded with zero stations');

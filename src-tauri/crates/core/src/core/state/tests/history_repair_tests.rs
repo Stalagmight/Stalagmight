@@ -865,6 +865,7 @@ fn redo_of_a_created_shot_with_the_maximum_id_remints_it_inside_the_window() {
                 before_shot_uuid: None,
                 uuid: Some("11111111-1111-4111-8111-111111111111".to_string()),
                 previous_offsets: HashMap::new(),
+                legacy_comment_rows: Vec::new(),
             },
             timestamp: None,
         });
@@ -1009,6 +1010,7 @@ fn an_anchored_redo_forcing_the_maximum_shot_id_remints_it_inside_the_window() {
                 before_shot_uuid: None,
                 uuid: Some("44444444-4444-4444-8444-444444444444".to_string()),
                 previous_offsets: HashMap::new(),
+                legacy_comment_rows: Vec::new(),
             },
             timestamp: None,
         });

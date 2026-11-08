@@ -1837,7 +1837,7 @@ export const exportRoundtripFuzz: Scenario = {
       const afterLoad = await readModeSnapshot(ctx);
       if (afterLoad.appMode !== 'survey') {
         fail(
-          `X9b loading a project mid-Export left appMode at "${afterLoad.appMode}"\n` +
+          `X9b loading a project mid-Export left appMode at "${shareableTestId(afterLoad.appMode)}"\n` +
             `    applyDisplaySettings sets APP_MODE_DEFAULT precisely so a load is\n` +
             `    authoritative over whatever workspace mode the previous project was in.\n` +
             `  ${reproduce}`,

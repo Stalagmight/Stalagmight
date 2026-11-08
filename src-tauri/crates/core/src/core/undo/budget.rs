@@ -48,8 +48,17 @@ impl UndoStack {
             }
             UndoData::ShotSnapshot { .. } => BYTES_PER_SHOT,
             UndoData::CreatedShotSnapshot {
-                previous_offsets, ..
-            } => BYTES_PER_SHOT + previous_offsets.len() * BYTES_PER_OFFSET,
+                previous_offsets,
+                legacy_comment_rows,
+                ..
+            } => {
+                BYTES_PER_SHOT
+                    + previous_offsets.len() * BYTES_PER_OFFSET
+                    + legacy_comment_rows
+                        .iter()
+                        .map(|(_, text)| 128 + text.len())
+                        .sum::<usize>()
+            }
             UndoData::MergeInfo {
                 removed_closures,
                 previous_offsets,

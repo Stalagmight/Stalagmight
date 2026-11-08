@@ -48,7 +48,8 @@ describe('parseScenarioArgs', () => {
     expect(() => parseScenarioArgs(['fractalStress', '--iterations', '0'])).toThrow(/positive integer/);
     expect(() => parseScenarioArgs(['fractalStress', '--seed', '3.7'])).toThrow(/needs an integer/);
     expect(() => parseScenarioArgs([])).toThrow(/usage: pnpm agent:scenario/);
-    expect(() => parseScenarioArgs(['fractalStress', '--bogus'])).toThrow(/unknown flag, a string of 7 character\(s\)/);
+    expect(() => parseScenarioArgs(['fractalStress', '--bogus'])).toThrow('unknown flag, "--bogus"');
+    expect(() => parseScenarioArgs(['fractalStress', 'qzCaveA.stalx'])).toThrow('unknown flag, a string of 13 character(s)');
   });
 
   it('prints what the user typed, and what a trace carries, as its shape (#576 W51)', () => {
@@ -74,5 +75,21 @@ describe('parseScenarioArgs', () => {
     expect(refusal(() => parseScenarioArgs(['fractalStress', '--iterations', '0']))).toBe(
       'flag --iterations needs a positive integer, got 0',
     );
+  });
+
+  it('echoes a refused value shaped like a flag or a number (#576 W58 Q4)', () => {
+    const refusal = (argv: string[]): string => {
+      try {
+        parseScenarioArgs(argv);
+      } catch (err) {
+        return (err as Error).message;
+      }
+      return '';
+    };
+    expect(refusal(['fractalStress', '--sed', '7'])).toBe('unknown flag, "--sed"');
+    expect(refusal(['fractalStress', '--seed', '3.7'])).toBe('flag --seed needs an integer, got "3.7"');
+    expect(refusal(['fractalStress', '--seed', '--iterations'])).toBe('flag --seed needs an integer, got "--iterations"');
+    expect(refusal(['fractalStress', '--iterations', '-2'])).toBe('flag --iterations needs a positive integer, got "-2"');
+    expect(refusal(['fractalStress', '--seed', 'qzCaveA'])).toBe('flag --seed needs an integer, got a string of 7 character(s)');
   });
 });

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Stalagmight .stalx persistence. Internal to Stalagmight, published only so `stalx-reader` can depend on it; no semver promise - use stalx-reader."
 repository = "https://github.com/Stalagmight/Stalagmight"
 edition.workspace = true
+rust-version = "1.89.0"
 license.workspace = true
 
 # Opt into the workspace lint tables (see the workspace root manifest) so the
@@ -17,9 +18,20 @@ workspace = true
 # in-memory/expiry/grant test hooks), plus the non-transactional per-stack
 # undo/redo writers that seed history fixtures: dependents' tests still call
 # them, and a dependency's `cfg(test)` items are invisible to a dependent's
-# test build. Enabled only via [dev-dependencies] entries (the root crate's and
-# stalagmight-core's), so production builds never compile them.
+# test build. Also the #619 authorizer probes (`sqlite::untrusted_sql_probes`)
+# stalx-reader's tests share. Enabled only via [dev-dependencies] entries (the
+# root crate's, stalagmight-core's, stalagmight-tiles' and stalx-reader's), so
+# production builds never compile them.
 test-support = []
+# [#619] Compiles the one unit test that imports a real `.dmp` through
+# stalagmight-parsers (`migrate_v12_leaves_a_section_with_no_vertical_signal_untouched`,
+# which also reads the repo's `e2e/fixtures/test_v5.dmp`). Neither is in the
+# packaged crate: stalagmight-parsers is unpublished, so its dev-dependency below
+# stays path-only and cargo drops it. Enabled only by this crate's own path-only
+# self dev-dependency below, which cargo drops too: every test build in the repo
+# has it, the packaged crate's unit tests compile without it, and no production
+# build enables it.
+dmp-fixture-tests = []
 
 [dependencies]
 stalagmight-models = { path = "../models", version = "=0.1.0" }
@@ -43,11 +55,18 @@ uuid = { workspace = true, features = ["v4"] }
 # prerequisites fail the test naming what is missing (#576 E13), and
 # `Project::set_raw_section_offset`, which the round-trip tests use to store a legacy
 # dust-zero section offset the app's own writers refuse to (#576 A10).
-stalagmight-models = { path = "../models", features = ["test-support"] }
+# Versioned like the dependency above, because cargo drops a path-only
+# dev-dependency from the manifest it packages. stalagmight-parsers below is
+# unpublished, so it stays path-only and the packaged unit tests still lack it:
+# the test that uses it is gated on `dmp-fixture-tests`.
+stalagmight-models = { path = "../models", version = "=0.1.0", features = ["test-support"] }
 # `hooks` for the progress handler the tile-cache accounting tests count
 # SQLite VM steps with (#576 B19). Test builds only; no extra crate.
 rusqlite = { workspace = true, features = ["bundled", "hooks"] }
 # Test-only and acyclic: the sqlite round-trip tests import a real `.dmp`
 # through the parser to exercise a realistic project shape.
 stalagmight-parsers = { path = "../parsers" }
+# Turns on `dmp-fixture-tests` (see [features]) for this crate's own test
+# builds; path-only, so cargo drops it from the packaged manifest.
+stalagmight-persistence = { path = ".", features = ["dmp-fixture-tests"] }
 tempfile = { workspace = true }

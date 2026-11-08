@@ -240,6 +240,7 @@ impl AppState {
                 before_shot_id,
                 uuid,
                 previous_offsets,
+                legacy_comment_rows,
                 ..
             } => {
                 // Undo a CreateShot by removing the shot it created - resolved
@@ -270,6 +271,22 @@ impl AppState {
                             // recorded map instead of trusting that re-derivation
                             // (#413, finding 27's second arm).
                             self.restore_captured_section_offsets(previous_offsets);
+                            // [#576 RV20-6] A comment held under another key that
+                            // named the station goes back under that key. In
+                            // session the removal left it in place; after a save
+                            // and reopen it had the station's own key and went
+                            // with the shot.
+                            if !legacy_comment_rows.is_empty() {
+                                if let Some(project) = self.project.lock().as_mut() {
+                                    for (key, text) in legacy_comment_rows {
+                                        project
+                                            .station_comments
+                                            .entry(key.clone())
+                                            .or_insert_with(|| text.clone());
+                                    }
+                                    project.touch();
+                                }
+                            }
                         }
                         removed
                     }
@@ -624,6 +641,11 @@ impl AppState {
 
         // Epilogue: push to redo stack on success, push back to undo stack on failure
         if result.success {
+            // [#576 W57-NF1, RV20-6-NF1] No arm may leave a comment key that names
+            // no station: the next append or prepend would give it one. Dropped
+            // here, after every arm, as the open drops one (Q-W30-3-D1); a snapshot
+            // arm already dropped its own in `restore_snapshot_into`.
+            self.drop_orphan_comments_after_undo();
             result = self.settle_reversed_sections(&entry.command, result);
             self.undo_stack.lock().push_redo(entry);
             tracing::info!("Undo performed");

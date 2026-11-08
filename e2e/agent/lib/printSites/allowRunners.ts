@@ -60,216 +60,215 @@ export const GROUP: SiteGroup = {
   },
   allow: {
     'e2e/agent/createSession.ts': {
-      'process.platform': "Node's process.platform, one of Node's fixed platform names (the override prints by its shape)",
+      'createSession: process.platform': "Node's process.platform, one of Node's fixed platform names (the override prints by its shape)",
     },
     'e2e/agent/fuzz-matrix.ts': {
       // The cell counter and the cell's coordinates.
       'runOne: label': 'the cell counter `[i/n]` main builds from two counts and passes to runOne/printDone',
       'printDone: label': 'the cell counter `[i/n]` main builds from two counts and passes to runOne/printDone',
-      'runOne: fixture': R.FOLDED,
-      'result.fixture': R.FOLDED,
-      'failure.fixture': R.FOLDED,
       'runOne: seed': 'a seed: Options.seeds, integers parseSeeds checked against /^-?\\d+$/ (lib/fuzzMatrixArgs.ts)',
-      'result.seed': 'a seed: Options.seeds, integers parseSeeds checked against /^-?\\d+$/ (lib/fuzzMatrixArgs.ts)',
-      'failure.seed': 'a seed: Options.seeds, integers parseSeeds checked against /^-?\\d+$/ (lib/fuzzMatrixArgs.ts)',
+      'printDone: result.seed': 'a seed: Options.seeds, integers parseSeeds checked against /^-?\\d+$/ (lib/fuzzMatrixArgs.ts)',
+      'printReport: failure.seed': 'a seed: Options.seeds, integers parseSeeds checked against /^-?\\d+$/ (lib/fuzzMatrixArgs.ts)',
       'runOne: slot': R.COUNT,
       'runOne: BASE_PORT': 'the constant base port 4544 (lib/fuzzMatrixArgs.ts BASE_PORT)',
-      'axis.key': 'an --axis key, which parseAxis only accepts as ^STALAGMIGHT_[A-Z0-9_]{1,64}$ outside RESERVED_AXIS_KEYS',
-      'axis.value': 'an --axis value from the CLI, folded (a knob can take a path); see the W51 open question on knob values',
-      'secs(result.durationMs)': 'secs(): a duration the runner measured, as seconds with toFixed(1)',
-      'result.headline':
+      'axisLabel: axis.key': 'an --axis key, which parseAxis only accepts as ^STALAGMIGHT_[A-Z0-9_]{1,64}$ outside RESERVED_AXIS_KEYS',
+      'axisLabel: axis.value': 'an --axis value from the CLI, folded (a knob can take a path); see the W51 open question on knob values',
+      'printDone: secs(result.durationMs)': 'secs(): a duration the runner measured, as seconds with toFixed(1)',
+      'printDone: result.headline':
         "runOne's headline: `spawn failed:` + the spawn error through foldLocalPaths (runOne, where the headline is made), a timeout count, failHeadline (the child's own FAIL headline, printed by scenarioFailOutput), or exit code and signal name",
-      'cells.map((cell, i) => (i === cells.length - 1 ? cell : cell.padEnd(widths[i]!))).join(\' \')':
+      "line: cells.map((cell, i) => (i === cells.length - 1 ? cell : cell.padEnd(widths[i]!))).join(' ')":
         "printReport's table: literal headers and the validated axis key; rows of the fixture and the axis value, each through foldLocalPaths where the row is made, String(seed), a verdict word, secs() and runOne's headline (see result.headline)",
-      'failure.reproduce': R.FOLDED,
-      'opts.scenario': 'the --scenario name, which parseArgs only accepts as /^[a-z][a-z0-9-]{1,63}$/ (lib/fuzzMatrixArgs.ts)',
-      "failure.detail.split('\\n').map((l) => ` | ${l}`).join('\\n')":
+      'printReport: failure.reproduce': R.FOLDED,
+      'printReport: opts.scenario': 'the --scenario name, which parseArgs only accepts as /^[a-z][a-z0-9-]{1,63}$/ (lib/fuzzMatrixArgs.ts)',
+      'main: opts.scenario': 'the --scenario name, which parseArgs only accepts as /^[a-z][a-z0-9-]{1,63}$/ (lib/fuzzMatrixArgs.ts)',
+      "printReport: failure.detail.split('\\n').map((l) => ` | ${l}`).join('\\n')":
         "failureDetail's output (HELPERS), stored by runOne, each line prefixed with `    | `",
-      "maxed.join(', ')": 'metric names filtered by MAX_MERGED_METRICS.has: names from the runner\'s own fixed set',
+      "printReport: maxed.join(', ')": 'metric names filtered by MAX_MERGED_METRICS.has: names from the runner\'s own fixed set',
       'printReport: key':
         "a key parseMetrics read off the JSON of a cell's `PASS:` line, which only scenario-run.ts prints (JSON.stringify(metrics.metrics)): " +
         METRICS_JSON,
-      'merged[key]': 'a merged metric: a sum or a max of the finite numbers parseMetrics kept',
-      "matrixSummary(results, wallMs).join('\\n')": "matrixSummary's lines (HELPERS): counts and durations, joined",
+      'printReport: merged[key]': 'a merged metric: a sum or a max of the finite numbers parseMetrics kept',
+      "printReport: matrixSummary(results, wallMs).join('\\n')": "matrixSummary's lines (HELPERS): counts and durations, joined",
       'main: note': 'an Options note: `note: --workers N clamped to M`, two integers (lib/fuzzMatrixArgs.ts parseArgs)',
-      "dropped.join(', ')": "names from INHERITED_ENV_BLOCKLIST (lib/fuzzMatrixArgs.ts) that are set: the runner's own env-name table",
-      'opts.axis.find((entry) => entry !== null)?.key':
+      "main: dropped.join(', ')": "names from INHERITED_ENV_BLOCKLIST (lib/fuzzMatrixArgs.ts) that are set: the runner's own env-name table",
+      'main: opts.axis.find((entry) => entry !== null)?.key':
         'an --axis key, which parseAxis only accepts as ^STALAGMIGHT_[A-Z0-9_]{1,64}$ outside RESERVED_AXIS_KEYS',
-      'opts.iterations': R.KNOB,
-      'agentBuildMode()': "agentBuildMode(): 'debug' or 'release' (e2e/lib/env.ts)",
-      "freshness.reasons.join('; ')": R.FOLDED,
-      'err.message':
+      'main: opts.iterations': R.KNOB,
+      'main: agentBuildMode()': "agentBuildMode(): 'debug' or 'release' (e2e/lib/env.ts)",
+      "main: freshness.reasons.join('; ')": R.FOLDED,
+      'parseOrBail: err.message':
         "a MatrixArgError's message, printed by bail through shareableFailureText; its text is written at the bad() sites of lib/fuzzMatrixArgs.ts",
-      "path.join(repoRoot, 'node_modules', '.bin', 'tsx')": R.FOLDED,
+      "<module>: path.join(repoRoot, 'node_modules', '.bin', 'tsx')": R.FOLDED,
     },
     'e2e/agent/fuzz-shrink.ts': {
-      "refused.map(envKey).join(', ')":
+      "main: refused.map(envKey).join(', ')":
         'env keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else (the trace is a file) by its shape',
-      "cleared.map(envKey).join(', ')":
+      "main: cleared.map(envKey).join(', ')":
         'env keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else by its shape',
-      'started.state': STARTED_STATE,
-      'started.buildMode': STARTED_BUILD,
-      'started.buildAction': STARTED_BUILD,
-      'args.trace': R.FOLDED,
-      'trace.scenario': 'a registry name: main throws unless getScenario(trace.scenario) found it, just above the print',
-      'trace.fixture': R.FOLDED,
-      "Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${foldLocalPaths(String(value))}`).join(' ')":
-        "the trace's knobs as KEY=value: the key through envKey (knob shape, else valueShape), the value folded; see the W51 open question on knob values",
+      "main: withheld.map(envKey).join(', ')":
+        "the trace's envWithheld keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else (the trace is a file) by its shape (#576 W58 Q9)",
+      'main: started.state': STARTED_STATE,
+      'main: started.buildMode': STARTED_BUILD,
+      'main: started.buildAction': STARTED_BUILD,
+      'main: args.trace': R.FOLDED,
+      'main: trace.scenario': 'a registry name: main throws unless getScenario(trace.scenario) found it, just above the print',
+      "main: Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${shareableKnobValue(key, value)}`).join(' ')":
+        "the trace's knobs as KEY=value: the key through envKey (knob shape, else valueShape), the value through shareableKnobValue (traceKnobs.ts: a registered knob's value of its shape, the fixture by shareableFixtureName, else valueShape; #576 W58 Q9)",
       'main: CORPUS_DIR_ENV': "CORPUS_DIR_ENV, the constant 'STALAGMIGHT_FUZZ_CORPUS_DIR' (lib/fixtureCorpus.ts)",
-      'replayTimesMs[0]': R.COUNT,
-      'info.stats.tests': R.COUNT,
-      'info.candidateSize': R.COUNT,
-      'info.bestSize': R.COUNT,
-      'info.verdict': "ddmin's ShrinkVerdict: 'preserved' | 'passed' | 'divergent' (lib/fuzzShrink.ts)",
-      'result.stats.tests': R.COUNT,
-      'result.stats.cacheHits': R.COUNT,
-      'result.stats.preserved': R.COUNT,
-      'result.stats.passed': R.COUNT,
-      'result.stats.divergent': R.COUNT,
-      'args.out': R.FOLDED,
-      "args.trace.replace(/\\.json$/, '')": R.FOLDED,
-      'describeSteps(minimal)':
-        "the minimal trace's steps (lib/fuzzTrace.ts describeSteps): step kinds, counts, test ids and the labels the scenarios wrote, folded; see the W51 open question on a trace's labels",
+      'main: replayTimesMs[0]': R.COUNT,
+      'onProgress: info.stats.tests': R.COUNT,
+      'onProgress: info.candidateSize': R.COUNT,
+      'onProgress: info.bestSize': R.COUNT,
+      'onProgress: info.verdict': "ddmin's ShrinkVerdict: 'preserved' | 'passed' | 'divergent' (lib/fuzzShrink.ts)",
+      'main: result.stats.tests': R.COUNT,
+      'main: result.stats.cacheHits': R.COUNT,
+      'main: result.stats.preserved': R.COUNT,
+      'main: result.stats.passed': R.COUNT,
+      'main: result.stats.divergent': R.COUNT,
+      'main: args.out': R.FOLDED,
+      "main: args.trace.replace(/\\.json$/, '')": R.FOLDED,
+      'main: describeSteps(minimal)':
+        "the minimal trace's steps (lib/fuzzTrace.ts describeSteps): one describeStep line per step, a builder whose every value the guard checks (allowLib.ts): step kinds, counts, each label through shareableStepLabel (#576 W58 Q10), a test id through shareableTestId, a path folded, a trigger, export format or oracle name only when lib/traceStepFields.ts lists it, a corpus id in its 5-hex form, a reload's fixture through shareableFixtureName (#576 W58 NF1, NF2); folded",
     },
     'e2e/agent/ipc-payload-probe.ts': {
-      'started.state': STARTED_STATE,
-      'started.buildMode': STARTED_BUILD,
-      'started.buildAction': STARTED_BUILD,
-      'probeCase.label': "a label of the probe's own literal `cases` table",
-      'suspect.label': "a label of the probe's own literal SUSPECTS table",
-      "broken.join(', ')": "labels of the probe's own literal SUSPECTS table",
-      'baseline.arrived': "a boolean the probe's own in-page script computes from indexOf",
-      'ceiling.arrived': "a boolean the probe's own in-page script computes from indexOf",
+      'main: started.state': STARTED_STATE,
+      'main: started.buildMode': STARTED_BUILD,
+      'main: started.buildAction': STARTED_BUILD,
+      'main: probeCase.label': "a label of the probe's own literal `cases` table",
+      'main: suspect.label': "a label of the probe's own literal SUSPECTS table",
       'main: max': 'the --max length: parseArgs refuses anything but a positive integer',
       'main: good': R.COUNT,
       'main: bad': R.COUNT,
     },
     'e2e/agent/journeys-run.ts': {
-      'path.join(runsDir, `${stamp}-${record.gitSha}.jsonl`)': R.FOLDED,
-      "listJourneys().join(', ')": 'journey names from the registry (journeys/index.ts listJourneys)',
-      'started.state': STARTED_STATE,
-      'started.buildAction': STARTED_BUILD,
+      'writeLedger: path.join(runsDir, `${stamp}-${record.gitSha}.jsonl`)': R.FOLDED,
+      "main: listJourneys().join(', ')": 'journey names from the registry (journeys/index.ts listJourneys)',
+      'main: started.state': STARTED_STATE,
+      'main: started.buildAction': STARTED_BUILD,
       'main: name': 'a registry name: main exits unless getJourney(name) found every name it runs',
-      'main: line': PROGRESS_PRINT,
-      'record.verdict': "the run verdict, 'pass' or 'fail' from a literal conditional in main",
+      'main > progressLogger: line': PROGRESS_PRINT,
+      'writeLedger: record.verdict': "the run verdict, 'pass' or 'fail' from a literal conditional in main",
+      'main: record.verdict': "the run verdict, 'pass' or 'fail' from a literal conditional in main",
       // The committed UAT ledger (docs/uat/).
-      'JSON.stringify(ledgerRecord(record))': "ledgerRecord's projection (HELPERS) of the run record, serialised",
-      'record.date.slice(0, 10)': "the date part of the record's new Date().toISOString(), made in main",
-      'record.gitSha': "git rev-parse --short HEAD of the checkout (DEV_TOOL output, a hex sha) or the literal 'unknown'",
-      'record.platform': "`${process.platform}-${process.arch}`: Node's own platform and architecture names",
-      "failed.join(', ')": "journey names (runJourney's journey.name, from the registry) of the failed journeys",
-      'path.basename(runFile)': 'the run file name main makes: a timestamp and the git sha, `.jsonl`',
+      'writeLedger: JSON.stringify(ledgerRecord(record))': "ledgerRecord's projection (HELPERS) of the run record, serialised",
+      'writeLedger: record.date.slice(0, 10)': "the date part of the record's new Date().toISOString(), made in main",
+      'writeLedger: record.gitSha': "git rev-parse --short HEAD of the checkout (DEV_TOOL output, a hex sha) or the literal 'unknown'",
+      'writeLedger: record.platform': "`${process.platform}-${process.arch}`: Node's own platform and architecture names",
+      "writeLedger: failed.join(', ')": "journey names (runJourney's journey.name, from the registry) of the failed journeys",
+      'writeLedger: path.basename(runFile)': 'the run file name main makes: a timestamp and the git sha, `.jsonl`',
     },
     'e2e/agent/mcp/bridge.ts': {
-      'main: text': "a line of the MCP server's stderr as passLinesFolded hands it: the checkout and home folded (as agent:mcp:smoke prints it)",
-      'process.versions.node': "Node's own version string (process.versions.node)",
-      "path.join(bridgeDir, 'requests.jsonl')": R.FOLDED,
+      'main > passLinesFolded: text': "a line of the MCP server's stderr as passLinesFolded hands it: the checkout and home folded (as agent:mcp:smoke prints it)",
+      'main: process.versions.node': "Node's own version string (process.versions.node)",
+      "main: path.join(bridgeDir, 'requests.jsonl')": R.FOLDED,
       'main: offset': 'a byte count: statSync(reqPath).size',
-      'process.pid': "the bridge's own process id, an integer",
+      'main: process.pid': "the bridge's own process id, an integer",
     },
     'e2e/agent/mcp/hygiene.ts': {
-      "args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')":
+      "<module>: args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')":
         "the console.log/info/warn/debug override's arguments, moved to stderr: each such call in the server is a stream site of its own, checked there",
     },
     'e2e/agent/mcp/server.ts': {
-      'args.condition': 'wait_for\'s condition: a zod z.enum of the tool schema, and ' + MCP_ONLY,
-      'args.timeoutMs': "driver_script's timeoutMs: a zod z.number of the tool schema, and " + MCP_ONLY,
+      '<module> > define > run > session.exclusive: args.condition': 'wait_for\'s condition: a zod z.enum of the tool schema, and ' + MCP_ONLY,
+      '<module> > define > run: args.timeoutMs': "driver_script's timeoutMs: a zod z.number of the tool schema, and " + MCP_ONLY,
     },
     'e2e/agent/mcp/smoke-client.ts': {
-      'main: text': "a line of the MCP server's stderr as passLinesFolded hands it: the checkout and home folded (docs: RV19b-P8)",
+      'main > passLinesFolded: text': "a line of the MCP server's stderr as passLinesFolded hands it: the checkout and home folded (docs: RV19b-P8)",
       'check: label': R.FORWARD,
     },
     'e2e/agent/os/helper.ts': {
       'write: text': 'a line of cargo build output as passLinesFolded hands it: the checkout and home folded (as lib/build.ts passes the app build)',
-      "args.join(' ')": OS_MCP_ONLY,
-      "[failure?.message, stderr.trim(), trimmed && `stdout: ${trimmed}`] .filter(Boolean) .join(' | ')": OS_MCP_ONLY,
-      'JSON.stringify(stamp, null, 2)': 'the helper build stamp: schema version 1, two mtimes in ms and an ISO timestamp',
+      "runHelper: args.join(' ')": OS_MCP_ONLY,
+      "runHelper: [failure?.message, stderr.trim(), trimmed && `stdout: ${trimmed}`] .filter(Boolean) .join(' | ')": OS_MCP_ONLY,
+      'writeHelperStamp: JSON.stringify(stamp, null, 2)': 'the helper build stamp: schema version 1, two mtimes in ms and an ISO timestamp',
     },
     'e2e/agent/os/input.ts': {
-      'activateApp: pid': 'swallowed by ensureAppFrontmost (its catch), and ' + OS_MCP_ONLY,
-      'activateApp: errOut': 'swallowed by ensureAppFrontmost (its catch), and ' + OS_MCP_ONLY,
-      'error.message': 'swallowed by ensureAppFrontmost (its catch), and ' + OS_MCP_ONLY,
-      "permissionHelp('accessibility')": "permissionHelp's literal instructions (os/permissions.ts), and " + OS_MCP_ONLY,
-      "permissionHelp('screenRecording')": "permissionHelp's literal instructions (os/permissions.ts), and " + OS_MCP_ONLY,
+      'activateApp > new Promise > execFile: pid': 'swallowed by ensureAppFrontmost (its catch), and ' + OS_MCP_ONLY,
+      'activateApp > new Promise > execFile: errOut': 'swallowed by ensureAppFrontmost (its catch), and ' + OS_MCP_ONLY,
+      'activateApp > new Promise > execFile: error.message': 'swallowed by ensureAppFrontmost (its catch), and ' + OS_MCP_ONLY,
+      "requireOsAccess: permissionHelp('accessibility')": "permissionHelp's literal instructions (os/permissions.ts), and " + OS_MCP_ONLY,
+      "requireOsAccess: permissionHelp('screenRecording')": "permissionHelp's literal instructions (os/permissions.ts), and " + OS_MCP_ONLY,
       'requireFrontmostForInput: what': "the literal 'click' or `keys <spec>`, and " + OS_MCP_ONLY,
-      'session.state': 'a SessionState, and ' + OS_MCP_ONLY,
-      'session.appPid?.()': 'a pid (an integer from the session pidfile), and ' + OS_MCP_ONLY,
+      'requireAppPid: session.state': 'a SessionState, and ' + OS_MCP_ONLY,
+      'requireAppPid: session.appPid?.()': 'a pid (an integer from the session pidfile), and ' + OS_MCP_ONLY,
       'windowForPid: pid': 'a pid requireAppPid checked as a positive integer, and ' + OS_MCP_ONLY,
       'osKeys: spec': "the agent's key spec (the os_keys tool's argument), and " + OS_MCP_ONLY,
     },
     'e2e/agent/os/screenshot.ts': {
-      'screencaptureWindow: windowId': "the helper's window id, a number, and " + OS_MCP_ONLY,
+      'screencaptureWindow > new Promise > execFile: windowId': "the helper's window id, a number, and " + OS_MCP_ONLY,
       'osScreenshot: outPath': 'the PNG path os_screenshot builds under the session dir, and ' + OS_MCP_ONLY,
     },
     'e2e/agent/scenario-run.ts': {
-      'path.resolve(args.trace)': R.FOLDED,
-      'args.trace': R.FOLDED,
-      'trace.fixture': R.FOLDED,
-      'runAt.seed': 'scenarioRunOptions: --seed through integerFlag, or the trace seed it refuses unless Number.isInteger',
-      'runAt.iterations':
+      'main: path.resolve(args.trace)': R.FOLDED,
+      'main: args.trace': R.FOLDED,
+      'main: runAt.seed': 'scenarioRunOptions: --seed through integerFlag, or the trace seed it refuses unless Number.isInteger',
+      'main: runAt.iterations':
         'scenarioRunOptions: --iterations through positiveIntFlag, or the trace count it refuses unless a positive integer',
-      "restored.map(([key, value]) => `${envKey(key)}=${foldLocalPaths(String(value))}`).join(' ')":
-        "the knobs restored from the trace as KEY=value: the key through envKey (knob shape, else valueShape), the value folded; see the W51 open question on knob values",
-      "cleared.map(envKey).join(', ')":
+      "main: restored.map(([key, value]) => `${envKey(key)}=${shareableKnobValue(key, value)}`).join(' ')":
+        "the knobs restored from the trace as KEY=value: the key through envKey (knob shape, else valueShape), the value through shareableKnobValue (traceKnobs.ts: a registered knob's value of its shape, the fixture by shareableFixtureName, else valueShape; #576 W58 Q9)",
+      "main: cleared.map(envKey).join(', ')":
         'env keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else by its shape',
-      "refused.map(envKey).join(', ')":
+      "main: withheld.map(envKey).join(', ')":
+        "the trace's envWithheld keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else (the trace is a file) by its shape (#576 W58 Q9)",
+      "main: refused.map(envKey).join(', ')":
         'env keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else (the trace is a file) by its shape',
-      "listScenarios().join(', ')": 'scenario names from the registry (scenarios/index.ts listScenarios)',
-      'started.state': STARTED_STATE,
-      'started.buildMode': STARTED_BUILD,
-      'started.buildAction': STARTED_BUILD,
-      'main: line': PROGRESS_PRINT,
-      'args.name': 'a registry name: main throws unless getScenario(args.name) found it, before the session starts',
-      'metrics.seed': "runScenario's seed: the integer it ran at (opts.seed ?? 1, from scenarioRunOptions)",
-      'metrics.iterations': "runScenario's iteration count: scenarioRunOptions' integer or the scenario's defaultIterations",
-      'metrics.durationMs': R.COUNT,
-      'JSON.stringify(metrics.metrics)': METRICS_JSON,
+      "main: listScenarios().join(', ')": 'scenario names from the registry (scenarios/index.ts listScenarios)',
+      'main: started.state': STARTED_STATE,
+      'main: started.buildMode': STARTED_BUILD,
+      'main: started.buildAction': STARTED_BUILD,
+      'main > progressLogger: line': PROGRESS_PRINT,
+      'main: args.name': 'a registry name: main throws unless getScenario(args.name) found it, before the session starts',
+      'main: metrics.seed': "runScenario's seed: the integer it ran at (opts.seed ?? 1, from scenarioRunOptions)",
+      'main: metrics.iterations': "runScenario's iteration count: scenarioRunOptions' integer or the scenario's defaultIterations",
+      'main: metrics.durationMs': R.COUNT,
+      'main: JSON.stringify(metrics.metrics)': METRICS_JSON,
       // STALAGMIGHT_FUZZ_DETERMINISM=2sessions (main's two-session block).
-      "[...DETERMINISM_SCENARIOS].join(', ')":
+      "main: [...DETERMINISM_SCENARIOS].join(', ')":
         'registry names: DETERMINISM_SCENARIOS is the .name of three registered scenarios (scenarios/index.ts:52-56)',
-      'print: line': `${PROGRESS_PRINT}: print is handed only to progressLogger (scenario-run.ts:155, 179)`,
-      'main: replay': "'A' or 'B': runDeterminismPair calls runReplay only with its literal ['A', 'B'] (lib/fuzzDeterminismRun.ts:66, 72)",
-      'pairFailOutput(args.name, err, replayLogs)':
+      'print: line': `${PROGRESS_PRINT}: print is handed only to progressLogger (scenario-run.ts:164, 188)`,
+      'main > runDeterminismPair: replay':
+        "'A' or 'B': runDeterminismPair calls runReplay only with its literal ['A', 'B'] (lib/fuzzDeterminismRun.ts:66, 72)",
+      'main: pairFailOutput(args.name, err, replayLogs)':
         "pairFailOutput's FAIL block (lib/shareableFailure.ts): `FAIL: <args.name> threw:`, a registry name getScenario " +
         'found (:130-134), then shareableFailureText (HELPERS) of the message, as scenarioFailOutput prints one ' +
         '(pinned in shareableRunnerOutput.test.ts)',
     },
     'e2e/agent/scenarios-smoke.ts': {
-      'started.state': STARTED_STATE,
-      'started.buildAction': STARTED_BUILD,
+      'main: started.state': STARTED_STATE,
+      'main: started.buildAction': STARTED_BUILD,
       'main: name': 'a registry name: the loop runs over listScenarios()',
-      'main: m': PROGRESS_PRINT,
-      'metrics.durationMs': R.COUNT,
-      'JSON.stringify(metrics.metrics)': METRICS_JSON,
+      'main > progressLogger: m': PROGRESS_PRINT,
+      'main: metrics.durationMs': R.COUNT,
+      'main: JSON.stringify(metrics.metrics)': METRICS_JSON,
     },
     'e2e/agent/session-http-probe.ts': {
-      "dropped.join(', ')": "names from dropProxyEnv's literal list of proxy variables that were set",
-      'process.versions.node': "Node's own version string (process.versions.node)",
-      'process.versions.undici': "Node's bundled undici version string (process.versions.undici)",
-      'browser.sessionId': "the session id webdriverio parsed from this probe's own loopback stub's reply (STUB_SESSION_ID)",
-      "seen.join(', ')": "`METHOD /path` of each request webdriverio made to this probe's own loopback stub",
+      "main: dropped.join(', ')": "names from dropProxyEnv's literal list of proxy variables that were set",
+      'main: process.versions.node': "Node's own version string (process.versions.node)",
+      'main: process.versions.undici': "Node's bundled undici version string (process.versions.undici)",
+      'main: browser.sessionId': "the session id webdriverio parsed from this probe's own loopback stub's reply (STUB_SESSION_ID)",
+      // seen.push(`${req.method} ${req.url}`): each request webdriverio made to the stub.
+      'main > http.createServer > req.on: req.method': "the HTTP method of a request webdriverio made to this probe's own loopback stub",
+      'main > http.createServer > req.on: req.url': "the path of a request webdriverio made to this probe's own loopback stub (its WebDriver endpoints, /session...)",
     },
     'e2e/agent/session.ts': {
-      "freshness.reasons.join('; ')": R.FOLDED,
-      'startInner: line': R.FOLDED,
-      "pool.join(', ')": 'Xvfb displays parseDisplayPool accepted, each /^:\\d+$/ (lib/displayPool.ts)',
-      'this.driverPort': 'a TCP port findFreePort picked, a number',
+      "startInner: freshness.reasons.join('; ')": R.FOLDED,
+      'startInner > buildApp: line': R.FOLDED,
+      "startInner: pool.join(', ')": 'Xvfb displays parseDisplayPool accepted, each /^:\\d+$/ (lib/displayPool.ts)',
+      'startInner: this.driverPort': 'a TCP port findFreePort picked, a number',
     },
     'e2e/agent/sessionMac.ts': {
-      "freshness.reasons.join('; ')": R.FOLDED,
-      'startInner: line': R.FOLDED,
-      'this.driverPort': 'a TCP port findFreePort picked, a number',
+      "startInner: freshness.reasons.join('; ')": R.FOLDED,
+      'startInner > buildApp: line': R.FOLDED,
+      'startInner: this.driverPort': 'a TCP port findFreePort picked, a number',
     },
     'e2e/agent/smoke.ts': {
       'log: msg': R.FORWARD,
       'check: name': R.FORWARD,
       'check: detail': R.FORWARD,
-      'JSON.stringify(started)':
-        'the StartResult, folded: state/build words, ports, the display, a commit hash, and its paths (session, profile, builtFrom.repoRoot, rebuild reasons) folded',
-      "session.recorder.writeScreenshot(session.recorder.nextSeq(), 'smoke', shot)":
+      "main: session.recorder.writeScreenshot(session.recorder.nextSeq(), 'smoke', shot)":
         "Recorder.writeScreenshot's session-relative path, screenshots/<seq>-smoke.png (lib/recorder.ts)",
-      'before.latestSeq': "the log ring's latest sequence number (get_recent_logs_since's u64 latest_seq, lib/logs.ts)",
-      'session.exclusive(() => session.browser.execute(() => document.readyState), )':
+      'main: before.latestSeq': "the log ring's latest sequence number (get_recent_logs_since's u64 latest_seq, lib/logs.ts)",
+      'main: session.exclusive(() => session.browser.execute(() => document.readyState), )':
         "the page's document.readyState: one of the DOM's loading/interactive/complete",
       'main: parsed': R.COUNT,
       'main: failures': R.COUNT,
@@ -323,7 +322,12 @@ export const GROUP: SiteGroup = {
         what: 'tauri-driver.log',
         reason: "tauri-driver's and WebKitWebDriver's raw output in the session directory",
       },
-      'startInner -> <stream driverLog>': {
+      'startInner > this.driver.stdout.on -> <stream driverLog>': {
+        class: 'private',
+        what: 'tauri-driver.log',
+        reason: "the driver's stdout and stderr chunks, written to its log as they arrive",
+      },
+      'startInner > this.driver.stderr.on -> <stream driverLog>': {
         class: 'private',
         what: 'tauri-driver.log',
         reason: "the driver's stdout and stderr chunks, written to its log as they arrive",
@@ -340,7 +344,17 @@ export const GROUP: SiteGroup = {
         what: 'tauri-wd.log',
         reason: "tauri-wd's raw output and its spawn error in the session directory (macOS)",
       },
-      'startInner -> <stream driverLog>': {
+      'startInner > this.driver.stdout.on -> <stream driverLog>': {
+        class: 'private',
+        what: 'tauri-wd.log',
+        reason: "tauri-wd's stdout and stderr chunks and its spawn error, written to its log as they arrive",
+      },
+      'startInner > this.driver.stderr.on -> <stream driverLog>': {
+        class: 'private',
+        what: 'tauri-wd.log',
+        reason: "tauri-wd's stdout and stderr chunks and its spawn error, written to its log as they arrive",
+      },
+      'startInner > this.driver.on -> <stream driverLog>': {
         class: 'private',
         what: 'tauri-wd.log',
         reason: "tauri-wd's stdout and stderr chunks and its spawn error, written to its log as they arrive",
@@ -368,17 +382,25 @@ export const GROUP: SiteGroup = {
     // Validators the scan cannot see through: each prints its argument only when
     // it passes the check in the same expression, and valueShape (HELPERS) otherwise.
     'e2e/agent/fuzz-shrink.ts': {
-      shownFlag: "a CLI token: itself only when it is one of the runner's literal FLAGS, else valueShape",
+      shownFlag: "a CLI token: itself only when it is one of the runner's literal FLAGS, else cliValueShape",
       gitRev: 'a trace revision: its first 12 characters only when /^(?:[0-9a-f]{7,40}|unknown)$/ holds, else valueShape',
     },
     'e2e/agent/ipc-payload-probe.ts': {
-      shownFlag: "a CLI token: itself only when it is one of the probe's literal FLAGS, else valueShape",
+      shownFlag: "a CLI token: itself only when it is one of the probe's literal FLAGS, else cliValueShape",
       shownChar: "--char: the quoted default 'x', a label of the literal SUSPECTS table when the text is one, else valueShape",
+      // #576 RV20-13: the probe reads and prints a call's error through lib/ipcPayloadProbe.ts (ipcPayloadProbe.test.ts).
+      probeVerdict: "'arrived', 'truncated' or 'other': a ProbeVerdict word, from the class of the error",
+      shownProbeError:
+        "a call's error as a label of the literal PROBE_ERROR_CLASSES (or `not a known rejection`) and its length, never its text",
     },
     'e2e/agent/scenario-run.ts': {
       scenarioName:
         "a scenario name from the CLI or a trace: itself only when it has the registry's shape /^[a-z][a-z0-9-]{1,63}$/ (as fuzz-matrix validates --scenario), else valueShape",
       gitRev: 'a trace revision: its first 12 characters only when /^(?:[0-9a-f]{7,40}|unknown)$/ holds, else valueShape',
+    },
+    'e2e/agent/smoke.ts': {
+      smokeStartedLine:
+        'the StartResult (lib/smokeStartLine.ts): state/build words, ports, a commit hash, the display as `:N`, `aqua` or `<display>` (#576 W58 Q14), and its paths folded',
     },
     'e2e/agent/mcp/smoke-client.ts': {
       shownDetail:

@@ -28,6 +28,7 @@
  * `ExportOracleError` is the marker the scenario catches to attach its trace
  * path. Nothing here classifies, tolerates or downgrades: a red is the app's.
  */
+import { foldThenCut } from './fixtureCorpus';
 
 export class ExportOracleError extends Error {
   constructor(message: string) {
@@ -1404,7 +1405,8 @@ export function checkShotMultiset(
   if (commentDeltas.length > 0) {
     lines.push(`    ${commentDeltas.length} COMMENT text(s) differ, pooled over shots AND stations:`);
     for (const delta of commentDeltas.slice(0, 8)) {
-      lines.push(`      ${JSON.stringify(delta.key.slice(0, 60))}  x${delta.before} -> x${delta.after}`);
+      // Fold, THEN cut (RV18-W23-6): a corpus name cut first leaves a stub no fold matches (#576 RV20-8).
+      lines.push(`      ${JSON.stringify(foldThenCut(delta.key, 60))}  x${delta.before} -> x${delta.after}`);
     }
     if (commentDeltas.length > 8) lines.push(`      ... and ${commentDeltas.length - 8} more`);
     lines.push(`      A STATION comment legitimately moves into project.station_comments (which`);

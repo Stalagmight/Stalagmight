@@ -70,7 +70,7 @@ fn every_open_path_waits_at_least_five_seconds_for_a_busy_file() {
         // [#608] The hardened open for a file from elsewhere (a server upload).
         (
             "open_existing_untrusted",
-            Database::open_existing_untrusted(&path, 1 << 20, std::time::Duration::from_mins(1))
+            Database::open_existing_untrusted(&path, 1 << 20, std::time::Duration::from_secs(60))
                 .unwrap(),
         ),
         (

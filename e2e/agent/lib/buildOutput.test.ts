@@ -38,7 +38,7 @@ vi.mock('child_process', async (importOriginal) => {
   const real = await importOriginal<typeof import('child_process')>();
   const { EventEmitter: Emitter } = await import('events');
   const { PassThrough: Pass } = await import('stream');
-  const isBuild = (command: unknown): boolean => String(command).startsWith('pnpm tauri build');
+  const isBuild = (command: unknown): boolean => /^(exec )?pnpm tauri build/.test(String(command));
   return {
     ...real,
     // The real execSync with `stdio: ['ignore', 2, 2]`: the build writes to this

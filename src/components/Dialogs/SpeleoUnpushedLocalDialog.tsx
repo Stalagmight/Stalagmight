@@ -34,7 +34,8 @@ import type { SpeleoProjectSummary, UnpushedLocalEdits } from '../../types/ipc.g
  * not be read (`state_unknown`: a hot journal after a crash, a lock another program
  * holds), since un-pushed edits cannot be ruled out. The choice is the same, but the
  * copy says the file could not be read and how to get past it, rather than telling
- * the user about changes they may never have made.
+ * the user about changes they may never have made. [#576 W59] The take-remote button
+ * says so too: both presses name the local copy, not "my changes".
  */
 export default function SpeleoUnpushedLocalDialog() {
   const { t } = useTranslation();
@@ -276,8 +277,12 @@ export default function SpeleoUnpushedLocalDialog() {
             data-testid="speleodb-unpushed-local-take-remote"
           >
             {discardArmed
-              ? t('speleodb.unpushedLocal.takeRemoteConfirm')
-              : t('speleodb.unpushedLocal.takeRemote')}
+              ? unreadable
+                ? t('speleodb.unpushedLocal.unreadable.takeRemoteConfirm')
+                : t('speleodb.unpushedLocal.takeRemoteConfirm')
+              : unreadable
+                ? t('speleodb.unpushedLocal.unreadable.takeRemote')
+                : t('speleodb.unpushedLocal.takeRemote')}
           </Button>
           {/* Primary + [data-primary-action]: DialogWrapper's initial-focus heuristic
               lands here, so a stray Enter keeps the local work - it can never

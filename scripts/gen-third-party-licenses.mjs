@@ -31,11 +31,12 @@
 // `pnpm install --frozen-lockfile` - a drifted install stamps correct hashes
 // over content from the wrong tree.
 
-import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+
+import { execFileSyncFolded, foldLocalPaths } from './lib/fold-local-paths.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_FILE = path.join(REPO_ROOT, 'THIRD-PARTY-LICENSES.md');
@@ -88,7 +89,9 @@ function run(cmd, args, opts = {}) {
   // execFileSync a .cmd without a shell. Args here are static flags plus
   // repo-root-derived paths, so shell interpretation is safe.
   const win = process.platform === 'win32' && cmd === 'pnpm';
-  return execFileSync(win ? 'pnpm.cmd' : cmd, args, {
+  // The tool's stderr reaches ours folded: cargo's `failed to parse manifest
+  // at <path>` names the checkout (#576 W58). Failures throw as before.
+  return execFileSyncFolded(win ? 'pnpm.cmd' : cmd, args, {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -112,7 +115,7 @@ function collectRust() {
   } catch (e) {
     const hint = /not found|no such command/i.test(String(e.message))
       ? 'cargo-about is not installed. Install it with: cargo install cargo-about --version 0.9.1 --locked --features cli'
-      : String(e.stderr || e.message).slice(0, 4000);
+      : foldLocalPaths(String(e.stderr || e.message)).slice(0, 4000);
     throw new Error(`cargo about generate failed.\n${hint}`);
   }
   const { licenses } = JSON.parse(json);

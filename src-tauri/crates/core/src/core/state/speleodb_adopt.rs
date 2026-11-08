@@ -1039,7 +1039,10 @@ impl AppState {
         // so renaming a live handle is the hazard `close_project_if_open_at_held` exists
         // for. This is the same close, at the same point in the same sequence.
         self.close_project_held(commands);
-        if let Err(e) = std::fs::rename(&staged, dest) {
+        // [#576 RV20-2] The cache replace's install, sidecar handling included: a
+        // `-journal` the old copy left beside `dest` would otherwise stay beside the
+        // adopted file, and the reopen below would play the old pages into it.
+        if let Err(e) = super::speleodb_cache::install_over(&staged, dest) {
             // `rename` is atomic, so a failure leaves `dest` exactly as it was.
             self.adopt_abandon_staging(commands, &staged, previous.as_deref());
             return Err(local_dto(SpeleoDbError::Io(format!(

@@ -56,6 +56,64 @@ describe('kept lines carry no local path or name (#576 RV18-W23-4)', () => {
     expect(foldLocalPaths(`${HOME}/a ${HOME}by/b ${HOME}`)).toBe(`~/a ${HOME}by/b ~`);
   });
 
+  // #576 W58 Q2: a build's `Built application at:` line names CARGO_TARGET_DIR,
+  // and a save under the temp dir names it, both outside the home dir and the
+  // checkout as often as not.
+  describe('CARGO_TARGET_DIR and the temp dir', () => {
+    let saved: Record<'CARGO_TARGET_DIR' | 'TMPDIR', string | undefined>;
+    let scratch: string;
+    beforeEach(() => {
+      saved = { CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR, TMPDIR: process.env.TMPDIR };
+      scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'fold-roots-'));
+    });
+    afterEach(() => {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(scratch, { recursive: true, force: true });
+    });
+
+    it('folds CARGO_TARGET_DIR to <target> and the temp dir to <tmp>, outside the home dir and the checkout', () => {
+      process.env.CARGO_TARGET_DIR = '/qzbuild/target';
+      process.env.TMPDIR = '/qzscratch/t';
+      expect(foldLocalPaths('Built application at: /qzbuild/target/release/stalagmight')).toBe(
+        'Built application at: <target>/release/stalagmight',
+      );
+      expect(foldLocalPaths('saved /qzscratch/t/stalagmight-fractal-1/qzproject.stalx')).toBe(
+        'saved <tmp>/stalagmight-fractal-1/qzproject.stalx',
+      );
+      // Not inside a longer name, and folding twice changes nothing.
+      expect(foldLocalPaths('/qzbuild/targets/x /qzscratch/tt/y')).toBe('/qzbuild/targets/x /qzscratch/tt/y');
+      expect(foldLocalPaths('<target>/release <tmp>/a')).toBe('<target>/release <tmp>/a');
+    });
+
+    it('folds the longest root first: a target under the home dir is <target>, the checkout under the temp dir is <repo>', () => {
+      process.env.CARGO_TARGET_DIR = `${HOME}/.cache/qztarget`;
+      expect(foldLocalPaths(`${HOME}/.cache/qztarget/debug/app ${HOME}/x`)).toBe('<target>/debug/app ~/x');
+      process.env.TMPDIR = path.dirname(REPO);
+      expect(foldLocalPaths(`${REPO}/a ${path.dirname(REPO)}/b`)).toBe('<repo>/a <tmp>/b');
+    });
+
+    it('folds the temp dir by its real path too', () => {
+      const real = path.join(scratch, 'qzreal');
+      fs.mkdirSync(real);
+      const link = path.join(scratch, 'qzlink');
+      fs.symlinkSync(real, link);
+      process.env.TMPDIR = link;
+      expect(foldLocalPaths(`${link}/a ${fs.realpathSync(real)}/b`)).toBe('<tmp>/a <tmp>/b');
+    });
+
+    it('folds nothing for an unset, relative or root CARGO_TARGET_DIR', () => {
+      process.env.TMPDIR = '/qzscratch/t';
+      for (const target of [undefined, '', 'target', '/']) {
+        if (target === undefined) delete process.env.CARGO_TARGET_DIR;
+        else process.env.CARGO_TARGET_DIR = target;
+        expect(foldLocalPaths('target/debug /qzbuild/target/debug')).toBe('target/debug /qzbuild/target/debug');
+      }
+    });
+  });
+
   it('keeps a move-tail heading only in the words the harness writes', () => {
     const shared = shareableFailureText(
       ['U3 undo diff', '  last 3 moves into qzstation:', '  m1', '  last 2 action(s) this iteration:', '  a1'].join(
@@ -139,7 +197,7 @@ describe('a harness crash prints codes, counts and code locations (#576 W23-NF2)
 const HARNESS_VALUES = new Set([
   'counts.sections',
   'counts.stations',
-  'counts.view',
+  'shareableTestId(counts.view)',
   "Object.entries(UNREACHABLE_VARIANTS) .map(([name, why]) => `${name} (${why})`) .join('; ')",
   'ctx.seed',
   "[...seen.entries()].map(([v, c]) => `${v}=${c}`).sort().join(' ')",

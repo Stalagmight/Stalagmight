@@ -60,9 +60,10 @@ export function ProjectSettingsDialog() {
   // [#576 RV3-FE-14] The name and the thresholds stay editable in the read-only
   // workspaces (they are on the backend's allowlist), but not on a project whose
   // metadata the backend refuses to change at all: a file a newer version saved, or a
-  // SpeleoDB project open without the lock (`guard_metadata_mutation`).
+  // SpeleoDB project open without the lock (`guard_metadata_mutation`). Nor while an
+  // update installs: the restart would drop the change.
   const blockedReason = useEditBlockedReason();
-  const metadataBlocked = blockedReason === 'newerFile' || blockedReason === 'lock';
+  const metadataBlocked = blockedReason === 'update' || blockedReason === 'newerFile' || blockedReason === 'lock';
   const panelIdBase = useId();
 
   const [tab, setTab] = useState<ProjectSettingsTab>('general');

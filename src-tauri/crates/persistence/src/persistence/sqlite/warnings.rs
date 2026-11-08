@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use rusqlite::types::Value;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 
 use super::{Database, ResolvedWarning};
@@ -110,20 +110,27 @@ fn land_on_free_slot(
     section_id: u32,
     held: &HashSet<(u32, u32)>,
 ) -> Result<()> {
-    let base = u64::from(section_id) * u64::from(FEATURE_ID_STRIDE);
-    let end = (base + u64::from(FEATURE_ID_STRIDE)).min(u64::from(u32::MAX) + 1);
-    for slot in (base..end).rev() {
-        let Ok(slot) = u32::try_from(slot) else {
-            continue;
-        };
-        if held.contains(&(section_id, slot)) {
-            continue;
-        }
+    for slot in slots_from_the_top(section_id, held) {
         if conn.execute(LAND_IF_FREE, params![id, slot])? == 1 {
             return Ok(());
         }
     }
     anyhow::bail!("an ignore found no free slot in its section to move out of the way to")
+}
+
+/// The ids of `section_id`'s window that no shot of the section holds (`held`),
+/// highest first: the slots [`land_on_free_slot`] and
+/// [`Database::save_resolved_warning_parked`] try, in order.
+fn slots_from_the_top(
+    section_id: u32,
+    held: &HashSet<(u32, u32)>,
+) -> impl Iterator<Item = u32> + '_ {
+    let base = u64::from(section_id) * u64::from(FEATURE_ID_STRIDE);
+    let end = (base + u64::from(FEATURE_ID_STRIDE)).min(u64::from(u32::MAX) + 1);
+    (base..end)
+        .rev()
+        .filter_map(|slot| u32::try_from(slot).ok())
+        .filter(move |slot| !held.contains(&(section_id, *slot)))
 }
 
 impl Database {
@@ -375,6 +382,75 @@ impl Database {
         Ok(())
     }
 
+    /// [#576 RV20-1] Record the ignore of a shot the file does not hold, keyed by
+    /// the shot's uuid (`warning.shot_uuid`, which must be set), on the highest id
+    /// of its section's window that no shot of the section holds (`held`) and no
+    /// row with its code holds - not on `warning.shot_id`. Dedups like
+    /// [`Self::save_resolved_warning`], in one transaction.
+    ///
+    /// The row is matched by its uuid, in session and by the save that writes the
+    /// shot (which moves it to the shot's saved position), so it needs no slot of
+    /// its shot's. And its shot's id is one the file can give another shot: a
+    /// reopen without a save numbers the file's shots from the bottom of the
+    /// window, and the shots appended next count up from there. On one of their
+    /// ids the row would hold the slot their own ignore of that code needs, which
+    /// [`Self::save_resolved_warning`] refuses to take from a different shot's
+    /// row.
+    pub fn save_resolved_warning_parked(
+        &self,
+        warning: &ResolvedWarning,
+        held: &HashSet<(u32, u32)>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            warning.shot_uuid.is_some(),
+            "a parked ignore is keyed by its shot's uuid"
+        );
+        let tx = self.conn.unchecked_transaction()?;
+        Self::delete_matching_resolved(&tx, warning)?;
+        for slot in slots_from_the_top(warning.section_id, held) {
+            let inserted = tx.execute(
+                "INSERT OR IGNORE INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    warning.section_id,
+                    slot,
+                    warning.warning_code,
+                    warning.resolved_at.to_rfc3339(),
+                    warning.resolved_comment,
+                    warning.shot_uuid,
+                ],
+            )?;
+            if inserted == 1 {
+                tx.commit()?;
+                return Ok(());
+            }
+        }
+        anyhow::bail!("could not record this ignore: its section has no free slot for it")
+    }
+
+    /// [#576 RV20-1] Whether the file holds a shot with no uuid where `shot_id`
+    /// points in `section_id`: at the position a load gives that id (it numbers a
+    /// section's shots `section_id * FEATURE_ID_STRIDE + position`, in
+    /// `sequence_order`; an empty uuid reads as none, as the load reads it). Such a
+    /// shot, of a file written before shots had uuids, gets a fresh uuid on every
+    /// load, so its position is all that names it from one session to the next.
+    pub fn holds_shot_without_uuid_at(&self, section_id: u32, shot_id: u32) -> Result<bool> {
+        let Some(position) = shot_id.checked_sub(section_id.saturating_mul(FEATURE_ID_STRIDE))
+        else {
+            return Ok(false);
+        };
+        let uuid: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT uuid FROM shots WHERE section_id = ?1 \
+                 ORDER BY sequence_order LIMIT 1 OFFSET ?2",
+                params![section_id, position],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(uuid.is_some_and(|uuid| uuid.is_none_or(|uuid| uuid.is_empty())))
+    }
+
     /// Whether `uuid` is already stored in the on-disk `shots` table FOR `section_id`. A pre-v6
     /// shot's UUID is minted only in memory until the project is saved, so keying a new ignore
     /// by such an unpersisted UUID would orphan the row on the next open (different UUIDs are
@@ -439,10 +515,13 @@ impl Database {
     ///
     /// Each `(section_id, from, to)` re-keys the position-keyed (NULL-uuid) rows
     /// at `from` to `to`. `shots` gives the uuid of the shot at each
-    /// `(section_id, shot id)` of those sections. A uuid-keyed row is matched by
+    /// `(section_id, shot id)` of those sections that has one, and `shot_ids`
+    /// every shot of them, with a uuid or without. A uuid-keyed row is matched by
     /// its uuid wherever it sits, but it still holds its slot under
     /// UNIQUE(section_id, shot_id, warning_code), so, in a section of `moves`:
-    /// one whose uuid names exactly one of those shots moves to that shot's id,
+    /// one whose uuid names exactly one of those shots, and is in the file, moves
+    /// to that shot's id (one whose uuid is not in the file is parked, and stays:
+    /// see [`Self::save_resolved_warning_parked`]),
     /// and one whose uuid names none (the ignore of a deleted shot, kept for an
     /// undo of the delete; the next save drops it) moves out of the way when a
     /// position-keyed row with its code lands on its slot. Left in place, either
@@ -468,6 +547,7 @@ impl Database {
         &self,
         moves: &[(u32, u32, u32)],
         shots: &HashMap<(u32, u32), String>,
+        shot_ids: &HashSet<(u32, u32)>,
     ) -> Result<usize> {
         let tx = self.conn.unchecked_transaction()?;
         // (row, target) of each position-keyed row that moves, and the
@@ -497,9 +577,11 @@ impl Database {
                 .and_modify(|id| *id = None)
                 .or_insert(Some(shot_id));
         }
-        // Every shot id of the sections, which no free slot may be.
-        let held: HashSet<(u32, u32)> = shots
-            .keys()
+        // Every shot id of the sections, with a uuid or without (a shot with
+        // none is in no uuid map), which no free slot may be.
+        let held: HashSet<(u32, u32)> = shot_ids
+            .iter()
+            .chain(shots.keys())
             .copied()
             .chain(moves.iter().flat_map(|&(s, from, to)| [(s, from), (s, to)]))
             .collect();
@@ -525,9 +607,17 @@ impl Database {
             })?;
             for row in rows {
                 let (id, own_slot, code, uuid) = row?;
-                let target = uuid
+                let mut target = uuid
                     .as_deref()
                     .and_then(|u| id_of.get(&(section_id, u)).copied().flatten());
+                // [#576 RV20-1] A row of a shot whose uuid the file does not hold
+                // stays parked (see `save_resolved_warning_parked`): its shot's id
+                // is one the file can give another shot.
+                if let (Some(_), Some(u)) = (target, uuid.as_deref()) {
+                    if !self.shot_uuid_is_persisted(section_id, u)? {
+                        target = None;
+                    }
+                }
                 let displaced = landings
                     .iter()
                     .any(|(s, slot, c)| *s == section_id && *slot == own_slot && *c == code);

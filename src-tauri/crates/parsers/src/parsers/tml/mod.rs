@@ -3512,7 +3512,7 @@ mod tests {
             tml_shot_xml_az_len(2, 1, "Main", 90.0, 10.0),
             // The real continuation, far shorter than the closure's 500 m.
             tml_shot_xml_az_len(3, 2, "Main", 90.0, 10.0),
-            long_closure.to_owned(),
+            long_closure,
         ]
         .join("\n");
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));

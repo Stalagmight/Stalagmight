@@ -2187,6 +2187,75 @@ mod tests {
         project
     }
 
+    /// Every entry in `dir`, sorted, so a stray export temp shows up by name.
+    fn dir_entries(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn re_export_replaces_the_target_and_leaves_no_temp() {
+        // #570: a re-export leaves exactly one entry - the new, parseable export -
+        // and no temp. This alone cannot tell an atomic write from a direct one;
+        // the symlinked-target test below is what pins both writers to the rename.
+        let project = simple_project();
+        for name in ["cave.tml", "cave.tmlu"] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"a previous export").unwrap();
+
+            export_tml(&project, &path).unwrap();
+
+            assert_eq!(dir_entries(dir.path()), vec![name.to_string()]);
+            let parsed = crate::parsers::tml::parse_tml(&path).unwrap();
+            assert_eq!(parsed.sections.len(), 1, "{name}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_through_a_symlink_replaces_its_target_by_rename_and_keeps_the_link() {
+        // #570 pinned both Ariane writers to temp + rename with a symlinked
+        // target. The one writer kept by the #576 merge (`export::atomic`, B9)
+        // follows a link at the name - the in-place write did, and replacing the
+        // link would cut what the user linked it to - so the rename is pinned
+        // here by a second hard link instead: a truncating write rewrites the
+        // bytes that link still names, a rename leaves them. What a link may
+        // lead to is the export commands' write-path policy (a `.tml` name that
+        // leads to a `.stalx` is refused there before anything is written;
+        // `commands/export_write_policy_tests.rs`).
+        let project = simple_project();
+        for ext in ["tml", "tmlu"] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let real = dir.path().join(format!("real.{ext}"));
+            std::fs::write(&real, b"a previous export").unwrap();
+            let pin = dir.path().join("previous");
+            std::fs::hard_link(&real, &pin).unwrap();
+            let path = dir.path().join(format!("cave.{ext}"));
+            std::os::unix::fs::symlink(&real, &path).unwrap();
+
+            export_tml(&project, &path).unwrap();
+
+            assert_eq!(std::fs::read(&pin).unwrap(), b"a previous export", "{ext}");
+            assert_eq!(std::fs::read_link(&path).unwrap(), real, "{ext}");
+            let parsed = crate::parsers::tml::parse_tml(&real).unwrap();
+            assert_eq!(parsed.sections.len(), 1, "{ext}");
+            assert_eq!(
+                dir_entries(dir.path()),
+                vec![
+                    format!("cave.{ext}"),
+                    "previous".to_string(),
+                    format!("real.{ext}")
+                ],
+                "{ext}"
+            );
+        }
+    }
+
     #[test]
     fn test_export_emits_a_uuid_per_real_shot() {
         // The `<UUID>`/`<UU>` element is what makes a re-export of an unchanged

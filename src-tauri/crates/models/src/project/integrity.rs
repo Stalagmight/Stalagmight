@@ -277,6 +277,27 @@ impl Project {
         violations
     }
 
+    /// [#576 Q-W30-3-D1] Drop every station comment whose key names no station
+    /// (read from a file: a row past the end of its section), and return the
+    /// keys dropped, sorted. Run by the load, which lists them on its receipt:
+    /// such an orphan used to stay as a positional `Index` key that no edit
+    /// re-anchors, so a shot later added to the section put it on whichever new
+    /// station took that position. Leaves `modified_at` alone (a load, not an
+    /// edit).
+    pub fn drop_orphan_station_comments(&mut self) -> Vec<StationKey> {
+        let mut orphans: Vec<StationKey> = self
+            .station_comments
+            .keys()
+            .filter(|key| self.resolve_key(key).is_none())
+            .cloned()
+            .collect();
+        for key in &orphans {
+            self.station_comments.remove(key);
+        }
+        orphans.sort();
+        orphans
+    }
+
     /// World-space gap between two stored endpoints: the pair resolved against
     /// the CURRENT structure plus their horizontal distance in metres, or `None`
     /// when either endpoint dangles, has no computable position, or sits on

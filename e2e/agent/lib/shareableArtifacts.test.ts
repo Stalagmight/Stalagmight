@@ -126,7 +126,7 @@ const FULL_FAILURE = [
   '  last 2 move(s):',
   '    open import dialog [idle]',
   `    rename to ${SECTION} -> FAILED [Section ${SECTION} exists]`,
-  '  trace: /tmp/session/traces/import-dialog-fuzz-seed7.json',
+  `  trace: ${os.tmpdir()}/session/traces/import-dialog-fuzz-seed7.json`,
 ].join('\n');
 
 describe('a scenario failure shares no app text (#576 W21-NF1)', () => {
@@ -143,7 +143,7 @@ describe('a scenario failure shares no app text (#576 W21-NF1)', () => {
       '  ATTRIBUTED [rv9-merge]',
       '  last 2 move(s):',
       "  (2 line(s) withheld: they can quote the app's text - the full failure is in the session's actions.jsonl)",
-      '  trace: /tmp/session/traces/import-dialog-fuzz-seed7.json',
+      '  trace: <tmp>/session/traces/import-dialog-fuzz-seed7.json',
     ]);
     // Projecting twice changes nothing, so a trace rewritten keeps its counts.
     expect(shareableFailureText(shared)).toBe(shared);

@@ -59,6 +59,7 @@ import {
   type CellVerdict,
 } from './lib/fuzzMatrixReport';
 import { RUN_START_ENV, runStartMs } from './lib/recorder';
+import { foldPrivateFixtures, shareableFixtureName } from './lib/privateFixtures';
 import { foldLocalPaths, shareableErrorText, shareableFailureText } from './lib/shareableFailure';
 import {
   BASE_PORT,
@@ -153,7 +154,7 @@ function runOne(
   const { fixture, seed, axis } = cell;
   const startedAt = Date.now();
   process.stdout.write(
-    `${label} start ${foldLocalPaths(fixture)} seed=${seed}${axis ? ` ${axisLabel(axis)}` : ''} slot=${slot} ` +
+    `${label} start ${shareableFixtureName(fixture)} seed=${seed}${axis ? ` ${axisLabel(axis)}` : ''} slot=${slot} ` +
       `port=${BASE_PORT + slot * PORT_STRIDE} display=:${TOP_DISPLAY - slot}\n`,
   );
 
@@ -235,7 +236,7 @@ function secs(ms: number): string {
 
 function printDone(result: RunResult, label: string): void {
   process.stdout.write(
-    `${label} ${result.verdict === 'lost' ? 'LOST ' : result.passed ? 'PASS ' : 'FAIL '} ${foldLocalPaths(result.fixture)} seed=${result.seed}` +
+    `${label} ${result.verdict === 'lost' ? 'LOST ' : result.passed ? 'PASS ' : 'FAIL '} ${shareableFixtureName(result.fixture)} seed=${result.seed}` +
       `${result.axis ? ` ${axisLabel(result.axis)}` : ''} ` +
       `(${secs(result.durationMs)})${result.passed ? '' : ` ${result.headline}`}\n`,
   );
@@ -245,7 +246,7 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
   const withAxis = results.some((r) => r.axis !== null);
   const rows = results.map((r) =>
     [
-      foldLocalPaths(r.fixture),
+      shareableFixtureName(r.fixture),
       String(r.seed),
       ...(withAxis ? [r.axis ? foldLocalPaths(r.axis.value) : ''] : []),
       r.verdict === 'lost' ? 'LOST' : r.passed ? 'PASS' : 'FAIL',
@@ -268,13 +269,14 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
   if (failures.length) {
     process.stdout.write('\n=== repro commands ===\n');
     for (const failure of failures) {
-      // Folded (#576 W51): a fixture, and a `reproduce:` line Node printed itself
-      // in an uncaught error, can name a path under the home directory.
-      const fixture = foldLocalPaths(failure.fixture);
+      // Folded (#576 W51): a `reproduce:` line Node printed itself in an
+      // uncaught error can name a path under the home directory. A fixture the
+      // repo does not track prints as its tag (#576 W58 Q1).
+      const fixture = shareableFixtureName(failure.fixture);
       const prefix = `STALAGMIGHT_FUZZ_FIXTURE=${fixture}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}`;
       process.stdout.write(
         `${fixture} seed=${failure.seed}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}: ` +
-          `${foldLocalPaths(failure.reproduce) || `(no reproduce line) ${prefix} pnpm agent:scenario ${opts.scenario} --seed ${failure.seed}`}\n`,
+          `${foldPrivateFixtures(foldLocalPaths(failure.reproduce)) || `(no reproduce line) ${prefix} pnpm agent:scenario ${opts.scenario} --seed ${failure.seed}`}\n`,
       );
       // ALWAYS, not just when there is no repro line. A matrix cell's child
       // process and its session are gone by the time anyone reads this, so a

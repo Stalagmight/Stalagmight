@@ -90,6 +90,8 @@ pnpm gen:ipc-types                                        # regenerate the front
 git status --porcelain src/types/ipc src/types/ipc.generated.ts   # must print nothing after gen:ipc-types (the generated frontend IPC types are committed)
 cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml   # workspace-excluded vendored crate; no telemetry feature/env
 cargo package --no-verify --manifest-path src-tauri/Cargo.toml -p stalagmight-models -p stalagmight-persistence -p stalx-reader   # crates.io packaging check; each package must also list LICENSE
+STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE=1 CARGO_TARGET_DIR=target-unstripped-sqlite cargo --config 'env.LIBSQLITE3_FLAGS.value=""' --config 'env.LIBSQLITE3_FLAGS.force=true' test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence -p stalx-reader --lib -- --exact persistence::sqlite::untrusted_sql_tests::every_untrusted_open_refuses_what_the_build_flags_strip tests::the_inspect_connection_refuses_what_the_build_flags_strip   # #619: the SQLite authorizer on a build WITHOUT the repo flags (what crates.io users get)
+cargo +1.89.0 check --locked --manifest-path src-tauri/Cargo.toml -p stalx-reader -p stalagmight-persistence -p stalagmight-models   # MSRV of the published crates (needs: rustup toolchain install 1.89.0 --profile minimal; #625)
 # --- smoke job (e2e-smoke.yml) ---
 pnpm lint:e2e-parallel:test && pnpm lint:e2e-parallel     # Playwright parallel-safety
 pnpm lint:e2e-no-sleep:test && pnpm lint:e2e-no-sleep     # no unannotated waitForTimeout in Playwright specs
@@ -103,6 +105,8 @@ pnpm test:ui:smoke                                        # the @smoke merge gat
 pnpm lint:private-leaks:test && pnpm lint:private-leaks   # no internal/personal refs in the public tree
 pnpm lint:no-em-dash:test && pnpm lint:no-em-dash         # Unicode-dash guard
 pnpm lint:third-party:test && pnpm lint:third-party       # THIRD-PARTY-LICENSES.md matches the lockfiles (regen: pnpm gen:third-party)
+pnpm lint:updater-pubkey:test && pnpm lint:updater-pubkey # the committed updater pubkey and endpoints are well-formed (#579)
+pnpm gen:updater-manifest:test                            # updater manifest generator fixture test (#579)
 pnpm lint:prepush-checklist:test && pnpm lint:prepush-checklist # this block lists every gate CI runs
 ```
 

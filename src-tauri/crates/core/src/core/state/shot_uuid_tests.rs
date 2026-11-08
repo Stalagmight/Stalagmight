@@ -1695,6 +1695,7 @@ fn a_legacy_created_shot_redo_append_mints_an_identity() {
             before_shot_uuid: None,
             uuid: None,
             previous_offsets: std::collections::HashMap::new(),
+            legacy_comment_rows: Vec::new(),
         },
         timestamp: None,
     };

@@ -154,6 +154,9 @@ fn migrate_v12_preserves_null_pitch_and_does_not_launder_a_blunder() {
 /// name, date and quality, but NOT its section fields the test does not read: the
 /// direction is `None` (the removed fn mapped the dump's In/Out) and the color is
 /// empty (it took the caller's). The v12 test reads only the shots' pitches.
+/// [#619] Only with `dmp-fixture-tests` (see Cargo.toml), like that test: the
+/// packaged crate has neither stalagmight-parsers nor the fixture.
+#[cfg(feature = "dmp-fixture-tests")]
 fn flat_dmp_section_data(section: &stalagmight_parsers::parsers::dmp::DmpSection) -> SectionData {
     use stalagmight_parsers::parsers::dmp::DmpShotType;
     SectionData {
@@ -195,6 +198,7 @@ fn flat_dmp_section_data(section: &stalagmight_parsers::parsers::dmp::DmpSection
 /// which convention its inclinations are in. The migration has to decline rather
 /// than guess: silently negating a section it cannot reason about would corrupt
 /// it, and unlike a wrong warning that is not something the user can see.
+#[cfg(feature = "dmp-fixture-tests")]
 #[test]
 fn migrate_v12_leaves_a_section_with_no_vertical_signal_untouched() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");

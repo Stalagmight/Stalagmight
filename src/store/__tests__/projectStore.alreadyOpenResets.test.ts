@@ -286,7 +286,7 @@ const RESETS: Reset[] = [
     name: "clears CaveA's load-repair notice",
     arrange: () => {
       useProjectStore.setState({
-        loadRepairs: { shots: 2, sectionOffsets: 0, stationOffsets: 1, gpsPoints: 0 },
+        loadRepairs: { shots: 2, sectionOffsets: 0, stationOffsets: 1, gpsPoints: 0, stationComments: 0 },
         loadRepairsDismissed: true,
       });
     },

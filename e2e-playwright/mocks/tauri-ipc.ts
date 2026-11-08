@@ -3,6 +3,7 @@ import type { CommandError } from '../../src/types/ipc/CommandError';
 import type { RemoteLinkBits } from '../../src/types/ipc/RemoteLinkBits';
 import type { MockCommandFamily, MockCommandName, MockIpcContext, MockReply } from './ipc/types';
 import { defaultConfig } from '../../src/types/ipc/defaultConfig';
+import { appUpdateCommands } from './ipc/appUpdate';
 import { compassImportCommands } from './ipc/compassImport';
 import { configCommands } from './ipc/config';
 import { deletePreviewCommands } from './ipc/deletePreviews';
@@ -57,6 +58,7 @@ const MOCK_COMMAND_FAMILIES: MockCommandFamily[] = [
   exportCommands,
   deletePreviewCommands,
   historyDiscardedCommands,
+  appUpdateCommands,
 ];
 
 /**
@@ -215,7 +217,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       let openProjectSpeleoLinkUnreadable = false;
       // `BinaryEnvelope::load_repairs` (#576 B35(h)): what the NEXT binary load reset or
       // dropped, per kind. Flip per-spec with __MOCK_SET_LOAD_REPAIRS__; nothing by default.
-      let mockLoadRepairs = { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0 };
+      let mockLoadRepairs = { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0, station_comments: 0 };
       // `BinaryEnvelope::unreadable_project_settings` (#576 B15): the stored settings the
       // NEXT binary load could not read. None by default; flip per-spec with
       // __MOCK_SET_PROJECT_UNREADABLE_SETTINGS__.
@@ -589,8 +591,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         section_offsets?: number;
         station_offsets?: number;
         gps_points?: number;
+        station_comments?: number;
       }) => {
-        mockLoadRepairs = { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0, ...repairs };
+        mockLoadRepairs = { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0, station_comments: 0, ...repairs };
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_WINDOW_TEARDOWN_COUNTS__ = () => ({
         destroy: windowDestroyCount,
@@ -1036,7 +1039,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               newer_schema_version: null,
               speleo_link_unreadable: false,
               unreadable_project_settings: [],
-              load_repairs: { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0 },
+              load_repairs: { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0, station_comments: 0 },
               warnings: [],
               display_settings: {},
             }) satisfies MockReply<'get_project_state_binary'>;
@@ -2259,7 +2262,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'merge_projects':
             console.log('[Mock IPC] merge_projects called with:', args);
-            return { warnings: [] } satisfies MockReply<'merge_projects'>;
+            return { warnings: [], source_repairs: [] } satisfies MockReply<'merge_projects'>;
 
           case 'set_shot_kind': {
             console.log('[Mock IPC] set_shot_kind called with:', args);

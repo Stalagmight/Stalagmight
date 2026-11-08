@@ -154,11 +154,11 @@ export default function CorruptionRecoveryDialog() {
     // with no result, which renders an empty body (#576 NF-W12FS-1).
     let cancelled = false;
     try {
-      // [#576 W30-5] This read no longer feeds the message (the write below
-      // answers the counts of what it wrote). It stays so that a file the
-      // backend cannot open at all fails here, before a destination is asked.
-      await invokeIpc('export_salvageable_data', { path: filePath }, {
-        purpose: 'salvage data from corrupt database',
+      // [#576 Q-W37-1-D1] Only OPEN the damaged file here, so one the backend
+      // cannot open at all fails before a destination is asked. The write below
+      // is the one full read (HFI-3); this used to be a second full salvage.
+      await invokeIpc('check_salvage_source', { path: filePath }, {
+        purpose: 'check the corrupt database opens for salvage',
       });
 
       // Prompt user for save location
@@ -185,13 +185,19 @@ export default function CorruptionRecoveryDialog() {
         purpose: 'write salvaged data from corrupt database',
       });
 
+      // [#576 Q-W30-2-D1] When the project could not be read as a whole the file
+      // holds its sections only: the shots and merges the backend counted are
+      // not in it, so they are not listed as recovered, and the message says so.
       const parts: string[] = [];
       if (written.sectionCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.sections', { count: written.sectionCount }));
-      if (written.shotCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.shots', { count: written.shotCount }));
-      if (written.mergeCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.merges', { count: written.mergeCount }));
+      if (written.projectIncluded && written.shotCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.shots', { count: written.shotCount }));
+      if (written.projectIncluded && written.mergeCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.merges', { count: written.mergeCount }));
       const summary = parts.length > 0 ? parts.join(', ') : t('dialogs.corruptionRecovery.salvage.noData');
 
       let message = t('dialogs.corruptionRecovery.salvage.savedTo', { path: destPath, summary });
+      if (!written.projectIncluded) {
+        message += `\n\n${t('dialogs.corruptionRecovery.salvage.projectNotIncluded')}`;
+      }
       if (written.errors.length > 0) {
         message += `\n\n${t('dialogs.corruptionRecovery.salvage.warnings', { list: written.errors.map(e => `  - ${e}`).join('\n') })}`;
       }

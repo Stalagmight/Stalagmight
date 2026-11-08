@@ -98,6 +98,9 @@ export interface LoadRepairs {
   stationOffsets: number;
   /** GPS tie points (zero datums) with a non-finite coordinate, dropped. */
   gpsPoints: number;
+  /** [#576 Q-W30-3-D1] Station comments whose row points past the end of its
+   *  section (naming no station), dropped. */
+  stationComments: number;
 }
 
 /** The envelope's `load_repairs` as the store's `LoadRepairs`, or null when the
@@ -111,6 +114,7 @@ export function loadRepairsFromEnvelope(
     sectionOffsets: Number(raw.section_offsets ?? 0),
     stationOffsets: Number(raw.station_offsets ?? 0),
     gpsPoints: Number(raw.gps_points ?? 0),
+    stationComments: Number(raw.station_comments ?? 0),
   };
   return Object.values(repairs).some((n) => n > 0) ? repairs : null;
 }
@@ -168,6 +172,7 @@ export interface BinaryEnvelope {
     section_offsets?: number | bigint;
     station_offsets?: number | bigint;
     gps_points?: number | bigint;
+    station_comments?: number | bigint;
   };
   /** [#576 W75-NF7] The open file's tree generation (u64 on the wire: a msgpack
    *  decoder may hand it over as bigint). Absent from an envelope that predates it. */

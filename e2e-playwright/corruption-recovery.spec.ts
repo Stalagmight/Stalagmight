@@ -65,15 +65,12 @@ function setupRecoveryMocks(page: Page): Promise<void> {
 
     overrides.restore_from_backup = 'File restored successfully from backup.';
 
-    overrides.export_salvageable_data = {
-      projectName: 'CaveA',
-      projectLocation: null,
+    overrides.write_salvaged_data = {
       sectionCount: 3,
       shotCount: 42,
       mergeCount: 2,
-      fullProjectJson: '{"sections": []}',
-      sectionsJson: '[]',
       errors: [],
+      projectIncluded: true,
     };
 
     (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
@@ -86,7 +83,7 @@ function clearRecoveryMocks(page: Page): Promise<void> {
     delete overrides.attempt_repair;
     delete overrides.list_backups;
     delete overrides.restore_from_backup;
-    delete overrides.export_salvageable_data;
+    delete overrides.write_salvaged_data;
     (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
   });
 }

@@ -36,6 +36,7 @@ import * as path from 'path';
 import { readTrace, restoreTraceEnv, type FuzzTrace } from './lib/fuzzTrace';
 import { parseScenarioArgs, scenarioRunOptions } from './lib/scenarioRunArgs';
 import {
+  cliValueShape,
   foldLocalPaths,
   pairFailOutput,
   progressLogger,
@@ -43,6 +44,8 @@ import {
   shareableErrorText,
   valueShape,
 } from './lib/shareableFailure';
+import { shareableFixtureName } from './lib/privateFixtures';
+import { shareableKnobValue } from './lib/traceKnobs';
 
 /**
  * Values from outside as printed before the registry is loaded (#576 W51) - the
@@ -92,16 +95,16 @@ async function main(): Promise<void> {
         .filter(([key, value]) => process.env[key] !== value)
         .map(([key]) => key),
     );
-    const { applied, refused, cleared } = restoreTraceEnv(trace.env);
+    const { applied, refused, cleared, withheld } = restoreTraceEnv(trace.env, trace.envWithheld);
     process.env.STALAGMIGHT_FUZZ_REPLAY = tracePath;
     const restored = applied.filter(([key]) => changed.has(key));
     const runAt = scenarioRunOptions(args, trace);
     process.stdout.write(
-      `replaying ${trace.steps.length} step(s) recorded by ${scenarioName(trace.scenario)} on ${foldLocalPaths(String(trace.fixture))} ` +
+      `replaying ${trace.steps.length} step(s) recorded by ${scenarioName(trace.scenario)} on ${shareableFixtureName(trace.fixture)} ` +
         `(seed ${valueShape(trace.seed)}, ${valueShape(trace.iterations)} iteration(s), rev ${gitRev(trace.gitRev)}); ` +
         `running at seed ${String(runAt.seed)}, ${String(runAt.iterations)} iteration(s)\n` +
         (restored.length > 0
-          ? `  restored from the trace: ${restored.map(([key, value]) => `${envKey(key)}=${foldLocalPaths(String(value))}`).join(' ')}\n`
+          ? `  restored from the trace: ${restored.map(([key, value]) => `${envKey(key)}=${shareableKnobValue(key, value)}`).join(' ')}\n`
           : '') +
         // Printed for the same reason `restored` is: a knob the shell set and
         // the recording did not is a difference between this run and that one,
@@ -113,6 +116,12 @@ async function main(): Promise<void> {
           : '') +
         (refused.length > 0
           ? `  REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.map(envKey).join(', ')}\n`
+          : '') +
+        // The recording had these set to a value its trace does not carry (not
+        // one its knob takes, #576 W58 Q9): this shell's value stands.
+        (withheld.length > 0
+          ? `  the recording set ${withheld.length} knob(s) to a value the trace does not carry; ` +
+            `left as this shell has them: ${withheld.map(envKey).join(', ')}\n`
           : ''),
     );
   }
@@ -130,7 +139,7 @@ async function main(): Promise<void> {
   const scenario = getScenario(args.name);
   if (!scenario) {
     // Not a registry name, so its shape (#576 W51): it is the user's text.
-    throw new Error(`unknown scenario, ${valueShape(args.name)}; known: ${listScenarios().join(', ')}`);
+    throw new Error(`unknown scenario, ${cliValueShape(args.name)}; known: ${listScenarios().join(', ')}`);
   }
 
   // Determinism mode (`lib/fuzzDeterminismRun.ts`). `=1` pairs inside

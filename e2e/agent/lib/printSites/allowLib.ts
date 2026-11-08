@@ -52,15 +52,15 @@ export const GROUP: SiteGroup = {
         "a line of `pnpm tauri build`'s output, folded by passLinesFolded (foldedLines.ts:31,37) before it reaches write",
       'buildApp: mode': "the AgentBuildMode, 'debug' or 'release' (e2e/lib/env.ts agentBuildMode)",
       // build.ts:833: execSync(`git checkout -- ${SCHEMA_PATHSPEC}`, { stdio: 'ignore' }) is the only call in the try.
-      'err.message':
+      'buildApp: err.message':
         "Node's `Command failed: git checkout -- src-tauri/gen/schemas` (stdio ignored, so no stderr is appended) or a spawn errno message",
       'buildApp: err':
         "the error of `git checkout -- src-tauri/gen/schemas` run with stdio ignored: Node's `Command failed: <that command>`",
-      '(err as NodeJS.ErrnoException).code': 'the errno code of the failed stamp write (EACCES, EISDIR, ...), or the word io',
+      'writeBuildStamp: (err as NodeJS.ErrnoException).code': 'the errno code of the failed stamp write (EACCES, EISDIR, ...), or the word io',
     },
     'e2e/agent/lib/controls.ts': {
       'requireSelector: action': "a literal tool name at every call: 'hover', 'select_option', 'element_state' (controls.ts:126,211,233)",
-      'outcome.interaction':
+      'mapClick: outcome.interaction':
         "'placement' or 'maplibre': the harness's own page script picks one of the two literals (controls.ts:368)",
     },
     'e2e/agent/lib/displayPool.ts': {
@@ -69,30 +69,28 @@ export const GROUP: SiteGroup = {
     },
     'e2e/agent/lib/exportOracles.ts': {
       'exportBaseName: shape': "'openProject' or 'plnxSibling': the switch case the throw sits in (exportOracles.ts:176-177)",
-      "broken.map((a) => a.format).join(' and ')":
+      "checkFormatDifferential: broken.map((a) => a.format).join(' and ')":
         "'png' and/or 'pdf': the arms runDifferential builds from its literal ['svg', 'png', 'pdf'] (exportRoundtripFuzz.ts)",
-      "'ABC'[index]": 'one letter of the literal ABC, the index of the export (0 to 2)',
-      'args.extension':
+      "checkByteIdentity > args.sizes.forEach: 'ABC'[index]": 'one letter of the literal ABC, the index of the export (0 to 2)',
+      'checkByteIdentity: args.extension':
         "'tml' or 'tmlu': drawn by ctx.pick(['tml', 'tmlu']), or on replay refused otherwise by readExtension (exportRoundtripFuzz.ts)",
-      'firstDifference(c1, c2)': R.COUNT,
-      "lines.join('\\n')":
-        "checkShotMultiset's message: line 1 is the literal `X6 the shot set changed across an export + re-import`, every pushed line is a later line",
-      'args.during.appMode':
+      'checkConvergence: firstDifference(c1, c2)': R.COUNT,
+      'checkExportModeInvariants: args.during.appMode':
         "printed only when APP_MODES (AppMode's words, src/store/uiStore.ts) has it, checked on the line before; else its length",
-      'args.during.geometryMode':
+      'checkExportModeInvariants: args.during.geometryMode':
         "printed only when GEOMETRY_MODES (GeometryMode's words, src/store/uiStore.ts) has it, checked just before; else its length",
     },
     'e2e/agent/lib/fixtureCorpus.ts': {
-      'entry.id': "a corpus entry's publishable id: 5 hex characters of a CRC (crc32.ts shortId), never its path",
-      '(err as NodeJS.ErrnoException).code': "the errno code of the failed stat, or the word io - never the fs message, which names the path",
+      'materializeCorpusEntry: entry.id': "a corpus entry's publishable id: 5 hex characters of a CRC (crc32.ts shortId), never its path",
+      'materializeCorpusEntry: (err as NodeJS.ErrnoException).code': "the errno code of the failed stat, or the word io - never the fs message, which names the path",
     },
     'e2e/agent/lib/fixtures.ts': {
-      'path.resolve(databasePath)': R.FOLDED,
+      'stripUndoHistory: path.resolve(databasePath)': R.FOLDED,
     },
     'e2e/agent/lib/foldedLines.ts': {
       'finish: partial': R.FOLDED,
-      'decoder.end()': R.FOLDED,
-      "lines.map((line) => `${foldLocalPaths(line)}\\n`).join('')":
+      'finish: decoder.end()': R.FOLDED,
+      "passLinesFolded > new Promise > input.on: lines.map((line) => `${foldLocalPaths(line)}\\n`).join('')":
         "the whole lines of the child's output that arrived, each folded by foldLocalPaths inside the map (the docs' rule, #576 RV19b-P8, W47-NF3)",
     },
     'e2e/agent/lib/fuzzDeterminismProbe.ts': {
@@ -104,7 +102,7 @@ export const GROUP: SiteGroup = {
         'the seed, a number: both callers pass Number(...) (scenarios/index.ts:78 into :89-91, scenario-run.ts:164)',
     },
     'e2e/agent/lib/fuzzHarness.ts': {
-      'replayTracePath()': R.FOLDED,
+      'openReplay: replayTracePath()': R.FOLDED,
       'openReplay: fixture':
         "the run's fixture, fuzzKnobs.fuzzFixture() at all four callers (an e2e/fixtures/ name the run already opened); the scenarios' reproduce: lines print it too",
       'throwFailure: message':
@@ -117,28 +115,29 @@ export const GROUP: SiteGroup = {
       'parseSeeds: raw': 'digits, dots and minus signs only: it matched /^(-?\\d+)\\.\\.(-?\\d+)$/ on the line before',
       'positiveInt: flag': "a literal flag name at every call: 'workers', 'iterations' (fuzzMatrixArgs.ts:205,229)",
       'booleanFlag: flag': "the literal flag name 'release' at its one call (fuzzMatrixArgs.ts:230)",
-      'raw.slice(0, eq)': 'the axis key, printed only once RESERVED_AXIS_KEYS has it (checked on the line before): an env name from that table',
-      'RESERVED_BY[key]': 'the owner text of a reserved axis key, from the RESERVED_BY table in this file',
-      "[...RESERVED_AXIS_KEYS].join(', ')": R.ENV_NAME,
-      'token.slice(2, eq)': "the flag name, printed only once `known` has it (checked on the line before): one of the parser's own flag names",
-      'token.slice(2)': "the flag name, printed only once `known` has it (checked on the line before): one of the parser's own flag names",
-      "path.dirname(fixtureSourcePath('probe.stalx'))": R.FOLDED,
+      'parseAxis: raw.slice(0, eq)': 'the axis key, printed only once RESERVED_AXIS_KEYS has it (checked on the line before): an env name from that table',
+      'parseAxis: RESERVED_BY[key]': 'the owner text of a reserved axis key, from the RESERVED_BY table in this file',
+      "parseAxis: [...RESERVED_AXIS_KEYS].join(', ')": R.ENV_NAME,
+      'parseArgs: token.slice(2, eq)': "the flag name, printed only once `known` has it (checked on the line before): one of the parser's own flag names",
+      'parseArgs: token.slice(2)': "the flag name, printed only once `known` has it (checked on the line before): one of the parser's own flag names",
+      "parseArgs: path.dirname(fixtureSourcePath('probe.stalx'))": R.FOLDED,
     },
     'e2e/agent/lib/fuzzOracleCore.ts': {
-      'part.name': "a literal function name from the parts table in oracleInjectionSource (fuzzOracleCore.ts:276-279)",
-      'part.source.slice(0, 80)':
+      'oracleInjectionSource: part.name': "a literal function name from the parts table in oracleInjectionSource (fuzzOracleCore.ts:276-279)",
+      'oracleInjectionSource: part.source.slice(0, 80)':
         "the first 80 characters of a harness function's own source (Function.prototype.toString of code in this file): public tree code",
     },
     'e2e/agent/lib/fuzzTrace.ts': {
+      'writeTrace > trace.steps.forEach: filePath': R.FOLDED,
       'writeTrace: filePath': R.FOLDED,
-      'writeTrace: index': R.COUNT,
-      'corpusNameLeakAt(trace.steps)': 'the index of the first offending step, a number (the message prints it plus one)',
-      'corpusNameLeakAt(parsed.steps)': 'the index of the first offending step, a number (the message prints it plus one)',
+      'writeTrace > trace.steps.forEach: index': R.COUNT,
+      'writeTrace: corpusNameLeakAt(trace.steps)': 'the index of the first offending step, a number (the message prints it plus one)',
+      'readTrace: corpusNameLeakAt(parsed.steps)': 'the index of the first offending step, a number (the message prints it plus one)',
       'validateStep: filePath': R.FOLDED,
       'validateStep: index': R.COUNT,
       'readTrace: filePath': R.FOLDED,
       // The trace FILE (a shareable sink): see corpusTracePrivacy.test.ts for the corpus half.
-      'JSON.stringify({ ...trace, failure }, null, 2)':
+      'writeTrace: JSON.stringify({ ...trace, failure }, null, 2)':
         'the trace: its header (scenario, seed, iterations, fixture, stream, gitRev, the recorded knobs), steps whose corpus files are ids (refused otherwise above), and the failure in its shareable form',
       // validateStep builds `where` as `trace ${foldLocalPaths(filePath)} step ${index + 1}` (fuzzTrace.ts:935), and
       // passes it, or that plus ` (<a FILE_ARG_ACTIONS name>)` (:949), to these four.
@@ -154,10 +153,28 @@ export const GROUP: SiteGroup = {
       'requireSessionRelative: field': "a literal field name at every call ('rel', 'args[0]'), or `rel[<index>]` (fuzzTrace.ts:987)",
       'requireCorpusId: field': "the literal field name 'corpusId' at its one call (fuzzTrace.ts:1019)",
       'requireCorpusHash: field': "the literal field name 'corpusHash' at its one call (fuzzTrace.ts:1020)",
+      // describeStep, a builder: fuzz-shrink prints it for the steps of a trace readTrace read, so validateStep checked
+      // each field below; the fields it checks only as text print through a shaping helper (#576 W58 NF2).
+      'describeStep: shareableStepLabel(step.label)':
+        "a step's label: itself only when every word in it is one the harness's or the app's sources wrote, else valueShape (lib/stepLabels.ts, #576 W58 Q10)",
+      'describeStep: step.kind': "a step kind: validateStep refuses any kind STEP_KINDS does not list (fuzzTrace.ts validateStep)",
+      'describeStep: step.steps': 'how many steps an undoTo or redoTo jumps: validateStep refuses anything but a positive safe integer',
+      'describeStep: step.mode': "an input step's mode: validateStep refuses any but INPUT_MODES' 'type', 'select' and 'check'",
+      'describeStep: step.dialog': "a file dialog step's dialog: validateStep refuses any but 'open' and 'save'",
+      'describeStep: step.index': "an episode's or a flow's index: validateStep refuses anything but a non-negative integer",
+      'describeStep: step.lngLat[0]': "a map click's longitude: validateStep refuses lngLat unless it is two finite numbers",
+      'describeStep: step.lngLat[1]': "a map click's latitude: validateStep refuses lngLat unless it is two finite numbers",
+      'describeStep: step.corpusId': "a corpus id, printed only where CORPUS_ID (/^[0-9a-f]{5}$/) matches it on the same line, else valueShape",
+      'describeStep: shareableTraceWord(step.trigger, TRACE_TRIGGERS)':
+        "a file dialog's trigger: itself only when TRACE_TRIGGERS lists it (the import-dialog fuzzer's, lib/traceStepFields.ts), else valueShape",
+      'describeStep: shareableTraceWord(step.format, TRACE_EXPORT_FORMATS)':
+        'an export format: itself only when TRACE_EXPORT_FORMATS lists it (every ExportFormat, lib/traceStepFields.ts), else valueShape',
+      'describeStep: shareableTraceWord(step.oracle, TRACE_ORACLE_NAMES)':
+        "an oracle name: itself only when TRACE_ORACLE_NAMES lists it (export-roundtrip-fuzz's ORACLE_NAMES, lib/traceStepFields.ts), else valueShape",
     },
     'e2e/agent/lib/importFlowOracles.ts': {
       'fail: headline': R.FORWARD,
-      'claim.shown': "a count: digest.receipt.shown, listItems' number of <li> in the receipt's warning list (importScreenDigest.ts)",
+      'checkReceipt: claim.shown': "a count: digest.receipt.shown, listItems' number of <li> in the receipt's warning list (importScreenDigest.ts)",
       // importDialogFuzz.ts, the only caller: const what = `flow ${flow + 1} of episode ${episode + 1}`.
       'checkResidue: what': "`flow <n> of episode <m>`, two counts (importDialogFuzz.ts, its only caller)",
       'checkTempFiles: what': "`flow <n> of episode <m>`, two counts (importDialogFuzz.ts, its only caller)",
@@ -166,7 +183,7 @@ export const GROUP: SiteGroup = {
       'checkRoundtripState: label': "the literal 'pre-flow' or 'post-flow' at its two calls (importDialogFuzz.ts)",
     },
     'e2e/agent/lib/importScreenDigest.ts': {
-      'source.slice(0, 80)':
+      'importScreenInjectionSource: source.slice(0, 80)':
         "the first 80 characters of the harness's own computeImportScreenDigest source (Function.prototype.toString): public tree code",
     },
     'e2e/agent/lib/junctionDepthOracle.ts': {
@@ -176,19 +193,20 @@ export const GROUP: SiteGroup = {
         "caller's `reproduce: pnpm agent:scenario <SCENARIO> --seed <ctx.seed> --iterations <n>` (exportRoundtripFuzz.ts:890, 1490)",
     },
     'e2e/agent/lib/mapControls.ts': {
-      'request.featureType': "'shot' or 'station': validateRequest refuses any other before the click (mapControls.ts:44)",
-      'request.sectionId': 'an integer: validateRequest refuses any other before the click (mapControls.ts:47)',
-      'request.shotId': "an integer when the feature type is 'shot', the only branch that prints it (validateRequest, mapControls.ts:48)",
-      'request.stationIndex':
+      'mapFeatureClick: request.featureType': "'shot' or 'station': validateRequest refuses any other before the click (mapControls.ts:44)",
+      'mapFeatureClick: request.sectionId': 'an integer: validateRequest refuses any other before the click (mapControls.ts:47)',
+      'mapFeatureClick: request.shotId': "an integer when the feature type is 'shot', the only branch that prints it (validateRequest, mapControls.ts:48)",
+      'mapFeatureClick: request.stationIndex':
         "an integer when the feature type is 'station', the only branch that prints it (validateRequest, mapControls.ts:51)",
     },
     'e2e/agent/lib/page.ts': {
       'invokeInApp: command': "the IPC command's name, printed only when it is one word (/^\\w+$/ on the same line), as a Tauri command is",
-      'raw.__agentError': AFTER_APP_PREFIX,
+      'invokeInApp: raw.__agentError': AFTER_APP_PREFIX,
+      'evalInApp: raw.__agentError': AFTER_APP_PREFIX,
       'evalInApp: err': `the eval body's compile error, ${AFTER_APP_PREFIX}`,
     },
     'e2e/agent/lib/oracles.ts': {
-      'JSON.stringify(shareableFinding(finding), null, 2)':
+      'captureFinding: JSON.stringify(shareableFinding(finding), null, 2)':
         "the finding's shareable projection (shareableFinding, scripts/lib/shareable-finding.mjs) as JSON",
     },
     'e2e/agent/lib/procs.ts': {
@@ -198,40 +216,45 @@ export const GROUP: SiteGroup = {
     },
     'e2e/agent/lib/recorder.ts': {
       'allocateSessionDir: root': R.FOLDED,
-      'deps.pid': "a process id, the number AllocateDeps.pid holds (a test's), written to the session's owner marker",
-      'process.pid': "this process's id, a number, written to the session's owner marker",
+      'allocateSessionDir: deps.pid': "a process id, the number AllocateDeps.pid holds (a test's), written to the session's owner marker",
+      'allocateSessionDir: process.pid': "this process's id, a number, written to the session's owner marker",
     },
     'e2e/agent/lib/replayHelpers.ts': {
+      'driverScript > new Promise > setTimeout: timeoutMs':
+        "the replay's timeout in ms: 60000, or the number generate-replay.mjs emits from the recorded call (the MCP driver_script tool takes z.number(), mcp/server.ts)",
       'driverScript: timeoutMs':
         "the replay's timeout in ms: 60000, or the number generate-replay.mjs emits from the recorded call (the MCP driver_script tool takes z.number(), mcp/server.ts)",
     },
     'e2e/agent/lib/scenarioRunArgs.ts': {
       'integerFlag: flag': "the literal '--seed' at its one call (scenarioRunArgs.ts:68)",
       'positiveIntFlag: flag': "the literal '--iterations' at its one call (scenarioRunArgs.ts:69)",
-      'rest[i]': "the flag, printed (`flag <flag> needs a value`) only once it is '--seed' or '--iterations', checked on the line before",
+      'parseScenarioArgs: rest[i]': "the flag, printed (`flag <flag> needs a value`) only once it is '--seed' or '--iterations', checked on the line before",
     },
     'e2e/agent/lib/seedWindow.ts': {
       'envInt: name': 'SEED_FIRST_ENV or SEED_COUNT_ENV, the literal env names at its two calls (seedWindow.ts:29, 31)',
       'envInt: min': 'the literal 0 or 1 at its two calls (seedWindow.ts:29, 31)',
     },
     'e2e/agent/lib/sessionCore.ts': {
-      'process.versions.node': "the running Node's version string (digits and dots), a fact about the toolchain, not the app or the user",
-      'this.state': "a SessionState word ('idle', 'building', 'ready', 'busy', 'crashed', ...; e2e/agent/sessionTypes.ts)",
+      'warnIfOffPinnedNode: process.versions.node': "the running Node's version string (digits and dots), a fact about the toolchain, not the app or the user",
+      'exclusive > this.queue.then: this.state': "a SessionState word ('idle', 'building', 'ready', 'busy', 'crashed', ...; e2e/agent/sessionTypes.ts)",
+      'start: this.state': "a SessionState word ('idle', 'building', 'ready', 'busy', 'crashed', ...; e2e/agent/sessionTypes.ts)",
     },
     'e2e/agent/lib/sessionShared.ts': {
       'attachBrowser: driverName': "'tauri-driver' (the default, session.ts) or the literal 'tauri-wd' (sessionMac.ts), its two callers",
       'attachBrowser: port': 'the WebDriver port, a number findFreePort returned',
-      'process.versions.node': "the running Node's version string (digits and dots), a fact about the toolchain, not the app or the user",
+      'attachBrowser: process.versions.node': "the running Node's version string (digits and dots), a fact about the toolchain, not the app or the user",
     },
     'e2e/agent/lib/stores.ts': {
-      '(result as { __agentError: string }).__agentError':
+      'readStore: (result as { __agentError: string }).__agentError':
         "`store <STORE_KEY[store]> unavailable`: the harness's own page script sets __agentError only there (stores.ts:45), the key from STORE_KEY",
     },
     'e2e/agent/lib/undoFuzzHarness.ts': {
-      'step.kind':
+      'assertHistoryStep: step.kind':
+        "a trace step's kind, one of fuzzTrace's STEP_KINDS (readTrace refuses any other); at historyReach one of the four history kinds (assertHistoryStep runs first)",
+      'historyReach: step.kind':
         "a trace step's kind, one of fuzzTrace's STEP_KINDS (readTrace refuses any other); at historyReach one of the four history kinds (assertHistoryStep runs first)",
       'assertHistoryStep: scenario': 'a registry name: undoRedoFuzz.name or undoPersistenceFuzz.name at its two calls',
-      'entry.id':
+      'resolveMismatch: entry.id':
         'a KnownAsymmetry id from SAVE_HEALING_MUTATIONS or RELOAD_RESOLVED_GEOMETRY (projectSnapshot.ts): classifyDiffs returns only entries of the list it is given',
     },
   },
@@ -317,6 +340,14 @@ export const GROUP: SiteGroup = {
         reason: 'synthetic survey files a scenario feeds the importers; a spec can come back from a trace',
       },
     },
+    'e2e/agent/lib/privateErrors.ts': {
+      'appendProbeError -> path.join(sessionDir, PROBE_ERRORS_FILE)': {
+        class: 'private',
+        what: 'ipc-probe-errors.jsonl',
+        reason:
+          "the whole error of each ipc-payload-probe call, in the session directory, written only with STALAGMIGHT_AGENT_PRIVATE_ERRORS=1 (#576 RV20-13)",
+      },
+    },
   },
   passthrough: {},
   wrappers: {
@@ -331,10 +362,13 @@ export const GROUP: SiteGroup = {
     // `progressLogger`'s print: the runner's stdout.
     'e2e/agent/lib/shareableFailure.ts': { print: 'stream' },
   },
-  builders: {},
+  builders: {
+    // fuzz-shrink's minimal action list, one line per step (#576 W58 NF2): every field it prints is checked.
+    'e2e/agent/lib/fuzzTrace.ts': ['describeStep'],
+  },
   fileHelpers: {
     'e2e/agent/lib/fuzzMatrixArgs.ts': {
-      typed: 'a value the user typed, as its length (fuzzMatrixArgs.ts typed)',
+      typed: 'a value the user typed: quoted when shareableFailure.cliShaped (a flag or a number), else its length (fuzzMatrixArgs.ts typed, #576 W58 Q4)',
     },
   },
 };

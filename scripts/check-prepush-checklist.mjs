@@ -132,6 +132,18 @@ export const SHELL_GATE_STEPS = [
     checklist: 'cargo package --no-verify --manifest-path src-tauri/Cargo.toml -p stalagmight-models -p stalagmight-persistence -p stalx-reader',
     why: 'a shell loop over the three published crates: cargo package, then a LICENSE check on each package listing',
   },
+  {
+    workflow: '.github/workflows/ci.yml',
+    step: 'SQLite authorizer on a build without the repo\'s flags (#619)',
+    checklist: 'STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE=1 CARGO_TARGET_DIR=target-unstripped-sqlite cargo --config \'env.LIBSQLITE3_FLAGS.value=""\' --config \'env.LIBSQLITE3_FLAGS.force=true\' test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence -p stalx-reader --lib -- --exact persistence::sqlite::untrusted_sql_tests::every_untrusted_open_refuses_what_the_build_flags_strip tests::the_inspect_connection_refuses_what_the_build_flags_strip',
+    why: 'two named tests on a SQLite built without the repo flags (#619); the test names after `--` are filters this gate cannot compare as commands',
+  },
+  {
+    workflow: '.github/workflows/ci.yml',
+    step: 'MSRV check (stalx-reader and its crates, Rust 1.89.0)',
+    checklist: 'cargo +1.89.0 check --locked --manifest-path src-tauri/Cargo.toml -p stalx-reader -p stalagmight-persistence -p stalagmight-models',
+    why: 'installs the 1.89.0 toolchain (rustup, plumbing), then checks the three published crates on it (#625)',
+  },
 ];
 
 // Actions that gate nothing: runner setup, caches and report uploads. Matched

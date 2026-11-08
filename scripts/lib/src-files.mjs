@@ -18,6 +18,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { foldLocalPaths } from './fold-local-paths.mjs';
+
 // Test code: a __tests__/ directory, a *.test.* / *.spec.* file, or the
 // src/test/ harness (vitest setup and its own tests).
 const TEST_DIR_RE = /(^|\/)__tests__(\/|$)/;
@@ -57,10 +59,12 @@ export function walkFiles(root, dir, { exts, skip = () => false } = {}) {
         }
         // Every gate prints the target. One that is absolute or leaves the root
         // names a path on this machine - the home directory, the user's own
-        // folders - not the checkout's text, so it prints as a placeholder (#576 W51).
-        const resolved = path.relative(root, path.resolve(path.dirname(child), target));
+        // folders - not the checkout's text, so it prints resolved and folded
+        // (#576 W51, W58).
+        const absolute = path.resolve(path.dirname(child), target);
+        const resolved = path.relative(root, absolute);
         const leaves = path.isAbsolute(target) || path.isAbsolute(resolved) || resolved === '..' || resolved.startsWith(`..${path.sep}`);
-        symlinks.push({ rel, target: leaves ? '<outside the checkout>' : target });
+        symlinks.push({ rel, target: leaves ? foldLocalPaths(absolute) : target });
       } else if (e.isDirectory()) {
         visit(child);
       } else if (e.isFile() && (!exts || exts.some((x) => e.name.endsWith(x)))) {

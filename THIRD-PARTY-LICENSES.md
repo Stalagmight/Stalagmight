@@ -1,7 +1,7 @@
 # Third-party licenses
 
 Stalagmight's shipped binaries include the open-source packages listed below:
-630 Rust crates and 57 npm packages. Each distinct license
+640 Rust crates and 57 npm packages. Each distinct license
 text is reproduced verbatim, as those licenses require. Stalagmight itself is
 licensed AGPL-3.0-or-later; see [LICENSE](LICENSE).
 
@@ -10,11 +10,11 @@ from the dependency lockfiles - do not edit by hand. CI fails if this file is
 stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
-Cargo.lock=423f5cc5de197be3c798587773251286867589248d97284f5436006e4a7a4109
+Cargo.lock=0a5a19bbcf89d65cf8010e4968305592b8bb11ecc0424c26afaebb1d7c2d7bc7
 pnpm-lock.yaml=d97c965ee56f623ec9547f748d12d4f34fbf2323ad678d38851f5b7c9d6d56de
-gen-third-party-licenses.mjs=ff6cafa3455b8c30cd20895c6cadd3b967609582cd167932396caa881b31ce7f
+gen-third-party-licenses.mjs=22d180d813c1a0f252c7f49beb30e1817db3dd4f8c4c1d9be4f447f4acae0668
 about.toml=d2768e49653dc612b768e450ef73aab5e97964c9365bcf0fc2b68cd50cde9f0d
-bundle-body=e13e698676bdeac4debe89b1d6bb16fc7f3f1f1dc0bf3da88a1e14d3faadb586
+bundle-body=66355ca42594a392415bb82c61b226a7f9179728a637bf09bf352838dab85c0b
 -->
 
 ## npm packages
@@ -4053,7 +4053,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Applies to: `block2 0.6.2`, `brotli-decompressor 5.0.0`, `cargo_toml 0.22.3`, `cesu8 1.1.0`, `chrono 0.4.42`, `convert_case 0.4.0`, `dispatch 0.2.0`, `dispatch2 0.3.0`, `dlopen2 0.8.2`, `dlopen2_derive 0.4.3`, `dpi 0.1.2`, `fxhash 0.2.1`, `igrf 0.2.0`, `libm 0.2.15`, `mac 0.1.1`, `match_token 0.1.0`, `ndk 0.9.0`, `ndk-context 0.1.1`, `ndk-sys 0.6.0+11769913`, `objc2 0.6.3`, `objc2-app-kit 0.3.2`, `objc2-cloud-kit 0.3.2`, `objc2-core-data 0.3.2`, `objc2-core-foundation 0.3.2`, `objc2-core-graphics 0.3.2`, `objc2-core-image 0.3.2`, `objc2-core-text 0.3.2`, `objc2-core-video 0.3.2`, `objc2-encode 4.1.0`, `objc2-exception-helper 0.1.1`, `objc2-foundation 0.3.2`, `objc2-javascript-core 0.3.2`, `objc2-quartz-core 0.3.2`, `objc2-security 0.3.2`, `objc2-ui-kit 0.3.2`, `objc2-web-kit 0.3.2`, `phf 0.10.1`, `phf 0.8.0`, `phf_codegen 0.8.0`, `phf_generator 0.10.0`, `phf_generator 0.8.0`, `phf_macros 0.10.0`, `phf_shared 0.10.0`, `phf_shared 0.8.0`, `proj4rs 0.1.10`, `r-efi 5.3.0`, `rsqlite-vfs 0.2.0`, `siphasher 0.3.11`, `siphasher 1.0.1`, `tao-macros 0.1.3`, `tauri 2.9.5`, `tauri-build 2.5.3`, `tauri-codegen 2.5.2`, `tauri-macros 2.5.2`, `tauri-plugin 2.5.2`, `tauri-plugin-dialog 2.5.0`, `tauri-plugin-fs 2.4.5`, `tauri-plugin-opener 2.5.3`, `tauri-plugin-single-instance 2.3.7`, `tauri-runtime 2.9.2`, `tauri-runtime-wry 2.9.3`, `tauri-utils 2.8.1`, `ts-rs 7.1.1`, `ts-rs-macros 7.1.1`, `unic-char-property 0.9.0`, `unic-char-range 0.9.0`, `unic-common 0.9.0`, `unic-ucd-ident 0.9.0`, `unic-ucd-version 0.9.0`, `wasip2 1.0.1+wasi-0.2.4`, `webview2-com 0.38.2`, `webview2-com-macros 0.8.1`, `webview2-com-sys 0.38.2`, `winapi-i686-pc-windows-gnu 0.4.0`, `winapi-x86_64-pc-windows-gnu 0.4.0`, `windows 0.56.0`, `windows 0.61.3`, `windows-collections 0.2.0`, `windows-core 0.56.0`, `windows-core 0.61.2`, `windows-core 0.62.2`, `windows-future 0.2.1`, `windows-implement 0.56.0`, `windows-implement 0.60.2`, `windows-interface 0.56.0`, `windows-interface 0.59.3`, `windows-link 0.1.3`, `windows-link 0.2.1`, `windows-numerics 0.2.0`, `windows-result 0.1.2`, `windows-result 0.3.4`, `windows-result 0.4.1`, `windows-strings 0.4.2`, `windows-strings 0.5.1`, `windows-sys 0.45.0`, `windows-sys 0.48.0`, `windows-sys 0.52.0`, `windows-sys 0.59.0`, `windows-sys 0.60.2`, `windows-sys 0.61.2`, `windows-targets 0.42.2`, `windows-targets 0.48.5`, `windows-targets 0.52.6`, `windows-targets 0.53.5`, `windows-threading 0.1.0`, `windows-version 0.1.7`, `windows_aarch64_gnullvm 0.42.2`, `windows_aarch64_gnullvm 0.48.5`, `windows_aarch64_gnullvm 0.52.6`, `windows_aarch64_gnullvm 0.53.1`, `windows_aarch64_msvc 0.42.2`, `windows_aarch64_msvc 0.48.5`, `windows_aarch64_msvc 0.52.6`, `windows_aarch64_msvc 0.53.1`, `windows_i686_gnu 0.42.2`, `windows_i686_gnu 0.48.5`, `windows_i686_gnu 0.52.6`, `windows_i686_gnu 0.53.1`, `windows_i686_gnullvm 0.52.6`, `windows_i686_gnullvm 0.53.1`, `windows_i686_msvc 0.42.2`, `windows_i686_msvc 0.48.5`, `windows_i686_msvc 0.52.6`, `windows_i686_msvc 0.53.1`, `windows_x86_64_gnu 0.42.2`, `windows_x86_64_gnu 0.48.5`, `windows_x86_64_gnu 0.52.6`, `windows_x86_64_gnu 0.53.1`, `windows_x86_64_gnullvm 0.42.2`, `windows_x86_64_gnullvm 0.48.5`, `windows_x86_64_gnullvm 0.52.6`, `windows_x86_64_gnullvm 0.53.1`, `windows_x86_64_msvc 0.42.2`, `windows_x86_64_msvc 0.48.5`, `windows_x86_64_msvc 0.52.6`, `windows_x86_64_msvc 0.53.1`, `zune-core 0.4.12`, `zune-jpeg 0.4.21`
+Applies to: `block2 0.6.2`, `brotli-decompressor 5.0.0`, `cargo_toml 0.22.3`, `cesu8 1.1.0`, `chrono 0.4.42`, `convert_case 0.4.0`, `dispatch 0.2.0`, `dispatch2 0.3.0`, `dlopen2 0.8.2`, `dlopen2_derive 0.4.3`, `dpi 0.1.2`, `fxhash 0.2.1`, `igrf 0.2.0`, `libm 0.2.15`, `mac 0.1.1`, `match_token 0.1.0`, `minisign-verify 0.2.5`, `ndk 0.9.0`, `ndk-context 0.1.1`, `ndk-sys 0.6.0+11769913`, `objc2 0.6.3`, `objc2-app-kit 0.3.2`, `objc2-cloud-kit 0.3.2`, `objc2-core-data 0.3.2`, `objc2-core-foundation 0.3.2`, `objc2-core-graphics 0.3.2`, `objc2-core-image 0.3.2`, `objc2-core-text 0.3.2`, `objc2-core-video 0.3.2`, `objc2-encode 4.1.0`, `objc2-exception-helper 0.1.1`, `objc2-foundation 0.3.2`, `objc2-javascript-core 0.3.2`, `objc2-osa-kit 0.3.2`, `objc2-quartz-core 0.3.2`, `objc2-security 0.3.2`, `objc2-ui-kit 0.3.2`, `objc2-web-kit 0.3.2`, `phf 0.10.1`, `phf 0.8.0`, `phf_codegen 0.8.0`, `phf_generator 0.10.0`, `phf_generator 0.8.0`, `phf_macros 0.10.0`, `phf_shared 0.10.0`, `phf_shared 0.8.0`, `proj4rs 0.1.10`, `r-efi 5.3.0`, `rsqlite-vfs 0.2.0`, `siphasher 0.3.11`, `siphasher 1.0.1`, `tao-macros 0.1.3`, `tauri 2.9.5`, `tauri-build 2.5.3`, `tauri-codegen 2.5.2`, `tauri-macros 2.5.2`, `tauri-plugin 2.5.2`, `tauri-plugin-dialog 2.5.0`, `tauri-plugin-fs 2.4.5`, `tauri-plugin-opener 2.5.3`, `tauri-plugin-single-instance 2.3.7`, `tauri-plugin-updater 2.9.0`, `tauri-runtime 2.9.2`, `tauri-runtime-wry 2.9.3`, `tauri-utils 2.8.1`, `ts-rs 7.1.1`, `ts-rs-macros 7.1.1`, `unic-char-property 0.9.0`, `unic-char-range 0.9.0`, `unic-common 0.9.0`, `unic-ucd-ident 0.9.0`, `unic-ucd-version 0.9.0`, `wasip2 1.0.1+wasi-0.2.4`, `webview2-com 0.38.2`, `webview2-com-macros 0.8.1`, `webview2-com-sys 0.38.2`, `winapi-i686-pc-windows-gnu 0.4.0`, `winapi-x86_64-pc-windows-gnu 0.4.0`, `windows 0.56.0`, `windows 0.61.3`, `windows-collections 0.2.0`, `windows-core 0.56.0`, `windows-core 0.61.2`, `windows-core 0.62.2`, `windows-future 0.2.1`, `windows-implement 0.56.0`, `windows-implement 0.60.2`, `windows-interface 0.56.0`, `windows-interface 0.59.3`, `windows-link 0.1.3`, `windows-link 0.2.1`, `windows-numerics 0.2.0`, `windows-result 0.1.2`, `windows-result 0.3.4`, `windows-result 0.4.1`, `windows-strings 0.4.2`, `windows-strings 0.5.1`, `windows-sys 0.45.0`, `windows-sys 0.48.0`, `windows-sys 0.52.0`, `windows-sys 0.59.0`, `windows-sys 0.60.2`, `windows-sys 0.61.2`, `windows-targets 0.42.2`, `windows-targets 0.48.5`, `windows-targets 0.52.6`, `windows-targets 0.53.5`, `windows-threading 0.1.0`, `windows-version 0.1.7`, `windows_aarch64_gnullvm 0.42.2`, `windows_aarch64_gnullvm 0.48.5`, `windows_aarch64_gnullvm 0.52.6`, `windows_aarch64_gnullvm 0.53.1`, `windows_aarch64_msvc 0.42.2`, `windows_aarch64_msvc 0.48.5`, `windows_aarch64_msvc 0.52.6`, `windows_aarch64_msvc 0.53.1`, `windows_i686_gnu 0.42.2`, `windows_i686_gnu 0.48.5`, `windows_i686_gnu 0.52.6`, `windows_i686_gnu 0.53.1`, `windows_i686_gnullvm 0.52.6`, `windows_i686_gnullvm 0.53.1`, `windows_i686_msvc 0.42.2`, `windows_i686_msvc 0.48.5`, `windows_i686_msvc 0.52.6`, `windows_i686_msvc 0.53.1`, `windows_x86_64_gnu 0.42.2`, `windows_x86_64_gnu 0.48.5`, `windows_x86_64_gnu 0.52.6`, `windows_x86_64_gnu 0.53.1`, `windows_x86_64_gnullvm 0.42.2`, `windows_x86_64_gnullvm 0.48.5`, `windows_x86_64_gnullvm 0.52.6`, `windows_x86_64_gnullvm 0.53.1`, `windows_x86_64_msvc 0.42.2`, `windows_x86_64_msvc 0.48.5`, `windows_x86_64_msvc 0.52.6`, `windows_x86_64_msvc 0.53.1`, `zune-core 0.4.12`, `zune-jpeg 0.4.21`
 
 ````text
 MIT License
@@ -4217,7 +4217,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Applies to: `cc 1.2.52`, `cfg-if 1.0.4`, `find-msvc-tools 0.1.7`, `js-sys 0.3.83`, `pkg-config 0.3.32`, `socket2 0.6.1`, `toml_datetime 0.6.3`, `wasm-bindgen 0.2.106`, `wasm-bindgen-futures 0.4.56`, `wasm-bindgen-macro 0.2.106`, `wasm-bindgen-macro-support 0.2.106`, `wasm-bindgen-shared 0.2.106`, `web-sys 0.3.83`
+Applies to: `cc 1.2.52`, `cfg-if 1.0.4`, `filetime 0.2.29`, `find-msvc-tools 0.1.7`, `js-sys 0.3.83`, `pkg-config 0.3.32`, `socket2 0.6.1`, `toml_datetime 0.6.3`, `wasm-bindgen 0.2.106`, `wasm-bindgen-futures 0.4.56`, `wasm-bindgen-macro 0.2.106`, `wasm-bindgen-macro-support 0.2.106`, `wasm-bindgen-shared 0.2.106`, `web-sys 0.3.83`
 
 ````text
 Copyright (c) 2014 Alex Crichton
@@ -5999,6 +5999,38 @@ THE SOFTWARE.
 
 ### MIT License
 
+Applies to: `hyper-rustls 0.27.9`, `rustls 0.23.36`
+
+````text
+Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+````
+
+### MIT License
+
 Applies to: `hyper-util 0.1.19`
 
 ````text
@@ -7179,6 +7211,38 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
+Applies to: `osakit 0.3.1`
+
+````text
+Copyright (c) 2024 Marat Dulin
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+````
+
+### MIT License
+
 Applies to: `phf 0.11.3`, `phf_codegen 0.11.3`, `phf_generator 0.11.3`, `phf_macros 0.11.3`, `phf_shared 0.11.3`
 
 ````text
@@ -7808,38 +7872,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-````
-
-### MIT License
-
-Applies to: `rustls 0.23.36`
-
-````text
-Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
 ````
 
 ### MIT License
@@ -8585,6 +8617,38 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### MIT License
 
+Applies to: `tar 0.4.46`
+
+````text
+Copyright (c) The tar-rs Project Contributors
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+````
+
+### MIT License
+
 Applies to: `tauri-winres 0.3.5`
 
 ````text
@@ -8620,7 +8684,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Applies to: `tempfile 3.24.0`
+Applies to: `tempfile 3.24.0`, `xattr 1.6.1`
 
 ````text
 Copyright (c) 2015 Steven Allen
@@ -8730,6 +8794,38 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+````
+
+### MIT License
+
+Applies to: `tokio-rustls 0.26.4`
+
+````text
+Copyright (c) 2017 quininer kel
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 ````
 
 ### MIT License
@@ -9627,7 +9723,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Applies to: `zip 2.4.2`
+Applies to: `zip 2.4.2`, `zip 4.6.1`
 
 ````text
 The MIT License (MIT)

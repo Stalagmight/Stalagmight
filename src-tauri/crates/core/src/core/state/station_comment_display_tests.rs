@@ -1,15 +1,19 @@
-//! [#576 W30-6] A station shows the comment the save writes for it.
+//! [#576 W30-6, Q-W30-3-D1] A station comment row past the end of its section
+//! (an orphan) never reaches a station.
 //!
-//! Two stored comment keys can name one station after an open. The open's
-//! re-anchor (`Project::reanchor_station_refs`) joins the keys that resolve, but
-//! a key that does not resolve - a row past the end of its section, which the
-//! integrity banner reports and the save refuses until Repair - stays the
-//! positional `Index` key it was read as. An edit that gives the section that
-//! station (a shot added or prepended) brings the key back, now naming a station
-//! that has, or later gets, a key of its own, and no re-anchor runs to join the
-//! two. The save writes one row per station with both comments joined
-//! (`Project::one_row_per_station`); the station showed only one of them, so a
-//! reopen showed text the station had not shown.
+//! The open's re-anchor (`Project::reanchor_station_refs`) joins the keys that
+//! resolve, but a key that does not resolve - a row past the end of its
+//! section - used to stay the positional `Index` key it was read as. An edit
+//! that gave the section that station (a shot added or prepended) brought the
+//! key back, now naming a station that had, or later got, a key of its own:
+//! the orphan's text landed on a station it was never written for, and the
+//! save joined it into that station's row. The open now drops such a row and
+//! lists it on its receipt (`load_repairs.station_comments`), so no later edit
+//! can bring it back.
+//!
+//! The commands that still meet a legacy `Index` key - it can come back from
+//! undo history a build before Q-W30-3-D1 persisted - are tested with that key
+//! built in memory ([`seed_legacy_comment_rows`]).
 //!
 //! All data is synthetic: a file this build saved, then rows added with plain
 //! SQL. No fixture is read or written.
@@ -21,7 +25,7 @@ use tempfile::TempDir;
 
 use super::AppState;
 use crate::core::Command;
-use crate::models::{Project, SectionData, ShotData, ShotId, StationRef};
+use crate::models::{Project, SectionData, ShotData, ShotId, StationKey, StationRef};
 use crate::persistence::Database;
 use crate::test_fixtures::state_with_null_sink;
 
@@ -63,6 +67,21 @@ pub(super) fn file_with_comment_rows(dir: &Path, rows: &[(u32, &str)]) -> (PathB
         .unwrap();
     }
     (path, sid)
+}
+
+/// [#576 Q-W30-3-D1] Put `rows` (`(station_index, comment)`) under positional
+/// `Index` keys of section `sid` in the open project, as an open before
+/// Q-W30-3-D1 left a row past the end of its section. An open now drops such a
+/// row, so the tests of the commands that still meet a legacy key (from undo
+/// history an older build persisted) build it here, right after the open.
+pub(super) fn seed_legacy_comment_rows(state: &AppState, sid: u32, rows: &[(u32, &str)]) {
+    let mut guard = state.project.lock();
+    let project = guard.as_mut().unwrap();
+    for (index, comment) in rows {
+        project
+            .station_comments
+            .insert(StationKey::positional(sid, *index), (*comment).to_string());
+    }
 }
 
 /// The comment the open project shows on `sr` (the `comment` the station
@@ -122,12 +141,14 @@ pub(super) fn save_and_reopen(
     (written, reopened)
 }
 
-/// The file holds a comment on station 2 (the end of the line) and one on
-/// station 3, past the end. A shot prepended to the section moves the end
-/// station to index 3, where the past-the-end key now resolves: two keys, one
-/// station, and the save is no longer refused.
+/// [#576 Q-W30-3-D1] The file holds a comment on station 2 (the end of the
+/// line) and one on station 3, past the end. The open drops the orphan, lists
+/// it on its receipt, and does not refuse the save over it. A shot prepended to
+/// the section moves the end station to index 3, where the orphan's key used
+/// to resolve: the end station shows, the save writes and the reopen shows its
+/// own comment alone. (The orphan used to land there, joined into the row.)
 #[test]
-fn a_prepend_that_brings_an_orphan_comment_onto_a_station_shows_what_the_save_writes() {
+fn an_orphan_comment_is_dropped_on_open_and_a_prepend_never_brings_it_back() {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
     let (path, sid) = file_with_comment_rows(
@@ -137,8 +158,8 @@ fn a_prepend_that_brings_an_orphan_comment_onto_a_station_shows_what_the_save_wr
     let state = state_with_null_sink();
     state.do_load_project_full(path).unwrap();
     assert!(
-        state.integrity_check().save_blocked,
-        "the comment past the end is an orphan the save refuses"
+        !state.integrity_check().save_blocked,
+        "the orphan is gone at the open, so nothing blocks the save"
     );
 
     let first = *shot_ids(&state).first().unwrap();
@@ -152,10 +173,6 @@ fn a_prepend_that_brings_an_orphan_comment_onto_a_station_shows_what_the_save_wr
         before_shot_id: Some(first),
     });
     assert!(prepended.success, "prepend: {:?}", prepended.error);
-    assert!(
-        !state.integrity_check().save_blocked,
-        "the key past the end resolves now, so the save is allowed"
-    );
 
     let end = StationRef::new(sid, 3);
     let shown = shown_comment(&state, end);
@@ -165,8 +182,8 @@ fn a_prepend_that_brings_an_orphan_comment_onto_a_station_shows_what_the_save_wr
     println!("the reopen shows:       {reopened:?}");
     assert_eq!(
         written.as_deref(),
-        Some("comment at the end\ncomment past the end"),
-        "the save joins the two comments, the canonical key's first"
+        Some("comment at the end"),
+        "the end station keeps its own comment, and the orphan is not joined in"
     );
     assert_eq!(
         shown, written,
@@ -175,17 +192,12 @@ fn a_prepend_that_brings_an_orphan_comment_onto_a_station_shows_what_the_save_wr
     assert_eq!(reopened, written, "and what the reopen shows");
 }
 
-/// The file holds one comment past the end of the section. A shot appended to
-/// the section gives it that station, and a comment set there in the app
-/// REPLACES the past-the-end one (#576 W30-NF1): the set removes every key
-/// that names the station, so the station shows, the save writes and the
-/// reopen shows exactly the new text. (Before W30-NF1 the set stored the new
-/// text under the canonical key beside the past-the-end one, and the two were
-/// joined. With the set replacing, this test no longer exercises the
-/// one-row-per-station display rule - the prepend test above does - #576
-/// RV19a-14.)
+/// [#576 Q-W30-3-D1] The file holds one comment past the end of the section. A
+/// shot appended to the section gives it a station at that position: the new
+/// station shows no comment, the save writes none there and the reopen shows
+/// none. (The orphan used to land on the appended station.)
 #[test]
-fn a_comment_set_where_an_orphan_comment_landed_replaces_it() {
+fn an_appended_station_never_gets_an_orphan_comment() {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
     let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
@@ -204,25 +216,13 @@ fn a_comment_set_where_an_orphan_comment_landed_replaces_it() {
     });
     assert!(appended.success, "append: {:?}", appended.error);
     let station = StationRef::new(sid, 3);
-    let set = state.execute(Command::SetStationComment {
-        station_ref: station,
-        comment: Some("comment set in the app".to_string()),
-    });
-    assert!(set.success, "set comment: {:?}", set.error);
 
     let shown = shown_comment(&state, station);
     let (written, reopened) = save_and_reopen(&state, &temp.path().join("saved.stalx"), station);
     println!("station {station:?} shows:   {shown:?}");
     println!("the save writes:        {written:?}");
     println!("the reopen shows:       {reopened:?}");
-    assert_eq!(
-        written.as_deref(),
-        Some("comment set in the app"),
-        "the save writes the new comment alone: it replaced the past-the-end one"
-    );
-    assert_eq!(
-        shown, written,
-        "the station shows what the save writes for it"
-    );
-    assert_eq!(reopened, written, "and what the reopen shows");
+    assert_eq!(shown, None, "the appended station shows no comment");
+    assert_eq!(written, None, "the save writes no comment for it");
+    assert_eq!(reopened, None, "and the reopen shows none");
 }

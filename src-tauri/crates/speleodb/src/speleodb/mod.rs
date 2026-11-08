@@ -241,15 +241,18 @@ impl SpeleoDbError {
 }
 
 /// The user-facing line for [`SpeleoDbError::WouldDiscardLocalEdits`]: the copy
-/// read as dirty, or (`state_unknown`) it could not be read at all, which the line
-/// names together with how the two branches the refusal offers get past it.
+/// read as dirty, or (`state_unknown`) it could not be read at all.
+///
+/// [#576 RV20-21] Neutral about what to do next: the line is also the raw text of
+/// the Start editing and Update toasts and of the adopt error, none of which offers
+/// the open prompt's two buttons, so it names neither. The prompt words its own
+/// remedies (`speleodb.unpushedLocal.unreadable.*`). A damaged file reads as
+/// unknown too, so the line allows for one.
 fn would_discard_local_edits_message(state_unknown: bool) -> &'static str {
     if state_unknown {
         "the copy of this project on this computer could not be read, so it was not \
-         replaced: a save may have been interrupted, or another program may be using it. \
-         Open the local copy to let an interrupted save roll back to the last one that \
-         finished (close any other program using it first), or take the server copy, \
-         which discards the local one"
+         replaced: a save may have been interrupted, another program may be using it, or \
+         the file may be damaged"
     } else {
         "this project has local edits that were never pushed to SpeleoDB"
     }
@@ -288,6 +291,39 @@ mod tests {
         let gone = SpeleoDbError::LockNotHeld { holder: None }.to_string();
         assert!(gone.starts_with("you no longer hold the SpeleoDB write lock"));
         assert!(gone.contains("start editing again"));
+    }
+
+    /// [#576 RV20-21] The unreadable-copy refusal is also the raw text of the Start
+    /// editing and Update toasts and of the adopt error, none of which offers the
+    /// open prompt's buttons, so it names none of them; and a damaged file maps to
+    /// it too, so it says that as well. The remedies stay on the prompt's own lines.
+    #[test]
+    fn the_unreadable_copy_refusal_names_no_button_and_allows_damage() {
+        let message = SpeleoDbError::WouldDiscardLocalEdits {
+            project_id: "p".to_owned(),
+            local_path: "/cache/p.stalx".to_owned(),
+            last_edit_at: None,
+            state_unknown: true,
+            unlinked: false,
+        }
+        .to_string();
+        let lower = message.to_lowercase();
+        let named: Vec<&str> = [
+            "open the local copy",
+            "take the server copy",
+            "keep the local",
+        ]
+        .into_iter()
+        .filter(|button| lower.contains(button))
+        .collect();
+        assert!(
+            named.is_empty(),
+            "the refusal names the prompt's buttons {named:?}: {message:?}"
+        );
+        assert!(
+            message.contains("could not be read") && message.contains("damaged"),
+            "it says what is known, damage included: {message:?}"
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@
  * tool state desync and handler errors on repeated switching. Restores 'select'
  * at the end.
  */
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import type { Scenario } from './framework';
 import { ensureProjectLoaded } from './common';
 
@@ -58,7 +59,9 @@ export const toolSwitchSpam: Scenario = {
         [tool],
       );
       ctx.metric('switches');
-      if (active !== tool) throw new Error(`setActiveTool(${tool}) left activeTool=${active}`);
+      // The page's answer keeps only the words of the app's source, as a test
+      // id does (#576 W58 Q11): every real ToolType prints as itself.
+      if (active !== tool) throw new Error(`setActiveTool(${tool}) left activeTool=${shareableTestId(active)}`);
     }
 
     await ctx.callAction('ui', 'setActiveTool', ['select']);

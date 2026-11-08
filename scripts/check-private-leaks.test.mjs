@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import {
   findLeaks, findPathLeaks, isExcluded, isAttributionFile, RULES, gateFails, looksBinary, scan, report,
 } from './check-private-leaks.mjs';
-import { parseLsFilesStage, makeReader, hasBinaryExt, MAX_SCAN_BYTES } from './lib/tracked-files.mjs';
+import { parseLsFilesStage, makeReader, hasBinaryExt, listTracked, MAX_SCAN_BYTES } from './lib/tracked-files.mjs';
 
 let passed = 0;
 const failures = [];
@@ -325,6 +325,39 @@ test('makeReader returns a link\'s target string (live or dangling) and a file\'
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+// git's stderr reaches ours folded, and a failing git still throws what
+// execFileSync throws (#576 W58): its dubious-ownership text names the checkout.
+// A fake git first on PATH stands in for the real one.
+test('listTracked prints git\'s stderr folded and still throws its exit status', () => {
+  if (process.platform === 'win32') return; // the fake git is a shell script
+  const repo = path.resolve(import.meta.dirname, '..');
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-git-'));
+  fs.writeFileSync(
+    path.join(bin, 'git'),
+    `#!/bin/sh\necho "fatal: detected dubious ownership in repository at '${repo}'" >&2\nexit 128\n`,
+    { mode: 0o755 },
+  );
+  const savedPath = process.env.PATH;
+  const write = process.stderr.write;
+  const written = [];
+  let err;
+  process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
+  process.stderr.write = (chunk) => (written.push(String(chunk)), true);
+  try {
+    listTracked(repo);
+  } catch (e) {
+    err = e;
+  } finally {
+    process.stderr.write = write;
+    process.env.PATH = savedPath;
+    fs.rmSync(bin, { recursive: true, force: true });
+  }
+  assert.equal(written.join(''), "fatal: detected dubious ownership in repository at '<repo>'\n");
+  assert.ok(err instanceof Error, 'a failing git must still throw');
+  assert.equal(err.status, 128);
+  assert.equal(err.message.split('\n')[0], 'Command failed: git ls-files -s -z');
 });
 
 test('both whole-tree guards share one binary-extension set and one size cap', () => {

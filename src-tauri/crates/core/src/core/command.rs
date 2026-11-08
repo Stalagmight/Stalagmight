@@ -430,6 +430,11 @@ pub struct CommandResult {
     /// and the key stays absent for every ordinary save).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unlinked_copy_path: Option<String>,
+    /// [#576 W57-NF2] `MergeProjects`: what reading each source reset or dropped
+    /// (see [`crate::core::MergeProjectsOutcome::source_repairs`]). Internal
+    /// only; empty for every other command.
+    #[serde(skip)]
+    pub merge_source_repairs: Vec<crate::core::MergeSourceRepairs>,
     /// The sections whose station NUMBERING this operation reversed (station `i`
     /// became station `N - i`), each carrying the shot count `N` in force at that
     /// reverse - for `ReverseSection`, for a `Batch` of them, and for an undo/redo

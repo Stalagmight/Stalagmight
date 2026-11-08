@@ -588,13 +588,16 @@ describe('describeSteps', () => {
   });
 
   it('gives every v2 kind a line carrying what the label cannot', () => {
+    // A path the repo does not track prints as its tag (#576 W74-NF2).
+    const tag = (rel: string): string => `<private-path#${shortId(rel)}>`;
     const text = describeSteps([
       { kind: 'ui', testid: 'import-confirm', label: 'confirm import' },
       { kind: 'ui', testid: 'row-3', double: true, label: 'open row' },
       { kind: 'input', testid: 'name', value: 'x', mode: 'type', label: 'rename' },
-      { kind: 'fileDialog', trigger: 'open-btn', dialog: 'open', rel: 'in/a.dmp', label: 'pick dmp' },
-      { kind: 'fileDialog', trigger: 'open-btn', dialog: 'open', rel: ['a', 'b'], label: 'pick two' },
-      { kind: 'fileDialog', trigger: 'save-btn', dialog: 'save', rel: null, label: 'cancel' },
+      // A trigger the harness records (#576 W58 NF2: any other prints as its length).
+      { kind: 'fileDialog', trigger: 'toolbar-import-button', dialog: 'open', rel: 'in/a.dmp', label: 'pick dmp' },
+      { kind: 'fileDialog', trigger: 'key:Ctrl+O', dialog: 'open', rel: ['a', 'b'], label: 'pick two' },
+      { kind: 'fileDialog', trigger: 'global-open-import-button', dialog: 'save', rel: null, label: 'cancel' },
       { kind: 'genFile', spec: {}, rel: 'in/a.dmp', label: 'v5 x2' },
       { kind: 'corpusFile', corpusId: corpusFileId('device/x.dmp'), rel: 'in/x.dmp', label: 'corpus dmp' },
       { kind: 'route', rel: 'in/a.tml', label: 'route' },
@@ -606,14 +609,14 @@ describe('describeSteps', () => {
       '  1. click import-confirm - confirm import',
       '  2. dblclick row-3 - open row',
       '  3. type name - rename',
-      '  4. open-dialog via open-btn -> in/a.dmp - pick dmp',
-      '  5. open-dialog via open-btn -> 2 file(s) - pick two',
-      '  6. save-dialog via save-btn -> cancel - cancel',
-      '  7. genFile in/a.dmp - v5 x2',
-      `  8. corpusFile #${corpusFileId('device/x.dmp')} -> in/x.dmp - corpus dmp`,
-      '  9. route in/a.tml - route',
+      `  4. open-dialog via toolbar-import-button -> ${tag('in/a.dmp')} - pick dmp`,
+      '  5. open-dialog via key:Ctrl+O -> 2 file(s) - pick two',
+      '  6. save-dialog via global-open-import-button -> cancel - cancel',
+      `  7. genFile ${tag('in/a.dmp')} - v5 x2`,
+      `  8. corpusFile #${corpusFileId('device/x.dmp')} -> ${tag('in/x.dmp')} - corpus dmp`,
+      `  9. route ${tag('in/a.tml')} - route`,
       ' 10. mapClick -83.5,20.25 - pick station',
-      ' 11. export tml -> out/x.tml - roundtrip',
+      ` 11. export tml -> ${tag('out/x.tml')} - roundtrip`,
       ' 12. reload naharon.stalx',
     ]);
   });
@@ -783,7 +786,14 @@ describe('a written trace never names a corpus file', () => {
 });
 
 describe('restoreTraceEnv', () => {
-  const OWNED = ['STALAGMIGHT_FUZZ_TEST_KNOB', 'STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB', 'STALAGMIGHT_OTHER_TEST'];
+  const OWNED = [
+    'STALAGMIGHT_FUZZ_TEST_KNOB',
+    'STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB',
+    'STALAGMIGHT_OTHER_TEST',
+    // Registered knobs (lib/traceKnobs.ts): only these restore (#576 W58 Q9).
+    'STALAGMIGHT_FUZZ_STREAM',
+    'STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET',
+  ];
   const saved = new Map<string, string | undefined>();
 
   beforeEach(() => {
@@ -802,12 +812,12 @@ describe('restoreTraceEnv', () => {
 
   it('applies the knobs the recorder writes', () => {
     const { applied, refused } = restoreTraceEnv({
-      STALAGMIGHT_FUZZ_TEST_KNOB: 'a',
-      STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB: 'b',
+      STALAGMIGHT_FUZZ_STREAM: 'v3',
+      STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET: '1',
     });
 
-    expect(process.env.STALAGMIGHT_FUZZ_TEST_KNOB).toBe('a');
-    expect(process.env.STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB).toBe('b');
+    expect(process.env.STALAGMIGHT_FUZZ_STREAM).toBe('v3');
+    expect(process.env.STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET).toBe('1');
     expect(applied).toHaveLength(2);
     expect(refused).toEqual([]);
   });
@@ -824,12 +834,12 @@ describe('restoreTraceEnv', () => {
     const { applied, refused } = restoreTraceEnv({
       STALAGMIGHT_FUZZ_TRACE: '/tmp/pwn/out.json',
       STALAGMIGHT_FUZZ_REPLAY: '/tmp/pwn/in.json',
-      STALAGMIGHT_FUZZ_TEST_KNOB: 'kept',
+      STALAGMIGHT_FUZZ_STREAM: 'v2',
     });
 
     expect(process.env.STALAGMIGHT_FUZZ_TRACE).toBe(before.trace);
     expect(process.env.STALAGMIGHT_FUZZ_REPLAY).toBe(before.replay);
-    expect(applied.map(([key]) => key)).toEqual(['STALAGMIGHT_FUZZ_TEST_KNOB']);
+    expect(applied.map(([key]) => key)).toEqual(['STALAGMIGHT_FUZZ_STREAM']);
     expect(refused).toEqual(['STALAGMIGHT_FUZZ_TRACE', 'STALAGMIGHT_FUZZ_REPLAY']);
   });
 
@@ -845,15 +855,15 @@ describe('restoreTraceEnv', () => {
       LD_PRELOAD: '/tmp/pwn.so',
       STALAGMIGHT_AGENT_RELEASE: '1',
       STALAGMIGHT_OTHER_TEST: 'x',
-      STALAGMIGHT_FUZZ_TEST_KNOB: 'kept',
+      STALAGMIGHT_FUZZ_STREAM: 'v2',
     });
 
     expect(process.env.PATH).toBe(before.PATH);
     expect(process.env.NODE_OPTIONS).toBe(before.NODE_OPTIONS);
     expect(process.env.LD_PRELOAD).toBeUndefined();
     expect(process.env.STALAGMIGHT_OTHER_TEST).toBeUndefined();
-    expect(process.env.STALAGMIGHT_FUZZ_TEST_KNOB).toBe('kept');
-    expect(applied.map(([key]) => key)).toEqual(['STALAGMIGHT_FUZZ_TEST_KNOB']);
+    expect(process.env.STALAGMIGHT_FUZZ_STREAM).toBe('v2');
+    expect(applied.map(([key]) => key)).toEqual(['STALAGMIGHT_FUZZ_STREAM']);
     expect(refused).toEqual([
       'PATH',
       'NODE_OPTIONS',
@@ -887,13 +897,13 @@ describe('restoreTraceEnv', () => {
   });
 
   it('leaves a knob the recording DID have at the recorded value, not cleared', () => {
-    process.env.STALAGMIGHT_FUZZ_TEST_KNOB = 'from the shell';
+    process.env.STALAGMIGHT_FUZZ_STREAM = 'v1';
 
-    const { applied, cleared } = restoreTraceEnv({ STALAGMIGHT_FUZZ_TEST_KNOB: 'from the trace' });
+    const { applied, cleared } = restoreTraceEnv({ STALAGMIGHT_FUZZ_STREAM: 'v3' });
 
-    expect(process.env.STALAGMIGHT_FUZZ_TEST_KNOB).toBe('from the trace');
-    expect(applied).toEqual([['STALAGMIGHT_FUZZ_TEST_KNOB', 'from the trace']]);
-    expect(cleared).not.toContain('STALAGMIGHT_FUZZ_TEST_KNOB');
+    expect(process.env.STALAGMIGHT_FUZZ_STREAM).toBe('v3');
+    expect(applied).toEqual([['STALAGMIGHT_FUZZ_STREAM', 'v3']]);
+    expect(cleared).not.toContain('STALAGMIGHT_FUZZ_STREAM');
   });
 
   it('never clears a NEVER_RESTORED path knob, which the CALLER owns', () => {

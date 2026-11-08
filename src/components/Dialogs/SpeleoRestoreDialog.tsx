@@ -57,7 +57,8 @@ export default function SpeleoRestoreDialog() {
   const [needsDiscard, setNeedsDiscard] = useState(false);
   // [#576 W55 NF-W53-1] The same refusal arrives when the copy is there but could not
   // be read (`state_unknown`: a hot journal after a crash, a lock another program
-  // holds). The discard route is the same; only the warning says what is known.
+  // holds). The discard route is the same; only the warning and the discard labels
+  // [#576 W59] say what is known.
   const [copyUnreadable, setCopyUnreadable] = useState(false);
   // The separate arming step for that route, on its own control - the same
   // arm-then-confirm shape SpeleoUnpushedLocalDialog and SpeleoQuitDialog use for
@@ -180,11 +181,17 @@ export default function SpeleoRestoreDialog() {
                   : 'speleodb-restore-discard-offer-btn'
               }
             >
+              {/* [#576 W59] Nobody knows whether a copy that could not be read
+                  holds changes, so its labels name the local copy instead. */}
               {busy
                 ? t('speleodb.restore.restoring')
                 : discardArmed
-                  ? t('speleodb.restore.discardConfirm')
-                  : t('speleodb.restore.discardOffer')}
+                  ? copyUnreadable
+                    ? t('speleodb.restore.unreadableDiscardConfirm')
+                    : t('speleodb.restore.discardConfirm')
+                  : copyUnreadable
+                    ? t('speleodb.restore.unreadableDiscardOffer')
+                    : t('speleodb.restore.discardOffer')}
             </Button>
           ) : (
             <Button

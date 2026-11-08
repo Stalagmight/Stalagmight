@@ -13,6 +13,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { shortId } from './crc32';
 import {
   CORPUS_DIR_ENV,
   corpusEntryFor,
@@ -159,7 +160,8 @@ describe('a corpus trace names no corpus file (#576 HFI-13)', () => {
     // `fuzz-shrink.ts` prints exactly these for a trace and its baseline.
     const printed = [describeSteps(trace.steps), describeSignature(failureSignature(failure))].join('\n');
     expectNoName(printed, 'the shrink output');
-    expect(printed).toContain(`fuzz-files/corpus-3/${CORPUS_ENTRY_SEGMENT}`);
+    // The session path prints as its tag, as every path the repo does not track (#576 W74-NF2).
+    expect(printed).toContain(`<private-path#${shortId(`fuzz-files/corpus-3/${CORPUS_ENTRY_SEGMENT}`)}>`);
   });
 
   it('resolves the token back to the copy on replay, and to nothing without its corpusFile step', () => {

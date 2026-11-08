@@ -1018,13 +1018,66 @@ locations:
   agent:...` or `run_scenario("...")`, a `trace:` line is one path to a
   `.json` trace, and a diff path is lower-case field names and indices. An
   `ipc <command>:` / `eval:` / `javascript error:` headline keeps
-  the prefix and the length of the app's text. Every line it keeps has the
-  checkout folded to `<repo>` and the home directory to `~`
-  (`foldLocalPaths`), so a `reproduce:` line's fixture path or a session
-  directory in a headline does not name the user.
+  the prefix and the length of the app's text. The headline itself is kept
+  only when the harness wrote it (#576 W58 Q3, `harnessBuilt`): an error built
+  in the checkout's own sources, outside node_modules, that Node did not mark
+  as its own (`code`, `errno`, `syscall`) and the engine did not word
+  (`TypeError`, `SyntaxError`, ...). Any other first line - webdriverio's
+  (`element ("<selector>") still not displayed`), Node's (an `fs` message
+  naming a path), one with no stack frame of ours or a stack webdriverio
+  spliced - prints as `a third-party <Name>: (<n> characters withheld)`, here,
+  in a crash line, a fuzz failure and a journey's abort reason. A failure's
+  full line is in the session's `actions.jsonl` (`uat/run.jsonl` for a
+  journey's abort); a crash keeps no copy, as for its other lines. Every
+  line it keeps has the checkout folded to `<repo>`, the home directory to
+  `~`, `CARGO_TARGET_DIR` to `<target>` and the temp directory
+  (`os.tmpdir()`, and its real path) to `<tmp>` (`foldLocalPaths`, the
+  longest root first; #576 W58), so a `reproduce:` line's fixture path, a
+  session directory in a headline, a build's output path or a save under the
+  temp directory does not name the user. A path outside those roots prints
+  as it is. The repo's Node tools
+  under `scripts/` fold the paths they echo with the same function
+  (`scripts/lib/fold-local-paths.mjs`, which `lib/shareableFailure.ts`
+  re-exports): the generators' session dir and `--out`, `heap-profile.mjs`'s
+  `--file`, `slice-ts.mjs`'s file, `$PW_TIMING_OUTPUT`'s path, and a source
+  gate's symlink target that leaves the checkout (#576 W58). The whole-tree
+  gates' `git ls-files` and `gen-third-party-licenses.mjs`' cargo and pnpm
+  calls write the tool's stderr through it too (`execFileSyncFolded`), where
+  they used to pass it through, so git's dubious-ownership text names the
+  checkout as `<repo>`. A fixture prints by name
+  only when the repo tracks it (`git ls-files e2e/fixtures`); any other - a
+  `.stalx` dropped into `e2e/fixtures/` for a local run, or one a trace or the
+  knob names - prints as a tag, `<private-fixture#xxxxx>` (`crc32.shortId` of
+  its name), in every line of the runners' output, a metric key, `fuzz-matrix`'s
+  table and repro commands, the trace header `fuzz-shrink` and
+  `agent:scenario --trace` print, and a reload step in `fuzz-shrink`'s minimal
+  action list (#576 W58 Q1, NF1, `lib/privateFixtures.ts`). Its full name stays
+  in the session's `actions.jsonl`: the first time a scenario opens it, a
+  progress line names it with its tag, and `fuzz-shrink` records a
+  `private-fixture` event with the name and the tag of each one its trace
+  names.
 - A fuzz trace's `failure` is that form, with the signature of that form.
   `fuzz-shrink` prints that shareable signature and checks it against the
   trace header; ddmin still compares full signatures, in memory.
+- `fuzz-shrink`'s minimal action list prints a step's label only when every
+  word in it is one the harness's sources under `e2e/agent` (tests excluded)
+  or the app's production source wrote, with no control character (#576 W58
+  Q10, `lib/stepLabels.ts`): the words of the label templates, the
+  generators' tables and the test ids the fuzzers drive. Any other label - a
+  forged trace's, or one that would quote the app's text - prints as its
+  length, `a string of <n> character(s)`. The other fields `readTrace` checks
+  only as text print shaped too (#576 W58 NF2): a test id as a test id prints
+  (`shareableTestId`), a file dialog's trigger, an export format
+  or an oracle name only when it is one the harness defines
+  (`lib/traceStepFields.ts`), and a corpus id only in its 5-hex form; any
+  other value prints as its length. A step's relative path prints as itself
+  only when the repo tracks it, as a fixture name does: a path `git ls-files`
+  lists, or the session's copy of a tracked fixture (`fixtures/<name>`). Any
+  other - the session's own `fuzz-files/...` and `out/...` paths too - prints
+  as a tag, `<private-path#xxxxx>` (`crc32.shortId` of the path), so the steps
+  that name one file still agree (#576 W74-NF2, `shareableTracePath`): folding
+  replaces only the local roots, so a forged trace's `qzCave/x.dmp` printed
+  its names.
 - A scenario's progress lines (`   . <line>`) print in the headline form
   (`shareableProgressLine`): folded, and the app's text after a `<what>
   failed:` prefix replaced by its length. A scenario reports the app's text in
@@ -1067,14 +1120,16 @@ locations:
   that return those record their full results in the session's
   `actions.jsonl`. The server's stderr - an `app_start` build's output, whose
   cargo `Compiling` and Tauri `Built application at:` lines name the checkout -
-  is passed through a line at a time with the checkout folded to `<repo>` and
-  the home directory to `~` (#576 RV19b-P8, `lib/foldedLines.ts`), and so is
+  is passed through a line at a time, folded by `foldLocalPaths` (the checkout
+  to `<repo>`, the home directory to `~`, `CARGO_TARGET_DIR` to `<target>`,
+  the temp directory to `<tmp>`; #576 RV19b-P8, `lib/foldedLines.ts`), and so is
   it by `agent:bridge`, which inherited it before (#576 W51).
 - A session that builds - `agent:scenario`, `agent:journeys`, `agent:smoke`
   and the MCP server's `app_start`, and the Tier 2 OS helper's `cargo build
   --release` (`os/helper.ts`, #576 W51) - passes `pnpm tauri build`'s stdout and
-  stderr to its own stderr the same way, a line at a time with the checkout
-  folded to `<repo>` and the home directory to `~`, and folds its `Rebuilding:`
+  stderr to its own stderr the same way, a line at a time folded by
+  `foldLocalPaths` (so a `CARGO_TARGET_DIR` outside the checkout and the home
+  directory prints as `<target>`), and folds its `Rebuilding:`
   reasons and build log lines too (#576 W47-NF3, `lib/build.ts`
   `runBuildCommand`, `buildOutput.test.ts`).
 - `fuzz-matrix` prints a failed cell's FAIL block as the child wrote it. For
@@ -1104,7 +1159,10 @@ locations:
   they have the form the harness writes them in - a number, a word of the
   tool's fixed set, identifier characters - and so do the header's session
   id, commit, display and each step's number and tool; any other value, which
-  only a forged or hand-edited log holds, is its shape (#576 W49-NF1). A
+  only a forged or hand-edited log holds, is its shape (#576 W49-NF1). An
+  `ipc` step's Tauri plugin command keeps its `plugin:<name>|` prefix before
+  a command name, the `|` escaped for markdown (`plugin:dialog\|open`, #576
+  W58). A
   test id or a selector keeps its structure and the words the
   app's own source uses (#576 RV19b-P1, `scripts/lib/shareable-selector.mjs`):
   a test id - and an `#id`, an `id=` value or an attribute's value in a
@@ -1132,39 +1190,72 @@ locations:
   unknown scenario or journey name, a bad `STALAGMIGHT_AGENT_PLATFORM`,
   `STALAGMIGHT_AGENT_WINDOW_RECT` or `STALAGMIGHT_AGENT_DISPLAYS` entry, and
   what a trace file holds when it is refused or printed back (its header's
-  scenario, seed and iterations, a refused step value). A trace's knob name
-  prints when it reads `STALAGMIGHT_[A-Z0-9_]+`, its values, the fixture and
-  every path folded. A store value a scenario reports on the first line of an
-  error - an open dialog, an undo entry's command type - keeps only the words
-  of the app's source, as a test id does; a section name or a leftover temp
+  scenario, seed and iterations, a refused step value). A refused command-line
+  value shaped like a flag (`--sed`) or a number (`1.5`) prints as itself,
+  quoted, since neither shape can spell a path or a name (#576 W58 Q4,
+  `cliValueShape`). A trace's knob name
+  prints when it reads `STALAGMIGHT_[A-Z0-9_]+`, a knob's value only when the
+  knob is registered and the value has its shape (`lib/traceKnobs.ts`, #576
+  W58 Q9) and otherwise as its length, every path folded, and its fixture by
+  name only when the repo tracks it. A store value a scenario reports on the first line of an
+  error, in a progress line or in a metric key - an open dialog, an undo
+  entry's command type, the active tool, the app mode, the view, the import
+  context (#576 W58 Q11) - keeps only the words of the app's source, as a test
+  id does, so every real value prints as itself; a section name or a leftover temp
   file prints as its length or a count, and a metric key holds codes only
-  (`mapSkip:<code>`). `agent:smoke`'s `started:` line is folded and its
-  integrity check gives `<n> message(s), save_blocked=<bool>`;
-  `ipc-payload-probe.ts` gives serde's rejection as its length.
+  (`mapSkip:<code>`). `agent:smoke`'s `started:` line is folded, its X
+  display prints only as `:N` (any other `DISPLAY`, such as `localhost:10.0`
+  under `ssh -X`, as `<display>`; #576 W58 Q14), and its integrity check
+  gives `<n> message(s), save_blocked=<bool>`;
+  `ipc-payload-probe.ts` gives serde's rejection as its class from a fixed
+  set (`missing field`, `premature end of input`, ...; `lib/ipcPayloadProbe.ts`)
+  and its length, and reads an error that is none of them as `OTHER`, never
+  as an arrived body (#576 RV20-13).
+- To see what is withheld, locally: `STALAGMIGHT_AGENT_PRIVATE_ERRORS=1`
+  (#576 RV20-13, `lib/privateErrors.ts`) also keeps the whole text in a
+  private file - a session attach failure as an `attach-failed` event in the
+  session's `actions.jsonl`, each `ipc-payload-probe.ts` call's error in
+  `ipc-probe-errors.jsonl` in its session directory. Nothing more reaches
+  stdout, stderr or `report.md`: what a run prints is the same with it set or
+  not. Unset (the default), neither is written.
 - Every print and write site is checked in the source, not one at a time
   (#576 W51, `e2e/agent/lib/printSites/`). `printSites.test.ts` scans every
   non-test file of `e2e/agent`, `e2e/lib` and `scripts/` for what prints or
-  writes - `console.*`, `process.stdout`/`stderr.write`, `ctx.log`, a
-  `ctx.metric` key (the PASS/FAIL line prints the metrics), an error's
-  message (a runner prints its first line), a `report.md` step, a
-  file write or copy, a child process whose output is ours (`stdio:
-  'inherit'`, `execSync`'s default stderr), a sink handed on as a value - and
+  writes - every `console` method, `process.stdout`/`stderr.write`,
+  `process.emitWarning`, a context's `log` under any name (`ctx.log`,
+  `context.log`), a context's `metric` key (the PASS/FAIL line prints the
+  metrics), an error's message (`new Error(..)` or `Error(..)`; a runner
+  prints its first line), a line pushed into what `report.md` is joined
+  from, a file write or copy (`fs.writeSync` too), a child process whose
+  output is ours (`stdio: 'inherit'`, `execSync`'s default stderr), a sink
+  handed on as a value (`log = console.log`, `const c = console`, `import {
+  stdout } from 'node:process'`) - and
   fails on any value that reaches a shareable one unless it goes through a
   helper above, sits where the runner withholds it (after the first
   ` failed: ` of a first line, or on a later line), or has an entry in its
   group's allow-list (`allowRunners.ts`, `allowLib.ts`, `allowScenarios.ts`,
   `allowScripts.ts`) saying why it is a code, a count, a length, an integer, a
-  word the harness writes or a path folded by `foldLocalPaths`. A bare name is
-  allowed only in the function it was checked in, a path only folded. Every
+  word the harness writes or a path folded by `foldLocalPaths`. A value is
+  allowed only in the function it was checked in (a callback is a function of
+  its own, named by its call: `main > files.forEach`), a path only folded. Every
   file write is listed as shareable or private, every private one by a name
   in the list below, and every shell, Python, PowerShell and Rust program
   under those directories is classified too. A new site fails the test until
-  it is one of those.
+  it is one of those. A sink handed on is listed only where a declared
+  wrapper holds it (so its calls are checked sites), and no wrapper is
+  exported. The guard trusts a helper by its name and a reason by its words:
+  that a helper returns the shareable form, and that a value comes from where
+  its reason says, is held by behaviour tests (`scripts/generators.test.ts`
+  for `report.md`, the helpers' own tests in `e2e/agent/lib/`).
 
 **Not for sharing** - the full text, for triage where the run happened: the
 session's `actions.jsonl` (each `finding` event with its detail, each
 `scenario-failure` event with the whole failure message, each
-`scenario-progress` event with the whole progress line), `agent:journeys`'
+`scenario-progress` event with the whole progress line, each `private-fixture`
+event with the name of a fixture the repo does not track, an `attach-failed`
+event with the whole error under `STALAGMIGHT_AGENT_PRIVATE_ERRORS=1`),
+`ipc-probe-errors.jsonl` (`ipc-payload-probe.ts`'s whole error per call, under
+the same opt-in), `agent:journeys`'
 `uat/run.jsonl` (each check's detail, each abort reason), the screenshots
 (`screenshots/`, `findings/<n>/screenshot.png`, the journey checkpoints in
 `journeys/<journey>/`), the crash-marker copies in
@@ -1508,7 +1599,16 @@ is the same failure rather than a lookalike. A replayed run says so in its
 
 The recording's ENVIRONMENT is part of the repro, so `--trace` restores the
 header's `STALAGMIGHT_*` knobs (fixture, tolerance, stream, the persistence
-ones) and prints what it restored. Every knob is read at call time
+ones) and prints what it restored. The knobs a trace carries are a declared
+registry, each with the shape of its value (`lib/traceKnobs.ts`, #576 W58 Q9):
+a switch, a number, a stream name, a format list, a fixture name. A run
+records a knob's value only when it has that shape; any other value, and any
+knob the registry does not know, is recorded by its length in the header's
+`envWithheld`, and a replay leaves those as its own shell has them and says
+so. A replay restores, and a runner prints, only a registered knob's value of
+its shape; anything else in a trace is refused and printed as its length. A
+new knob is added to the registry with its shape (`traceKnobs.test.ts` fails
+on one the harness reads that is missing). Every knob is read at call time
 (`lib/fuzzKnobs.ts`), so the restore only has to precede the run; both
 `agent:scenario` and `agent:fuzz-shrink` still do it before importing the
 registry (dynamically), so a knob some module read at import time would not

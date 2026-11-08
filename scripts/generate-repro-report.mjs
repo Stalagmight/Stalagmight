@@ -13,6 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { foldLocalPaths } from './lib/fold-local-paths.mjs';
 import { shareableFinding } from './lib/shareable-finding.mjs';
 import { shareableSelector, shareableTestId } from './lib/shareable-selector.mjs';
 
@@ -28,9 +29,9 @@ const getFlag = (name) => {
 };
 const jsonlPath = path.join(sessionDir, 'actions.jsonl');
 if (!fs.existsSync(jsonlPath)) {
-  // Not the path itself: it is the one the caller gave, which can sit outside
-  // the checkout and name the user's own directories (#576 W51).
-  process.stderr.write('no actions.jsonl in <sessionDir>\n');
+  // Folded: it is the path the caller gave, which can name the user's own
+  // directories (#576 W51, W58).
+  process.stderr.write(`no actions.jsonl in ${foldLocalPaths(sessionDir)}\n`);
   process.exit(1);
 }
 
@@ -128,6 +129,18 @@ const word = (words, v) => (words.has(v) ? v : argShape(v));
  */
 const NAME = /^[\w.:-]{1,80}$/;
 const code = (v, shape = NAME) => (typeof v === 'string' && shape.test(v) ? v : argShape(v));
+/**
+ * An `ipc` step's command: a NAME, or a Tauri plugin command
+ * `plugin:<plugin>|<command>` whose command is a NAME (#576 W58). The `|` prints
+ * escaped (`plugin:dialog\|open`), as the report printed it before W49-NF1, so
+ * it cannot split a markdown table cell. Anything else - a space, a newline, a
+ * backtick, a second `|` - only a forged log holds, and is its shape.
+ */
+const PLUGIN_COMMAND = /^(plugin:[\w-]{1,80})\|([\w.:-]{1,80})$/;
+const ipcCommand = (v) => {
+  const plugin = typeof v === 'string' ? PLUGIN_COMMAND.exec(v) : null;
+  return plugin ? `${plugin[1]}\\|${plugin[2]}` : code(v);
+};
 /** `git rev-parse --short HEAD`, or `unknown` (e2e/agent/lib/build.ts `gitHeadFor`). */
 const GIT_HEAD = /^(?:[0-9a-f]{4,64}|unknown)$/;
 /** An X display (`:89`, `:0.0`) or macOS's `aqua`; a host-prefixed DISPLAY is the user's env. */
@@ -190,7 +203,7 @@ const describeKeys = (keys) => {
  * characters.
  */
 const OS_KEY_NAMES = new Set([
-  'cmd', 'command', 'meta', 'super', 'win', 'shift', 'alt', 'opt', 'option', 'ctrl', 'control', 'fn',
+  'cmd', 'command', 'meta', 'super', 'win', 'shift', 'alt', 'opt', 'option', 'ctrl', 'control', 'fn', 'function',
   'return', 'enter', 'escape', 'esc', 'tab', 'space', 'delete', 'backspace', 'forwarddelete',
   'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'help', 'keypadenter',
   'minus', 'equal', 'comma', 'period', 'slash', 'backslash', 'semicolon', 'quote',
@@ -367,7 +380,8 @@ P('');
 
 const outPath = path.join(sessionDir, 'report.md');
 fs.writeFileSync(outPath, md.join('\n'));
-process.stdout.write('wrote <sessionDir>/report.md\n');
+// Folded: the session dir is the caller's path (#576 W51, W58).
+process.stdout.write(`wrote ${foldLocalPaths(outPath)}\n`);
 
 function describeAction(a) {
   const p = a.params ?? {};
@@ -439,7 +453,7 @@ function describeAction(a) {
       return `${code(p.name)} (seed=${num(p.seed ?? 1)}${p.iterations != null ? `, iterations=${num(p.iterations)}` : ''})`;
     // Argument shapes, not values - see argShape. store_action args are positional.
     case 'ipc':
-      return `${code(p.command)}(${argShape(p.args ?? {})})`;
+      return `${ipcCommand(p.command)}(${argShape(p.args ?? {})})`;
     case 'store_action': {
       const list = p.args ?? [];
       return `${code(p.store)}.${code(p.action)}(${Array.isArray(list) ? list.map((v) => argShape(v)).join(', ') : argShape(list)})`;

@@ -20,7 +20,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { fixtureSourcePath } from './fixtures';
-import { foldLocalPaths } from './shareableFailure';
+import { cliShaped, foldLocalPaths } from './shareableFailure';
 
 /** A bad flag. The runner prints `.message`, then the usage line, then exits 2. */
 export class MatrixArgError extends Error {}
@@ -32,10 +32,11 @@ function bad(message: string): never {
 /**
  * A value the user typed that is not what the flag takes, as the refusal prints
  * it: its length (#576 W51). The refusal goes to stderr, which people paste, and
- * a stray argument can be a path or a name.
+ * a stray argument can be a path or a name. A token shaped like a flag or a
+ * number prints as itself, quoted (#576 W58 Q4): neither shape can be either.
  */
 function typed(raw: string): string {
-  return `a value of ${raw.length} character(s)`;
+  return cliShaped(raw) ? JSON.stringify(raw) : `a value of ${raw.length} character(s)`;
 }
 
 /** Size of session.ts's Xvfb display pool - one display per worker, so 5 is the ceiling. */
@@ -189,7 +190,7 @@ export function parseArgs(argv: string[]): Options {
     if (!token.startsWith('--')) bad(`unexpected argument, ${typed(token)}`);
     const eq = token.indexOf('=');
     const flag = eq >= 0 ? token.slice(2, eq) : token.slice(2);
-    if (!known.has(flag)) bad(`unknown flag, ${typed(flag)} after --`);
+    if (!known.has(flag)) bad(`unknown flag, ${typed(eq >= 0 ? token.slice(0, eq) : token)}`);
     // `--release` is a boolean switch; every other flag takes a value.
     if (flag === 'release' && eq < 0) {
       raw[flag] = '1';

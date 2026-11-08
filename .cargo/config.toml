@@ -12,4 +12,11 @@
 # Pinned by the stalagmight-persistence test
 # bundled_sqlite_omits_virtual_table_modules_and_extension_loading, which every
 # `cargo test --workspace` runs.
+#
+# Defence in depth for the app build only: this file does not travel with a
+# published crate, so a crates.io build of stalagmight-persistence or
+# stalx-reader has all of these compiled in. What those builds rely on is the
+# SQLite authorizer persistence installs on every connection to an existing
+# file, which refuses the same features whatever the build (#619); CI runs its
+# test on a build without these flags.
 LIBSQLITE3_FLAGS = { value = "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION", force = true }

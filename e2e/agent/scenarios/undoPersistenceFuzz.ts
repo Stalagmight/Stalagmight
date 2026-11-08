@@ -323,7 +323,7 @@ import {
   type UndoVariant,
 } from './undoPersistenceCoverage';
 import { TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
-import { foldLocalPaths } from '../lib/shareableFailure';
+import { shareableFixtureName } from '../lib/privateFixtures';
 import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import { initModel, injectOracle, type StepResponse } from './undoRedoFuzzBridge';
 
@@ -372,7 +372,7 @@ export const undoPersistenceFuzz: Scenario = {
     const fixture = fuzzFixture();
     // Folded (#576 W51): a metric key prints in the runner's PASS line
     // unfolded, and the fixture is the knob as the user wrote it.
-    ctx.setMetric(`fixture:${foldLocalPaths(fixture)}`, 1);
+    ctx.setMetric(`fixture:${shareableFixtureName(fixture)}`, 1);
     ctx.setMetric('plannedVariants', PLANNED_VARIANTS.length);
     const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-persist-fuzz-'));
 

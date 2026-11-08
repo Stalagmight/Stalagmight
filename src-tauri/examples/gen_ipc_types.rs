@@ -7,6 +7,7 @@ use std::sync::Mutex;
 
 use ts_rs::TS;
 
+use stalagmight_lib::commands::app_update::{AppUpdateCheck, AppUpdateProgress, AppUpdateStatus};
 use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStatsResponse};
 use stalagmight_lib::commands::export::DiveProfileRequest;
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
@@ -23,7 +24,7 @@ use stalagmight_lib::config::{
     PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset, ReserveProfile,
     SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
     StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
-    ThemeMode, TokenFallback, UnitsConfig, ValidationConfig,
+    ThemeMode, TokenFallback, UnitsConfig, UpdateTrack, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     Command, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
@@ -38,7 +39,8 @@ use stalagmight_lib::core::loading::{
 };
 use stalagmight_lib::core::outcome::{
     BatchOutcome, DeleteProjectOutcome, EditOutcome, HistoryOutcome, ImportOutcome,
-    ProjectFileOutcome, RemoteLinkBits, ReverseOutcome, SaveOutcome, SectionCreated, ShotCreated,
+    MergeProjectsOutcome, MergeSourceRepairs, ProjectFileOutcome, RemoteLinkBits, ReverseOutcome,
+    SaveOutcome, SectionCreated, ShotCreated,
 };
 use stalagmight_lib::core::state::{DisplaySettingTarget, ProjectIdentity, VirtualShotMode};
 use stalagmight_lib::core::WorkspaceMode;
@@ -72,7 +74,8 @@ use stalagmight_lib::parsers::tml::{
 };
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{
-    BackupInfo, BackupKind, RawTableData, RepairResult, SalvageWriteResult, SalvagedData,
+    BackupInfo, BackupKind, LoadRepairs, RawTableData, RepairResult, SalvageWriteResult,
+    SalvagedData,
 };
 use stalagmight_lib::speleodb::{
     AdoptUpload, DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult,
@@ -184,6 +187,10 @@ fn main() {
     export::<SaveOutcome>(&out_dir);
     export::<DeleteProjectOutcome>(&out_dir);
     export::<ProjectFileOutcome>(&out_dir);
+    // [#576 W57-NF2] merge_projects names what reading each source reset
+    export::<MergeProjectsOutcome>(&out_dir);
+    export::<MergeSourceRepairs>(&out_dir);
+    export::<LoadRepairs>(&out_dir);
     // Core command/result types
     export::<ReversedSection>(&out_dir);
     export::<ImportReceipt>(&out_dir);
@@ -410,6 +417,7 @@ fn main() {
     export::<LengthUnit>(&out_dir);
     export::<AngleUnit>(&out_dir);
     export::<ShortcutFeedback>(&out_dir);
+    export::<UpdateTrack>(&out_dir);
     export::<ThemeMode>(&out_dir);
     export::<ColorTheme>(&out_dir);
     export::<SpeleoDbConfig>(&out_dir);
@@ -417,6 +425,11 @@ fn main() {
     export::<ConfigSaveReport>(&out_dir);
     // [#576 D27-32(c)] one changed setting, for patch_config
     export::<ConfigPatch>(&out_dir);
+    // In-app updater (#579): the check answer, its status union, and the
+    // download-progress event payload.
+    export::<AppUpdateCheck>(&out_dir);
+    export::<AppUpdateStatus>(&out_dir);
+    export::<AppUpdateProgress>(&out_dir);
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
@@ -500,6 +513,9 @@ fn main() {
         "SaveOutcome",
         "DeleteProjectOutcome",
         "ProjectFileOutcome",
+        "MergeProjectsOutcome",
+        "MergeSourceRepairs",
+        "LoadRepairs",
         "ReversedSection",
         "ImportReceipt",
         "CommentHolder",
@@ -681,12 +697,16 @@ fn main() {
         "DpvUnit",
         "DpvRig",
         "ShortcutFeedback",
+        "UpdateTrack",
         "ThemeMode",
         "ColorTheme",
         "SpeleoDbConfig",
         "TokenFallback",
         "ConfigSaveReport",
         "ConfigPatch",
+        "AppUpdateCheck",
+        "AppUpdateStatus",
+        "AppUpdateProgress",
         "Permission",
         "SpeleoProjectSummary",
         "TokenStorage",

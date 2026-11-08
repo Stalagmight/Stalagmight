@@ -177,3 +177,45 @@ fn an_import_nobody_cancels_still_lands_and_frees_its_token() {
         2
     );
 }
+
+/// [#576 RV20-17] The parse runs under the import's Cancel flag, which the
+/// parsers' wait for a file lease watches, and a parse that gives up because
+/// Cancel was pressed ends as the cancelled import, not as a failed parse. The
+/// wait took no flag, so a Cancel pressed during it waited the open out.
+#[test]
+fn a_parse_that_gives_up_on_cancel_ends_as_the_cancelled_import() {
+    let state = state_with_project("CaveC");
+    let mut seen_by_the_parse = None;
+    let result = run_file_import(
+        &state,
+        Arc::new(SilentSink),
+        Some("import"),
+        &TEST_IMPORT,
+        Path::new("/tmp/synthetic.dat"),
+        None,
+        VirtualShotMode::Auto,
+        |_| {
+            // Cancel pressed while the file's open waits; the wait gives up.
+            state.cancel_loading(Some("import"));
+            seen_by_the_parse = Some(crate::parsers::cancel_pressed());
+            Err::<(), _>(anyhow::anyhow!("reading /tmp/synthetic.dat: cancelled"))
+        },
+        |()| Ok(one_section()),
+    );
+    println!(
+        "parse gave up on Cancel: Cancel seen by the parse {seen_by_the_parse:?}; code {:?}; \
+         message {:?}",
+        result.code, result.error
+    );
+    assert_eq!(
+        seen_by_the_parse,
+        Some(true),
+        "the parse runs under the import's Cancel flag"
+    );
+    assert_eq!(
+        result.code,
+        Some(crate::core::CommandErrorCode::ImportCancelled),
+        "the outcome is the cancelled import: {:?}",
+        result.error
+    );
+}

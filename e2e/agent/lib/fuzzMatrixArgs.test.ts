@@ -231,6 +231,23 @@ describe('the other flags still parse as they did', () => {
     expect(refusal('--workers', '0')).toBe('--workers needs a positive integer, got 0');
   });
 
+  it('echoes a refused value shaped like a flag or a number (#576 W58 Q4)', () => {
+    const refusal = (...argv: string[]): string => {
+      try {
+        parse(...argv);
+      } catch (err) {
+        return (err as Error).message;
+      }
+      return '';
+    };
+    expect(refusal('--nope', '1')).toBe('unknown flag, "--nope"');
+    expect(refusal('--nope=qzCaveA')).toBe('unknown flag, "--nope"');
+    expect(refusal('--seeds', '1,2.5')).toBe('--seeds: "2.5" is not an integer');
+    expect(refusal('--workers', '1.5')).toBe('--workers needs a positive integer, got "1.5"');
+    expect(refusal('-x')).toBe('unexpected argument, "-x"');
+    expect(refusal('--QzCaveA')).toBe('unknown flag, a value of 9 character(s)');
+  });
+
   it('takes fixture BASENAMES that exist', () => {
     // Whatever the tracked tree actually holds - naming one here would break the
     // day somebody adds or renames a fixture, which is not what this asserts.

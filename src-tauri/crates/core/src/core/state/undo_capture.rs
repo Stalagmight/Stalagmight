@@ -36,6 +36,7 @@ impl AppState {
                 before_shot_uuid: None,
                 uuid: None,
                 previous_offsets: project.capture_rigid_connected_section_offsets(*section_id),
+                legacy_comment_rows: Vec::new(),
             },
 
             // For DeleteSection, capture full project snapshot (before/after pair)
@@ -645,6 +646,25 @@ impl AppState {
                                 .and_then(|id| section.get_shot(id))
                                 .and_then(|anchor_shot| anchor_shot.uuid.clone())
                         };
+                        // [#576 RV20-6] The rows that name the new station under
+                        // a key other than its own (a legacy `Index` key past
+                        // the end, which an append makes name it): a save and
+                        // reopen gives them its key, and the undo's removal
+                        // would take them with the shot.
+                        let created =
+                            crate::models::StationRef::new(*section_id, (position + 1) as u32);
+                        let own_key = project.key_for_ref(created);
+                        let mut legacy_comment_rows: Vec<(StationKey, String)> = project
+                            .station_comments
+                            .iter()
+                            .filter(|(key, _)| {
+                                key.section_id == *section_id
+                                    && Some(*key) != own_key.as_ref()
+                                    && project.key_is_ref(key, created)
+                            })
+                            .map(|(key, text)| (key.clone(), text.clone()))
+                            .collect();
+                        legacy_comment_rows.sort_by(|(a, _), (b, _)| a.cmp(b));
                         UndoData::CreatedShotSnapshot {
                             section_id: *section_id,
                             shot_id,
@@ -657,6 +677,7 @@ impl AppState {
                             before_shot_uuid: anchor_uuid(*before_shot_id),
                             uuid: shot.uuid.clone(),
                             previous_offsets,
+                            legacy_comment_rows,
                         }
                     } else {
                         // The stub could not be completed, so it must not be

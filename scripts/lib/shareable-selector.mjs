@@ -69,14 +69,25 @@ const count = (text) => ({ n: String(text).length });
 const kept = (text) => ({ t: text });
 
 /**
- * A value's parts: the words that are numbers or `words` stay, and the span from
- * the first other word to the last is its length. An empty word (two separators
- * in a row) is only the separators.
+ * A lowercase source word of three letters or more with a counter glued on
+ * (`stage3` from `gas-readout-stage${i + 1}-reset`, #576 RV20-14). A short or
+ * capitalised stem stays counted: `A1` or `st4` reads like a station name.
+ */
+const COUNTED_WORD = /^([a-z]{3,})\d+$/;
+
+/**
+ * A value's parts: the words that are numbers, `words`, or a `COUNTED_WORD` of
+ * one of `words` stay, and the span from the first other word to the last is its
+ * length. An empty word (two separators in a row) is only the separators.
  */
 export function valueParts(value, words = codeWords()) {
   const text = String(value);
   const pieces = text.split(/([-_])/);
-  const isKnown = (word) => word === '' || /^\d+$/.test(word) || (/^[A-Za-z][A-Za-z0-9]*$/.test(word) && words.has(word));
+  const isKnown = (word) =>
+    word === '' ||
+    /^\d+$/.test(word) ||
+    (/^[A-Za-z][A-Za-z0-9]*$/.test(word) && words.has(word)) ||
+    words.has(COUNTED_WORD.exec(word)?.[1] ?? '');
   let first = -1;
   let last = -1;
   for (let i = 0; i < pieces.length; i += 2) {

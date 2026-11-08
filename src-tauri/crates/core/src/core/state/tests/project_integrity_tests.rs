@@ -1108,6 +1108,7 @@ fn redo_legacy_prepend_createshot_reanchors_section_start() {
             before_shot_uuid: None,
             uuid: Some("prep-uuid".to_string()),
             previous_offsets: HashMap::new(),
+            legacy_comment_rows: Vec::new(),
         },
         timestamp: None,
     };

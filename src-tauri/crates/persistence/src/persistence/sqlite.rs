@@ -384,10 +384,14 @@ impl InflationBudget {
 
     /// Take `bytes` out of the budget, or fail without taking anything.
     ///
-    /// `try_update` (formerly `fetch_update`, deprecated in Rust 1.99) rather than a
-    /// load followed by a store: two threads reserving concurrently off the same
-    /// observed remainder would each believe they fit, and the budget would be
-    /// overspent by exactly the amount it is meant to bound.
+    /// A `compare_exchange` loop rather than a load followed by a store: two threads
+    /// reserving concurrently off the same observed remainder would each believe they
+    /// fit, and the budget would be overspent by exactly the amount it is meant to
+    /// bound. A failed exchange retries against the remainder it saw instead.
+    ///
+    /// Written out by hand, not with `AtomicU64::try_update` (stable only since Rust
+    /// 1.95) or `fetch_update` (deprecated in Rust 1.99), so the crate builds on the
+    /// `rust-version` it declares.
     ///
     /// The message deliberately shares NO distinctive phrase with the pre-scan's: a test
     /// that asserts on "load budget" cannot tell which of the two refused it, and one
@@ -395,17 +399,24 @@ impl InflationBudget {
     /// ran. Assert on "while inflating" for this one, "declares" for the pre-scan.
     fn reserve(&self, bytes: u64) -> Result<()> {
         use std::sync::atomic::Ordering;
-        self.remaining
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                left.checked_sub(bytes)
-            })
-            .map_err(|left| {
-                anyhow::anyhow!(
+        let mut left = self.remaining.load(Ordering::SeqCst);
+        loop {
+            let Some(after) = left.checked_sub(bytes) else {
+                anyhow::bail!(
                     "history exceeded its inflation budget while inflating \
                      (a further {bytes} bytes requested with {left} left)"
-                )
-            })?;
-        Ok(())
+                );
+            };
+            match self.remaining.compare_exchange_weak(
+                left,
+                after,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(now) => left = now,
+            }
+        }
     }
 
     /// Hand back a reservation that turned out to be larger than the real output.
@@ -645,6 +656,19 @@ pub use schema_guard::{
 };
 pub use warnings::MAX_CARRIED_RESOLVED_WARNINGS;
 
+pub use schema_guard::deny_stripped_sqlite_features;
+
+/// [#619] The probes the authorizer tests run, shared with `stalx-reader`'s:
+/// see the module doc.
+#[cfg(any(test, feature = "test-support"))]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test support: panics on a failed assumption are the point, and the printed \
+              per-probe outcomes are the evidence a run captures"
+)]
+pub mod untrusted_sql_probes;
+
 /// A stringified page of rows from a raw sqlite table.
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../bindings/")]
@@ -743,6 +767,32 @@ pub struct SalvageWriteResult {
     pub merge_count: usize,
     /// Errors encountered while reading individual tables
     pub errors: Vec<String>,
+    /// [#576 Q-W30-2-D1] Whether the file holds the whole project. `false` when
+    /// the project could not be read as a whole: the file then holds only what
+    /// could be read of the sections (their names, surveyors, dates and
+    /// colours), or nothing - never the shots or merges the counts above found.
+    pub project_included: bool,
+}
+
+impl SalvagedData {
+    /// What the salvage export writes, and what it answers about it (#576
+    /// HFI-3, W30-5): the whole project's JSON when the project could be read,
+    /// else the sections' JSON, else `{}` - and the counts and warnings of this
+    /// read, with [`SalvageWriteResult::project_included`] saying which.
+    pub fn into_export(self) -> (String, SalvageWriteResult) {
+        let written = SalvageWriteResult {
+            section_count: self.section_count,
+            shot_count: self.shot_count,
+            merge_count: self.merge_count,
+            errors: self.errors,
+            project_included: self.full_project_json.is_some(),
+        };
+        let content = self
+            .full_project_json
+            .or(self.sections_json)
+            .unwrap_or_else(|| "{}".to_owned());
+        (content, written)
+    }
 }
 
 /// Minimal section info for salvage display.
@@ -924,6 +974,13 @@ mod open_order_tests;
               values are the evidence a run captures"
 )]
 mod schema_guard_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod untrusted_sql_tests;
 
 #[cfg(test)]
 #[expect(

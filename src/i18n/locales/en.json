@@ -104,7 +104,22 @@
         "undoHistory": "Undo History",
         "feedback": "Feedback",
         "startup": "Startup",
-        "privacy": "Privacy"
+        "privacy": "Privacy",
+        "updates": "Updates"
+      },
+      "updateCheck": {
+        "label": "Check for updates automatically",
+        "help": "Checks GitHub for new releases shortly after Stalagmight starts. Checking contacts GitHub; nothing is downloaded until you choose to.",
+        "aria": "Enable automatic update checks"
+      },
+      "updateTrack": {
+        "label": "Update track",
+        "help": "Stable releases are the recommended default. Weekly builds get new features sooner, with less testing.",
+        "aria": "Update track preference",
+        "options": {
+          "stable": "Stable",
+          "weekly": "Weekly"
+        }
       },
       "telemetry": {
         "label": "Share anonymous usage statistics",
@@ -1341,6 +1356,7 @@
         "merges": "{{count}} merge(s)",
         "noData": "no recoverable data",
         "savedTo": "Saved to {{path}}\n\nRecovered: {{summary}}",
+        "projectNotIncluded": "Shots and merges are not included: the project itself could not be read, so only what could be read of its sections was saved.",
         "warnings": "Warnings:\n{{list}}"
       },
       "busy": {
@@ -1681,6 +1697,7 @@
         "correctionAria": "Correction to true north, in degrees east",
         "correctionUnit": "° east",
         "blocked": {
+          "update": "An update is installing: the north reference cannot be changed until it finishes.",
           "newerFile": "A newer version of Stalagmight saved this project: update Stalagmight to change the north reference.",
           "lock": "This project is open read-only: acquire the lock to change the north reference.",
           "workspace": "The north reference turns the survey: switch to Survey to change it.",
@@ -2294,6 +2311,13 @@
       "description": "Desktop application for processing underwater cave survey data.",
       "website": "stalagmight.com",
       "close": "Close",
+      "channel": "Channel: {{channel}}",
+      "track": "Update track: {{track}}",
+      "trackPending": "(unsaved change pending)",
+      "checkUpdates": "Check for updates",
+      "upToDate": "You're up to date on Stalagmight {{current}}",
+      "updateAvailable": "You're on Stalagmight {{current}} - {{version}} is available, see the update banner",
+      "checkFailed": "Could not check for updates",
       "mapImagery": {
         "title": "Map imagery"
       }
@@ -3152,6 +3176,8 @@
     "loadRepairs": {
       "lead": "Some stored values could not be used and were changed when this project opened: {{items}}.",
       "detail": "Saving makes the change permanent. Details are in the log.",
+      "mergeLead": "Some stored values in {{name}} ({{file}}) could not be used and were changed in the merged project: {{items}}.",
+      "mergeDetail": "The source files are unchanged. Details are in the log.",
       "dismiss": "Dismiss",
       "items": {
         "shots_one": "{{count}} shot with an invalid value reset",
@@ -3161,7 +3187,9 @@
         "stationOffsets_one": "{{count}} station move reset",
         "stationOffsets_other": "{{count}} station moves reset",
         "gpsPoints_one": "{{count}} GPS tie point dropped",
-        "gpsPoints_other": "{{count}} GPS tie points dropped"
+        "gpsPoints_other": "{{count}} GPS tie points dropped",
+        "stationComments_one": "{{count}} station comment past the end of its section dropped",
+        "stationComments_other": "{{count}} station comments past the end of their sections dropped"
       }
     },
     "newerFile": {
@@ -3185,6 +3213,25 @@
       }
     }
   },
+  "updateBanner": {
+    "available": "Stalagmight {{version}} is available",
+    "download": "Download",
+    "releaseNotes": "Release notes",
+    "dismiss": "Dismiss",
+    "downloading": "Downloading update…",
+    "restart": "Restart to update",
+    "toasts": {
+      "downloadFailed": "Could not download the update. Try again from the update banner.",
+      "installFailed": "Could not install the update. Download it again from the update banner."
+    }
+  },
+  "updateInstall": {
+    "title": "Installing update…",
+    "titleVersion": "Installing Stalagmight {{version}}…",
+    "body": "Stalagmight restarts when the install finishes. The project cannot be changed until then.",
+    "progressAria": "Installing update",
+    "editRefused": "An update is installing - the project cannot be changed until it finishes."
+  },
   "integrityRepair": {
     "toasts": {
       "issue_one": "issue",
@@ -3196,6 +3243,7 @@
       "failed": "Repair failed - nothing was changed. Please try again."
     },
     "blocked": {
+      "update": "An update is installing",
       "newerFile": "Update Stalagmight to repair",
       "lock": "Acquire the lock to repair",
       "workspace": "Switch to Survey to repair",
@@ -4088,7 +4136,7 @@
       "forceEditActive": "You are force-editing without the write lock. Finish or discard those edits (reconnect or save a local copy) before you can view or restore a revision.",
       "unknownAuthor": "unknown author",
       "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - take the write lock and upload your changes first, or use Revert (that route asks before replacing them).",
-      "viewBlockedByUnreadable": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. Viewing a revision replaces that copy, so nothing was replaced - if another program is using the file, close it and try again, or use Revert (that route asks before replacing it)."
+      "viewBlockedByUnreadable": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. The file may also be damaged. Viewing a revision replaces that copy, so nothing was replaced - if another program is using the file, close it and try again, or use Revert (that route asks before replacing it)."
     },
     "restore": {
       "title": "Restore revision {{sha}}",
@@ -4097,9 +4145,11 @@
       "unsavedWarning": "You have unsaved changes that will be discarded.",
       "confirmButton": "Restore revision",
       "discardWarning": "The working copy has changes that are not on SpeleoDB - including any earlier restore you have not pushed. Restoring this revision replaces them, and they are not on the server, so this cannot be undone.",
-      "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. Restoring this revision replaces that copy, so any such changes would be lost, and this cannot be undone.",
+      "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. The file may also be damaged. Restoring this revision replaces that copy, so any such changes would be lost, and this cannot be undone.",
       "discardOffer": "Replace my changes & restore",
       "discardConfirm": "Yes, replace my changes & restore",
+      "unreadableDiscardOffer": "Replace the local copy & restore",
+      "unreadableDiscardConfirm": "Yes, replace the local copy & restore",
       "restoring": "Restoring…",
       "doneToast": "Restored to revision {{sha}}. Push to make it the latest.",
       "viewToast": "Viewing revision {{sha}}. Use Update to return to the latest.",
@@ -4166,13 +4216,15 @@
       "consequence": "Your project history is not rewritten - the revert lands as a new revision on top of the current one. When it finishes the project is read-only again, exactly as it is now.",
       "unsavedWarning": "You have changes that are not saved to disk. Save or discard them first - a revert replaces the working copy, so it cannot keep them.",
       "unpushedWarning": "This copy has changes that are not on SpeleoDB. A revert replaces them, and they are not on the server, so this cannot be undone.",
-      "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. A revert replaces that copy, so any such changes would be lost, and this cannot be undone.",
+      "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. The file may also be damaged. A revert replaces that copy, so any such changes would be lost, and this cannot be undone.",
       "messageLabel": "Commit message",
       "commitMessage": "Revert to revision {{sha}}",
       "confirmButton": "Revert",
       "reverting": "Reverting…",
       "discardOffer": "Replace my changes & revert",
       "discardConfirm": "Yes, replace my changes & revert",
+      "unreadableDiscardOffer": "Replace the local copy & revert",
+      "unreadableDiscardConfirm": "Yes, replace the local copy & revert",
       "retryUpload": "Retry the upload",
       "steps": {
         "locking": "Taking the write lock…",
@@ -4257,9 +4309,11 @@
       "takeRemoteConfirm": "Yes, discard my changes",
       "unreadable": {
         "title": "The copy on this computer could not be read",
-        "message": "\"{{name}}\" has already been opened on this computer, but that local copy could not be read, so we cannot tell whether it has changes SpeleoDB has never seen. A save may have been interrupted, or another program may be using it. Nothing has been downloaded yet.",
+        "message": "\"{{name}}\" has already been opened on this computer, but that local copy could not be read, so we cannot tell whether it has changes SpeleoDB has never seen. A save may have been interrupted, or another program may be using it. The file may also be damaged. Nothing has been downloaded yet.",
         "keepHint": "Keeping the local copy downloads nothing and overwrites nothing. Opening it lets an interrupted save roll back to the last one that finished; if another program is using the file, close it first.",
-        "discardWarning": "Taking the server copy permanently replaces the copy of \"{{name}}\" on this computer. It could not be read, so any changes in it that are not on SpeleoDB would be lost, and this cannot be undone."
+        "discardWarning": "Taking the server copy permanently replaces the copy of \"{{name}}\" on this computer. It could not be read, so any changes in it that are not on SpeleoDB would be lost, and this cannot be undone.",
+        "takeRemote": "Take the server copy & replace the local copy",
+        "takeRemoteConfirm": "Yes, replace the local copy"
       }
     },
     "transport": {

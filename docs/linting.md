@@ -70,7 +70,7 @@ Production code may not use (see `[workspace.lints.clippy]` for the full list + 
 
 - **Panic safety:** `unwrap_used`, `expect_used`, `panic`, `unwrap_in_result`
 - **Debug artifacts:** `dbg_macro`, `todo`, `unimplemented`, `print_stdout`, `print_stderr`
-- **Clone/string spam:** `inefficient_to_string`, `clone_on_ref_ptr`, `rc_clone_in_vec_init` (`string_to_string` was denied here until clippy removed it; its successor `implicit_clone`, which also flags `String.to_string()`, is at warn)
+- **Clone/string spam:** `inefficient_to_string`, `clone_on_ref_ptr`, `rc_clone_in_vec_init`, `implicit_clone` (`string_to_string` was denied here until clippy removed it; its successor `implicit_clone` flags `String.to_string()` and the other implicit clones - `to_owned`/`to_vec`/`to_path_buf` on an already-owned value - and is denied in its place)
 - **Hygiene:** `wildcard_imports`, `allow_attributes` (you can't silence lints with `#[allow]`), `wildcard_dependencies`, `redundant_type_annotations`, `mem_forget`, `lossy_float_literal`, `needless_pass_by_ref_mut`, `semicolon_if_nothing_returned`, `explicit_into_iter_loop`
 - **Async footguns:** `await_holding_lock`, `await_holding_refcell_ref`
 - **`[workspace.lints.rust]`:** `unsafe_code`, `unused_must_use`, `unused_qualifications`, `unreachable_pub`
@@ -132,6 +132,7 @@ clean tree.
 | `too_many_arguments` (deny), `cognitive_complexity`, `too-many-lines-threshold` | - | Contradict deliberate `allow`s for the complex geometry/numerical code. |
 | `transmute_ptr_to_ref`, `cast_ptr_alignment` | - | Redundant: `unsafe_code = "deny"` already blocks anything that needs `unsafe`. |
 | `cargo_common_metadata`, `multiple_crate_versions` | 15 / 44 | Matter for *published* crates; this is a private app binary with a large transitive tree. |
+| `deprecated_in_future` (rustc) | - | Flags APIs a *future* Rust release will deprecate. CI builds on floating stable, so denying it would let a toolchain bump alone break the `check` job with no change on our side. Not denied, by decision (#576 Q-W52-1-D1). |
 
 ## Frontend: ESLint
 

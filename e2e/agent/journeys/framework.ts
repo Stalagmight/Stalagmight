@@ -19,7 +19,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { shareableFailureText } from '../lib/shareableFailure';
+import { errorMessageOf, shareableFailureText } from '../lib/shareableFailure';
 import type { ScenarioContext, ScenarioTarget } from '../scenarios/framework';
 import { makeContext } from '../scenarios/framework';
 
@@ -101,7 +101,9 @@ export async function runJourney(
   try {
     await journey.run(ctx);
   } catch (err) {
-    aborted = err instanceof Error ? err.message : String(err);
+    // A third-party error's first line is marked as one (#576 W58 Q3): the
+    // verdict line and the ledger print it as its length, run.jsonl keeps it.
+    aborted = errorMessageOf(err);
   }
   // A journey that recorded no checks asserted nothing - a silent PASS from a
   // spec whose early guards all bailed is exactly the vacuous-test defect the

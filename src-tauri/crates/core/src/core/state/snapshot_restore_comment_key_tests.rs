@@ -11,21 +11,33 @@
 //! re-anchored the key onto the appended shot, so undoing the append then
 //! deleted the comment together with the shot.
 //!
+//! [#576 Q-W30-3-D1] An open now drops a row past the end of its section, so
+//! the legacy key is built in memory right after the open
+//! (`station_comment_display_tests::seed_legacy_comment_rows`), exactly as
+//! the open used to leave it; it can still come from undo history an older
+//! build persisted.
+//!
+//! [#576 W57-NF1] Every restore now drops a comment key that names no station,
+//! as the open does (`orphan_comment_restore_tests`): undoing the append as well
+//! leaves the legacy key past the end, so it is dropped, and the redo does not
+//! bring it back.
+//!
 //! All data is synthetic: a file this build saved, then rows added with plain
 //! SQL (`station_comment_display_tests::file_with_comment_rows`). No fixture is
 //! read or written.
 
 use tempfile::TempDir;
 
+use super::orphan_comment_restore_tests::orphan_keys;
 use super::station_comment_display_tests::{
-    file_with_comment_rows, save_and_reopen, shot_ids, shown_comment,
+    file_with_comment_rows, save_and_reopen, seed_legacy_comment_rows, shot_ids, shown_comment,
 };
 use super::station_comment_legacy_key_tests::{
     append_shot, redo, station_holder, stored_rows, undo,
 };
 use super::AppState;
 use crate::core::Command;
-use crate::models::StationRef;
+use crate::models::{StationKey, StationRef};
 use crate::test_fixtures::state_with_null_sink;
 
 /// The edit a run makes once the append has made the file's past-the-end
@@ -66,14 +78,23 @@ fn apply(state: &AppState, sid: u32, edit: Edit) {
     assert!(result.success, "{edit:?}: {:?}", result.error);
 }
 
+/// `rows` (as `stored_rows` lists them) without the rows stored under `keys`.
+fn without_keys(rows: &[String], keys: &[StationKey]) -> Vec<String> {
+    rows.iter()
+        .filter(|row| !keys.iter().any(|key| row.starts_with(&format!("{key:?}="))))
+        .cloned()
+        .collect()
+}
+
 /// The stored comment keys are exactly the ones each history step recorded:
-/// undo and redo of the edit, then of the append under it too. Last, what a
-/// save writes and the reopen shows agree with what the stations show.
+/// undo and redo of the edit, then of the append under it too - except a key
+/// that names no station, which every restore drops (#576 W57-NF1). Last, what
+/// a save writes and the reopen shows agree with what the stations show.
 #[test]
 fn a_snapshot_restore_keeps_the_comment_keys_it_recorded() {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
-    let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
+    let (path, sid) = file_with_comment_rows(temp.path(), &[]);
     for edit in [
         Edit::MoveComment,
         Edit::SetStationComment,
@@ -82,12 +103,16 @@ fn a_snapshot_restore_keeps_the_comment_keys_it_recorded() {
     ] {
         let state = state_with_null_sink();
         state.do_load_project_full(path.clone()).unwrap();
+        seed_legacy_comment_rows(&state, sid, &[(3, "comment past the end")]);
         let loaded = stored_rows(&state);
         let loaded_blocked = state.integrity_check().save_blocked;
         append_shot(&state, sid);
         let before_edit = stored_rows(&state);
         apply(&state, sid, edit);
         let after_edit = stored_rows(&state);
+        // The delete leaves the legacy key past the end: an orphan the redo's
+        // restore drops.
+        let left_by_edit = orphan_keys(&state);
         undo(&state);
         let after_undo = stored_rows(&state);
         redo(&state);
@@ -115,22 +140,30 @@ fn a_snapshot_restore_keeps_the_comment_keys_it_recorded() {
             after_undo, before_edit,
             "{edit:?}: undo restores the keys the edit replaced"
         );
+        let seeded = [StationKey::positional(sid, 3)];
         assert_eq!(
-            after_redo, after_edit,
-            "{edit:?}: redo restores the edit's keys"
+            after_redo,
+            without_keys(&after_edit, &left_by_edit),
+            "{edit:?}: redo restores the edit's keys, an orphan left out"
+        );
+        assert!(
+            loaded_blocked,
+            "{edit:?}: fixture: the seeded key blocks the save"
         );
         assert_eq!(
-            after_undo_both, loaded,
-            "{edit:?}: undoing the append as well keeps the file's comment"
+            after_undo_both,
+            without_keys(&loaded, &seeded),
+            "{edit:?}: undoing the append as well leaves the legacy key past the end, \
+             an orphan the undo drops"
+        );
+        assert!(
+            !undone_blocked,
+            "{edit:?}: with the orphan gone nothing blocks the save"
         );
         assert_eq!(
-            undone_blocked, loaded_blocked,
-            "{edit:?}: the save is refused as it was at the open, not let through \
-             without the comment"
-        );
-        assert_eq!(
-            after_redo_both, after_edit,
-            "{edit:?}: redoing both gives the edit's keys again"
+            after_redo_both,
+            without_keys(&after_edit, &seeded),
+            "{edit:?}: redoing both gives the edit's keys again, without the orphan"
         );
 
         // A save of the edited project, where one is allowed (the delete leaves

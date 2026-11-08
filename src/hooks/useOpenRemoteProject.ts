@@ -586,8 +586,10 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * link seed + rollback), so the two branches can never drift apart.
    *
    * One thing the shared tail must be told, because this branch is NOT a pull:
-   * the copy is DIRTY, and we know it. This branch is reachable only because the
-   * backend refused the open over edits the server has never seen. The tail's
+   * the copy may hold edits the server has never seen. This branch is reachable
+   * only because the backend refused the open over such edits - or, for a copy it
+   * could not read (`state_unknown`, #576 W53), because it could not rule them out,
+   * and then the safe assumption is the same. The tail's
    * default seed says `hasUnpushedEdits: false`, and that value is exactly what
    * `guardQuit` and the status button's warning read - so seeding it clean
    * disarmed the quit guard for the one project proven to have work at risk,
@@ -635,6 +637,8 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         { local_path: localPath, concurrent_session: false },
         summary.permission,
         summary.id,
+        // Dirty, or (an unreadable copy) possibly dirty: either way the quit guard
+        // stays armed until a status poll reads the link (#576 RV20-21).
         { hasUnpushedEdits: true },
       );
     },

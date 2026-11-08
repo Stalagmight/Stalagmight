@@ -4,7 +4,13 @@ import { IPC_EVENTS, listenIpc } from '../utils/ipcEvents';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { debugLog } from '../utils/debugLog';
-import { consumeQuitConfirmation } from '../utils/quit';
+import { consumeQuitConfirmation, consumeUpdateRestartArmed, abandonUpdateRestart } from '../utils/quit';
+import { invokeIpc } from '../utils/ipc';
+import { useUIStore } from '../store/uiStore';
+import { useUpdateStore } from '../store/updateStore';
+import { TOAST_KEYS } from '../utils/toastKeys';
+import { holdAutosave } from '../utils/autosaveHold';
+import i18n from '../i18n';
 
 /**
  * Hook to show a confirmation dialog when the user tries to close the app window
@@ -160,7 +166,12 @@ export function useBeforeUnload(
             } finally {
               isShowingDialog.current = false;
             }
-            if (!proceed) return;
+            if (!proceed) {
+              // [#579] The user declined the exit outright, so an update
+              // restart that was riding on it is abandoned - on both sides.
+              abandonUpdateRestart();
+              return;
+            }
             tier1Confirmed.current = true;
           }
 
@@ -192,6 +203,59 @@ export function useBeforeUnload(
           // Mark that we're closing, so a close request arriving while `destroy()`
           // is in flight is ignored rather than running this whole flow again.
           isClosing.current = true;
+
+          // [#579] An update restart armed by `requestUpdateRestart` has now
+          // passed every guard exactly like a plain quit would - swap the
+          // destroy for the install-and-restart command instead. A rejection
+          // (the download went stale, disk full, etc.) leaves the window open
+          // with an error toast, rather than destroying a window the update
+          // never actually applied to.
+          if (consumeUpdateRestartArmed()) {
+            // [#576 D34] The guarantee `performQuit` gives a quit, for as long as
+            // this one takes: the user may have just chosen "Discard & Quit", and
+            // the install can outlast the quit confirmation's hold (it writes the
+            // whole new bundle before the restart), so autosave must not write the
+            // discarded edits into the project while it runs. Released however the
+            // install ends - a failed install leaves the app running, and autosave
+            // with it, as a refused quit does.
+            const releaseAutosave = holdAutosave();
+            // [#579 x #576] The install runs off the main thread, so the window stays
+            // live while it writes the new bundle - and the user has already passed
+            // the unsaved-changes prompt, so an edit made now would be dropped by the
+            // restart without a word. Hold the project still until the install ends:
+            // the overlay takes the screen and keyboard, and the editing gate and the
+            // mutation queue refuse edits. Lifted only when the install fails; a
+            // successful one ends the process.
+            useUpdateStore.getState().setInstalling(true);
+            try {
+              await invokeIpc('install_app_update_and_restart', undefined, {
+                purpose: 'install downloaded app update and restart',
+              });
+              // Never returns on success - the process exits from under us.
+            } catch (e) {
+              console.error('[useBeforeUnload] install_app_update_and_restart failed:', e);
+              // The app stays up: give the project back before saying why.
+              useUpdateStore.getState().setInstalling(false);
+              // The backend arm was spent by the attempt itself, so there is
+              // nothing left to unarm; what has to be undone is the BANNER,
+              // which is sitting on "ready" offering a restart that just
+              // failed. Dropping it back to "available" re-offers Download,
+              // which is the only action that can recover - the bytes may well
+              // be the reason the install failed.
+              useUpdateStore.getState().setDownloadFailed();
+              useUIStore
+                .getState()
+                .showToast(
+                  i18n.t('updateBanner.toasts.installFailed'),
+                  TOAST_KEYS.APP_UPDATE_INSTALL_FAILED,
+                  'error',
+                );
+              isClosing.current = false;
+            } finally {
+              releaseAutosave();
+            }
+            return;
+          }
 
           // Destroy the window. Both the latch above and the unregister below are
           // one-way, and `destroy()` CAN reject (a revoked/regressed

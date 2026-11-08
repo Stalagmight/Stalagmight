@@ -7,6 +7,7 @@
  * teardown because only it knows the stop reason to record.
  */
 import { remote, type Browser } from 'webdriverio';
+import { recordPrivateError } from './privateErrors';
 import { waitForAppReady, waitForE2EHooks, disableOnboardingGuides } from './waiters';
 
 /** verifyReadiness failure that means the binary itself is wrong, not slow. */
@@ -19,10 +20,16 @@ export class E2EHooksMissingError extends Error {
   }
 }
 
+/**
+ * `recorder`: the session's, which keeps the whole failure as an `attach-failed`
+ * event of its actions.jsonl when the developer opted in
+ * (STALAGMIGHT_AGENT_PRIVATE_ERRORS=1, `privateErrors.ts`); a runner prints it withheld.
+ */
 export async function attachBrowser(
   port: number,
   capabilities: Record<string, unknown>,
   driverName = 'tauri-driver',
+  recorder?: { event(event: string, detail?: unknown): void },
 ): Promise<Browser> {
   try {
     return await remote({
@@ -37,19 +44,25 @@ export async function attachBrowser(
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    const failed = (error: Error): Error => {
+      recordPrivateError(recorder, 'attach-failed', error);
+      return error;
+    };
     if (msg.includes('UND_ERR_INVALID_ARG')) {
-      throw new Error(
-        `Failed to attach to ${driverName} (UND_ERR_INVALID_ARG), an error from webdriverio's ` +
-          `undici HTTP layer. You are on Node ${process.versions.node}. Session creation is ` +
-          'known to work on Node 22 and 24, so this is more likely a bad dispatcher/proxy ' +
-          'option or an HTTP_PROXY/NO_PROXY in the environment than the Node version. If a ' +
-          'different Node major does fix it, please record which one in docs/agent-harness.md.',
+      throw failed(
+        new Error(
+          `Failed to attach to ${driverName} (UND_ERR_INVALID_ARG), an error from webdriverio's ` +
+            `undici HTTP layer. You are on Node ${process.versions.node}. Session creation is ` +
+            'known to work on Node 22 and 24, so this is more likely a bad dispatcher/proxy ' +
+            'option or an HTTP_PROXY/NO_PROXY in the environment than the Node version. If a ' +
+            'different Node major does fix it, please record which one in docs/agent-harness.md.',
+        ),
       );
     }
     // WebDriver's error can quote the driver's reply (the binary's path, the
     // app's text), so it ends a `failed:` headline, which the runners print as
     // its length (#576 W51).
-    throw new Error(`Failed to attach to ${driverName} on port ${port}; the session request failed: ${msg}`);
+    throw failed(new Error(`Failed to attach to ${driverName} on port ${port}; the session request failed: ${msg}`));
   }
 }
 

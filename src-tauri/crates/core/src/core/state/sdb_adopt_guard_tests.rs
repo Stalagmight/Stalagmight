@@ -162,3 +162,66 @@ fn a_confirmed_discard_still_rebuilds_over_the_edits() {
         "the copy was rebuilt from the server's file"
     );
 }
+
+/// `path` with an SQLite sidecar suffix (`-journal`, `-wal`, `-shm`).
+fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// The linked cache copy at `dest` behind its OWN hot rollback journal, as a
+/// kill or power loss mid-save leaves it: the file caught mid-transaction after
+/// a cache spill (header synced), copied together with its `-journal`. Nothing
+/// has opened it since, so the journal is still there.
+fn seed_behind_its_own_hot_journal(dir: &Path, dest: &Path) {
+    let live = dir.join("live.stalx");
+    let mut db = Database::open(&live).unwrap();
+    db.save_project(&Project::new("CaveA".to_string(), None))
+        .unwrap();
+    db.save_speleo_link(Some(&link(false))).unwrap();
+    drop(db);
+    let conn = rusqlite::Connection::open(&live).unwrap();
+    conn.execute_batch(
+        "PRAGMA journal_mode = DELETE; CREATE TABLE junk(x);
+         PRAGMA cache_size = 1; BEGIN;
+         INSERT INTO junk SELECT hex(randomblob(2000)) FROM
+           (WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200)
+            SELECT i FROM n);",
+    )
+    .unwrap();
+    std::fs::copy(&live, dest).unwrap();
+    std::fs::copy(sidecar(&live, "-journal"), sidecar(dest, "-journal")).unwrap();
+    conn.execute_batch("ROLLBACK").unwrap();
+}
+
+/// [#576 RV20-2] An adoption over a cache copy behind a hot journal installs
+/// the adopted file and opens it. The adoption renamed its staged file over the
+/// copy and left the copy's `-journal` beside it, so the reopen played the old
+/// file's pages into the adopted one: "Database file may be corrupted", with no
+/// project open. The discard is confirmed (`None`): unconfirmed, the guard
+/// refuses a copy it cannot read past such a journal.
+#[test]
+fn an_adoption_over_a_copy_behind_a_hot_journal_opens_the_adopted_file() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let dest = temp.path().join("project.stalx");
+    let remote = remote_file(temp.path());
+    seed_behind_its_own_hot_journal(temp.path(), &dest);
+    let state = state_with_null_sink();
+
+    let adopted = adopt(&state, None, &remote, &dest);
+    let journal_left = sidecar(&dest, "-journal").exists();
+    let integrity: Result<String, String> = rusqlite::Connection::open(&dest)
+        .and_then(|conn| conn.query_row("PRAGMA integrity_check", [], |row| row.get(0)))
+        .map_err(|e| e.to_string());
+    let sections = state.get_project_state().map(|p| p.sections.len());
+    println!(
+        "adoption over a copy behind its hot journal -> {adopted:?}; journal left: \
+         {journal_left}; integrity {integrity:?}; sections open {sections:?}"
+    );
+    assert!(adopted.is_ok(), "the adoption completes: {adopted:?}");
+    assert_eq!(integrity.as_deref(), Ok("ok"), "the adopted file is intact");
+    assert!(!journal_left, "the old copy's journal is gone");
+    assert_eq!(sections, Some(1), "the adopted project is open");
+}

@@ -137,10 +137,10 @@ fn export_format_with_notes(
                 path = ?path,
                 purpose = "export project for sharing",
                 format = format,
-                reason = %e,
+                reason = %format_args!("{e:#}"),
                 "{} export failed", format.to_uppercase()
             );
-            Err(e.to_string())
+            Err(format!("{e:#}"))
         }
     }
 }
@@ -298,12 +298,12 @@ pub async fn export_image<R: Runtime>(
                 path = ?path,
                 purpose = "export map image for sharing",
                 format = ?options.format,
-                reason = %e,
+                reason = %format_args!("{e:#}"),
                 "Image export failed"
             );
         }
 
-        result.map_err(|e| CommandError::failed(e.to_string()))
+        result.map_err(|e| CommandError::failed(format!("{e:#}")))
     })
     .await
 }

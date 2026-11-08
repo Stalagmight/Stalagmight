@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'url';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 
+import { noteFixtureName } from './privateFixtures';
 import { foldLocalPaths } from './shareableFailure';
 
 /**
@@ -26,6 +27,9 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 export const DEFAULT_FIXTURE = 'fractal_plant_iter3.stalx';
 
 export function fixtureSourcePath(name: string): string {
+  // Every fixture a run opens or checks comes through here: one the repo does
+  // not track is folded to its tag in shareable output from now on (#576 W58 Q1).
+  noteFixtureName(path.basename(name));
   return path.join(repoRoot, 'e2e', 'fixtures', path.basename(name));
 }
 

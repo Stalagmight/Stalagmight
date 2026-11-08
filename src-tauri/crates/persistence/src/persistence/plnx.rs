@@ -42,10 +42,12 @@ impl PlnxStore {
     /// (which project this file belongs to) is stamped separately via
     /// [`ensure_identity`](Self::ensure_identity).
     pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open(path).context("Failed to open dive-plan file")?;
+        let mut conn = Connection::open(path).context("Failed to open dive-plan file")?;
         // [#576 RV18-4] A `.plnx` is input like a `.stalx`: refuse a schema that
-        // could run SQL the file chose before anything else touches it (#608).
-        // A new file is empty, so this passes it.
+        // could run SQL the file chose before anything else touches it (#608),
+        // with the authorizer on first (#619). A new file is empty, so this
+        // passes it.
+        super::sqlite::deny_stripped_sqlite_features(&mut conn)?;
         super::sqlite::check_schema(&conn)?;
         // Crash-safe in-place writes; ignore pragma failures (defaults are already safe).
         let _ = conn.pragma_update(None, "journal_mode", "DELETE");
@@ -122,8 +124,9 @@ impl PlnxStore {
     /// swallowed; any other SQLite error (corruption, I/O, permissions) propagates,
     /// as does a schema the guard refuses (#608, #576 RV18-4).
     pub fn probe_stored_project_created_at(path: &Path) -> Result<Option<String>> {
-        let conn = Connection::open(path).context("Failed to open dive-plan file")?;
+        let mut conn = Connection::open(path).context("Failed to open dive-plan file")?;
         // [#576 RV18-4] The same schema guard as [`Self::open`], before the read.
+        super::sqlite::deny_stripped_sqlite_features(&mut conn)?;
         super::sqlite::check_schema(&conn)?;
         match conn.query_row(
             "SELECT project_created_at FROM plnx_meta WHERE id = 1",

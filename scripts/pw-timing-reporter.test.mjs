@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import TimingReporter from './pw-timing-reporter.mjs';
 
 let passed = 0;
@@ -155,18 +155,24 @@ test('stats carry the run count', () => {
   assert.equal(rep.stats.tests, 1);
 });
 
-// stdout names the env path by its variable: the path is the caller's, and can
-// name their own directories (#576 W51).
-test('the summary line names $PW_TIMING_OUTPUT, not the path in it', () => {
+// stdout names the env path folded: the path is the caller's, and can name
+// their own directories (#576 W51, W58).
+test('the summary line names the $PW_TIMING_OUTPUT path folded', () => {
   const logged = [];
   const log = console.log;
+  const home = process.env.HOME;
   console.log = (...a) => logged.push(a.join(' '));
+  // The output path sits under the home directory, so it prints as ~/...
+  process.env.HOME = dir;
   try {
     run([]);
   } finally {
     console.log = log;
+    if (home === undefined) delete process.env.HOME;
+    else process.env.HOME = home;
   }
-  assert.deepEqual(logged, ['\n[pw-timing] wrote 1 test timings to $PW_TIMING_OUTPUT']);
+  assert.deepEqual(logged, [`\n[pw-timing] wrote 1 test timings to ~/${basename(process.env.PW_TIMING_OUTPUT)}`]);
+  assert.ok(!logged[0].includes(dir), 'the absolute path must not print');
 });
 
 // The reports above were written under `dir`; remove it so a run leaves

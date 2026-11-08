@@ -221,10 +221,8 @@ describe('SpeleoRestoreDialog - a copy that could not be read (#576 W55 NF-W53-1
     expect(warning).toContain('could not be read');
     expect(warning).toContain('A save may have been interrupted, or another program may be using it.');
     expect(warning).not.toContain('The working copy has changes that are not on SpeleoDB');
-    // Same offer, same label: only the warning's wording follows the flag.
-    expect(screen.getByTestId('speleodb-restore-discard-offer-btn')).toHaveTextContent(
-      'Replace my changes & restore',
-    );
+    // Same discard route on offer; its labels are pinned in the W59 block below.
+    expect(screen.getByTestId('speleodb-restore-discard-offer-btn')).toBeInTheDocument();
   });
 
   it('keeps the un-pushed wording for a copy that was read and found dirty', async () => {
@@ -236,5 +234,50 @@ describe('SpeleoRestoreDialog - a copy that could not be read (#576 W55 NF-W53-1
     const warning = (await screen.findByTestId('speleodb-restore-discard-warning')).textContent;
     expect(warning).toContain('The working copy has changes that are not on SpeleoDB');
     expect(warning).not.toContain('could not be read');
+  });
+});
+
+/**
+ * [#576 W59 Q-W53-2-D1] When the copy could not be read nobody knows whether it holds
+ * changes, so neither press of the two-press discard may call them "my changes": both
+ * name the local copy instead. A copy that was read and found dirty keeps the labels.
+ */
+describe('SpeleoRestoreDialog - discard labels for a copy that could not be read (#576 W59)', () => {
+  const refusal = (stateUnknown: boolean) => ({
+    message: 'could not be read',
+    code: 'SPELEODB_UNPUSHED_LOCAL_EDITS',
+    unpushed_local: {
+      project_id: 'p1',
+      local_path: '/cache/p1.stalx',
+      last_edit_at: null,
+      state_unknown: stateUnknown,
+    },
+  });
+
+  const discardLabels = async (stateUnknown: boolean) => {
+    invokeIpcMock.mockRejectedValue(refusal(stateUnknown));
+    render(<SpeleoRestoreDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-restore-confirm-btn'));
+    const offer = (await screen.findByTestId('speleodb-restore-discard-offer-btn')).textContent;
+    // The arming press: it only re-labels the control, it sends nothing.
+    const restoreCalls = invokeIpcMock.mock.calls.length;
+    await userEvent.click(screen.getByTestId('speleodb-restore-discard-offer-btn'));
+    expect(invokeIpcMock.mock.calls.length).toBe(restoreCalls);
+    const confirm = screen.getByTestId('speleodb-restore-discard-confirm-btn').textContent;
+    return { offer, confirm };
+  };
+
+  it('names the local copy, not "my changes", on both presses', async () => {
+    const { offer, confirm } = await discardLabels(true);
+    console.log('[W59] restore discard labels (state_unknown):', offer, '|', confirm);
+    expect(offer).toBe('Replace the local copy & restore');
+    expect(confirm).toBe('Yes, replace the local copy & restore');
+  });
+
+  it('keeps the "my changes" labels for a copy that was read and found dirty', async () => {
+    const { offer, confirm } = await discardLabels(false);
+    console.log('[W59] restore discard labels (dirty):', offer, '|', confirm);
+    expect(offer).toBe('Replace my changes & restore');
+    expect(confirm).toBe('Yes, replace my changes & restore');
   });
 });

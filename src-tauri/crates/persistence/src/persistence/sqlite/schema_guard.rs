@@ -8,6 +8,7 @@
 //! check on server uploads.
 
 use rusqlite::config::DbConfig;
+use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::Connection;
 
 /// A schema object the app never creates, found in a file it was asked to open.
@@ -67,6 +68,13 @@ impl std::error::Error for RefusedSchemaObject {}
 /// call only innocuous functions. Then one pass over `sqlite_master`, which a
 /// file cannot shadow (`sqlite_` names are reserved) and whose reading runs no
 /// module code. It refuses, in order:
+/// - any row whose `name`, `tbl_name` or `sql` is not valid UTF-8 (#619): SQLite
+///   would hand such an identifier to the authorizer, whose rusqlite wrapper
+///   panics on it;
+/// - any row whose `type`, `name` or `tbl_name` is not stored as text, or whose
+///   `sql` is neither text nor NULL (#619): SQLite parses a `sql` cell stored as
+///   a BLOB like text, so a CHECK in one is enforced, but the checks below read
+///   only text and would see no SQL there;
 /// - any object named `pragma_*` (any case): the file's own table or view of
 ///   that name would be read in place of SQLite's table-valued pragma by every
 ///   later probe, and could lie to all of them;
@@ -86,17 +94,28 @@ pub fn check_schema(conn: &Connection) -> anyhow::Result<()> {
 /// builds the schema from the `sql` text) - is checked as that type instead of
 /// refused. Every expression check still runs on it, so a case-variant row
 /// cannot hide a generated column or an expression index; a view or a trigger
-/// in any case is still refused. Every other open keeps the exact spelling.
+/// in any case is still refused. Likewise (#619) a `type`, `name`, `tbl_name`
+/// or `sql` cell stored as a BLOB of valid UTF-8 - one flipped bit in the
+/// record's serial type turns TEXT into a BLOB of the same bytes, which SQLite
+/// still reads as that text - is read as that text and checked as text is
+/// (a type in any case), instead of refused. Only in a UTF-8 file: SQLite
+/// reads a BLOB cell as text in the file's own encoding, so in a UTF-16 file
+/// it would read other text than the guard. Every other open keeps the exact
+/// spelling and holds all four cells to text.
 pub(super) fn check_schema_for_salvage(conn: &Connection) -> anyhow::Result<()> {
     guard(conn, TypeSpelling::AnyCase)
 }
 
-/// How [`refused_by_master`] reads a row's `type`.
+/// How [`refused_by_master`] reads a row's `type`, and whether it reads its
+/// `type`, `name`, `tbl_name` and `sql` cells stored as a BLOB.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TypeSpelling {
-    /// Only exactly `table` or `index` is accepted.
+    /// Only exactly `table` or `index` is accepted, and all four cells only
+    /// stored as text (`sql` may be NULL).
     Exact,
-    /// `table` or `index` in any ASCII case is accepted as that type.
+    /// `table` or `index` in any ASCII case is accepted as that type, and, in
+    /// a UTF-8 file, any of the four cells stored as a BLOB of valid UTF-8 is
+    /// read as text: the salvage's [`check_schema_for_salvage`].
     AnyCase,
 }
 
@@ -106,6 +125,118 @@ fn guard(conn: &Connection, spelling: TypeSpelling) -> anyhow::Result<()> {
     match refused_object(conn, spelling)? {
         Some(refused) => Err(anyhow::Error::new(refused)),
         None => Ok(()),
+    }
+}
+
+/// [#619] Install SQLite's authorizer on `conn`, a connection to a file from
+/// outside the app, before its first statement. It refuses creating or dropping
+/// any virtual table, reading an eponymous virtual table of a module the repo's
+/// build leaves out (`DENIED_TABLES` in this module), and calling a function
+/// that extension loading or one of those modules registers
+/// (`DENIED_FUNCTIONS`); everything else is allowed. A refused statement fails
+/// to prepare, with `SQLITE_AUTH`, or with `SQLITE_ERROR` for a refused function
+/// call, which is how SQLite reports that one. It replaces any authorizer
+/// `conn` already had.
+///
+/// The repo-root `.cargo/config.toml` builds the bundled SQLite without
+/// FTS3/4/5, R-tree, DBSTAT and extension loading (#608), but cargo reads that
+/// file only inside the clone, so the crates.io build of this crate and of
+/// `stalx-reader` has them all. The authorizer holds in either build: it is what
+/// the published crates rely on, and the build flags stay as defence in depth.
+/// The app creates no virtual table and calls none of these functions.
+///
+/// Every opener in this crate that runs the schema guard installs it. It is
+/// public for a crate that opens its own connection to such a file:
+/// `stalx-reader` installs it on the connection it inspects an upload with,
+/// which parses the file's schema before the load does. Call it right after
+/// the open, before any statement is prepared.
+pub fn deny_stripped_sqlite_features(conn: &mut Connection) -> rusqlite::Result<()> {
+    conn.authorizer(Some(authorize_untrusted))
+}
+
+/// The eponymous virtual tables of the modules the repo's build leaves out: a
+/// module whose `xCreate` is its `xConnect` can be read by name, with no
+/// `CREATE VIRTUAL TABLE`. From the SQLite 3.54.1 amalgamation bundled in
+/// libsqlite3-sys 0.39.1 (`sqlite3/sqlite3.c`): `dbstat_module` (dbstat.c),
+/// `fts3tok_module` (fts3_tokenize_vtab.c), `fts3aux_module` (fts3_aux.c) and
+/// `fts5structure_module` (fts5_index.c, only with SQLITE_TEST or
+/// SQLITE_FTS5_DEBUG). Matched in any letter case and in any schema.
+const DENIED_TABLES: &[&str] = &["dbstat", "fts3tokenize", "fts4aux", "fts5_structure"];
+
+/// The SQL functions extension loading and the left-out modules register, from
+/// the same amalgamation, matched in any letter case. DBSTAT registers none.
+/// - func.c `aBuiltinFunc`, unless SQLITE_OMIT_LOAD_EXTENSION: `load_extension`.
+/// - fts3.c `sqlite3Fts3Init` and fts3_tokenizer.c `sqlite3Fts3InitHashTable`:
+///   `fts3_tokenizer` and the overloads `snippet`, `offsets`, `matchinfo`,
+///   `optimize`; with SQLITE_TEST also `fts3_tokenizer_test`,
+///   `fts3_tokenizer_internal_test`, and `fts3_exprtest` and
+///   `fts3_exprtest_rebalance` (fts3_expr.c).
+/// - fts5.c `fts5Init`: `fts5`, `fts5_source_id`, `fts5_locale`,
+///   `fts5_insttoken`, and through `sqlite3Fts5AuxInit` the overloads `snippet`,
+///   `highlight`, `bm25`, `fts5_get_locale`; with SQLITE_TEST or
+///   SQLITE_FTS5_DEBUG also `fts5_expr`, `fts5_expr_tcl`, `fts5_isalnum`,
+///   `fts5_fold` (`sqlite3Fts5ExprInit`) and `fts5_decode`, `fts5_decode_none`,
+///   `fts5_rowid` (`sqlite3Fts5IndexInit`).
+/// - rtree.c `sqlite3RtreeInit`: `rtreenode`, `rtreedepth`, `rtreecheck`; with
+///   SQLITE_DEBUG also `rtree_round`; with SQLITE_ENABLE_GEOPOLY the `geopoly_*`
+///   functions of geopoly.c `sqlite3_geopoly_init`.
+const DENIED_FUNCTIONS: &[&str] = &[
+    "load_extension",
+    "fts3_tokenizer",
+    "snippet",
+    "offsets",
+    "matchinfo",
+    "optimize",
+    "fts3_tokenizer_test",
+    "fts3_tokenizer_internal_test",
+    "fts3_exprtest",
+    "fts3_exprtest_rebalance",
+    "fts5",
+    "fts5_source_id",
+    "fts5_locale",
+    "fts5_insttoken",
+    "highlight",
+    "bm25",
+    "fts5_get_locale",
+    "fts5_expr",
+    "fts5_expr_tcl",
+    "fts5_isalnum",
+    "fts5_fold",
+    "fts5_decode",
+    "fts5_decode_none",
+    "fts5_rowid",
+    "rtreenode",
+    "rtreedepth",
+    "rtreecheck",
+    "rtree_round",
+    "geopoly_area",
+    "geopoly_blob",
+    "geopoly_json",
+    "geopoly_svg",
+    "geopoly_within",
+    "geopoly_contains_point",
+    "geopoly_overlap",
+    "geopoly_debug",
+    "geopoly_bbox",
+    "geopoly_xform",
+    "geopoly_regular",
+    "geopoly_ccw",
+    "geopoly_group_bbox",
+];
+
+/// The authorizer [`deny_stripped_sqlite_features`] installs.
+fn authorize_untrusted(ctx: AuthContext<'_>) -> Authorization {
+    let listed = |names: &[&str], name: &str| names.iter().any(|n| n.eq_ignore_ascii_case(name));
+    let denied = match ctx.action {
+        AuthAction::CreateVtable { .. } | AuthAction::DropVtable { .. } => true,
+        AuthAction::Read { table_name, .. } => listed(DENIED_TABLES, table_name),
+        AuthAction::Function { function_name } => listed(DENIED_FUNCTIONS, function_name),
+        _ => false,
+    };
+    if denied {
+        Authorization::Deny
+    } else {
+        Authorization::Allow
     }
 }
 
@@ -145,22 +276,66 @@ fn refused_by_master(
         ValueRef::Text(t) => Some(String::from_utf8_lossy(t).into_owned()),
         _ => None,
     };
-    let mut stmt = conn.prepare("SELECT type, name, rootpage, sql FROM sqlite_master")?;
+    // [#619] The text of a `type`, `name`, `tbl_name` or `sql` cell. The
+    // salvage also reads a BLOB of valid UTF-8 as text, in a UTF-8 file only
+    // (see [`check_schema_for_salvage`]): SQLite reads a BLOB cell as text in
+    // the file's encoding. `PRAGMA encoding` loads the schema first, which
+    // sets the encoding it reports.
+    let blob_as_text = spelling == TypeSpelling::AnyCase
+        && conn.query_row("PRAGMA encoding", [], |r| r.get::<_, String>(0))? == "UTF-8";
+    let stored_text = |v: ValueRef<'_>| match v {
+        ValueRef::Blob(b) if blob_as_text => std::str::from_utf8(b).ok().map(str::to_owned),
+        v => text(v),
+    };
+    // [#619] Every identifier SQLite keeps for the file comes from the `name`
+    // and `sql` cells, and SQLite hands identifiers to the authorizer
+    // ([`deny_stripped_sqlite_features`]), whose safe rusqlite wrapper panics
+    // on one that is not UTF-8. So a row whose bytes are not UTF-8, as text or
+    // as a blob, is refused here, before a statement can pass one on.
+    // `tbl_name` is held to UTF-8 too: SQLite reports a row whose `tbl_name`
+    // differs from the table its SQL names as a malformed schema, but never
+    // reads that cell on an autoindex row, which has no SQL.
+    let utf8 = |v: ValueRef<'_>| match v {
+        ValueRef::Text(b) | ValueRef::Blob(b) => std::str::from_utf8(b).is_ok(),
+        _ => true,
+    };
+    let mut stmt = conn.prepare("SELECT type, name, rootpage, sql, tbl_name FROM sqlite_master")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
+        if !(utf8(row.get_ref(1)?) && utf8(row.get_ref(3)?) && utf8(row.get_ref(4)?)) {
+            return Ok(Some(RefusedSchemaObject {
+                what: "a schema object whose name, table name or SQL is not valid UTF-8",
+                name: text(row.get_ref(1)?).unwrap_or_default(),
+            }));
+        }
         // Read loosely: a crafted row may store any column as any type, and that
         // must come back as this refusal, not as a conversion error.
-        let (Some(kind), Some(name)) = (text(row.get_ref(0)?), text(row.get_ref(1)?)) else {
+        let (Some(kind), Some(name)) = (stored_text(row.get_ref(0)?), stored_text(row.get_ref(1)?))
+        else {
             return Ok(Some(RefusedSchemaObject {
                 what: "a schema object of an unexpected type",
                 name: String::new(),
             }));
         };
+        // [#619] SQLite builds the schema from the `sql` cell's bytes whatever
+        // its storage class, so a CHECK stored as a BLOB is parsed and enforced
+        // like one stored as text, but a cell `stored_text` cannot read would
+        // reach every check below as no SQL at all, and pass them. `tbl_name`
+        // is held to text too.
+        let sql_cell = row.get_ref(3)?;
+        let sql = stored_text(sql_cell);
+        if stored_text(row.get_ref(4)?).is_none()
+            || (sql.is_none() && !matches!(sql_cell, ValueRef::Null))
+        {
+            return Ok(Some(RefusedSchemaObject {
+                what: "a schema object whose table name or SQL is not stored as text",
+                name,
+            }));
+        }
         let rootpage = match row.get_ref(2)? {
             ValueRef::Integer(page) => Some(page),
             _ => None,
         };
-        let sql = text(row.get_ref(3)?);
         let sql = sql.as_deref().unwrap_or("");
         let kind = match spelling {
             TypeSpelling::Exact => kind,
@@ -191,9 +366,12 @@ fn refused_by_master(
 /// The type tests read `lower(m.type)`: under [`TypeSpelling::Exact`] the
 /// first pass has already refused any other spelling, and under
 /// [`TypeSpelling::AnyCase`] a 'Table' row must be checked like a 'table' one.
+/// Likewise `CAST(m.name AS TEXT)` (#619): the salvage's first pass lets a
+/// `type` or `name` stored as a BLOB of UTF-8 through, which `lower` and the
+/// pragmas read as text too.
 fn refused_by_expression(conn: &Connection) -> rusqlite::Result<Option<RefusedSchemaObject>> {
     let mut stmt = conn.prepare(
-        "SELECT m.name, c.hidden, c.dflt_value \
+        "SELECT CAST(m.name AS TEXT), c.hidden, c.dflt_value \
          FROM sqlite_master AS m, pragma_table_xinfo(m.name) AS c WHERE lower(m.type) = 'table'",
     )?;
     let mut rows = stmt.query([])?;
@@ -218,7 +396,7 @@ fn refused_by_expression(conn: &Connection) -> rusqlite::Result<Option<RefusedSc
         "SELECT i.name FROM sqlite_master AS m, pragma_index_list(m.name) AS i \
          WHERE lower(m.type) = 'table' AND i.partial = 1 \
          UNION ALL \
-         SELECT m.name FROM sqlite_master AS m, pragma_index_xinfo(m.name) AS x \
+         SELECT CAST(m.name AS TEXT) FROM sqlite_master AS m, pragma_index_xinfo(m.name) AS x \
          WHERE lower(m.type) = 'index' AND x.cid = -2",
     )?;
     let mut rows = stmt.query([])?;

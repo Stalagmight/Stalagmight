@@ -373,6 +373,42 @@ mod tests {
         assert_eq!(mode(&fresh), mode(&probe));
     }
 
+    /// [#570] A rename that fails after the temp file is fully written (a non-empty folder squats
+    /// the destination - for root too) leaves no temp file and nothing changed.
+    #[test]
+    fn a_failed_rename_removes_the_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("CaveA.tml");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("keep"), b"x").unwrap();
+
+        let err = write_atomic_bytes(&path, b"new export").unwrap_err();
+
+        assert!(err.to_string().starts_with("Failed to replace"), "{err}");
+        assert_eq!(names_in(dir.path()), ["CaveA.tml"]);
+        assert_eq!(std::fs::read(path.join("keep")).unwrap(), b"x");
+    }
+
+    /// [#570] An export the user made private stays private: the replacement never exists at a
+    /// wider mode than the file it replaces, however the umask is set.
+    #[cfg(unix)]
+    #[test]
+    fn a_private_destination_stays_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("CaveA.csv");
+        std::fs::write(&path, OLD).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        write_atomic_bytes(&path, b"new").unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    }
+
     /// The in-place write followed a symlink into its target; the rename must not instead swap the
     /// link for a regular file.
     #[cfg(unix)]

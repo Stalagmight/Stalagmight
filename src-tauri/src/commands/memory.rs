@@ -1,6 +1,6 @@
 //! Memory-probe IPC.
 //!
-//! Returns RSS / VM stats for the backend process and for every WebKit child
+//! Returns RSS / VM stats for the backend process and for every WebKit helper
 //! process spawned by this app (WebKitWebProcess, WebKitNetworkProcess,
 //! WebKitGPUProcess on Linux). On non-Linux platforms returns the backend
 //! stats only.
@@ -43,12 +43,11 @@ mod linux {
     use std::io;
 
     /// Walk /proc, return our process plus every process [`select_webkit`]
-    /// picks: each one whose `Name:` starts with `WebKit` and whose real uid
-    /// (the first `Uid:` field) is ours. Name and uid are the only checks -
-    /// no environ or cwd is read - and because a reparented WebKit process
-    /// must still be found, a same-uid `WebKit*` process is reported whether
-    /// or not its PPid chain leads to us (so a second WebKit app run by the
-    /// same user is counted too).
+    /// picks: our same-uid `WebKit*` descendants, plus same-uid WebKit Web,
+    /// Network and GPU processes that were reparented away from us, never a
+    /// `WebKitWebDriver`. Name, PPid and real uid (the first `Uid:` field) are
+    /// the only checks - no environ or cwd is read - so a reparented helper of
+    /// a second WebKit app run by the same user is counted too.
     pub(super) fn collect() -> io::Result<MemoryStats> {
         let our_pid = std::process::id();
         let backend = read_process(our_pid, "backend")?;
@@ -102,47 +101,65 @@ mod linux {
         pub(super) uid: u32,
     }
 
+    /// The WebKit helper processes a WebKitGTK app runs, by the `Name:` /proc
+    /// shows for them: the kernel truncates a process name to 15 bytes, so
+    /// `WebKitWebProcess` reads as `WebKitWebProces` (a test's full name
+    /// still matches, as it starts with the truncated one).
+    const HELPER_NAMES: [&str; 3] = ["WebKitWebProces", "WebKitNetworkPr", "WebKitGPUProces"];
+
+    /// The WebDriver server of a WebKit test harness (15 bytes, untruncated).
+    const WEB_DRIVER_NAME: &str = "WebKitWebDriver";
+
     /// The child-process filter, over a process table read from /proc: the
     /// `(pid, name)` of every process to report, sorted by pid.
     ///
-    /// Our own process is never reported. A process of another uid is never
-    /// reported. A same-uid process is reported when its name starts with
-    /// `WebKit` - a child or grandchild of ours (chased through the PPid
-    /// links, up to 3 passes so a grandchild listed before its parent is still
-    /// reached), and, as the fallback for sandboxed setups where WebKit's
-    /// processes are reparented, any same-uid `WebKit*` process.
+    /// [#576 Q-W33-1-D1] Our own process is never reported, nor a process of
+    /// another uid, nor a `WebKitWebDriver` (it launches the app under a test
+    /// harness; it is not the app's). A same-uid process is reported when its
+    /// name starts with `WebKit` and it is a descendant of ours (chased
+    /// through the PPid links, through non-WebKit processes too, in any
+    /// listing order), or - the fallback for sandboxed setups where WebKit's
+    /// helpers are reparented away from us - when it is a WebKit Web, Network
+    /// or GPU process ([`HELPER_NAMES`]) wherever it sits.
     pub(super) fn select_webkit(
         our_pid: u32,
         our_uid: u32,
         table: &[ProcEntry],
     ) -> Vec<(u32, String)> {
+        // Our same-uid descendants: grown until a pass adds nothing, so a
+        // grandchild listed before its parent is still reached.
         let mut descendants: std::collections::HashSet<u32> = std::collections::HashSet::new();
         descendants.insert(our_pid);
-        let mut selected = Vec::new();
-
-        // We do up to 3 passes so grandchildren are picked up even if the
-        // directory listing order is parent-after-child.
-        for _ in 0..3 {
+        loop {
+            let before = descendants.len();
             for entry in table {
-                if descendants.contains(&entry.pid) {
-                    continue;
-                }
-                if entry.uid != our_uid {
-                    continue;
-                }
-                if descendants.contains(&entry.ppid) || entry.name.starts_with("WebKit") {
+                if entry.uid == our_uid && descendants.contains(&entry.ppid) {
                     descendants.insert(entry.pid);
-                    if entry.pid == our_pid {
-                        continue;
-                    }
-                    if entry.name.starts_with("WebKit") {
-                        selected.push((entry.pid, entry.name.clone()));
-                    }
                 }
+            }
+            if descendants.len() == before {
+                break;
             }
         }
 
-        // De-dupe by pid (multi-pass could insert twice).
+        let mut selected: Vec<(u32, String)> = table
+            .iter()
+            .filter(|entry| entry.uid == our_uid && entry.pid != our_pid)
+            .filter(|entry| !entry.name.starts_with(WEB_DRIVER_NAME))
+            .filter(|entry| {
+                if descendants.contains(&entry.pid) {
+                    entry.name.starts_with("WebKit")
+                } else {
+                    HELPER_NAMES
+                        .iter()
+                        .any(|helper| entry.name.starts_with(helper))
+                }
+            })
+            .map(|entry| (entry.pid, entry.name.clone()))
+            .collect();
+
+        // De-dupe by pid (a table read from /proc lists each pid once; a
+        // synthetic one need not).
         selected.sort_by_key(|(pid, _)| *pid);
         selected.dedup_by_key(|(pid, _)| *pid);
         selected
@@ -306,18 +323,63 @@ mod tests {
         );
     }
 
-    /// The documented fallback for sandboxed setups: a same-uid `WebKit*`
-    /// process counts although no PPid chain leads to us. This is why the
-    /// filter cannot be tested against the host's live process list.
+    /// The fallback for sandboxed setups, where WebKit's helpers are
+    /// reparented away from us: a same-uid Web, Network or GPU process counts
+    /// although no PPid chain leads to us. The kernel truncates a process
+    /// name to 15 bytes, so these are the names /proc really shows. This is
+    /// why the filter cannot be tested against the host's live process list.
     #[test]
-    fn reparented_same_user_webkit_process_is_reported() {
+    fn reparented_web_network_and_gpu_processes_are_reported() {
         let table = [
             entry(100, "stalagmight", 1, 1000),
-            entry(300, "WebKitWebDriver", 1, 1000),
+            entry(300, "WebKitWebProces", 1, 1000),
+            entry(301, "WebKitNetworkPr", 1, 1000),
+            entry(302, "WebKitGPUProces", 1, 1000),
         ];
         assert_eq!(
             linux::select_webkit(100, 1000, &table),
-            vec![(300, "WebKitWebDriver".to_string())]
+            vec![
+                (300, "WebKitWebProces".to_string()),
+                (301, "WebKitNetworkPr".to_string()),
+                (302, "WebKitGPUProces".to_string()),
+            ]
+        );
+    }
+
+    /// [#576 Q-W33-1-D1] A WebKitWebDriver (the agent harness's, say) is never
+    /// counted: not as a reparented process, and not even as a descendant. It
+    /// used to be reported, and classified as a web process.
+    #[test]
+    fn webkit_web_driver_is_never_reported() {
+        let (us, uid) = (100, 1000);
+        let table = [
+            // The driver that launched us: our parent, not our child.
+            entry(50, "WebKitWebDriver", 1, uid),
+            entry(us, "stalagmight", 50, uid),
+            entry(101, "WebKitWebProces", us, uid),
+            // A driver under us is still not ours to count.
+            entry(102, "WebKitWebDriver", us, uid),
+        ];
+        assert_eq!(
+            linux::select_webkit(us, uid, &table),
+            vec![(101, "WebKitWebProces".to_string())]
+        );
+    }
+
+    /// [#576 Q-W33-1-D1] Away from our process tree only the Web, Network and
+    /// GPU processes count; any other same-uid `WebKit*` process is someone
+    /// else's. Under us, every `WebKit*` process is ours.
+    #[test]
+    fn a_reparented_webkit_process_of_another_kind_is_not_reported() {
+        let (us, uid) = (100, 1000);
+        let table = [
+            entry(us, "stalagmight", 1, uid),
+            entry(400, "WebKitPluginPro", 1, uid),
+            entry(401, "WebKitPluginPro", us, uid),
+        ];
+        assert_eq!(
+            linux::select_webkit(us, uid, &table),
+            vec![(401, "WebKitPluginPro".to_string())]
         );
     }
 

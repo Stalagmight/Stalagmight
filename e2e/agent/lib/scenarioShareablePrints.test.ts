@@ -7,7 +7,12 @@
  * key prints in the runner's PASS line unfolded. Each case hands a synthetic
  * name (`qzCaveA`) in and checks that it does not come out.
  */
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { afterEach, describe, expect, it } from 'vitest';
+
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 
 import type { ScenarioContext, ScenarioTarget } from '../scenarios/framework';
 import { makeContext } from '../scenarios/framework';
@@ -17,6 +22,8 @@ import { mapSkipCode } from '../scenarios/importDialogFuzz';
 import { answerKeyboardFileDialog, runUiStep } from '../scenarios/importDialogBridge';
 import { FileSeq, moveFromTraceStep } from '../scenarios/importDialogTrace';
 import { runStep } from '../scenarios/undoRedoFuzzBridge';
+import { seedLargeProject } from '../scenarios/seedLargeProject';
+import { toolSwitchSpam } from '../scenarios/toolSwitchSpam';
 import type { TraceStep } from './fuzzTrace';
 
 const NAME = 'qzCaveA';
@@ -96,5 +103,54 @@ describe('the seed a scenario prints is a number (#576 W51)', () => {
     expect(makeContext(TARGET, 7).seed).toBe(7);
     expect(makeContext(TARGET, NAME as unknown as number).seed).toBe(1);
     expect(makeContext(TARGET, '5' as unknown as number).seed).toBe(5);
+  });
+});
+
+describe('a store value of a union type prints in the test-id form (#576 W58 Q11)', () => {
+  const UI_STORE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../src/store/uiStore.ts');
+
+  /** The string literals of a type alias or state field declared in src/store/uiStore.ts. */
+  function literals(source: string, declaration: RegExp): string[] {
+    const found = declaration.exec(source);
+    expect(found, String(declaration)).not.toBeNull();
+    return [...(found?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1] ?? '');
+  }
+
+  it("prints every real activeTool, appMode, view and importContext exactly as the app's source spells it", () => {
+    const source = fs.readFileSync(UI_STORE, 'utf8');
+    const real = [
+      ...literals(source, /export type ToolType =([^;]+);/),
+      ...literals(source, /export type AppMode =([^;]+);/),
+      ...literals(source, /export type ViewType =([^;]+);/),
+      ...literals(source, /\n\s+importContext: ([^;]+);/),
+    ];
+    expect(real).toEqual(expect.arrayContaining(['move_comment', 'export', 'single', 'existing-project']));
+    expect(real.length).toBeGreaterThan(15);
+    for (const value of real) expect(shareableTestId(value), value).toBe(value);
+  });
+
+  it("tool-switch-spam's refusal prints a forged activeTool by the source's words only", async () => {
+    const ctx = {
+      // hasProject, the navigation-tools setting, then the activeTool probe.
+      eval: async (script: string) => (script.includes('setActiveTool') ? `move_${NAME}` : true),
+      metric: () => undefined,
+      callAction: async () => ({ ok: true }),
+      log: () => undefined,
+    } as unknown as ScenarioContext;
+    const message = await refusal(() => toolSwitchSpam.run(ctx, { iterations: 1 } as never));
+    expect(message).toBe('setActiveTool(select) left activeTool=move_<7 characters>');
+  });
+
+  it("seed-large-project's progress line prints a forged view by the source's words only", async () => {
+    const lines: string[] = [];
+    const ctx = {
+      eval: async (script: string) => (script.includes('ui.view') ? { sections: 2, stations: 5, view: `${NAME} single` } : true),
+      setMetric: () => undefined,
+      log: (line: string) => lines.push(line),
+    } as unknown as ScenarioContext;
+    await seedLargeProject.run(ctx, { iterations: 1 } as never);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toContain(NAME);
+    expect(lines[0]).toMatch(/^loaded 2 sections \/ 5 stations, view=<\d+ characters>/);
   });
 });

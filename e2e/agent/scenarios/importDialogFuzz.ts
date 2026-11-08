@@ -2698,7 +2698,7 @@ export const importDialogFuzz: Scenario = {
         // Counted, never asserted: `checkResidue` documents why this scenario
         // cannot tell a completion from an abandonment, and #477 - the real
         // completion-path defect - was established by reading the code.
-        if (digest.ctx !== null) ctx.metric(`residualImportContext:${digest.ctx}`);
+        if (digest.ctx !== null) ctx.metric(`residualImportContext:${shareableTestId(digest.ctx)}`);
         if (sawReceipt) ctx.metric('flowPresentedReceipt');
         // F3 measures the receipt against the delta the import made, so it needs
         // both measurements to describe the same project. A flow that started

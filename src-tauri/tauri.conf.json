@@ -68,5 +68,12 @@
       }
     ]
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZDMkI4ODE4MzQ2NTJCQ0UKUldUT0syVTBHSWdyYkRFZWhjVjdnSTVNd25IRkpRVHltUmgwNXhmQzUzZVQxdy9IUVFUUEo0R3oK",
+      "endpoints": [
+        "https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest-stable.json"
+      ]
+    }
+  }
 }

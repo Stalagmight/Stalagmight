@@ -17,7 +17,7 @@
  * The post-attach `__E2E_TEST__` check in session.ts stays as the definitive
  * backstop; this is the cheap pre-flight.
  */
-import { execFileSync, execSync, spawn } from 'child_process';
+import { execFileSync, execSync, spawn, type ChildProcess } from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -767,22 +767,58 @@ export function isPluginAclChurn(diff: string): boolean {
  * <path>` printed raw beside a runner's shareable lines - `agent:scenario`,
  * `agent:journeys` and `agent:smoke` build in-process. Rejects as `execSync`
  * threw, `Command failed: <command>`, when the build exits non-zero or dies.
+ *
+ * As the build's stderr is a pipe, not a terminal, cargo prints no progress bar
+ * and no colours. The child is not killed when this process exits by itself:
+ * the MCP server's shutdown calls `stopRunningBuilds` first (#576 RV20-16); a
+ * runner interrupted from its terminal stops the build with it, as the signal
+ * reaches the whole foreground process group.
  */
-function runBuildCommand(command: string, options: { cwd: string; env: NodeJS.ProcessEnv }): Promise<void> {
+export function runBuildCommand(command: string, options: { cwd: string; env: NodeJS.ProcessEnv }): Promise<void> {
   return new Promise((resolve, reject) => {
     // stdout too goes to stderr, NEVER to this process's stdout: under the MCP
     // server, stdout is the JSON-RPC stream and any build chatter (pnpm/vite log
     // to stdout) would corrupt the protocol framing.
-    const child = spawn(command, { ...options, shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    // `exec` so the shell becomes the build instead of waiting on it: then the
+    // pid `stopRunningBuilds` signals IS the build. bash does this by itself for
+    // a lone command, dash (`/bin/sh` on Debian/Ubuntu, CI's runners) does not,
+    // and a SIGTERM to the waiting shell left the build running and its pipes
+    // open (#576 RV20-16). cmd.exe has no `exec`; `child.kill` ends it there.
+    const shellCommand = process.platform === 'win32' ? command : `exec ${command}`;
+    const child = spawn(shellCommand, { ...options, shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    runningBuilds.add(child);
     const write = (text: string): void => {
       process.stderr.write(text);
     };
     const passed = Promise.all([passLinesFolded(child.stdout, write), passLinesFolded(child.stderr, write)]);
-    child.once('error', reject);
+    child.once('error', (err) => {
+      runningBuilds.delete(child);
+      reject(err);
+    });
     child.once('close', (code: number | null) => {
+      runningBuilds.delete(child);
       void passed.then(() => (code === 0 ? resolve() : reject(new Error(`Command failed: ${command}`))));
     });
   });
+}
+
+/** The builds `runBuildCommand` has started that have not closed yet. */
+const runningBuilds = new Set<ChildProcess>();
+
+/**
+ * Sends SIGTERM to every build still running and returns their pids (#576
+ * RV20-16). The MCP server calls it on shutdown, which otherwise ends in
+ * `process.exit` with a `pnpm tauri build` child left running. pnpm passes the
+ * signal on to the build script it runs. Each build then rejects as a failed
+ * build does.
+ */
+export function stopRunningBuilds(): number[] {
+  const pids: number[] = [];
+  for (const child of runningBuilds) {
+    if (child.pid !== undefined) pids.push(child.pid);
+    child.kill('SIGTERM');
+  }
+  return pids;
 }
 
 export async function buildApp(

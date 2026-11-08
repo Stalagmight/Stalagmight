@@ -93,6 +93,11 @@ export default defineConfig({
     // Shown separately in About. A released build's version no longer carries
     // the hash, but a bug report still needs to say which build it came from.
     __APP_COMMIT__: JSON.stringify(shortHash),
+    // Which update channel this build was published on (#579). Set by the
+    // release workflow for weekly builds; defaults to 'stable' everywhere
+    // else (dev, and stable release builds), so the About dialog's channel
+    // line is hidden unless it says otherwise.
+    __APP_CHANNEL__: JSON.stringify(process.env.STALAGMIGHT_CHANNEL ?? 'stable'),
   },
   // Force a single React instance. Vite's dep optimizer can intermittently
   // pre-bundle two copies of React, which surfaces as "Invalid hook call" + a

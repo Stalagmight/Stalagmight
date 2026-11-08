@@ -169,7 +169,7 @@ export function projectStateEnvelope(
     newer_schema_version: null,
     speleo_link_unreadable: false,
     unreadable_project_settings: [],
-    load_repairs: { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0 },
+    load_repairs: { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0, station_comments: 0 },
     project_header: {
       name: project.name ?? 'Project',
       location: project.location ?? null,

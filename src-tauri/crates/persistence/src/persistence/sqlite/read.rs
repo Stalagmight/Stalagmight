@@ -18,6 +18,23 @@ use super::Database;
 /// refused on load (A18(d), #576).
 const MAX_SHOTS_PER_SECTION: usize = (FEATURE_ID_STRIDE - 1) as usize;
 
+/// How [`Database::load_project_with_report`] looks up an optional table - one
+/// a file written before the table existed lacks - before it reads it.
+#[derive(Clone, Copy)]
+enum TableLookup {
+    /// A `sqlite_master` row typed exactly 'table' and named exactly so, both
+    /// as text: every load but the salvage's.
+    Exact,
+    /// [#619] As the salvage's summary does (`Database::salvage_table_exists`):
+    /// typed 'table' in any ASCII case, and the `type` or `name` cell read as
+    /// text when one flipped bit left it a BLOB of the same bytes. Its schema
+    /// guard (`check_schema_for_salvage`) accepts both and SQLite still reads
+    /// such a table, but the exact match took it for absent and its rows were
+    /// left out of the salvaged project. No encoding check: in a file that is
+    /// not UTF-8 that guard has already refused a BLOB `type` or `name`.
+    Salvage,
+}
+
 impl Database {
     /// The `modified_at` stamp the file holds: the one its last save wrote (the
     /// in-memory project's own stamp at that save, `save_project`), which a load
@@ -230,6 +247,22 @@ impl Database {
     /// over the stored value (`save_project` writes these settings back from the
     /// model).
     pub fn load_project_with_report(&self) -> Result<(Project, ProjectLoadReport)> {
+        self.load_project_finding_tables(TableLookup::Exact)
+    }
+
+    /// [#619] [`Self::load_project`] for the salvage (`export_salvageable`): it
+    /// finds each optional table as the salvage's schema guard reads the file,
+    /// see [`TableLookup::Salvage`].
+    pub(super) fn load_project_for_salvage(&self) -> Result<Project> {
+        self.load_project_finding_tables(TableLookup::Salvage)
+            .map(|(project, _)| project)
+    }
+
+    /// [`Self::load_project_with_report`], each optional table found by `lookup`.
+    fn load_project_finding_tables(
+        &self,
+        lookup: TableLookup,
+    ) -> Result<(Project, ProjectLoadReport)> {
         tracing::debug!("Loading project from database");
 
         // First check if project table has data and log what's there
@@ -762,7 +795,7 @@ impl Database {
         // Load station offsets. [#576 B35(h)] Through the same finiteness guard as
         // shots and section offsets: they used to be inserted verbatim, and a
         // station offset is added straight into world coordinates.
-        let mut station_offsets = self.load_station_offsets()?;
+        let mut station_offsets = self.load_station_offsets(lookup)?;
         let sanitized_station_offsets = Project::sanitize_station_offsets(&mut station_offsets);
         if sanitized_station_offsets > 0 {
             tracing::warn!(
@@ -774,13 +807,13 @@ impl Database {
         report.repairs.station_offsets = sanitized_station_offsets;
 
         // Load loop closures
-        let loop_closures = self.load_loop_closures()?;
+        let loop_closures = self.load_loop_closures(lookup)?;
 
         // Load imported file hashes
-        let imported_file_hashes = self.load_imported_file_hashes()?;
+        let imported_file_hashes = self.load_imported_file_hashes(lookup)?;
 
         // Load imported section hashes
-        let imported_section_hashes = self.load_imported_section_hashes()?;
+        let imported_section_hashes = self.load_imported_section_hashes(lookup)?;
 
         // Derive next_closure_id: use persisted value if available, otherwise fall back to max(existing) + 1.
         // Always ensure it's at least max(existing closures) + 1 for safety.
@@ -791,29 +824,29 @@ impl Database {
         };
 
         // Load station comments
-        let station_comments = self.load_station_comments()?;
+        let station_comments = self.load_station_comments(lookup)?;
 
         // Per-project validation thresholds (#57). The DB layer has no access to
         // the global config, so legacy projects (no row) fall back to the
         // hardcoded default here; the AppState open paths re-check for absence
         // and seed from the user's global config instead (see project_io.rs).
         let validation = report
-            .setting("validation", self.load_project_validation())
+            .setting("validation", self.project_validation(lookup))
             .unwrap_or_default();
 
         // Entrance elevation (#431). Unlike `validation`, a missing row has no
         // legacy-seeding fallback - `None` genuinely means "unknown".
         let surface_elevation =
-            report.setting("surface_elevation", self.load_project_surface_elevation());
+            report.setting("surface_elevation", self.project_surface_elevation(lookup));
         let default_azimuth_reference = report.setting(
             "default_azimuth_reference",
-            self.load_project_default_azimuth_reference(),
+            self.project_default_azimuth_reference(lookup),
         );
 
         // Through the loader constructor (#576 A10): the lookup caches are
         // private to `Project`, which builds both of them up front so callers
         // get O(1) `get_section` / `resolve_key` right after load.
-        let project = Project::from_loaded(LoadedProject {
+        let mut project = Project::from_loaded(LoadedProject {
             name,
             location,
             created_at,
@@ -833,23 +866,39 @@ impl Database {
             surface_elevation,
             default_azimuth_reference,
         });
+        // [#576 Q-W30-3-D1] A comment row past the end of its section names no
+        // station: it is dropped here and counted for the open's notice, so it
+        // can never attach to a station a later edit puts at that position.
+        // Logged by position only - the text is the user's.
+        for orphan in project.drop_orphan_station_comments() {
+            tracing::warn!(
+                section_id = orphan.section_id,
+                anchor = ?orphan.anchor,
+                purpose = "block corruption at the source",
+                "Dropped a station comment past the end of its section on load"
+            );
+            report.repairs.station_comments += 1;
+        }
         Ok((project, report))
     }
 
     /// Load loop closures from database
-    fn load_loop_closures(&self) -> Result<Vec<LoopClosure>> {
+    fn load_loop_closures(&self, lookup: TableLookup) -> Result<Vec<LoopClosure>> {
         let mut closures = Vec::new();
 
         // Check if table exists (for backwards compatibility with older files)
-        let table_exists: bool = self
-            .conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='loop_closures'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c > 0)
-            .unwrap_or(false);
+        let table_exists: bool = match lookup {
+            TableLookup::Exact => self
+                .conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='loop_closures'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false),
+            TableLookup::Salvage => self.salvage_table_exists("loop_closures").unwrap_or(false),
+        };
 
         if !table_exists {
             return Ok(closures);
@@ -946,19 +995,27 @@ impl Database {
     }
 
     /// Load station offsets from database
-    fn load_station_offsets(&self) -> Result<HashMap<StationKey, (f64, f64, f64)>> {
+    fn load_station_offsets(
+        &self,
+        lookup: TableLookup,
+    ) -> Result<HashMap<StationKey, (f64, f64, f64)>> {
         let mut offsets = HashMap::new();
 
         // Check if table exists (for backwards compatibility with older files)
-        let table_exists: bool = self
-            .conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='station_offsets'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c > 0)
-            .unwrap_or(false);
+        let table_exists: bool = match lookup {
+            TableLookup::Exact => self
+                .conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='station_offsets'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false),
+            TableLookup::Salvage => self
+                .salvage_table_exists("station_offsets")
+                .unwrap_or(false),
+        };
 
         if !table_exists {
             return Ok(offsets);
@@ -989,19 +1046,24 @@ impl Database {
         Ok(offsets)
     }
 
-    fn load_station_comments(&self) -> Result<HashMap<StationKey, String>> {
+    fn load_station_comments(&self, lookup: TableLookup) -> Result<HashMap<StationKey, String>> {
         let mut comments = HashMap::new();
 
         // Check if table exists (for backwards compatibility with older files)
-        let table_exists: bool = self
-            .conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='station_comments'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c > 0)
-            .unwrap_or(false);
+        let table_exists: bool = match lookup {
+            TableLookup::Exact => self
+                .conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='station_comments'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false),
+            TableLookup::Salvage => self
+                .salvage_table_exists("station_comments")
+                .unwrap_or(false),
+        };
 
         if !table_exists {
             return Ok(comments);
@@ -1132,15 +1194,20 @@ impl Database {
     }
 
     /// Load imported file hashes from database
-    fn load_imported_file_hashes(&self) -> Result<Vec<String>> {
+    fn load_imported_file_hashes(&self, lookup: TableLookup) -> Result<Vec<String>> {
         let mut hashes = Vec::new();
 
         // Check if table exists (for backwards compatibility with older files)
-        let table_exists: bool = self.conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='imported_file_hashes'",
-            [],
-            |row| row.get::<_, i64>(0),
-        ).map(|c| c > 0).unwrap_or(false);
+        let table_exists: bool = match lookup {
+            TableLookup::Exact => self.conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='imported_file_hashes'",
+                [],
+                |row| row.get::<_, i64>(0),
+            ).map(|c| c > 0).unwrap_or(false),
+            TableLookup::Salvage => self
+                .salvage_table_exists("imported_file_hashes")
+                .unwrap_or(false),
+        };
 
         if !table_exists {
             return Ok(hashes);
@@ -1157,15 +1224,20 @@ impl Database {
     }
 
     /// Load imported section hashes from database
-    fn load_imported_section_hashes(&self) -> Result<Vec<String>> {
+    fn load_imported_section_hashes(&self, lookup: TableLookup) -> Result<Vec<String>> {
         let mut hashes = Vec::new();
 
         // Check if table exists (for backwards compatibility with older files)
-        let table_exists: bool = self.conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='imported_section_hashes'",
-            [],
-            |row| row.get::<_, i64>(0),
-        ).map(|c| c > 0).unwrap_or(false);
+        let table_exists: bool = match lookup {
+            TableLookup::Exact => self.conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='imported_section_hashes'",
+                [],
+                |row| row.get::<_, i64>(0),
+            ).map(|c| c > 0).unwrap_or(false),
+            TableLookup::Salvage => self
+                .salvage_table_exists("imported_section_hashes")
+                .unwrap_or(false),
+        };
 
         if !table_exists {
             return Ok(hashes);
@@ -1393,13 +1465,16 @@ impl Database {
     /// written before it existed and opened read-only, which does not migrate - is
     /// "not set". Every other failure is an error. A value of the wrong SQLite type
     /// is unparseable, like a malformed one: warned about and read as not set.
-    fn project_setting_text(&self, key: &str) -> Result<Option<String>> {
-        let has_table: i64 = self.conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='project_settings'",
-            [],
-            |row| row.get(0),
-        )?;
-        if has_table == 0 {
+    fn project_setting_text(&self, lookup: TableLookup, key: &str) -> Result<Option<String>> {
+        let has_table = match lookup {
+            TableLookup::Exact => self.conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='project_settings'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )? > 0,
+            TableLookup::Salvage => self.salvage_table_exists("project_settings")?,
+        };
+        if !has_table {
             return Ok(None);
         }
         // Read by reference [#576 FZ-PARSE-2]: rusqlite's conversion to an owned
@@ -1437,7 +1512,15 @@ impl Database {
     pub fn load_project_validation(
         &self,
     ) -> Result<Option<crate::models::config::ValidationConfig>> {
-        let json = self.project_setting_text("validation")?;
+        self.project_validation(TableLookup::Exact)
+    }
+
+    /// [`Self::load_project_validation`], the table found by `lookup`.
+    fn project_validation(
+        &self,
+        lookup: TableLookup,
+    ) -> Result<Option<crate::models::config::ValidationConfig>> {
+        let json = self.project_setting_text(lookup, "validation")?;
         Ok(json.and_then(|s| serde_json::from_str(&s).ok()))
     }
 
@@ -1447,7 +1530,12 @@ impl Database {
     /// before this feature) - reads as `None`, which is the correct "unknown"
     /// value for those files; no migration needed.
     pub fn load_project_surface_elevation(&self) -> Result<Option<f64>> {
-        let text = self.project_setting_text("surface_elevation")?;
+        self.project_surface_elevation(TableLookup::Exact)
+    }
+
+    /// [`Self::load_project_surface_elevation`], the table found by `lookup`.
+    fn project_surface_elevation(&self, lookup: TableLookup) -> Result<Option<f64>> {
+        let text = self.project_setting_text(lookup, "surface_elevation")?;
         Ok(text.and_then(|s| {
             // `"NaN"`, `"inf"` and `1e309` all parse happily; a corrupted or
             // hand-edited `.stalx` (same untrusted provenance as a `.tml`) can
@@ -1472,7 +1560,16 @@ impl Database {
     /// A row that does not parse is treated the same way and warned about,
     /// rather than defaulting to some other rotation.
     pub fn load_project_default_azimuth_reference(&self) -> Result<Option<AzimuthReference>> {
-        let json = self.project_setting_text("default_azimuth_reference")?;
+        self.project_default_azimuth_reference(TableLookup::Exact)
+    }
+
+    /// [`Self::load_project_default_azimuth_reference`], the table found by
+    /// `lookup`.
+    fn project_default_azimuth_reference(
+        &self,
+        lookup: TableLookup,
+    ) -> Result<Option<AzimuthReference>> {
+        let json = self.project_setting_text(lookup, "default_azimuth_reference")?;
         Ok(json.and_then(|s| {
             let parsed = serde_json::from_str::<AzimuthReference>(&s).ok().map(|r| {
                 // Re-impose the type's invariants on a hand-edited row.
@@ -1504,10 +1601,13 @@ pub struct ProjectLoadReport {
 }
 
 /// [#576 B35(h)] How many stored values a load reset or dropped because it could
-/// not use them (non-finite numbers from a damaged or hand-edited file), per
-/// kind. The next save writes the reset values, so the open reports them to the
-/// user once instead of only logging them.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+/// not use them (non-finite numbers, or rows naming no station, from a damaged or
+/// hand-edited file), per kind. The next save writes the reset values, so the
+/// open reports them to the user once instead of only logging them.
+///
+/// [#576 W57-NF2] Also on a merge's answer, per source (`MergeSourceRepairs`), so
+/// the frontend lists what the merge's read of each source reset or dropped.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
 pub struct LoadRepairs {
     /// Shots with a non-finite measurement, reset to finite defaults.
     pub shots: usize,
@@ -1517,6 +1617,9 @@ pub struct LoadRepairs {
     pub station_offsets: usize,
     /// GPS tie points (zero datums) with a non-finite coordinate, dropped.
     pub gps_points: usize,
+    /// [#576 Q-W30-3-D1] Station comments whose row points past the end of its
+    /// section (an orphan, which names no station), dropped.
+    pub station_comments: usize,
 }
 
 impl LoadRepairs {

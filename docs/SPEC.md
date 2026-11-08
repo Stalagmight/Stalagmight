@@ -2613,7 +2613,7 @@ not live co-editing), and floating/dockable panels.
 
 **Note**: P and Z act only when `map.controls.show_navigation_tools` is on (Settings -> Map -> Controls). The Pan and Zoom tools are hidden by default, and while they are hidden both keys behave like unbound keys. The map still pans on a plain drag and zooms on the wheel under every tool.
 
-**Note**: When Pan (P) or Zoom (Z) tools are active, selection-related shortcuts (Ctrl+A, Delete/Backspace) are disabled to prevent accidental modifications while navigating the map. Hover effects and click selection are also disabled.
+**Note**: When Pan (P) or Zoom (Z) tools are active, selection-related shortcuts (Ctrl+A, Delete/Backspace) are disabled to prevent accidental modifications while navigating the map. Hovering the map itself is also off (no hover highlight on a shot, station or section, and no pointer cursor), and clicks on the map select nothing. Hovering a row in a panel (a section in the Sections panel, a shot row in the data table, a station link in the detail panel) still highlights that feature on the map.
 
 ### Undo/Redo Dropdown Keyboard Navigation
 

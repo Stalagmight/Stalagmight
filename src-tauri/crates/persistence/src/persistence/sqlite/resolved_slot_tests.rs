@@ -15,7 +15,7 @@
 //! instead, keeping B's ignore - the outcome `save_resolved_warning` documents
 //! for a slot held by a different shot.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 
@@ -144,7 +144,7 @@ fn position_keyed_ignores_move_with_their_shots_all_or_nothing() {
     // A swap of slots 1 and 2: the position-keyed rows trade places, the
     // uuid-keyed one stays.
     let moved = db
-        .rekey_position_resolved_warnings(&[(0, 1, 2), (0, 2, 1)], &shots)
+        .rekey_position_resolved_warnings(&[(0, 1, 2), (0, 2, 1)], &shots, &HashSet::new())
         .unwrap();
     assert_eq!(moved, 2);
     assert_eq!(
@@ -162,7 +162,7 @@ fn position_keyed_ignores_move_with_their_shots_all_or_nothing() {
     db.save_resolved_warning(&at(3, "B", None, "shot three"))
         .unwrap();
     let moved = db
-        .rekey_position_resolved_warnings(&[(0, 3, 1)], &shots)
+        .rekey_position_resolved_warnings(&[(0, 3, 1)], &shots, &HashSet::new())
         .unwrap();
     assert_eq!(moved, 1);
     assert_eq!(
@@ -182,7 +182,7 @@ fn position_keyed_ignores_move_with_their_shots_all_or_nothing() {
         .unwrap();
     let before = slots(&db);
     assert!(db
-        .rekey_position_resolved_warnings(&[(0, 3, 2)], &shots)
+        .rekey_position_resolved_warnings(&[(0, 3, 2)], &shots, &HashSet::new())
         .is_err());
     assert_eq!(
         slots(&db),
@@ -231,7 +231,7 @@ fn uuid_keyed_ignores_move_with_their_shots_out_of_the_way() {
     // The reverse swaps them: N is at id 1 now, S at id 2.
     let reversed = HashMap::from([((0, 1), "uuid-n".to_owned()), ((0, 2), "uuid-s".to_owned())]);
     let moved = db
-        .rekey_position_resolved_warnings(&[(0, 1, 2), (0, 2, 1)], &reversed)
+        .rekey_position_resolved_warnings(&[(0, 1, 2), (0, 2, 1)], &reversed, &HashSet::new())
         .unwrap();
     assert_eq!(moved, 2);
     assert_eq!(
@@ -241,7 +241,7 @@ fn uuid_keyed_ignores_move_with_their_shots_out_of_the_way() {
     );
     // And back.
     let back = HashMap::from([((0, 1), "uuid-s".to_owned()), ((0, 2), "uuid-n".to_owned())]);
-    db.rekey_position_resolved_warnings(&[(0, 1, 2), (0, 2, 1)], &back)
+    db.rekey_position_resolved_warnings(&[(0, 1, 2), (0, 2, 1)], &back, &HashSet::new())
         .unwrap();
     assert_eq!(
         slots(&db),
@@ -255,7 +255,7 @@ fn uuid_keyed_ignores_move_with_their_shots_out_of_the_way() {
     db.backfill_resolved_warning_uuids(&HashMap::from([((0, 3), "uuid-s".to_owned())]))
         .unwrap();
     let moved = db
-        .rekey_position_resolved_warnings(&[(0, 1, 2), (0, 2, 1)], &reversed)
+        .rekey_position_resolved_warnings(&[(0, 1, 2), (0, 2, 1)], &reversed, &HashSet::new())
         .unwrap();
     assert_eq!(moved, 2, "N's row and one of S's land on their shots' ids");
     let keys: Vec<(u32, Option<String>)> = slots(&db)
@@ -291,7 +291,8 @@ fn a_reverse_moves_a_position_keyed_ignore_onto_the_slot_a_uuid_keyed_one_leaves
 
     // The reverse puts A at id 1 and B at id 3.
     let after = HashMap::from([((0, 1), "uuid-a".to_owned()), ((0, 3), "uuid-b".to_owned())]);
-    let moved = db.rekey_position_resolved_warnings(&[(0, 1, 3), (0, 3, 1)], &after);
+    let moved =
+        db.rekey_position_resolved_warnings(&[(0, 1, 3), (0, 3, 1)], &after, &HashSet::new());
 
     let mut rows: Vec<(u32, Option<String>, String)> = db
         .load_resolved_warnings()

@@ -75,7 +75,8 @@ export default function SpeleoRevertDialog() {
   // either refused up front (before any lock was taken) or by the backend mid-flight.
   const [needsDiscard, setNeedsDiscard] = useState(false);
   // [#576 W55 NF-W53-1] That refusal was over a copy that could not be read
-  // (`state_unknown`), not one read dirty: same route, honest wording.
+  // (`state_unknown`), not one read dirty: same route, honest wording (warning, lock
+  // note and [#576 W59] discard labels).
   const [copyUnreadable, setCopyUnreadable] = useState(false);
   const [discardArmed, setDiscardArmed] = useState(false);
   // True when the failure left us holding a lock we did not have before, so the
@@ -320,11 +321,17 @@ export default function SpeleoRevertDialog() {
                   : 'speleodb-revert-discard-offer-btn'
               }
             >
+              {/* [#576 W59] Nobody knows whether a copy that could not be read
+                  holds changes, so its labels name the local copy instead. */}
               {busy
                 ? t('speleodb.revert.reverting')
                 : discardArmed
-                  ? t('speleodb.revert.discardConfirm')
-                  : t('speleodb.revert.discardOffer')}
+                  ? copyUnreadable
+                    ? t('speleodb.revert.unreadableDiscardConfirm')
+                    : t('speleodb.revert.discardConfirm')
+                  : copyUnreadable
+                    ? t('speleodb.revert.unreadableDiscardOffer')
+                    : t('speleodb.revert.discardOffer')}
             </Button>
           ) : retryUpload ? (
             // Re-issue the upload and NOTHING else: `resume-upload` skips the acquire

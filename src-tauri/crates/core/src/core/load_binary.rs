@@ -115,7 +115,8 @@ pub struct LoadProjectFullBinaryResult {
     /// `newer_schema_version`: absent to a reader that predates it.
     pub unreadable_project_settings: Vec<String>,
     /// [#576 B35(h)] What the load reset or dropped because it could not use it,
-    /// per kind (`shots`, `section_offsets`, `station_offsets`, `gps_points`).
+    /// per kind (`shots`, `section_offsets`, `station_offsets`, `gps_points`,
+    /// `station_comments`).
     /// Mirrors `LoadProjectFullResult::load_repairs`; the frontend shows one notice
     /// after the open when any count is non-zero. A top-level key, like
     /// `newer_schema_version`: absent to a reader that predates it.

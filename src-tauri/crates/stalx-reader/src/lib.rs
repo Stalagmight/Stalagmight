@@ -19,7 +19,13 @@
 //! counted before anything is loaded. Every connection to the copy runs in
 //! defensive mode with `trusted_schema` off, a cap on any value SQLite produces,
 //! no memory-mapping, cell-size checks, and a deadline that interrupts any
-//! statement still running past it.
+//! statement still running past it. Each also has SQLite's authorizer refuse
+//! virtual tables, DBSTAT, and the functions of FTS, R-tree and extension
+//! loading, which this crate's bundled SQLite has compiled in; a
+//! file whose schema names or SQL are not valid UTF-8, which the authorizer
+//! cannot be handed, is refused before that, and so is one whose schema names
+//! or SQL are not stored as text: SQLite still parses SQL stored as a blob, so
+//! a CHECK there would otherwise go unseen.
 //!
 //! **Bounds.** One deadline covers the read from the first SQLite statement to
 //! the result, at two granularities: inside SQLite a statement is interrupted
@@ -38,6 +44,10 @@
 //! Files written by a newer schema than this crate knows are refused with
 //! [`ReadError::NewerSchema`]; upgrade the crate to read them.
 //!
+//! A file with a section of more than 99,999 shots, the most the app's shot ids
+//! can number in one section, is refused with [`InvalidKind::Other`], whatever
+//! [`CountLimits`] allows.
+//!
 //! ```no_run
 //! let survey = stalx_reader::read_file(std::path::Path::new("project.stalx"))?;
 //! for section in &survey.sections {
@@ -53,7 +63,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use stalagmight_models::ClassifyScope;
-use stalagmight_persistence::persistence::{refused_schema_object, Database, SCHEMA_VERSION};
+use stalagmight_persistence::persistence::{
+    deny_stripped_sqlite_features, refused_schema_object, Database, SCHEMA_VERSION,
+};
 
 pub use survey::{
     CorrectionSource, Direction, LoopClosure, North, Section, Shot, ShotKind, StationComment,
@@ -258,14 +270,16 @@ pub enum InvalidKind {
     /// an impossible schema version).
     Corrupt,
     /// The file defines a schema object that evaluates file-chosen SQL (see the
-    /// crate docs).
+    /// crate docs). A schema whose names or SQL are not valid UTF-8 or not
+    /// stored as text is refused this way too.
     RefusedSchemaObject,
     /// A statement was still running at the deadline.
     Deadline,
     /// SQLite, but not a Stalagmight project (no project data).
     NoProjectData,
     /// A stored value no survey can have: a zero datum with a non-finite
-    /// latitude/longitude or one outside [-90, 90] / [-180, 180].
+    /// latitude, longitude or depth, or a latitude/longitude outside
+    /// [-90, 90] / [-180, 180].
     InvalidValue,
     /// Anything else the load path rejected.
     Other,
@@ -370,13 +384,13 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
     #[cfg(test)]
     tests::AFTER_LOAD.with(|hook| hook.borrow()());
     check_counts(&project, options.count_limits)?;
-    // The loader drops a zero datum with a non-finite coordinate (and counts
-    // it) rather than handing it on; it is just as impossible as one out of
-    // range, so it is refused the same way.
+    // The loader drops a zero datum with a non-finite latitude, longitude or
+    // depth (and counts it) rather than handing it on; it is just as impossible
+    // as one out of range, so it is refused the same way.
     if report.repairs.gps_points > 0 {
         return Err(ReadError::invalid(
             InvalidKind::InvalidValue,
-            "zero datum: non-finite latitude/longitude",
+            "zero datum: non-finite latitude, longitude or depth",
         ));
     }
     validate_values(&project)?;
@@ -398,12 +412,18 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
         project.classify_virtual_shots(&ClassifyScope::WholeProject);
     }
     remaining(expires)?;
-    Ok(Survey::from_project(
+    let mut survey = Survey::from_project(
         &project,
         schema_version,
         options.with_stations,
         &derived_uuids,
-    ))
+    );
+    // [#576 Q-W30-3-D1] The loader now drops a comment row past the end of its
+    // section itself (and counts it) instead of leaving it for `from_project`
+    // to find unresolved. It is the same dangling cross-reference, so it is
+    // counted here exactly as before: a reader sees what it always saw.
+    survey.unresolved_references += report.repairs.station_comments;
+    Ok(survey)
 }
 
 /// Time left before `expires`, or [`InvalidKind::Deadline`] once it has passed.
@@ -530,6 +550,8 @@ fn inspect(
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(sql_err)?;
     // Same hardening as the load connection: this one parses the file's schema too.
+    // The authorizer first, before any statement (#619).
+    deny_stripped_sqlite_features(&mut conn).map_err(sql_err)?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)
         .map_err(sql_err)?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)
@@ -541,6 +563,8 @@ fn inspect(
         .map_err(sql_err)?;
     conn.execute_batch("PRAGMA mmap_size = 0; PRAGMA cell_size_check = ON;")
         .map_err(sql_err)?;
+    #[cfg(test)]
+    tests::ON_INSPECT.with(|hook| hook.borrow()(&conn));
 
     // The app's own hostile-schema check (`persistence::refused_schema_object`):
     // pragma-shadowing names, unexpected types, virtual tables, and any schema

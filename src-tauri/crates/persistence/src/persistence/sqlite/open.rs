@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
+use super::schema::PreUpgradeCopy;
 use super::{Database, UpgradeRefusal, SCHEMA_VERSION};
 
 /// Whether `path` names a `.stalx` project file, in any letter case.
@@ -77,12 +78,18 @@ pub fn with_stalx_extension(path: PathBuf) -> PathBuf {
 /// this connection, closing last, checkpoints those frames into the file. That
 /// is the writer's committed data, written where it would have gone anyway -
 /// not a corruption - but it is a write made by a reader's close.
+///
+/// Every caller runs the schema guard on it, so the authorizer goes on before
+/// any statement (#619).
 pub(super) fn connect_for_reading(path: &Path) -> rusqlite::Result<Connection> {
     use rusqlite::OpenFlags;
     if !wal_mode_with_nothing_beside(path) {
-        return Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY);
+        let mut conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        super::deny_stripped_sqlite_features(&mut conn)?;
+        return Ok(conn);
     }
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    let mut conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    super::deny_stripped_sqlite_features(&mut conn)?;
     conn.pragma_update(None, "query_only", true)?;
     Ok(conn)
 }
@@ -240,10 +247,12 @@ impl Database {
         // row yet must still be MIGRATED, not treated as fresh.
         let file_existed = path.exists();
 
-        let conn = connect().context("Failed to open database")?;
+        let mut conn = connect().context("Failed to open database")?;
         if file_existed {
             // An existing file may come from anywhere; refuse a hostile schema
-            // before init_schema or a migration touches it (#608).
+            // before init_schema or a migration touches it (#608), with the
+            // authorizer on first (#619).
+            super::deny_stripped_sqlite_features(&mut conn)?;
             super::check_schema(&conn)?;
         }
 
@@ -361,11 +370,13 @@ impl Database {
             COPIES.fetch_add(1, Ordering::Relaxed)
         );
         let uri = OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let conn = Connection::open_with_flags(
+        let mut conn = Connection::open_with_flags(
             &name,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | uri,
         )
         .context("Failed to create an in-memory copy of the project")?;
+        // The copy is the file's content, and the upgrade runs on it (#619).
+        super::deny_stripped_sqlite_features(&mut conn)?;
         let source_path = if path.is_absolute() {
             path.to_path_buf()
         } else {
@@ -378,12 +389,13 @@ impl Database {
         // creates the `-wal` / `-shm` beside it and cannot remove them when it
         // closes; a read-write one removes them as every other open's last close
         // does, so the source's folder is left as it was.
-        let source =
+        let mut source =
             Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_WRITE | uri)
                 .context("Failed to open the project to copy it")?;
         // Another open of an existing file: the schema guard first (#608). The
         // refusing first open already refused a hostile schema, so this catches a
         // file swapped in between (#576 RV18-2, tested through `between_opens`).
+        super::deny_stripped_sqlite_features(&mut source)?;
         super::check_schema(&source)?;
         source
             .execute("VACUUM INTO ?1", [&name])
@@ -420,22 +432,28 @@ impl Database {
         }
 
         // Open in read-only mode first to check if it's valid
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .context("Failed to open database - file may not be a valid SQLite database")?;
+        let mut conn =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+                .context("Failed to open database - file may not be a valid SQLite database")?;
+        super::deny_stripped_sqlite_features(&mut conn)?;
         Self::finish_open_existing(conn, false, refuse_upgrade)
     }
 
     /// [`Self::open_existing`] for a file from an untrusted source, e.g. a server
     /// upload. Callers must pass a private COPY: this runs the same forward
-    /// migrations, which write to the file.
+    /// migrations, which write to the file. Because it is a copy, an upgrade keeps
+    /// no `.pre-v<N>.backup` beside it, unlike every other open.
     ///
     /// The file can carry its own schema, so before anything reads it the
     /// connection is put in defensive mode with `trusted_schema` off (no
-    /// non-innocuous functions from schema code), every string or blob SQLite
-    /// produces is capped at `max_value_bytes`, and any statement still running
-    /// once `deadline` has passed since the open is interrupted. SQLite checks the
-    /// deadline every 1,000 VM steps within a statement, so it bounds long
-    /// statements; many short ones are bounded by the input size instead.
+    /// non-innocuous functions from schema code), SQLite's authorizer refuses
+    /// virtual tables, DBSTAT and the functions of FTS, R-tree and extension
+    /// loading whether or not the linked SQLite has them (#619), every string
+    /// or blob SQLite produces is capped at `max_value_bytes`, and any statement
+    /// still running once `deadline` has passed since the open is interrupted.
+    /// SQLite checks the deadline every 1,000 VM steps within a statement, so it
+    /// bounds long statements; many short ones are bounded by the input size
+    /// instead.
     pub fn open_existing_untrusted(
         path: &Path,
         max_value_bytes: i32,
@@ -452,6 +470,7 @@ impl Database {
                 .context("Failed to open database - file may not be a valid SQLite database")?;
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
+        super::deny_stripped_sqlite_features(&mut conn)?;
         conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, max_value_bytes)?;
         let expires = std::time::Instant::now() + deadline;
         conn.progress_handler(1_000, Some(move || std::time::Instant::now() > expires))?;
@@ -466,7 +485,8 @@ impl Database {
 
     /// The checks and migrations every existing-file open runs on `conn`.
     /// `untrusted` keeps the caller's hardened pragmas instead of the app's
-    /// performance ones; `refuse_upgrade` is [`Self::open_existing_with`]'s.
+    /// performance ones, and skips the pre-upgrade copy; `refuse_upgrade` is
+    /// [`Self::open_existing_with`]'s.
     fn finish_open_existing(
         conn: Connection,
         untrusted: bool,
@@ -479,7 +499,15 @@ impl Database {
         if !untrusted {
             db.apply_load_performance_pragmas();
         }
-        db.run_existing_open_checks(refuse_upgrade)
+        // An untrusted open is always of a private copy the caller throws away
+        // after the read (`open_existing_untrusted`), so an upgrade keeps no
+        // pre-upgrade copy beside it.
+        let pre_upgrade_copy = if untrusted {
+            PreUpgradeCopy::Skip
+        } else {
+            PreUpgradeCopy::Keep
+        };
+        db.run_existing_open_checks(refuse_upgrade, pre_upgrade_copy)
     }
 
     fn apply_load_performance_pragmas(&self) {
@@ -502,7 +530,11 @@ impl Database {
         let _ = self.conn.pragma_update(None, "temp_store", "MEMORY");
     }
 
-    fn run_existing_open_checks(self, refuse_upgrade: Option<&UpgradeRefusal>) -> Result<Self> {
+    fn run_existing_open_checks(
+        self,
+        refuse_upgrade: Option<&UpgradeRefusal>,
+        pre_upgrade_copy: PreUpgradeCopy,
+    ) -> Result<Self> {
         let db = &self;
         // Run quick integrity check before reading any data (SPEC 14.4)
         let t = std::time::Instant::now();
@@ -528,7 +560,7 @@ impl Database {
 
         // Run lightweight migrations to ensure newer tables exist in legacy projects
         let t = std::time::Instant::now();
-        db.ensure_schema_version_with(refuse_upgrade)?;
+        db.ensure_schema_version_with(refuse_upgrade, pre_upgrade_copy)?;
         tracing::debug!(
             ms = t.elapsed().as_millis() as u64,
             "open_existing: ensure_schema_version"
@@ -621,12 +653,14 @@ impl Database {
         drop(self);
         #[cfg(test)]
         between_opens::run(path);
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .context("Failed to reopen the database read-only")?;
+        let mut conn =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .context("Failed to reopen the database read-only")?;
         // Another open of an existing file: the schema guard first (#608). The
         // open that made this handle already refused a hostile schema, so this
         // catches a file swapped in between (#576 RV18-2, tested through
         // `between_opens`).
+        super::deny_stripped_sqlite_features(&mut conn)?;
         super::check_schema(&conn)?;
         let db = Self { conn };
         db.enable_foreign_keys()?;
@@ -687,8 +721,10 @@ impl Database {
         if !path.exists() {
             anyhow::bail!("File does not exist: {}", path.display());
         }
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .context("Failed to open database read-write for metadata")?;
+        let mut conn =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+                .context("Failed to open database read-write for metadata")?;
+        super::deny_stripped_sqlite_features(&mut conn)?;
         super::check_schema(&conn)?;
         Ok(Self { conn })
     }

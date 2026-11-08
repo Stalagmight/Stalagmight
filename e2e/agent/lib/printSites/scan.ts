@@ -7,30 +7,44 @@
  * and the values.
  *
  * A site is a sink call:
- * - `stream`: `console.*`, `process.stdout.write` / `process.stderr.write`, or a
- *   call of a function a file declares as a wrapper of one (`smoke.ts`' `log`,
- *   the repro report's `P`);
- * - `progress`: `ctx.log`, printed through `shareableProgressLine`;
- * - `stream` too: the key of `ctx.metric` / `ctx.setMetric`, which the runner's
+ * - `stream`: every `console` method (`console['log']` too; `console.assert`'s
+ *   data, not its condition), `process.stdout.write` / `process.stderr.write`,
+ *   `process.emitWarning`, each under the global object too
+ *   (`globalThis.console.error`), `fs.writeSync` / `writevSync` / `write` /
+ *   `writev` to descriptor 1 or 2, or a call of a function a file declares as a
+ *   wrapper of one (`smoke.ts`' `log`, the repro report's `P`);
+ * - `progress`: `<context>.log` under any name (`ctx.log`, `context.log`),
+ *   printed through `shareableProgressLine`;
+ * - `stream` too: the key of `<context>.metric` / `setMetric`, which the runner's
  *   PASS/FAIL line prints (`JSON.stringify(metrics.metrics)`);
- * - `error`: `new <Name>Error(message)`, whose message a runner prints through
+ * - `error`: `new <Name>Error(message)` or `<Name>Error(message)` without `new`,
+ *   whose message a runner prints through
  *   `shareableErrorText` / `scenarioFailOutput`, which keep its first line
  *   (under `unprojected` prefixes - `scripts/` - the whole message prints);
  * - `return`: a `return` of a function a file declares as a builder of shared
  *   text (the repro report's `describeAction`);
  * - `file`: `writeFileSync`, `writeFile`, `appendFileSync`, `appendFile`,
- *   `createWriteStream`, a `.write` / `.end` on a stream one opened, and the
- *   copies `copyFileSync`, `copyFile`, `cpSync`;
+ *   `createWriteStream`, `writeSync` / `writevSync` / `fs.write` / `fs.writev`
+ *   to another descriptor, a `.write` / `.end` on a stream one opened, a
+ *   `.write` / `.writev` / `.writeFile` / `.appendFile` on a FileHandle one
+ *   opened (`fs.promises.open`, or handed to a `.then` callback), and the copies
+ *   `copyFileSync`, `copyFile`, `cpSync`; each taken from fs by another name too
+ *   (`const { writeFileSync: w } = fs`, `import { copyFile as c } from 'fs'`);
  * - `passthrough`: a child process's `stdio` (or `stdout` / `stderr` option)
  *   that hands it this process's stdout or stderr (`'inherit'`, `1`, `2`,
  *   `process.stdout`), an `execSync` / `execFileSync` that sets no `stdio`
  *   (its stderr is ours), a `.pipe(process.stdout)`, and a sink handed on as a
- *   value (`log = console.log`, `const out = process.stderr`).
+ *   value (`log = console.log`, `const out = process.stderr`, `const c =
+ *   console`, `const { error } = console`, `const { stdout } = process`,
+ *   `import { stdout } from 'node:process'`, anything imported from `console`,
+ *   the same taken with `require` or a dynamic `import()`, `globalThis.console`,
+ *   `promisify(fs.write)`, a file write handed on: `const w = fs.writeFileSync`).
  *
- * A value is followed through a `const` to what it was made from, and through
+ * A value is followed through a `const` to what it was made from, through
  * a call of a local arrow function to what it returns, each parameter standing
- * for its argument. `.length`, arithmetic, comparisons and `Math.*` are numbers
- * and need no reason. A value is marked folded inside a `FOLDS` call, in a line
+ * for its argument, and through the `join` of a `const` array to what was
+ * pushed into it (report.md's `md`), while nothing else can add to it.
+ * `.length`, arithmetic, comparisons and `Math.*` are numbers and need no reason. A value is marked folded inside a `FOLDS` call, in a line
  * the runner projects (it folds every line), or as the parameter of a function a
  * `FOLDING_CALLBACKS` helper calls.
  *
@@ -48,7 +62,7 @@ export interface PrintSite {
   /** Repo-relative, `/`-separated. */
   file: string;
   line: number;
-  /** The enclosing named function, or `<module>`. */
+  /** The function it is written in (`fnName`): the nearest named one or `<module>`, a callback as its call under it. */
   fn: string;
   kind: SinkKind;
   /** The callee as written (`process.stdout.write`), or `return` / `stdio`. */
@@ -56,6 +70,13 @@ export interface PrintSite {
   /** `file` sites: the target argument as written. */
   target?: string;
   values: PrintValue[];
+  /**
+   * A `reference` passthrough (a sink handed on): the names it is held in, and
+   * whether every one is a declared wrapper of the file, so that its calls are
+   * checked sites (#576 RV20-12).
+   */
+  holders?: readonly string[];
+  held?: boolean;
 }
 
 export interface PrintValue {
@@ -66,9 +87,7 @@ export interface PrintValue {
   withheld: boolean;
   /** The value is a call of this function (the callee's last name), if any. */
   callee?: string;
-  /** A bare identifier, or a call of a parameter (`what()`): the allow-list keys it by function too. */
-  bare: boolean;
-  /** The function the value is written in (a const or a local arrow function can be another than the site's). */
+  /** The function the value is written in (a const or a local arrow function can be another than the site's): its allow key's first half. */
   fn: string;
   /** Inside a call of a folding helper (`foldLocalPaths`): a path in it prints folded. */
   folded: boolean;
@@ -101,12 +120,40 @@ export interface ScanOptions {
   unprojected: readonly string[];
 }
 
-const STREAM = /^(?:console\.(?:log|error|warn|info|debug|trace|table|dir)|process\.(?:stdout|stderr)\.write)$/;
-const FILE_WRITE = new Set(['writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream']);
-/** A scenario's metric: its key prints in the runner's PASS/FAIL line. */
-const METRIC = /^ctx\.(?:metric|setMetric)$/;
+/**
+ * Every console method prints (`group`, `assert`, `count`, `timeLog` too), and so does a process warning,
+ * under the global object too (`globalThis.console.error`, #576 W56-T1-NF1).
+ */
+const STREAM = /^(?:(?:globalThis|global|window)\.)?(?:console\.\w+|process\.(?:stdout|stderr)\.write|process\.emitWarning)$/;
+/** The console under the global object (`const c = globalThis.console`): the console itself. */
+const GLOBAL_CONSOLE = /^(?:globalThis|global|window)\.console$/;
+/** This process's stdout or stderr, under the global object too. */
+const STD_STREAM = /^(?:(?:globalThis|global|window)\.)?process\.(?:stdout|stderr)$/;
+const FILE_WRITE = new Set(['writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream', 'writeSync', 'writevSync']);
+/** `fs.writeSync` / `writevSync` to one of these descriptors is stdout or stderr. */
+const STD_FD = /^(?:1|2|process\.(?:stdout|stderr)\.fd)$/;
+const FD_WRITE = new Set(['writeSync', 'writevSync']);
+/** `fs.write` / `fs.writev`, the same writes with a callback: named only on the fs module, as `write` alone is any stream's. */
+const FS_ASYNC_WRITE = new Set(['write', 'writev']);
+/** What a FileHandle (`fs.promises.open`) writes with: the data is its first argument. */
+const HANDLE_WRITE = new Set(['write', 'writev', 'writeFile', 'appendFile']);
+/** A scenario's progress line, under whatever name its context has (`ctx.log`, `context.log`, `base.log`). */
+const PROGRESS = /^(?!console\.|Math\.)[\w$]+(?:\.[\w$]+)*\.log$/;
+/** A scenario's metric, under whatever name its context has: its key prints in the runner's PASS/FAIL line. */
+const METRIC = /^[\w$]+(?:\.[\w$]+)*\.(?:metric|setMetric)$/;
+/** `Error(message)` without `new` makes the same error: a constructor's name, capitalised. */
+const ERROR_CALL = /(?:^|\.)(?:[A-Z]\w*)?Error$/;
+/** Modules that hand out this process's streams or console under another name. */
+const STD_MODULE = /^(?:node:)?(?:process|console)$/;
+/**
+ * What a destructure or a named import of `process` takes that prints: `default` too, which a module
+ * namespace of it holds the whole process in (`const { default: p } = await import('process')`).
+ */
+const PROCESS_SINKS = new Set(['stdout', 'stderr', 'emitWarning', 'default']);
 /** Copies: the target is the second argument, the content another file. */
 const FILE_COPY = new Set(['copyFileSync', 'copyFile', 'cpSync']);
+/** What fs and fs/promises hand out that writes or copies a file: a site where it is called, a sink handed on anywhere else. */
+const FS_FILE_WRITE = new Set([...FILE_WRITE, ...FILE_COPY]);
 /** Child processes whose stderr is this process's unless `stdio` says otherwise. */
 const EXEC_INHERITS_STDERR = new Set(['execSync', 'execFileSync']);
 /** A call whose function argument runs in the page. */
@@ -147,17 +194,40 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
   const errorsProjected = !opts.unprojected.some((prefix) => file.startsWith(prefix));
   const sites: PrintSite[] = [];
 
+  /** A callee without its arguments (`actions.filter().map`): stable across edits of what it is called with. */
+  const calleeName = (callee: ts.Expression): string => {
+    if (ts.isIdentifier(callee) || callee.kind === ts.SyntaxKind.ThisKeyword) return callee.getText(source);
+    if (ts.isPropertyAccessExpression(callee)) return `${calleeName(callee.expression)}.${callee.name.text}`;
+    if (ts.isCallExpression(callee)) return `${calleeName(callee.expression)}()`;
+    if (ts.isElementAccessExpression(callee)) return `${calleeName(callee.expression)}[]`;
+    if (ts.isParenthesizedExpression(callee) || ts.isAwaitExpression(callee) || ts.isNonNullExpression(callee) || ts.isAsExpression(callee)) {
+      return calleeName(callee.expression);
+    }
+    return '<expression>';
+  };
+  /**
+   * The function a node is written in: the nearest named one (a declaration, a
+   * method, a function held in a variable or a property), or `<module>`. A
+   * function handed to a call as an argument is that call, under the function it
+   * is written in (`<module> > steps.forEach`, `main > files.map > rows.forEach`):
+   * a callback's names are its own, not its enclosing function's (#576 RV20-7).
+   */
   const fnName = (node: ts.Node): string => {
+    const calls: string[] = [];
+    const named = (name: string): string => [name, ...calls].join(' > ');
     for (let at: ts.Node | undefined = node.parent; at; at = at.parent) {
-      if ((ts.isFunctionDeclaration(at) || ts.isMethodDeclaration(at)) && at.name) return at.name.getText(source);
+      if ((ts.isFunctionDeclaration(at) || ts.isMethodDeclaration(at)) && at.name) return named(at.name.getText(source));
       if ((ts.isArrowFunction(at) || ts.isFunctionExpression(at)) && at.parent) {
-        const holder = at.parent;
+        const holder: ts.Node = at.parent;
         if ((ts.isVariableDeclaration(holder) || ts.isPropertyAssignment(holder)) && holder.name) {
-          return holder.name.getText(source);
+          return named(holder.name.getText(source));
+        }
+        if ((ts.isCallExpression(holder) || ts.isNewExpression(holder)) && holder.arguments?.includes(at)) {
+          calls.unshift(`${ts.isNewExpression(holder) ? 'new ' : ''}${calleeName(holder.expression)}`);
         }
       }
     }
-    return '<module>';
+    return named('<module>');
   };
   const inPage = (node: ts.Node): boolean => {
     for (let at: ts.Node | undefined = node.parent; at; at = at.parent) {
@@ -222,14 +292,47 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     }
     return undefined;
   };
-  /** Is `id` a parameter of a function that encloses it? A call of one runs whatever its caller passed. */
-  const isParameter = (id: ts.Identifier): boolean => {
-    for (let at: ts.Node | undefined = id.parent; at; at = at.parent) {
-      if (ts.isFunctionLike(at) && at.parameters.some((param) => ts.isIdentifier(param.name) && param.name.text === id.text)) {
-        return true;
-      }
+
+  /**
+   * An accumulator (`const md = []; md.push(..); md.join('\n')`): its elements,
+   * then each argument a `push` on it adds, in source order, so a line pushed
+   * past the helper that should print it (`P`) is a value of the join's site.
+   * Only while every other use of it only reads it: one handed to a function,
+   * assigned, or reordered (`unshift`, `sort`, `x[i] = ..`) can hold anything,
+   * so its join stays one value that needs a reason of its own.
+   */
+  const pushedTo = new Map<ts.Node, readonly ts.Expression[] | null>();
+  const READS = new Set(['join', 'length', 'slice', 'map', 'filter', 'forEach', 'some', 'every', 'includes', 'indexOf', 'find', 'at']);
+  const accumulated = (receiver: ts.Expression): readonly ts.Expression[] | undefined => {
+    const init = ts.isIdentifier(receiver) ? constInit(receiver) : undefined;
+    if (!init || !ts.isArrayLiteralExpression(init)) return undefined;
+    if (!pushedTo.has(init)) {
+      const found: ts.Expression[] = [];
+      let closed = true;
+      // Its uses are in the block that declares it.
+      let scope: ts.Node = init;
+      while (!(ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isCaseClause(scope) || ts.isModuleBlock(scope))) scope = scope.parent;
+      scope.forEachChild(function uses(node: ts.Node): void {
+        if (ts.isIdentifier(node) && node.text === (receiver as ts.Identifier).text && constInit(node) === init) {
+          const parent = node.parent;
+          const member = ts.isPropertyAccessExpression(parent) && parent.expression === node ? parent.name.text : undefined;
+          if (member === 'push' && ts.isCallExpression(parent.parent) && parent.parent.expression === parent) {
+            found.push(...parent.parent.arguments);
+          } else if (
+            (ts.isVariableDeclaration(parent) || ts.isPropertyAccessExpression(parent) || ts.isPropertyAssignment(parent)) &&
+            parent.name === node
+          ) {
+            // Its own declaration, or a property of the same name.
+          } else if (!(member !== undefined && READS.has(member)) && !ts.isSpreadElement(parent) && !(ts.isForOfStatement(parent) && parent.expression === node)) {
+            closed = false;
+          }
+        }
+        node.forEachChild(uses);
+      });
+      pushedTo.set(init, closed ? found : null);
     }
-    return false;
+    const pushed = pushedTo.get(init);
+    return pushed ? [...init.elements, ...pushed] : undefined;
   };
 
   /** One printed part: literal text, or a value. */
@@ -245,17 +348,18 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       return [...flatten(node.left), ...flatten(node.right)];
     }
-    // `[a, b].join(sep)`: the elements, the separator between them.
-    if (
-      ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      node.expression.name.text === 'join' &&
-      ts.isArrayLiteralExpression(node.expression.expression)
-    ) {
+    // `[a, b].join(sep)`, or an accumulator's: the elements, the separator between them.
+    const joined =
+      ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'join'
+        ? ts.isArrayLiteralExpression(node.expression.expression)
+          ? node.expression.expression.elements
+          : accumulated(node.expression.expression)
+        : undefined;
+    if (joined && ts.isCallExpression(node)) {
       const sepArg = node.arguments[0];
       const sep = sepArg && ts.isStringLiteralLike(sepArg) ? sepArg.text : ',';
       const parts: Part[] = [];
-      node.expression.expression.elements.forEach((el, i) => {
+      joined.forEach((el, i) => {
         if (i > 0) parts.push({ lit: sep });
         if (!ts.isSpreadElement(el) && !ts.isOmittedExpression(el)) parts.push(...flatten(el));
         else parts.push({ expr: el as ts.Expression });
@@ -268,8 +372,8 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
   const valuesOf = (node: ts.Expression, withheld: boolean, out: PrintValue[], seen: Set<ts.Node>, folded = false): void => {
     if (seen.has(node)) return;
     seen.add(node);
-    const add = (n: ts.Expression, callee?: string, bare = ts.isIdentifier(n)): void => {
-      out.push({ text: text(n), line: lineOf(n), withheld, ...(callee ? { callee } : {}), bare, folded, fn: fnName(n) });
+    const add = (n: ts.Expression, callee?: string): void => {
+      out.push({ text: text(n), line: lineOf(n), withheld, ...(callee ? { callee } : {}), folded, fn: fnName(n) });
     };
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)) {
       return valuesOf(node.expression, withheld, out, seen, folded);
@@ -316,7 +420,7 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
       const init = constInit(node);
       if (init && !ts.isArrowFunction(init) && !ts.isFunctionExpression(init)) return valuesOf(init, withheld, out, seen, folded);
       if (!folded && foldedParameter(node)) {
-        out.push({ text: text(node), line: lineOf(node), withheld, bare: true, folded: true, fn: fnName(node) });
+        out.push({ text: text(node), line: lineOf(node), withheld, folded: true, fn: fnName(node) });
         return;
       }
       return add(node);
@@ -370,13 +474,16 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
           return;
         }
       }
-      if ([...flatten(node)].length > 1) {
-        for (const part of flatten(node)) if ('expr' in part) valuesOf(part.expr, withheld, out, seen, folded);
+      // A join of several parts, or an accumulator's (however few it holds), is its parts.
+      const parts = flatten(node);
+      const ofAccumulator = ts.isPropertyAccessExpression(node.expression) && last === 'join' && !!accumulated(node.expression.expression);
+      if (parts.length > 1 || ofAccumulator) {
+        for (const part of parts) if ('expr' in part) valuesOf(part.expr, withheld, out, seen, folded);
         return;
       }
       // A call of a parameter (`guarded`'s `what()`) runs whatever its caller passed, so the same text in
-      // another function is another value: keyed by its function, as a bare identifier is.
-      return add(node, last, ts.isIdentifier(node.expression) && isParameter(node.expression));
+      // another function is another value: keyed by its function, as every value is (`valueKey`).
+      return add(node, last);
     }
     add(node);
   };
@@ -414,10 +521,118 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
   const site = (node: ts.Node, kind: SinkKind, sink: string, values: PrintValue[], target?: string): void => {
     sites.push({ file, line: lineOf(node), fn: fnName(node), kind, sink, values, ...(target ? { target } : {}) });
   };
+  /** The names a sink handed on is held in (`log = console.log`, `const { error } = console`); none when it is passed or stored elsewhere. */
+  const holdersOf = (node: ts.Node): string[] => {
+    if (ts.isBindingElement(node) || ts.isImportSpecifier(node) || ts.isNamespaceImport(node)) return [node.name.getText(source)];
+    if (ts.isImportClause(node)) return node.name ? [node.name.text] : [];
+    let at: ts.Node = node;
+    while (ts.isParenthesizedExpression(at.parent) || ts.isAsExpression(at.parent) || ts.isNonNullExpression(at.parent)) at = at.parent;
+    const holder = at.parent;
+    if ((ts.isVariableDeclaration(holder) || ts.isParameter(holder)) && holder.initializer === at) {
+      if (ts.isIdentifier(holder.name)) return [holder.name.text];
+      return ts.isObjectBindingPattern(holder.name) ? holder.name.elements.map((element) => element.name.getText(source)) : [];
+    }
+    const assigned = ts.isBinaryExpression(holder) && holder.operatorToken.kind === ts.SyntaxKind.EqualsToken && holder.right === at;
+    return assigned && ts.isIdentifier(holder.left) ? [holder.left.text] : [];
+  };
+  /** A sink handed on: a passthrough to list, held only where a declared wrapper makes its calls sites. */
+  const reference = (node: ts.Node, target: string): void => {
+    const holders = holdersOf(node);
+    const held = holders.length > 0 && holders.every((name) => Object.hasOwn(wrappers, name));
+    sites.push({ file, line: lineOf(node), fn: fnName(node), kind: 'passthrough', sink: 'reference', values: [], target, holders, held });
+  };
+
+  // The fs module and fs/promises under the names the file gives them (`fs` itself, `import * as
+  // nodeFs from 'node:fs'`, `const fsp = require('fs/promises')`, `const fsp = fs.promises`, `const fsp =
+  // await import('fs/promises')`), and `write` / `writev` / `open` taken from them by name (#576
+  // W56-T1-NF1), and a file write or copy taken by name (`const { writeFileSync: w } = fs`, `import {
+  // copyFile as c } from 'node:fs/promises'`), each local name to what it was taken as (#576 W74-NF1).
+  const fsModules = new Set(['fs']);
+  const fsPromisesModules = new Set<string>();
+  const fsWrites = new Map<string, string>();
+  const fsOpens = new Set<string>();
+  const fsFileWrites = new Map<string, string>();
+  /**
+   * The module a `require('<module>')` or a dynamic `import('<module>')` loads, without `node:`; and
+   * whether it is the import, whose call is a promise of the module (#576 W74-NF1).
+   */
+  const loaded = (expr: ts.Expression): { module: string; imported: boolean } | undefined => {
+    if (!ts.isCallExpression(expr)) return undefined;
+    const imported = expr.expression.kind === ts.SyntaxKind.ImportKeyword;
+    if (!imported && !(ts.isIdentifier(expr.expression) && expr.expression.text === 'require')) return undefined;
+    const spec = expr.arguments[0];
+    return spec && ts.isStringLiteralLike(spec) ? { module: spec.text.replace(/^node:/, ''), imported } : undefined;
+  };
+  /** The module an expression is: `require('<module>')` or `await import('<module>')` (without `node:`), or a name or `.promises` of fs. */
+  const moduleOf = (expr: ts.Expression): string | undefined => {
+    let inner = expr;
+    while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+    const awaited = ts.isAwaitExpression(inner);
+    if (ts.isAwaitExpression(inner)) inner = inner.expression;
+    while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+    const load = loaded(inner);
+    // A dynamic import is the module once awaited; un-awaited it is a promise of it.
+    if (load) return load.imported && !awaited ? undefined : load.module;
+    if (ts.isIdentifier(expr)) return fsModules.has(expr.text) ? 'fs' : fsPromisesModules.has(expr.text) ? 'fs/promises' : undefined;
+    if (ts.isPropertyAccessExpression(expr) && expr.name.text === 'promises' && moduleOf(expr.expression) === 'fs') return 'fs/promises';
+    return undefined;
+  };
+  /** Note `local` as a name for `module`, or for what it takes from it (`taken`). */
+  const bindModule = (module: string, local: string, taken?: string): void => {
+    const name = module.replace(/^node:/, '');
+    if (name === 'fs' && taken === undefined) fsModules.add(local);
+    else if ((name === 'fs' && taken === 'promises') || (name === 'fs/promises' && taken === undefined)) fsPromisesModules.add(local);
+    else if (name === 'fs' && taken !== undefined && FS_ASYNC_WRITE.has(taken)) fsWrites.set(local, taken);
+    else if (name === 'fs/promises' && taken === 'open') fsOpens.add(local);
+    else if ((name === 'fs' || name === 'fs/promises') && taken !== undefined && FS_FILE_WRITE.has(taken)) fsFileWrites.set(local, taken);
+  };
+  /** A destructure of `module`: each name it takes, and fs's `promises` destructured in turn (`const { promises: { writeFile: w } } = fs`). */
+  const bindPattern = (module: string, pattern: ts.ObjectBindingPattern): void => {
+    for (const element of pattern.elements) {
+      const taken = text(element.propertyName ?? element.name);
+      if (!ts.isObjectBindingPattern(element.name)) bindModule(module, element.name.getText(source), taken);
+      else if (module === 'fs' && taken === 'promises') bindPattern('fs/promises', element.name);
+    }
+  };
+  source.forEachChild(function modules(node: ts.Node): void {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.importClause) {
+      const specifier = node.moduleSpecifier.text;
+      const { name, namedBindings } = node.importClause;
+      if (name) bindModule(specifier, name.text);
+      if (namedBindings && ts.isNamespaceImport(namedBindings)) bindModule(specifier, namedBindings.name.text);
+      if (namedBindings && ts.isNamedImports(namedBindings)) {
+        for (const element of namedBindings.elements) bindModule(specifier, element.name.text, (element.propertyName ?? element.name).text);
+      }
+    }
+    const held = ts.isVariableDeclaration(node) && node.initializer ? moduleOf(node.initializer) : undefined;
+    if (held !== undefined && ts.isVariableDeclaration(node)) {
+      if (ts.isIdentifier(node.name)) bindModule(held, node.name.text);
+      if (ts.isObjectBindingPattern(node.name)) bindPattern(held, node.name);
+    }
+    node.forEachChild(modules);
+  });
+  /** `fs.write(fd, ..)` / `fs.writev(fd, ..)` under any name the file gives fs, or taken from it (`write(fd, ..)`). */
+  const asyncFdWrite = (callee: ts.Expression): boolean =>
+    ts.isPropertyAccessExpression(callee)
+      ? FS_ASYNC_WRITE.has(callee.name.text) && moduleOf(callee.expression) === 'fs'
+      : ts.isIdentifier(callee) && fsWrites.has(callee.text);
+  /** fs or fs/promises, under any name the file gives it. */
+  const isFsModule = (expr: ts.Expression): boolean => ['fs', 'fs/promises'].includes(moduleOf(expr) ?? '');
+  /** `await fs.promises.open(..)`, `fsp.open(..)`, `open(..)` taken from fs/promises: a FileHandle. */
+  const opensHandle = (expr: ts.Expression): boolean => {
+    let at = expr;
+    while (ts.isAwaitExpression(at) || ts.isParenthesizedExpression(at)) at = at.expression;
+    if (!ts.isCallExpression(at)) return false;
+    const callee = at.expression;
+    if (ts.isPropertyAccessExpression(callee)) return callee.name.text === 'open' && moduleOf(callee.expression) === 'fs/promises';
+    return ts.isIdentifier(callee) && fsOpens.has(callee.text);
+  };
 
   // What a file stream is held in (`const log = fs.createWriteStream(..)`, `this.driverLog = ..`):
-  // its `.write(..)` calls are writes to that file.
+  // its `.write(..)` calls are writes to that file. And what a FileHandle is held in
+  // (`const fh = await fs.promises.open(..)`): its `.write(..)`, `.writeFile(..)` too.
   const fileStreams = new Set<string>();
+  const fileHandles = new Set<string>();
   source.forEachChild(function holders(node: ts.Node): void {
     const init = ts.isVariableDeclaration(node)
       ? node.initializer
@@ -425,9 +640,20 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
         ? node.right
         : undefined;
     const holder = ts.isVariableDeclaration(node) ? node.name : ts.isBinaryExpression(node) ? node.left : undefined;
-    const opens = init && ts.isCallExpression(init) && /(?:^|\.)createWriteStream$/.test(text(init.expression));
+    const opens =
+      init &&
+      ts.isCallExpression(init) &&
+      (/(?:^|\.)createWriteStream$/.test(text(init.expression)) ||
+        (ts.isIdentifier(init.expression) && fsFileWrites.get(init.expression.text) === 'createWriteStream'));
     // Or another name for one (`const driverLog = this.driverLog`), declared after it.
     if (holder && init && (opens || fileStreams.has(text(init)))) fileStreams.add(text(holder));
+    if (holder && init && (opensHandle(init) || fileHandles.has(text(init)))) fileHandles.add(text(holder));
+    // Or the handle a callback is given (`fsp.open(p).then((fh) => fh.write(..))`, #576 W74-NF1).
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'then' && opensHandle(node.expression.expression)) {
+      const callback = node.arguments[0];
+      const param = callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) ? callback.parameters[0] : undefined;
+      if (param && ts.isIdentifier(param.name)) fileHandles.add(param.name.text);
+    }
     node.forEachChild(holders);
   });
 
@@ -443,27 +669,57 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     }
     if (ts.isCallExpression(node)) {
       const callee = text(node.expression);
-      const last = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : callee;
-      const wrapper = Object.hasOwn(wrappers, callee) ? wrappers[callee] : undefined;
+      // A file write or copy taken from fs by another name (`const { writeFileSync: w } = fs`) is that write.
+      const taken = ts.isIdentifier(node.expression) ? fsFileWrites.get(node.expression.text) : undefined;
+      const last = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : (taken ?? callee);
+      // The callee's name without whitespace or arguments (`context\n  .log` is `context.log`).
+      const named = calleeName(node.expression);
+      // A stream wrapper that holds the console or a stream (`const c = console`): its methods print too.
+      const receiver = ts.isPropertyAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression) ? node.expression.expression.text : '';
+      const held = Object.hasOwn(wrappers, receiver) ? wrappers[receiver] : undefined;
+      const wrapper = Object.hasOwn(wrappers, callee)
+        ? wrappers[callee]
+        : (typeof held === 'object' ? held.kind : held) === 'stream'
+          ? 'stream'
+          : undefined;
       const wrapped = typeof wrapper === 'object' ? wrapper.kind : wrapper;
       const printed = (args: readonly ts.Expression[]): readonly ts.Expression[] =>
-        typeof wrapper === 'object' ? args.filter((_, i) => wrapper.args.includes(i)) : args;
-      if (METRIC.test(callee)) {
+        typeof wrapper === 'object'
+          ? args.filter((_, i) => wrapper.args.includes(i))
+          : named === 'console.assert'
+            ? args.slice(1) // console.assert(condition, ...data) prints data, not the condition
+            : args;
+      const [first, ...rest] = node.arguments;
+      const fdWrite = FD_WRITE.has(last) || asyncFdWrite(node.expression);
+      // On a handle held in a name, or straight on the open (`(await fsp.open(p, 'w')).write(..)`, #576 W74-NF1).
+      const handleWrite =
+        ts.isPropertyAccessExpression(node.expression) &&
+        HANDLE_WRITE.has(node.expression.name.text) &&
+        (fileHandles.has(text(node.expression.expression)) || opensHandle(node.expression.expression));
+      // `throw Error(message)`: the same error without `new`.
+      if (ERROR_CALL.test(named) && first) site(node, 'error', callee, messageValues(first, errorsProjected));
+      if (METRIC.test(named)) {
         // A metric's key prints in the PASS/FAIL line (`JSON.stringify(metrics.metrics)`); its value is a number.
         site(node, 'stream', callee, node.arguments.slice(0, 1).flatMap((arg) => messageValues(arg, false)));
-      } else if (STREAM.test(callee) || wrapped === 'stream') {
+      } else if (fdWrite && first && STD_FD.test(text(first))) {
+        // fs.writeSync(1, text), fs.write(1, text, cb): stdout, and what it writes is the second argument.
+        site(node, 'stream', callee, rest.slice(0, 1).flatMap((arg) => messageValues(arg, false)));
+      } else if (STREAM.test(named) || wrapped === 'stream') {
         const values = printed(node.arguments).flatMap((arg) => messageValues(arg, false));
         site(node, inPage(node) ? 'page' : 'stream', callee, values);
-      } else if (callee === 'ctx.log' || wrapped === 'progress') {
+      } else if (PROGRESS.test(named) || wrapped === 'progress') {
         site(node, 'progress', callee, printed(node.arguments).flatMap((arg) => messageValues(arg, true)));
       } else if (wrapped === 'error') {
         // An error wrapper prints its first argument, unless it names others.
         const message = typeof wrapper === 'object' ? printed(node.arguments) : node.arguments.slice(0, 1);
         site(node, 'error', callee, message.flatMap((arg) => messageValues(arg, errorsProjected)));
-      } else if (FILE_WRITE.has(last)) {
-        const [target, ...rest] = node.arguments;
+      } else if (handleWrite && ts.isPropertyAccessExpression(node.expression)) {
+        // fh.write(data), fh.writeFile(data): the file the handle was opened on, and the data first.
+        const values = node.arguments.slice(0, 1).flatMap((arg) => messageValues(arg, false));
+        site(node, 'file', callee, values, `<handle ${text(node.expression.expression)}>`);
+      } else if (FILE_WRITE.has(last) || fdWrite) {
         const values = rest.slice(0, 1).flatMap((arg) => messageValues(arg, false));
-        site(node, 'file', callee, values, target ? text(target) : '');
+        site(node, 'file', callee, values, first ? text(first) : '');
       } else if (FILE_COPY.has(last)) {
         const target = node.arguments[1];
         site(node, 'file', callee, [], target ? text(target) : '');
@@ -486,20 +742,130 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
       STREAM.test(text(node)) &&
       !(ts.isCallExpression(node.parent) && node.parent.expression === node)
     ) {
-      site(node, 'passthrough', 'reference', [], text(node));
+      reference(node, text(node));
+    }
+    // An fd write handed on (`promisify(fs.write)`): whatever it is later called with is written.
+    if (ts.isPropertyAccessExpression(node) && asyncFdWrite(node) && !(ts.isCallExpression(node.parent) && node.parent.expression === node)) {
+      reference(node, text(node));
+    }
+    // A file write or copy handed on (`const w = fs.writeFileSync`, `promisify(fsp.writeFile)`), or one taken from
+    // fs by name and handed on under that name (`const w = writeFileSync`, `promisify(write)`): whatever it is
+    // later called with is written, and no call of it is a site (#576 W74-NF1).
+    const called = node.parent !== undefined && ts.isCallExpression(node.parent) && node.parent.expression === node;
+    if (!called && ts.isPropertyAccessExpression(node) && FS_FILE_WRITE.has(node.name.text) && isFsModule(node.expression)) {
+      reference(node, text(node));
+    }
+    const takenFromFs = ts.isIdentifier(node) ? (fsFileWrites.get(node.text) ?? fsWrites.get(node.text)) : undefined;
+    if (takenFromFs !== undefined && !called) {
+      const parent = node.parent;
+      // Its own declaration (`import { writeFileSync as w }`, `const { writeFileSync: w } = fs`), a property or a
+      // declaration of the same name, or its type.
+      const ownName =
+        ts.isImportSpecifier(parent) ||
+        (ts.isBindingElement(parent) && (parent.name === node || parent.propertyName === node)) ||
+        ((ts.isPropertyAccessExpression(parent) ||
+          ts.isPropertyAssignment(parent) ||
+          ts.isVariableDeclaration(parent) ||
+          ts.isParameter(parent) ||
+          ts.isFunctionDeclaration(parent) ||
+          ts.isMethodDeclaration(parent)) &&
+          parent.name === node) ||
+        ts.isTypeQueryNode(parent) ||
+        ts.isQualifiedName(parent);
+      if (!ownName) reference(node, `fs.${takenFromFs}`);
     }
     // The stream itself handed on (`const out = process.stderr`, `stdio: [.., process.stderr]`).
     if (
       ts.isPropertyAccessExpression(node) &&
-      /^process\.(?:stdout|stderr)$/.test(text(node)) &&
+      STD_STREAM.test(text(node)) &&
       !ts.isPropertyAccessExpression(node.parent) &&
       !(ts.isCallExpression(node.parent) && /\.pipe$/.test(text(node.parent.expression))) &&
       !(ts.isArrayLiteralExpression(node.parent) && ts.isPropertyAssignment(node.parent.parent) && text(node.parent.parent.name) === 'stdio')
     ) {
-      site(node, 'passthrough', 'reference', [], text(node));
+      reference(node, text(node));
     }
     if (ts.isNewExpression(node) && /(?:^|\.)\w*Error$/.test(text(node.expression)) && node.arguments?.[0]) {
       site(node, 'error', `new ${text(node.expression)}`, messageValues(node.arguments[0], errorsProjected));
+    }
+    // The console itself handed on (`const c = console`, `const { error } = console`, `run(console)`),
+    // under the global object too (`const c = globalThis.console`).
+    const consoleOf =
+      (ts.isIdentifier(node) && node.text === 'console') || (ts.isPropertyAccessExpression(node) && GLOBAL_CONSOLE.test(text(node)))
+        ? node.parent
+        : undefined;
+    // `console.x` is a call or a member reference, found above; the rest is the console itself.
+    if (consoleOf && !(ts.isPropertyAccessExpression(consoleOf) && consoleOf.expression === node) && !inPage(node)) {
+      const parent = consoleOf;
+      const ownName =
+        (ts.isPropertyAccessExpression(parent) && (parent.expression === node || parent.name === node)) ||
+        ((ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isBindingElement(parent) || ts.isPropertyAssignment(parent)) &&
+          parent.name === node) ||
+        ts.isTypeOfExpression(parent) ||
+        ts.isTypeQueryNode(parent) ||
+        // A name in a type (`typeof globalThis.console`, `typeof console.log`): never a value (#576 W74-NF3).
+        ts.isQualifiedName(parent);
+      const element = ts.isElementAccessExpression(parent) && parent.expression === node ? parent : undefined;
+      const call = element && ts.isCallExpression(element.parent) && element.parent.expression === element ? element.parent : undefined;
+      // `console[method] = ..` (mcp/hygiene.ts) replaces a method: whatever replaces it prints and is checked there.
+      const patched =
+        element && ts.isBinaryExpression(element.parent) && element.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && element.parent.left === element;
+      if (call) site(call, 'stream', text(call.expression), call.arguments.flatMap((arg) => messageValues(arg, false)));
+      else if (!ownName && !patched) reference(node, text(node));
+    }
+    // `const { stdout } = process`: the stream (or `emitWarning`) under its own name.
+    if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.initializer) && node.initializer.text === 'process' && ts.isObjectBindingPattern(node.name)) {
+      for (const element of node.name.elements) {
+        const taken = text(element.propertyName ?? element.name);
+        if (PROCESS_SINKS.has(taken)) reference(element, `process.${taken}`);
+      }
+    }
+    // `import { stdout } from 'node:process'`, `import * as proc from 'process'`, anything from 'console'.
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && STD_MODULE.test(node.moduleSpecifier.text)) {
+      const module = node.moduleSpecifier.text.replace(/^node:/, '');
+      const clause = node.importClause;
+      const bindings = clause?.namedBindings;
+      if (clause?.name && (module === 'console' || clause.name.text !== 'process')) {
+        reference(clause, `import ${clause.name.text} from '${module}'`);
+      }
+      if (bindings && ts.isNamespaceImport(bindings)) reference(bindings, `import * from '${module}'`);
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) {
+          const taken = (element.propertyName ?? element.name).text;
+          if (module === 'console' || PROCESS_SINKS.has(taken)) reference(element, `${module}.${taken}`);
+        }
+      }
+    }
+    // The same taken with `require` (#576 W56-T1-NF1): `const proc = require('process')`,
+    // `const { stdout } = require('node:process')`, `require('process').stderr`, anything from `require('console')`.
+    // And with a dynamic import, awaited (`const { stdout } = await import('process')`, `(await
+    // import('process')).stderr`), or its promise handed on (`import('process').then(..)`, #576 W74-NF1).
+    const load = ts.isCallExpression(node) ? loaded(node) : undefined;
+    const required = load?.module;
+    if (load && (required === 'process' || required === 'console')) {
+      // What holds the module: the call, or for an import the `await` of it (in any parentheses).
+      let at: ts.Node = node;
+      let up = node.parent;
+      while (load.imported && ts.isParenthesizedExpression(up)) up = up.parent;
+      if (load.imported && ts.isAwaitExpression(up)) {
+        at = up;
+        while (ts.isParenthesizedExpression(at.parent)) at = at.parent;
+      }
+      const holder = at.parent;
+      if (load.imported && at === node) {
+        // The promise of the module handed on: whatever receives it holds the module.
+        reference(node, `import('${required}')`);
+      } else if (ts.isVariableDeclaration(holder) && holder.initializer === at && ts.isObjectBindingPattern(holder.name)) {
+        for (const element of holder.name.elements) {
+          const taken = text(element.propertyName ?? element.name);
+          if (required === 'console' || PROCESS_SINKS.has(taken)) reference(element, `${required}.${taken}`);
+        }
+      } else if (ts.isPropertyAccessExpression(holder) && holder.expression === at) {
+        if (required === 'console' || PROCESS_SINKS.has(holder.name.text)) reference(holder, `${required}.${holder.name.text}`);
+      } else if (load.imported || !(required === 'process' && ts.isVariableDeclaration(holder) && ts.isIdentifier(holder.name) && holder.name.text === 'process')) {
+        // `const process = require('process')`: its `process.stdout.write` is a stream site by name. Not an
+        // import's namespace of it, whose `default` is the process again (`process.default.stdout`).
+        reference(node, `${load.imported ? 'import' : 'require'}('${required}')`);
+      }
     }
     if (ts.isPropertyAssignment(node) && text(node.name) === 'stdio') {
       const init = text(node.initializer);
@@ -512,11 +878,43 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
       const init = text(node.initializer);
       if (/^(?:'inherit'|"inherit"|process\.std(?:out|err))$/.test(init)) site(node, 'passthrough', text(node.name), [], init);
     }
-    if (ts.isReturnStatement(node) && node.expression && builders.includes(fnName(node))) {
+    if (ts.isReturnStatement(node) && node.expression && builders.includes(fnName(node).split(' > ')[0] ?? '')) {
       site(node, 'return', 'return', messageValues(node.expression, false));
     }
     node.forEachChild(visit);
   };
   visit(source);
+
+  // A wrapper is a sink in its own file only: exported, its calls in another file would be no site at all.
+  const exported = new Map<string, ts.Node>();
+  const isExported = (node: ts.Node): boolean =>
+    ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
+  if (Object.keys(wrappers).length > 0) source.forEachChild(function exports(node: ts.Node): void {
+    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name && isExported(node)) exported.set(node.name.text, node);
+    if (ts.isVariableStatement(node) && isExported(node)) {
+      for (const decl of node.declarationList.declarations) if (ts.isIdentifier(decl.name)) exported.set(decl.name.text, decl);
+    }
+    if (ts.isExportDeclaration(node) && !node.moduleSpecifier && node.exportClause && ts.isNamedExports(node.exportClause)) {
+      for (const element of node.exportClause.elements) exported.set((element.propertyName ?? element.name).text, element);
+    }
+    if (ts.isExportAssignment(node) && ts.isIdentifier(node.expression)) exported.set(node.expression.text, node);
+    // CommonJS: `exports.P = P`, `module.exports = { P }`.
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const named = /^(?:module\.)?exports\.(\w+)$/.exec(text(node.left));
+      if (named?.[1]) exported.set(named[1], node);
+      if (named && ts.isIdentifier(node.right)) exported.set(node.right.text, node);
+      if (text(node.left) === 'module.exports' && ts.isObjectLiteralExpression(node.right)) {
+        for (const prop of node.right.properties) {
+          if (ts.isShorthandPropertyAssignment(prop)) exported.set(prop.name.text, prop);
+          else if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.initializer)) exported.set(prop.initializer.text, prop);
+        }
+      }
+    }
+    node.forEachChild(exports);
+  });
+  for (const name of Object.keys(wrappers)) {
+    const at = exported.get(name);
+    if (at) site(at, 'passthrough', 'export', [], `export ${name}`);
+  }
   return sites;
 }

@@ -17,40 +17,27 @@
  * its own vocabulary, and everything else is withheld and counted - so a new
  * oracle that quotes the app is covered without anyone remembering to mark it.
  */
-import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
-import { redactCorpusText } from './fixtureCorpus';
+import { foldLocalPaths } from '../../../scripts/lib/fold-local-paths.mjs';
 
-/** The checkout: the session directories live in it (`.agent-artifacts/sessions/<id>`). */
+import { redactCorpusText } from './fixtureCorpus';
+import { foldPrivateFixtures } from './privateFixtures';
+
+/** The checkout: `harnessBuilt` keeps an error built in its sources (#576 W58 Q3). */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 /**
- * `text` with the checkout folded to `<repo>` and the home directory to `~`
- * (#576 RV18-W23-4). A kept line can carry a path - a `reproduce:` line's
+ * `text` with the checkout folded to `<repo>`, the home directory to `~`,
+ * `CARGO_TARGET_DIR` to `<target>` and the temp directory to `<tmp>` (#576
+ * RV18-W23-4, W58). A kept line can carry a path - a `reproduce:` line's
  * fixture or `REPLAY of <trace>`, a headline naming the session directory - and
- * a path under either root names the user. What follows the folded root is the
- * harness's own layout, or a corpus id the corpus fold already put there. Read
- * at call time, so a changed `HOME` is honoured; a root of `/` folds nothing.
+ * a path under any of these roots names the user or their machine. One
+ * implementation, `scripts/lib/fold-local-paths.mjs`, so the repo's Node tools
+ * under `scripts/` fold the paths they echo the same way.
  */
-export function foldLocalPaths(text: string): string {
-  const roots = [
-    { root: REPO_ROOT, say: '<repo>' },
-    { root: os.homedir(), say: '~' },
-  ]
-    .filter(({ root }) => path.isAbsolute(root) && path.resolve(root) !== path.parse(root).root)
-    .map(({ root, say }) => ({ root: path.resolve(root), say }))
-    .sort((a, b) => b.root.length - a.root.length);
-  let out = text;
-  for (const { root, say } of roots) {
-    if (!out.includes(root)) continue;
-    const literal = root.replace(/[.*+?^$()|[\]{}\\]/g, '\\$&');
-    // Not inside a longer name: `/home/bob` must leave `/home/bobby` alone.
-    out = out.replace(new RegExp(`${literal}(?![\\w.-])`, 'g'), say);
-  }
-  return out;
-}
+export { foldLocalPaths };
 
 /**
  * Lines the harness writes from its own vocabulary, kept whole. Each shape is
@@ -123,8 +110,111 @@ export function valueShape(value: unknown): string {
   return typeof value === 'object' ? 'an object' : `a ${typeof value}`;
 }
 
-/** `headline` with the app's text after an `APP_ERROR_HEADLINES` prefix replaced by its length. */
+/** A token shaped like a flag the runners take: `--seed`, `-h`, lower-case words and dashes. */
+const FLAG_SHAPED = /^--?[a-z][a-z0-9-]{0,40}$/;
+/** A token shaped like a number as typed: an optional sign, digits, a decimal point, an exponent. */
+const NUMBER_SHAPED = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?$/i;
+
+/** Is `value` a command-line token shaped like a flag or like a number (#576 W58 Q4)? */
+export function cliShaped(value: unknown): boolean {
+  return typeof value === 'string' && (FLAG_SHAPED.test(value) || (value.length <= 24 && NUMBER_SHAPED.test(value)));
+}
+
+/**
+ * A value a runner refuses on its command line, as the refusal prints it (#576
+ * W58 Q4): a token shaped like a flag (`--sed`) or like a number (`1.5`, `-3`)
+ * as itself, quoted, and anything else - a stray path, a name - by its shape
+ * (`valueShape`: its length). Neither shape can spell a path or a sentence.
+ */
+export function cliValueShape(value: unknown): string {
+  return cliShaped(value) ? JSON.stringify(value) : valueShape(value);
+}
+
+/**
+ * Error classes whose message the engine or Node words: a `TypeError` can quote
+ * a value (`Cannot create property 'x' on string '<text>'`), a `SyntaxError`
+ * from `JSON.parse` quotes the text it could not parse.
+ */
+const ENGINE_ERRORS = [TypeError, RangeError, SyntaxError, ReferenceError, EvalError, URIError];
+
+/** The file a stack frame (`at fn (file:line:col)`, `at file:line:col`) names, or null. */
+function frameFile(frame: string): string | null {
+  const location = /\(([^()]*)\)\s*$/.exec(frame)?.[1] ?? frame.trim().replace(/^at (?:async )?/, '');
+  const file = location.replace(/(?::\d+){1,2}$/, '');
+  if (file.startsWith('file://')) {
+    try {
+      return fileURLToPath(file);
+    } catch {
+      return null;
+    }
+  }
+  return path.isAbsolute(file) ? file : null;
+}
+
+/**
+ * Did the harness build `err` (#576 W58 Q3)? Its message is then one the
+ * print-site guard checked where it was built (`printSites/`), and its first
+ * line prints as a headline. An error is the harness's when it is a plain
+ * `Error` (or a harness subclass) built in a source file of the checkout
+ * outside node_modules - the first frame of its stack - with nothing that
+ * says Node made it: no `code`, `errno` or `syscall`.
+ *
+ * Fail-closed: an error with no frame (a WebDriver error carries the driver's
+ * stack instead of ours), one an engine class words, one built in node_modules
+ * or Node's internals (webdriverio, undici, `fs`), and one whose stack
+ * webdriverio spliced (`waitUntil` joins two stacks with a `---` line and drops
+ * its own frames) is third-party.
+ */
+export function harnessBuilt(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (ENGINE_ERRORS.some((cls) => err instanceof cls)) return false;
+  if (['code', 'errno', 'syscall'].some((key) => Object.prototype.hasOwnProperty.call(err, key))) return false;
+  // The stack opens with `<name>: <message>`, as many lines as the message has:
+  // a message line that reads like a frame (`  at project.sections[3]`) is not one.
+  const lines = typeof err.stack === 'string' ? err.stack.split('\n').slice(err.message.split('\n').length) : [];
+  if (lines.some((line) => /^\s*---\s*$/.test(line))) return false;
+  const frame = lines.find((line) => /^\s+at /.test(line));
+  const file = frame === undefined ? null : frameFile(frame);
+  if (file === null) return false;
+  const rel = path.relative(REPO_ROOT, file);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel) && !rel.split(/[\\/]/).includes('node_modules');
+}
+
+/** A third-party error's first line as the projections see it: `a third-party <Name>: <its text>`. */
+const THIRD_PARTY_HEADLINE = /^(a third-party \w+): (.*)$/;
+/** What `shareableFailureText` leaves of a third-party error's first line. */
+const WITHHELD_THIRD_PARTY = /^\(\d+ characters withheld\)$/;
+
+/**
+ * An error's message as the shareable projections take it (#576 W58 Q3). One
+ * the harness built (`harnessBuilt`) is its message. Any other - webdriverio's,
+ * Node's, a thrown non-Error - gets `a third-party <Name>: ` in front of its
+ * first line, which every projection prints as that prefix and the line's
+ * length: the line is not a shape the harness writes, and it can quote a
+ * selector, a path or the page. WebDriver's `javascript error: <the page's
+ * message>` is one the harness knows, and keeps its prefix the same way
+ * (`APP_ERROR_HEADLINES`). The full text is what a runner records in the
+ * session's actions.jsonl.
+ */
+export function errorMessageOf(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (harnessBuilt(err)) return message;
+  const [first = '', ...rest] = message.split('\n');
+  if (APP_ERROR_HEADLINES[0]?.test(first)) return message;
+  const name = err instanceof Error && /^\w+$/.test(err.name) ? err.name : 'error';
+  return [`a third-party ${name}: ${first}`, ...rest].join('\n');
+}
+
+/**
+ * `headline` with a third-party error's first line, or the app's text after an
+ * `APP_ERROR_HEADLINES` prefix, replaced by its length.
+ */
 function shareableHeadline(headline: string): string {
+  const thirdParty = THIRD_PARTY_HEADLINE.exec(headline);
+  if (thirdParty) {
+    const [, prefix = '', text = ''] = thirdParty;
+    return `${prefix}: ${WITHHELD_THIRD_PARTY.test(text) ? text : `(${text.length} characters withheld)`}`;
+  }
   for (const shape of APP_ERROR_HEADLINES) {
     const app = shape.exec(headline);
     if (!app) continue;
@@ -144,7 +234,8 @@ function withheldLine(count: number, where = "the full failure is in the session
 }
 
 /**
- * `message` with the corpus and path folds applied and every line the harness did not
+ * `message` with the corpus, path and private-fixture folds applied (a fixture
+ * the repo does not track prints as its tag, #576 W58 Q1) and every line the harness did not
  * word itself withheld, a run of them replaced by one count line. The headline
  * (line 1) stays - a scenario writes it from harness words, numbers and names
  * (scenario, fixture, move, screen) - except the app's text an
@@ -155,7 +246,7 @@ export function shareableFailureText(
   alsoKept: readonly RegExp[] = [],
   withheldWhere?: string,
 ): string {
-  const [first = '', ...rest] = foldLocalPaths(redactCorpusText(message)).split('\n');
+  const [first = '', ...rest] = foldPrivateFixtures(foldLocalPaths(redactCorpusText(message))).split('\n');
   const out = [shareableHeadline(first)];
   let withheld = 0;
   const flush = (): void => {
@@ -183,10 +274,11 @@ export function shareableFailureText(
 /**
  * What `agent:scenario` / `agent:scenarios` print for a scenario that threw:
  * the `FAIL: <name> threw:` line `fuzz-matrix` anchors on, then the shareable
- * failure, whose first line is the headline the matrix reports.
+ * failure, whose first line is the headline the matrix reports. A third-party
+ * error's first line prints as its length (`errorMessageOf`, #576 W58 Q3).
  */
 export function scenarioFailOutput(name: string, err: unknown): string {
-  return `FAIL: ${name} threw:\n${shareableFailureText(err instanceof Error ? err.message : String(err))}\n`;
+  return `FAIL: ${name} threw:\n${shareableFailureText(errorMessageOf(err))}\n`;
 }
 
 /** Where a two-session failure's full text is: every replay session with an action log. */
@@ -235,8 +327,13 @@ const CRASH_WITHHELD = 'the rest of the error is not printed';
  * script's error - so the raw stack is not for sharing either.
  */
 export function shareableErrorText(err: unknown): string {
-  if (!(err instanceof Error)) return shareableFailureText(String(err), [], CRASH_WITHHELD);
+  if (!(err instanceof Error)) return shareableFailureText(errorMessageOf(err), [], CRASH_WITHHELD);
   const frames = (err.stack ?? '').split('\n').filter((line) => STACK_FRAME.test(line));
+  // A third-party error's message carries its name in front (`a third-party
+  // TypeError: <its length>`, #576 W58 Q3), so it is not named twice.
+  if (!harnessBuilt(err)) {
+    return shareableFailureText([errorMessageOf(err), ...frames].join('\n'), [STACK_FRAME], CRASH_WITHHELD);
+  }
   const name = /^\w+$/.test(err.name) ? err.name : 'Error';
   return `${name}: ${shareableFailureText([err.message, ...frames].join('\n'), [STACK_FRAME], CRASH_WITHHELD)}`;
 }
@@ -300,7 +397,7 @@ export function shareableTail(lines: readonly string[]): string {
     withheld = 0;
   };
   for (const raw of lines) {
-    const line = foldLocalPaths(redactCorpusText(raw));
+    const line = foldPrivateFixtures(foldLocalPaths(redactCorpusText(raw)));
     const progress = /^(\s+\S )(.*)$/.exec(line);
     const crash = /^(fatal|shrink failed): (?:(\w*Error): )?(.*)$/.exec(line);
     let kept: string | null = null;

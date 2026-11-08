@@ -12,7 +12,8 @@ import { readStore } from './lib/stores';
 import { LogCursor } from './lib/logs';
 import { invokeInApp } from './lib/page';
 import { isPortFree } from './lib/procs';
-import { foldLocalPaths, shareableErrorText } from './lib/shareableFailure';
+import { shareableErrorText } from './lib/shareableFailure';
+import { smokeStartedLine } from './lib/smokeStartLine';
 
 function log(msg: string): void {
   process.stderr.write(`[smoke] ${msg}\n`);
@@ -30,7 +31,9 @@ async function main(): Promise<void> {
   const started = await session.start({ build: buildMode });
   // Folded (#576 W51): the session and profile directories, the checkout that
   // built the binary and a rebuild reason all name paths under the home directory.
-  log(`started: ${foldLocalPaths(JSON.stringify(started))}`);
+  // The X display only as `:N` (#576 W58 Q14): an inherited DISPLAY such as
+  // `localhost:10.0` under ssh -X names a host.
+  log(`started: ${smokeStartedLine(started)}`);
   check('session ready', session.state === 'ready');
 
   // Screenshot.

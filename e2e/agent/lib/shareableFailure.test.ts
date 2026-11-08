@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { shareableFailureText, valueShape } from './shareableFailure';
+import { cliValueShape, shareableFailureText, valueShape } from './shareableFailure';
 
 describe('kept line shapes take only the lines the harness writes (#576 RV19b-P2)', () => {
   it("withholds the app's text shaped like a trace, reproduce or diff-path line", () => {
@@ -58,5 +58,29 @@ describe('a value read back from a file prints as its shape (#576 W51)', () => {
     expect(valueShape(['qzCaveA', 'StationA1'])).toBe('an array of 2 item(s)');
     expect(valueShape({ name: 'qzCaveA' })).toBe('an object');
     for (const forged of ['qzCaveA', ['qzCaveA'], { qzCaveA: 1 }]) expect(valueShape(forged)).not.toContain('qzCaveA');
+  });
+});
+
+describe('a refused command-line value echoes only a flag or a number (#576 W58 Q4)', () => {
+  it('prints a token shaped like a flag or a number as itself, quoted', () => {
+    expect(['--sed', '-h', '--max-test', '1.5', '-3', '+7', '.5', '1e5', '42'].map(cliValueShape)).toEqual([
+      '"--sed"',
+      '"-h"',
+      '"--max-test"',
+      '"1.5"',
+      '"-3"',
+      '"+7"',
+      '".5"',
+      '"1e5"',
+      '"42"',
+    ]);
+  });
+
+  it('prints anything else by its length, as valueShape does', () => {
+    for (const typed of ['qzcavea', '--QzCaveA', '/home/qz/CaveA.stalx', '--qz=CaveA', '--qz cave', `--${'q'.repeat(42)}`, '1.5.6', '9'.repeat(25), '']) {
+      expect(cliValueShape(typed), typed).toBe(valueShape(typed));
+    }
+    expect(cliValueShape('qzCaveA')).toBe('a string of 7 character(s)');
+    expect(cliValueShape(undefined)).toBe('undefined');
   });
 });

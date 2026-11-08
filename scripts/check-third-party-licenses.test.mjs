@@ -165,6 +165,31 @@ test('importing the generator neither runs it nor rewrites the bundle', () => {
   assert.ok(fs.readFileSync(bundle).equals(bytes));
 });
 
+// The generator's cargo / pnpm stderr reaches ours folded (#576 W58): cargo's
+// `failed to parse manifest at <path>` names the checkout. A fake cargo first
+// on PATH fails the way that looks, so the run stops before it writes anything.
+test('a failing cargo about prints its stderr folded and still fails the generator', () => {
+  if (process.platform === 'win32') return; // the fake cargo is a shell script
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-cargo-'));
+  roots.push(bin);
+  const manifest = path.join(REPO_ROOT, 'src-tauri', 'Cargo.toml');
+  fs.writeFileSync(path.join(bin, 'cargo'), `#!/bin/sh\necho "error: failed to parse manifest at \\\`${manifest}\\\`" >&2\nexit 101\n`, {
+    mode: 0o755,
+  });
+  const bundle = path.join(REPO_ROOT, 'THIRD-PARTY-LICENSES.md');
+  const bytes = fs.readFileSync(bundle);
+  const r = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts', 'gen-third-party-licenses.mjs')], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+  });
+  const folded = 'error: failed to parse manifest at `<repo>/src-tauri/Cargo.toml`';
+  assert.equal(r.status, 1, 'the uncaught `cargo about generate failed.` still exits 1');
+  assert.ok(r.stderr.startsWith(`${folded}\n`), r.stderr.slice(0, 300));
+  assert.ok(r.stderr.includes(`cargo about generate failed.\n${folded}`), r.stderr.slice(0, 600));
+  assert.ok(!r.stderr.includes(`at \`${manifest}`), 'the manifest path must not print raw');
+  assert.ok(fs.readFileSync(bundle).equals(bytes));
+});
+
 test('the checker verifies exactly the generator\'s input list', () => {
   assert.deepEqual(HASHED_INPUTS, ['src-tauri/Cargo.lock', 'pnpm-lock.yaml', 'scripts/gen-third-party-licenses.mjs', 'src-tauri/about.toml']);
 });

@@ -10,7 +10,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-import type { SalvagedData } from '../../../types/ipc/SalvagedData';
 import type { SalvageWriteResult } from '../../../types/ipc/SalvageWriteResult';
 
 vi.mock('../../../utils/ipc');
@@ -41,29 +40,19 @@ import CorruptionRecoveryDialog from '../CorruptionRecoveryDialog';
 import { invokeIpcMock as invokeIpc } from '../../../test/factories/ipc';
 import { useOverwritePromptStore } from '../../../utils/overwriteGuard';
 
-const SALVAGED: SalvagedData = {
-  projectName: 'CaveA',
-  projectLocation: null,
-  sectionCount: 2,
-  shotCount: 17,
-  mergeCount: 1,
-  sectionsJson: '[]',
-  fullProjectJson: '{"name":"CaveA"}',
-  errors: [],
-};
-
 /** What the write answers: the counts and warnings of the salvage it wrote. */
 const WRITTEN: SalvageWriteResult = {
   sectionCount: 2,
   shotCount: 17,
   mergeCount: 1,
   errors: [],
+  projectIncluded: true,
 };
 
-/** Script the backend: the salvage read answers SALVAGED, the write answers `write`. */
+/** Script the backend: the open check passes, the write answers `write`. */
 function backend(write: () => Promise<SalvageWriteResult>): void {
   invokeIpc.mockImplementation(async (command: string) => {
-    if (command === 'export_salvageable_data') return SALVAGED;
+    if (command === 'check_salvage_source') return null;
     if (command === 'write_salvaged_data') return write();
     throw new Error(`unexpected ${command}`);
   });
@@ -114,7 +103,7 @@ describe('CorruptionRecoveryDialog salvage export (#576 HFI-3)', () => {
     await exportSalvage();
 
     await waitFor(() => expect(saveDialogMock).toHaveBeenCalledTimes(1));
-    expect(invokeIpc).toHaveBeenCalledWith('export_salvageable_data', { path: '/survey/CaveA.stalx' }, expect.anything());
+    expect(invokeIpc).toHaveBeenCalledWith('check_salvage_source', { path: '/survey/CaveA.stalx' }, expect.anything());
     expect(invokeIpc).not.toHaveBeenCalledWith('write_salvaged_data', expect.anything(), expect.anything());
   });
 
@@ -146,7 +135,7 @@ describe('CorruptionRecoveryDialog salvage export, a name typed without .json (#
   /** The backend, with a file at the rewritten name or not. */
   function backendWith(rewrittenExists: boolean): void {
     invokeIpc.mockImplementation(async (command: string) => {
-      if (command === 'export_salvageable_data') return SALVAGED;
+      if (command === 'check_salvage_source') return null;
       if (command === 'save_target_exists') return rewrittenExists;
       if (command === 'write_salvaged_data') return WRITTEN;
       throw new Error(`unexpected ${command}`);
@@ -218,13 +207,13 @@ describe('CorruptionRecoveryDialog salvage export, the counts it reports (#576 W
     saveDialogMock.mockResolvedValue('/survey/rescued/salvaged.json');
   });
 
-  it('shows the counts and warnings of the salvage that was written, not of the earlier read', async () => {
-    // The earlier read (SALVAGED): 2 sections, 17 shots, 1 merge, no warning.
+  it('shows the counts and warnings of the salvage that was written', async () => {
     backend(async () => ({
       sectionCount: 5,
       shotCount: 40,
       mergeCount: 3,
       errors: ['Failed to read station merges: database disk image is malformed'],
+      projectIncluded: true,
     }));
 
     await exportSalvage();
@@ -234,5 +223,92 @@ describe('CorruptionRecoveryDialog salvage export, the counts it reports (#576 W
     expect(message).toHaveTextContent('Recovered: 5 section(s), 40 shot(s), 3 merge(s)');
     expect(message).toHaveTextContent('Failed to read station merges: database disk image is malformed');
     expect(message).not.toHaveTextContent('17 shot(s)');
+  });
+});
+
+/**
+ * [#576 Q-W37-1-D1] The damaged file is read in full ONCE, by the write (HFI-3).
+ * The dialog used to run a full salvage read first (`export_salvageable_data`)
+ * only to fail early on a file that cannot be opened; it now asks the backend
+ * to open the file and nothing more (`check_salvage_source`).
+ */
+describe('CorruptionRecoveryDialog salvage export, one read of the damaged file (#576 Q-W37-1-D1)', () => {
+  const commands = (): string[] => invokeIpc.mock.calls.map(([command]) => command as string);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invokeIpc.mockReset();
+    saveDialogMock.mockResolvedValue('/survey/rescued/salvaged.json');
+  });
+
+  it('only opens the file before asking for a destination, then the write salvages it', async () => {
+    backend(async () => WRITTEN);
+
+    await exportSalvage();
+
+    expect(await screen.findByText('Data Exported')).toBeInTheDocument();
+    expect(commands()).toEqual(['check_salvage_source', 'write_salvaged_data']);
+    expect(invokeIpc).toHaveBeenCalledWith('check_salvage_source', { path: '/survey/CaveA.stalx' }, expect.anything());
+  });
+
+  it('fails before asking for a destination when the file cannot be opened', async () => {
+    invokeIpc.mockImplementation(async (command: string) => {
+      if (command === 'check_salvage_source') throw new Error('Salvage failed: File does not exist');
+      throw new Error(`unexpected ${command}`);
+    });
+
+    await exportSalvage();
+
+    expect(await screen.findByText('Salvage Failed')).toBeInTheDocument();
+    expect(screen.getByText(/File does not exist/)).toBeInTheDocument();
+    expect(saveDialogMock).not.toHaveBeenCalled();
+    expect(commands()).toEqual(['check_salvage_source']);
+  });
+});
+
+/**
+ * [#576 Q-W30-2-D1] When the project itself cannot be read the file holds only
+ * its sections, yet the message listed the shots and merges the backend had
+ * counted as recovered. It now leaves them out and says plainly that they are
+ * not included.
+ */
+describe('CorruptionRecoveryDialog salvage export, a project that could not be read (#576 Q-W30-2-D1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invokeIpc.mockReset();
+    saveDialogMock.mockResolvedValue('/survey/rescued/salvaged.json');
+  });
+
+  it('says plainly that shots and merges are not included, and does not list them as recovered', async () => {
+    backend(async () => ({
+      sectionCount: 2,
+      shotCount: 17,
+      mergeCount: 1,
+      errors: ['Failed to load full project: no such table: shots'],
+      projectIncluded: false,
+    }));
+
+    await exportSalvage();
+
+    expect(await screen.findByText('Data Exported')).toBeInTheDocument();
+    const message = screen.getByText(/Recovered:/);
+    expect(message).toHaveTextContent('Recovered: 2 section(s)');
+    expect(message).not.toHaveTextContent('17 shot(s)');
+    expect(message).not.toHaveTextContent('1 merge(s)');
+    expect(message).toHaveTextContent(
+      'Shots and merges are not included: the project itself could not be read, so only what could be read of its sections was saved.',
+    );
+    expect(message).toHaveTextContent('Failed to load full project: no such table: shots');
+  });
+
+  it('says nothing of the kind when the whole project was saved', async () => {
+    backend(async () => WRITTEN);
+
+    await exportSalvage();
+
+    expect(await screen.findByText('Data Exported')).toBeInTheDocument();
+    const message = screen.getByText(/Recovered:/);
+    expect(message).toHaveTextContent('Recovered: 2 section(s), 17 shot(s), 1 merge(s)');
+    expect(message).not.toHaveTextContent('not included');
   });
 });

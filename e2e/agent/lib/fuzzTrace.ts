@@ -108,9 +108,14 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import { shortId } from './crc32';
 import { detProbe } from './fuzzDeterminismProbe';
+import { fixtureTag, isTrackedFixture, noteFixtureName, shareableFixtureName } from './privateFixtures';
+import { knobValueShaped } from './traceKnobs';
 import { foldLocalPaths, shareableFailureText, valueShape } from './shareableFailure';
+import { shareableStepLabel } from './stepLabels';
+import { TRACE_EXPORT_FORMATS, TRACE_ORACLE_NAMES, TRACE_TRIGGERS, shareableTracePath, shareableTraceWord } from './traceStepFields';
 
 /** Current trace schema. Bumped when a step shape changes incompatibly. */
 export const TRACE_VERSION = 4;
@@ -271,8 +276,18 @@ export interface FuzzTrace {
   fixture: string;
   /** Generator stream the recording ran on (`v1` / `v2`), for the header only. */
   stream: string;
-  /** The `STALAGMIGHT_FUZZ_*` / `STALAGMIGHT_PERSIST_FUZZ_*` knobs that were set. */
+  /**
+   * The `STALAGMIGHT_FUZZ_*` / `STALAGMIGHT_PERSIST_FUZZ_*` knobs that were set,
+   * each with a value of its knob's shape (`traceKnobs.ts`, #576 W58 Q9).
+   */
   env: Record<string, string>;
+  /**
+   * The knobs that were set to a value that is not their knob's shape, or that
+   * the registry does not know, by the value's length (#576 W58 Q9). Not
+   * restorable, so a replay leaves them as its shell has them and says so.
+   * OPTIONAL: omitted when there were none, and absent in older traces.
+   */
+  envWithheld?: Record<string, number>;
   gitRev: string;
   recordedAt: string;
   /** Null when the run passed and the trace was written because of the env var. */
@@ -486,7 +501,7 @@ const RECORDED_ENV_PREFIXES = ['STALAGMIGHT_FUZZ_', 'STALAGMIGHT_PERSIST_FUZZ_']
  * corpus ids against the corpus the REPLAYER configured, which is the only one
  * it can read anyway.
  */
-const NEVER_RESTORED = [
+export const NEVER_RESTORED: readonly string[] = [
   'STALAGMIGHT_FUZZ_TRACE',
   'STALAGMIGHT_FUZZ_REPLAY',
   'STALAGMIGHT_FUZZ_CORPUS_DIR',
@@ -507,10 +522,14 @@ const NEVER_RESTORED = [
  * Returns what it applied and what it refused, so the caller can print both:
  * a silently dropped knob would be a replay that quietly is not the recording.
  */
-export function restoreTraceEnv(recorded: Readonly<Record<string, string>>): {
+export function restoreTraceEnv(
+  recorded: Readonly<Record<string, string>>,
+  withheldByRecorder: Readonly<Record<string, number>> = {},
+): {
   applied: [string, string][];
   refused: string[];
   cleared: string[];
+  withheld: string[];
 } {
   const applied: [string, string][] = [];
   const refused: string[] = [];
@@ -519,13 +538,19 @@ export function restoreTraceEnv(recorded: Readonly<Record<string, string>>): {
       refused.push(key);
       continue;
     }
-    if (RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+    // Only a registered knob, and only a value of its shape (#576 W58 Q9): the
+    // recorder writes nothing else, so anything else is a forged or older file.
+    if (RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)) && knobValueShaped(key, value)) {
       process.env[key] = value;
       applied.push([key, value]);
     } else {
       refused.push(key);
     }
   }
+  // A knob the recording had set to a value its trace does not carry: its
+  // value is unknown here, so neither restored nor cleared - this shell's
+  // stands, and the caller says so.
+  const withheld = Object.keys(withheldByRecorder).filter((key) => !NEVER_RESTORED.includes(key));
   // The recorded env is the WHOLE truth about restorable knobs, so a knob the
   // recording did not have is unset here rather than inherited.
   //
@@ -546,24 +571,33 @@ export function restoreTraceEnv(recorded: Readonly<Record<string, string>>): {
   // take them away.
   const cleared: string[] = [];
   for (const key of Object.keys(process.env)) {
-    if (key in recorded || NEVER_RESTORED.includes(key)) continue;
+    if (key in recorded || NEVER_RESTORED.includes(key) || withheld.includes(key)) continue;
     if (!RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
     delete process.env[key];
     cleared.push(key);
   }
-  return { applied, refused, cleared };
+  return { applied, refused, cleared, withheld };
 }
 
-function recordedEnv(): Record<string, string> {
-  const out: Record<string, string> = {};
+/**
+ * The knobs this run was set to, split by `traceKnobs.ts`'s registry (#576 W58
+ * Q9): a value of its knob's shape is recorded, and any other - an
+ * unregistered knob's, or text the shell held - only by its length, since a
+ * trace is attached to issues.
+ */
+function recordedEnv(): { env: Record<string, string>; withheld: Record<string, number> } {
+  const env: Record<string, string> = {};
+  const withheld: Record<string, number> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
     // The trace's own path is not part of what the run DOES, and carrying it
     // would make a replayed trace overwrite the file it came from.
     if (NEVER_RESTORED.includes(key)) continue;
-    if (RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) out[key] = value;
+    if (!RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
+    if (knobValueShaped(key, value)) env[key] = value;
+    else withheld[key] = value.length;
   }
-  return out;
+  return { env, withheld };
 }
 
 function gitRev(): string {
@@ -748,6 +782,7 @@ export class TraceRecorder {
     /** Episode indices that ran with no project open; omitted when none did. */
     noProjectEpisodes?: readonly number[] | undefined;
   }): FuzzTrace {
+    const { env, withheld } = recordedEnv();
     return {
       v: TRACE_VERSION,
       scenario: meta.scenario,
@@ -755,7 +790,9 @@ export class TraceRecorder {
       iterations: meta.iterations,
       fixture: meta.fixture,
       stream: meta.stream,
-      env: recordedEnv(),
+      env,
+      // Omitted when empty, as `noProjectEpisodes` is.
+      ...(Object.keys(withheld).length > 0 ? { envWithheld: withheld } : {}),
       gitRev: gitRev(),
       recordedAt: new Date().toISOString(),
       failure: meta.failure
@@ -1072,7 +1109,21 @@ export function readTrace(filePath: string): FuzzTrace {
     throw new Error(`trace ${foldLocalPaths(filePath)} is schema v${valueShape(parsed.v)}; this build reads v${TRACE_VERSION}`);
   }
   if (!Array.isArray(parsed.steps)) throw new Error(`trace ${foldLocalPaths(filePath)} has no steps array`);
+  const withheld: unknown = parsed.envWithheld;
+  if (
+    withheld !== undefined &&
+    (typeof withheld !== 'object' ||
+      withheld === null ||
+      Array.isArray(withheld) ||
+      !Object.values(withheld).every((n) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0))
+  ) {
+    throw new Error(`trace ${foldLocalPaths(filePath)} has envWithheld ${valueShape(withheld)}; must map knob names to lengths`);
+  }
   parsed.steps.forEach((step, index) => validateStep(step, index, filePath));
+  // The fixtures it names fold to their tag in shareable output when the repo
+  // does not track them (#576 W58 Q1), wherever the run prints them next.
+  if (typeof parsed.fixture === 'string') noteFixtureName(parsed.fixture);
+  for (const step of parsed.steps) if (step.kind === 'reload') noteFixtureName(step.fixture);
   // Same non-quoting rule as `requireCorpusId`: the value is a survey's name.
   const leak = corpusNameLeakAt(parsed.steps);
   if (leak >= 0) {
@@ -1176,6 +1227,20 @@ export function describeSteps(steps: readonly TraceStep[]): string {
 }
 
 /**
+ * The fixtures a trace names that the repo does not track - its header's and
+ * its reload steps' - each once, with the tag shareable output prints for it
+ * (#576 W58 Q1, NF1). `fuzz-shrink` records these in the session's
+ * actions.jsonl, which is not for sharing, so a tag in its output can be traced
+ * back where the shrink ran.
+ */
+export function tracePrivateFixtures(trace: { fixture: unknown; steps: readonly TraceStep[] }): { fixture: string; tag: string }[] {
+  const named = [trace.fixture, ...trace.steps.flatMap((step) => (step.kind === 'reload' ? [step.fixture] : []))];
+  const found = new Set<string>();
+  for (const name of named) if (typeof name === 'string' && name !== '' && !isTrackedFixture(name)) found.add(name);
+  return [...found].map((fixture) => ({ fixture, tag: fixtureTag(fixture) }));
+}
+
+/**
  * One step, as a line.
  *
  * The v2 kinds print their own `label` plus the ONE fact the label cannot carry
@@ -1184,45 +1249,59 @@ export function describeSteps(steps: readonly TraceStep[]): string {
  * publishable id, which since v3 is the only thing the step has: the rule
  * `fixtureCorpus.ts` states now holds for the trace FILE as well as for the text
  * rendered from it.
+ *
+ * A label prints through `shareableStepLabel` (#576 W58 Q10): `readTrace` checks
+ * it only as text, so one with a word no harness or app source wrote prints as
+ * its length. A reload's fixture prints by name only when the repo tracks it,
+ * else as its tag (`shareableFixtureName`, #576 W58 NF1). The other fields it
+ * checks only as text print shaped too (#576 W58 NF2): a test id through
+ * `shareableTestId`, a path by itself only when the repo tracks it, else as its
+ * tag (`shareableTracePath`, #576 W74-NF2), a trigger, an export format or an oracle
+ * name only when it is one the harness defines (`traceStepFields.ts`), and a
+ * corpus id only in its 5-hex form; any other value as its length.
  */
 function describeStep(step: TraceStep): string {
+  const label = 'label' in step ? shareableStepLabel(step.label) : '';
   switch (step.kind) {
     case 'mutate':
-      return step.label;
+      return label;
     case 'undoTo':
     case 'redoTo':
       return `${step.kind}(${step.steps} step(s))`;
     case 'ui':
-      return `${step.double === true ? 'dblclick' : 'click'} ${step.testid} - ${step.label}`;
+      return `${step.double === true ? 'dblclick' : 'click'} ${shareableTestId(step.testid)} - ${label}`;
     case 'input':
-      return `${step.mode} ${step.testid} - ${step.label}`;
+      return `${step.mode} ${shareableTestId(step.testid)} - ${label}`;
     case 'fileDialog': {
       const answer =
-        step.rel === null ? 'cancel' : Array.isArray(step.rel) ? `${step.rel.length} file(s)` : step.rel;
-      return `${step.dialog}-dialog via ${step.trigger} -> ${answer} - ${step.label}`;
+        step.rel === null ? 'cancel' : Array.isArray(step.rel) ? `${step.rel.length} file(s)` : shareableTracePath(step.rel);
+      return `${step.dialog}-dialog via ${shareableTraceWord(step.trigger, TRACE_TRIGGERS)} -> ${answer} - ${label}`;
     }
     case 'episode':
       return `episode ${step.index}${step.headless ? ' (no project)' : ''}`;
     case 'flow':
       return `flow ${step.index}`;
     case 'genFile':
-      return `genFile ${step.rel} - ${step.label}`;
-    case 'corpusFile':
+      return `genFile ${shareableTracePath(step.rel)} - ${label}`;
+    case 'corpusFile': {
       // Printed, not folded: since v3 the step already holds the id, and folding
       // it again would print a tag that matched no metric key in the run beside
       // it. `asCorpusId` is what guarantees that, on both the record and the
-      // read path.
-      return `corpusFile #${step.corpusId} -> ${step.rel} - ${step.label}`;
+      // read path; a step built another way prints an id of another shape as
+      // its length.
+      const id = CORPUS_ID.test(step.corpusId) ? `#${step.corpusId}` : valueShape(step.corpusId);
+      return `corpusFile ${id} -> ${shareableTracePath(step.rel)} - ${label}`;
+    }
     case 'route':
-      return `route ${step.rel} - ${step.label}`;
+      return `route ${shareableTracePath(step.rel)} - ${label}`;
     case 'mapClick':
-      return `mapClick ${step.lngLat[0]},${step.lngLat[1]} - ${step.label}`;
+      return `mapClick ${step.lngLat[0]},${step.lngLat[1]} - ${label}`;
     case 'export':
-      return `export ${step.format} -> ${step.rel} - ${step.label}`;
+      return `export ${shareableTraceWord(step.format, TRACE_EXPORT_FORMATS)} -> ${shareableTracePath(step.rel)} - ${label}`;
     case 'oracle':
-      return `oracle ${step.oracle} - ${step.label}`;
+      return `oracle ${shareableTraceWord(step.oracle, TRACE_ORACLE_NAMES)} - ${label}`;
     case 'reload':
-      return `reload ${step.fixture}`;
+      return `reload ${shareableFixtureName(step.fixture)}`;
     default:
       return step.kind;
   }

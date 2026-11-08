@@ -4,7 +4,7 @@ use crate::commands::pool;
 use crate::commands::save_target::file_name;
 use crate::commands::write_path::{check_write_path, check_write_path_with, AppDirs, WriteTarget};
 use crate::core::CommandError;
-use crate::persistence::{BackupInfo, Database, RepairResult, SalvageWriteResult, SalvagedData};
+use crate::persistence::{BackupInfo, Database, RepairResult, SalvageWriteResult};
 
 /// Attempt to repair a corrupt database file.
 ///
@@ -96,15 +96,19 @@ pub async fn restore_from_backup(
     .await
 }
 
-/// Export whatever data can be salvaged from a corrupt database.
-///
-/// Reads each table independently, collecting recoverable data and errors.
+/// [#576 Q-W37-1-D1] Whether the salvage export can open the damaged project at
+/// all: the open [`write_salvaged_data`] makes first (the file exists, opens
+/// read-only, and passes the salvage's schema guard, #608), and nothing more.
+/// The recovery dialog asks this before it asks for a destination, so a file
+/// that cannot be opened fails there. It used to run a full salvage read for
+/// that, and the write salvaged the file again, so a damaged file was read in
+/// full twice; the write's salvage is now the only one (HFI-3).
 #[tauri::command]
-pub async fn export_salvageable_data(path: PathBuf) -> Result<SalvagedData, CommandError> {
+pub async fn check_salvage_source(path: PathBuf) -> Result<(), CommandError> {
     pool::run_stateless(move || {
-        tracing::info!(path = ?path, "IPC: export_salvageable_data");
-
-        Database::export_salvageable(&path)
+        tracing::info!(path = ?path, "IPC: check_salvage_source");
+        Database::open_for_recovery(&path)
+            .map(drop)
             .map_err(|e| CommandError::failed(format!("Salvage failed: {e}")))
     })
     .await
@@ -126,8 +130,9 @@ pub async fn export_salvageable_data(path: PathBuf) -> Result<SalvagedData, Comm
 /// refused.
 ///
 /// [#576 W30-5] It answers the counts and warnings of the salvage it wrote, for
-/// the dialog to report: those of the dialog's own earlier read need not be
-/// what this second read found, since a damaged file can read differently twice.
+/// the dialog to report, and [#576 Q-W30-2-D1] whether the file holds the whole
+/// project or only the sections. This is the only full read of the damaged file:
+/// the dialog's earlier check only opens it ([`check_salvage_source`]).
 #[tauri::command]
 pub async fn write_salvaged_data(
     path: PathBuf,
@@ -156,18 +161,12 @@ pub(crate) fn write_salvaged_data_with(
         )));
     }
 
-    let salvaged = Database::export_salvageable(path)
-        .map_err(|e| CommandError::failed(format!("Salvage failed: {e}")))?;
-    let written = SalvageWriteResult {
-        section_count: salvaged.section_count,
-        shot_count: salvaged.shot_count,
-        merge_count: salvaged.merge_count,
-        errors: salvaged.errors,
-    };
-    let content = salvaged
-        .full_project_json
-        .or(salvaged.sections_json)
-        .unwrap_or_else(|| "{}".to_owned());
+    // [#576 Q-W30-2-D1] The whole project, else the sections only (or `{}`),
+    // and whether it was the whole project: the dialog says plainly when shots
+    // and merges are not in the file.
+    let (content, written) = Database::export_salvageable(path)
+        .map_err(|e| CommandError::failed(format!("Salvage failed: {e}")))?
+        .into_export();
     // `FAILED` with the reason, as every export's write failure: the atomic
     // writer reports the OS error as text, so there is no kind to classify.
     crate::export::write_atomic_bytes(dest_path, content.as_bytes()).map_err(|e| {

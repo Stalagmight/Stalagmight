@@ -9,7 +9,7 @@ import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { toastProjectChanged } from '../../utils/projectChangedNotice';
-import { holdsWriteLock, performQuit } from '../../utils/quit';
+import { abandonUpdateRestart, holdsWriteLock, performQuit } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
@@ -78,6 +78,9 @@ export default function SpeleoQuitDialog() {
    * be pointless at best.
    */
   const dismiss = () => {
+    // [#579] Same as UnsavedChangesDialog's Cancel: abandoning the exit
+    // abandons an update restart riding on it, on both sides.
+    abandonUpdateRestart();
     if (cancelReturnsTo) openDialog(cancelReturnsTo, cancelReturnsData);
     else closeDialog();
   };

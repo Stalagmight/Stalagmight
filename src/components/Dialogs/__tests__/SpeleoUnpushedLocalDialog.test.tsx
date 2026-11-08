@@ -348,4 +348,39 @@ describe('SpeleoUnpushedLocalDialog: a local copy that could not be read (#576 W
     expect(text).toContain('that local copy has changes SpeleoDB has never seen');
     expect(text).not.toContain('could not be read');
   });
+
+  /**
+   * [#576 W59 Q-W53-2-D1] Nobody knows whether a copy that could not be read holds
+   * changes, so neither press of the take-remote button may call them "my changes":
+   * both name the local copy instead. A copy read as dirty keeps the labels.
+   */
+  describe('take-remote labels (#576 W59)', () => {
+    const takeRemoteLabels = async () => {
+      render(<SpeleoUnpushedLocalDialog />);
+      const button = screen.getByTestId('speleodb-unpushed-local-take-remote');
+      const offer = button.textContent;
+      // The arming press: it only re-labels the button, it sends nothing.
+      await userEvent.click(button);
+      expect(speleoCalls()).toEqual([]);
+      const confirm = screen.getByTestId('speleodb-unpushed-local-take-remote').textContent;
+      return { offer, confirm };
+    };
+
+    it('names the local copy, not "my changes", on both presses', async () => {
+      const { offer, confirm } = await takeRemoteLabels();
+      console.log('[W59] open prompt take-remote labels (state_unknown):', offer, '|', confirm);
+      expect(offer).toBe('Take the server copy & replace the local copy');
+      expect(confirm).toBe('Yes, replace the local copy');
+    });
+
+    it('keeps the "my changes" labels for a copy that was read and found dirty', async () => {
+      useUIStore.setState({
+        dialogData: { summary: SUMMARY, unpushedLocal: { ...UNPUSHED, state_unknown: false } },
+      });
+      const { offer, confirm } = await takeRemoteLabels();
+      console.log('[W59] open prompt take-remote labels (dirty):', offer, '|', confirm);
+      expect(offer).toBe('Take the server copy & discard my changes');
+      expect(confirm).toBe('Yes, discard my changes');
+    });
+  });
 });

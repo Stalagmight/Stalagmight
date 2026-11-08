@@ -151,9 +151,8 @@ fn the_salvage_export_writes_the_chosen_file() {
     println!("salvaged project name in the file: {}", json["name"]);
     assert_eq!(json["name"], "SalvageMe");
 
-    // The same bytes the read command hands the dialog for its summary.
-    let read =
-        tauri::async_runtime::block_on(recovery::export_salvageable_data(project.clone())).unwrap();
+    // The same bytes a salvage read of the project gives.
+    let read = Database::export_salvageable(&project).unwrap();
     assert_eq!(
         std::fs::read_to_string(&dest).unwrap(),
         read.full_project_json.unwrap()
@@ -235,6 +234,37 @@ fn the_salvage_export_answers_the_counts_of_the_file_it_wrote() {
     assert_eq!(wire["mergeCount"], merges, "mergeCount");
     // An intact project salvages with no warning; the list is on the wire.
     assert_eq!(wire["errors"], serde_json::json!([]), "errors");
+    // [#576 Q-W30-2-D1] And it says the file holds the whole project.
+    assert_eq!(wire["projectIncluded"], true, "projectIncluded");
+}
+
+/// [#576 Q-W37-1-D1] The dialog's early check only OPENS the damaged project:
+/// it passes a file that opens although it holds no project (the write then
+/// salvages what it can), and fails - in the salvage's own words - only where
+/// the write's open would: no file, or no database at all.
+#[test]
+fn the_salvage_check_only_opens_the_file() {
+    let check = |path: &Path| {
+        tauri::async_runtime::block_on(recovery::check_salvage_source(path.to_path_buf()))
+    };
+    let temp = TempDir::new().unwrap();
+    // A database with the project schema and no project in it.
+    let empty = temp.path().join("Empty.stalx");
+    drop(Database::open(&empty).unwrap());
+    let missing = temp.path().join("Missing.stalx");
+    let garbage = temp.path().join("Garbage.stalx");
+    std::fs::write(&garbage, b"not a database").unwrap();
+
+    let (empty, missing, garbage) = (check(&empty), check(&missing), check(&garbage));
+    println!("opens, holds no project: {empty:?}");
+    println!("missing: {missing:?}");
+    println!("not a database: {garbage:?}");
+    assert!(empty.is_ok());
+    assert_eq!(
+        missing.unwrap_err().message,
+        "Salvage failed: File does not exist"
+    );
+    assert!(garbage.unwrap_err().message.starts_with("Salvage failed: "));
 }
 
 /// Refused like every other write: the app's own folders, a non-JSON name, and

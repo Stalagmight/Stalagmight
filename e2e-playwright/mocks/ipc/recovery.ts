@@ -28,26 +28,20 @@ export const recoveryCommands: MockCommandFamily = (ctx) => {
       case 'restore_from_backup':
         return `Restored ${String(args?.backupPath ?? '')}` satisfies MockReply<'restore_from_backup'>;
 
-      case 'export_salvageable_data':
-        return {
-          projectName: null,
-          projectLocation: null,
-          sectionCount: 0,
-          shotCount: 0,
-          mergeCount: 0,
-          sectionsJson: null,
-          fullProjectJson: null,
-          errors: [],
-        } satisfies MockReply<'export_salvageable_data'>;
+      // [#576 Q-W37-1-D1] The salvage's open-only check: every path opens.
+      case 'check_salvage_source':
+        return null satisfies MockReply<'check_salvage_source'>;
 
       // [#576 HFI-3] The salvage file is written by the backend; the mock writes
-      // nothing, and answers the counts of what it wrote: none (#576 W30-5).
+      // nothing, and answers the counts of what it wrote: none (#576 W30-5) - so
+      // not the project either (#576 Q-W30-2-D1).
       case 'write_salvaged_data':
         return {
           sectionCount: 0,
           shotCount: 0,
           mergeCount: 0,
           errors: [],
+          projectIncluded: false,
         } satisfies MockReply<'write_salvaged_data'>;
 
       default:

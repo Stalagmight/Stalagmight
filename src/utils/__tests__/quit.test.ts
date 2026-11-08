@@ -25,11 +25,15 @@ import {
   performQuit,
   consumeQuitConfirmation,
   resetQuitConfirmationForTests,
+  requestUpdateRestart,
+  consumeUpdateRestartArmed,
+  abandonUpdateRestart,
+  resetUpdateRestartForTests,
 } from '../quit';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
-import { stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 import { makeSpeleoLink } from '../../test/factories/speleo';
 
 const link = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState =>
@@ -41,7 +45,10 @@ beforeEach(() => {
   closeMock.mockReset();
   closeMock.mockResolvedValue(undefined);
   openDialog.mockReset();
+  invokeIpcMock.mockReset();
+  invokeIpcMock.mockResolvedValue(null);
   resetQuitConfirmationForTests();
+  resetUpdateRestartForTests();
   useProjectStore.setState({ project: { name: 'p' } as never, isDirty: false });
   useSpeleoStore.setState({ link: null });
   useUIStore.setState({ openDialog: openDialog as never, activeDialog: null, dialogData: {} });
@@ -273,5 +280,114 @@ describe('the one-shot quit confirmation', () => {
     await Promise.resolve();
     expect(consumeQuitConfirmation()).toBe(false);
     err.mockRestore();
+  });
+});
+
+/**
+ * [#579] `requestUpdateRestart` - unlike `performQuit`, it does NOT pre-confirm
+ * the close: an update restart still runs the same exit guards a plain quit
+ * does, so `updateRestartArmedUntil` is a SEPARATE one-shot flag consumed only
+ * in `useBeforeUnload`'s final branch (see the guard-integration tests in
+ * `useBeforeUnload.guard.test.tsx` for that half).
+ */
+describe('the update-restart arm (#579)', () => {
+  it('requests a close, unconfirmed - guardQuit must still run for it', async () => {
+    await requestUpdateRestart();
+    expect(closeMock).toHaveBeenCalledTimes(1);
+    expect(consumeQuitConfirmation()).toBe(false);
+  });
+
+  it('is armed by requestUpdateRestart and consumed exactly once', async () => {
+    expect(consumeUpdateRestartArmed()).toBe(false);
+    await requestUpdateRestart();
+    expect(consumeUpdateRestartArmed()).toBe(true);
+    expect(consumeUpdateRestartArmed()).toBe(false);
+  });
+
+  /**
+   * The BACKEND arm is what actually gates the install command, so it has to be
+   * taken before the window is asked to close - the frontend flag alone is a
+   * convention any webview script could ignore.
+   */
+  it('arms the backend before asking for the close', async () => {
+    await requestUpdateRestart();
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'arm_app_update_restart',
+      undefined,
+      expect.anything(),
+    );
+    expect(invokeIpcMock.mock.invocationCallOrder[0]).toBeLessThan(
+      closeMock.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('does not arm, or close, when the backend refuses', async () => {
+    invokeIpcMock.mockRejectedValueOnce(new Error('nothing downloaded'));
+    await expect(requestUpdateRestart()).rejects.toThrow('nothing downloaded');
+    expect(closeMock).not.toHaveBeenCalled();
+    expect(consumeUpdateRestartArmed()).toBe(false);
+  });
+
+  /**
+   * [review] The arm was already taken when the close was requested, so a
+   * REFUSED close (a revoked `core:window:allow-close` capability, an IPC
+   * failure) left it set with no guard chain coming to consume it - and the
+   * next ordinary quit the user made installed the update instead of quitting,
+   * without them ever pressing Restart.
+   */
+  it('releases both arms when the window refuses to close', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    closeMock.mockRejectedValueOnce(new Error('close denied'));
+
+    await expect(requestUpdateRestart()).rejects.toThrow('close denied');
+
+    expect(consumeUpdateRestartArmed()).toBe(false);
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'unarm_app_update_restart',
+      undefined,
+      expect.anything(),
+    );
+    err.mockRestore();
+  });
+
+  /**
+   * [review] It used to be a 10-second TTL, and this test used to assert the
+   * expiry as if it were the desired behaviour. It is not: the arm spans the
+   * unsaved-changes dialog, which is HUMAN time - reading it, saving, then
+   * confirming is routinely more than ten seconds. Past the deadline the
+   * restart silently became a plain quit and the downloaded update was lost
+   * with nothing said. Only an explicit abandon may clear it.
+   */
+  it('survives arbitrarily long guard dialogs - no wall clock', async () => {
+    vi.useFakeTimers();
+    try {
+      await requestUpdateRestart();
+      vi.advanceTimersByTime(60 * 60_000);
+      expect(consumeUpdateRestartArmed()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('abandonUpdateRestart clears both halves', async () => {
+    await requestUpdateRestart();
+    invokeIpcMock.mockClear();
+    abandonUpdateRestart();
+    expect(consumeUpdateRestartArmed()).toBe(false);
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'unarm_app_update_restart',
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  /**
+   * Every ordinary quit runs through the same exit dialogs, whose Cancel calls
+   * this unconditionally - so it must be free when no restart is in flight,
+   * rather than sending an unarm for every cancelled quit in the app.
+   */
+  it('abandoning when nothing is armed touches no IPC', () => {
+    abandonUpdateRestart();
+    expect(invokeIpcMock).not.toHaveBeenCalled();
   });
 });

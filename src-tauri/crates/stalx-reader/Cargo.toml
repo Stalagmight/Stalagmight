@@ -6,6 +6,7 @@ repository = "https://github.com/Stalagmight/Stalagmight"
 readme = false
 keywords = ["cave", "survey", "speleology", "sqlite"]
 edition.workspace = true
+rust-version = "1.89.0"
 license.workspace = true
 
 [lints]
@@ -19,3 +20,12 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true, features = ["v5"] }
+
+[dev-dependencies]
+# `test-support` for the #619 authorizer probes the inspect-connection test
+# shares with persistence's own (`persistence::sqlite::untrusted_sql_probes`).
+# Test builds only: the dependency above, which the library builds with, does
+# not enable it. Versioned like it, because cargo drops a path-only
+# dev-dependency from the manifest it packages, and the packaged src/tests.rs
+# would not compile without this one.
+stalagmight-persistence = { path = "../persistence", version = "=0.1.0", features = ["test-support"] }

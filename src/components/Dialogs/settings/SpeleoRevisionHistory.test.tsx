@@ -280,6 +280,29 @@ describe('SpeleoRevisionHistory - a View refused over a copy that could not be r
     expect(message).toContain('This copy has changes that are not on SpeleoDB');
     expect(message).not.toContain('could not be read');
   });
+
+  /**
+   * [#576 W59 Q-W53-2-D1] The View route has no discard step of its own (a refused View
+   * replaces nothing and offers no "replace" button), so the decision's neutral wording
+   * comes down to the toast and the row's buttons: neither may speak of "my/your
+   * changes" for a copy nobody could read. The dirty line keeps its "your changes".
+   */
+  describe('neutral wording (#576 W59)', () => {
+    const MY_CHANGES = /\b(my|your) changes\b/i;
+
+    it('says nothing about "my changes" for a copy that could not be read', async () => {
+      const message = await viewRefusedWith(refusal(true));
+      const section = screen.getByTestId('speleodb-revisions').textContent ?? '';
+      console.log('[W59] revision View toast (state_unknown):', message);
+      expect(message).not.toMatch(MY_CHANGES);
+      expect(section).not.toMatch(MY_CHANGES);
+    });
+
+    it('keeps "your changes" in the line for a copy that was read and found dirty', async () => {
+      const message = await viewRefusedWith(refusal(false));
+      expect(message).toMatch(MY_CHANGES);
+    });
+  });
 });
 
 /**

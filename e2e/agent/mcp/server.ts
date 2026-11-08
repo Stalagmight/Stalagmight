@@ -7,6 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { createSession } from '../createSession';
+import { stopRunningBuilds } from '../lib/build';
 import { isDarwinTarget } from '../lib/platform';
 import { osClick, osKeys } from '../os/input';
 import { grant as osGrant, preflight as osPreflight } from '../os/permissions';
@@ -1234,6 +1235,9 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     try {
+      // An app_start still building: stop the build, which process.exit would
+      // leave running (#576 RV20-16).
+      stopRunningBuilds();
       if (session.state !== 'idle') await session.stop('server-shutdown');
     } finally {
       process.exit(0);

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use super::models::SpeleoDumpCandidate;
 use super::SpeleoDbError;
-use crate::models::zip_entry_bound::{entry_count_excess, EntryExcess, MAX_END_CANDIDATES};
+use crate::models::zip_entry_bound::{parse_bounded, EntryExcess, LastEndRecordOnly};
 
 /// Hard ceiling on a single extracted dump entry. The `.stalx` is a SQLite DB;
 /// a few hundred MB is far past any real cave project but small enough that a
@@ -39,8 +39,8 @@ const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 /// still bounding the walk. `ZipArchive::new` parses the whole central directory
 /// eagerly, and the `zip` crate exposes no hook to bound that, so the limit is
 /// enforced on the raw bytes BEFORE that parse (#576 W52-4), by the check the `.tml`
-/// reader runs too ([`entry_count_excess`]); the count after it stays as defence in
-/// depth.
+/// reader runs too ([`parse_bounded`], which also keeps the parse to the dump's own
+/// directory, #576 RV20-4); the count after it stays as defence in depth.
 const MAX_ENTRIES: usize = 10_000;
 
 /// How many openable entries a picker may be asked to present. [#258 review]
@@ -217,7 +217,7 @@ fn download_temp_path(dest: &Path) -> PathBuf {
 /// from the *same* archive, so the central directory isn't re-parsed between the
 /// classify step and the extract step.
 pub struct Dump<'a> {
-    archive: zip::ZipArchive<Cursor<&'a [u8]>>,
+    archive: zip::ZipArchive<LastEndRecordOnly<Cursor<&'a [u8]>>>,
 }
 
 impl<'a> Dump<'a> {
@@ -234,25 +234,28 @@ impl<'a> Dump<'a> {
     /// same way [`Self::extract_entry_capped`] is - building ten thousand real ZIP
     /// entries to exercise one comparison buys nothing).
     fn open_capped(zip_bytes: &'a [u8], max_entries: usize) -> Result<Self, SpeleoDbError> {
-        let mut reader = Cursor::new(zip_bytes);
-        let excess = entry_count_excess(&mut reader, max_entries as u64)
-            .map_err(|e| SpeleoDbError::Parse(format!("dump could not be read: {e}")))?;
-        if let Some(excess) = excess {
-            let over = match excess {
-                EntryExcess::Declared(declared) => format!("declares {declared} entries"),
-                EntryExcess::DirectoryRecords(records) => {
-                    format!("holds {records} central-directory records")
-                }
-                EntryExcess::EndRecords => {
-                    format!("holds more than {MAX_END_CANDIDATES} ZIP64 end records or locators")
-                }
-            };
-            return Err(SpeleoDbError::Parse(format!(
-                "dump {over}, over the {max_entries}-entry limit"
-            )));
-        }
-        let archive = zip::ZipArchive::new(reader)
-            .map_err(|e| SpeleoDbError::Parse(format!("dump is not a valid ZIP: {e}")))?;
+        let parsed = parse_bounded(
+            Cursor::new(zip_bytes),
+            max_entries as u64,
+            zip::ZipArchive::new,
+        )
+        .map_err(|e| SpeleoDbError::Parse(format!("dump could not be read: {e}")))?;
+        let parsed = match parsed {
+            Ok(parsed) => parsed,
+            Err(excess) => {
+                let over = match excess {
+                    EntryExcess::Declared(declared) => format!("declares {declared} entries"),
+                    EntryExcess::EndRecords => {
+                        format!("holds more than {max_entries} end-of-directory records")
+                    }
+                };
+                return Err(SpeleoDbError::Parse(format!(
+                    "dump {over}, over the {max_entries}-entry limit"
+                )));
+            }
+        };
+        let archive =
+            parsed.map_err(|e| SpeleoDbError::Parse(format!("dump is not a valid ZIP: {e}")))?;
         // Defence in depth only: the check above bounded the parse, and this
         // counts unique names (the `zip` crate keys its entries by name), so
         // duplicates would slip past it.
@@ -1104,5 +1107,65 @@ mod tests {
                 "{label}: refused naming the count and the limit, got {refused:?}"
             );
         }
+    }
+
+    /// [#576 RV20-4] An archive the dump STORES uncompressed keeps its own
+    /// central directory in the dump's bytes, and those records are the inner
+    /// archive's, not the dump's. The bound counted every directory signature in
+    /// the file, so a three-entry dump holding an inner ZIP of 10 001 entries was
+    /// refused as 10 005 records. Only the dump's own directory counts.
+    #[test]
+    fn a_stored_inner_archive_does_not_count_against_the_dumps_entry_limit() {
+        let names: Vec<String> = (0..=super::MAX_ENTRIES).map(|i| format!("n/{i}")).collect();
+        let inner_entries: Vec<(&str, &[u8])> =
+            names.iter().map(|name| (name.as_str(), &b""[..])).collect();
+        let inner = make_zip(&inner_entries);
+        let dump = make_zip(&[
+            ("misc/project.stalx", b"stalx"),
+            ("ariane.tml", &inner),
+            ("misc/notes.txt", b"notes"),
+        ]);
+        let premise = zip::ZipArchive::new(std::io::Cursor::new(&dump[..])).map(|a| a.len());
+        println!(
+            "premise: the ZIP reader sees {premise:?} entries in the dump, around an inner \
+             archive of {} entries",
+            inner_entries.len()
+        );
+        assert_eq!(premise.ok(), Some(3));
+
+        let opened = Dump::open(&dump).and_then(|mut dump| dump.entry_paths());
+        println!(
+            "three-entry STORED dump around a {}-entry archive: {:?}",
+            inner_entries.len(),
+            opened.as_ref().map_err(ToString::to_string)
+        );
+        assert_eq!(
+            opened.expect("the dump's own directory is within the limit"),
+            ["misc/project.stalx", "ariane.tml", "misc/notes.txt"]
+        );
+    }
+
+    /// [#576 RV20-4] A dump may STORE many archives, each with its own end
+    /// record in the dump's bytes; the parse hides all of them but the dump's
+    /// own. Capped at a fixed 1024, the 1025th refused a dump far within the
+    /// entry limit; the cap is the entry limit now.
+    #[test]
+    fn a_dump_storing_more_than_1024_archives_is_read() {
+        let empty_zip = make_zip(&[]);
+        let names: Vec<String> = (0..1025).map(|i| format!("misc/z{i}.zip")).collect();
+        let mut entries: Vec<(&str, &[u8])> = vec![("misc/project.stalx", b"stalx")];
+        entries.extend(names.iter().map(|name| (name.as_str(), &empty_zip[..])));
+        let dump = make_zip(&entries);
+
+        let opened = Dump::open(&dump)
+            .and_then(|mut dump| dump.entry_paths())
+            .map(|paths| paths.len());
+        println!(
+            "dump storing {} empty archives ({} bytes each): {:?}",
+            names.len(),
+            empty_zip.len(),
+            opened.as_ref().map_err(ToString::to_string)
+        );
+        assert_eq!(opened.expect("within the entry limit"), entries.len());
     }
 }

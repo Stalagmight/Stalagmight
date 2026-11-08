@@ -12,7 +12,12 @@
  * TRUNCATED fails with `premature end of input`. So the error message alone
  * distinguishes "arrived and was rejected" from "did not arrive", and a
  * deliberately-invalid config is enough to binary-search the boundary without
- * mutating a project.
+ * mutating a project. Node reads each error by its class from a fixed set
+ * (`lib/ipcPayloadProbe.ts`); an error that is none of them - a page script's
+ * own failure, an unknown command - is `other`, never "arrived" (#576 RV20-13).
+ * What prints is that class and the message's length; with
+ * `STALAGMIGHT_AGENT_PRIVATE_ERRORS=1` the whole message of each call also goes
+ * to `ipc-probe-errors.jsonl` in the session directory, a private file.
  *
  *   pnpm tsx e2e/agent/ipc-payload-probe.ts [--char x] [--max 33554432]
  *
@@ -20,15 +25,19 @@
  * does not.
  */
 import { AppSession } from './session';
+import { probeVerdict, shownProbeError, type ProbeVerdict } from './lib/ipcPayloadProbe';
 import { evalInApp } from './lib/page';
-import { shareableErrorText, valueShape, withheldAppText } from './lib/shareableFailure';
+import { appendProbeError } from './lib/privateErrors';
+import { cliValueShape, shareableErrorText, valueShape } from './lib/shareableFailure';
 
 interface Probe {
   /** serde's message, or null when the call unexpectedly succeeded. */
   error: string | null;
-  /** Did the body reach the handler at all? */
-  arrived: boolean;
 }
+
+/** A verdict as the sweeps print it, padded to one width. */
+const verdictWord = (verdict: ProbeVerdict): string =>
+  verdict === 'arrived' ? 'arrived  ' : verdict === 'truncated' ? 'TRUNCATED' : 'OTHER    ';
 
 /**
  * Characters worth one call each, with the reason they are suspects.
@@ -63,9 +72,12 @@ const SUSPECTS: readonly { label: string; text: string }[] = [
   { label: 'quote and backslash', text: '"\\' },
 ];
 
-/** The flags this probe takes. An error names one of them, and anything else by its shape (#576 W51). */
+/**
+ * The flags this probe takes. An error names one of them, a token shaped like a
+ * flag or a number as itself, and anything else by its shape (#576 W51, W58 Q4).
+ */
 const FLAGS: ReadonlySet<string> = new Set(['--classes', '--shapes', '--char', '--max']);
-const shownFlag = (flag: string | undefined): string => (flag !== undefined && FLAGS.has(flag) ? flag : valueShape(flag));
+const shownFlag = (flag: string | undefined): string => (flag !== undefined && FLAGS.has(flag) ? flag : cliValueShape(flag));
 
 const DEFAULT_CHAR = 'x';
 /**
@@ -76,9 +88,6 @@ const shownChar = (text: string): string =>
   text === DEFAULT_CHAR
     ? JSON.stringify(DEFAULT_CHAR)
     : (SUSPECTS.find((suspect) => suspect.text === text)?.label ?? valueShape(text));
-
-/** serde's message as printed (#576 W51): it is the app's error text, so its length. */
-const shownError = (error: string | null): string => (error === null ? '(no error)' : withheldAppText(error));
 
 function parseArgs(argv: string[]): { char: string; max: number; classes: boolean; shapes: boolean } {
   let char = DEFAULT_CHAR;
@@ -100,7 +109,7 @@ function parseArgs(argv: string[]): { char: string; max: number; classes: boolea
     i += 1;
     if (flag === '--char') char = value;
     else if (flag === '--max') max = Number(value);
-    else throw new Error(`unknown flag, ${valueShape(flag)}`);
+    else throw new Error(`unknown flag, ${cliValueShape(flag)}`);
   }
   if (!Number.isInteger(max) || max < 1) throw new Error('--max needs a positive integer');
   return { char, max, classes, shapes };
@@ -111,6 +120,12 @@ async function main(): Promise<number> {
   const session = new AppSession();
   const started = await session.start({ build: 'auto' });
   process.stdout.write(`session ${started.state} (${started.buildMode} build ${started.buildAction})\n`);
+
+  /** One call's verdict; its whole error goes to the private log when the developer opted in. */
+  const judge = (call: string, result: Probe): ProbeVerdict => {
+    appendProbeError(session.sessionDir, call, result.error);
+    return probeVerdict(result.error);
+  };
 
   /**
    * One call, with a `comment` of `length` copies of `char`.
@@ -129,10 +144,10 @@ async function main(): Promise<number> {
         const filler = args[0].repeat(args[1]);
         try {
           await core.invoke('import_sections', { sections: [{ comment: filler }] });
-          return { error: null, arrived: true };
+          return { error: null };
         } catch (err) {
           const message = String(err);
-          return { error: message, arrived: message.indexOf('premature end of input') < 0 };
+          return { error: message };
         }
       `,
         [char, length],
@@ -174,17 +189,16 @@ async function main(): Promise<number> {
             const core = window.__TAURI__.core;
             try {
               await core.invoke('import_sections', ${probeCase.body});
-              return { error: null, arrived: true };
+              return { error: null };
             } catch (err) {
               const message = String(err && err.message ? err.message : err);
-              return { error: message, arrived: message.indexOf('premature end of input') < 0 };
+              return { error: message };
             }
           `,
           ),
         );
-        process.stdout.write(
-          `  ${result.arrived ? 'arrived  ' : 'TRUNCATED'} ${probeCase.label.padEnd(24)} ${shownError(result.error)}\n`,
-        );
+        const verdict = judge(probeCase.label, result);
+        process.stdout.write(`  ${verdictWord(verdict)} ${probeCase.label.padEnd(24)} ${shownProbeError(result.error)}\n`);
       }
       return 0;
     }
@@ -192,6 +206,7 @@ async function main(): Promise<number> {
     if (classes) {
       process.stdout.write('\ncharacter class sweep (one call each, 8 copies):\n');
       const broken: string[] = [];
+      const unread: string[] = [];
       for (const suspect of SUSPECTS) {
         const result = await session.exclusive(() =>
           evalInApp<Probe>(
@@ -201,20 +216,21 @@ async function main(): Promise<number> {
             const filler = args[0].repeat(8);
             try {
               await core.invoke('import_sections', { sections: [{ comment: filler }] });
-              return { error: null, arrived: true };
+              return { error: null };
             } catch (err) {
               const message = String(err);
-              return { error: message, arrived: message.indexOf('premature end of input') < 0 };
+              return { error: message };
             }
           `,
             [suspect.text],
           ),
         );
-        process.stdout.write(
-          `  ${result.arrived ? 'arrived  ' : 'TRUNCATED'} ${suspect.label.padEnd(32)} ${shownError(result.error)}\n`,
-        );
-        if (!result.arrived) broken.push(suspect.label);
+        const verdict = judge(suspect.label, result);
+        process.stdout.write(`  ${verdictWord(verdict)} ${suspect.label.padEnd(32)} ${shownProbeError(result.error)}\n`);
+        if (verdict === 'truncated') broken.push(suspect.label);
+        if (verdict === 'other') unread.push(suspect.label);
       }
+      if (unread.length > 0) process.stdout.write(`\nNOT A KNOWN REJECTION (says nothing about the body): ${unread.join(', ')}\n`);
       process.stdout.write(
         broken.length > 0
           ? `\nTRUNCATES THE IPC BODY: ${broken.join(', ')}\n`
@@ -224,12 +240,15 @@ async function main(): Promise<number> {
     }
 
     const baseline = await probe(1);
-    process.stdout.write(`  baseline (1 char): arrived=${baseline.arrived} error=${shownError(baseline.error)}\n`);
-    if (!baseline.arrived) throw new Error('even a 1-character argument did not arrive; the probe is wrong');
+    const baselineVerdict = judge('baseline', baseline);
+    process.stdout.write(`  baseline (1 char): ${baselineVerdict} error=${shownProbeError(baseline.error)}\n`);
+    if (baselineVerdict !== 'arrived') throw new Error(`even a 1-character argument did not arrive (${baselineVerdict}); the probe is wrong`);
 
     const ceiling = await probe(max);
-    process.stdout.write(`  ceiling (${max} chars): arrived=${ceiling.arrived} error=${shownError(ceiling.error)}\n`);
-    if (ceiling.arrived) {
+    const ceilingVerdict = judge(`ceiling ${max}`, ceiling);
+    process.stdout.write(`  ceiling (${max} chars): ${ceilingVerdict} error=${shownProbeError(ceiling.error)}\n`);
+    if (ceilingVerdict === 'other') throw new Error(`the ${max}-character call failed with an error that is not a known rejection`);
+    if (ceilingVerdict === 'arrived') {
       process.stdout.write(`\nNO TRUNCATION up to ${max} ${shownChar(char)} characters.\n`);
       return 0;
     }
@@ -239,9 +258,10 @@ async function main(): Promise<number> {
     let bad = max;
     while (bad - good > 1) {
       const middle = Math.floor((good + bad) / 2);
-      const result = await probe(middle);
-      process.stdout.write(`  ${String(middle).padStart(9)} -> ${result.arrived ? 'arrived' : 'TRUNCATED'}\n`);
-      if (result.arrived) good = middle;
+      const verdict = judge(String(middle), await probe(middle));
+      process.stdout.write(`  ${String(middle).padStart(9)} -> ${verdict}\n`);
+      if (verdict === 'other') throw new Error(`the ${middle}-character call failed with an error that is not a known rejection`);
+      if (verdict === 'arrived') good = middle;
       else bad = middle;
     }
     process.stdout.write(

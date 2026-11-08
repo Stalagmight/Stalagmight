@@ -19,9 +19,10 @@
 // guards know a path is a link before deciding on extension-based exclusions:
 // a link called `logo.png` is still text (its target), not an image.
 
-import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+
+import { execFileSyncFolded } from './fold-local-paths.mjs';
 
 // Skip (and FAIL on) a file larger than this. Bounds scan time against an
 // adversarial multi-MB single-line file on a fork PR; no tracked text file
@@ -68,9 +69,12 @@ export function parseLsFilesStage(out) {
   return entries.filter((e) => (seen.has(e.rel) ? false : (seen.add(e.rel), true)));
 }
 
-// Every tracked path with its symlink flag, sorted.
+// Every tracked path with its symlink flag, sorted. git's stderr reaches ours
+// folded: a failure such as `detected dubious ownership in repository at
+// '<path>'` names the checkout (#576 W58). A failing git still throws
+// execFileSync's error (`Command failed: git ls-files -s -z`, its status).
 export function listTracked(root) {
-  const out = execFileSync('git', ['ls-files', '-s', '-z'], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
+  const out = execFileSyncFolded('git', ['ls-files', '-s', '-z'], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
   return parseLsFilesStage(out.toString('utf8')).sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 }
 

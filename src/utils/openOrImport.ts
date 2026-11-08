@@ -36,6 +36,7 @@
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
+import { useUpdateStore, selectUpdateInstalling } from '../store/updateStore';
 import { projectSessionEpoch } from '../store/projectSession';
 import { isEditingBlockedNow } from '../hooks/useEditingBlocked';
 import { getErrorMessage } from './ipc';
@@ -308,6 +309,12 @@ export async function routeOpenedFile(
   let handedOff = false;
 
   try {
+    // [#579 x #576] An update is installing and the project is held still until it
+    // ends. The install overlay covers every DOM entry point, but a file dropped on
+    // the window arrives as a native webview event: it must not open, import or
+    // raise a prompt over the install. The overlay already says why nothing acts.
+    if (selectUpdateInstalling(useUpdateStore.getState())) return;
+
     // One import at a time (#411). Drag-drop routes unconditionally - the drop
     // listener has no modal check (Ctrl+O/Ctrl+I do: useKeyboardShortcuts returns
     // early for every non-Escape key while a dialog is open) - so a second file

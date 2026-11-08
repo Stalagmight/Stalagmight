@@ -24,8 +24,8 @@ export default function MergeProjectsDialog() {
   const { closeDialog, dialogData, showToast } = useUIStore(
     useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData, showToast: s.showToast })),
   );
-  const { mergeProjects, loadProject } = useProjectStore(
-    useShallow((s) => ({ mergeProjects: s.mergeProjects, loadProject: s.loadProject })),
+  const { mergeProjects, loadProject, showMergeSourceRepairs } = useProjectStore(
+    useShallow((s) => ({ mergeProjects: s.mergeProjects, loadProject: s.loadProject, showMergeSourceRepairs: s.showMergeSourceRepairs })),
   );
   const precision = useDecimalPrecision();
 
@@ -131,6 +131,10 @@ export default function MergeProjectsDialog() {
           setProjectActionSource('dialog');
           await loadProject(finalPath);
         }
+        // [#576 W57-NF2] What reading each source reset or dropped, which the merged
+        // file no longer holds: the load-repairs notice, named by source. After the
+        // open, which replaces the notice.
+        showMergeSourceRepairs(result.source_repairs);
       } else {
         setError(result.error ?? t('dialogs.mergeProjects.errors.failed'));
       }
@@ -139,7 +143,7 @@ export default function MergeProjectsDialog() {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedProjects, outputName, archiveOriginals, openAfterMerge, mergeProjects, closeDialog, loadProject, t]);
+  }, [selectedProjects, outputName, archiveOriginals, openAfterMerge, mergeProjects, closeDialog, loadProject, showMergeSourceRepairs, t]);
 
   if (!selectedProjects || selectedProjects.length < 2) {
     return null;

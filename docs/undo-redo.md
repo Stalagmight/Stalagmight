@@ -35,10 +35,11 @@ Commands go through a two-phase capture during execution:
 
 | Variant | Used By | Undo | Redo |
 |---------|---------|------|------|
-| `InverseCommand` | SetStationComment | Execute the inverse command | Execute the original command |
+| `InverseCommand` | SetStationComment, when no key but the station's own names it | Execute the inverse command (a set of the previous comment) | Execute the original command |
+| `StationCommentRows` | SetStationComment, when a key other than the station's own names it (a legacy positional `Index` key) | Remove every key that names the station, then put back each recorded row under its own key | Execute the original command |
 | `PreviousValues` | UpdateShot, SetShotKind, UpdateSectionMetadata | Parse JSON, apply old values, then put the recorded `section_offsets` back (see below) | Execute the original command |
 | `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves the original ID **and** the recorded identity - see below) |
-| `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free - then put the recorded `section_offsets` back (see below) | Restore from snapshot (preserves original ID) |
+| `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free - then put the recorded `section_offsets` back (see below), and any comment row that named the new station under another key (a legacy `Index` key the append made resolve) back under that key; a key that then names no station is dropped (see below) | Restore from snapshot (preserves original ID) |
 | `ShotSnapshot` | legacy persisted DeleteShot entries (a live DeleteShot records `ProjectSnapshotPair`) | Restore shot at exact position | Re-execute the delete |
 | `MergeInfo` | legacy persisted MergeStations entries (a live MergeStations records `ProjectSnapshotPair`) | Restore previous offsets + unmerge | Execute the original command |
 | `UnmergeInfo` | legacy persisted UnmergeStations entries (a live UnmergeStations records `ProjectSnapshotPair`) | Re-merge + restore removed closures | Re-execute the unmerge |
@@ -47,6 +48,19 @@ Commands go through a two-phase capture during execution:
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
 | `ProjectSnapshotPair` | Batch, DeleteSection, DeleteShot, ReverseSection, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
 | `None` | Non-undoable commands | N/A | N/A |
+
+### A restore drops a comment key that names no station (#576 Q-W30-3-D1)
+
+The open drops a station comment row past the end of its section (an orphan)
+and lists it on the load receipt. Undo history an older build saved can still
+hold one: that build's open kept the row as a positional `Index` key, so its
+snapshots recorded the key, and an append it ran could make the key name a
+station that the undo of that append takes away again. Left in the project,
+the next append or prepend gave the orphan a station and the save joined it
+into that station's row. So `restore_snapshot_into` drops every comment whose
+key names no station, and so does the undo epilogue after every arm
+(`drop_orphan_comments`, logged by position only). Only the comment goes; the
+entry still steps. A redo does not bring a dropped orphan back.
 
 ### Undo data addresses a shot by uuid, never by its in-session id (#413)
 

@@ -341,6 +341,58 @@ jobs:
             cargo package --list --manifest-path src-tauri/Cargo.toml -p "$c" | grep -qx LICENSE \
               || { echo "::error::$c does not package a LICENSE"; exit 1; }
           done
+      # [#619] The crates packaged above are built on crates.io without the
+      # repo-root .cargo/config.toml, so their bundled SQLite has FTS3/4/5,
+      # R-tree, DBSTAT and extension loading compiled in. There, the SQLite
+      # authorizer stalagmight-persistence installs on every untrusted
+      # connection is what keeps a hostile .stalx away from them, so run its
+      # test on such a build: --config empties LIBSQLITE3_FLAGS (a command-line
+      # value wins over the file's `force = true`), and
+      # STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE makes the test fail unless the
+      # modules really are there. Its own target dir, so this SQLite does not
+      # replace the one the steps above built; and only this test and its
+      # stalx-reader twin, which covers the connection the reader opens itself
+      # to inspect a file. That also bounds the compile: the flag-pinning test in
+      # persistence::sqlite::tests must fail on this build. A name --exact
+      # matches nothing runs 0 tests and passes, so a renamed test would leave
+      # the step green without running it: the step reads the output back and
+      # fails unless each named test ran and passed.
+      - name: SQLite authorizer on a build without the repo's flags (#619)
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          tests=(
+            persistence::sqlite::untrusted_sql_tests::every_untrusted_open_refuses_what_the_build_flags_strip
+            tests::the_inspect_connection_refuses_what_the_build_flags_strip
+          )
+          log="$RUNNER_TEMP/unstripped-sqlite-tests.log"
+          cargo --config 'env.LIBSQLITE3_FLAGS.value=""' --config 'env.LIBSQLITE3_FLAGS.force=true' \
+            test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence -p stalx-reader --lib -- \
+            --exact "${tests[@]}" | tee "$log"
+          for t in "${tests[@]}"; do
+            grep -qxF "test $t ... ok" "$log" \
+              || { echo "::error::$t did not run, or did not pass"; exit 1; }
+          done
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/target-unstripped-sqlite
+          STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE: "1"
+      # The same three crates declare `rust-version = "1.89.0"`: the oldest stable
+      # rustc that builds them (rusqlite 0.41 itself requires 1.89), and the floor
+      # library users get. Every other step builds on the latest stable, which takes
+      # an API stabilized after 1.89 without a word - `AtomicU64::try_update` (1.95)
+      # got in that way - so build them on the floor itself. --locked: the
+      # dependency versions the lockfile holds, which are what set the floor. Its
+      # own CARGO_TARGET_DIR, so these artifacts never mix with the stable ones the
+      # steps around it share. Self-contained on purpose (installs its toolchain,
+      # minimal profile: a check needs no rustfmt or clippy).
+      - name: MSRV check (stalx-reader and its crates, Rust 1.89.0)
+        if: ${{ !cancelled() }}
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/msrv-target
+        run: |
+          rustup toolchain install 1.89.0 --profile minimal
+          cargo +1.89.0 check --locked --manifest-path src-tauri/Cargo.toml \
+            -p stalx-reader -p stalagmight-persistence -p stalagmight-models
       # sccache health on the self-hosted path (the cache that replaces rust-cache
       # on the ephemeral runner). Skipped on hosted. !cancelled() (not always()):
       # still report on cargo FAILURE, but skip on a superseded/cancelled run.

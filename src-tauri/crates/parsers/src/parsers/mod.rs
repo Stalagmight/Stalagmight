@@ -13,4 +13,4 @@ pub mod tml;
 pub mod walls;
 
 pub use dmp::*;
-pub use encoding::stream_import_file;
+pub use encoding::{cancel_pressed, stream_import_file, with_cancel_flag};

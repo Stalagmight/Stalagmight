@@ -45,13 +45,16 @@ import {
   sameSignature,
   shareableSignature,
   shrinkableSteps,
+  tracePrivateFixtures,
   writeTrace,
   type FailureSignature,
   type FuzzTrace,
   type TraceStep,
 } from './lib/fuzzTrace';
 import { ddmin, type ShrinkVerdict } from './lib/fuzzShrink';
-import { foldLocalPaths, shareableErrorText, valueShape } from './lib/shareableFailure';
+import { shareableFixtureName } from './lib/privateFixtures';
+import { shareableKnobValue } from './lib/traceKnobs';
+import { cliValueShape, foldLocalPaths, shareableErrorText, valueShape } from './lib/shareableFailure';
 // Safe to import statically, unlike the scenarios below: this module freezes
 // nothing at import and reads `STALAGMIGHT_FUZZ_CORPUS_DIR` at call time, which
 // its own tests pin.
@@ -64,9 +67,12 @@ interface Args {
   out: string | null;
 }
 
-/** The flags this runner takes. An error names one of them, and anything else by its shape (#576 W51). */
+/**
+ * The flags this runner takes. An error names one of them, a token shaped like
+ * a flag or a number as itself, and anything else by its shape (#576 W51, W58 Q4).
+ */
 const FLAGS: ReadonlySet<string> = new Set(['--release', '--max-tests', '--out']);
-const shownFlag = (flag: string | undefined): string => (flag !== undefined && FLAGS.has(flag) ? flag : valueShape(flag));
+const shownFlag = (flag: string | undefined): string => (flag !== undefined && FLAGS.has(flag) ? flag : cliValueShape(flag));
 
 /**
  * A trace's header fields as printed (#576 W51). A trace is a file from wherever
@@ -95,7 +101,7 @@ function parseArgs(argv: string[]): Args {
     i += 1;
     if (flag === '--max-tests') args.maxTests = Number(value);
     else if (flag === '--out') args.out = path.resolve(value);
-    else throw new Error(`unknown flag, ${valueShape(flag)}`);
+    else throw new Error(`unknown flag, ${cliValueShape(flag)}`);
   }
   return args;
 }
@@ -120,10 +126,17 @@ async function main(): Promise<number> {
   // rather than inheriting whatever shell the shrink was started from - through
   // the recorder's own prefix filter, because a trace is a file from wherever
   // the user got it and this process goes on to invoke cargo and launch the app.
-  const { refused, cleared } = restoreTraceEnv(trace.env);
+  const { refused, cleared, withheld } = restoreTraceEnv(trace.env, trace.envWithheld);
   if (refused.length > 0) {
     process.stdout.write(
       `REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.map(envKey).join(', ')}\n`,
+    );
+  }
+  if (withheld.length > 0) {
+    // Set in the recording to a value its trace does not carry (#576 W58 Q9).
+    process.stdout.write(
+      `WITHHELD ${withheld.length} knob(s) the recording set to a value the trace does not carry, ` +
+        `left as this shell has them: ${withheld.map(envKey).join(', ')}\n`,
     );
   }
   if (cleared.length > 0) {
@@ -159,12 +172,18 @@ async function main(): Promise<number> {
 
   const session = new AppSession();
   const started = await session.start({ build: 'auto' });
+  // A fixture the repo does not track prints as its tag below - the header's and
+  // every reload step's (#576 W58 Q1, NF1). Its full name goes to the session's
+  // actions.jsonl, which is not for sharing, so the tag can be traced back.
+  if (session.hasRecorder) {
+    for (const named of tracePrivateFixtures(trace)) session.recorder.event('private-fixture', named);
+  }
   process.stdout.write(
     `session ${started.state} (${started.buildMode} build ${started.buildAction})\n` +
       `trace ${foldLocalPaths(args.trace)}\n` +
-      `  scenario=${trace.scenario} seed=${valueShape(trace.seed)} fixture=${foldLocalPaths(String(trace.fixture))} ` +
+      `  scenario=${trace.scenario} seed=${valueShape(trace.seed)} fixture=${shareableFixtureName(trace.fixture)} ` +
       `steps=${trace.steps.length} rev=${gitRev(trace.gitRev)}\n` +
-      `  env=${Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${foldLocalPaths(String(value))}`).join(' ')}\n`,
+      `  env=${Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${shareableKnobValue(key, value)}`).join(' ')}\n`,
   );
 
   // Said BEFORE the baseline replay, not after it, and it RESOLVES the ids
@@ -297,7 +316,8 @@ async function main(): Promise<number> {
         `  wall clock: ${(wallMs / 1000).toFixed(1)} s, ${Math.round(perReplay)} ms per replay ` +
           `(${replayTimesMs.length} replays incl. the baseline)`,
         // Folded (#576 W51): the minimal trace sits beside the one the user gave,
-        // and a step's `rel` or label can carry a path.
+        // and a step's `rel` or label can carry a path. A reload step's private
+        // fixture prints as its tag (#576 W58 NF1), and so does a step path the repo does not track (W74-NF2).
         `  minimal trace: ${foldLocalPaths(outPath)}`,
         '',
         'minimal action list:',

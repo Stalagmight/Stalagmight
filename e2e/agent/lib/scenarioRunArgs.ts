@@ -4,7 +4,7 @@
  * that can be tested without the app lives here).
  */
 import type { FuzzTrace } from './fuzzTrace';
-import { valueShape } from './shareableFailure';
+import { cliValueShape, valueShape } from './shareableFailure';
 
 export interface ScenarioRunArgs {
   name: string;
@@ -29,12 +29,12 @@ export const SCENARIO_RUN_USAGE =
  * exercised nothing.
  */
 export function integerFlag(flag: string, raw: string): number {
-  if (!/^-?\d+$/.test(raw)) throw new Error(`flag ${flag} needs an integer, got ${valueShape(raw)}`);
+  if (!/^-?\d+$/.test(raw)) throw new Error(`flag ${flag} needs an integer, got ${cliValueShape(raw)}`);
   return Number(raw);
 }
 
 export function positiveIntFlag(flag: string, raw: string): number {
-  if (!/^\d+$/.test(raw)) throw new Error(`flag ${flag} needs a positive integer, got ${valueShape(raw)}`);
+  if (!/^\d+$/.test(raw)) throw new Error(`flag ${flag} needs a positive integer, got ${cliValueShape(raw)}`);
   if (Number(raw) < 1) throw new Error(`flag ${flag} needs a positive integer, got ${Number(raw)}`);
   return Number(raw);
 }
@@ -60,8 +60,9 @@ export function parseScenarioArgs(argv: string[]): ScenarioRunArgs {
       continue;
     }
     // What the user typed prints as its shape: stderr is pasted, and a stray
-    // argument can be a path or a name (#576 W51).
-    if (flag !== '--seed' && flag !== '--iterations') throw new Error(`unknown flag, ${valueShape(flag)}`);
+    // argument can be a path or a name (#576 W51) - unless it is shaped like a
+    // flag or a number, which neither can be (#576 W58 Q4).
+    if (flag !== '--seed' && flag !== '--iterations') throw new Error(`unknown flag, ${cliValueShape(flag)}`);
     const raw = rest[i + 1];
     if (raw === undefined) throw new Error(`flag ${flag} needs a value`);
     i += 1;

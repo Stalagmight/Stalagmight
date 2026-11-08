@@ -23,7 +23,7 @@ import type { ScenarioContext } from '../scenarios/framework';
 import { redactCorpusText } from './fixtureCorpus';
 import { TraceRecorder, defaultTracePath, readTrace, writeTrace, type FuzzTrace } from './fuzzTrace';
 import { replayTracePath, traceOutPath } from './fuzzKnobs';
-import { foldLocalPaths } from './shareableFailure';
+import { errorMessageOf, foldLocalPaths } from './shareableFailure';
 
 /** What a scenario needs to know about replay, resolved once per run (or cycle). */
 export interface ReplaySetup {
@@ -255,9 +255,15 @@ export function describeRunError(err: unknown, inFlight: string | null): RunErro
       ].join('\n'),
     };
   }
+  // A third-party error's first line - webdriverio's, Node's - is not a shape
+  // the harness writes: it goes in behind `a third-party <Name>: `, which the
+  // shareable form prints as that prefix and the line's length (#576 W58 Q3).
+  // The failure message, and so the session's actions.jsonl and the in-memory
+  // signature a shrink compares, keeps the line whole.
+  const [shown = ''] = errorMessageOf(err).split('\n');
   return {
     stall: false,
-    headline: first === '' ? 'the run threw an error with no message' : first,
+    headline: first === '' ? 'the run threw an error with no message' : shown.trim(),
     detail: [`  in flight: ${inFlight ?? '(none)'}`, ...lines.slice(1)].join('\n').trimEnd(),
   };
 }

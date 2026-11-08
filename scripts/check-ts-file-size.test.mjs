@@ -197,9 +197,13 @@ test('listSrcFiles walks untracked files, prunes tests/generated/node_modules, r
 });
 
 // Every gate prints a symlink's target. One that is absolute or leaves the root
-// names a path on the machine, not the checkout's text (#576 W51).
-test('walkFiles gives a symlink target outside the root as a placeholder, one inside as written', () => {
+// names a path on the machine, not the checkout's text, so it prints resolved
+// and folded (#576 W51, W58).
+test('walkFiles gives a symlink target outside the root resolved and folded, one inside as written', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'src-files-out-'));
+  const saved = { HOME: process.env.HOME, CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR };
+  process.env.HOME = '/qzhome/qzuser';
+  delete process.env.CARGO_TARGET_DIR;
   try {
     fs.mkdirSync(path.join(root, 'src', 'a'), { recursive: true });
     fs.writeFileSync(path.join(root, 'src', 'b.ts'), 'x');
@@ -209,11 +213,17 @@ test('walkFiles gives a symlink target outside the root as a placeholder, one in
     const { symlinks } = walkFiles(root, 'src', { exts: ['.ts'] });
     assert.deepEqual(symlinks, [
       { rel: 'src/a/in.ts', target: '../b.ts' },
-      { rel: 'src/abs.ts', target: '<outside the checkout>' },
-      { rel: 'src/up.ts', target: '<outside the checkout>' },
+      { rel: 'src/abs.ts', target: '~/CaveA/x.ts' },
+      { rel: 'src/up.ts', target: '<tmp>/qzCaveA/x.ts' },
     ]);
-    assert.doesNotMatch(symlinks.map(symlinkProblem).join('\n'), /qz/);
+    const printed = symlinks.map(symlinkProblem).join('\n');
+    assert.doesNotMatch(printed, /qzhome|qzuser/);
+    assert.ok(!printed.includes(os.tmpdir()), 'the temp dir prints as <tmp>');
   } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

@@ -17,6 +17,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, relative } from 'node:path';
 
+import { foldLocalPaths } from './lib/fold-local-paths.mjs';
+
 export default class TimingReporter {
   /** Titles already warned about, so an unknown step warns once, not per test. */
   static warned = new Set();
@@ -127,7 +129,8 @@ export default class TimingReporter {
     const path = process.env.PW_TIMING_OUTPUT || 'playwright-report/timing.json';
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(out, null, 2));
-    // The env path is the caller's and can name their own directories (#576 W51).
-    console.log(`\n[pw-timing] wrote ${merged.size} test timings to ${process.env.PW_TIMING_OUTPUT ? '$PW_TIMING_OUTPUT' : 'playwright-report/timing.json'}`);
+    // Folded: the env path is the caller's and can name their own directories
+    // (#576 W51, W58).
+    console.log(`\n[pw-timing] wrote ${merged.size} test timings to ${foldLocalPaths(path)}`);
   }
 }

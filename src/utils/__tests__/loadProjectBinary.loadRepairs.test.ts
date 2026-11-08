@@ -65,6 +65,22 @@ describe('loadProjectBinary decodes what the load reset or dropped (#576 B35(h))
       sectionOffsets: 0,
       stationOffsets: 1,
       gpsPoints: 3,
+      stationComments: 0,
+    });
+  });
+
+  // [#576 Q-W30-3-D1] Orphaned station comments the open dropped.
+  it('carries the station comments the open dropped as orphans', () => {
+    const result = buildResult(
+      envelope({ shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0, station_comments: 2n }),
+      0,
+    );
+    expect(result.loadRepairs).toEqual({
+      shots: 0,
+      sectionOffsets: 0,
+      stationOffsets: 0,
+      gpsPoints: 0,
+      stationComments: 2,
     });
   });
 

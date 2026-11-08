@@ -86,6 +86,31 @@ impl IpcEvent for SpeleoPrePushSave {
     type Payload = crate::core::ProjectFileOutcome;
 }
 
+/// [#579] Bytes received so far by the in-app update download
+/// (`commands::app_update::download_app_update`), throttled by the emitter.
+pub struct AppUpdateDownloadProgress;
+impl IpcEvent for AppUpdateDownloadProgress {
+    const NAME: &'static str = "app-update:download-progress";
+    type Payload = AppUpdateProgress;
+}
+
+/// [`AppUpdateDownloadProgress`]'s payload.
+///
+/// `total` is `None` when the server sent no `Content-Length`; the frontend
+/// then has bytes-so-far but no percentage, which is a real state and not an
+/// error.
+#[derive(Debug, Clone, Copy, serde::Serialize, ts_rs::TS)]
+pub struct AppUpdateProgress {
+    /// `number` in TS, not ts-rs's default `bigint` for `u64`: serde_json puts a
+    /// plain JSON number on the wire, so a `bigint` declaration would typecheck
+    /// against arithmetic that throws at runtime. Bounded by the download cap
+    /// (`MAX_UPDATE_BYTES`, 512 MiB), nowhere near 2^53.
+    #[ts(type = "number")]
+    pub downloaded: u64,
+    #[ts(type = "number | null")]
+    pub total: Option<u64>,
+}
+
 /// `E`'s payload as the JSON value an [`EventSink`] takes, typed by `E`.
 pub fn payload<E: IpcEvent>(payload: &E::Payload) -> serde_json::Result<serde_json::Value> {
     serde_json::to_value(payload)

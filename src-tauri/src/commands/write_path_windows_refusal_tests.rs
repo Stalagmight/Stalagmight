@@ -403,6 +403,45 @@ fn this_computer_reached_as_a_network_share_is_refused() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
+/// [#576 PR #594 review] Class 4, the unspecified address: `0.0.0.0` in every
+/// spelling Windows reads as an IPv4 address, and `::` (bare, in brackets,
+/// IPv4-mapped, as an `ipv6-literal.net` name). No remote server has it, and
+/// it can reach this computer (see `is_this_computer`). `[::]` and `::` were
+/// refused before only as an alternate data stream, for their `:`.
+#[test]
+fn the_unspecified_address_as_a_server_is_this_computer() {
+    let cases = [
+        ("0.0.0.0", r"\\0.0.0.0\c$\CaveL.stalx", LOOPBACK),
+        ("0", r"\\0\c$\CaveL.stalx", LOOPBACK),
+        ("0x0", r"\\0x0\c$\CaveL.stalx", LOOPBACK),
+        ("0.0", r"\\0.0\share\CaveL.stalx", LOOPBACK),
+        ("000.0.0.0", r"\\000.0.0.0\share\CaveL.stalx", LOOPBACK),
+        ("0.0.0.0.", r"\\0.0.0.0.\share\CaveL.stalx", LOOPBACK),
+        ("::", r"\\::\c$\CaveL.stalx", LOOPBACK),
+        ("[::]", r"\\[::]\c$\CaveL.stalx", LOOPBACK),
+        (
+            "0:0:0:0:0:0:0:0",
+            r"\\0:0:0:0:0:0:0:0\c$\CaveL.stalx",
+            LOOPBACK,
+        ),
+        (
+            "[::ffff:0.0.0.0]",
+            r"\\[::ffff:0.0.0.0]\c$\CaveL.stalx",
+            LOOPBACK,
+        ),
+        (
+            ":: as an ipv6-literal.net name",
+            r"\\--.ipv6-literal.net\c$\CaveL.stalx",
+            LOOPBACK,
+        ),
+        ("verbatim UNC", r"\\?\UNC\0.0.0.0\c$\CaveL.stalx", LOOPBACK),
+        ("0.0.0.1", r"\\0.0.0.1\share\CaveL.stalx", None),
+        ("[::2]", r"\\[::2]\share\CaveL.stalx", STREAM),
+    ];
+    let wrong = wrong_writes(WINDOWS, &cases);
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 /// Unix and macOS rules take every one of those spellings as plain names: a
 /// `:`, `C:x`, `NUL.stalx` or `//localhost` is a file or folder name there.
 #[test]

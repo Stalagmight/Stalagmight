@@ -23,6 +23,29 @@ let sessionDir: string;
 
 const record = (obj: object): string => JSON.stringify(obj);
 
+/**
+ * A copy of `from`'s actions.jsonl at `<home>/qzsessions/s1`, under a synthetic
+ * home dir, and the env that makes a child see that dir as HOME: a path the
+ * caller gives prints folded to `~` (#576 W58).
+ */
+const underHome = (from: string): { home: string; dir: string; env: NodeJS.ProcessEnv } => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-home-'));
+  const dir = path.join(home, 'qzsessions', 's1');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(from, 'actions.jsonl'), path.join(dir, 'actions.jsonl'));
+  return { home, dir, env: { ...process.env, HOME: home } };
+};
+
+/** The stderr of a child that exits non-zero. */
+const failingStderr = (args: string[], env: NodeJS.ProcessEnv): string => {
+  try {
+    execFileSync(process.execPath, args, { encoding: 'utf8', stdio: 'pipe', env });
+  } catch (e) {
+    return String((e as { stderr?: string }).stderr);
+  }
+  throw new Error('the generator was expected to fail');
+};
+
 beforeAll(() => {
   sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-test-'));
   const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
@@ -293,17 +316,25 @@ describe('generate-replay.mjs', () => {
     expect(spec).not.toContain('browser.keys(["cmd+s"])');
   });
 
-  // stdout is shareable: the session dir and --out are the caller's paths,
-  // which can sit outside the checkout and name their own directories (#576 W51).
-  it('names what it wrote on stdout by its placeholder, never its path', () => {
-    const withOut = execFileSync(process.execPath, [replayGen, sessionDir, '--out', path.join(sessionDir, 'qz-out.spec.ts')], {
-      encoding: 'utf8',
-    });
-    const inDir = execFileSync(process.execPath, [replayGen, sessionDir], { encoding: 'utf8' });
-    expect(withOut.split('\n')[0]).toBe('wrote the --out file (18 actions)');
-    expect(inDir.split('\n')[0]).toBe('wrote <sessionDir>/replay.spec.ts (18 actions)');
-    expect(withOut + inDir).not.toContain(sessionDir);
-    expect(fs.existsSync(path.join(sessionDir, 'replay.spec.ts'))).toBe(true);
+  // stdout and stderr are shareable: the session dir and --out are the caller's
+  // paths, which can name their own directories, so they print folded (#576 W51, W58).
+  it('names what it read and wrote by its folded path, never the raw one', () => {
+    const { home, dir, env } = underHome(sessionDir);
+    try {
+      const withOut = execFileSync(process.execPath, [replayGen, dir, '--out', path.join(dir, 'qz-out.spec.ts')], {
+        encoding: 'utf8',
+        env,
+      });
+      const inDir = execFileSync(process.execPath, [replayGen, dir], { encoding: 'utf8', env });
+      const missing = failingStderr([replayGen, path.join(home, 'qzsessions', 'qz-missing')], env);
+      expect(withOut.split('\n')[0]).toBe('wrote ~/qzsessions/s1/qz-out.spec.ts (18 actions)');
+      expect(inDir.split('\n')[0]).toBe('wrote ~/qzsessions/s1/replay.spec.ts (18 actions)');
+      expect(missing).toBe('no actions.jsonl at ~/qzsessions/qz-missing\n');
+      expect(withOut + inDir + missing).not.toContain(home);
+      expect(fs.existsSync(path.join(dir, 'replay.spec.ts'))).toBe(true);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
@@ -336,6 +367,19 @@ describe('shareable test ids and selectors', () => {
     // Text a selector matches is counted even when its words are known.
     expect(shareableSelector('span=section row', words)).toBe('span=<11 characters>');
     expect(shareableSelector("//span[normalize-space()='row']", words)).toContain("='<3 characters>'");
+  });
+
+  // #576 RV20-14: `gas-readout-stage${i + 1}-reset` glues a counter to a source
+  // word. A lowercase source word of three letters or more with digits after it
+  // is kept; a short or capitalised one (a station name such as `A1`) is still
+  // counted, and so is an unknown word with digits.
+  it('keeps a source word with a counter glued on, and counts a station-like name', () => {
+    const words = new Set(['gas', 'readout', 'stage', 'reset', 'section', 'row', 'A', 'st']);
+    expect(shareableTestId('gas-readout-stage3-reset', words)).toBe('gas-readout-stage3-reset');
+    expect(shareableTestId('gas-readout-stage12-drop', new Set([...words, 'drop']))).toBe('gas-readout-stage12-drop');
+    expect(shareableTestId('section-row-A1', words)).toBe('section-row-<2 characters>');
+    expect(shareableTestId('section-row-st4', words)).toBe('section-row-<3 characters>');
+    expect(shareableTestId('section-row-qzcave3', words)).toBe('section-row-<7 characters>');
   });
 });
 
@@ -725,6 +769,57 @@ describe('generate-repro-report.mjs', () => {
     });
   });
 
+  // A Tauri plugin command is `plugin:<name>|<cmd>`: its `|` is not a name
+  // character, so it printed as its shape. The prefix is allowed, the `|`
+  // escaped for markdown; a command that only looks like one is still its
+  // shape (#576 W58 Q12).
+  describe('ipc steps keep a Tauri plugin command, its | escaped', () => {
+    let pluginDir: string;
+
+    beforeAll(() => {
+      pluginDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-plugin-'));
+      const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+      const ipc = (seq: number, command: string) =>
+        record({ type: 'action', v: 1, seq, ts: ts(seq), tool: 'ipc', mutating: true, params: { command, args: {} }, outcome: { ok: true, durationMs: 1 } });
+      const lines = [
+        record({ type: 'session-start', v: 1, sessionId: 'plugin-fixture', startedAt: ts(0) }),
+        ipc(1, 'plugin:dialog|open'),
+        ipc(2, 'plugin:fs-extra|read_text_file'),
+        ipc(3, 'save_project'),
+        ipc(4, 'plugin:x|y qzCaveA'),
+        ipc(5, 'plugin:x|y\n## forged'),
+        ipc(6, 'plugin:x|y`'),
+        ipc(7, 'plugin:x|y|z'),
+        ipc(8, 'plugin:|y'),
+        ipc(9, 'plugin:x|'),
+        ipc(10, 'plugin:x y|z'),
+      ];
+      fs.writeFileSync(path.join(pluginDir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+      execFileSync(process.execPath, [reportGen, pluginDir], { encoding: 'utf8' });
+    });
+
+    afterAll(() => fs.rmSync(pluginDir, { recursive: true, force: true }));
+
+    it('prints a plugin command with its prefix and any other command as before or as its shape', () => {
+      const md = fs.readFileSync(path.join(pluginDir, 'report.md'), 'utf8');
+      const steps = md.split('## Steps to reproduce')[1].split('Automated replay')[0].trim().split('\n');
+      expect(steps).toEqual([
+        '1. `ipc` plugin:dialog\\|open({})',
+        '2. `ipc` plugin:fs-extra\\|read_text_file({})',
+        '3. `ipc` save_project({})',
+        '4. `ipc` string(18)({})',
+        '5. `ipc` string(20)({})',
+        '6. `ipc` string(11)({})',
+        '7. `ipc` string(12)({})',
+        '8. `ipc` string(9)({})',
+        '9. `ipc` string(9)({})',
+        '10. `ipc` string(12)({})',
+      ]);
+      expect(md).not.toContain('qzCaveA');
+      expect(md).not.toContain('forged');
+    });
+  });
+
   // A `press_keys` step types every key that is not a WebDriver key name, one
   // character at a time: a run of single characters - or one longer string -
   // spells a name as surely as `type_text` does (#576 W39-NF2). Named keys stay.
@@ -930,6 +1025,37 @@ describe('generate-repro-report.mjs', () => {
         '8. `os_keys` ["ctrl", 2 characters] [OS-level]',
       ]);
     });
+
+    // #576 RV20-15: every named key the helper's chord grammar accepts
+    // (keyspec.rs' `modifier` and `key_code` arms, `"fn" | "function"` among them)
+    // prints as its name; only a one-character key is typed text.
+    it('keeps every named key of the helper grammar, read from keyspec.rs', () => {
+      const keyspec = fs.readFileSync(path.join(repoRoot, 'e2e/agent/os/helper/src/keyspec.rs'), 'utf8');
+      const names = keyspec
+        .split('\n')
+        .filter((line) => /^\s*"[^"]+"(?:\s*\|\s*"[^"]+")*\s*=>/.test(line))
+        .flatMap((line) => [...line.split('=>')[0].matchAll(/"([^"]+)"/g)].map((m) => m[1] as string))
+        .filter((name) => name.length > 1);
+      expect(names).toContain('function');
+      expect(names.length).toBeGreaterThan(40);
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-osnames-'));
+      try {
+        const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+        const lines = [
+          record({ type: 'session-start', v: 1, sessionId: 'osnames-fixture', startedAt: ts(0) }),
+          ...names.map((name, i) =>
+            record({ type: 'action', v: 1, seq: i + 1, ts: ts(i + 1), tool: 'os_keys', mutating: true, params: { spec: `${name}+f1` }, outcome: { ok: true, durationMs: 1 } }),
+          ),
+        ];
+        fs.writeFileSync(path.join(dir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+        execFileSync(process.execPath, [reportGen, dir], { encoding: 'utf8' });
+        const md = fs.readFileSync(path.join(dir, 'report.md'), 'utf8');
+        const counted = names.filter((name, i) => !md.includes(`${i + 1}. \`os_keys\` [${JSON.stringify(name)}, "f1"] [OS-level]`));
+        expect(counted, 'named keys report.md counts as typed text').toEqual([]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   // Every value report.md reads back from actions.jsonl - a step's number,
@@ -955,7 +1081,6 @@ describe('generate-repro-report.mjs', () => {
     const F = '\n## forged';
     let forgedDir: string;
     let validDir: string;
-    let stdout: string;
 
     beforeAll(() => {
       forgedDir = write(
@@ -994,7 +1119,7 @@ describe('generate-repro-report.mjs', () => {
         [{ severity: 'error', kind: 'unresponsive', message: 'IPC did not return within 5s; possible command-lock deadlock', dir: '0001-unresponsive' }],
       );
       execFileSync(process.execPath, [reportGen, forgedDir], { encoding: 'utf8' });
-      stdout = execFileSync(process.execPath, [reportGen, validDir], { encoding: 'utf8' });
+      execFileSync(process.execPath, [reportGen, validDir], { encoding: 'utf8' });
     });
 
     afterAll(() => {
@@ -1056,17 +1181,18 @@ describe('generate-repro-report.mjs', () => {
     });
 
     // stdout is shareable too: the session dir is the caller's path, which can
-    // sit outside the checkout and name their own directories (#576 W51).
-    it('names the session dir on stdout and stderr by its placeholder, never its path', () => {
-      expect(stdout).toBe('wrote <sessionDir>/report.md\n');
-      const missing = path.join(validDir, 'qz-missing');
-      let stderr = '';
+    // name their own directories, so it prints folded (#576 W51, W58).
+    it('names the session dir on stdout and stderr by its folded path, never the raw one', () => {
+      const { home, dir, env } = underHome(validDir);
       try {
-        execFileSync(process.execPath, [reportGen, missing], { encoding: 'utf8', stdio: 'pipe' });
-      } catch (e) {
-        stderr = String((e as { stderr?: string }).stderr);
+        const stdout = execFileSync(process.execPath, [reportGen, dir], { encoding: 'utf8', env });
+        const stderr = failingStderr([reportGen, path.join(home, 'qzsessions', 'qz-missing')], env);
+        expect(stdout).toBe('wrote ~/qzsessions/s1/report.md\n');
+        expect(stderr).toBe('no actions.jsonl in ~/qzsessions/qz-missing\n');
+        expect(stdout + stderr).not.toContain(home);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
       }
-      expect(stderr).toBe('no actions.jsonl in <sessionDir>\n');
     });
   });
 });

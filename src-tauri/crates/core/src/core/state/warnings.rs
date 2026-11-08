@@ -227,7 +227,9 @@ impl AppState {
     ///
     /// NULL-uuid rows are still minted today: `commands::validation` deliberately stores
     /// `None` when the shot's UUID is not yet on disk (a shot created this session, or a
-    /// pre-v6 file), so this is not only a legacy-data concern.
+    /// pre-v6 file), so this is not only a legacy-data concern. [#576 RV20-1] The write
+    /// keeps that key only for a shot of a pre-v6 file; one the file does not hold is keyed
+    /// by its uuid and parked (`save_resolved_warning_for_its_shot`), and stays parked here.
     ///
     /// The mirror: `shots[p].id` is unchanged by the reverse (ids stay with positions),
     /// while the record that HELD that id moved to position `N - 1 - p`. So the row keyed
@@ -257,7 +259,8 @@ impl AppState {
         type Slots = std::collections::HashMap<(u32, u32), String>;
         // `moves`: (section, id the row holds, id its shot has now). `mirrored`: the
         // shot each row belongs to, by the id it holds. `current`: the shot at each id.
-        let (moves, mirrored, current) = {
+        // `ids`: every shot's id, with a uuid or without.
+        let (moves, mirrored, current, ids) = {
             let guard = self.project.lock();
             let Some(project) = guard.as_ref() else {
                 return;
@@ -265,6 +268,7 @@ impl AppState {
             let mut moves = Vec::new();
             let mut mirrored = Slots::new();
             let mut current = Slots::new();
+            let mut ids = HashSet::new();
             for section in section_ids
                 .iter()
                 .filter_map(|sid| project.get_section(*sid))
@@ -274,6 +278,7 @@ impl AppState {
                     let Some(owner) = section.shots.get(last - p) else {
                         continue;
                     };
+                    ids.insert((section.id, shot.id));
                     if shot.id != owner.id {
                         moves.push((section.id, shot.id, owner.id));
                     }
@@ -285,7 +290,7 @@ impl AppState {
                     }
                 }
             }
-            (moves, mirrored, current)
+            (moves, mirrored, current, ids)
         };
         let db_guard = self.database.lock();
         let Some(db) = db_guard.as_ref() else {
@@ -296,7 +301,7 @@ impl AppState {
         let pins = if moves.is_empty() {
             current
         } else {
-            match db.rekey_position_resolved_warnings(&moves, &current) {
+            match db.rekey_position_resolved_warnings(&moves, &current, &ids) {
                 Ok(_) => current,
                 Err(e) => {
                     tracing::warn!(
@@ -414,17 +419,88 @@ impl AppState {
     ///
     /// [#576 C4] A refusal is the gate's own [`crate::core::CommandError`], so its
     /// code reaches the IPC; a persistence failure is unclassified (`FAILED`).
+    ///
+    /// [#576 RV20-1] A position-keyed row is re-keyed first where its position
+    /// could name another shot on the next open: see
+    /// [`Self::save_resolved_warning_for_its_shot`].
     pub fn save_resolved_warning_gated(
         &self,
         warning: &crate::persistence::ResolvedWarning,
     ) -> Result<(), crate::core::CommandError> {
         let _between_commands = self.hold_commands();
         self.guard_mutation("Resolve warning")?;
-        self.save_resolved_warning(warning)
+        self.save_resolved_warning_for_its_shot(warning)
             .map_err(|e| crate::core::CommandError::failed(e.to_string()))?;
         // Dirty-bit flip (#191/#197): set-only; no-op for local-only (no speleo_link).
         self.mark_remote_forward_edit();
         Ok(())
+    }
+
+    /// [#576 RV20-1] Write a user's ignore so that it only ever applies to the shot
+    /// it was made for, whether the session is saved or not.
+    ///
+    /// The resolve command keys an ignore by position (`shot_uuid: None`) when the
+    /// shot's uuid is not on disk yet, and the row goes to the open file at once.
+    /// Every load reads that position against the FILE: the backfill binds the row
+    /// to the shot the file holds there, and the position fallback suppresses that
+    /// shot's warning. That is the shot the ignore was made for only if the file
+    /// holds a shot with no uuid there (`Database::holds_shot_without_uuid_at`):
+    /// one of a file written before shots had uuids, which gets a fresh uuid on
+    /// every load, so its position is all that can name it (issue #57). That row
+    /// is written as given. Any other shot whose uuid is not on disk is one the
+    /// file does not hold - appended, inserted or restored since the last save -
+    /// and once the file is opened again without a save its id is free to name
+    /// another shot: the next shot appended takes it, and a reverse (which keeps
+    /// ids with positions) gives it to a shot the file holds. Such an ignore is
+    /// keyed by the shot's own uuid instead, which no shot of the file holds. In
+    /// session it applies to that shot alone, after a close without saving to no
+    /// shot, and the save that writes the shot writes the uuid with it (the
+    /// carry-over moves the row to the shot's saved position). It is parked off
+    /// the section's ids (`Database::save_resolved_warning_parked`), so it holds
+    /// no slot an ignore of the shot the file gives that id would need.
+    ///
+    /// A row that names a uuid, or a shot that does not exist (which the resolve
+    /// command refuses before it gets here), is written as given.
+    fn save_resolved_warning_for_its_shot(
+        &self,
+        warning: &crate::persistence::ResolvedWarning,
+    ) -> Result<()> {
+        if warning.shot_uuid.is_some() {
+            return self.save_resolved_warning(warning);
+        }
+        // The shot's uuid and the ids of its section, read before the database is
+        // locked (the order every other path takes them in).
+        let shot = {
+            let guard = self.project.lock();
+            guard
+                .as_ref()
+                .and_then(|p| p.get_section(warning.section_id))
+                .and_then(|section| {
+                    let shot = section.shots.iter().find(|s| s.id == warning.shot_id)?;
+                    let held: HashSet<(u32, u32)> =
+                        section.shots.iter().map(|s| (section.id, s.id)).collect();
+                    Some((shot.uuid.clone()?, held))
+                })
+        };
+        let db_guard = self.database.lock();
+        let db = db_guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database open"))?;
+        let Some((uuid, held)) = shot else {
+            return db.save_resolved_warning(warning);
+        };
+        if db.shot_uuid_is_persisted(warning.section_id, &uuid)?
+            || db.holds_shot_without_uuid_at(warning.section_id, warning.shot_id)?
+        {
+            return db.save_resolved_warning(warning);
+        }
+        db.save_resolved_warning_parked(
+            &crate::persistence::ResolvedWarning {
+                shot_uuid: Some(uuid),
+                ..warning.clone()
+            },
+            &held,
+        )
     }
 
     /// User-facing **unresolve** (the `unresolve_warning` command's persistence step):

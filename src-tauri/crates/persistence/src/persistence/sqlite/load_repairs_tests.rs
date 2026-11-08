@@ -160,6 +160,52 @@ fn the_load_report_counts_every_value_it_reset() {
             section_offsets: 1,
             station_offsets: 1,
             gps_points: 0,
+            station_comments: 0,
         }
+    );
+}
+
+/// [#576 Q-W30-3-D1] A station comment row past the end of its section names no
+/// station (an orphan). The load drops it and counts it for the open's notice;
+/// a comment on a real station - the end of the line too - is kept. It used to
+/// be kept as a positional `Index` key that no edit re-anchors, so a shot later
+/// added to the section put it on the new station at that position.
+#[test]
+fn an_orphan_station_comment_is_dropped_on_load_and_counted() {
+    let temp = TempDir::new().unwrap();
+    // One section of two shots: stations 0, 1 and 2.
+    let path = b35_build_file(
+        temp.path(),
+        "INSERT INTO station_comments (section_id, station_index, comment)
+         VALUES ({sid}, 2, 'comment at the end'), ({sid}, 3, 'comment past the end'),
+                ({sid}, 9, 'comment far past the end');",
+    );
+    let (project, report) = Database::open_existing(&path)
+        .unwrap()
+        .load_project_with_report()
+        .unwrap();
+    let kept: Vec<&str> = project
+        .station_comments
+        .values()
+        .map(String::as_str)
+        .collect();
+    println!("load repairs: {:?}", report.repairs);
+    println!("comments kept: {kept:?}");
+    assert_eq!(
+        kept,
+        ["comment at the end"],
+        "only the in-range comment is kept"
+    );
+    assert_eq!(
+        report.repairs.station_comments, 2,
+        "both orphans are counted"
+    );
+    assert_eq!(
+        report.repairs,
+        LoadRepairs {
+            station_comments: 2,
+            ..LoadRepairs::default()
+        },
+        "and nothing else is reported"
     );
 }

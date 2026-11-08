@@ -146,10 +146,33 @@ pub struct DeleteProjectOutcome {
 }
 
 /// A project-file command with only warnings to report (`close_project`,
-/// `merge_projects`, `remove_from_recent_projects`).
+/// `remove_from_recent_projects`).
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct ProjectFileOutcome {
     pub warnings: Vec<ValidationWarning>,
+}
+
+/// [#576 W57-NF2] What reading one source of a merge reset or dropped because it
+/// could not use it - the same per-kind counts an open reports
+/// (`LoadProjectFullResult::load_repairs`) - and which source it was.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct MergeSourceRepairs {
+    /// The source file, as the merge was given it.
+    pub path: String,
+    /// The source project's name.
+    pub name: String,
+    pub repairs: crate::persistence::LoadRepairs,
+}
+
+/// `merge_projects`.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct MergeProjectsOutcome {
+    pub warnings: Vec<ValidationWarning>,
+    /// [#576 W57-NF2] One entry per source whose read reset or dropped stored
+    /// values, in the order the sources were given; empty when none did. The
+    /// merged file holds the reset values, so the frontend shows them in the
+    /// load-repairs notice, named by source.
+    pub source_repairs: Vec<MergeSourceRepairs>,
 }
 
 macro_rules! carries_remote_link {
@@ -273,6 +296,15 @@ impl FromCommandResult for ProjectFileOutcome {
     fn from_success(result: CommandResult) -> Result<Self, CommandError> {
         Ok(Self {
             warnings: result.warnings,
+        })
+    }
+}
+
+impl FromCommandResult for MergeProjectsOutcome {
+    fn from_success(result: CommandResult) -> Result<Self, CommandError> {
+        Ok(Self {
+            warnings: result.warnings,
+            source_repairs: result.merge_source_repairs,
         })
     }
 }
@@ -405,8 +437,8 @@ mod tests {
     #[test]
     fn no_outcome_field_is_omitted_or_declared_optional() {
         use super::{
-            DeleteProjectOutcome, ImportOutcome, ProjectFileOutcome, ReverseOutcome, SaveOutcome,
-            ShotCreated,
+            DeleteProjectOutcome, ImportOutcome, MergeProjectsOutcome, MergeSourceRepairs,
+            ProjectFileOutcome, ReverseOutcome, SaveOutcome, ShotCreated,
         };
         use ts_rs::TS;
 
@@ -431,6 +463,8 @@ mod tests {
             SaveOutcome::decl(),
             DeleteProjectOutcome::decl(),
             ProjectFileOutcome::decl(),
+            MergeProjectsOutcome::decl(),
+            MergeSourceRepairs::decl(),
         ] {
             assert!(
                 !decl.contains("?:"),

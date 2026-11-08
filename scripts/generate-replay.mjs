@@ -26,6 +26,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { foldLocalPaths } from './lib/fold-local-paths.mjs';
 import { testIdSelector } from './lib/test-id-selector.mjs';
 
 const args = process.argv.slice(2);
@@ -46,9 +47,9 @@ const jsonlPath = fs.existsSync(input) && fs.statSync(input).isDirectory()
   ? path.join(input, 'actions.jsonl')
   : input;
 if (!fs.existsSync(jsonlPath)) {
-  // Not the path itself: it is the one the caller gave, which can sit outside
-  // the checkout and name the user's own directories (#576 W51).
-  process.stderr.write('no actions.jsonl at <sessionDirOrJsonl>\n');
+  // Folded: it is the path the caller gave, which can name the user's own
+  // directories (#576 W51, W58).
+  process.stderr.write(`no actions.jsonl at ${foldLocalPaths(jsonlPath)}\n`);
   process.exit(1);
 }
 
@@ -255,7 +256,8 @@ push('');
 
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, lines.join('\n'));
-process.stdout.write(`wrote ${getFlag('--out') ? 'the --out file' : '<sessionDir>/replay.spec.ts'} (${actions.length} actions)\n`);
+// Folded: --out and the session dir are the caller's paths (#576 W51, W58).
+process.stdout.write(`wrote ${foldLocalPaths(outPath)} (${actions.length} actions)\n`);
 process.stdout.write('note: no in-repo runner yet - see e2e/agent/replays/README.md\n');
 
 // Recorded params inlined into a one-line comment. JSON never contains a raw

@@ -111,8 +111,9 @@ pub enum CommandErrorCode {
     /// chose: anything the persistence schema guard's `check_schema` refuses -
     /// a view, trigger or virtual table, an object named like a SQLite pragma,
     /// a CHECK the app never writes, a generated column, an expression or
-    /// partial index, or a `DEFAULT (expr)` (#576 RV18-6). `details` carries
-    /// its path.
+    /// partial index, or a `DEFAULT (expr)` (#576 RV18-6), or names or SQL that
+    /// are not valid UTF-8 or not stored as text (#619). `details` carries its
+    /// path.
     UnsafeFile,
     /// [#576 FZ-FZ-INT-R2] The open was refused because a save renamed a new file
     /// over the path while the open was reading it: what it read is a file that is

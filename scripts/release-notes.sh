@@ -95,9 +95,8 @@ fi
 
 printf '%s\n' "$BODY"
 
-# Nothing here is notarized, so every platform interposes a warning on first
-# launch. Tell recipients how to get past it, and what to check first. The macOS
-# bullet leads with the xattr command on purpose: it works on every macOS
+# Unnotarized builds interpose a warning on first launch. Tell recipients how
+# to get past it, and what to check first. The ad-hoc macOS bullet leads with the xattr command on purpose: it works on every macOS
 # version, whereas the Control-click override was removed in macOS 15, so the
 # menu path differs by version and the command does not.
 cat <<'FOOTER'
@@ -110,11 +109,32 @@ The macOS build is **Apple Silicon only** (M1 and later). There is no Intel buil
 no maintainer has an Intel Mac, so an architecture-specific bug there could not be
 reproduced or fixed. Intel users should build from source instead.
 
+FOOTER
+
+# MACOS_SIGNING is the build job's MACOS-SIGNED marker, passed in by release.yml:
+# `developer-id` when the macOS app was Developer ID signed and notarized,
+# anything else (or unset, as in a local preview) for the ad-hoc fallback. The
+# two must never mix: telling people to strip quarantine from a notarized app is
+# needless security advice, and promising a clean launch for an ad-hoc one is false.
+if [ "${MACOS_SIGNING:-adhoc}" = "developer-id" ]; then
+  cat <<'MACOS'
+The macOS app is signed with a Developer ID and notarized by Apple, so it opens
+like any other downloaded app. The Windows and Linux builds are not signed, so
+their first launch is blocked and you have to allow it once.
+
+- **macOS**: open the DMG and drag Stalagmight to Applications. The first launch asks you to confirm opening an app downloaded from the internet; nothing needs to be overridden.
+MACOS
+else
+  cat <<'MACOS'
 None of these builds are notarized, so the first launch is blocked on every
 platform and you have to allow it once. The macOS app is ad-hoc signed, which is
 what lets it launch at all once allowed; Windows and Linux are unsigned.
 
 - **macOS**: clear the quarantine flag, which works on every macOS version: `xattr -dr com.apple.quarantine /Applications/Stalagmight.app`. Alternatively, open it once from **System Settings > Privacy & Security**, where a blocked app appears with an **Open Anyway** button. On macOS 14 and earlier you can instead right-click the app and choose **Open**; that shortcut no longer works on macOS 15+.
+MACOS
+fi
+
+cat <<'FOOTER'
 - **Windows**: SmartScreen shows "Windows protected your PC". Choose **More info**, then **Run anyway**.
 - **Linux**: install the `.deb` or `.rpm`, or `chmod +x` the `.AppImage` and run it.
 

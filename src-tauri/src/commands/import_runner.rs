@@ -95,8 +95,15 @@ pub(crate) fn run_file_import<P>(
     emitter.start_phase(LoadingPhase::ImportParsing);
     #[cfg(test)]
     parse_gate::hold(path);
-    let parsed = match guarded(|| parse(path)) {
+    // [#576 RV20-17] Parsed under the import's token, so the parsers' wait for a
+    // file lease (up to 60 s) gives up when Cancel is pressed, and that failure is
+    // the cancelled import, not a failed parse.
+    let parsed = match guarded(|| crate::parsers::with_cancel_flag(&active.token, || parse(path))) {
         Ok(parsed) => parsed,
+        Err(e) if emitter.is_cancelled() => {
+            tracing::info!(path = ?path, purpose, reason = %e, "{label} parse stopped after Cancel");
+            return cancelled(label);
+        }
         Err(e) => {
             tracing::error!(
                 path = ?path,

@@ -24,6 +24,7 @@ import { useExportStore } from './exportStore';
 import { useGasPlanStore } from './gasPlanStore';
 import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
 import { runSerialized } from './mutationQueue';
+import { refuseEditWhileUpdateInstalls } from './updateStore';
 import {
   noteOpenTreeGeneration,
   noteProjectDirtied,
@@ -53,7 +54,7 @@ import type {
 } from '../types/project';
 import type { ExistingShotUpdate } from '../types/ipc/ExistingShotUpdate';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
-import type { BatchOutcome, DeleteProjectOutcome, EditOutcome, HistoryOutcome, ImportOutcome, ProjectFileOutcome, ReverseOutcome, SaveOutcome, SectionCreated, ShotCreated, ValidationWarning } from '../types/ipc.generated';
+import type { BatchOutcome, DeleteProjectOutcome, EditOutcome, HistoryOutcome, ImportOutcome, MergeProjectsOutcome, ProjectFileOutcome, ReverseOutcome, SaveOutcome, SectionCreated, ShotCreated, ValidationWarning } from '../types/ipc.generated';
 import type { Config } from '../types/config';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion } from '../types/commands';
@@ -308,7 +309,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectLoadingAction
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandOutcome<ProjectFileOutcome>>;
   deleteProject: (path: string) => Promise<CommandOutcome<DeleteProjectOutcome>>;
-  mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandOutcome<ProjectFileOutcome>>;
+  mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandOutcome<MergeProjectsOutcome>>;
 
   createSection: (data: SectionData) => Promise<CommandOutcome<SectionCreated>>;
   createSectionAndMerge: (
@@ -638,6 +639,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     typedArgs: QueuedCallArgs<K>,
     meta: { purpose: string; fields?: Record<string, unknown>; readOnlyNoticeInline?: boolean }
   ): Promise<CommandOutcome<IpcResult<K>>> => {
+    // [#579 x #576] An update is installing: the restart would drop this edit unseen.
+    const installing = refuseEditWhileUpdateInstalls();
+    if (installing) return installing;
     // Checked against the command's manifest entry at the call site (#576 C3); forwarded as is.
     const args = typedArgs as Record<string, unknown> | undefined;
     // Captured when the user ISSUES the command, not when the queue gets round to it. The two
@@ -773,6 +777,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     meta: { purpose: string; fields?: Record<string, unknown> },
     toastId: string,
   ): Promise<CommandOutcome<HistoryOutcome>> => {
+    // Refused while an update installs, as `executeCommand` refuses an edit.
+    const installing = refuseEditWhileUpdateInstalls();
+    if (installing) return installing;
     // Captured at ISSUE time - see `executeCommand`, which also explains the GHOST-2 check.
     const issued = issuedAgainst();
     const refused = refuseMutationDuringCarry() ?? refuseEditDuringSwitch(); // [#576 FZ-FZ-INT-7, Q-RVFc-1-D1]

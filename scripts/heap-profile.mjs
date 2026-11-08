@@ -27,6 +27,8 @@
 import readline from 'node:readline';
 import fs from 'node:fs';
 
+import { foldLocalPaths } from './lib/fold-local-paths.mjs';
+
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, cur, idx, arr) => {
     if (cur.startsWith('--')) acc.push([cur.slice(2), arr[idx + 1] ?? '']);
@@ -221,10 +223,10 @@ async function main() {
   if (args.file) {
     const paths = args.file.split(',').map((p) => p.trim()).filter(Boolean);
     let prev = null;
-    for (const [i, p] of paths.entries()) {
-      // By position, not by path: the path is the caller's own, and can name
-      // their directories (#576 W51).
-      const label = `--file ${i + 1} of ${paths.length}`;
+    for (const p of paths) {
+      // Folded: the path is the caller's own, and can name their directories
+      // (#576 W51, W58).
+      const label = foldLocalPaths(p);
       console.log(`\nparsing ${label} …`);
       const raw = fs.readFileSync(p, 'utf8');
       const snap = JSON.parse(raw);

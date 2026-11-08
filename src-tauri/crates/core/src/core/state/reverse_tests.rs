@@ -1885,10 +1885,13 @@ fn rvfd3_ignored(
 /// Section `[X, A, B]` saved. With `drift`: delete X and save, so the open
 /// session keeps ids the file no longer has (the save re-keys every ignore to
 /// its shot's saved position: B's lands on A's id). Ignore B (on disk, so by
-/// uuid) and save; delete B, append N and ignore N (not on disk, so by
-/// position); reverse, then `back`. N's ignore must stay on N in session and
-/// after a save and reopen. Returns whether it did, and what was seen.
-fn rvfd3_case(drift: bool, back: Rvfd3Back) -> (bool, String) {
+/// uuid) and save; delete B, append N and ignore N (not on disk); reverse,
+/// then `back`. N's ignore must stay on N in session and after a save and
+/// reopen. With `discard` [#576 RV20-1] the session is dropped instead of
+/// saved: the file never held N, so after the reopen N's ignore must apply to
+/// no shot - only B's saved one does. Returns whether it held, and what was
+/// seen.
+fn rvfd3_case(drift: bool, back: Rvfd3Back, discard: bool) -> (bool, String) {
     let temp = tempfile::TempDir::new().unwrap();
     let path = temp.path().join("cave.stalx");
     let (state, section_id) = state_with_section();
@@ -1943,17 +1946,36 @@ fn rvfd3_case(drift: bool, back: Rvfd3Back) -> (bool, String) {
         Rvfd3Back::Undo => assert!(state.undo().success),
     }
     let in_session = rvfd3_ignored(&state, section_id, &names);
-    rvfd3_save(&state);
+    if discard {
+        drop(state);
+    } else {
+        rvfd3_save(&state);
+    }
     let reopened = AppState::new().unwrap();
     assert!(reopened.execute(Command::OpenProject { path }).success);
     let after_reopen = rvfd3_ignored(&reopened, section_id, &names);
     let rows_on_disk = reopened.load_resolved_warnings().unwrap().len();
     let want = vec![format!("N:{RVFD3_CODE}")];
+    let reopened_as_wanted = if discard {
+        // And what N's ignore left in the file stands in no shot's way: each
+        // shot's own ignore of the code is taken (`rvfd3_ignore` unwraps).
+        for (_, uuid) in rvfd3_shots(&reopened, section_id) {
+            rvfd3_ignore(&reopened, section_id, &uuid);
+        }
+        after_reopen == vec![format!("B:{RVFD3_CODE}")]
+    } else {
+        after_reopen == want && rows_on_disk == 1
+    };
+    let end = if discard {
+        "closed without saving"
+    } else {
+        "saved"
+    };
     (
-        in_session == want && after_reopen == want && rows_on_disk == 1,
+        in_session == want && reopened_as_wanted,
         format!(
             "drift={drift} back={back:?}: before the reverse {before:?}, in session \
-             {in_session:?}, after a save and reopen {after_reopen:?} ({rows_on_disk} row)"
+             {in_session:?}, {end} and reopened {after_reopen:?} ({rows_on_disk} row)"
         ),
     )
 }
@@ -1967,18 +1989,237 @@ fn rvfd3_case(drift: bool, back: Rvfd3Back) -> (bool, String) {
 /// on, with the same code - the shape the review found blocking the re-key.
 /// Every combination of drift and what follows the reverse must keep N's ignore
 /// on N.
+///
+/// [#576 RV20-1] And closing without saving must leave it on no shot. The
+/// ignore is written to the open file at once; keyed by position, the reverse
+/// moved it to N's new id, which in the file is another shot's (X's, or with
+/// `drift` B's), and the reopen bound it to that shot for good.
 #[test]
 fn an_unsaved_shots_ignore_stays_on_it_across_a_reverse() {
     let _config = crate::test_helpers::isolated_config();
     let mut failures = Vec::new();
     for drift in [false, true] {
         for back in [Rvfd3Back::Nothing, Rvfd3Back::ReverseAgain, Rvfd3Back::Undo] {
-            let (held, seen) = rvfd3_case(drift, back);
-            println!("{seen}");
-            if !held {
-                failures.push(seen);
+            for discard in [false, true] {
+                let (held, seen) = rvfd3_case(drift, back, discard);
+                println!("{seen}");
+                if !held {
+                    failures.push(seen);
+                }
             }
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// The code the [#576 RV20-1] tests below ignore: a real warning, so they read
+/// what the warnings list shows.
+const RV20_1_CODE: &str = "SHORT_SHOT";
+
+/// Append a shot short enough to raise [`RV20_1_CODE`]; its `(id, uuid)`.
+fn rv20_1_append_short(state: &AppState, section_id: SectionId) -> (u32, String) {
+    let created = state.execute(Command::CreateShot {
+        section_id,
+        shot: straight_shot(45.0, 0.1),
+        after_shot_id: None,
+        before_shot_id: None,
+    });
+    assert!(created.success, "{:?}", created.error);
+    rvfd3_shots(state, section_id).last().unwrap().clone()
+}
+
+/// Ignore [`RV20_1_CODE`] on `shot_id`, keyed the way the resolve command keys
+/// it (see [`rvfd3_ignore`]). Whether the uuid was on disk.
+fn rv20_1_ignore(state: &AppState, section_id: SectionId, shot_id: u32, uuid: &str) -> bool {
+    let persisted = state.shot_uuid_is_persisted(section_id, uuid);
+    let saved = state.save_resolved_warning_gated(&crate::persistence::ResolvedWarning {
+        section_id,
+        shot_id,
+        warning_code: RV20_1_CODE.to_string(),
+        resolved_at: chrono::Utc::now(),
+        resolved_comment: None,
+        shot_uuid: persisted.then(|| uuid.to_string()),
+    });
+    assert!(
+        saved.is_ok(),
+        "the ignore of shot {shot_id} was refused: {saved:?}"
+    );
+    persisted
+}
+
+/// Whether the [`RV20_1_CODE`] warning of `shot_id` shows as ignored.
+fn rv20_1_hidden(state: &AppState, shot_id: u32) -> bool {
+    let project = state.get_project_state().unwrap();
+    let warnings = state.compute_project_warnings(&project, None);
+    let warning = warnings
+        .iter()
+        .find(|w| w.shot_id == shot_id && w.code == RV20_1_CODE);
+    assert!(warning.is_some(), "shot {shot_id} raises no {RV20_1_CODE}");
+    warning.is_some_and(|w| w.is_resolved)
+}
+
+/// `[X, A, B]` saved at `path`; N appended and its warning ignored; closed
+/// without saving; reopened, and M appended. Returns the reopened state and
+/// M's id, which is N's old id (asserted).
+fn rv20_1_discarded(path: &std::path::Path) -> (AppState, u32) {
+    let (state, section_id) = state_with_section();
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.to_path_buf()),
+            })
+            .success
+    );
+    let (n_id, n) = rv20_1_append_short(&state, section_id);
+    let persisted = rv20_1_ignore(&state, section_id, n_id, &n);
+    assert!(!persisted, "N is not on disk yet");
+    assert!(rv20_1_hidden(&state, n_id), "N's own warning is ignored");
+    drop(state);
+    let reopened = AppState::new().unwrap();
+    assert!(
+        reopened
+            .execute(Command::OpenProject {
+                path: path.to_path_buf(),
+            })
+            .success
+    );
+    let (m_id, _) = rv20_1_append_short(&reopened, section_id);
+    assert_eq!(m_id, n_id, "M takes N's old id, or this tests nothing");
+    (reopened, m_id)
+}
+
+/// [#576 RV20-1] The same without a reverse. N's ignore is written to the open
+/// file at once, at N's id; closed without saving, the file never held N, and
+/// after the reopen the next shot appended, M, takes that id. Keyed by
+/// position, the ignore hid M's warning, and the next save pinned it to M for
+/// good. M's warning must show, before and after a save.
+#[test]
+fn an_unsaved_shots_ignore_does_not_reach_the_shot_that_takes_its_id_after_a_discard() {
+    let _config = crate::test_helpers::isolated_config();
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("cave.stalx");
+    let (reopened, m_id) = rv20_1_discarded(&path);
+    let after_reopen = rv20_1_hidden(&reopened, m_id);
+    rvfd3_save(&reopened);
+    drop(reopened);
+    let again = AppState::new().unwrap();
+    assert!(again.execute(Command::OpenProject { path }).success);
+    let after_save = rv20_1_hidden(&again, m_id);
+    assert!(
+        !after_reopen && !after_save,
+        "N's ignore reached M, which took N's id {m_id}: M's warning hidden after the \
+         reopen: {after_reopen}, after a save and reopen: {after_save}"
+    );
+}
+
+/// [#576 RV20-1] A shot restored since the last save is not in the file either,
+/// and its id can be one the file gives another shot. `[.., S, T]` saved;
+/// delete S and save (T now sits at S's position in the file); undo the delete
+/// (S comes back on its own id) and ignore S's warning; close without saving.
+/// Keyed by position, the reopen bound the ignore to T, which holds that id in
+/// the file. T's warning must show, and T's own ignore must be taken: a row
+/// that names a uuid holds its slot against another shot's ignore of the same
+/// code, so S's must not sit on that id.
+#[test]
+fn an_ignore_of_a_shot_restored_since_the_save_stays_off_the_shot_the_file_holds_at_its_id() {
+    let _config = crate::test_helpers::isolated_config();
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("cave.stalx");
+    let (state, section_id) = state_with_section();
+    let (s_id, s) = rv20_1_append_short(&state, section_id);
+    rv20_1_append_short(&state, section_id);
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone()),
+            })
+            .success
+    );
+    rvfd3_delete(&state, section_id, &s);
+    rvfd3_save(&state);
+    assert!(state.undo().success);
+    assert_eq!(
+        rvfd3_id_of(&state, section_id, &s),
+        s_id,
+        "S is back on its id"
+    );
+    let persisted = rv20_1_ignore(&state, section_id, s_id, &s);
+    assert!(!persisted, "S is not on disk");
+    assert!(rv20_1_hidden(&state, s_id), "S's own warning is ignored");
+    drop(state);
+
+    let reopened = AppState::new().unwrap();
+    assert!(reopened.execute(Command::OpenProject { path }).success);
+    let (t_id, t) = rvfd3_shots(&reopened, section_id).last().unwrap().clone();
+    assert_eq!(
+        t_id, s_id,
+        "the file gives T the id S had, or this tests nothing"
+    );
+    let t_hidden = rv20_1_hidden(&reopened, t_id);
+    assert!(
+        !t_hidden,
+        "S's ignore reached T, which the file holds at S's id {s_id}: T's warning hidden"
+    );
+    rv20_1_ignore(&reopened, section_id, t_id, &t);
+    assert!(rv20_1_hidden(&reopened, t_id), "T's own ignore applies");
+}
+
+/// [#576 RV20-1] The #57 path is kept: a shot of a file written before shots
+/// had uuids gets a fresh uuid on every open, so its ignore is keyed by its
+/// position, which is all that names it, and applies to it again after a close
+/// without saving. (Synthetic: a file this build saved, its shot uuids then
+/// cleared with plain SQL.)
+#[test]
+fn the_ignore_of_a_shot_of_a_file_without_uuids_stays_keyed_by_its_position() {
+    let _config = crate::test_helpers::isolated_config();
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("cave.stalx");
+    let (state, section_id) = state_with_section();
+    let (s_id, _) = rv20_1_append_short(&state, section_id);
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone()),
+            })
+            .success
+    );
+    drop(state);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute("UPDATE shots SET uuid = NULL", [])
+        .unwrap();
+
+    let state = AppState::new().unwrap();
+    assert!(
+        state
+            .execute(Command::OpenProject { path: path.clone() })
+            .success
+    );
+    let s = rvfd3_shots(&state, section_id)
+        .into_iter()
+        .find(|(id, _)| *id == s_id)
+        .unwrap()
+        .1;
+    let persisted = rv20_1_ignore(&state, section_id, s_id, &s);
+    let rows: Vec<(u32, Option<String>)> = state
+        .load_resolved_warnings()
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.shot_id, r.shot_uuid))
+        .collect();
+    assert!(!persisted, "the file holds no uuid for S");
+    assert_eq!(
+        rows,
+        vec![(s_id, None)],
+        "S's ignore is keyed by its position"
+    );
+    assert!(rv20_1_hidden(&state, s_id), "S's own warning is ignored");
+    drop(state);
+
+    let reopened = AppState::new().unwrap();
+    assert!(reopened.execute(Command::OpenProject { path }).success);
+    assert!(
+        rv20_1_hidden(&reopened, s_id),
+        "closed without saving and reopened, S's ignore applies to S again"
+    );
 }

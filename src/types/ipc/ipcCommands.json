@@ -2,6 +2,20 @@
   "generatedBy": "pnpm gen:ipc-types (src-tauri/examples/gen_ipc_types/commands.rs)",
   "commands": [
     {
+      "name": "arm_app_update_restart",
+      "module": "app_update",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
       "name": "attempt_repair",
       "module": "recovery",
       "async": true,
@@ -154,6 +168,20 @@
       }
     },
     {
+      "name": "check_for_app_update",
+      "module": "app_update",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "AppUpdateCheck",
+        "ts": "AppUpdateCheck"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
       "name": "check_merge_connectivity",
       "module": "station",
       "async": true,
@@ -190,6 +218,28 @@
       "result": {
         "rust": "IntegrityCheckResult",
         "ts": "IntegrityCheckResult"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "check_salvage_source",
+      "module": "recovery",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
       },
       "error": {
         "rust": "CommandError",
@@ -979,6 +1029,20 @@
       }
     },
     {
+      "name": "download_app_update",
+      "module": "app_update",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
       "name": "execute_batch",
       "module": "section",
       "async": true,
@@ -1394,28 +1458,6 @@
       "result": {
         "rust": "()",
         "ts": "null"
-      },
-      "error": {
-        "rust": "CommandError",
-        "ts": "CommandError"
-      }
-    },
-    {
-      "name": "export_salvageable_data",
-      "module": "recovery",
-      "async": true,
-      "args": [
-        {
-          "name": "path",
-          "key": "path",
-          "rust": "PathBuf",
-          "ts": "string",
-          "optional": false
-        }
-      ],
-      "result": {
-        "rust": "SalvagedData",
-        "ts": "SalvagedData"
       },
       "error": {
         "rust": "CommandError",
@@ -2066,6 +2108,20 @@
       }
     },
     {
+      "name": "install_app_update_and_restart",
+      "module": "app_update",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
       "name": "is_telemetry_available",
       "module": "telemetry",
       "async": true,
@@ -2258,8 +2314,8 @@
         }
       ],
       "result": {
-        "rust": "ProjectFileOutcome",
-        "ts": "ProjectFileOutcome"
+        "rust": "MergeProjectsOutcome",
+        "ts": "MergeProjectsOutcome"
       },
       "error": {
         "rust": "CommandError",
@@ -4833,6 +4889,20 @@
           "optional": false
         }
       ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
+      "name": "unarm_app_update_restart",
+      "module": "app_update",
+      "async": true,
+      "args": [],
       "result": {
         "rust": "()",
         "ts": "null"

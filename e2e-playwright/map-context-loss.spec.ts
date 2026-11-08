@@ -722,11 +722,41 @@ test.describe('Pointer from the map straight onto a data-table row (#576 W39-NF4
       expect(await storeHover()).toEqual(expected);
       await expect.poll(overlayShots).toEqual([[drawn.from, drawn.to]]);
       await expect(dest.locator('xpath=ancestor::div[@role="row"]')).toHaveClass(/sg-row-hover/);
-      // And it holds: nothing clears it a moment later.
-      // settle: proves the hover is NOT cleared after the leave callbacks have run
-      await page.waitForTimeout(300);
-      expect(await storeHover()).toEqual(expected);
-      expect(await overlayShots()).toEqual([[drawn.from, drawn.to]]);
+      // And it holds: nothing clears it later. What could clear it - a leave
+      // callback, a React effect, the layer's hit-test or redraw - runs by
+      // animation frame, so read the store and the overlay (as storeHover and
+      // overlayShots do) at each of the next 20 frames. Every reading is kept,
+      // so a clear that something then undid fails too.
+      const readings = await page.evaluate(async () => {
+        const w = window as unknown as {
+          __E2E_TEST__: { uiStore: { getState: () => { hoveredShot: unknown } } };
+          __stalagmight_map__?: { getStyle: () => { sources: Record<string, unknown> } };
+        };
+        const read = () => {
+          const src = w.__stalagmight_map__?.getStyle().sources['survey-interact'] as
+            | {
+                data?: {
+                  features?: Array<{ properties?: { kind?: string } | null; geometry: { coordinates: number[][] } }>;
+                };
+              }
+            | undefined;
+          return {
+            hover: w.__E2E_TEST__.uiStore.getState().hoveredShot,
+            overlay: (src?.data?.features ?? [])
+              .filter((f) => f.properties?.kind === 'shot')
+              .map((f) => f.geometry.coordinates),
+          };
+        };
+        const frames: Array<ReturnType<typeof read>> = [];
+        for (let frame = 0; frame < 20; frame++) {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          frames.push(read());
+        }
+        return frames;
+      });
+      expect(readings).toEqual(
+        Array.from({ length: 20 }, () => ({ hover: expected, overlay: [[drawn.from, drawn.to]] })),
+      );
     });
   }
 });

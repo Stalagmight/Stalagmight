@@ -128,13 +128,10 @@ impl LoadError {
     pub fn unsafe_file(refused: &RefusedSchemaObject, path: &str) -> Self {
         Self::with_details(
             CommandErrorCode::UnsafeFile,
-            format!(
-                "This file was not opened: it contains {} named \"{}\". Stalagmight \
-                 never creates these, so the file was changed by another program, and \
-                 opening it could let it run its own database commands. Your other \
-                 projects are not affected.",
-                refused.what,
-                refused.display_name()
+            unsafe_file_message(
+                refused,
+                "This file",
+                "Your other projects are not affected.",
             ),
             path,
         )
@@ -258,6 +255,24 @@ pub(crate) fn is_path_not_found(err: &anyhow::Error) -> bool {
         }
     }
     false
+}
+
+/// The unsafe-file refusal's wording (#608), one text for every file the app
+/// refuses for its schema: `subject` names the file ("This file" for a project
+/// the user just chose; the `.plnx` beside the open project, #576 Q-W35-1-D1)
+/// and `unaffected` says what the refusal leaves alone.
+pub(crate) fn unsafe_file_message(
+    refused: &RefusedSchemaObject,
+    subject: &str,
+    unaffected: &str,
+) -> String {
+    format!(
+        "{subject} was not opened: it contains {} named \"{}\". Stalagmight never \
+         creates these, so the file was changed by another program, and opening it \
+         could let it run its own database commands. {unaffected}",
+        refused.what,
+        refused.display_name()
+    )
 }
 
 /// The schema refusal inside an open error, if that is why the open failed.

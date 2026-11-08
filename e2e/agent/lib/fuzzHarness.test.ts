@@ -15,7 +15,7 @@ import {
   writeRunTrace,
 } from './fuzzHarness';
 import { TraceRecorder, failureSignature, readTrace, writeTrace } from './fuzzTrace';
-import { shareableFailureText } from './shareableFailure';
+import { foldLocalPaths, shareableFailureText } from './shareableFailure';
 import { moveTraceStep } from '../scenarios/importDialogTrace';
 
 // Shared per-run plumbing of the four fuzz scenarios. The failure texts below
@@ -85,7 +85,7 @@ describe('openReplay', () => {
     process.env.STALAGMIGHT_FUZZ_REPLAY = file;
 
     expect(() => openReplay('scenario-a', 'CaveA.stalx', RERUN_WITH_IDS)).toThrow(
-      new Error(`trace ${file} was recorded by another scenario; run it with that scenario\n  recorded by: scenario-b`),
+      new Error(`trace ${foldLocalPaths(file)} was recorded by another scenario; run it with that scenario\n  recorded by: scenario-b`),
     );
   });
 
@@ -95,7 +95,7 @@ describe('openReplay', () => {
 
     expect(() => openReplay('scenario-a', 'CaveA.stalx', RERUN_WITH_IDS)).toThrow(
       new Error(
-        `trace ${file} was recorded on another fixture but this run is on CaveA.stalx ` +
+        `trace ${foldLocalPaths(file)} was recorded on another fixture but this run is on CaveA.stalx ` +
           '(pnpm agent:scenario --trace restores it for you)\n' +
           '  its steps carry ids resolved against that project. Re-run with STALAGMIGHT_FUZZ_FIXTURE=CaveB.stalx',
       ),
@@ -108,7 +108,7 @@ describe('openReplay', () => {
 
     expect(() => openReplay('scenario-a', 'CaveA.stalx', RERUN_WITH)).toThrow(
       new Error(
-        `trace ${file} was recorded on another fixture but this run is on CaveA.stalx ` +
+        `trace ${foldLocalPaths(file)} was recorded on another fixture but this run is on CaveA.stalx ` +
           '(pnpm agent:scenario --trace restores it for you)\n' +
           '  re-run with STALAGMIGHT_FUZZ_FIXTURE=CaveB.stalx',
       ),
@@ -129,7 +129,7 @@ describe('openReplay', () => {
       }
       return '';
     };
-    expect(headline()).toBe(`trace ${forged} was recorded by another scenario; run it with that scenario`);
+    expect(headline()).toBe(`trace ${foldLocalPaths(forged)} was recorded by another scenario; run it with that scenario`);
     process.env.STALAGMIGHT_FUZZ_REPLAY = recordedTrace('scenario-a', 'qzCaveB.stalx');
     expect(headline()).toContain('was recorded on another fixture');
     expect(headline()).not.toContain('qzCaveB');

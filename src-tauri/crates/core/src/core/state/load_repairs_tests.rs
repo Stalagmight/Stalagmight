@@ -158,6 +158,52 @@ fn the_load_result_and_the_binary_envelope_carry_what_the_load_reset() {
     );
 }
 
+/// The envelope's `load_repairs` key, read for the orphaned station comments.
+#[derive(serde::Deserialize, Debug)]
+struct EnvelopeOrphanComments {
+    station_comments: usize,
+}
+
+#[derive(serde::Deserialize)]
+struct EnvelopeWithOrphanComments {
+    load_repairs: EnvelopeOrphanComments,
+}
+
+/// [#576 Q-W30-3-D1] A station comment row past the end of its section is
+/// dropped by the production open and listed on its receipt: counted on the
+/// load result and in the `load_repairs` key of the binary envelope the
+/// frontend decodes (the notice after the open). The open project holds the
+/// in-range comment only, and nothing blocks the save.
+#[test]
+fn an_orphan_station_comment_is_listed_on_the_load_receipt() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let path = damaged_file(
+        temp.path(),
+        "INSERT INTO station_comments (section_id, station_index, comment)
+         VALUES ({sid}, 1, 'comment on station 1'), ({sid}, 3, 'comment past the end');",
+    );
+
+    let state = state_with_null_sink();
+    let loaded = state
+        .do_load_project_full(path)
+        .unwrap_or_else(|e| panic!("the file opens: {e:?}"));
+    let comments: Vec<String> = loaded.project.station_comments.values().cloned().collect();
+    println!("load_repairs on the result: {:?}", loaded.load_repairs);
+    println!("comments in the open project: {comments:?}");
+    assert_eq!(loaded.load_repairs.station_comments, 1);
+    assert_eq!(comments, ["comment on station 1"]);
+    assert!(
+        !state.integrity_check().save_blocked,
+        "nothing dangles, so nothing blocks the save"
+    );
+
+    let bytes = crate::core::load_binary::encode(loaded, 0).unwrap();
+    let envelope: EnvelopeWithOrphanComments = rmp_serde::from_slice(&bytes).unwrap();
+    println!("envelope load_repairs: {:?}", envelope.load_repairs);
+    assert_eq!(envelope.load_repairs.station_comments, 1);
+}
+
 /// [#576 B35(g)] A GPS tie point whose values are finite but impossible
 /// (latitude past the pole, longitude past 180, or a depth reference beyond
 /// 11 km, which builds before v0.5.0-rc5 allowed) opens AS IT IS - dropping it

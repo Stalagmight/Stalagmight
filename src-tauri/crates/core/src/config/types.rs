@@ -617,6 +617,34 @@ pub enum ShortcutFeedback {
     All,
 }
 
+/// Which release track the in-app update check follows.
+///
+/// The `Default` is a property of the BUILD, not of the user: the weekly CI
+/// workflow compiles with `STALAGMIGHT_CHANNEL=weekly` set, so a weekly install
+/// follows the weekly manifest out of the box while an ordinary stable build -
+/// which has no such variable at compile time - follows the stable one.
+/// `option_env!` is read when this crate is compiled, so flipping the variable
+/// on an installed app does nothing; the user's own choice lives in the config
+/// field and overrides the build default from the first launch onwards.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum UpdateTrack {
+    /// Tagged releases only.
+    Stable,
+    /// The Monday prerelease builds, which lead stable.
+    Weekly,
+}
+
+impl Default for UpdateTrack {
+    fn default() -> Self {
+        match option_env!("STALAGMIGHT_CHANNEL") {
+            Some("weekly") => Self::Weekly,
+            _ => Self::Stable,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct GeneralConfig {
     pub auto_save: bool,
@@ -664,6 +692,18 @@ pub struct GeneralConfig {
     /// Whether the telemetry opt-in dialog has been shown
     #[serde(default)]
     pub telemetry_opt_in_shown: bool,
+    /// Release track the update check follows: stable (default) or weekly
+    #[serde(default)]
+    pub update_track: UpdateTrack,
+    /// Whether the AUTOMATIC launch-time update check runs. On by default.
+    ///
+    /// Read by the frontend's launch hook only - `check_for_app_update` does
+    /// not consult it, deliberately: the About dialog's "Check for updates"
+    /// button is an explicit request by the user, and a backend that refused
+    /// would break that button along with the background check this setting is
+    /// actually about.
+    #[serde(default = "default_update_check_enabled")]
+    pub update_check_enabled: bool,
 }
 
 pub(super) fn default_locale() -> String {
@@ -675,6 +715,10 @@ pub(super) fn default_format_locale() -> String {
 }
 
 fn default_onboarding_enabled() -> bool {
+    true
+}
+
+fn default_update_check_enabled() -> bool {
     true
 }
 

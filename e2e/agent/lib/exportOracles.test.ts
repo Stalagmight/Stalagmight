@@ -47,6 +47,7 @@ import {
   type ShotIdentity,
   type TmlAzimuthPlan,
 } from './exportOracles';
+import { foldThenCut, redactCorpusText, registerCorpusRedactions } from './fixtureCorpus';
 
 const REPRO = 'reproduce: pnpm agent:scenario export-roundtrip-fuzz --seed 1 --iterations 1';
 
@@ -821,6 +822,26 @@ describe('X6 shot multiset', () => {
         REPRO,
       ),
     ).toThrow(/COMMENT text/);
+  });
+
+  it('folds a comment key before it cuts it: a corpus name across character 60 leaves no stub (#576 RV20-8)', () => {
+    // A synthetic corpus entry whose name starts 50 characters into the comment, so the old cut at 60 split it.
+    const name = 'qzcommentcut CaveA north.dmp';
+    registerCorpusRedactions('rv208', '/tmp/qzrv208/fuzz-files/corpus-0', [name]);
+    const key = `${'x'.repeat(50)}${name} was the station note`;
+    let message = '';
+    try {
+      checkShotMultiset(
+        { deltas: [], commentDeltas: [{ key, before: 1, after: 0 }], uuidsBefore: ['u1'], uuidsAfter: ['u1'], countBefore: 1, countAfter: 1 },
+        REPRO,
+      );
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    // What actions.jsonl and check_problems get: the message folded again.
+    const line = redactCorpusText(message).split('\n').find((l) => l.includes('x1 -> x0'));
+    expect(line).toBe(`      ${JSON.stringify(foldThenCut(key, 60))}  x1 -> x0`);
+    expect(line).not.toContain('qzcomm');
   });
 
   it('fails when a uuid did not come back, even with identical geometry', () => {

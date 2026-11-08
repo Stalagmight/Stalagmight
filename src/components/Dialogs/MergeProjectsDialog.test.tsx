@@ -5,7 +5,7 @@
  * `result.warnings` - this pins the toast wiring per docs/notifications.md.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../utils/fileDialogs', () => ({
@@ -25,6 +25,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { CommandResult, ValidationWarning } from '../../types/commands';
 import type { ProjectMetadata } from '../../types/project';
+import type { MergeSourceRepairs } from '../../types/ipc.generated';
 
 const SURFACE_ELEVATION_WARNING: ValidationWarning = {
   code: 'SURFACE_ELEVATION_MISMATCH',
@@ -41,8 +42,8 @@ const projectMeta = (name: string): ProjectMetadata =>
     total_length: 10,
   } as ProjectMetadata);
 
-const ok = (warnings: ValidationWarning[]): CommandResult =>
-  ({ success: true, error: null, warnings, section_ids: [] } as CommandResult);
+const ok = (warnings: ValidationWarning[], source_repairs: MergeSourceRepairs[] = []): CommandResult =>
+  ({ success: true, error: null, warnings, section_ids: [], source_repairs } as CommandResult);
 
 let mergeProjects: ReturnType<typeof vi.fn>;
 let showToast: ReturnType<typeof vi.fn>;
@@ -55,6 +56,9 @@ beforeEach(() => {
   useProjectStore.setState({
     mergeProjects,
     loadProject: vi.fn(),
+    loadRepairs: null,
+    mergeSourceRepairs: [],
+    loadRepairsDismissed: false,
   });
   useUIStore.setState({
     closeDialog,
@@ -87,6 +91,56 @@ describe('MergeProjectsDialog warning surfacing', () => {
 
     expect(showToast).not.toHaveBeenCalled();
     expect(closeDialog).toHaveBeenCalled();
+  });
+});
+
+// [#576 W57-NF2] The merge reads each source as an open does, and what that read
+// reset or dropped is not in the merged file: the load-repairs notice lists it,
+// named by source, once the merged project is open (an open replaces the notice).
+describe('MergeProjectsDialog load-repairs notice', () => {
+  it('lists what reading a source dropped, after the merged project opens', async () => {
+    const order: string[] = [];
+    useProjectStore.setState({
+      loadProject: vi.fn(async () => {
+        order.push('open');
+        useProjectStore.setState({ loadRepairs: null, mergeSourceRepairs: [] });
+        return { success: true };
+      }),
+    });
+    mergeProjects.mockResolvedValue(
+      ok([], [
+        {
+          path: '/tmp/B.stalx',
+          name: 'B',
+          repairs: { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0, station_comments: 1 },
+        },
+      ]),
+    );
+
+    render(<MergeProjectsDialog />);
+    await userEvent.click(await screen.findByTestId('merge-projects-confirm-button'));
+
+    await waitFor(() =>
+      expect(useProjectStore.getState().mergeSourceRepairs).toEqual([
+        {
+          name: 'B',
+          fileName: 'B.stalx',
+          repairs: { shots: 0, sectionOffsets: 0, stationOffsets: 0, gpsPoints: 0, stationComments: 1 },
+        },
+      ]),
+    );
+    expect(order).toEqual(['open']);
+    expect(useProjectStore.getState().loadRepairsDismissed).toBe(false);
+  });
+
+  it('leaves the notice alone when no source read changed anything', async () => {
+    mergeProjects.mockResolvedValue(ok([]));
+
+    render(<MergeProjectsDialog />);
+    await userEvent.click(await screen.findByTestId('merge-projects-confirm-button'));
+
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(useProjectStore.getState().mergeSourceRepairs).toEqual([]);
   });
 });
 

@@ -374,6 +374,23 @@ pub enum UndoData {
         #[serde(skip_serializing_if = "HashMap::is_empty")]
         #[serde(serialize_with = "ordered_section_offsets")]
         previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
+        /// [#576 RV20-6] The station comment rows that name the created station
+        /// under a key other than its own, in key order: a legacy `Index` key
+        /// past the end of the section, which an append makes name the new end
+        /// station. In session the undo leaves such a row where it is, past the
+        /// end again. A save, though, writes it at the station it names, so a
+        /// reopen gives it the appended station's own key, and the removal took
+        /// it with the shot. The undo puts each one back under its own key where
+        /// no row holds that key.
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): absent in entries written
+        /// before this field existed and not written when empty, so every entry
+        /// with nothing to record is as before; empty restores nothing, the
+        /// pre-fix behaviour. `UndoData` does not deny unknown fields, so a build
+        /// that predates the field reads an entry that has one and undoes as
+        /// before.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        legacy_comment_rows: Vec<(StationKey, String)>,
     },
 
     /// Merge info for unmerging stations
@@ -1960,6 +1977,7 @@ mod tests {
                 before_shot_uuid: None,
                 uuid: uuid.map(str::to_string),
                 previous_offsets: HashMap::new(),
+                legacy_comment_rows: Vec::new(),
             },
             timestamp: None,
         }
@@ -2434,6 +2452,7 @@ mod tests {
                     before_shot_uuid: None,
                     uuid: None,
                     previous_offsets: HashMap::new(),
+                    legacy_comment_rows: Vec::new(),
                 },
                 timestamp: None,
             },

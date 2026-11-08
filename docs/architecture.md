@@ -99,7 +99,8 @@ command converts it with `CommandResult::into_outcome::<T>()` into the type that
 exactly what it reports - `EditOutcome`, `SectionCreated`, `ShotCreated`,
 `ReverseOutcome` (a parity-reduced `reversed_sections`), `BatchOutcome`,
 `HistoryOutcome` (`reversed_steps`, the ordered per-step log a consumer composes),
-`ImportOutcome`, `SaveOutcome`, `DeleteProjectOutcome`, `ProjectFileOutcome`
+`ImportOutcome`, `SaveOutcome`, `DeleteProjectOutcome`, `ProjectFileOutcome`,
+`MergeProjectsOutcome` (`source_repairs`: what reading each source reset or dropped)
 (`crates/core/src/core/outcome.rs`) - and a failure into a `CommandError` with the
 producer's code (`CommandResult::refused`).
 
