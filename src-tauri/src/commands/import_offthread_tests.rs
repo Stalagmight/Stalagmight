@@ -319,6 +319,53 @@ fn a_cancel_dispatched_while_an_import_reads_its_file_stops_it_with_nothing_comm
     }
 }
 
+/// A Cancel that reaches the backend BEFORE its import registered still stops that
+/// import (Codex review on #630). The dialog shows its Cancel as soon as the import
+/// is issued, but the import's IPC leaves only after the frontend's edit queue
+/// (`runSerialized`) and the plan-anchor flush, and its body then waits for the
+/// blocking pool. So `cancel_loading` can run while no load of that name is in
+/// progress: it did nothing then, and the import ran to its end and landed.
+#[test]
+fn a_cancel_that_reaches_the_backend_before_its_import_still_stops_it() {
+    let dir = TempDir::new().expect("temp dir");
+    let observed: Vec<(&'static str, Result<Value, Value>, usize, bool)> = cases(&dir)
+        .into_iter()
+        .map(|case| {
+            let (app, window) = app_with_import_commands();
+            // The Cancel is dispatched, and answered, before the import is dispatched.
+            dispatch(
+                &window,
+                request("cancel_loading", json!({ "loadToken": case.command })),
+            )
+            .recv_timeout(Duration::from_secs(5))
+            .expect("cancel_loading answers");
+            let answer = dispatch(&window, request(case.command, body_for(&case, &app)))
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the import answers");
+            let state = app.state::<AppState>();
+            let sections = state.get_project_state().expect("project").sections.len();
+            (case.command, answer_of(answer), sections, state.can_undo())
+        })
+        .collect();
+    for (command, result, sections, undo_available) in &observed {
+        println!(
+            "{command}: Cancel before the import: result success={} code={:?}; sections in \
+             the project={sections}; undo available={undo_available}",
+            result.is_ok(),
+            error_code(result),
+        );
+    }
+    for (command, result, sections, undo_available) in observed {
+        assert_eq!(
+            error_code(&result),
+            Some("IMPORT_CANCELLED"),
+            "{command}: the early Cancel stopped the import: {result:?}"
+        );
+        assert_eq!(sections, 0, "{command}: nothing was imported");
+        assert!(!undo_available, "{command}: nothing was recorded");
+    }
+}
+
 /// The same wiring with nobody pressing Cancel: the import lands, its answer
 /// arrives through the handler, and the dispatching thread was free throughout.
 #[test]

@@ -212,8 +212,9 @@ fn cancelled(label: &str) -> CommandResult {
     ))
 }
 
-/// An import registered as the app's active load (`AppState::start_named_load`), so
-/// `cancel_loading` naming it flips its token; cleared when it ends, however it ends
+/// An import registered as the app's active load (`AppState::start_named_import`), so
+/// `cancel_loading` naming it flips its token, also one that came before it registered
+/// (Codex review on #630); cleared when it ends, however it ends
 /// (`clear_active_load` only clears its own token, never a newer load's).
 struct ActiveImport<'a> {
     state: &'a AppState,
@@ -224,7 +225,7 @@ impl<'a> ActiveImport<'a> {
     fn register(state: &'a AppState, load_token: Option<&str>) -> Self {
         Self {
             state,
-            token: state.start_named_load(load_token),
+            token: state.start_named_import(load_token),
         }
     }
 }

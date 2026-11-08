@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64};
 use std::sync::Arc;
@@ -69,6 +69,56 @@ pub(super) fn adjusted_config_hash(ca: &ClosureAdjustmentConfig) -> u64 {
 pub(super) struct ActiveLoad {
     pub(super) cancel: Arc<AtomicBool>,
     load_token: Option<String>,
+}
+
+/// How many Cancels [`AppState::cancel_loading`] keeps for a load that was not in
+/// progress when they arrived, the oldest dropped first (Codex review on #630). A
+/// Cancel can overtake the file import it names: the import's IPC leaves after the
+/// frontend's edit queue, and its body then waits for the blocking pool. A dialog
+/// sends one Cancel per import, so a few cover every import that can be waiting.
+pub(super) const CANCELS_KEPT_BEFORE_START: usize = 16;
+
+/// What `AppState::active_loading` guards: the load in progress, and the Cancels
+/// that named no load in progress (Codex review on #630). One lock for both, so a
+/// Cancel and the import it names cannot pass each other between two locks.
+#[derive(Default)]
+pub(super) struct LoadSlot {
+    pub(super) active: Option<ActiveLoad>,
+    /// Their names, oldest first, each once, at most [`CANCELS_KEPT_BEFORE_START`].
+    /// A file import takes its own name out as it registers
+    /// ([`AppState::start_named_import`]). The rest came after their load ended and
+    /// name no later load: every load's name is new (`utils/loadToken.ts`, 128
+    /// random bits per load, create and import).
+    pub(super) cancelled_before_start: VecDeque<String>,
+}
+
+impl LoadSlot {
+    /// Keep a Cancel naming `name`, which is not the load in progress.
+    fn keep_cancel(&mut self, name: &str) {
+        if self.cancelled_before_start.iter().any(|kept| kept == name) {
+            return;
+        }
+        if self.cancelled_before_start.len() >= CANCELS_KEPT_BEFORE_START {
+            self.cancelled_before_start.pop_front();
+        }
+        self.cancelled_before_start.push_back(name.to_owned());
+    }
+
+    /// Make `load_token` the load in progress, cancelling the one it replaces.
+    fn install(&mut self, load_token: Option<&str>) -> Arc<AtomicBool> {
+        // Cancel any existing load
+        if let Some(old) = self.active.take() {
+            old.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        // Create new token
+        let token = Arc::new(AtomicBool::new(false));
+        self.active = Some(ActiveLoad {
+            cancel: Arc::clone(&token),
+            load_token: load_token.map(str::to_owned),
+        });
+        token
+    }
 }
 
 /// [#576 RV4-R-NITS C-4] What a parked `execute` signals on and waits for (see
@@ -180,7 +230,7 @@ pub struct AppState {
     /// Sink for emitting events to the host application (set during app setup)
     pub(super) event_sink: RecoveringMutex<Option<Arc<dyn crate::core::events::EventSink>>>,
     /// Active loading cancellation token (if any load operation is in progress)
-    pub(super) active_loading: RecoveringMutex<Option<ActiveLoad>>,
+    pub(super) active_loading: RecoveringMutex<LoadSlot>,
     /// Shots a load found carrying a `kind` byte this build does not recognise
     /// (#27), tagged with the `loading_id` of the load that found them. Never
     /// persisted - the fix is the user's answer, applied as an ordinary
@@ -391,7 +441,11 @@ impl AppState {
             )),
             tile_fetch_stats: Arc::new(TileFetchStats::new()),
             event_sink: RecoveringMutex::with_monitor("event_sink", None, &poison),
-            active_loading: RecoveringMutex::with_monitor("active_loading", None, &poison),
+            active_loading: RecoveringMutex::with_monitor(
+                "active_loading",
+                LoadSlot::default(),
+                &poison,
+            ),
             unrecognised_shot_kinds: RecoveringMutex::with_monitor(
                 "unrecognised_shot_kinds",
                 None,
@@ -523,19 +577,25 @@ impl AppState {
     /// (`load_token`, #576 W44-NF3): a Cancel it makes for this load names it too,
     /// and [`Self::cancel_loading`] cancels the active load only when the names match.
     pub fn start_named_load(&self, load_token: Option<&str>) -> Arc<AtomicBool> {
+        self.active_loading.lock().install(load_token)
+    }
+
+    /// [`Self::start_named_load`] for a file import (`commands::import_runner`): a
+    /// Cancel that named it before it got here, which [`Self::cancel_loading`] kept,
+    /// cancels it now, and is spent (Codex review on #630).
+    pub fn start_named_import(&self, load_token: Option<&str>) -> Arc<AtomicBool> {
         let mut guard = self.active_loading.lock();
-
-        // Cancel any existing load
-        if let Some(old) = guard.take() {
-            old.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-
-        // Create new token
-        let token = Arc::new(AtomicBool::new(false));
-        *guard = Some(ActiveLoad {
-            cancel: Arc::clone(&token),
-            load_token: load_token.map(str::to_owned),
+        let token = guard.install(load_token);
+        let kept = load_token.and_then(|name| {
+            guard
+                .cancelled_before_start
+                .iter()
+                .position(|kept| kept == name)
         });
+        if let Some(at) = kept {
+            guard.cancelled_before_start.remove(at);
+            token.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         token
     }
 
@@ -545,9 +605,9 @@ impl AppState {
     pub fn clear_active_load(&self, expected_token: &Arc<AtomicBool>) {
         {
             let mut guard = self.active_loading.lock();
-            if let Some(ref current) = *guard {
+            if let Some(ref current) = guard.active {
                 if Arc::ptr_eq(&current.cancel, expected_token) {
-                    *guard = None;
+                    guard.active = None;
                 }
             }
         }
@@ -812,15 +872,23 @@ impl AppState {
     /// active, so it cancelled the newer one. A name that is not the active load's
     /// (an ended load's, an unknown one) and `None` cancel nothing, and a load the
     /// backend started unnamed ([`Self::start_new_load`]) is never cancelled here.
+    ///
+    /// (Codex review on #630) A name that is not the active load's is kept, bounded
+    /// ([`CANCELS_KEPT_BEFORE_START`]): a file import of that name that has not
+    /// registered yet is cancelled as it does ([`Self::start_named_import`]).
     pub fn cancel_loading(&self, load_token: Option<&str>) {
         {
-            let guard = self.active_loading.lock();
-            if let Some(active) = guard.as_ref() {
+            let mut guard = self.active_loading.lock();
+            if let Some(active) = guard.active.as_ref() {
                 if load_token.is_some() && active.load_token.as_deref() == load_token {
                     active
                         .cancel
                         .store(true, std::sync::atomic::Ordering::SeqCst);
+                    return;
                 }
+            }
+            if let Some(name) = load_token {
+                guard.keep_cancel(name);
             }
         }
         // No error if no active load - cancel_loading is idempotent

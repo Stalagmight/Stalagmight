@@ -666,12 +666,12 @@ fn test_start_new_load_cancels_previous_and_clear_is_identity_safe() {
 
     state.clear_active_load(&first);
     let guard = state.active_loading.lock();
-    assert!(guard.as_ref().is_some());
-    assert!(Arc::ptr_eq(&guard.as_ref().unwrap().cancel, &second));
+    assert!(guard.active.as_ref().is_some());
+    assert!(Arc::ptr_eq(&guard.active.as_ref().unwrap().cancel, &second));
     drop(guard);
 
     state.clear_active_load(&second);
-    assert!(state.active_loading.lock().is_none());
+    assert!(state.active_loading.lock().active.is_none());
 }
 
 /// [#576 W44-NF3] A Cancel cancels only the load it names. It used to cancel
@@ -718,6 +718,47 @@ fn test_cancel_loading_cancels_only_the_load_it_names() {
     );
     let _newer = state.start_named_load(Some("load-c"));
     assert!(unnamed.load(Ordering::SeqCst), "a newer load supersedes it");
+}
+
+/// (Codex review on #630) A Cancel naming no load in progress is kept for the file
+/// import of that name that has not registered yet, and what is kept is bounded:
+/// past `CANCELS_KEPT_BEFORE_START` names the oldest goes first, a repeat takes no
+/// second place, a nameless Cancel takes none, and the import spends its own.
+#[test]
+fn test_cancels_kept_before_their_import_are_bounded_and_spent_once() {
+    use crate::core::state::app_state::CANCELS_KEPT_BEFORE_START;
+    let state = AppState::new().unwrap();
+    let name = |i: usize| format!("not-started-{i}");
+    for i in 0..=CANCELS_KEPT_BEFORE_START {
+        state.cancel_loading(Some(&name(i)));
+    }
+    state.cancel_loading(Some(&name(CANCELS_KEPT_BEFORE_START)));
+    state.cancel_loading(None);
+    let kept = state.active_loading.lock().cancelled_before_start.len();
+
+    let oldest = state.start_named_import(Some(&name(0)));
+    let oldest_cancelled = oldest.load(Ordering::SeqCst);
+    state.clear_active_load(&oldest);
+    let newest = state.start_named_import(Some(&name(CANCELS_KEPT_BEFORE_START)));
+    let newest_cancelled = newest.load(Ordering::SeqCst);
+    state.clear_active_load(&newest);
+    let kept_after = state.active_loading.lock().cancelled_before_start.len();
+    println!(
+        "{} Cancels for loads not started: {kept} kept; the oldest's import cancelled: \
+         {oldest_cancelled}; the newest's: {newest_cancelled}; kept after: {kept_after}",
+        CANCELS_KEPT_BEFORE_START + 1
+    );
+    assert_eq!(kept, CANCELS_KEPT_BEFORE_START, "bounded, each name once");
+    assert!(!oldest_cancelled, "the oldest was dropped past the bound");
+    assert!(
+        newest_cancelled,
+        "a kept Cancel cancels the import it names"
+    );
+    assert_eq!(
+        kept_after,
+        CANCELS_KEPT_BEFORE_START - 1,
+        "and is spent on it"
+    );
 }
 
 #[test]

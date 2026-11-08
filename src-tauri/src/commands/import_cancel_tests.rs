@@ -158,12 +158,13 @@ fn an_import_nobody_cancels_still_lands_and_frees_its_token() {
     );
 
     // The import's token is released: a Cancel pressed afterwards reaches no one,
-    // and the next import is not born cancelled.
+    // and the next import is not born cancelled. That import has a name of its own,
+    // as every import does (`nameImport`: a new `newLoadToken` per import).
     state.cancel_loading(Some("import"));
     let again = run_file_import(
         &state,
         Arc::new(SilentSink),
-        Some("import"),
+        Some("next-import"),
         &TEST_IMPORT,
         Path::new("/tmp/synthetic.dat"),
         None,
@@ -176,6 +177,71 @@ fn an_import_nobody_cancels_still_lands_and_frees_its_token() {
         state.get_project_state().expect("project").sections.len(),
         2
     );
+}
+
+/// An import named `load_token` of one synthetic section that nobody cancels while
+/// it runs.
+fn import_named(state: &AppState, load_token: Option<&str>) -> crate::core::CommandResult {
+    run_file_import(
+        state,
+        Arc::new(SilentSink),
+        load_token,
+        &TEST_IMPORT,
+        Path::new("/tmp/synthetic.dat"),
+        None,
+        VirtualShotMode::Auto,
+        |_| Ok(()),
+        |()| Ok(one_section()),
+    )
+}
+
+/// A Cancel that reaches the backend before its import registered (the import's
+/// command still waiting for the blocking pool, or its IPC still in the frontend's
+/// edit queue) stops that import when it registers, and nothing else (Codex review
+/// on #630). It found no load of that name in progress and did nothing, so the
+/// import landed.
+#[test]
+fn a_cancel_sent_before_its_import_registered_stops_that_import_alone() {
+    let state = state_with_project("CaveC");
+    // The Cancel arrives first; a tokenless one alongside it names nothing.
+    state.cancel_loading(Some("early-import"));
+    state.cancel_loading(None);
+
+    // Another import, and an unnamed one, run while it waits: neither is stopped.
+    let other = import_named(&state, Some("other-import"));
+    let unnamed = import_named(&state, None);
+    let sections_before = state.get_project_state().expect("project").sections.len();
+
+    // The import it names registers now: stopped, with nothing committed.
+    let named = import_named(&state, Some("early-import"));
+    let sections_after = state.get_project_state().expect("project").sections.len();
+
+    // The Cancel was spent on that import: it stops one import, not a name forever.
+    let rerun = import_named(&state, Some("early-import"));
+    println!(
+        "early Cancel: other import success={}; unnamed import success={}; the named \
+         import code={:?} error={:?}, sections {sections_before} -> {sections_after}; a \
+         later run of that name success={}",
+        other.success, unnamed.success, named.code, named.error, rerun.success
+    );
+    assert!(
+        other.success,
+        "another import is not stopped: {:?}",
+        other.error
+    );
+    assert!(
+        unnamed.success,
+        "an unnamed import is not stopped: {:?}",
+        unnamed.error
+    );
+    assert_eq!(
+        named.code,
+        Some(crate::core::CommandErrorCode::ImportCancelled),
+        "the import the early Cancel named is the cancelled import: {:?}",
+        named.error
+    );
+    assert_eq!(sections_after, sections_before, "and it imported nothing");
+    assert!(rerun.success, "the Cancel is spent: {:?}", rerun.error);
 }
 
 /// [#576 RV20-17] The parse runs under the import's Cancel flag, which the
