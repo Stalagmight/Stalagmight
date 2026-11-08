@@ -3,7 +3,8 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { isProjectChangedRefusal } from '../../store/commandResult';
 import { useProject } from '../../hooks/useProject';
-import { abandonUpdateRestart, performQuit } from '../../utils/quit';
+import { abandonUpdateRestart, editsSettledForExit, performQuit } from '../../utils/quit';
+import { mutationsSettled } from '../../store/mutationQueue';
 import { holdAutosave } from '../../utils/autosaveHold';
 import { openPendingImport, readPendingImport } from '../../utils/pendingImport';
 import { toastProjectChanged } from '../../utils/projectChangedNotice';
@@ -97,14 +98,38 @@ export default function UnsavedChangesDialog() {
     }
   };
 
+  // [#576 PREPR-594-3-LOW] Say why Save & Quit did not quit, and put this prompt back
+  // as it was (unless another dialog took the slot), so the same button can be pressed
+  // again and Cancel still abandons the exit.
+  const refuseEditPending = () => {
+    showToast(t('dialogs.unsavedChanges.editPending'), TOAST_KEYS.EXIT_EDIT_PENDING, 'info');
+    if (useUIStore.getState().activeDialog === null) openDialog('unsaved-changes', dialogData);
+  };
+
   const handleSaveAndQuit = async () => {
     // Save the project, then quit only if the save actually succeeded. On a
     // failed/blocked/cancelled save, handleSaveProject already surfaced the
     // outcome; the app stays open with the project intact (no data lost).
     trackDialogComplete('unsaved-changes');
     closeDialog();
+    // [#576 PREPR-594-3-LOW] This prompt can be up because an edit did not settle
+    // within the exit's wait (`guardQuit`, `editsSettledForExit`): a stuck edit. The
+    // save does not wait for edits, so it ran while that edit was still queued, and the
+    // pre-confirmed quit then closed the window before the edit reached the file. Wait
+    // for the queued edits again, so the save includes them; when they still have not
+    // settled, do not save or quit over them: say so and keep the prompt.
+    if (!(await editsSettledForExit())) {
+      refuseEditPending();
+      return;
+    }
+    const queueAtSave = mutationsSettled();
     const result = await handleSaveProject();
     if (result && result.success) {
+      // An edit queued while the save ran may not be in the file: not quitting over it.
+      if (mutationsSettled() !== queueAtSave) {
+        refuseEditPending();
+        return;
+      }
       performQuit();
       return;
     }

@@ -1414,7 +1414,8 @@
       "note": "Your changes will be lost.",
       "discardQuit": "Discard & Quit",
       "discard": "Discard Changes",
-      "saveQuit": "Save & Quit"
+      "saveQuit": "Save & Quit",
+      "editPending": "An edit is still being applied. Try again in a moment."
     },
     "confirm": {
       "title": {

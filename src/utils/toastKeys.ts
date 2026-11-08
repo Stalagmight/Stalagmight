@@ -13,6 +13,8 @@ export const TOAST_KEYS = {
   EDIT_DISABLED: 'edit-disabled',
   /** An edit refused while a project switch is under way (#576 Q-RVFc-1-D1). */
   EDIT_DURING_SWITCH: 'edit-during-switch',
+  /** Save & Quit refused because an edit queued before it has not settled (#576 PREPR-594-3-LOW). */
+  EXIT_EDIT_PENDING: 'exit-edit-pending',
   /** A save refused because a newer Stalagmight saved the project (#576 B6-D1). */
   NEWER_FILE_READ_ONLY: 'newer-file-read-only',
   /*

@@ -210,7 +210,11 @@ Commands now run **concurrently**, which makes three rules explicit:
   Q-RVFc-1-D1), except a save pressed on an exit prompt (Save & Quit on the
   unsaved-changes prompt, "Save changes locally" on the SpeleoDB close and quit
   prompts), which shows the same toast and leaves the prompt up to press again
-  (#576 W87a-4, W87a-NF1, W87a-NF2).
+  (#576 W87a-4, W87a-NF1, W87a-NF2). Save & Quit also waits for the queued edits
+  again before it saves (the prompt may be up because one did not settle within
+  the quit's wait); when one still has not settled, or one was queued while the
+  save ran, it neither quits nor (for the first) saves: a quiet "An edit is still
+  being applied." toast, and the prompt is back (#576 PREPR-594-3-LOW).
 - **A read of the project is a settled read.** A command mutates the project and
   then settles it (orphan conversion, frame renormalisation, the reconcile, the undo
   push) under one `command_lock` span but several `project` acquisitions, so a read
