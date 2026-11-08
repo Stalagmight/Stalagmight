@@ -114,6 +114,20 @@ pub fn for_project<T>(expected: Option<ProjectIdentity>, body: impl FnOnce() -> 
     body()
 }
 
+/// [#576 W87b] The `created_at` of the project the command body running on this
+/// thread was made for ([`for_project`]): `None` outside any scope, for a body made
+/// with no project open, or for a stamp that does not parse.
+pub(super) fn made_for_created_at() -> Option<DateTime<Utc>> {
+    EXPECTED.with(|scope| {
+        scope
+            .borrow()
+            .as_ref()
+            .and_then(|MadeFor(expected)| expected.as_ref())
+            .and_then(|identity| DateTime::parse_from_rfc3339(&identity.created_at).ok())
+            .map(|at| at.with_timezone(&Utc))
+    })
+}
+
 impl AppState {
     /// [#576 RV6b-2, NF-W8FE-3, RV10b-4] Whether `made_for` names the open
     /// project: both none, or the same `created_at` AND the file the open project

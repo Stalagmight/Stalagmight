@@ -1564,11 +1564,12 @@ impl AppState {
     ///
     /// Called under `command_lock` (the caller's), and holds `project` across the
     /// write, so no open, close or switch can commit between the check and the write
-    /// (the shape of `speleodb_remove_link_at`). Writes nothing when the file is the
-    /// open project's (a session of that very file owns its link now), when it holds
-    /// no link or a link to another project or deployment (the path is not that file
-    /// any more), or when it cannot be opened. Best-effort: the verb is answered
-    /// `PROJECT_CHANGED` either way, and a failure is logged.
+    /// (the shape of `speleodb_remove_link_at`). A file that is open again is
+    /// recorded through the open session instead
+    /// ([`Self::speleodb_record_landed_upload_in_open_copy`]). Writes nothing when
+    /// the file holds no link or a link to another project or deployment (the path
+    /// is not that file any more), or when it cannot be opened. Best-effort: the verb
+    /// is answered `PROJECT_CHANGED` either way, and a failure is logged.
     ///
     /// [#303] And the undo history the commit carried, cut from that file's history
     /// by the rule a landed push applies to the open copy's
@@ -1592,15 +1593,24 @@ impl AppState {
         captured_through: Option<chrono::DateTime<chrono::Utc>>,
     ) {
         let open = self.project.lock();
-        if open
+        let open_again = open
             .as_ref()
-            .and_then(|project| project.file_path.as_deref())
-            .is_some_and(|open| super::project_io::same_file(open, made_for.file))
-        {
-            tracing::info!(
-                path = %made_for.file.display(),
-                purpose = "record a push whose project was switched away mid-verb (#576 Q-W44-6-D1)",
-                "speleodb: the file the push was made for is open again; its session owns the link"
+            .filter(|project| {
+                project
+                    .file_path
+                    .as_deref()
+                    .is_some_and(|open| super::project_io::same_file(open, made_for.file))
+            })
+            .map(|project| project.created_at.utc());
+        if let Some(open_created_at) = open_again {
+            drop(open);
+            self.speleodb_record_landed_upload_in_open_copy(
+                made_for,
+                open_created_at,
+                new_base,
+                push_start,
+                undo_cutoff,
+                captured_through,
             );
             return;
         }
@@ -1670,6 +1680,86 @@ impl AppState {
                 purpose = "record a push whose project was switched away mid-verb (#576 Q-W44-6-D1)",
                 "speleodb: could not record the landed push in the link of the project it was \
                  made for; its next open reconciles"
+            ),
+        }
+    }
+
+    /// [#576 W87b] [`Self::speleodb_record_landed_upload_in_file`] for a file that is
+    /// open again although the identity check refused. Only two things get there:
+    ///
+    /// - Another project lives at that path now (a Save As or a new project saved
+    ///   over it: another `created_at`). The push's project is not in that file any
+    ///   more, so nothing is recorded, and the log says so.
+    /// - The push's own project (the same `created_at`), reopened through another
+    ///   spelling of its path (a symlink, a `..` segment, a case variant), which the
+    ///   identity check compares literally. That session's link is the one the push
+    ///   was made for, so the landing is recorded there as for the open copy
+    ///   ([`Self::speleodb_record_landed_upload`]): BASE, the dirty mark and the undo
+    ///   history the commit carried. It used to be recorded nowhere, on the grounds
+    ///   that the open session owns the link, so that copy kept its old BASE and
+    ///   dirty mark and its next push read our own landed commit as somebody else's.
+    ///
+    /// Under the caller's `command_lock`, and not under `project` (the link write and
+    /// the undo cut take `database` and the undo stack, as on the open copy).
+    fn speleodb_record_landed_upload_in_open_copy(
+        &self,
+        made_for: &UploadMadeFor<'_>,
+        open_created_at: chrono::DateTime<chrono::Utc>,
+        new_base: Option<&str>,
+        push_start: &str,
+        undo_cutoff: &str,
+        captured_through: Option<chrono::DateTime<chrono::Utc>>,
+    ) {
+        let purpose = "record a push whose project was reopened mid-verb (#576 W87b)";
+        if super::expected_project::made_for_created_at() != Some(open_created_at) {
+            tracing::warn!(
+                path = %made_for.file.display(),
+                project_id = %made_for.link.project_id,
+                purpose,
+                "speleodb: the file the push was made for holds another project now; \
+                 nothing recorded"
+            );
+            return;
+        }
+        let same_link = |link: &crate::models::SpeleoLink| {
+            link.project_id == made_for.link.project_id
+                && crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+                    == crate::speleodb::auth::normalize_endpoint(&made_for.link.endpoint)
+        };
+        let recorded = match self.speleodb_open_link() {
+            Ok(link) if same_link(&link) => self
+                .speleodb_mutate_link(|l| record_landing(l, new_base, push_start))
+                .map(|()| true),
+            Ok(_) | Err(SpeleoDbError::NoRemoteProject) => Ok(false),
+            Err(e) => Err(e),
+        };
+        match recorded {
+            Ok(true) => {
+                let history = self.speleodb_clear_undo_after_push(undo_cutoff, captured_through);
+                tracing::info!(
+                    path = %made_for.file.display(),
+                    project_id = %made_for.link.project_id,
+                    new_base = ?new_base,
+                    history_dropped = history.is_some(),
+                    purpose,
+                    "speleodb: recorded the landed push in the link of the project, open again \
+                     through another spelling of its path"
+                );
+            }
+            Ok(false) => tracing::warn!(
+                path = %made_for.file.display(),
+                project_id = %made_for.link.project_id,
+                purpose,
+                "speleodb: the project open again no longer holds that project's link; \
+                 nothing recorded"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                path = %made_for.file.display(),
+                project_id = %made_for.link.project_id,
+                purpose,
+                "speleodb: could not record the landed push in the link of the project open \
+                 again; its next open reconciles"
             ),
         }
     }

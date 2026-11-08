@@ -618,3 +618,123 @@ fn an_edit_made_after_the_push_started_keeps_its_history_in_that_file() {
         "and it is the later one: {stamp:?}"
     );
 }
+
+/// [#576 W87b] The identity check compares paths literally, so the push's own project
+/// reopened mid-verb through another spelling of its path (here a `..` segment; a
+/// symlink or a case variant does the same) is refused as another project. The file
+/// is the open one, which made the landing skip, "its session owns the link" - and
+/// nothing recorded it: that copy kept its old BASE and its dirty mark. The same
+/// `created_at` says it is the push's project, so the landing is recorded there.
+#[test]
+fn a_push_whose_project_is_open_again_under_another_spelling_records_its_landing_there() {
+    let world = switched_mid_push(EDITED_BEFORE);
+    let dir = world.a.parent().expect("the projects folder");
+    std::fs::create_dir_all(dir.join("sub")).expect("a sibling folder");
+    let alias = dir
+        .join("sub")
+        .join("..")
+        .join(world.a.file_name().expect("CaveA's name"));
+    world
+        .state
+        .do_load_project_full(alias.clone())
+        .expect("reopen CaveA through the alias");
+    let reopened = identity_of(&world.state);
+    let push_start = chrono::Utc::now().to_rfc3339();
+    let code = record_for_a(&world, &push_start);
+    let a_link = link_on_disk(&world.a).expect("CaveA is still linked");
+    let open_link = world.state.speleodb_open_link().ok();
+    println!(
+        "[W87b] push made for {}, CaveA open again as {:?} -> refusal {code:?}; CaveA's link: \
+         base {:?}, dirty {}; the open session's link: base {:?}",
+        world.a.display(),
+        world.state.open_project_path(),
+        a_link.base_commit_sha,
+        a_link.has_unpushed_edits,
+        open_link.as_ref().map(|l| l.base_commit_sha.clone()),
+    );
+    assert_eq!(
+        reopened.as_ref().map(|r| &r.created_at),
+        world.made_for_a.as_ref().map(|m| &m.created_at),
+        "premise: the push's own project is open again"
+    );
+    assert_eq!(
+        world.state.open_project_path().as_deref(),
+        Some(alias.as_path()),
+        "premise: under another spelling of its path"
+    );
+    assert_eq!(
+        code,
+        Some(CommandErrorCode::ProjectChanged),
+        "the identity check still refuses it"
+    );
+    assert_eq!(
+        a_link.base_commit_sha.as_deref(),
+        Some(LANDED),
+        "the landing is recorded in CaveA's link"
+    );
+    assert!(
+        !a_link.has_unpushed_edits && a_link.last_edit_at.is_none(),
+        "and its dirty mark is cleared"
+    );
+}
+
+/// [#576 W87b] The other way a refused landing finds its file open: another project
+/// was saved over that path mid-verb (another `created_at`), even one linked to the
+/// same SpeleoDB project. The push's project is not in that file any more, so nothing
+/// is recorded there, and the log says so instead of "its session owns the link".
+#[test]
+fn a_path_another_project_was_saved_over_records_nothing_and_says_so() {
+    let world = switched_mid_push(EDITED_BEFORE);
+    // CaveB, open, saved over CaveA's path, then linked to the same remote project.
+    let saved_over = world.state.execute(Command::SaveProject {
+        path: Some(world.a.clone()),
+    });
+    assert!(
+        saved_over.success,
+        "Save As over CaveA: {:?}",
+        saved_over.error
+    );
+    world
+        .state
+        .database
+        .lock()
+        .as_ref()
+        .expect("CaveB's database")
+        .save_speleo_link(Some(&world.link_a))
+        .expect("link CaveB to the same remote project");
+    let over = identity_of(&world.state);
+    let push_start = chrono::Utc::now().to_rfc3339();
+    let mut code = None;
+    let logs = super::speleodb::logged_events(|| {
+        code = record_for_a(&world, &push_start);
+    });
+    let link = link_on_disk(&world.a).expect("the file at CaveA's path is linked");
+    let said: Vec<&String> = logs
+        .iter()
+        .filter(|line| line.contains("the file the push was made for"))
+        .collect();
+    println!(
+        "[W87b] CaveB saved over {} -> refusal {code:?}; its link: base {:?}, dirty {}; \
+         logged {said:?}",
+        world.a.display(),
+        link.base_commit_sha,
+        link.has_unpushed_edits,
+    );
+    assert_ne!(
+        over.as_ref().map(|o| &o.created_at),
+        world.made_for_a.as_ref().map(|m| &m.created_at),
+        "premise: another project lives at the path now"
+    );
+    assert_eq!(code, Some(CommandErrorCode::ProjectChanged));
+    assert_eq!(
+        link.base_commit_sha.as_deref(),
+        Some(OLD_BASE),
+        "nothing is recorded in the other project's file"
+    );
+    assert!(link.has_unpushed_edits, "its dirty mark included");
+    assert!(
+        said.iter()
+            .any(|line| line.contains("holds another project now")),
+        "and the log says why: {said:?}"
+    );
+}
