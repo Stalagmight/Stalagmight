@@ -322,3 +322,8 @@ rusqlite = { workspace = true }
 # saved file themselves; the config I/O itself lives in stalagmight-core now.
 toml = { workspace = true }
 tauri = { version = "2", features = ["test"] }
+# [MAC-CMDQ-D1] Tauri's own menu backend, already in the tree through `tauri`:
+# the app-menu test parses the Quit accelerator with it, because Tauri drops an
+# accelerator it cannot parse without an error. No default features, so it adds
+# no crates.
+muda = { version = "0.17", default-features = false }

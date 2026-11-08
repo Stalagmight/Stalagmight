@@ -1434,11 +1434,24 @@ mod tests {
             on_exit.contains("speleodb_release_held_lock_bounded(EXIT_LOCK_RELEASE_TIMEOUT)"),
             "{on_exit}"
         );
+        // [MAC-CMDQ-D1] The run loop hands every event to `on_run_event`, whose
+        // exit stages (`ExitRequested`, and `Exit` as the backstop) call the same
+        // release; `exit_release_tests` drives that through the mock run loop.
         assert!(
-            lib.contains(
-                "if let tauri::RunEvent::ExitRequested { .. } = event {\n                    release_held_lock_on_exit(app_handle);"
+            lib.contains("app.run(|app_handle, event| on_run_event(app_handle, &event));"),
+            "the run loop goes through on_run_event"
+        );
+        let on_run = body(lib, "pub(crate) fn on_run_event<");
+        assert!(
+            on_run.contains(
+                "if exit_releases_held_lock(event) {\n        release_held_lock_on_exit(app_handle);"
             ),
-            "the quit path calls the same release"
+            "the quit path calls the same release: {on_run}"
+        );
+        let stages = body(lib, "fn exit_releases_held_lock(");
+        assert!(
+            stages.contains("tauri::RunEvent::ExitRequested { .. }"),
+            "{stages}"
         );
     }
 }

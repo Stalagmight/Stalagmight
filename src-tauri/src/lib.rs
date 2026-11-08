@@ -4,6 +4,18 @@
 // use) keeps compiling unchanged.
 pub use stalagmight_models::app_dirs;
 pub use stalagmight_persistence::cache;
+// [MAC-CMDQ-D1] The macOS app menu, whose Quit goes through the close guard.
+#[cfg(desktop)]
+mod app_menu;
+#[cfg(all(test, desktop))]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod app_menu_tests;
 pub mod commands;
 // Extracted to the `stalagmight-core` workspace member; re-exported under the
 // old names, same deal as `models` below (`tile_providers` and, for the test
@@ -42,6 +54,14 @@ pub mod tile_attribution;
               values are the evidence a run captures"
 )]
 mod entry_point_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod exit_release_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
@@ -90,14 +110,110 @@ const EXIT_LOCK_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 /// every other editor (fix 1, fix M2). No-op when no remote edit session is
 /// active.
 ///
-/// [#579 x #576] One function for every way the process ends: the
-/// `RunEvent::ExitRequested` handler below (a quit, a window close, and an
-/// update restart, which `commands::app_update` runs off the main thread so it
-/// goes through that event), and the updater's Windows installer hand-over,
-/// which exits the process without it (`on_before_exit`).
+/// [#579 x #576] One function for every way the process ends: the run-loop
+/// handler below ([`on_run_event`]: `RunEvent::ExitRequested` for a quit, a
+/// window close and an update restart, which `commands::app_update` runs off the
+/// main thread so it goes through that event, and `RunEvent::Exit` as the
+/// backstop for an exit that skips it), and the updater's Windows installer
+/// hand-over, which exits the process without either (`on_before_exit`).
+///
+/// [MAC-CMDQ-D1] Runs once per process ([`ExitLockRelease`]).
 pub(crate) fn release_held_lock_on_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    if let Some(state) = app.try_state::<core::state::AppState>() {
-        state.speleodb_release_held_lock_bounded(EXIT_LOCK_RELEASE_TIMEOUT);
+    // Managed on first use, so no exit path can reach the release without the
+    // latch; `manage` keeps the instance that is already there.
+    app.manage(ExitLockRelease::default());
+    let Some(latch) = app.try_state::<ExitLockRelease>() else {
+        return;
+    };
+    latch.run_once(|| {
+        if let Some(state) = app.try_state::<core::state::AppState>() {
+            state.speleodb_release_held_lock_bounded(EXIT_LOCK_RELEASE_TIMEOUT);
+        }
+    });
+}
+
+/// [MAC-CMDQ-D1] The exit-time lock release runs once per process, whichever exit
+/// stage reaches it first. An ordinary exit runs `RunEvent::ExitRequested` and
+/// then `RunEvent::Exit`, and both release; without this, a release that timed
+/// out at the first would go out again at the second, a second POST and up to a
+/// second [`EXIT_LOCK_RELEASE_TIMEOUT`] before the process ends. A caller that
+/// arrives while another is releasing waits for it (`OnceLock::get_or_init`), so
+/// it does not end the process under a release still in flight. Once per process
+/// is right because the app never prevents an exit: the first exit stage is the
+/// process's last.
+#[derive(Default)]
+pub(crate) struct ExitLockRelease {
+    released: std::sync::OnceLock<()>,
+    /// How many times the release ran, for the tests.
+    #[cfg(test)]
+    runs: std::sync::atomic::AtomicUsize,
+}
+
+impl ExitLockRelease {
+    fn run_once(&self, release: impl FnOnce()) {
+        self.released.get_or_init(|| {
+            #[cfg(test)]
+            self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            release();
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runs(&self) -> usize {
+        self.runs.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// [MAC-CMDQ-D1] Whether `event` is an exit stage, where a held lock is released.
+/// `ExitRequested` is a quit, a window close or an update restart: Tauri asks
+/// before it exits. `Exit` is the backstop for an exit that never asked. On macOS
+/// `terminate:` (the Dock's Quit, logout, restart, shutdown) ends the process
+/// through `applicationWillTerminate:` and `Exit` alone (tao 0.34.5
+/// `app_delegate.rs:132-134`, tauri-runtime-wry 2.9.3 `lib.rs:4008-4009`). Where
+/// both run, [`ExitLockRelease`] keeps it to one release.
+fn exit_releases_held_lock(event: &tauri::RunEvent) -> bool {
+    matches!(
+        event,
+        tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+    )
+}
+
+/// The app's run-loop handler.
+pub(crate) fn on_run_event<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    event: &tauri::RunEvent,
+) {
+    // Best-effort release of a held SpeleoDB write lock on app exit so
+    // quitting / closing the window doesn't strand the server mutex
+    // locked for every other editor (fix 1). This covers the quit +
+    // window-close paths that destroy the window WITHOUT routing through
+    // `close_project` (which releases on its own). No-op when no remote
+    // edit session is active. Bounded (fix M2): this handler runs on the
+    // main event-loop thread, so a synchronous release against a hung /
+    // unreachable server would freeze quit for the full HTTP timeout - cap
+    // the wait and exit anyway (the server lock times out on its own).
+    if exit_releases_held_lock(event) {
+        release_held_lock_on_exit(app_handle);
+    }
+
+    // macOS "open with" (#424). Finder never uses argv: both a cold
+    // launch and a double-click while the app runs arrive as an
+    // Apple event, which Tauri surfaces here. On a cold launch this
+    // fires long before the webview exists, so the paths are queued
+    // rather than pushed - the frontend drains them when ready.
+    // `focus_main_window` mirrors the single-instance path in `run()` (a
+    // no-op with no webview yet, so the cold-launch case above is
+    // unaffected): without it, a double-click on a backgrounded app
+    // queues the file and raises the confirm in a window the user
+    // cannot see - the exact failure raising it exists to prevent
+    // (#445 review).
+    #[cfg(target_os = "macos")]
+    if let tauri::RunEvent::Opened { urls } = event {
+        commands::launch::focus_main_window(app_handle);
+        commands::launch::queue_and_notify(
+            app_handle,
+            commands::launch::launch_paths_from_urls(urls),
+        );
     }
 }
 
@@ -337,6 +453,21 @@ pub fn run() {
             }
         }
     });
+
+    // [MAC-CMDQ-D1] The macOS app menu, whose Quit (Cmd+Q) asks the main window
+    // to close so it reaches the handler above and the frontend's close guard,
+    // instead of Tauri's default predefined Quit, which terminates the process
+    // past both (see `app_menu`). macOS only: Tauri sets no menu elsewhere, and
+    // one would add a menu bar to the window. `cfg!` rather than `#[cfg]`, so
+    // every platform's build type-checks the macOS branch.
+    #[cfg(desktop)]
+    let builder = if cfg!(target_os = "macos") {
+        builder
+            .menu(app_menu::build_app_menu)
+            .on_menu_event(|app, event| app_menu::on_menu_event(app, &event))
+    } else {
+        builder
+    };
 
     // In-app updater (#579), registered ONLY when a minisign public key is
     // committed. This is not a preference: `tauri_plugin_updater::Config` has a
@@ -663,43 +794,12 @@ pub fn run() {
             commands::telemetry::set_telemetry_enabled,
         ])
         .build(tauri::generate_context!())
-        .map(|app| {
-            app.run(|app_handle, event| {
-                // Best-effort release of a held SpeleoDB write lock on app exit so
-                // quitting / closing the window doesn't strand the server mutex
-                // locked for every other editor (fix 1). This covers the quit +
-                // window-close paths that destroy the window WITHOUT routing through
-                // `close_project` (which releases on its own). No-op when no remote
-                // edit session is active. Bounded (fix M2): this closure runs on the
-                // main event-loop thread, so a synchronous release against a hung /
-                // unreachable server would freeze quit for the full HTTP timeout - cap
-                // the wait and exit anyway (the server lock times out on its own).
-                if let tauri::RunEvent::ExitRequested { .. } = event {
-                    release_held_lock_on_exit(app_handle);
-                }
-
-                // macOS "open with" (#424). Finder never uses argv: both a cold
-                // launch and a double-click while the app runs arrive as an
-                // Apple event, which Tauri surfaces here. On a cold launch this
-                // fires long before the webview exists, so the paths are queued
-                // rather than pushed - the frontend drains them when ready.
-                // `focus_main_window` mirrors the single-instance path above (a
-                // no-op with no webview yet, so the cold-launch case above is
-                // unaffected): without it, a double-click on a backgrounded app
-                // queues the file and raises the confirm in a window the user
-                // cannot see - the exact failure raising it exists to prevent
-                // (#445 review).
-                #[cfg(target_os = "macos")]
-                if let tauri::RunEvent::Opened { urls } = &event {
-                    commands::launch::focus_main_window(app_handle);
-                    commands::launch::queue_and_notify(
-                        app_handle,
-                        commands::launch::launch_paths_from_urls(urls),
-                    );
-                }
-            });
-        })
-        .unwrap_or_else(|e| {
-            tracing::error!(error = %e, "Fatal: Tauri application failed to start");
-        });
+        .map_or_else(
+            |e| {
+                tracing::error!(error = %e, "Fatal: Tauri application failed to start");
+            },
+            |app| {
+                app.run(|app_handle, event| on_run_event(app_handle, &event));
+            },
+        );
 }
