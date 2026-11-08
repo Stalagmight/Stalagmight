@@ -1298,12 +1298,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   // Project operations - uses consolidated create_project_full command
-  createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) =>
-    runProjectSwitch(async (turn) => {
+  createProject: async (name: string, projectLocation?: string, options?: CreateProjectOptions) => {
     // [#576 RV15-2] A create that names its file or folder is judged by the
     // write-path policy before anything else (the backend does the same, RV14-1):
     // one it refuses must not stop the open or load in progress, nor show the
     // loading state, on its way to the error. The create checks again.
+    // Before the switch is requested (Codex review on #630): requesting it
+    // supersedes the switch in flight, and a load's onSuperseded cancels it.
     if (options?.savePath !== undefined || options?.saveDirectory !== undefined) {
       try {
         await invokeIpc(
@@ -1317,6 +1318,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
     }
 
+    return runProjectSwitch(async (turn) => {
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
 
@@ -1434,7 +1436,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       return emptyCommandResult(false, message);
     }
-    }, { dropped: () => emptyCommandResult(false, 'Cancelled') }), // the superseded create's answer
+    }, { dropped: () => emptyCommandResult(false, 'Cancelled') }); // the superseded create's answer
+  },
 
   // [#576 FZ-FZ-INT-4] Refused while a project switch is under way, else tracked until it
   // settles, so a switch requested meanwhile waits for it (`switchGate.ts`).

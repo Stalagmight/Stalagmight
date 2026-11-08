@@ -4,6 +4,7 @@ import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import type { DisplaySettings } from '../../types/loading';
 import { invokeIpcMock } from '../../test/factories/ipc';
+import { runProjectSwitch } from '../../utils/projectTransition';
 
 vi.mock('../../utils/ipc');
 
@@ -198,6 +199,37 @@ describe('projectStore.createProject', () => {
       // The dialog shows the refusal; nothing was created.
       expect(result.error).toBe(refusal.message);
       expect(commandsSent()).not.toContain('create_project_full');
+    });
+
+    // Codex review on #630: the check ran inside the switch, and entering the
+    // switch supersedes the one in flight (a load's onSuperseded cancels it with
+    // cancel_loading), so a refused create still stopped a valid open. A real
+    // in-flight switch stands in for that load here; it must not be superseded.
+    it('a refused create does not supersede a switch already in flight', async () => {
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const superseded = vi.fn();
+      const inFlight = runProjectSwitch(
+        async (turn) => {
+          await held;
+          return turn.superseded;
+        },
+        { onSuperseded: superseded }
+      );
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+      const refused = await useProjectStore.getState().createProject('Refused Cave', undefined, {
+        savePath: '/refused/Cave.stalx',
+      });
+      expect(refused.success).toBe(false);
+      expect(refused.error).toBe(refusal.message);
+      expect(superseded).not.toHaveBeenCalled();
+      expect(commandsSent()).not.toContain('cancel_loading');
+
+      release();
+      expect(await inFlight).toBe(false);
     });
 
     it('a create the policy accepts is checked first, then runs as before', async () => {
