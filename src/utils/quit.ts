@@ -121,8 +121,9 @@ const EXIT_EDITS_SETTLE_TIMEOUT_MS = 5_000;
  *
  * [#576 W84] The three hand-back exits wait the same way before their guards
  * (`handleCloseProject`, `newProjectGuarded`, `routeOpenedFile` opening a
- * `.stalx`): the project switch they start waits for that edit too, so it lands
- * on the project being replaced, which then goes with the edit unsaved.
+ * `.stalx`), one at a time ({@link editsSettledForHandBack}): the project switch
+ * they start waits for that edit too, so it lands on the project being replaced,
+ * which then goes with the edit unsaved.
  */
 export function editsSettledForExit(): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -130,6 +131,34 @@ export function editsSettledForExit(): Promise<boolean> {
     timer = setTimeout(() => resolve(false), EXIT_EDITS_SETTLE_TIMEOUT_MS);
   });
   return Promise.race([mutationsSettled().then(() => true), timedOut]).finally(() => clearTimeout(timer));
+}
+
+/** [#576 W85] Set while a hand-back exit waits in {@link editsSettledForHandBack}. */
+let handBackDeciding = false;
+
+/**
+ * [#576 W85] {@link editsSettledForExit} for the three hand-back exits, one exit at
+ * a time: `null` when another one is already waiting, and the caller drops itself.
+ *
+ * Each exit decides after the wait, but the screen-owned checks in front of it (a
+ * dialog open, the shortcut hooks' modal gate) were passed before it. A second exit
+ * asked for during the wait - Ctrl+N twice, a double-click on a Recents entry, Close
+ * then New - passed them too, and its prompt replaced the first one's in the single
+ * dialog slot, dropping the first call's request (the file to open, the new project).
+ * The exit already waiting owns the answer, as a dialog that owns the screen owns a
+ * shortcut.
+ *
+ * The flag is released in the same microtask run that resumes the caller, so no event
+ * can arrive between the release and the decision the first exit then makes.
+ */
+export async function editsSettledForHandBack(): Promise<boolean | null> {
+  if (handBackDeciding) return null;
+  handBackDeciding = true;
+  try {
+    return await editsSettledForExit();
+  } finally {
+    handBackDeciding = false;
+  }
 }
 
 /**

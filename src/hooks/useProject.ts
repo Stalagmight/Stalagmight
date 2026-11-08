@@ -8,7 +8,7 @@ import { saveFailureOf, surfaceSaveFailure } from '../utils/saveFeedback';
 import { openOrImport } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
-import { editsSettledForExit, needsSpeleoHandBackPrompt } from '../utils/quit';
+import { editsSettledForHandBack, needsSpeleoHandBackPrompt } from '../utils/quit';
 
 export function useProject() {
   const { setView, openDialog } = useUIStore(
@@ -98,8 +98,9 @@ export function useProject() {
     // The close waits for it (`runProjectSwitch`), so it landed on this project,
     // which then closed with the edit unsaved and no prompt. Wait for the edits
     // queued so far first, as quitting does; one that has not settled in time
-    // counts as unsaved work.
-    const editsSettled = await editsSettledForExit();
+    // counts as unsaved work. [#576 W85] Another exit already waiting owns the answer.
+    const editsSettled = await editsSettledForHandBack();
+    if (editsSettled === null) return { success: false, error: 'Another exit is deciding' };
     if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
       openDialog('speleodb-close');
       return { success: false, error: 'Showing dialog' };

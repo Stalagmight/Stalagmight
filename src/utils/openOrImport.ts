@@ -43,7 +43,7 @@ import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
-import { editsSettledForExit, needsSpeleoHandBackPrompt } from './quit';
+import { editsSettledForExit, editsSettledForHandBack, needsSpeleoHandBackPrompt } from './quit';
 import { openPendingImport, type PendingImport } from './pendingImport';
 import { TOAST_KEYS } from './toastKeys';
 import i18n from '../i18n';
@@ -431,8 +431,11 @@ export async function routeOpenedFile(
       // have settled, as at quit (`editsSettledForExit`): an edit still in flight
       // reads as a clean project, and `loadProject` waits for it to land on this
       // project and then replaces it, unsaved. One that has not settled in time
-      // counts as unsaved work. The state is read again after the wait.
-      const editsSettled = store.project ? await editsSettledForExit() : true;
+      // counts as unsaved work. The state is read again after the wait. [#576 W85] An
+      // open asked for while another hand-back exit waits (a double-click on a Recents
+      // entry) is dropped: that exit owns the answer.
+      const editsSettled = store.project ? await editsSettledForHandBack() : true;
+      if (editsSettled === null) return;
       const current = useProjectStore.getState();
       if (current.project && needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
         ui.openDialog('speleodb-close', { pendingOpenPath: path });

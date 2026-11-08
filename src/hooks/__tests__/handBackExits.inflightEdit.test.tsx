@@ -369,3 +369,98 @@ describe('Import as new project waits for the edits queued before it', () => {
     expect(ui().dialogData).toMatchObject({ filePath: TML, importType: 'tml' });
   });
 });
+
+/**
+ * [#576 W85] One hand-back exit decides at a time. Each one waits for the queued
+ * edits and decides after the wait, but the screen-owned checks in front of it (a
+ * dialog open, the shortcut hooks' modal gate) were all passed before it. A second
+ * exit asked for during the wait - Ctrl+N twice, a double-click on a Recents entry,
+ * Close then New - passed them too, and its prompt replaced the first one's in the
+ * single dialog slot, with the first call's request gone. The first exit owns the
+ * answer; a later one is dropped, as a shortcut is while a dialog owns the screen.
+ */
+describe('a second hand-back exit asked for during the wait is dropped', () => {
+  const OTHER_2 = '/cave/other-2.stalx';
+
+  /** Every `unsaved-changes` prompt opened from here on (`openDialog` installs fresh data each time). */
+  function recordPrompts(): Array<Record<string, unknown>> {
+    const opened: Array<Record<string, unknown>> = [];
+    unsubscribe = useUIStore.subscribe((s, prev) => {
+      if (s.activeDialog === 'unsaved-changes' && s.dialogData !== prev.dialogData) opened.push(s.dialogData);
+    });
+    return opened;
+  }
+  let unsubscribe: (() => void) | null = null;
+  afterEach(() => {
+    unsubscribe?.();
+    unsubscribe = null;
+  });
+
+  it('New Project twice (Ctrl+N, Ctrl+N): one prompt', async () => {
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+    const prompts = recordPrompts();
+
+    const first = newProjectGuarded();
+    await vi.advanceTimersByTimeAsync(0);
+    const second = newProjectGuarded();
+    await vi.advanceTimersByTimeAsync(0);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(Promise.all([first, second]));
+
+    expect(prompts).toHaveLength(1);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData).toMatchObject({ pendingNewProject: true });
+  });
+
+  it('two opens during the wait (a double-click on Recents): one prompt, for the file opened first', async () => {
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+    const prompts = recordPrompts();
+
+    const first = routeOpenedFile(OTHER, 'Open Failed', { allow: 'project-only' });
+    await vi.advanceTimersByTimeAsync(0);
+    const second = routeOpenedFile(OTHER_2, 'Open Failed', { allow: 'project-only' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(Promise.all([first, second]));
+
+    expect(prompts).toHaveLength(1);
+    expect(ui().dialogData).toMatchObject({ pendingOpenPath: OTHER });
+    expect(loadProject).not.toHaveBeenCalled();
+  });
+
+  it('Close, then New Project during the wait: one prompt, the close one', async () => {
+    const { result } = renderHook(() => useProject());
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+    const prompts = recordPrompts();
+
+    const closing = result.current.handleCloseProject();
+    await vi.advanceTimersByTimeAsync(0);
+    const starting = newProjectGuarded();
+    await vi.advanceTimersByTimeAsync(0);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(Promise.all([closing, starting]));
+
+    expect(prompts).toHaveLength(1);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData.pendingNewProject).toBeUndefined();
+    expect(calls(CLOSE)).toBe(0);
+  });
+
+  it('control: once the first exit has decided, the next one is asked as usual', async () => {
+    await newProjectGuarded();
+    expect(ui().activeDialog).toBe('new-project');
+    useUIStore.getState().closeDialog();
+
+    await routeOpenedFile(OTHER);
+    expect(ui().activeDialog).toBe('launch-open-confirm');
+  });
+});

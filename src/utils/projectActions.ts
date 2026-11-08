@@ -16,7 +16,7 @@
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
-import { editsSettledForExit, needsSpeleoHandBackPrompt } from './quit';
+import { editsSettledForHandBack, needsSpeleoHandBackPrompt } from './quit';
 import { saveFailureOf, surfaceSaveFailure } from './saveFeedback';
 import i18n from '../i18n';
 import { invokeIpc } from './ipc';
@@ -54,11 +54,13 @@ import type { SaveOutcome } from '../types/ipc/SaveOutcome';
  * project, and the switch to the new one waits for it to land on this project
  * and then replaces it, unsaved. One that has not settled in time counts as
  * unsaved work. With no project open there is nothing to wait for, and the
- * dialog opens synchronously as before.
+ * dialog opens synchronously as before. [#576 W85] A New Project asked for while
+ * another hand-back exit waits (Ctrl+N twice) is dropped: that exit owns the answer.
  */
 export async function newProjectGuarded(): Promise<void> {
   const { openDialog } = useUIStore.getState();
-  const editsSettled = useProjectStore.getState().project ? await editsSettledForExit() : true;
+  const editsSettled = useProjectStore.getState().project ? await editsSettledForHandBack() : true;
+  if (editsSettled === null) return;
   const ps = useProjectStore.getState();
   if (!ps.project) {
     openDialog('new-project');
