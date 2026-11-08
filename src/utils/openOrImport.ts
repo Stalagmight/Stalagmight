@@ -256,13 +256,25 @@ export async function routeOpenedFile(
   // file. A close with nothing to ask goes through the guarded close as before.
   // True when a dialog took the screen (it owns the entry-point source from here);
   // false when the close was refused and the import ends.
+  //
+  // [#576 W85] Both checks read state an edit sets only once its IPC and the refresh
+  // after it have returned, so they run once the edits queued so far have settled,
+  // as the close itself does (`editsSettledForExit`): an edit still in flight read
+  // as a clean project, the close below found it and asked WITHOUT the file, and the
+  // parsed import was dropped. One that has not settled in time counts as unsaved
+  // work. The confirm can be cancelled during the wait, which drops the file.
   const handOverParsed = async (pending: PendingImport): Promise<boolean> => {
     if (importAsNew && useProjectStore.getState().project) {
+      const editsSettled = await editsSettledForExit();
+      if (!stillWanted()) {
+        dropLateResult();
+        return false;
+      }
       if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
         ui.openDialog('speleodb-close', { pendingImport: pending });
         return true;
       }
-      if (useProjectStore.getState().isDirty) {
+      if (useProjectStore.getState().isDirty || !editsSettled) {
         ui.openDialog('unsaved-changes', { pendingImport: pending });
         return true;
       }

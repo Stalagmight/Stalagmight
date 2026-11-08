@@ -283,3 +283,89 @@ describe('Opening another .stalx waits for the edits queued before it', () => {
     await settle(editDone);
   });
 });
+
+/**
+ * [#576 W85] "Import as new project" decides after a good parse whether the close
+ * must ask first, and a prompt it raises carries the parsed file (`pendingImport`,
+ * #576 HFI-4-D2). It read `isDirty` without waiting, so an edit in flight read as a
+ * clean project and the close was asked for at once: that close waits for the edit,
+ * finds the project dirty and asks WITHOUT the file, and the import ended there.
+ */
+describe('Import as new project waits for the edits queued before it', () => {
+  const TML = '/cave/CaveA.tml';
+  const PARSED = { cave_name: 'CaveA', sections: [] };
+
+  /** The confirm dialog as the router opened it, then "Close and import" with the real guarded close. */
+  function confirmImportAsNew(closeCurrent: () => Promise<{ success: boolean }>): Promise<void> {
+    useProjectStore.setState({ parseTml: vi.fn(async () => PARSED) as never });
+    useUIStore.setState({ activeDialog: 'import-as-new-project', dialogData: { path: TML, fileName: 'CaveA.tml' } });
+    return routeOpenedFile(TML, 'Open Failed', { importAsNew: { closeCurrent } });
+  }
+
+  it('an edit in flight when the parse lands: the prompt carries the parsed file, and the project stays open', async () => {
+    const { result } = renderHook(() => useProject());
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const importing = confirmImportAsNew(() => result.current.handleCloseProject());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls(CLOSE)).toBe(0);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(importing);
+
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData.pendingImport).toMatchObject({ filePath: TML, importType: 'tml', tmlFile: PARSED });
+    expect(calls(CLOSE)).toBe(0);
+    expect(useProjectStore.getState().project).not.toBeNull();
+  });
+
+  it('an edit that never settles counts as unsaved work, and the prompt still carries the parsed file', async () => {
+    const { result } = renderHook(() => useProject());
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const importing = confirmImportAsNew(() => result.current.handleCloseProject());
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settle(importing);
+
+    expect(useProjectStore.getState().isDirty).toBe(false);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData.pendingImport).toMatchObject({ filePath: TML, importType: 'tml' });
+    expect(calls(CLOSE)).toBe(0);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+  });
+
+  it('a confirm cancelled while the edit is still landing drops the file: no prompt, the project stays', async () => {
+    const { result } = renderHook(() => useProject());
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const importing = confirmImportAsNew(() => result.current.handleCloseProject());
+    await vi.advanceTimersByTimeAsync(0);
+    // The confirm's Cancel, while the router still waits on the edit.
+    useUIStore.getState().closeDialog();
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(importing);
+
+    expect(ui().activeDialog).toBeNull();
+    expect(calls(CLOSE)).toBe(0);
+    expect(useProjectStore.getState().project).not.toBeNull();
+  });
+
+  it('control: a clean project with nothing in flight closes and opens the new-project dialog with the file', async () => {
+    const { result } = renderHook(() => useProject());
+
+    await settle(confirmImportAsNew(() => result.current.handleCloseProject()));
+
+    expect(calls(CLOSE)).toBe(1);
+    expect(ui().activeDialog).toBe('new-project-for-import');
+    expect(ui().dialogData).toMatchObject({ filePath: TML, importType: 'tml' });
+  });
+});
