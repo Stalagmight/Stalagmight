@@ -308,6 +308,52 @@ fn a_landing_that_leaves_the_switched_away_copy_clean_releases_the_lock_the_swit
     assert!(!claim_left, "and its claim goes with it");
 }
 
+/// [#576 W87b] The kept lock's release is reclaim-checked on every path. Without a
+/// sink that lends managed state (unit tests, before `setup`) the detached release
+/// cannot reach the guard, and it used to send the raw POST, which frees the lock
+/// under a session that reopened the project and claimed it meanwhile. Now nothing
+/// goes out: the claim is put back, and the stranded-claim janitor hands the lock
+/// back through its reclaim-checked release once no project is open.
+#[test]
+fn without_managed_state_the_kept_lock_is_never_released_unguarded() {
+    let world = edited_then_left(EDITED_BEFORE, LeftBy::Switch);
+    world
+        .state
+        .set_event_sink(Arc::new(crate::core::events::NullEventSink));
+    let push_start = chrono::Utc::now().to_rfc3339();
+    let code = world.record(&push_start);
+    let claim_back = world
+        .state
+        .speleodb_claim_on_deployment(&world.base, REMOTE_ID);
+    let unguarded = world.releases_within(Duration::from_millis(500));
+    assert!(
+        world.state.execute(Command::CloseProject).success,
+        "close CaveB"
+    );
+    let _ = world.state.speleodb_link_status();
+    let by_janitor = world.releases_within(Duration::from_secs(10));
+    let claim_left = world
+        .state
+        .speleodb_claim_on_deployment(&world.base, REMOTE_ID);
+    println!(
+        "[W87b] landed with no managed state -> refusal {code:?}; release requests right \
+         after the landing {unguarded:?}; claim put back {claim_back}; after the janitor \
+         {by_janitor:?}, claim left {claim_left}"
+    );
+    assert_eq!(code, Some(CommandErrorCode::ProjectChanged));
+    assert!(
+        unguarded.is_empty(),
+        "no release goes out where the reclaim guard cannot run"
+    );
+    assert!(claim_back, "the claim is put back for the janitor");
+    assert_eq!(
+        by_janitor.len(),
+        1,
+        "which hands the lock back through its reclaim-checked release"
+    );
+    assert!(!claim_left, "and ends the claim");
+}
+
 #[test]
 fn a_copy_still_dirty_after_the_landing_keeps_its_lock() {
     // An edit after the push start is still only local: the veto's reason stands.

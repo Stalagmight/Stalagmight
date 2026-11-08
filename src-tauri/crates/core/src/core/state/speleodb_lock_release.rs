@@ -731,44 +731,57 @@ impl AppState {
     /// reclaim-checked - a session that has reopened the project and claimed its
     /// lock since keeps it - and with the claim put back when the POST fails, so
     /// the janitor can retry. No gate to shut: the session that edited under it is
-    /// gone. Without managed state (unit tests, pre-`setup`) the raw POST.
+    /// gone.
+    ///
+    /// [#576 W87b] Only ever reclaim-checked. The detached thread reaches the guard
+    /// through the managed state the event sink lends; without such a sink (unit
+    /// tests, pre-`setup`) it used to send the raw POST instead, which frees the lock
+    /// under a session that reopened the project and claimed it meanwhile. No release
+    /// goes out then: the claim is put back, unmarked, for the stranded-claim
+    /// janitor, whose release is reclaim-checked
+    /// (`AppState::speleodb_janitor_stranded_claim`). The caller holds
+    /// `command_lock`, which sits below `speleodb_lock_ops`, so the guard cannot run
+    /// on this thread instead.
     pub(super) fn speleodb_release_kept_lock_detached(
         &self,
         params: LockReleaseParams,
         claim: super::speleodb_session::LockClaim,
     ) {
-        let sink = self.get_event_sink();
+        // Whether the sink lends managed state: it runs the closure here and now
+        // when it does (the app's sink is `try_state`, the tests' a reference).
+        let Some(sink) = self
+            .get_event_sink()
+            .filter(|sink| sink.with_app_state(Box::new(|_| {})))
+        else {
+            tracing::info!(
+                project_id = %params.project_id,
+                purpose = "release a lock kept over edits a landed push has uploaded",
+                "speleodb: no managed state to run the reclaim-checked release in; the \
+                 claim is kept for the janitor"
+            );
+            self.speleodb_restore_lock_claim(Some(claim));
+            return;
+        };
+        let project_id = params.project_id.clone();
         std::thread::spawn(move || {
-            let ran = sink.is_some_and(|sink| {
-                // Clones for the fallback below: a `false` return means the
-                // closure was never run.
-                let p = params.clone();
-                sink.with_app_state(Box::new(move |state| {
-                    if let Err(e) = state.speleodb_release_unless_reclaimed(&p) {
-                        tracing::warn!(
-                            error = %e,
-                            project_id = %p.project_id,
-                            purpose = "release a lock kept over edits a landed push has uploaded",
-                            "speleodb: the release failed; the claim is kept for a retry"
-                        );
-                        state.speleodb_restore_lock_claim(Some(claim));
-                    }
-                }))
-            });
-            if !ran {
-                if let Err(e) = client::release_lock(
-                    &params.endpoint,
-                    &params.token,
-                    params.insecure_http,
-                    &params.project_id,
-                ) {
+            let lent = sink.with_app_state(Box::new(move |state| {
+                if let Err(e) = state.speleodb_release_unless_reclaimed(&params) {
                     tracing::warn!(
                         error = %e,
                         project_id = %params.project_id,
                         purpose = "release a lock kept over edits a landed push has uploaded",
-                        "speleodb: the release failed"
+                        "speleodb: the release failed; the claim is kept for a retry"
                     );
+                    state.speleodb_restore_lock_claim(Some(claim));
                 }
+            }));
+            if !lent {
+                tracing::warn!(
+                    project_id = %project_id,
+                    purpose = "release a lock kept over edits a landed push has uploaded",
+                    "speleodb: the managed state was gone by the release; the lock is left \
+                     held"
+                );
             }
         });
     }
