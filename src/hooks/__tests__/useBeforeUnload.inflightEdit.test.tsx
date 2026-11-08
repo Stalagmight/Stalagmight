@@ -31,8 +31,11 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: vi.fn(async () => true) }
 
 vi.mock('../../utils/ipc');
 
+import { confirm } from '@tauri-apps/plugin-dialog';
 import { useBeforeUnload } from '../useBeforeUnload';
+import { editBlockedReasonNow } from '../useEditingBlocked';
 import {
+  abandonUpdateRestart,
   guardQuit,
   performQuit,
   quitApp,
@@ -334,5 +337,142 @@ describe('a waiting close request ends when a confirmed quit took the tail meanw
     expect.soft(destroyMock).not.toHaveBeenCalled();
     expect.soft(useUpdateStore.getState().installing).toBe(false);
     expect.soft(useUIStore.getState().activeDialog).toBeNull();
+  });
+});
+
+/**
+ * [#576 W85] An update restart holds the project still from its close request on,
+ * not only once the install starts. The guard waits for the edits queued BEFORE the
+ * request; one issued during that wait (a key the screen did not catch, a script) was
+ * not waited for, the guard read the project as clean, and the restart dropped it. The
+ * hold now goes up before the wait (and before the tier-1 cleanup), so such an edit is
+ * refused at issue time, and it comes down on every way out that does not install.
+ */
+describe('an update restart holds the project still from its close request', () => {
+  beforeEach(() => {
+    // A local project, so the editing gate's only possible reason here is the hold.
+    useSpeleoStore.setState({ projectLinkKind: 'local' });
+  });
+
+  it('an edit issued while the restart waits for the queued edits is refused, not dropped by the restart', async () => {
+    render(<App />);
+    await vi.advanceTimersByTimeAsync(0);
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    await requestUpdateRestart();
+    const closing = closeRequested();
+    await vi.advanceTimersByTimeAsync(0);
+    // The restart waits on the first edit; a second one is issued meanwhile.
+    const late = useProjectStore.getState().updateShot(1, 2, { length: 7 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The backend refuses the first edit: the project stays clean, so the restart goes ahead.
+    edit.reject({ code: 'VALIDATION', message: 'refused' });
+    await settle(editDone);
+    await settle(closing);
+    const lateOutcome = await settle(late);
+
+    expect(calls(INSTALL)).toBe(1);
+    expect.soft(calls(EDIT)).toBe(1);
+    expect.soft(lateOutcome.success).toBe(false);
+    expect.soft(useUpdateStore.getState().installing).toBe(true);
+  });
+
+  it('the hold is up while the restart waits, and comes down when the guard prompts', async () => {
+    render(<App />);
+    await vi.advanceTimersByTimeAsync(0);
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    await requestUpdateRestart();
+    const closing = closeRequested();
+    await vi.advanceTimersByTimeAsync(0);
+    expect.soft(useUpdateStore.getState().installing).toBe(true);
+    expect.soft(editBlockedReasonNow()).toBe('update');
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(closing);
+
+    expect(useUIStore.getState().activeDialog).toBe('unsaved-changes');
+    expect(calls(INSTALL)).toBe(0);
+    expect(useUpdateStore.getState().installing).toBe(false);
+    expect(editBlockedReasonNow()).toBeNull();
+  });
+
+  it('is up before the tier-1 cleanup runs', async () => {
+    const heldDuringCleanup: boolean[] = [];
+    const cleanup = vi.fn(async () => {
+      heldDuringCleanup.push(useUpdateStore.getState().installing);
+    });
+    function TierOneApp() {
+      useBeforeUnload(true, 'Discard the dive plan?', cleanup, guardQuit);
+      return null;
+    }
+    render(<TierOneApp />);
+    await vi.advanceTimersByTimeAsync(0);
+
+    await requestUpdateRestart();
+    await settle(closeRequested());
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(heldDuringCleanup).toEqual([true]);
+    expect(calls(INSTALL)).toBe(1);
+  });
+
+  it('declining tier 1 holds nothing, and abandons the restart', async () => {
+    vi.mocked(confirm).mockResolvedValueOnce(false);
+    function TierOneApp() {
+      useBeforeUnload(true, 'Discard the dive plan?', undefined, guardQuit);
+      return null;
+    }
+    render(<TierOneApp />);
+    await vi.advanceTimersByTimeAsync(0);
+
+    await requestUpdateRestart();
+    await settle(closeRequested());
+
+    expect(useUpdateStore.getState().installing).toBe(false);
+    expect(calls('unarm_app_update_restart')).toBe(1);
+    expect(calls(INSTALL)).toBe(0);
+  });
+
+  it('a destroy that fails after the restart was given up meanwhile lifts the hold', async () => {
+    render(<App />);
+    await vi.advanceTimersByTimeAsync(0);
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    await requestUpdateRestart();
+    const closing = closeRequested();
+    await vi.advanceTimersByTimeAsync(0);
+    // Given up on during the wait (a script; the screen is held), so the pass ends in a plain destroy.
+    abandonUpdateRestart();
+    destroyMock.mockRejectedValueOnce(new Error('destroy denied'));
+    edit.reject({ code: 'VALIDATION', message: 'refused' });
+    await settle(editDone);
+    await settle(closing);
+
+    expect(calls(INSTALL)).toBe(0);
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+    expect(useUpdateStore.getState().installing).toBe(false);
+  });
+
+  it('control: a plain quit holds nothing while it waits', async () => {
+    render(<App />);
+    await vi.advanceTimersByTimeAsync(0);
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    quitApp();
+    const closing = closeRequested();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useUpdateStore.getState().installing).toBe(false);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(closing);
+    expect(useUIStore.getState().activeDialog).toBe('unsaved-changes');
   });
 });

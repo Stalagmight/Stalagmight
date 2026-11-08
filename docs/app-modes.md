@@ -112,7 +112,9 @@ by a newer Stalagmight, `selectNewerFileReadOnly` (`projectStore.ts`, set from t
 load result in the same `set()` as the project). A fourth term,
 `selectUpdateInstalling` (`updateStore.ts`), holds while an update restart installs:
 the user has already passed the unsaved-changes prompt and the restart would drop
-any edit, so nothing may change the project until the install ends. It has no
+any edit, so nothing may change the project until the install ends. It goes up as
+soon as the restart's close request is past the tier-1 confirm, so it also covers
+the exit guard's wait for queued edits, and comes down if the guard prompts. It has no
 backend backstop; the mutation queue (`executeCommand` / `executeUndoRedo`) refuses
 every edit and undo/redo on it instead, and `UpdateInstallOverlay` holds the screen
 and keyboard. Do not write that composition inline. `useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly)`

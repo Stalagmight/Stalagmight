@@ -51,10 +51,11 @@ interface UpdateStore {
    */
   downloadVersion: string | null;
   /**
-   * An update restart is installing (#579 x #576): set by `useBeforeUnload` the
-   * moment every exit guard has passed and the install starts, cleared only when
-   * the install fails and the app stays up. A successful install ends the process,
-   * so it is never cleared on that path.
+   * An update restart is installing (#579 x #576): set by `useBeforeUnload` once the
+   * restart's close request is past the tier-1 confirm, so through the exit guard's
+   * wait for queued edits too (#576 W85), and cleared on every way out that does not
+   * install - the guard's prompt, a failed install. A successful install ends the
+   * process, so it is never cleared on that path.
    *
    * Independent of `status` on purpose: a check reply landing mid-install rewrites
    * `status` (`setUpToDate` drops to idle), and that must not lift the hold. While

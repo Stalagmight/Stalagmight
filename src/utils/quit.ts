@@ -235,6 +235,15 @@ export function consumeUpdateRestartArmed(): boolean {
 }
 
 /**
+ * [#576 W85] Is an update restart armed? A peek, not a consume: the close listener
+ * holds the project still from the restart's close request on (`useBeforeUnload`),
+ * and only its tail consumes the arm.
+ */
+export function isUpdateRestartArmed(): boolean {
+  return updateRestartArmed;
+}
+
+/**
  * Give up on a restart attempt, on both sides.
  *
  * Safe (and free) to call on any exit that was never a restart - it returns

@@ -9,6 +9,7 @@ import {
   consumeUpdateRestartArmed,
   abandonUpdateRestart,
   editsSettledForExit,
+  isUpdateRestartArmed,
 } from '../utils/quit';
 import { invokeIpc } from '../utils/ipc';
 import { useUIStore } from '../store/uiStore';
@@ -203,6 +204,18 @@ export function useBeforeUnload(
             tier1Confirmed.current = true;
           }
 
+          // [#576 W85] An update restart holds the project still from here - past the
+          // one prompt that can still cancel it without an in-app dialog - and not only
+          // once the install starts. The guard below waits for the edits queued BEFORE
+          // this request; one issued during that wait, or during the tier-1 cleanup, is
+          // not waited for, reads as a clean project, and the restart would drop it. The
+          // install overlay, the editing gate and the mutation queue refuse it instead.
+          // Every way out of this pass that does not install takes the hold down: the
+          // guard's prompt here, a failed install or destroy in the tail. A pass ended by
+          // another pass's tail leaves it to that pass (see `tailRuns`).
+          const restartArmed = isUpdateRestartArmed();
+          if (restartArmed) useUpdateStore.getState().setInstalling(true);
+
           // Tier 2: the app's own exit guards (unpushed SpeleoDB edits under our
           // write lock, then unsaved-to-disk changes). Opening a dialog abandons
           // this close; the dialog's own action re-issues it via performQuit,
@@ -225,6 +238,7 @@ export function useBeforeUnload(
             if (isClosing.current || tailRuns.current !== tailRunsBefore) return;
             if (guardRef.current?.({ editsSettled })) {
               debugLog('[useBeforeUnload] In-app guard opened a dialog, aborting close');
+              if (restartArmed) useUpdateStore.getState().setInstalling(false);
               return;
             }
           }
@@ -314,6 +328,9 @@ export function useBeforeUnload(
           if (!(await closeWindowNow())) {
             debugLog('[useBeforeUnload] Destroy failed - staying quittable');
             isClosing.current = false;
+            // [#576 W85] A restart given up on after its hold went up ends here, in a
+            // plain destroy; the app stays, so the project is given back.
+            useUpdateStore.getState().setInstalling(false);
             return;
           }
 
