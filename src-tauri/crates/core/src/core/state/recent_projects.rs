@@ -409,11 +409,12 @@ impl AppState {
                 //   nothing left to protect here and would only strand the server
                 //   lock. Same reasoning as `speleodb_unlink`, which likewise drops
                 //   the local link and so could never release from this project
-                //   again. Unlike unlink it keeps the claim check (#576 RV5-F4-4):
-                //   a session that only inherited the lock (a second window or
-                //   computer on the same account, gate opened by the status poll)
-                //   leaves it with the account instead of freeing the mutex the
-                //   other session is editing under (decision RV2-R-13).
+                //   again. [#576 SDB-QUIT-D1] Like unlink, no claim check: the lock
+                //   the session is editing under is released whether this session
+                //   took it or adopted it from the account (another window or
+                //   computer, the website, this app before a restart; decision
+                //   SDB-ACCT-D1). It used to keep the claim check (RV5-F4-4,
+                //   decision RV2-R-13) and leave an adopted lock held.
                 held_lock = self.speleodb_delete_lock_release_params();
                 // End OUR claim now, while the identity decision above is still
                 // atomic under this guard. After the guard drops, a successor Start
