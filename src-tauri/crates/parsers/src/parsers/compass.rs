@@ -230,17 +230,21 @@ pub fn parse_compass(path: &Path) -> Result<ParsedCompass> {
             ))
         }
     };
-    bound_length_corrections(&mut parsed);
+    bound_lengths(&mut parsed);
     Ok(parsed)
 }
 
 /// A survey's length correction beyond the limit no real survey reaches is
 /// read as 0 (#576 FZ-PARSE-5-D1): added to every shot, one near `f64::MAX`
-/// pushed the computed depths to infinity. Done on the parsed surveys, so
-/// the preview's counts, the warning it shows and the import all see the
-/// same value. A shot's own length and LRUDs need no bound: Compass reads
-/// 990 ft and above as its missing marker.
-fn bound_length_corrections(parsed: &mut ParsedCompass) {
+/// pushed the computed depths to infinity. A shot's own length beyond it is
+/// read as missing: a length has no missing marker (see `length_missing`), so
+/// a leg near `f64::MAX` did the same and one of 1e12 ft landed as measured.
+/// It becomes 0 ft, which `shot_length_m` resolves exactly as it does a
+/// non-finite length, so the preview counts and names the leg as the import
+/// then drops it. Done on the parsed surveys, so the preview's counts, the
+/// warnings it shows and the import all see the same value. LRUDs need no
+/// bound: Compass reads 990 ft and above as their missing marker.
+fn bound_lengths(parsed: &mut ParsedCompass) {
     let mut notes = BoundNotes::default();
     for entry in &mut parsed.surveys {
         let survey = &mut entry.survey;
@@ -251,6 +255,15 @@ fn bound_length_corrections(parsed: &mut ParsedCompass) {
                 let at = format!("Survey '{}'", survey.name);
                 notes.push(note(&at, "length correction", metres, "read as 0"));
                 cf.length = 0.0;
+            }
+        }
+        for shot in &mut survey.shots {
+            // A `.DAT` stores lengths in decimal feet (#576 B28).
+            let metres = shot.length * FEET_TO_METERS;
+            if beyond_limit(metres) {
+                let at = format!("Survey '{}' shot {}", survey.name, shot_label(shot));
+                notes.push(note(&at, "length", metres, "read as missing"));
+                shot.length = 0.0;
             }
         }
     }
@@ -4610,7 +4623,7 @@ mod lrud_tests;
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod negative_lrud_tests;
 
-// #576 FZ-PARSE-5: a length correction beyond the limit reads as 0.
+// #576 FZ-PARSE-5: a length correction beyond the limit reads as 0, a length as missing.
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod reading_bound_tests;

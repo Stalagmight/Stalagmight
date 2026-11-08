@@ -2483,8 +2483,10 @@ before Import is pressed, or on the import receipt after.
     `#Units` line or a `.WPJ` options string. Located by `.SRV` name and line.
   - **Compass**: a survey's length correction (`CORRECTIONS`) reads as 0,
     named by survey; a `.MAK` fixed station whose elevation is beyond the limit
-    is ignored as an anchor candidate. Shot lengths and LRUDs need no bound:
-    990 ft and above is already Compass's missing marker. Angles need none
+    is ignored as an anchor candidate. A shot length reads as missing, named
+    by survey and shot (a length has no missing marker of its own). LRUDs
+    need no bound: 990 ft and above is already Compass's missing marker.
+    Angles need none
     either: 990 and above (and -900 and below) is the missing marker, every
     corrected sight is checked finite, and the fs/bs inclinations are averaged
     without overflow.

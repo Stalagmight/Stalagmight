@@ -42,6 +42,14 @@ fn regression_seeds(target: Target) -> &'static [u64] {
         Target::Gen(Format::Wpj) => &[303, 3266, 3916, 4780],
         Target::Raw(Format::Srv) => &[1952, 2420],
         Target::Raw(Format::Wpj) => &[1426, 1445, 1662, 4457, 5116],
+        // FZ-PARSE-5, Compass shot length: once a length had no missing
+        // marker (RVF-d-2), a leg of about f64::MAX feet was accepted and the
+        // import was refused for a station at infinity (parsers
+        // compass::reading_bound_tests). The fuzz farm's rolling windows on
+        // 074ab799e.
+        Target::Raw(Format::Dat) => &[272_644],
+        Target::Gen(Format::Dat) => &[283_470, 352_509],
+        Target::Gen(Format::Mak) => &[351_636],
         _ => &[],
     }
 }
@@ -237,6 +245,34 @@ fn farm_gen_mak_a_project_length_correction_near_f64_max_imports_uncorrected() {
     let outcome = apply_files(Format::Mak, &files, Knobs(0b1000));
     eprintln!("farm gen_mak: {outcome:?}");
     assert!(outcome.applied, "{outcome:?}");
+}
+
+/// FZ-PARSE-5, Compass shot length (the farm's raw_dat, gen_dat and gen_mak
+/// findings on 074ab799e): legs of about f64::MAX feet were accepted, the
+/// preview said nothing and the import was refused for a station at infinity.
+/// Each now reads as missing and the rest of the survey imports.
+#[test]
+fn farm_dat_a_shot_length_near_f64_max_imports_as_missing() {
+    let mut dat = String::from(
+        "SYNTHETIC CAVE\r\nSURVEY NAME: B1\r\nSURVEY DATE: 2 20 1993\r\n\
+         SURVEY TEAM:\r\nAnn\r\n\
+         DECLINATION: 0.00  CORRECTIONS: 0.00 0.00 0.00\r\n\r\n\
+         FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT\r\n\r\n\
+         B0 B1 10.00 0.00 -60.00 0.00 0.00 0.00 0.00\r\n",
+    );
+    for i in 1..5 {
+        let _ = write!(
+            dat,
+            "B{i} B{} {} 0.00 -90.00 0.00 0.00 0.00 0.00\r\n",
+            i + 1,
+            near_max()
+        );
+    }
+    dat.push_str("\x0c\r\n");
+    let outcome = apply_one(Format::Dat, &dat, Knobs(0));
+    eprintln!("farm dat length: {outcome:?}");
+    assert!(outcome.applied, "{outcome:?}");
+    assert_eq!(outcome.shots, 1, "only the 10 ft leg lands: {outcome:?}");
 }
 
 /// FZ-PARSE-5, GPX case: an elevation near f64::MAX beside an ordinary one
