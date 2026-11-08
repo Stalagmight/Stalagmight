@@ -117,7 +117,8 @@ soon as the restart's close request is past the tier-1 confirm, so it also cover
 the exit guard's wait for queued edits, and comes down if the guard prompts. It has no
 backend backstop; the mutation queue (`executeCommand` / `executeUndoRedo`) refuses
 every edit and undo/redo on it instead, and `UpdateInstallOverlay` holds the screen
-and keyboard. Do not write that composition inline. `useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly)`
+and keyboard. A dialog asked for during the hold (`openDialog`) opens only once it
+lifts, never above the overlay (`afterUpdateInstallHold`). Do not write that composition inline. `useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly)`
 is a Rules-of-Hooks violation: `||` short-circuits, so the second hook is skipped
 on any render where the first term is already true, and React throws "Rendered
 fewer hooks than expected" when it flips back. The hook calls both

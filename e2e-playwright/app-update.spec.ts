@@ -111,6 +111,18 @@ async function holdInstall(page: import('@playwright/test').Page): Promise<void>
   });
 }
 
+/** The dialog slot, as the specs reach it through the exposed UI store. */
+interface UiStoreWindow {
+  __E2E_TEST__: {
+    uiStore: {
+      getState: () => {
+        activeDialog: string | null;
+        openDialog: (dialog: string, data?: Record<string, unknown>) => void;
+      };
+    };
+  };
+}
+
 /** The page-side handle `holdShotEdit` leaves for releasing the held edit. */
 interface EditHoldWindow {
   __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown, opts?: unknown) => Promise<unknown> };
@@ -304,6 +316,47 @@ test.describe('In-app update banner', () => {
 
     await page.keyboard.press('Control+z');
     await expect.poll(() => count('undo')).toBe(1);
+  });
+
+  /**
+   * [#576 W86] A dialog the app asks for while the update installs (a SpeleoDB verb
+   * answering, a load's prompt, an async failure's error) needs no click or key press,
+   * so the screen hold cannot stop it. It opened above the install window and took
+   * input there; it now waits, and opens once a failed install gives the app back,
+   * beside the install's own failure toast.
+   */
+  test('a dialog asked for during the install waits; a failed install shows it with the failure toast', async ({ page }) => {
+    await dirtyProjectWithReadyUpdate(page);
+    await holdInstall(page);
+    await recordIpcCalls(page, ['install_app_update_and_restart']);
+
+    await page.getByTestId('update-banner-restart').click();
+    await simulateCloseRequested(page);
+    await page.getByTestId('unsaved-changes-discard').click();
+    await simulateCloseRequested(page);
+    await expect.poll(async () => (await getIpcCalls(page, 'install_app_update_and_restart')).length).toBe(1);
+    const overlay = page.getByTestId('update-install-overlay');
+    await expect(overlay).toBeVisible();
+
+    // `openDialog` is synchronous, so the slot read right after it is the answer.
+    const slot = await page.evaluate(() => {
+      const ui = (window as unknown as UiStoreWindow).__E2E_TEST__.uiStore;
+      ui.getState().openDialog('error', { title: 'Open', message: 'Asked for during the install' });
+      return ui.getState().activeDialog;
+    });
+    expect(slot, 'no dialog takes the slot above the install window').toBeNull();
+    await expect(overlay).toBeFocused();
+    await expect(page.getByTestId('error-dialog')).toHaveCount(0);
+
+    await page.evaluate(() => {
+      (window as unknown as InstallHoldWindow).__E2E_INSTALL__?.reject({
+        code: 'FAILED',
+        message: 'Update install failed: disk full',
+      });
+    });
+    await expect(overlay).toHaveCount(0);
+    await expect(page.getByTestId('error-dialog')).toContainText('Asked for during the install');
+    await expect(page.locator('[data-toast-key="app-update-install-failed"]')).toBeVisible();
   });
 
   /**

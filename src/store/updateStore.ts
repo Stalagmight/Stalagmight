@@ -120,6 +120,26 @@ export function refuseEditWhileUpdateInstalls(): CommandRefused | null {
   return refusedLocally(i18n.t('updateInstall.editRefused'));
 }
 
+/**
+ * [#576 W86] Run `then` once no update install holds the app: at once when none
+ * does, otherwise inside the store update that lifts the hold (a failed install, or
+ * the restart's guard prompting), so what waited lands in the same render the
+ * install window leaves in. A successful install ends the process, and nothing
+ * waiting runs. `openDialog` and `loadProject` wait here: a dialog or a load asked
+ * for during the install, with no click or key press reaching the app.
+ */
+export function afterUpdateInstallHold(then: () => void): void {
+  if (!selectUpdateInstalling(useUpdateStore.getState())) {
+    then();
+    return;
+  }
+  const unsubscribe = useUpdateStore.subscribe((state) => {
+    if (selectUpdateInstalling(state)) return;
+    unsubscribe();
+    then();
+  });
+}
+
 export const useUpdateStore = create<UpdateStore>((set, get) => ({
   ...INITIAL_STATE,
 
