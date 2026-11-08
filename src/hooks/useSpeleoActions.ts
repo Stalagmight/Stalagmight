@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
+import { useUpdateStore, selectUpdateInstalling } from '../store/updateStore';
 import {
   useSpeleoStore,
   asPushKind,
@@ -166,7 +167,14 @@ export function useSpeleoActions(): SpeleoActions {
   // saveProject writes the current in-memory state, so a late edit is captured too.
   // Best-effort and quiet (autosave semantics): a failed flush leaves `isDirty` set,
   // which is the safe direction since the push already persisted the same edits.
+  //
+  // [#576 W85] Not while an update installs. This save is outside the mutation queue,
+  // so the queue's install refusal does not cover it, and a Done started from the
+  // status button can still be on the network when Restart is pressed: the guards see
+  // nothing unpushed and a clean project, the install starts, and the answer then
+  // wrote the project under it - over edits the user may have chosen to discard.
   const flushToDiskAfterPush = useCallback(async () => {
+    if (selectUpdateInstalling(useUpdateStore.getState())) return;
     try {
       await useProjectStore.getState().saveProject(undefined, true);
     } catch {
