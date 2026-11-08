@@ -21,8 +21,9 @@
 //!    detached-copy save, which leaves the link row out; a link-less one (an Unlink
 //!    from before this change, see `guard_local_edits`) is an ordinary Save As.
 //! 3. Read the copy back: present, readable, and NOT linked. Until this passes,
-//!    nothing else has changed - the session, the cache file and the lock are as
-//!    they were.
+//!    the cache file, its link and the lock are as they were. A read-back that
+//!    refuses leaves the copy it read at the destination, and its error says so: the
+//!    user confirmed replacing that file in the Save As, so it is not removed.
 //! 4. Only then close the session and remove the cache file, in the SAME
 //!    `command_lock` span as the save, so no edit can land in the cache file after
 //!    the copy was taken. A removal that fails leaves a duplicate behind, never a
@@ -62,6 +63,15 @@ fn inside(root: &Path, path: &Path) -> bool {
     resolved.is_some_and(|p| p.starts_with(&root))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test seam (#576 W87b): run on the destination right after the unlink's save
+    /// wrote it and before the read-back, on the thread that set it, so a test can
+    /// make that read-back refuse.
+    pub(super) static AFTER_COPY_WRITTEN: std::cell::Cell<Option<fn(&Path)>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// Remove the cache copy at `path` and what SQLite may keep beside it, then its
 /// per-project folder when that is empty. Returns why the copy itself could not be
 /// removed; the sidecars and the folder are best-effort.
@@ -83,7 +93,9 @@ impl AppState {
     /// Move the open project's copy out of the SpeleoDB cache to `destination`,
     /// unlinked from SpeleoDB (see the module doc for the order and why). Answers
     /// where the copy landed (`saved_path`, which the frontend then loads) and what
-    /// the save could not keep. On `Err` nothing has changed.
+    /// the save could not keep. On `Err` the cache copy, its link and the lock are as
+    /// they were; a refused read-back has written a copy to `destination` first, and
+    /// its error names it.
     pub fn speleodb_unlink(&self, destination: PathBuf) -> Result<SaveOutcome, SpeleoErrorDto> {
         // The whole verb is one lock operation: the release at the end must not
         // meet a Start Editing that took the mutex after the session closed.
@@ -152,18 +164,28 @@ impl AppState {
                     None => SpeleoDbError::refused(message),
                 }));
             }
+            #[cfg(test)]
+            if let Some(hook) = AFTER_COPY_WRITTEN.with(std::cell::Cell::get) {
+                hook(&dest);
+            }
             // Read the copy back before giving anything up: there, readable, unlinked.
+            // A refusal here comes AFTER the write: the copy stays where the user
+            // confirmed it may go, and the error says it was written.
             match Database::open_for_metadata(&dest).and_then(|db| db.load_speleo_link()) {
                 Ok(None) => {}
                 Ok(Some(_)) => {
                     return refuse(format!(
-                        "the copy at {} is still linked to SpeleoDB; nothing was unlinked",
+                        "a copy was written to {}, but it is still linked to SpeleoDB, so \
+                         the move could not be confirmed. That copy was left there; the \
+                         SpeleoDB copy was kept and nothing was unlinked",
                         dest.display()
                     ))
                 }
                 Err(e) => {
                     return refuse(format!(
-                        "the copy at {} could not be read back ({e}); nothing was unlinked",
+                        "a copy was written to {}, but it could not be read back ({e}), so \
+                         the move could not be confirmed. That copy was left there; the \
+                         SpeleoDB copy was kept and nothing was unlinked",
                         dest.display()
                     ))
                 }

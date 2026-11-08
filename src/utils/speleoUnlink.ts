@@ -62,8 +62,10 @@ export async function chooseUnlinkDestination(projectName: string): Promise<stri
  * Move the OPEN project out of the SpeleoDB cache to `destination` and land the
  * session on the moved copy. `speleodb_unlink` writes the unlinked copy there,
  * closes the backend session on the cache file, deletes the cache file and releases
- * a held lock best-effort; on any error nothing has changed. Because the backend
- * session is closed, the copy is then loaded here.
+ * a held lock best-effort. On an error the cache file, its link and the lock are as
+ * they were, but one raised after the write (the copy could not be read back as
+ * unlinked) leaves that copy at `destination`, and its message names it. Because
+ * the backend session is closed, the copy is then loaded here.
  *
  * Returns true once moved. A failed unlink is surfaced the way a failed save is
  * (its own Detach Failed title; it ran no integrity re-check). A failed load

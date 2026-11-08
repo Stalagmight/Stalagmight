@@ -349,3 +349,161 @@ fn unlink_move_body_in_a_process_of_its_own() {
         "work kept"
     );
 }
+
+/// The read-back refusal body's full test name, for the child's exact filter.
+const READBACK_CHILD_TEST: &str =
+    "core::state::sdb_unlink_move_tests::unlink_read_back_body_in_a_process_of_its_own";
+
+/// Run the ignored body `test` in a child process of its own (the app dirs are
+/// process-wide) and fail with its output when it fails.
+fn run_child_body(test: &str) {
+    let exe = std::env::current_exe().expect("this test binary");
+    let output = output_within(
+        std::process::Command::new(exe)
+            .args([
+                test,
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD_ENV, "1"),
+        CHILD_DEADLINE,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    println!("{stdout}");
+    assert!(
+        output.status.success(),
+        "the body {test} failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the body ran (and was not filtered out): {stdout}"
+    );
+}
+
+/// Point the process-wide app dirs at `dirs` and create the SpeleoDB cache root
+/// and a projects folder outside it: (cache root, projects folder).
+fn app_dirs_in(dirs: &TempDir) -> (PathBuf, PathBuf) {
+    crate::app_dirs::init_paths(
+        dirs.path().join("data"),
+        dirs.path().join("config"),
+        dirs.path().join("cache"),
+        None,
+    );
+    let root = super::speleodb_local_state::cache_root().expect("a cache root in this process");
+    std::fs::create_dir_all(&root).expect("create the cache root");
+    let projects = dirs.path().join("Documents/stalagmight");
+    std::fs::create_dir_all(&projects).expect("projects folder");
+    (root, projects)
+}
+
+/// A link to the stub project, at BASE, clean.
+fn link_at_base() -> SpeleoLink {
+    SpeleoLink {
+        endpoint: "http://placeholder.invalid/".to_owned(),
+        project_id: REMOTE_ID.to_owned(),
+        project_name: "Remote".to_owned(),
+        base_commit_sha: Some(BASE_SHA.to_owned()),
+        has_unpushed_edits: false,
+        last_edit_at: None,
+        last_verify_at: Some(chrono::Utc::now().to_rfc3339()),
+        undo_mode: Some(UndoMode::Full),
+    }
+}
+
+/// The read-back seam's two refusals: the copy is unreadable ...
+fn garble_copy(dest: &Path) {
+    std::fs::write(dest, b"not a stalx file").expect("garble the written copy");
+}
+
+/// ... and the copy still carries a link row.
+fn relink_copy(dest: &Path) {
+    Database::open_existing(dest)
+        .expect("open the written copy")
+        .save_speleo_link(Some(&link_at_base()))
+        .expect("link the written copy");
+}
+
+/// [#576 W87b] A read-back that refuses runs AFTER the save wrote the copy, so its
+/// error must say a copy was written to the destination - which may have been a
+/// file the user confirmed replacing in the Save As - and the copy stays there. It
+/// used to say "nothing was unlinked" as if nothing had been written. The session,
+/// the cache copy, its link, the gate and the claim are as they were.
+#[test]
+fn a_refused_read_back_names_the_copy_it_wrote() {
+    run_child_body(READBACK_CHILD_TEST);
+}
+
+#[test]
+#[ignore = "the child-process body of a_refused_read_back_names_the_copy_it_wrote: it \
+            sets the process-wide app dirs, so it runs only in a process of its own"]
+fn unlink_read_back_body_in_a_process_of_its_own() {
+    if std::env::var_os(CHILD_ENV).is_none() {
+        println!("not in the child process ({CHILD_ENV} unset): nothing to do");
+        return;
+    }
+    let _cfg = crate::test_helpers::isolated_config();
+    let dirs = TempDir::new().expect("app dirs");
+    let (root, projects) = app_dirs_in(&dirs);
+    let cache = super::speleodb_local_state::cache_path_in(&root, REMOTE_ID);
+    std::fs::create_dir_all(cache.parent().expect("cache dir")).expect("create cache dir");
+    project_file(&cache, "Local Copy", "LocalSection");
+    Database::open_existing(&cache)
+        .expect("reopen")
+        .save_speleo_link(Some(&link_at_base()))
+        .expect("link");
+    let state = state_with_null_sink();
+    assert!(
+        state.open_project(cache.clone()).success,
+        "open the cache copy"
+    );
+    // Signed in to an endpoint that never resolves: the refusals make no request.
+    *state.speleodb.lock() = authed_session_at("http://placeholder.invalid/");
+    state.set_edit_enabled(true);
+    state.speleodb_note_lock_acquired(Some(REMOTE_ID));
+
+    let replaced: &[u8] = b"the file the user confirmed replacing";
+    let refusals: [(&str, fn(&Path)); 2] = [
+        ("Unreadable.stalx", garble_copy),
+        ("StillLinked.stalx", relink_copy),
+    ];
+    for (name, hook) in refusals {
+        let dest = projects.join(name);
+        std::fs::write(&dest, replaced).expect("the file the Save As replaces");
+        super::speleodb_unlink::AFTER_COPY_WRITTEN.with(|seam| seam.set(Some(hook)));
+        let refused = state.speleodb_unlink(dest.clone());
+        super::speleodb_unlink::AFTER_COPY_WRITTEN.with(|seam| seam.set(None));
+        let message = refused
+            .as_ref()
+            .err()
+            .map(|e| e.message.clone())
+            .unwrap_or_default();
+        let left = std::fs::read(&dest).unwrap_or_default();
+        println!(
+            "[W87b] read-back refused for {name}: {message:?}; copy left at the destination: \
+             {}, replaced file kept: {}",
+            dest.exists(),
+            left == replaced
+        );
+        assert!(refused.is_err(), "{name}: the read-back refuses");
+        assert!(
+            message.contains(&format!("a copy was written to {}", dest.display())),
+            "{name}: the error names the copy it wrote: {message}"
+        );
+        assert!(
+            dest.exists() && left != replaced,
+            "{name}: the copy replaced the file and is left there"
+        );
+        assert_eq!(state.open_project_path(), Some(cache.clone()), "still open");
+        assert!(
+            linked_at(&cache) && sections_at(&cache) == ["LocalSection"],
+            "{name}: the cache copy and its link are untouched"
+        );
+        assert!(
+            state.edit_enabled() && state.speleodb_lock_acquired_here(REMOTE_ID),
+            "{name}: still editing under the claimed lock"
+        );
+    }
+}
