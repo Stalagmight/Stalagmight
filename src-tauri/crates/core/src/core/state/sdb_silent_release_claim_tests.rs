@@ -32,6 +32,7 @@ fn release_requests(seen: &std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Vec
 fn adopted_by_the_poll(base: &str) -> (tempfile::TempDir, AppState) {
     let (temp, state) = remote_readonly_fixture();
     *state.speleodb.lock() = authed_session_at(base);
+    super::speleodb::link_open_copy_to(&state, base);
     let polled = state.speleodb_link_status().map(|s| s.edit_enabled);
     println!(
         "[SDB-ACCT-D1] the account holds the lock, taken elsewhere: poll -> edit_enabled \
@@ -247,8 +248,10 @@ fn the_sign_out_prompt_names_the_held_lock_and_whether_the_sign_out_keeps_it() {
     let (_temp, editing) = editing_fixture(&base);
     let (_temp_ro, read_only) = remote_readonly_fixture();
     *read_only.speleodb.lock() = authed_session_at(&base);
+    super::speleodb::link_open_copy_to(&read_only, &base);
     let (_temp_dirty, dirty) = super::speleodb::remote_fixture_with_dirty_bit(true);
     *dirty.speleodb.lock() = authed_session_at(&base);
+    super::speleodb::link_open_copy_to(&dirty, &base);
     dirty.set_edit_enabled(true);
     let (_temp_out, signed_out) = editing_fixture(&base);
     signed_out.speleodb.lock().forget_reporting().unwrap();

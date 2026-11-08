@@ -172,6 +172,7 @@ fn unlink_move_body_in_a_process_of_its_own() {
         "open the cache copy"
     );
     *state.speleodb.lock() = authed_session_at(&base);
+    super::speleodb::link_open_copy_to(&state, &base);
     state.set_edit_enabled(true);
     state.speleodb_note_lock_acquired(Some(REMOTE_ID));
     edit(&state, "LocalEdit");

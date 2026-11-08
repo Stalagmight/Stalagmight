@@ -409,7 +409,14 @@ impl AppState {
         let Ok(link) = self.speleodb_open_link() else {
             return locks;
         };
-        if self.speleodb_active_token().is_err() {
+        let Ok((endpoint, _token)) = self.speleodb_active_token() else {
+            return locks;
+        };
+        // [#576 W87b] As the release does: a copy linked to another server than the
+        // one signed in has no release to offer.
+        if crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+            != crate::speleodb::auth::normalize_endpoint(&endpoint)
+        {
             return locks;
         }
         let held = crate::core::SpeleoLockLeftHeld {

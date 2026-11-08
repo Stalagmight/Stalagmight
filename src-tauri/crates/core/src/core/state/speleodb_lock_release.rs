@@ -259,6 +259,27 @@ impl AppState {
                 return None;
             }
         };
+        // [#576 W87b] The release sends the SESSION's token to the session's server
+        // and names the LINK's project, so the two must be the same server. Nothing
+        // that opens the gate compares them: Start editing on a copy linked to
+        // server X while signed in to server Y opens it (`speleodb_commit_editing`
+        // checks the generation and the project id only), and so does a Restore's
+        // reopen after a sign-in to Y landed inside it (`reopen_for_restore`). A
+        // release sent then hands Y's token and X's project id to Y.
+        if crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+            != crate::speleodb::auth::normalize_endpoint(&endpoint)
+        {
+            tracing::warn!(
+                project_id = %link.project_id,
+                link_endpoint = %link.endpoint,
+                session_endpoint = %endpoint,
+                ?intent,
+                purpose = "release a held SpeleoDB write lock",
+                "speleodb: the open project is linked to another server than the one \
+                 signed in; the release is skipped and its lock (if any) is left held"
+            );
+            return None;
+        }
         Some(LockReleaseParams {
             endpoint,
             token,
@@ -875,6 +896,111 @@ mod tests {
         assert!(
             !ordinary_logs.iter().any(|line| line.contains("WARN")),
             "signed out is the ordinary no-op, not a failure to report"
+        );
+    }
+
+    /// [#576 W87b] Nothing that opens the edit gate compares the copy's link with the
+    /// signed-in server: Start editing on a copy linked to server X, while signed in to
+    /// server Y that answers for the same project id, opens it
+    /// (`speleodb_commit_editing` checks the generation and the project id only). Every
+    /// silent release then sent Y's token and X's project id to Y. It is skipped now,
+    /// with a warning, the sign-out prompt offers no release for it, and a link to the
+    /// SAME server spelled another way still releases.
+    #[test]
+    fn a_copy_linked_to_another_server_is_not_released_on_the_signed_in_one() {
+        use crate::core::state::speleodb::{
+            authed_session_at, logged_events, recording_stub, remote_readonly_fixture,
+            HELD_BY_SAME_ACCOUNT_AT_BASE_BODY,
+        };
+        let releases = |seen: &std::sync::Mutex<Vec<String>>| {
+            seen.lock()
+                .map(|lines| {
+                    lines
+                        .iter()
+                        .filter(|r| r.starts_with("POST") && r.contains("/release/"))
+                        .count()
+                })
+                .unwrap_or_default()
+        };
+        // Server Y: the session signs in here. The copy is linked to `http://x/`.
+        let (y, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+        let (_temp, state) = remote_readonly_fixture();
+        *state.speleodb.lock() = authed_session_at(&y);
+        let started = state
+            .speleodb_start_editing()
+            .map(|_| ())
+            .map_err(|e| e.message);
+        let linked_to = state.speleodb_open_link().map(|link| link.endpoint).ok();
+        let gate = (state.edit_enabled(), state.force_editing());
+        let offered = state.speleodb_sign_out_locks().releasable.len();
+        let mut params = (None, None, None);
+        let logs = logged_events(|| {
+            params = (
+                Some(LockReleaseProbe::of(
+                    state.speleodb_held_lock_release_params(),
+                )),
+                Some(LockReleaseProbe::of(
+                    state.speleodb_abandon_lock_release_params(),
+                )),
+                Some(LockReleaseProbe::of(
+                    state.speleodb_delete_lock_release_params(),
+                )),
+            );
+        });
+        // The close's release.
+        state.speleodb_release_held_lock_best_effort();
+        let sent = releases(&seen);
+
+        // The same server spelled another way (scheme case, no trailing slash).
+        let (z, _z_listener, z_seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+        let (_z_temp, same) = remote_readonly_fixture();
+        *same.speleodb.lock() = authed_session_at(&z);
+        let spelled = z.trim_end_matches('/').replacen("http", "HTTP", 1);
+        crate::core::state::speleodb::link_open_copy_to(&same, &spelled);
+        let same_started = same
+            .speleodb_start_editing()
+            .map(|_| ())
+            .map_err(|e| e.message);
+        let same_offered = same.speleodb_sign_out_locks().releasable.len();
+        same.speleodb_release_held_lock_best_effort();
+        let same_sent = releases(&z_seen);
+        println!(
+            "[W87b] linked to {linked_to:?}, signed in to {y}: start editing -> {started:?}, \
+             gate (edit, force) {gate:?}; release params (silent, abandon, delete) {params:?}; \
+             sign-out prompt offers {offered}; release POSTs to the signed-in server {sent}; \
+             logged {logs:?}. Same server as {spelled} vs {z}: start editing -> \
+             {same_started:?}, offered {same_offered}, release POSTs {same_sent}"
+        );
+        assert!(
+            started.is_ok() && gate == (true, false),
+            "premise: Start editing opens the gate over a link to another server"
+        );
+        assert_eq!(
+            linked_to.as_deref(),
+            Some("http://x/"),
+            "premise: linked to X"
+        );
+        assert_eq!(
+            params,
+            (
+                Some(LockReleaseProbe::NoRelease),
+                Some(LockReleaseProbe::NoRelease),
+                Some(LockReleaseProbe::NoRelease)
+            ),
+            "no release is offered to the signed-in server for a copy linked elsewhere"
+        );
+        assert!(
+            logs.iter()
+                .any(|line| line.contains("WARN") && line.contains("linked to another server")),
+            "and the skip says so"
+        );
+        assert_eq!(offered, 0, "the sign-out prompt offers no release for it");
+        assert_eq!(sent, 0, "no release request went to the signed-in server");
+        assert!(same_started.is_ok(), "premise: editing on the same server");
+        assert_eq!(
+            (same_offered, same_sent),
+            (1, 1),
+            "the same server spelled another way is released as before"
         );
     }
 

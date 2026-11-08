@@ -3086,7 +3086,7 @@ pub(super) use landing::Landed;
 // cuts the file at its first top-level `#[cfg(test)]` still sees all of it.
 #[cfg(test)]
 pub(super) use tests::{
-    authed_session_at, editing_fixture, logged_events, recording_stub,
+    authed_session_at, editing_fixture, link_open_copy_to, logged_events, recording_stub,
     remote_fixture_with_dirty_bit, remote_readonly_fixture, routing_stub, FREE_MUTEX_AT_BASE_BODY,
     HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY, HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
 };
@@ -4500,6 +4500,15 @@ mod tests {
     /// The project id `remote_readonly_fixture` links to.
     pub(in crate::core::state) const REMOTE_ID: &str = "11111111-1111-1111-1111-111111111111";
 
+    /// Point the open copy's link at `endpoint`, the test server a session signs in
+    /// to: a silent release hands a lock back only when the link and the session name
+    /// the same server (#576 W87b).
+    pub(in crate::core::state) fn link_open_copy_to(state: &AppState, endpoint: &str) {
+        state
+            .speleodb_mutate_link(|link| endpoint.clone_into(&mut link.endpoint))
+            .expect("point the open copy's link at the test server");
+    }
+
     /// The remote fixture mid-edit-session: the write lock is held (edit gate on,
     /// not force-editing) and a token is available, so the silent release gate has
     /// everything it needs. Clean to start with - the dirty bit is the test's lever.
@@ -4508,10 +4517,11 @@ mod tests {
     /// this fixture stands for a session that TOOK the lock, and that provenance -
     /// not the edit gate - is what licenses the authorship shortcut in
     /// `speleodb_remote_state`. (The session assignment resets it, so it is recorded
-    /// after.)
+    /// after.) The copy is linked to `endpoint`, the server the session signs in to.
     pub(in crate::core::state) fn editing_fixture(endpoint: &str) -> (TempDir, AppState) {
         let (temp, state) = remote_readonly_fixture();
         *state.speleodb.lock() = authed_session_at(endpoint);
+        link_open_copy_to(&state, endpoint);
         state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
         (temp, state)

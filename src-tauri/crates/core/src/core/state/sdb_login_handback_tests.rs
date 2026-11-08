@@ -162,6 +162,7 @@ fn signing_in_as_another_account_hands_an_adopted_lock_back_first() {
         let (b_base, _b_listener, b_seen) = routing_stub(server_b);
         let (_temp, state) = super::speleodb::remote_readonly_fixture();
         *state.speleodb.lock() = authed_session_at(&a_base);
+        super::speleodb::link_open_copy_to(&state, &a_base);
         let polled = state
             .speleodb_link_status()
             .map(|s| s.edit_enabled)

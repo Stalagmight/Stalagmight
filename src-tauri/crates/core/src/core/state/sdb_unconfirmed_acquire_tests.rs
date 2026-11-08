@@ -118,6 +118,7 @@ fn start_lost_unread(
     let (base, listener, seen) = routing_stub(route);
     let (temp, state) = remote_readonly_fixture();
     *state.speleodb.lock() = authed_session_at(&base);
+    super::speleodb::link_open_copy_to(&state, &base);
     let started = state
         .speleodb_start_editing()
         .map(|_| ())
