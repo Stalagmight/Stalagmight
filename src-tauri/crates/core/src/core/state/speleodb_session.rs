@@ -45,6 +45,9 @@
 //!   one boundary the identity check cannot see (the project slot never
 //!   moves), so excluding it from the spans above is what lets the
 //!   fast-forward arm commit on identity alone.
+//! - [#576 W88] The 401 AUTO-DROP (`speleodb_forget`), which ends the session
+//!   without moving the slot either. Met by a call inside a span, it runs in
+//!   that span (`speleodb_lock_ops_held_here`) rather than wait on itself.
 //!
 //! Deliberately held across network I/O - which is exactly why it is
 //! OUTERMOST: nothing that holds `project` / `database` / `undo_stack` may
@@ -60,7 +63,8 @@
 //! 2. A bump means "the session ended or another began": committing a project
 //!    into the slot (open / create / the fast-forward reload), clearing it
 //!    (close, which delete and project-switch route through), and logout
-//!    (which ends the edit session without touching the slot - footgun 5.8).
+//!    (which ends the edit session without touching the slot - footgun 5.8),
+//!    and the 401 auto-drop, for the same reason (#576 W88).
 //! 3. NOT a bump: an undo rollback (`restore_snapshot_into` restores the SAME
 //!    open project - footgun 5.7), and every save (`save_project` never
 //!    replaces the slot; a Save a Copy does not even move `file_path`).
@@ -2275,9 +2279,11 @@ mod tests {
             }
         }
         bumping.sort();
+        // [#576 W88] `speleodb.rs`: the 401 auto-drop (`speleodb_forget`) ends the
+        // session as logout does, so it bumps (rule 2 of the module doc).
         assert_eq!(
             bumping,
-            vec!["session_commit.rs", "speleodb_logout.rs"],
+            vec!["session_commit.rs", "speleodb.rs", "speleodb_logout.rs"],
             "RULE (sanctioned scan, #576 A8-D2 - every slot writer bumps the session or \
              is classified exempt): the bump-site inventory moved; re-derive the \
              session-boundary classification in `speleodb_session` before updating this list"

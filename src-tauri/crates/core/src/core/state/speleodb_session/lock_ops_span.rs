@@ -15,9 +15,45 @@ use crate::speleodb::SpeleoDbError;
 /// or after it closes: the lock order is the type's, not a source scan's. Made only
 /// by [`AppState::speleodb_lock_ops_guard`].
 pub(in crate::core::state) struct LockOpsHeld<'a> {
+    /// [#576 W88] This thread's mark on the span, removed before the guard unlocks
+    /// (fields drop in order).
+    _held_here: HeldHere,
     _guard: std::sync::MutexGuard<'a, ()>,
     /// The state whose span this is: the reads below are ITS reads.
     state: &'a AppState,
+}
+
+std::thread_local! {
+    /// [#576 W88] The states (by address) whose lock-ops span THIS thread holds. A step
+    /// reached both inside a span and outside one - the 401 auto-drop,
+    /// `AppState::speleodb_forget`, met by a call that may run in either - asks it
+    /// whether opening the span would wait on the span its own thread holds (the mutex
+    /// is not reentrant). The guard is not `Send`, so a span opens and ends on one
+    /// thread.
+    static SPANS_HELD_HERE: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// [#576 W88] A span's entry in [`SPANS_HELD_HERE`], for as long as the span lives.
+struct HeldHere(usize);
+
+impl HeldHere {
+    fn mark(state: &AppState) -> Self {
+        let at = std::ptr::from_ref(state).addr();
+        SPANS_HELD_HERE.with(|held| held.borrow_mut().push(at));
+        Self(at)
+    }
+}
+
+impl Drop for HeldHere {
+    fn drop(&mut self) {
+        SPANS_HELD_HERE.with(|held| {
+            let mut held = held.borrow_mut();
+            if let Some(at) = held.iter().rposition(|state| *state == self.0) {
+                held.swap_remove(at);
+            }
+        });
+    }
 }
 
 /// [#576 A8] A value read INSIDE the lock-ops span. Made only by the span's own
@@ -98,9 +134,18 @@ impl AppState {
     /// doc). A poisoned mutex is recovered: the guarded value is `()`, so there
     /// is no state to protect - only the serialization matters.
     pub(in crate::core::state) fn speleodb_lock_ops_guard(&self) -> LockOpsHeld<'_> {
+        let guard = self.speleodb_lock_ops.lock();
         LockOpsHeld {
-            _guard: self.speleodb_lock_ops.lock(),
+            _held_here: HeldHere::mark(self),
+            _guard: guard,
             state: self,
         }
+    }
+
+    /// [#576 W88] Whether THIS thread holds this state's lock-ops span, so a step
+    /// that may run inside it runs there instead of waiting on itself.
+    pub(in crate::core::state) fn speleodb_lock_ops_held_here(&self) -> bool {
+        let at = std::ptr::from_ref(self).addr();
+        SPANS_HELD_HERE.with(|held| held.borrow().contains(&at))
     }
 }

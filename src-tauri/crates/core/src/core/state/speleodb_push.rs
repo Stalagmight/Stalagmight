@@ -2142,10 +2142,11 @@ mod update_restore {
         /// Restore the captured session after the reload, and hand back the local path.
         ///
         /// [#576 B35(a)] Reopen only for the session that ran the download: the span
-        /// keeps logout and login out, but a 401 auto-drop on a concurrent call
-        /// (`speleodb_forget`) takes no guard and can end the session during the
-        /// reload. Then through the commit Start editing uses, which also refuses when
-        /// the open project is no longer this one (a switch during the download).
+        /// keeps logout and login out, and since #576 W88 a 401 auto-drop on a
+        /// concurrent call (`speleodb_forget`) too, but one met by the download
+        /// itself ends the session inside this span. Then through the commit Start
+        /// editing uses, which also refuses when the open project is no longer this
+        /// one (a switch during the download).
         ///
         /// [#576 NF-W10BE-2] The commit runs under the capture's span, the one the
         /// pre-reload state was read in: there is no span parameter to pass another.
@@ -2753,9 +2754,10 @@ mod update_restore_tests {
         );
     }
 
-    /// [#576 B35(a)] A session that ended during the reload - a 401 auto-drop takes no
-    /// guard - must not get editing back: the restore re-reads the account AFTER the
-    /// reload and reopens only for the session that ran the download.
+    /// [#576 B35(a)] A session that ended during the reload - a 401 auto-drop met
+    /// inside the span (#576 W88), run here on the span's own thread - must not get
+    /// editing back: the restore re-reads the account AFTER the reload and reopens only
+    /// for the session that ran the download.
     #[test]
     fn the_update_cannot_reopen_editing_for_a_session_that_ended_mid_reload() {
         let (_dir, state) = session(false, true);

@@ -1428,7 +1428,31 @@ impl AppState {
     /// reconciles. (This is the AppState auto-drop sink; `Session::forget` is left
     /// untouched so the login switch-account path does not spuriously close the
     /// gate.)
+    ///
+    /// [#576 W88] A lock operation, as logout is: it ends the session, so it runs in
+    /// the lock-ops span and bumps the session generation, in that order. It took
+    /// neither, and so landed inside an in-flight Start editing - between its account
+    /// read and its commit - whose commit then opened the gate for a session that was
+    /// gone. A 401 met INSIDE a span (Start editing's acquire, a release verb, the
+    /// fast-forward's download) runs in that span; taking it again would wait on itself.
     pub(super) fn speleodb_forget(&self) {
+        if self.speleodb_lock_ops_held_here() {
+            self.speleodb_forget_in_span();
+        } else {
+            let _lock_ops = self.speleodb_lock_ops_guard();
+            self.speleodb_forget_in_span();
+        }
+    }
+
+    /// [`Self::speleodb_forget`]'s body, inside the lock-ops span.
+    fn speleodb_forget_in_span(&self) {
+        // [#576 W88] A session boundary, as logout's (footgun 5.8): a Start editing
+        // that read the token being forgotten must not commit over it. Under a brief
+        // `project` acquisition, per the `speleodb_session` rule.
+        {
+            let _proj_guard = self.project.lock();
+            self.bump_speleodb_session();
+        }
         // Drop the transient edit gate for a remote edit session. A dead token
         // surfaces as a 401 on ANY SpeleoDB call (e.g. a background list_projects /
         // refresh), and this is the auto-drop sink for all of them - so an
