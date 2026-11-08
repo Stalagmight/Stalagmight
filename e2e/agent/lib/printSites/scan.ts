@@ -27,7 +27,9 @@
  *   `createWriteStream`, `writeSync` / `writevSync` / `fs.write` / `fs.writev`
  *   to another descriptor, a `.write` / `.end` on a stream one opened, a
  *   `.write` / `.writev` / `.writeFile` / `.appendFile` on a FileHandle one
- *   opened (`fs.promises.open`, or handed to a `.then` callback), and the copies
+ *   opened (`fs.promises.open`, or `open` under another name: `const o =
+ *   fsp.open`), handed to a `.then` callback, or handed to a function of the
+ *   same file (below), and the copies
  *   `copyFileSync`, `copyFile`, `cpSync`; each taken from fs by another name too
  *   (`const { writeFileSync: w } = fs`, `import { copyFile as c } from 'fs'`);
  * - `passthrough`: a child process's `stdio` (or `stdout` / `stderr` option)
@@ -47,6 +49,26 @@
  * `.length`, arithmetic, comparisons and `Math.*` are numbers and need no reason. A value is marked folded inside a `FOLDS` call, in a line
  * the runner projects (it folds every line), or as the parameter of a function a
  * `FOLDING_CALLBACKS` helper calls.
+ *
+ * A file stream or a FileHandle is followed by the name it is held in, file-wide
+ * (a closure that names it is read by that name). A FileHandle, or fs/promises'
+ * `open`, handed to a function of the same file is followed one level further
+ * (#576 W78-NF): to the parameter it is given, of the function declaration or
+ * `const` arrow or function expression the call names (`doWrite(fh)`,
+ * `doWrite(await fsp.open(p))`, `writeWith(fsp.open)`, `fsp.open(p).then(writeIt)`),
+ * so that parameter's writes are the handle's. Not followed, so a write that way
+ * passes the guard unseen: a function of another file; a method (`this.write(fh)`,
+ * `obj.write(fh)`); a function handed to a wrapper that calls it with the handle
+ * (`withHandle(p, writeIt)`, whose `use(fh)` calls a parameter); a handle, or a
+ * function that takes one, stored in an object or an array and used later
+ * (`box.fh.write(..)`, `jobs.forEach((job) => job(fh))`), or a promise of one held
+ * in a name (`pending.then(writeIt)`); a destructured or rest parameter, or an
+ * argument after a spread; a function bound or wrapped (`.then(writeIt.bind(x))`);
+ * and a parameter handed on again to another function, more than one level (one
+ * that hands it to itself, recursing, is the same parameter). The names are read
+ * in one pass in source order, so a chain whose caller is written before its
+ * callees can happen to be followed further; nothing relies on that.
+ * `printSites.test.ts` pins some of these as uncovered.
  *
  * Code inside a function handed to the page (`browser.execute(...)` and the
  * like) runs in the app's webview, not here: its `console.*` is the app's
@@ -618,15 +640,66 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
       : ts.isIdentifier(callee) && fsWrites.has(callee.text);
   /** fs or fs/promises, under any name the file gives it. */
   const isFsModule = (expr: ts.Expression): boolean => ['fs', 'fs/promises'].includes(moduleOf(expr) ?? '');
+  /** fs/promises' `open` itself: `fsp.open`, `fs.promises.open`, `open` taken from it, or another name for one (#576 W78-NF). */
+  const isOpen = (expr: ts.Expression): boolean =>
+    ts.isPropertyAccessExpression(expr)
+      ? expr.name.text === 'open' && moduleOf(expr.expression) === 'fs/promises'
+      : ts.isIdentifier(expr) && fsOpens.has(expr.text);
   /** `await fs.promises.open(..)`, `fsp.open(..)`, `open(..)` taken from fs/promises: a FileHandle. */
   const opensHandle = (expr: ts.Expression): boolean => {
     let at = expr;
     while (ts.isAwaitExpression(at) || ts.isParenthesizedExpression(at)) at = at.expression;
-    if (!ts.isCallExpression(at)) return false;
-    const callee = at.expression;
-    if (ts.isPropertyAccessExpression(callee)) return callee.name.text === 'open' && moduleOf(callee.expression) === 'fs/promises';
-    return ts.isIdentifier(callee) && fsOpens.has(callee.text);
+    return ts.isCallExpression(at) && isOpen(at.expression);
   };
+  /**
+   * The function a name calls, declared in this file in a scope that encloses the call: a function
+   * declaration, or a `const` arrow function or function expression, if that scope declares the name once
+   * and no parameter between hides it (#576 W78-NF).
+   */
+  const localFunction = (id: ts.Identifier): ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | undefined => {
+    for (let scope: ts.Node | undefined = id.parent; scope; scope = scope.parent) {
+      if (ts.isFunctionLike(scope) && scope.parameters.some((param) => ts.isIdentifier(param.name) && param.name.text === id.text)) return undefined;
+      if (!(ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isCaseClause(scope) || ts.isModuleBlock(scope))) continue;
+      const found: ts.Node[] = [];
+      for (const statement of scope.statements) {
+        if (ts.isFunctionDeclaration(statement) && statement.body && statement.name?.text === id.text) found.push(statement);
+        if (!ts.isVariableStatement(statement)) continue;
+        const constant = (statement.declarationList.flags & ts.NodeFlags.Const) !== 0;
+        for (const decl of statement.declarationList.declarations) {
+          // Any other declaration of the name hides the functions outside.
+          if (ts.isIdentifier(decl.name) && decl.name.text === id.text) found.push(constant && decl.initializer ? decl.initializer : decl);
+        }
+      }
+      if (found.length > 1) return undefined;
+      const [only] = found;
+      if (only) return ts.isFunctionDeclaration(only) || ts.isArrowFunction(only) || ts.isFunctionExpression(only) ? only : undefined;
+    }
+    return undefined;
+  };
+  /**
+   * A call of a function of this file (`doWrite(fh)`, `writeWith(fsp.open)`): the parameter each argument
+   * `is` holds for is noted in `names`, so that inside it stands for what it was given (#576 W78-NF). One
+   * level: by name, as the handles are, and only what the pass has already noted by the call.
+   */
+  const handOn = (call: ts.CallExpression, is: (arg: ts.Expression) => boolean, names: Set<string>): void => {
+    const callee = ts.isIdentifier(call.expression) && call.arguments.some(is) ? localFunction(call.expression) : undefined;
+    if (!callee) return;
+    for (let i = 0; i < call.arguments.length; i++) {
+      const arg = call.arguments[i];
+      // After a spread no argument is known to be at its parameter.
+      if (!arg || ts.isSpreadElement(arg)) return;
+      const param = callee.parameters[i];
+      if (param && !param.dotDotDotToken && ts.isIdentifier(param.name) && is(arg)) names.add(param.name.text);
+    }
+  };
+  // open under another name (`const o = fsp.open`), or handed to a function of this file (`writeWith(fsp.open)`):
+  // that name, or the parameter it is given, opens a FileHandle too (#576 W78-NF). Before the handles below,
+  // so that a handle the parameter opens is one.
+  source.forEachChild(function opens(node: ts.Node): void {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && isOpen(node.initializer)) fsOpens.add(node.name.text);
+    if (ts.isCallExpression(node)) handOn(node, isOpen, fsOpens);
+    node.forEachChild(opens);
+  });
 
   // What a file stream is held in (`const log = fs.createWriteStream(..)`, `this.driverLog = ..`):
   // its `.write(..)` calls are writes to that file. And what a FileHandle is held in
@@ -648,12 +721,16 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     // Or another name for one (`const driverLog = this.driverLog`), declared after it.
     if (holder && init && (opens || fileStreams.has(text(init)))) fileStreams.add(text(holder));
     if (holder && init && (opensHandle(init) || fileHandles.has(text(init)))) fileHandles.add(text(holder));
-    // Or the handle a callback is given (`fsp.open(p).then((fh) => fh.write(..))`, #576 W74-NF1).
+    // Or the handle a callback is given (`fsp.open(p).then((fh) => fh.write(..))`, #576 W74-NF1), written
+    // inline or a function of this file (`.then(writeIt)`, #576 W78-NF).
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'then' && opensHandle(node.expression.expression)) {
       const callback = node.arguments[0];
-      const param = callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) ? callback.parameters[0] : undefined;
+      const inline = callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) ? callback : undefined;
+      const param = (inline ?? (callback && ts.isIdentifier(callback) ? localFunction(callback) : undefined))?.parameters[0];
       if (param && ts.isIdentifier(param.name)) fileHandles.add(param.name.text);
     }
+    // Or the parameter a handle is handed to, of a function of this file (`doWrite(fh)`, `doWrite(await fsp.open(p))`, #576 W78-NF).
+    if (ts.isCallExpression(node)) handOn(node, (arg) => fileHandles.has(text(arg)) || opensHandle(arg), fileHandles);
     node.forEachChild(holders);
   });
 

@@ -566,6 +566,124 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
     expect([...quiet.unchecked, ...quiet.unlisted]).toEqual([]);
   });
 
+  // A FileHandle, or fs/promises' open, handed to a function of the same file (#576 W78-NF): one level, by name.
+  const fspImport = "import * as fsp from 'node:fs/promises';";
+  /** One source, `m.ts`, a line each. */
+  const lines = (...source: string[]): Record<string, string> => ({ 'm.ts': source.map((line) => `${line}\n`).join('') });
+  const writeItThen = lines(fspImport, 'async function writeIt(h) {', '  await h.write(station.name);', '}', "fsp.open(p, 'w').then(writeIt);");
+  const shareableReport = { class: 'shareable' as const, what: 'report.md', reason: 'pasted into public issues' };
+  // Each probe: a label, its sources, what the guard reports, and the lists it is checked against.
+  const handedOn: [string, Record<string, string>, string[], Partial<SiteGroup>?][] = [
+    // A `.then` given a function of this file rather than one written inline.
+    ['open().then(writeIt), a function declaration', writeItThen, ['m.ts:3 writeIt -> <handle h>']],
+    [
+      'open().then(writeIt), a const arrow',
+      lines(fspImport, 'const writeIt = async (h) => {', '  await h.writev([station.name]);', '};', "fsp.open(p, 'w').then(writeIt);"),
+      ['m.ts:3 writeIt -> <handle h>'],
+    ],
+    [
+      'open().then(writeIt), a const function expression writing with writeFile',
+      lines('const writeIt = function (h) {', '  return h.writeFile(station.name);', '};', "fs.promises.open(p, 'w').then(writeIt);"),
+      ['m.ts:2 writeIt -> <handle h>'],
+    ],
+    // A handle handed to a function of this file: declared after its call or before it, at any argument.
+    [
+      'doWrite(fh), declared after the call',
+      lines(fspImport, "const fh = await fsp.open(p, 'w');", 'await doWrite(fh);', 'async function doWrite(out) {', '  await out.write(station.name);', '}'),
+      ['m.ts:5 doWrite -> <handle out>'],
+    ],
+    [
+      'doWrite(x, fh), a const arrow declared before, called in a function',
+      lines(fspImport, 'const doWrite = async (text, out) => out.write(text);', 'async function main() {', "  const fh = await fsp.open(p, 'w');", '  await doWrite(station.name, fh);', '}'),
+      ['m.ts:2 doWrite -> <handle out>'],
+    ],
+    [
+      'doWrite(await open())',
+      lines(fspImport, 'async function doWrite(out) {', '  await out.write(station.name);', '}', "await doWrite(await fsp.open(p, 'w'));"),
+      ['m.ts:3 doWrite -> <handle out>'],
+    ],
+    [
+      'open().then((fh) => doWrite(fh))',
+      lines(fspImport, 'async function doWrite(out) {', '  await out.write(station.name);', '}', "fsp.open(p, 'w').then((fh) => doWrite(fh));"),
+      ['m.ts:3 doWrite -> <handle out>'],
+    ],
+    [
+      'writeAll(await open(), xs), recursing with its parameter',
+      lines(fspImport, 'async function writeAll(h, items) {', '  if (items.length === 0) return;', '  await h.write(items[0]);', '  await writeAll(h, items.slice(1));', '}', "await writeAll(await fsp.open(p, 'w'), station.names);"),
+      ['m.ts:4 writeAll -> <handle h>'],
+    ],
+    // open under another name.
+    [
+      'const o = fsp.open; (await o(p)).write(x)',
+      lines(fspImport, 'const o = fsp.open;', "(await o(p, 'w')).write(station.name);"),
+      ["m.ts:3 <module> -> <handle (await o(p, 'w'))>"],
+    ],
+    [
+      'const o = fs.promises.open; const fh = await o(p)',
+      lines('const o = fs.promises.open;', "const fh = await o(p, 'w');", 'await fh.write(station.name);'),
+      ['m.ts:3 <module> -> <handle fh>'],
+    ],
+    [
+      "import { open } from 'node:fs/promises'; const o = open",
+      lines("import { open } from 'node:fs/promises';", 'const o = open;', "const fh = await o(p, 'w');", 'await fh.write(station.name);'),
+      ['m.ts:4 <module> -> <handle fh>'],
+    ],
+    // open handed to a function of this file, which opens with its parameter.
+    [
+      'writeWith(fsp.open)',
+      lines(fspImport, 'async function writeWith(openFile) {', "  const fh = await openFile(p, 'w');", '  await fh.write(station.name);', '}', 'await writeWith(fsp.open);'),
+      ['m.ts:4 writeWith -> <handle fh>'],
+    ],
+    [
+      'writeWith(o), o an alias of open',
+      lines(fspImport, 'const o = fsp.open;', "const writeWith = async (openFile) => (await openFile(p, 'w')).write(station.name);", 'await writeWith(o);'),
+      ["m.ts:3 writeWith -> <handle (await openFile(p, 'w'))>"],
+    ],
+    // A closure that names the handle is read by that name, file-wide, as every held handle is (before #576 W78-NF too).
+    [
+      'a closure kept for later that names the handle',
+      lines(fspImport, "const fh = await fsp.open(p, 'w');", 'const later = () => fh.write(station.name);', 'await later();'),
+      ['m.ts:3 later -> <handle fh>'],
+    ],
+    // Listed under the handle, what the function writes through it is checked.
+    ['open().then(writeIt), listed', writeItThen, ['m.ts:3 [file] writeIt: station.name'], { fileSinks: { 'm.ts': { 'writeIt -> <handle h>': shareableReport } } }],
+    // Not a sink: a function of this file handed something that is not a handle, or reading through one.
+    [
+      'not a sink: doWrite(child.stdin), open().then(readIt)',
+      lines(fspImport, 'async function doWrite(out) {', '  await out.write(station.name);', '}', 'await doWrite(child.stdin);', 'async function readIt(h) {', '  await h.read(buffer);', '}', 'fsp.open(p).then(readIt);'),
+      [],
+    ],
+    // UNCOVERED, a documented limit (scan.ts' header, docs/agent-harness.md): pinned so a change that follows one notices.
+    [
+      'UNCOVERED: a FileHandle handed to a function of another file',
+      {
+        'w.ts': 'export async function writeIt(h) {\n  await h.write(station.name);\n}\n',
+        'm.ts': `${fspImport}\nimport { writeIt } from './w';\nconst fh = await fsp.open(p, 'w');\nawait writeIt(fh);\n`,
+      },
+      [],
+    ],
+    [
+      'UNCOVERED: a higher-order wrapper handing its FileHandle to the function it was given',
+      lines(fspImport, 'async function withHandle(file, use) {', "  const fh = await fsp.open(file, 'w');", '  return use(fh);', '}', 'async function writeIt(h) {', '  await h.write(station.name);', '}', 'await withHandle(p, writeIt);'),
+      [],
+    ],
+    [
+      'UNCOVERED: a FileHandle handed to a method',
+      lines(fspImport, 'class Out {', '  async put(h) {', '    await h.write(station.name);', '  }', '  async run() {', "    await this.put(await fsp.open(p, 'w'));", '  }', '}'),
+      [],
+    ],
+    ['UNCOVERED: a FileHandle stored in an object', lines("const fh = await fs.promises.open(p, 'w');", 'const box = { fh };', 'await box.fh.write(station.name);'), []],
+    [
+      'UNCOVERED: a FileHandle handed on a second time (two levels), the callees written first',
+      lines(fspImport, 'async function inner(g) {', '  await g.write(station.name);', '}', 'async function outer(h) {', '  await inner(h);', '}', "const fh = await fsp.open(p, 'w');", 'await outer(fh);'),
+      [],
+    ],
+  ];
+  it.each(handedOn)('follows a FileHandle or open handed to a function of the same file (#576 W78-NF): %s', (_label, sources, expected, group) => {
+    const result = check(sources, group);
+    expect([...result.unchecked, ...result.unlisted]).toEqual(expected);
+  });
+
   it("does not take the console's type under a qualified name for the console handed on (#576 W74-NF3)", () => {
     const quiet = check({ 'm.ts': 'type C = typeof globalThis.console;\ntype D = typeof x.console;\ntype L = typeof console.log;\n' });
     expect([...quiet.unchecked, ...quiet.unlisted]).toEqual([]);

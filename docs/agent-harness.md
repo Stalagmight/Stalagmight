@@ -1254,7 +1254,18 @@ locations:
   exported. The guard trusts a helper by its name and a reason by its words:
   that a helper returns the shareable form, and that a value comes from where
   its reason says, is held by behaviour tests (`scripts/generators.test.ts`
-  for `report.md`, the helpers' own tests in `e2e/agent/lib/`).
+  for `report.md`, the helpers' own tests in `e2e/agent/lib/`). A file
+  stream or a FileHandle is followed by the name it is held in, and a
+  FileHandle or fs/promises' `open` handed to a function of the same file
+  one level further, to the parameter it is given (`doWrite(fh)`,
+  `writeWith(fsp.open)`, `fsp.open(p).then(writeIt)`, and `open` under
+  another name, `const o = fsp.open`; #576 W78-NF). It is not followed into
+  a function of another file, a method, a function a wrapper is handed and
+  calls with it (`withHandle(p, writeIt)`), an object or array it is stored
+  in, a bound or wrapped function, or a second hand-on to another function:
+  a write that way passes the guard unseen, so a clean scan is no proof that
+  none exists. `scan.ts`' header has the full list, and
+  `printSites.test.ts` pins some of them as uncovered.
 
 **Not for sharing** - the full text, for triage where the run happened: the
 session's `actions.jsonl` (each `finding` event with its detail, each
