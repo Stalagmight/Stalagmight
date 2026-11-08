@@ -358,6 +358,9 @@ export const GROUP: SiteGroup = {
       'readSig: dir': "the --dir the caller gave: release.yml's repo-relative release-artifacts directory",
       'readSig: path.join(dir, sigFile)':
         'the repo-relative path of a release artifact signature: the --dir the caller gave and the artifact file name the bundler built',
+      'notMinisign: label': "a platform label from the generator's own PLATFORMS table",
+      'notMinisign: why':
+        "the generator's own fixed wording for which minisign check the release signature failed (a missing header, a bad signature line, ...)",
       'buildManifest: version': 'the --version the caller gave: the release version from the tag release.yml builds',
       'buildManifest: tag': 'the --tag the caller gave: the git tag release.yml builds',
       'buildManifest: plat.label': "a platform label from the generator's own PLATFORMS table",
