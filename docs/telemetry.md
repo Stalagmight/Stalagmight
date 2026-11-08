@@ -359,7 +359,11 @@ list/map, toolbar, hamburger, keyboard, empty-state) and `peekProjectActionSourc
 is applied at each terminal command. It is `peek` (not consumed) so multi-command
 flows (e.g. DMP import = `create_project_full` + `import_sections`) all attribute
 to the same entry point, and it is cleared on `setView('single')` (flow complete)
-and on file-picker cancel. Project opens - which bypass the tracked `invokeIpc` via
+and on file-picker cancel. A routed file (`routeOpenedFile`) that ends with nothing
+handed on drops it too, but only the setting it started with
+(`projectActionSourceSetting` / `clearProjectActionSourceSetAt`): a route dropped
+while it waited, because a newer request won, leaves the source that newer request
+set (#576 FUZZ-MERGE-NF). Project opens - which bypass the tracked `invokeIpc` via
 the raw binary `load_project_full_binary` invoke - are explicitly counted as
 `command.load_project_full[:source]` inside `loadProject`.
 

@@ -3956,7 +3956,8 @@
       "release": "Release and sign out",
       "keep_one": "Keep lock and sign out",
       "keep_other": "Keep locks and sign out",
-      "signOut": "Sign out"
+      "signOut": "Sign out",
+      "editPending": "An edit is still being applied. Try again in a moment."
     },
     "storageChoice": {
       "title": "Where should your API key be kept?",

@@ -52,6 +52,8 @@ let _sourceTimer: ReturnType<typeof setTimeout> | null = null;
  * (setView('single')) or is cancelled.
  */
 let _pendingProjectSource: SourceName | null = null;
+/** Counts every {@link setProjectActionSource}, so a clear can name the setting it is for. */
+let _pendingProjectSourceSetting = 0;
 
 /** Dialog completion flag - set before closeDialog() in success paths. */
 let _dialogCompleted: string | null = null;
@@ -235,6 +237,22 @@ export function consumeSource(): string {
  */
 export function setProjectActionSource(source: SourceName): void {
   _pendingProjectSource = source;
+  _pendingProjectSourceSetting += 1;
+}
+
+/**
+ * [#576 FUZZ-MERGE-NF] Which setting of the pending source is current. A flow that
+ * drops the source on its way out reads this when it starts and hands it to
+ * {@link clearProjectActionSourceSetAt}, so a newer request that set its own source
+ * meanwhile keeps it.
+ */
+export function projectActionSourceSetting(): number {
+  return _pendingProjectSourceSetting;
+}
+
+/** Clear the pending source only if nothing set another since `setting` was read. */
+export function clearProjectActionSourceSetAt(setting: number): void {
+  if (_pendingProjectSourceSetting === setting) _pendingProjectSource = null;
 }
 
 /** Read the pending project-action source without clearing it (multi-command flows). */

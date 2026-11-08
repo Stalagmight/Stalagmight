@@ -42,7 +42,7 @@ import { isEditingBlockedNow } from '../hooks/useEditingBlocked';
 import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
-import { clearProjectActionSource } from './telemetry';
+import { clearProjectActionSource, clearProjectActionSourceSetAt, projectActionSourceSetting } from './telemetry';
 import { needsSpeleoHandBackPrompt, settleEditsBeforeHandBack } from './quit';
 import { openPendingImport, type PendingImport } from './pendingImport';
 import { TOAST_KEYS } from './toastKeys';
@@ -251,6 +251,11 @@ export async function routeOpenedFile(
   // fresh `dialogData`, so its identity names the instance). A parse that settles
   // after either moved is a late result and is dropped.
   const session = projectSessionEpoch();
+  // [#576 FUZZ-MERGE-NF] The entry-point source this route was asked with (its caller
+  // set it just before): the finally drops only that one, so a route dropped while it
+  // waited (superseded, or its parse late) does not clear the source a newer request
+  // set meanwhile.
+  const sourceSetting = projectActionSourceSetting();
   // Taken once this route passes the gates (below), before anything reads
   // `stillWanted`; 0 means it never did (the finally then has no mark to clear).
   let token = 0;
@@ -658,7 +663,7 @@ export async function routeOpenedFile(
   } finally {
     // Only this route's own mark: a newer one (a caller past the gate) keeps its.
     if (token !== 0 && useUIStore.getState().importParse?.token === token) ui.setImportParse(null);
-    if (!handedOff) clearProjectActionSource();
+    if (!handedOff) clearProjectActionSourceSetAt(sourceSetting);
   }
 }
 

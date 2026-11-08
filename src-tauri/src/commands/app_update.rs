@@ -300,6 +300,34 @@ fn self_update_refusal(bundle: Option<BundleType>, release_build: bool) -> Optio
     ))
 }
 
+/// [#576 FUZZ-MERGE-NF] Why a test-harness session may not check for updates, or
+/// `None` when it may.
+///
+/// The agent harness starts every app with `STALAGMIGHT_TEST_HOOKS=1`
+/// (`e2e/agent/session.ts`, `sessionMac.ts`) and runs a debug build, which
+/// [`self_update_refusal`] lets check as an unmarked binary: each harness launch
+/// with `update_check_enabled` asked GitHub for the manifest. Refused before the
+/// updater is built, so nothing is sent, unless `update_url` ([`UPDATE_URL_ENV`],
+/// blank counts as unset) names a manifest on purpose - a local-manifest test.
+///
+/// Two layers, as `commands::launch::single_instance_enabled`: `harness_build`
+/// is `cfg!(any(debug_assertions, feature = "e2e"))` at the call site, so a
+/// release binary ignores the variable. Pure so every answer is testable from a
+/// debug test build.
+fn harness_update_refusal(
+    harness_build: bool,
+    test_hooks: Option<&std::ffi::OsStr>,
+    update_url: Option<&str>,
+) -> Option<String> {
+    let harness = harness_build && test_hooks == Some(std::ffi::OsStr::new("1"));
+    (harness && resolve_override(update_url, false).is_none()).then(|| {
+        format!(
+            "Update checks are off in a test-harness session (STALAGMIGHT_TEST_HOOKS=1); set \
+             {UPDATE_URL_ENV} to check against a manifest"
+        )
+    })
+}
+
 /// Is this a manifest URL a release build may fetch?
 ///
 /// https, and `github.com` exactly - not a suffix match, which would accept
@@ -539,6 +567,10 @@ fn restore_bytes_if_current(update_state: &AppUpdateState, generation: u64, byte
 /// main thread) and answers a [`CommandError`]: `FAILED`, with the message
 /// below. The frontend routes on none of them - a failed check goes quietly to
 /// idle - so no update code of its own is needed.
+///
+/// [#576 FUZZ-MERGE-NF] A test-harness session (`STALAGMIGHT_TEST_HOOKS=1` in a
+/// debug or `e2e` build) is refused first, with nothing sent, unless
+/// [`UPDATE_URL_ENV`] names a manifest ([`harness_update_refusal`]).
 #[tauri::command]
 pub async fn check_for_app_update<R: Runtime>(
     app: AppHandle<R>,
@@ -548,6 +580,15 @@ pub async fn check_for_app_update<R: Runtime>(
 
 /// [`check_for_app_update`]'s body.
 async fn check<R: Runtime>(app: &AppHandle<R>) -> Result<AppUpdateCheck, String> {
+    // [#576 FUZZ-MERGE-NF] First, before the updater is asked anything: a harness
+    // session sends nothing (the frontend goes quietly idle on the refusal).
+    if let Some(refusal) = harness_update_refusal(
+        cfg!(any(debug_assertions, feature = "e2e")),
+        std::env::var_os("STALAGMIGHT_TEST_HOOKS").as_deref(),
+        std::env::var(UPDATE_URL_ENV).ok().as_deref(),
+    ) {
+        return Err(refusal);
+    }
     let update_state = app.state::<AppUpdateState>();
     // The plugin is not registered without a pubkey (see `updater_configured`),
     // and `updater_builder()` PANICS on its unmanaged state - so this guard is
@@ -862,7 +903,10 @@ fn install_and_restart<R: Runtime>(app: &AppHandle<R>) -> Result<(), CommandErro
 #[expect(
     clippy::expect_used,
     clippy::panic,
-    reason = "test fixtures fail loudly; one test panics a holder to POISON the cell on purpose"
+    clippy::print_stdout,
+    reason = "test fixtures fail loudly; one test panics a holder to POISON the cell on purpose; \
+              the launch-check tests print what each child process did, the evidence a run \
+              captures"
 )]
 mod tests {
     use super::*;
@@ -1136,6 +1180,147 @@ mod tests {
         }
         assert!(self_update_refusal(None, true).is_some());
         assert_eq!(self_update_refusal(None, false), None);
+    }
+
+    // Test-harness sessions (#576 FUZZ-MERGE-NF). The check reads the process
+    // environment, so each case runs `check` in a process of its own: the tests
+    // re-run this test binary on the ignored, env-gated body below.
+
+    /// The environment variable that marks the child process.
+    const LAUNCH_CHILD_ENV: &str = "STALAGMIGHT_W90_LAUNCH_CHECK_CHILD";
+    /// The child body's full test name, for the child's exact filter.
+    const LAUNCH_CHILD_TEST: &str =
+        "commands::app_update::tests::a_launch_check_in_a_process_of_its_own";
+    /// What the child prints its outcome after.
+    const LAUNCH_REPORT: &str = "LAUNCH CHECK: ";
+
+    /// Run the real `check` in a child process with exactly this harness switch and
+    /// manifest override, and answer how far it got: `refused: ...`, or `went on to
+    /// the updater: ...` - the step that sends the request, which a mock app (no
+    /// updater plugin) panics in.
+    fn launch_check_in_a_child(test_hooks: Option<&str>, update_url: Option<&str>) -> String {
+        let exe = std::env::current_exe().expect("this test binary");
+        let mut child = std::process::Command::new(exe);
+        child
+            .args([
+                LAUNCH_CHILD_TEST,
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(LAUNCH_CHILD_ENV, "1")
+            .env_remove("STALAGMIGHT_TEST_HOOKS")
+            .env_remove(UPDATE_URL_ENV);
+        if let Some(value) = test_hooks {
+            child.env("STALAGMIGHT_TEST_HOOKS", value);
+        }
+        if let Some(value) = update_url {
+            child.env(UPDATE_URL_ENV, value);
+        }
+        let output = child.output().expect("run the child process");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "the child body ran and passed:\n{stdout}\n{stderr}"
+        );
+        // Anywhere in the line: libtest prints the test's name on the line its
+        // output starts on.
+        let report = stdout
+            .lines()
+            .find_map(|line| line.split_once(LAUNCH_REPORT).map(|(_, report)| report))
+            .expect("the child reports its check")
+            .to_owned();
+        println!(
+            "STALAGMIGHT_TEST_HOOKS={test_hooks:?}, {UPDATE_URL_ENV}={update_url:?}: {report}"
+        );
+        report
+    }
+
+    #[test]
+    #[ignore = "the child-process body of the harness launch-check tests: it reads the \
+                process environment, so it runs only in a process of its own"]
+    fn a_launch_check_in_a_process_of_its_own() {
+        if std::env::var_os(LAUNCH_CHILD_ENV).is_none() {
+            println!("not in the child process ({LAUNCH_CHILD_ENV} unset): nothing to do");
+            return;
+        }
+        let _cfg = crate::test_helpers::isolated_config();
+        let app = tauri::test::mock_app();
+        app.manage(AppUpdateState::default());
+        app.manage(AppState::new().expect("the app state"));
+        let handle = app.handle().clone();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tauri::async_runtime::block_on(check(&handle))
+        }));
+        let report = match outcome {
+            Ok(Ok(found)) => format!("checked: {found:?}"),
+            Ok(Err(refusal)) => format!("refused: {refusal}"),
+            Err(panic) => format!(
+                "went on to the updater: {}",
+                panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("a panic")
+            ),
+        };
+        println!("{LAUNCH_REPORT}{report}");
+    }
+
+    /// The agent harness's session (`STALAGMIGHT_TEST_HOOKS=1`, a debug build) is
+    /// refused before the updater is built, so nothing is sent to GitHub.
+    #[test]
+    fn a_harness_session_never_checks_for_updates() {
+        let report = launch_check_in_a_child(Some("1"), None);
+        assert!(
+            report.starts_with("refused: ") && report.contains("STALAGMIGHT_TEST_HOOKS"),
+            "the check is refused before the network, naming the harness switch: {report}"
+        );
+    }
+
+    /// The predicate itself, for the answers a debug test process cannot be launched
+    /// into: a release binary ignores the switch, and a blank override names no
+    /// manifest.
+    #[test]
+    fn only_a_harness_build_with_the_switch_and_no_manifest_is_refused() {
+        use std::ffi::OsStr;
+        let hooks = Some(OsStr::new("1"));
+        assert!(harness_update_refusal(true, hooks, None).is_some());
+        assert!(harness_update_refusal(true, hooks, Some("  ")).is_some());
+        assert_eq!(harness_update_refusal(false, hooks, None), None);
+        assert_eq!(
+            harness_update_refusal(true, hooks, Some("http://127.0.0.1:9/latest.json")),
+            None
+        );
+        for other in ["0", "true", "", "1 "] {
+            assert_eq!(
+                harness_update_refusal(true, Some(OsStr::new(other)), None),
+                None,
+                "STALAGMIGHT_TEST_HOOKS={other:?} is not the harness switch"
+            );
+        }
+        assert_eq!(harness_update_refusal(true, None, None), None);
+    }
+
+    /// A harness session that names a manifest on purpose (a local-manifest test)
+    /// still checks; so does a debug launch without the harness switch, or with a
+    /// value that is not it.
+    #[test]
+    fn a_named_manifest_or_an_ordinary_launch_still_checks() {
+        for (test_hooks, update_url) in [
+            (Some("1"), Some("http://127.0.0.1:9/latest.json")),
+            (None, None),
+            (Some("0"), None),
+        ] {
+            let report = launch_check_in_a_child(test_hooks, update_url);
+            assert!(
+                report.starts_with("went on to the updater: "),
+                "STALAGMIGHT_TEST_HOOKS={test_hooks:?}, {UPDATE_URL_ENV}={update_url:?}: \
+                 the check goes on to the request: {report}"
+            );
+        }
     }
 
     // ── State machine ────────────────────────────────────────────────────────

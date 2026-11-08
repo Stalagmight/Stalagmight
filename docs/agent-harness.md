@@ -301,6 +301,14 @@ comparison to reach for is the same seed in the same profile. (The WDIO tier
 builds its DEBUG binary with `--features e2e` for this reason; the agent
 harness deliberately does not, to leave its default build unchanged.)
 
+**The update check is off in a harness session (#576).** A debug (or `e2e`)
+build started with `STALAGMIGHT_TEST_HOOKS=1` refuses `check_for_app_update`
+before anything is sent, so a harness launch no longer asks GitHub for the
+update manifest; the frontend goes quietly idle on the refusal. Export
+`STALAGMIGHT_UPDATE_URL` to a manifest to test the updater from a debug harness
+session anyway. A release binary ignores the variable
+(`commands::app_update::harness_update_refusal`).
+
 **Single-instance is off in both harness profiles (#576 HFI-7).** The release
 harness build drops `tauri-plugin-single-instance` at compile time, through
 `e2e`. The debug build keeps the plugin compiled in but does not REGISTER it

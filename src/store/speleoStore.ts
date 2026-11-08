@@ -315,6 +315,23 @@ function askSignOut(
 }
 
 /**
+ * [#576 FUZZ-MERGE-NF] Wait for the edits queued so far before a sign-out asks the
+ * backend which locks it would hand back, as every exit reads its guard
+ * (`editsSettledForExit`, `utils/quit.ts`). An edit on the open SpeleoDB project marks
+ * it un-pushed only once its IPC has returned, so one still in flight (a grid cell
+ * committed on blur on the way to Settings) left its lock listed as releasable: the
+ * sign-out released it, and the edit was then refused, or landed with no lock behind
+ * it. False when one has not settled in time: the sign-out is refused then, rather
+ * than hand back a lock that edit may need. No wait with no project open. Imported
+ * late: `utils/quit` reads this store (scripts/check-import-cycles.mjs).
+ */
+async function editsSettledBeforeSignOut(): Promise<boolean> {
+  if (!useProjectStore.getState().project) return true;
+  const { editsSettledForExit } = await import('../utils/quit');
+  return editsSettledForExit();
+}
+
+/**
  * [#270] The link state an optimistic open seed replaces - everything
  * `setLinkOnOpen` writes, so restoring one is a complete undo of a seed. Captured
  * by {@link SpeleoStore.snapshotLink} and put back by
@@ -980,6 +997,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // no prompt - the sign-out releases as it always did (nothing to release).
         // [#576 SIGNOUT-PROMPT-D2] Locks kept for un-pushed edits are named too, and
         // when they are all there is, the prompt only says so: Sign out or Cancel.
+        if (!(await editsSettledBeforeSignOut()))
+          return { ok: false, error: new Error(i18n.t('speleodb.signOutLocks.editPending')) };
         const locks = await invokeIpc('speleodb_sign_out_locks');
         const choice = await askSignOut(set, 'logout', locks);
         if (choice === 'cancel') return { ok: false, cancelled: true };
@@ -1022,6 +1041,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // server) signs the live session out first: the same prompt about that
         // session's locks, asked before it is replaced. The backend says which
         // locks, if any - it alone knows whose account a pasted token is.
+        if (!(await editsSettledBeforeSignOut()))
+          return { ok: false, error: new Error(i18n.t('speleodb.signOutLocks.editPending')) };
         const locks = await invokeIpc('speleodb_sign_in_hand_back_locks', {
           endpoint: credentials.endpoint,
           email: credentials.email,
