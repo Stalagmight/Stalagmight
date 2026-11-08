@@ -698,6 +698,26 @@ describe('TmlImportDialog discard failures (#411 fix round)', () => {
     expect(closeProject, 'closed it and left the written file behind').not.toHaveBeenCalled();
   });
 
+  // [#576 Q-W54-2-D1, W54-NF] Pin of the decision as a whole: a save in place deletes
+  // the file it wrote, and a Save As after it still deletes nothing - neither the
+  // reserved file the save in place wrote (the copy left behind now) nor the file the
+  // Save As named.
+  it('a save in place, then a Save As: deletes nothing and closes nothing', async () => {
+    openEmptyImportProject();
+    useProjectStore.setState({ databaseOpen: false, project: emptyProject({ file_path: '/tmp/reserved.stalx' }) });
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+    await userEvent.click(await screen.findByTestId('tml-import-cancel'));
+
+    useProjectStore.setState({ databaseOpen: true }); // the save in place
+    useProjectStore.setState({ project: emptyProject({ file_path: '/tmp/saved as.stalx' }) }); // the Save As
+    await userEvent.click(screen.getByTestId('tml-import-residue-discard'));
+
+    expect(deleteProject).not.toHaveBeenCalled();
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(closeDialog).toHaveBeenCalled();
+    expect(importContext()).toBeNull();
+  });
+
   it('still deletes after a reload of the same file, with no Save As', async () => {
     openEmptyImportProject();
     useProjectStore.setState({
