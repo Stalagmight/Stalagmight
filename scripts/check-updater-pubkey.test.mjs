@@ -1,10 +1,10 @@
 // Fixture tests for the updater pubkey/endpoint tripwire
 // (scripts/check-updater-pubkey.mjs).
 //
-// The `plugins.updater` block is absent from tauri.conf.json today (see
-// docs/releasing.md); these fixtures pin what happens the day it lands: a
+// tauri.conf.json commits the `plugins.updater` block (see
+// docs/releasing.md); these fixtures pin what the gate refuses in it: a
 // placeholder or malformed pubkey, an empty or non-https/non-GitHub
-// endpoint, and the current (block-absent) pass state.
+// endpoint. Also the block-absent pass, and the live config passing.
 //
 // Pure Node, no test framework (mirrors scripts/check-third-party-licenses.test.mjs).
 // Run: node scripts/check-updater-pubkey.test.mjs  (also a CI check step).
@@ -141,8 +141,8 @@ test('missing/invalid tauri.conf.json fails loudly', () => {
   assert.match(problems[0], /missing or not valid JSON/);
 });
 
-// The gate must pass against the real repo right now - the block is absent.
-test('live repo config passes (block absent)', () => {
+// The gate must pass against the real repo: its committed block is sane.
+test('live repo config passes', () => {
   assert.deepEqual(checkUpdaterConfig(REPO_ROOT), []);
 });
 

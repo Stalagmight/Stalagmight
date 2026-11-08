@@ -33,6 +33,29 @@
 //!   whole body in RAM and enforces no length at all),
 //! - an explicit request timeout on both the check and the download,
 //! - a generation stamp pairing bytes with the check that offered them.
+//!
+//! Two risks remain, and are known:
+//!
+//! - **The version is not signed.** The signature covers the bundle's bytes
+//!   and nothing else: the version an update is offered as is the manifest's
+//!   own, unsigned, and the plugin installs any signed bundle whose manifest
+//!   version is higher than the running one (tauri-plugin-updater 2.9.0,
+//!   `updater.rs`: `release.version > self.current_version` in `check`,
+//!   `verify_signature(&buffer, ...)` in `download`). So whoever controls the
+//!   `updater` release's manifest can pair an OLD, validly signed bundle with
+//!   a higher version, and the app downgrades itself to it - to a release with
+//!   a flaw since fixed, say. What stands in the way is who can write that
+//!   manifest: a release build fetches it only from an https `github.com` URL
+//!   ([`UPDATE_URL_ENV`], [`is_trusted_manifest_url`]), and changing it takes
+//!   write access to the repository's `updater` release. Signing the version
+//!   too, and checking it against the offer, would close it; not done.
+//! - **The size cap can be overshot.** [`MAX_UPDATE_BYTES`] is checked in the
+//!   plugin's per-chunk progress callback, and the plugin appends each chunk to
+//!   its buffer right after calling it. The callback can only raise a flag, so
+//!   the download is dropped when the poll that ran it returns ([`abortable`]),
+//!   and every chunk the stream already had ready is buffered before then: the
+//!   memory held can pass the cap by what arrived in that one poll before the
+//!   abort is seen. The cap bounds the download near 512 MiB, not at it.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -210,9 +233,10 @@ impl AppUpdateState {
 /// It gates plugin registration in `lib.rs`, and it has to: the plugin's own
 /// `Config` has a REQUIRED `pubkey` and no `Default`, so with `plugins.updater`
 /// absent Tauri fails to deserialize it and `Builder::build()` returns an
-/// error, so the app never starts. The block is deliberately absent today (the
-/// minisign keypair is still being provisioned), so registering unconditionally
-/// would brick every build, local and released, until the key lands.
+/// error, so the app never starts. The checked-in config carries the key
+/// (committed for #579), so every build of this tree answers `true`; the gate
+/// is what lets a config without the block - a fork that drops it, or the key
+/// taken out again - still start, with the updater off, instead of not at all.
 pub fn updater_configured() -> bool {
     static CONFIGURED: OnceLock<bool> = OnceLock::new();
     *CONFIGURED.get_or_init(|| pubkey_present(include_str!("../../tauri.conf.json")))

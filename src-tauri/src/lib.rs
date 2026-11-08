@@ -343,10 +343,11 @@ pub fn run() {
     // required `pubkey` and no `Default`, so with `plugins.updater` absent from
     // tauri.conf.json Tauri fails to deserialize the plugin's config and
     // `build()` below returns an error - the app does not start at all. The
-    // block is deliberately absent while the keypair is being provisioned (see
-    // `.github/workflows/release.yml`'s "Determine updater enablement", which
-    // reads the same key to decide whether to build updater artifacts), so
-    // registering unconditionally would brick every build until it lands.
+    // checked-in config carries the key (committed for #579; `.github/workflows/release.yml`'s
+    // "Determine updater enablement" reads the same key to decide whether to
+    // build updater artifacts), so this registers the plugin in every build of
+    // this tree; the gate keeps a config without the block starting, with the
+    // updater off.
     //
     // The plugin supplies the public key and the Windows install mode; the
     // ENDPOINT it configures is only a fallback, because `commands::app_update`
