@@ -59,13 +59,36 @@ const VERSION_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
 // also exposed as a bare pnpm command that a caller could invoke by hand.
 const TAG_RE = /^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
 
-// A minisign signature file (which is what Tauri's signer produces) is at
-// minimum an "untrusted comment:" header line followed by a base64 body
-// line. Checking only "non-empty" let a truncated or corrupted .sig through,
-// which ships a manifest that fails closed on every client that tries to
-// verify it - worth catching here instead.
+// Tauri's signer writes the .sig as ONE base64 line wrapping a whole minisign
+// signature file, and that base64 line is exactly what the manifest's
+// `signature` field must carry (the updater decodes it, then parses
+// minisign). So a valid .sig is a single base64 line that decodes to an
+// "untrusted comment:" header followed by a base64 body line. Checking only
+// "non-empty" let a truncated or corrupted .sig through, which ships a
+// manifest that fails closed on every client that tries to verify it. The
+// check once expected the decoded (plain-text) form instead, which no real
+// Tauri .sig has, and so refused the v0.5.0 release's genuine signatures.
+//
+// The checks below mirror what the client does with the field
+// (tauri-plugin-updater's strict STANDARD base64 decode, then
+// minisign-verify's `Signature::decode`): canonical base64 at both levels, a
+// 74-byte signature line (2-byte algorithm, 8-byte key id, 64-byte
+// signature), a "trusted comment: " line, and a 64-byte global signature.
 const MINISIGN_COMMENT_RE = /^untrusted comment:/;
+const TRUSTED_COMMENT_PREFIX = 'trusted comment: ';
 const BASE64_LINE_RE = /^[A-Za-z0-9+/]+=*$/;
+const SIGNATURE_LINE_BYTES = 74;
+const GLOBAL_SIGNATURE_BYTES = 64;
+const SIGNATURE_ALGORITHMS = new Set(['Ed', 'ED']);
+
+// Decodes `s` only if it is canonical base64 (what a strict decoder accepts):
+// Node's decoder silently tolerates bad padding and truncation, so round-trip
+// it and refuse anything that does not come back byte-for-byte.
+function strictBase64(s) {
+  if (!BASE64_LINE_RE.test(s)) return null;
+  const bytes = Buffer.from(s, 'base64');
+  return bytes.toString('base64') === s ? bytes : null;
+}
 
 // Order here is the order platforms appear in the emitted manifest.
 const PLATFORMS = [
@@ -122,16 +145,34 @@ function readSig(dir, artifactFile, label) {
   if (sig.length === 0) {
     throw new Error(`${label} update signature is empty: ${sigPath}`);
   }
-  const lines = sig.split('\n');
-  if (!MINISIGN_COMMENT_RE.test(lines[0] ?? '')) {
+  const outer = strictBase64(sig);
+  if (outer === null) {
     throw new Error(
-      `${label} update signature does not look like a minisign signature (missing "untrusted comment:" header): ${sigPath}`,
+      `${label} update signature is not a single base64 line (Tauri's .sig format): ${sigPath}`,
     );
   }
-  if (!BASE64_LINE_RE.test((lines[1] ?? '').trim())) {
-    throw new Error(
-      `${label} update signature does not look like a minisign signature (second line is not base64): ${sigPath}`,
-    );
+  const notMinisign = (why) =>
+    new Error(`${label} update signature does not decode to a minisign signature (${why}): ${sigPath}`);
+  const lines = outer.toString('utf8').split('\n');
+  if (!MINISIGN_COMMENT_RE.test(lines[0] ?? '')) {
+    throw notMinisign('missing "untrusted comment:" header');
+  }
+  const signature = strictBase64((lines[1] ?? '').trim());
+  if (signature === null) {
+    throw notMinisign('second line is not base64');
+  }
+  if (
+    signature.length !== SIGNATURE_LINE_BYTES ||
+    !SIGNATURE_ALGORITHMS.has(signature.subarray(0, 2).toString('latin1'))
+  ) {
+    throw notMinisign(`second line is not a ${SIGNATURE_LINE_BYTES}-byte Ed25519 signature`);
+  }
+  if (!(lines[2] ?? '').startsWith(TRUSTED_COMMENT_PREFIX)) {
+    throw notMinisign('missing "trusted comment:" line');
+  }
+  const global = strictBase64((lines[3] ?? '').trim());
+  if (global === null || global.length !== GLOBAL_SIGNATURE_BYTES) {
+    throw notMinisign(`fourth line is not a ${GLOBAL_SIGNATURE_BYTES}-byte global signature`);
   }
   return sig;
 }

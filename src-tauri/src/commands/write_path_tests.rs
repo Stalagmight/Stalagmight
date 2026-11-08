@@ -100,6 +100,32 @@ fn the_app_s_own_folders_are_refused_except_the_managed_project_cache() {
     }
 }
 
+/// A folder inside the managed-project cache that is a link into another of the
+/// app's own folders does not carry the cache's exception: the write would land
+/// in the config folder, so it is refused (Codex review on #594).
+#[cfg(unix)]
+#[test]
+fn a_link_from_the_managed_cache_into_another_app_folder_is_refused() {
+    let config = TempDir::new().expect("config dir");
+    let cache = TempDir::new().expect("cache dir");
+    let managed = cache.path().join("speleodb");
+    std::fs::create_dir_all(&managed).expect("managed dir");
+    std::os::unix::fs::symlink(config.path(), managed.join("p")).expect("link");
+    let dirs = AppDirs {
+        internal: vec![config.path().to_path_buf(), cache.path().to_path_buf()],
+        managed_projects: Some(managed.clone()),
+    };
+    let through_link = managed.join("p").join("x.stalx");
+    let got = verdict(&through_link, WriteTarget::Project, &dirs);
+    assert!(
+        got.contains("app's own settings, data or cache folder"),
+        "a project path spelled under the cache but landing in the config folder: {got}"
+    );
+    // A real project inside the cache keeps its exception.
+    let real = managed.join("q").join("x.stalx");
+    assert_eq!(verdict(&real, WriteTarget::Project, &dirs), "allowed");
+}
+
 #[cfg(unix)]
 #[test]
 fn system_folders_are_refused_and_user_mounts_are_not() {
