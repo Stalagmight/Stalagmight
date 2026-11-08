@@ -7,8 +7,10 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invokeIpc } from './ipc';
 import { useProjectStore } from '../store/projectStore';
 import { mutationsSettled } from '../store/mutationQueue';
+import { noteProjectExitRequested, projectExitSuperseded } from '../store/switchGate';
 import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
+import { useUpdateStore, selectUpdateInstalling } from '../store/updateStore';
 import { holdAutosave, withAutosaveHeld } from './autosaveHold';
 import { openPendingImport, readPendingImport, type PendingImport } from './pendingImport';
 
@@ -109,27 +111,112 @@ export function performQuit(): void {
 const EXIT_EDITS_SETTLE_TIMEOUT_MS = 5_000;
 
 /**
- * [#576 W83] Wait for the edits queued so far before an exit reads the dirty
+ * [#576 W83] Wait for the edit queue to go quiet before an exit reads the dirty
  * state. `isDirty` is set only once an edit's IPC AND the refresh after it have
  * both returned, so an edit still in flight (a grid cell committed on blur by the
  * very click that asked to quit or restart) reads as a clean project.
  *
- * Resolves `true` once they have settled, whether they succeeded or not, and
- * `false` when {@link EXIT_EDITS_SETTLE_TIMEOUT_MS} passed first: the caller then
- * cannot trust `isDirty`, and treats the project as dirty. Never rejects. Edits
- * queued after the call are not waited for, as in `mutationsSettled`.
+ * Resolves `true` once every edit queued so far has settled, whether it succeeded
+ * or not, and `false` when {@link EXIT_EDITS_SETTLE_TIMEOUT_MS} passed first: the
+ * caller then cannot trust `isDirty`, and treats the project as dirty. Never
+ * rejects.
+ *
+ * [#576 W84 x FZ-FZ-INT-1] An edit queued DURING the wait is waited for too: once
+ * the queue it was called on has settled, it waits again while a newer edit has
+ * joined it, all inside the one bound measured from the call (and it stops
+ * looking once that bound has run out). Waiting for the call's queue only, a
+ * guard read the clean flag while an edit queued after the click was still on its
+ * way, and the switch the exit then requested waited for that edit, so it landed
+ * on the project being left, which went unsaved and unasked. Once the guard has
+ * read the state, the exit requests its switch synchronously, and an edit queued
+ * after that is refused by the switch gate (`store/switchGate.ts`).
  *
  * [#576 W84] The three hand-back exits wait the same way before their guards
  * (`handleCloseProject`, `newProjectGuarded`, `routeOpenedFile` opening a
- * `.stalx`): the project switch they start waits for that edit too, so it lands
- * on the project being replaced, which then goes with the edit unsaved.
+ * `.stalx`), through {@link settleEditsBeforeHandBack}: the project switch they
+ * start waits for that edit too, so it lands on the project being replaced, which
+ * then goes with the edit unsaved.
  */
 export function editsSettledForExit(): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let outOfTime = false;
   const timedOut = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => resolve(false), EXIT_EDITS_SETTLE_TIMEOUT_MS);
+    timer = setTimeout(() => {
+      outOfTime = true;
+      resolve(false);
+    }, EXIT_EDITS_SETTLE_TIMEOUT_MS);
   });
-  return Promise.race([mutationsSettled().then(() => true), timedOut]).finally(() => clearTimeout(timer));
+  const quiet = (async () => {
+    let queue = mutationsSettled();
+    for (;;) {
+      await queue;
+      const now = mutationsSettled();
+      if (now === queue) return true;
+      if (outOfTime) return false;
+      queue = now;
+    }
+  })();
+  return Promise.race([quiet, timedOut]).finally(() => clearTimeout(timer));
+}
+
+/** What a hand-back exit learns from {@link settleEditsBeforeHandBack}. */
+export interface HandBackSettle {
+  /** False when the queued edits did not settle in time: the project counts as dirty. */
+  editsSettled: boolean;
+  /**
+   * A newer exit or a switch was requested during the wait (latest wins), or an
+   * update is installing: this exit does nothing at all.
+   */
+  superseded: boolean;
+  /**
+   * The dialog slot is not what it was when the exit was asked for (a dialog took
+   * the screen, or the one up then went): this exit must not replace it, or act
+   * for a dialog that was answered meanwhile.
+   */
+  screenTaken: boolean;
+}
+
+/**
+ * [#576 W84 x FZ-FZ-INT-1] The wait every hand-back exit (Close, New Project over
+ * a project, opening a `.stalx` over a project, the import-as-new hand-over) makes
+ * before its guards read `isDirty`: {@link editsSettledForExit}, plus what the
+ * fuzz branch guarantees around a switch, which a wait before the switch request
+ * would otherwise undo.
+ *
+ * - Latest wins: two exits can both be waiting (Close clicked, then a `.stalx`
+ *   dropped), and both resume on the same settled queue, the EARLIER first, so it
+ *   would request its switch first and the newer one would run second. Each takes
+ *   a ticket (`noteProjectExitRequested`); one a newer exit, a switch request, or
+ *   an update install overtook during the wait reports `superseded`.
+ * - One dialog at a time: a dialog that took the screen during the wait is not
+ *   replaced (`screenTaken`, compared against the slot as it was at the call, so
+ *   the re-entries that run while their own dialog is up - LaunchOpenConfirmDialog's
+ *   confirmed swap, ImportAsNewProjectDialog's close - still go ahead).
+ * - A launched file waits for an in-app pick: the wait holds the screen
+ *   (`isScreenBusy`), so the OS launch queue does not route a file over a request
+ *   the user is still waiting on. Its drain fetches the queue before it routes, so
+ *   the caller has decided by the time it looks again.
+ *
+ * Call it before the caller's first await, so the slot it compares against is the
+ * one the user asked from.
+ */
+export async function settleEditsBeforeHandBack(): Promise<HandBackSettle> {
+  const ticket = noteProjectExitRequested();
+  const ui = useUIStore.getState();
+  const { activeDialog, dialogData } = ui;
+  ui.addScreenOccupant();
+  try {
+    const editsSettled = await editsSettledForExit();
+    const now = useUIStore.getState();
+    return {
+      editsSettled,
+      superseded: projectExitSuperseded(ticket) || selectUpdateInstalling(useUpdateStore.getState()),
+      screenTaken:
+        now.activeDialog !== activeDialog || (now.activeDialog !== null && now.dialogData !== dialogData),
+    };
+  } finally {
+    useUIStore.getState().removeScreenOccupant();
+  }
 }
 
 /**

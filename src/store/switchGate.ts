@@ -12,10 +12,35 @@
  * The backend backs both up: every save and edit names the project it was made for
  * (`expectedProject`) and is refused with PROJECT_CHANGED when another is open.
  *
+ * [#576 W84 x FZ-FZ-INT-1] Before an exit that leaves the project (Close, New Project,
+ * opening a `.stalx`, the import-as-new hand-over) requests its switch, it waits for the
+ * queued edits so its guard reads a settled `isDirty` (`settleEditsBeforeHandBack` in
+ * `utils/quit.ts`). Two such exits can then be waiting at once, and both resume on the
+ * same settled queue, oldest first. Latest wins there too: each exit takes a ticket
+ * ({@link noteProjectExitRequested}) and one that a newer exit or a switch request has
+ * overtaken ({@link projectExitSuperseded}) does nothing.
+ *
  * Plain module state, importing no store: read by the store's save and edit
  * chokepoints and by the switch coordinator without an import cycle.
  */
 import { PROJECT_CHANGED_REFUSAL, refusedLocally, type CommandRefused } from './commandResult';
+
+/** Advanced by every project exit intent and every switch request: see {@link noteProjectExitRequested}. */
+let projectExitIntents = 0;
+
+/**
+ * [#576 W84 x FZ-FZ-INT-1] Note that the user asked to leave the project (an exit that
+ * waits before it requests its switch); the returned ticket names this request.
+ */
+export function noteProjectExitRequested(): number {
+  projectExitIntents += 1;
+  return projectExitIntents;
+}
+
+/** Whether a newer exit intent or a switch request was made since `ticket` was taken. */
+export function projectExitSuperseded(ticket: number): boolean {
+  return projectExitIntents !== ticket;
+}
 
 let switchesUnsettled = 0;
 /** One per switch requested and not yet released (committed, settled or dropped). */
@@ -34,8 +59,12 @@ export function refuseDuringSwitch(): CommandRefused | null {
   return switchUnderWay() ? refusedLocally(PROJECT_CHANGED_REFUSAL) : null;
 }
 
-/** Called when a switch is requested; the returned function is called once when it settles (or is dropped). */
+/**
+ * Called when a switch is requested; the returned function is called once when it settles (or is dropped).
+ * A switch request also overtakes every exit still waiting to request its own ({@link projectExitSuperseded}).
+ */
 export function noteSwitchRequested(): () => void {
+  projectExitIntents += 1;
   switchesUnsettled += 1;
   let decide!: () => void;
   const decided = new Promise<void>((resolve) => {

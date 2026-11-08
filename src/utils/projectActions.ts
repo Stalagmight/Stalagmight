@@ -16,7 +16,7 @@
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
-import { editsSettledForExit, needsSpeleoHandBackPrompt } from './quit';
+import { needsSpeleoHandBackPrompt, settleEditsBeforeHandBack } from './quit';
 import { saveFailureOf, surfaceSaveFailure } from './saveFeedback';
 import {
   ensureExtension,
@@ -55,10 +55,20 @@ import type { SaveOutcome } from '../types/ipc/SaveOutcome';
  * and then replaces it, unsaved. One that has not settled in time counts as
  * unsaved work. With no project open there is nothing to wait for, and the
  * dialog opens synchronously as before.
+ *
+ * [#576 W84 x FZ-FZ-INT-1] A New Project another exit overtook during the wait (a
+ * Close, a `.stalx` opened, a switch - latest wins), or made while an update began
+ * installing, does nothing; so does one whose screen a dialog took meanwhile
+ * (`settleEditsBeforeHandBack`).
  */
 export async function newProjectGuarded(): Promise<void> {
   const { openDialog } = useUIStore.getState();
-  const editsSettled = useProjectStore.getState().project ? await editsSettledForExit() : true;
+  if (!useProjectStore.getState().project) {
+    openDialog('new-project');
+    return;
+  }
+  const { editsSettled, superseded, screenTaken } = await settleEditsBeforeHandBack();
+  if (superseded || screenTaken) return;
   const ps = useProjectStore.getState();
   if (!ps.project) {
     openDialog('new-project');

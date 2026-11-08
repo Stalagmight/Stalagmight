@@ -43,7 +43,7 @@ import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
-import { editsSettledForExit, needsSpeleoHandBackPrompt } from './quit';
+import { needsSpeleoHandBackPrompt, settleEditsBeforeHandBack } from './quit';
 import { openPendingImport, type PendingImport } from './pendingImport';
 import { TOAST_KEYS } from './toastKeys';
 import i18n from '../i18n';
@@ -284,13 +284,25 @@ export async function routeOpenedFile(
   // file. A close with nothing to ask goes through the guarded close as before.
   // True when a dialog took the screen (it owns the entry-point source from here);
   // false when the close was refused and the import ends.
+  //
+  // [#576 W84 x HFI-4-D2] The guards below read `isDirty`, so they wait for the edit
+  // queue first, as `closeCurrent` does (`settleEditsBeforeHandBack`): an edit still
+  // in flight read as a clean project here, and `closeCurrent` then waited, saw it
+  // and asked WITHOUT the parsed file, so the import was lost. An edit that has not
+  // settled in time counts as unsaved work. A hand-over another exit overtook during
+  // the wait, or no longer wanted (the confirm went, the project changed), drops.
   const handOverParsed = async (pending: PendingImport): Promise<boolean> => {
     if (importAsNew && useProjectStore.getState().project) {
+      const settled = await settleEditsBeforeHandBack();
+      if (settled.superseded || !stillWanted()) {
+        dropLateResult();
+        return false;
+      }
       if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
         ui.openDialog('speleodb-close', { pendingImport: pending });
         return true;
       }
-      if (useProjectStore.getState().isDirty) {
+      if (useProjectStore.getState().isDirty || !settled.editsSettled) {
         ui.openDialog('unsaved-changes', { pendingImport: pending });
         return true;
       }
@@ -457,7 +469,24 @@ export async function routeOpenedFile(
       // reads as a clean project, and `loadProject` waits for it to land on this
       // project and then replaces it, unsaved. One that has not settled in time
       // counts as unsaved work. The state is read again after the wait.
-      const editsSettled = store.project ? await editsSettledForExit() : true;
+      //
+      // [#576 W84 x FZ-FZ-INT-1] An open another exit overtook during the wait (a
+      // newer route, a Close, New Project, a switch - latest wins), or made while an
+      // update began installing, does nothing. One whose screen a dialog took
+      // meanwhile does not replace it, and says so as the dialog gate above does
+      // (`settleEditsBeforeHandBack`).
+      let editsSettled = true;
+      if (store.project) {
+        const settled = await settleEditsBeforeHandBack();
+        if (settled.superseded || latestRouteToken !== token) return;
+        if (settled.screenTaken) {
+          if (useUIStore.getState().activeDialog) {
+            ui.showToast(i18n.t('importGate.inProgress'), TOAST_KEYS.IMPORT_IN_PROGRESS, 'warning');
+          }
+          return;
+        }
+        editsSettled = settled.editsSettled;
+      }
       const current = useProjectStore.getState();
       if (current.project && needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
         ui.openDialog('speleodb-close', { pendingOpenPath: path });
