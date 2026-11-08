@@ -507,3 +507,68 @@ fn unlink_read_back_body_in_a_process_of_its_own() {
         );
     }
 }
+
+/// The aliased-source body's full test name, for the child's exact filter.
+const ALIAS_CHILD_TEST: &str =
+    "core::state::sdb_unlink_move_tests::unlink_aliased_source_body_in_a_process_of_its_own";
+
+/// [#576 W87b] Whether the source is in the cache decides whether the Unlink DELETES
+/// it after the move, so only the resolved paths may decide. A link-less project
+/// opened as `<cache>/../elsewhere.stalx` lies OUTSIDE the cache, but a literal
+/// `starts_with` (component-wise, `..` unresolved) called it inside: the Unlink
+/// then wrote the copy and deleted the user's file beside the cache folder. Now it
+/// is refused as "not in the SpeleoDB cache", with nothing written or removed.
+#[test]
+fn unlink_never_deletes_a_source_outside_the_cache_named_through_it() {
+    run_child_body(ALIAS_CHILD_TEST);
+}
+
+#[test]
+#[ignore = "the child-process body of \
+            unlink_never_deletes_a_source_outside_the_cache_named_through_it: it sets the \
+            process-wide app dirs, so it runs only in a process of its own"]
+fn unlink_aliased_source_body_in_a_process_of_its_own() {
+    if std::env::var_os(CHILD_ENV).is_none() {
+        println!("not in the child process ({CHILD_ENV} unset): nothing to do");
+        return;
+    }
+    let _cfg = crate::test_helpers::isolated_config();
+    let dirs = TempDir::new().expect("app dirs");
+    let (root, projects) = app_dirs_in(&dirs);
+    // A plain local project beside the cache folder, opened through a spelling that
+    // goes into the cache folder and back out.
+    let aliased = root.join("..").join("elsewhere.stalx");
+    project_file(&aliased, "Elsewhere", "MySection");
+    let state = state_with_null_sink();
+    assert!(
+        state.open_project(aliased.clone()).success,
+        "open the project beside the cache"
+    );
+    let dest = projects.join("Moved.stalx");
+    let outcome = state.speleodb_unlink(dest.clone());
+    println!(
+        "[W87b] unlink of {} (open as {:?}; literally under the cache root: {}) -> {:?}; \
+         source left: {}, sections {:?}; copy written: {}",
+        aliased.display(),
+        state.open_project_path(),
+        aliased.starts_with(&root),
+        outcome
+            .as_ref()
+            .map(|o| &o.saved_path)
+            .map_err(|e| &e.message),
+        aliased.exists(),
+        sections_at(&aliased),
+        dest.exists(),
+    );
+    assert!(
+        outcome
+            .as_ref()
+            .is_err_and(|e| e.message.contains("is not in the SpeleoDB cache")),
+        "refused: the project is not in the cache"
+    );
+    assert!(
+        aliased.exists() && sections_at(&aliased) == ["MySection"],
+        "the user's file outside the cache is kept"
+    );
+    assert!(!dest.exists(), "and nothing was written");
+}

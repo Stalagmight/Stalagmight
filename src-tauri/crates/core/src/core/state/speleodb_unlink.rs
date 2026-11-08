@@ -44,13 +44,20 @@ use crate::core::{SaveOutcome, ValidationWarning, WarningSeverity};
 use crate::persistence::Database;
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
-/// Whether `path` lies inside `root`, literally or once both are resolved. A
+/// Whether `path` lies inside `root`, literally or once both are resolved: the
+/// destination check, where a literal match is reason enough to refuse. A
 /// destination need not exist yet, so its folder is resolved and its name joined
 /// back on.
 fn inside(root: &Path, path: &Path) -> bool {
-    if path.starts_with(root) {
-        return true;
-    }
+    path.starts_with(root) || resolved_inside(root, path)
+}
+
+/// Whether `path` lies inside `root` once both are resolved, and only then: the
+/// check that decides whether the source is DELETED (#576 W87b). A literal
+/// `starts_with` is component-wise and does not resolve `..`, so
+/// `<cache>/../elsewhere.stalx` passed it, and the move then deleted a file outside
+/// the cache.
+fn resolved_inside(root: &Path, path: &Path) -> bool {
     let Ok(root) = std::fs::canonicalize(root) else {
         // No cache folder on disk: nothing can be inside it.
         return false;
@@ -121,10 +128,11 @@ impl AppState {
             return refuse("the SpeleoDB cache folder is not available".to_owned());
         };
         // Linked: its own cache slot is the only place a managed copy lives. Link-less
-        // (an Unlink made before this change): anywhere in the cache.
+        // (an Unlink made before this change): anywhere in the cache, once resolved,
+        // because this decides whether the file is deleted after the move.
         let in_cache = match &link {
             Some(link) => is_the_cached_copy(&root, &link.project_id, &source),
-            None => inside(&root, &source),
+            None => resolved_inside(&root, &source),
         };
         if !in_cache {
             return refuse(format!(
