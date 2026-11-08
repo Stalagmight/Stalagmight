@@ -45,7 +45,7 @@ use std::path::Path;
 use ts_rs::TS;
 use usvg::{Options, Tree};
 
-use super::atomic::write_atomic_bytes;
+use super::atomic::{write_atomic_bytes_to, Destination};
 use crate::models::{Project, StationRef};
 
 mod label_index;
@@ -393,23 +393,33 @@ pub fn export_image_with_stations(
     options: &ExportImageOptions,
     stations: Vec<crate::models::Station>,
 ) -> Result<()> {
+    export_image_with_stations_to(project, Destination::Name(path), options, stations)
+}
+
+/// [`export_image_with_stations`] to a [`Destination`].
+pub fn export_image_with_stations_to(
+    project: &Project,
+    dest: Destination<'_>,
+    options: &ExportImageOptions,
+    stations: Vec<crate::models::Station>,
+) -> Result<()> {
     match options.format {
-        ImageFormat::Svg => export_svg(project, path, options, stations),
-        ImageFormat::Png => export_png(project, path, options, stations),
-        ImageFormat::Pdf => export_pdf(project, path, options, stations),
+        ImageFormat::Svg => export_svg(project, dest, options, stations),
+        ImageFormat::Png => export_png(project, dest, options, stations),
+        ImageFormat::Pdf => export_pdf(project, dest, options, stations),
     }
 }
 
 /// Export project as SVG (writes file).
 fn export_svg(
     project: &Project,
-    path: &Path,
+    dest: Destination<'_>,
     options: &ExportImageOptions,
     stations: Vec<crate::models::Station>,
 ) -> Result<()> {
     let svg = generate_svg_string_with_stations(project, options, stations)?;
-    write_atomic_bytes(path, svg.as_bytes()).context("Failed to write SVG file")?;
-    tracing::info!(path = ?path, "Exported SVG");
+    write_atomic_bytes_to(dest, svg.as_bytes()).context("Failed to write SVG file")?;
+    tracing::info!(path = ?dest.name(), "Exported SVG");
     Ok(())
 }
 
@@ -419,7 +429,7 @@ const MAX_PNG_DIMENSION: u32 = 16_384;
 /// Export project as PNG via resvg rasterization.
 fn export_png(
     project: &Project,
-    path: &Path,
+    dest: Destination<'_>,
     options: &ExportImageOptions,
     stations: Vec<crate::models::Station>,
 ) -> Result<()> {
@@ -452,16 +462,16 @@ fn export_png(
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     let png = pixmap.encode_png().context("Failed to encode PNG")?;
-    write_atomic_bytes(path, &png).context("Failed to save PNG file")?;
+    write_atomic_bytes_to(dest, &png).context("Failed to save PNG file")?;
 
-    tracing::info!(path = ?path, dpi = options.dpi, width = width, height = height, "Exported PNG");
+    tracing::info!(path = ?dest.name(), dpi = options.dpi, width = width, height = height, "Exported PNG");
     Ok(())
 }
 
 /// Export project as PDF via svg2pdf.
 fn export_pdf(
     project: &Project,
-    path: &Path,
+    dest: Destination<'_>,
     options: &ExportImageOptions,
     stations: Vec<crate::models::Station>,
 ) -> Result<()> {
@@ -478,9 +488,9 @@ fn export_pdf(
     )
     .map_err(|e| anyhow::anyhow!("Failed to convert SVG to PDF: {e:?}"))?;
 
-    write_atomic_bytes(path, &pdf).context("Failed to write PDF file")?;
+    write_atomic_bytes_to(dest, &pdf).context("Failed to write PDF file")?;
 
-    tracing::info!(path = ?path, "Exported PDF");
+    tracing::info!(path = ?dest.name(), "Exported PDF");
     Ok(())
 }
 
@@ -2288,7 +2298,7 @@ mod tests {
         let path = file.path().with_extension("png");
         export_png(
             &project,
-            &path,
+            Destination::Name(&path),
             &ExportImageOptions {
                 format: ImageFormat::Png,
                 dpi: 72,
@@ -2353,7 +2363,7 @@ mod tests {
         let path = file.path().with_extension("svg");
         export_svg(
             &project,
-            &path,
+            Destination::Name(&path),
             &ExportImageOptions::default(),
             project.compute_station_coordinates(),
         )
@@ -2379,7 +2389,7 @@ mod tests {
         };
         export_png(
             &project,
-            &path,
+            Destination::Name(&path),
             &options,
             project.compute_station_coordinates(),
         )
@@ -2404,7 +2414,7 @@ mod tests {
             let path = file.path().with_extension("png");
             export_png(
                 &project,
-                &path,
+                Destination::Name(&path),
                 &ExportImageOptions {
                     format: ImageFormat::Png,
                     dpi,
@@ -2478,7 +2488,7 @@ mod tests {
         };
         let err = export_png(
             &project,
-            &path,
+            Destination::Name(&path),
             &options,
             project.compute_station_coordinates(),
         )
@@ -2503,7 +2513,7 @@ mod tests {
         };
         let err = export_png(
             &project,
-            &path,
+            Destination::Name(&path),
             &options,
             project.compute_station_coordinates(),
         )

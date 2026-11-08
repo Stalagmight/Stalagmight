@@ -121,6 +121,28 @@ pub(crate) fn check_write_path(path: &Path, target: WriteTarget) -> Result<(), S
     check_write_path_with(path, target, &AppDirs::current())
 }
 
+/// [#576 PREPR-594-3] [`check_write_path`] for an export, answering where the
+/// write lands: the file a link at the name leads to
+/// (`export::resolve_destination`, the writer's own rule), else the name. The
+/// landing is judged by the policy too, when it is not the name itself, and the
+/// export writes exactly there (`export::Destination::Checked`), following
+/// nothing again.
+///
+/// The writer used to resolve the name a second time, on its own, after this
+/// check: a link at the name retargeted in between, or a file there swapped for
+/// a link, carried the export to a place the policy never judged. Now a change
+/// at the name after the check is replaced by the rename, not followed. Not
+/// covered: a FOLDER on the way swapped for a link after the check, which the
+/// rename still goes through.
+pub(crate) fn check_export_path(path: &Path, target: WriteTarget) -> Result<PathBuf, String> {
+    check_write_path(path, target)?;
+    let landing = crate::export::resolve_destination(path);
+    if landing != path {
+        check_write_path(&landing, target)?;
+    }
+    Ok(landing)
+}
+
 /// [`check_write_path`] against given app directories (the testable core).
 pub(crate) fn check_write_path_with(
     path: &Path,

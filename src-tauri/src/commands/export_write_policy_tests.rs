@@ -15,7 +15,10 @@
 //! - a link to an Ariane file is followed, policy-checked, and that file is
 //!   REPLACED by a rename (a second hard link still holds the old bytes), the
 //!   link kept;
-//! - a refused path writes nothing, and a failed write leaves the old file.
+//! - a refused path writes nothing, and a failed write leaves the old file;
+//! - [#576 PREPR-594-3] the write lands on the file the policy judged: a link at
+//!   the name retargeted, or planted there, between the check and the write is
+//!   replaced, not followed (`write_path::check_export_path`).
 //!
 //! All files are synthetic, in temp dirs.
 
@@ -24,7 +27,7 @@ use std::path::{Path, PathBuf};
 use tauri::Manager;
 use tempfile::TempDir;
 
-use super::command_tests::{h, run};
+use super::command_tests::{create_section_with_shots, h, run, shot_data};
 use crate::commands::export;
 use crate::commands::write_path::{check_write_path_with, AppDirs, WriteTarget};
 use crate::core::AppState;
@@ -280,4 +283,156 @@ fn a_failed_export_keeps_the_previous_file() {
     assert!(err.message.contains("temporary file"), "{}", err.message);
     assert_eq!(std::fs::read(&target).expect("read"), OLD);
     assert_eq!(names_in(&locked), ["cave.tml"]);
+}
+
+/// What a file the policy refuses to export over held before the export.
+const VICTIM: &[u8] = b"a note the export must never replace\n";
+
+/// [`app_with_project`] with a section of two shots, so every format, the map
+/// images included, has a survey to write.
+fn app_with_a_survey(dir: &Path) -> tauri::App<tauri::test::MockRuntime> {
+    let app = app_with_project(dir);
+    create_section_with_shots(&app, vec![shot_data(10.0), shot_data(8.0)]);
+    app
+}
+
+/// One export command, by extension, answering its error message.
+type ExportTo = fn(&tauri::App<tauri::test::MockRuntime>, PathBuf) -> Result<(), String>;
+
+/// Every export command the policy guards that a mock app can drive, by the
+/// extension it writes: CSV, JSON, both Ariane spellings and the three image
+/// formats. (The dive profile takes a concrete `AppHandle`, not a mock one.)
+fn exports() -> [(&'static str, ExportTo); 7] {
+    fn image(
+        app: &tauri::App<tauri::test::MockRuntime>,
+        path: PathBuf,
+        format: crate::export::ImageFormat,
+    ) -> Result<(), String> {
+        let options = crate::export::ExportImageOptions {
+            format,
+            dpi: 72,
+            ..Default::default()
+        };
+        run(export::export_image(h(app), path, options)).map_err(|e| e.message)
+    }
+    [
+        ("csv", |app, path| {
+            run(export::export_csv(h(app), path)).map_err(|e| e.message)
+        }),
+        ("json", |app, path| {
+            run(export::export_json(h(app), path)).map_err(|e| e.message)
+        }),
+        ("tml", |app, path| {
+            run(export::export_tml(h(app), path))
+                .map(drop)
+                .map_err(|e| e.message)
+        }),
+        ("tmlu", |app, path| {
+            run(export::export_tml(h(app), path))
+                .map(drop)
+                .map_err(|e| e.message)
+        }),
+        ("svg", |app, path| {
+            image(app, path, crate::export::ImageFormat::Svg)
+        }),
+        ("png", |app, path| {
+            image(app, path, crate::export::ImageFormat::Png)
+        }),
+        ("pdf", |app, path| {
+            image(app, path, crate::export::ImageFormat::Pdf)
+        }),
+    ]
+}
+
+/// [#576 PREPR-594-3] The export lands where the policy looked, whatever happens
+/// at its name after the check.
+///
+/// `cave.<ext>` is a link to `real.<ext>`, an export file the policy allows. In
+/// the window between the check and the write it is pointed at `victim.txt`
+/// instead, a file the policy refuses (a link to another type). The writer used to
+/// follow the link at the name a second time, on its own, so the export replaced
+/// the victim the check never judged. It now writes `real.<ext>`, the file the
+/// policy resolved and judged, and the victim stays as it was. Every case runs
+/// before the verdict, so a run shows what each one did.
+#[cfg(unix)]
+#[test]
+fn a_link_retargeted_between_the_check_and_the_write_is_not_followed() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let dir = TempDir::new().expect("tempdir");
+    let app = app_with_a_survey(dir.path());
+    let mut wrong = Vec::new();
+    for (ext, export_to) in exports() {
+        let real = dir.path().join(format!("real.{ext}"));
+        std::fs::write(&real, OLD).expect("the previous export");
+        let victim = dir.path().join(format!("victim-{ext}.txt"));
+        std::fs::write(&victim, VICTIM).expect("the victim");
+        let link = dir.path().join(format!("cave.{ext}"));
+        std::os::unix::fs::symlink(&real, &link).expect("the link");
+        let (at, to) = (link.clone(), victim.clone());
+        export::between_check_and_write::on(link.clone(), move || {
+            std::fs::remove_file(&at).expect("drop the checked link");
+            std::os::unix::fs::symlink(&to, &at).expect("retarget it at the victim");
+        });
+
+        let outcome = export_to(&app, link.clone());
+
+        let victim_kept = std::fs::read(&victim).is_ok_and(|bytes| bytes == VICTIM);
+        let real_written =
+            std::fs::read(&real).is_ok_and(|bytes| !bytes.is_empty() && bytes != OLD);
+        println!(
+            "cave.{ext} -> real.{ext}, retargeted at victim-{ext}.txt after the check: \
+             {outcome:?}; victim kept: {victim_kept}; real.{ext} holds the export: {real_written}"
+        );
+        if !(outcome.is_ok() && victim_kept && real_written) {
+            wrong.push(ext);
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "the write followed the retargeted link past the check: {wrong:?}"
+    );
+}
+
+/// [#576 PREPR-594-3] The same window, the other shape: `cave.<ext>` is a plain
+/// file when the policy checks it, and a link to `victim.txt` by the time the
+/// write runs. Renaming the staged file over the checked name replaces whatever
+/// entry is there now; it never follows a link planted after the check. The
+/// writer used to resolve the name again and replace the victim instead.
+#[cfg(unix)]
+#[test]
+fn a_name_swapped_for_a_link_between_the_check_and_the_write_is_replaced_not_followed() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let dir = TempDir::new().expect("tempdir");
+    let app = app_with_a_survey(dir.path());
+    let mut wrong = Vec::new();
+    for (ext, export_to) in exports() {
+        let victim = dir.path().join(format!("victim-{ext}.txt"));
+        std::fs::write(&victim, VICTIM).expect("the victim");
+        let name = dir.path().join(format!("cave.{ext}"));
+        std::fs::write(&name, OLD).expect("the previous export");
+        let (at, to) = (name.clone(), victim.clone());
+        export::between_check_and_write::on(name.clone(), move || {
+            std::fs::remove_file(&at).expect("drop the checked file");
+            std::os::unix::fs::symlink(&to, &at).expect("plant a link at its name");
+        });
+
+        let outcome = export_to(&app, name.clone());
+
+        let victim_kept = std::fs::read(&victim).is_ok_and(|bytes| bytes == VICTIM);
+        let name_is_a_file = std::fs::symlink_metadata(&name).is_ok_and(|m| m.is_file());
+        let name_written =
+            std::fs::read(&name).is_ok_and(|bytes| !bytes.is_empty() && bytes != OLD);
+        println!(
+            "cave.{ext} (a file at the check) swapped for a link to victim-{ext}.txt: \
+             {outcome:?}; victim kept: {victim_kept}; cave.{ext} a file again: \
+             {name_is_a_file}, holds the export: {name_written}"
+        );
+        if !(outcome.is_ok() && victim_kept && name_is_a_file && name_written) {
+            wrong.push(ext);
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "the write followed a link planted at the name after the check: {wrong:?}"
+    );
 }

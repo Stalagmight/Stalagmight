@@ -67,6 +67,7 @@ Update this file every time a new version is tagged.
 
 ### Security
 
+- **An export is written where the path check looked** - an export (CSV, JSON, Ariane, map image, dive profile) now writes the file the check of its destination judged: a symbolic link at the export's name changed to point elsewhere after that check, or put in place of the file, is replaced rather than followed. Before, the write followed the link again, so it could land in a file of another type or a folder the check refuses ([#576](https://github.com/Stalagmight/Stalagmight/issues/576))
 - **Full-text search, R-tree, DBSTAT and extension loading are also refused while a file is open** - every project file is opened with SQLite set to refuse them, so `stalx-reader` built from crates.io, whose SQLite has them compiled in, keeps a crafted `.stalx` away from their code too; a file whose schema names are not valid UTF-8, or whose schema SQL is not stored as text (a crafted file could hide a CHECK constraint from the unsafe-file check that way), is refused as unsafe, though the recovery dialog's Export Salvageable Data still reads a damaged file whose schema type, name, table name or SQL one flipped bit left stored as a blob, its station comments, loop closures and project settings included ([#619](https://github.com/Stalagmight/Stalagmight/issues/619))
 
 ## [0.5.0] - 2026-11-07

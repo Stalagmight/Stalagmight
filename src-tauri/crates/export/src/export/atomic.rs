@@ -22,9 +22,38 @@ use std::path::{Path, PathBuf};
 /// would-be endless loop into an error.
 const TEMP_NAME_ATTEMPTS: usize = 8;
 
+/// Where an export is written.
+#[derive(Debug, Clone, Copy)]
+pub enum Destination<'a> {
+    /// A path nobody resolved: a link at it is followed to the file it leads to when the write
+    /// happens ([`resolve_destination`]).
+    Name(&'a Path),
+    /// [#576 PREPR-594-3] `name` as the caller's write policy already resolved and judged it:
+    /// `landing` ([`resolve_destination`] of `name` at the check) is written exactly, and nothing
+    /// is followed again. Renaming over `landing` replaces whatever entry is there by then, so a
+    /// link retargeted at the name, or planted at it, after the check cannot carry the write
+    /// anywhere the check never looked. Whatever depends on the file NAME the user asked for (the
+    /// Ariane spelling, `.tml` or `.tmlu`) still reads `name`.
+    Checked { name: &'a Path, landing: &'a Path },
+}
+
+impl<'a> Destination<'a> {
+    /// The name the export was asked for.
+    pub fn name(self) -> &'a Path {
+        match self {
+            Self::Name(name) | Self::Checked { name, .. } => name,
+        }
+    }
+}
+
 /// Replace `path` with `bytes`. See [`write_atomic`].
 pub fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
-    write_atomic(path, |file| Ok(file.write_all(bytes)?))
+    write_atomic_bytes_to(Destination::Name(path), bytes)
+}
+
+/// [`write_atomic_bytes`] to a [`Destination`].
+pub fn write_atomic_bytes_to(dest: Destination<'_>, bytes: &[u8]) -> Result<()> {
+    write_atomic_to(dest, |file| Ok(file.write_all(bytes)?))
 }
 
 /// Replace `path` with whatever `fill` writes into the file it is handed.
@@ -36,8 +65,25 @@ pub fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 ///
 /// On any error the temp file is removed and `path` is left exactly as it was.
 pub fn write_atomic(path: &Path, fill: impl FnOnce(&mut File) -> Result<()>) -> Result<()> {
-    let dest = resolve_destination(path);
-    let previous = existing_destination(&dest)?;
+    write_atomic_to(Destination::Name(path), fill)
+}
+
+/// [`write_atomic`] to a [`Destination`]. A [`Destination::Checked`] landing is written exactly
+/// as given, and neither it nor a link found at it is followed: the access probe and the
+/// permissions carried over read the entry itself, so a link planted there after the check is
+/// replaced, not opened.
+pub fn write_atomic_to(
+    dest: Destination<'_>,
+    fill: impl FnOnce(&mut File) -> Result<()>,
+) -> Result<()> {
+    let (dest, previous) = match dest {
+        Destination::Name(path) => {
+            let dest = resolve_destination(path);
+            let previous = existing_destination(&dest)?;
+            (dest, previous)
+        }
+        Destination::Checked { landing, .. } => (landing.to_path_buf(), existing_entry(landing)?),
+    };
     let (temp_path, mut file) = create_temp_beside(&dest, previous.as_ref())?;
     let staged = fill(&mut file).and_then(|()| {
         file.sync_all()
@@ -65,7 +111,10 @@ pub fn write_atomic(path: &Path, fill: impl FnOnce(&mut File) -> Result<()>) -> 
 /// The in-place write this replaces followed the link. Renaming onto the link's own name would
 /// instead replace the link with a regular file, silently cutting whatever the user had linked it
 /// to. A dangling link has no target to resolve, so it is replaced like any other name.
-fn resolve_destination(path: &Path) -> PathBuf {
+///
+/// Public so a caller that checks where a write lands (the app's write-path policy) resolves the
+/// name once, judges that, and hands it back as a [`Destination::Checked`] landing.
+pub fn resolve_destination(path: &Path) -> PathBuf {
     let is_link = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
     if is_link {
         std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
@@ -93,6 +142,16 @@ fn existing_destination(dest: &Path) -> Result<Option<Metadata>> {
         .open(dest)
         .with_context(|| format!("Cannot overwrite {}", dest.display()))?;
     Ok(Some(metadata))
+}
+
+/// [`existing_destination`] for a [`Destination::Checked`] landing, read off the entry itself
+/// (`symlink_metadata`): a link found there was planted after the check, so it is neither probed
+/// through nor has its target's mode carried over, and the rename replaces it.
+fn existing_entry(landing: &Path) -> Result<Option<Metadata>> {
+    match std::fs::symlink_metadata(landing) {
+        Ok(entry) if entry.is_file() => existing_destination(landing),
+        _ => Ok(None),
+    }
 }
 
 /// Create a fresh temp file beside `dest`, retrying on a name that is already taken.
@@ -428,6 +487,34 @@ mod tests {
             .is_symlink());
         assert_eq!(std::fs::read(&real).unwrap(), b"new");
         assert_eq!(names_in(dir.path()), ["CaveA.pdf", "real.pdf"]);
+    }
+
+    /// [#576 PREPR-594-3] A checked landing is written exactly: a link found at it (planted after
+    /// the caller's check) is replaced by the rename, and the file it leads to is neither written
+    /// nor probed. The name only says what was asked for.
+    #[cfg(unix)]
+    #[test]
+    fn a_checked_landing_is_written_exactly_and_a_link_planted_there_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere.txt");
+        std::fs::write(&elsewhere, OLD).unwrap();
+        let landing = dir.path().join("real.csv");
+        std::os::unix::fs::symlink(&elsewhere, &landing).unwrap();
+        let name = dir.path().join("CaveA.csv");
+
+        write_atomic_bytes_to(
+            Destination::Checked {
+                name: &name,
+                landing: &landing,
+            },
+            b"new",
+        )
+        .unwrap();
+
+        assert!(std::fs::symlink_metadata(&landing).unwrap().is_file());
+        assert_eq!(std::fs::read(&landing).unwrap(), b"new");
+        assert_eq!(std::fs::read(&elsewhere).unwrap(), OLD);
+        assert_eq!(names_in(dir.path()), ["elsewhere.txt", "real.csv"]);
     }
 
     /// A rename only needs the directory to be writable, so without the access probe a read-only

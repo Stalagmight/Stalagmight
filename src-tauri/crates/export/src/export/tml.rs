@@ -33,7 +33,7 @@ use crate::parsers::tml::schema::{
     self, color_to_ariane, element as el, pitch_to_inclination, ElementName, Spelling,
 };
 
-use super::atomic::{write_atomic, write_atomic_bytes};
+use super::atomic::{write_atomic_bytes_to, write_atomic_to, Destination};
 use super::tml_azimuth::AzimuthExport;
 use super::tml_topology::{
     build_parent_map, choose_default_root_section_id, section_datum, station_depth,
@@ -343,7 +343,13 @@ enum TmlProfile {
 /// what the reader would assume, and the export command is the only moment the
 /// user is looking.
 pub fn export_tml(project: &Project, path: &Path) -> Result<Vec<String>> {
-    export_with_profile(project, path, TmlProfile::User)
+    export_tml_to(project, Destination::Name(path))
+}
+
+/// [`export_tml`] to a [`Destination`]. ZIP or plain XML, and the element spelling, follow the
+/// name asked for, not where a link at it leads.
+pub fn export_tml_to(project: &Project, dest: Destination<'_>) -> Result<Vec<String>> {
+    export_with_profile(project, dest, TmlProfile::User)
 }
 
 /// Render the SpeleoDB co-push sidecar (#196) - the same document, hardened for
@@ -352,12 +358,21 @@ pub fn export_tml(project: &Project, path: &Path) -> Result<Vec<String>> {
 pub fn export_tml_for_speleodb(project: &Project, path: &Path) -> Result<()> {
     // The sidecar has no user watching it; its notes go to the log with the
     // rest of the push.
-    export_with_profile(project, path, TmlProfile::SpeleoDbSidecar).map(|_| ())
+    export_with_profile(
+        project,
+        Destination::Name(path),
+        TmlProfile::SpeleoDbSidecar,
+    )
+    .map(|_| ())
 }
 
-fn export_with_profile(project: &Project, path: &Path, profile: TmlProfile) -> Result<Vec<String>> {
-    let (xml, notes) = build_xml(project, spelling_for_path(path), profile)?;
-    write_output(path, &xml)?;
+fn export_with_profile(
+    project: &Project,
+    dest: Destination<'_>,
+    profile: TmlProfile,
+) -> Result<Vec<String>> {
+    let (xml, notes) = build_xml(project, spelling_for_path(dest.name()), profile)?;
+    write_output(dest, &xml)?;
     Ok(notes)
 }
 
@@ -374,16 +389,17 @@ fn spelling_for_path(path: &Path) -> Spelling {
     }
 }
 
-fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
-    let ext = path
+fn write_output(dest: Destination<'_>, xml: &[u8]) -> Result<()> {
+    let ext = dest
+        .name()
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_lowercase)
         .unwrap_or_default();
     match ext.as_str() {
-        "tml" => write_zip(path, xml),
-        "tmlu" => write_atomic_bytes(path, xml).context("Failed to write TMLU file"),
-        _ => write_atomic_bytes(path, xml).context("Failed to write TML export file"),
+        "tml" => write_zip(dest, xml),
+        "tmlu" => write_atomic_bytes_to(dest, xml).context("Failed to write TMLU file"),
+        _ => write_atomic_bytes_to(dest, xml).context("Failed to write TML export file"),
     }
 }
 
@@ -663,8 +679,8 @@ fn format_f64(v: f64) -> String {
 // ZIP wrapper
 // ============================================================================
 
-fn write_zip(path: &Path, xml: &[u8]) -> Result<()> {
-    write_atomic(path, |file| {
+fn write_zip(dest: Destination<'_>, xml: &[u8]) -> Result<()> {
+    write_atomic_to(dest, |file| {
         let mut zip = zip::ZipWriter::new(file);
 
         let options = zip::write::SimpleFileOptions::default()

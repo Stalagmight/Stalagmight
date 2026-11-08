@@ -4,11 +4,11 @@ use ts_rs::TS;
 
 use crate::commands::event_sink::tauri_sink;
 use crate::commands::pool;
-use crate::commands::write_path::{check_write_path, WriteTarget};
+use crate::commands::write_path::{check_export_path, WriteTarget};
 use crate::config::GasConfig;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::{AppState, CommandError};
-use crate::export::{ExportImageOptions, ProfileFormat};
+use crate::export::{Destination, ExportImageOptions, ProfileFormat};
 use crate::models::{Cylinder, Diver, PlanSegment, Project, StationRef};
 
 /// True when `target` resolves to the same file on disk as the open project's
@@ -61,16 +61,73 @@ fn is_project_owned_file(target: &Path, project: &Project) -> bool {
         || is_open_project_file(target, &open_path.with_extension("plnx"))
 }
 
+/// [#576 PREPR-594-3] Test-only: a hook a test runs in the window between an
+/// export's write-path check and its write, to change what is on disk there (a
+/// link at the export's name retargeted, a file swapped for a link).
+#[cfg(test)]
+pub(crate) mod between_check_and_write {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, PoisonError};
+
+    type Hook = Box<dyn FnOnce() + Send>;
+
+    /// Keyed by the export's path, so a test's hook never fires in another
+    /// test's export running in parallel.
+    static HOOKS: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
+
+    /// Run `hook` once, when an export to `path` has been checked and not yet
+    /// written.
+    pub(crate) fn on(path: PathBuf, hook: impl FnOnce() + Send + 'static) {
+        HOOKS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((path, Box::new(hook)));
+    }
+
+    /// The export to `path` is between its check and its write.
+    pub(super) fn reached(path: &Path) {
+        let hook = {
+            let mut hooks = HOOKS.lock().unwrap_or_else(PoisonError::into_inner);
+            hooks
+                .iter()
+                .position(|(at, _)| at == path)
+                .map(|i| hooks.remove(i).1)
+        };
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+}
+
+/// [#576 PREPR-594-3] Where an export to `path` lands, checked: the write-path
+/// policy's landing ([`check_export_path`]), which the export then writes
+/// exactly (`export::Destination::Checked`), following nothing again. A landing
+/// other than the name passes the open-project guard too, so a link at the name
+/// pointed at the open project after that guard ran is refused, not written.
+fn checked_landing(path: &Path, target: WriteTarget, project: &Project) -> Result<PathBuf, String> {
+    let landing = check_export_path(path, target)?;
+    if landing != path && is_project_owned_file(&landing, project) {
+        tracing::warn!(
+            path = ?path,
+            landing = ?landing,
+            open_project = ?project.file_path,
+            "Refused to export through a link to a file the open project owns"
+        );
+        return Err("Cannot export over the open project file".to_owned());
+    }
+    Ok(landing)
+}
+
 /// Generic helper that handles the shared export logic for all text-based formats.
 fn export_format_impl(
     state: &AppState,
     path: PathBuf,
     format: &str,
     target: WriteTarget,
-    export_fn: fn(&Project, &Path) -> Result<(), anyhow::Error>,
+    export_fn: fn(&Project, Destination<'_>) -> Result<(), anyhow::Error>,
 ) -> Result<(), String> {
-    export_format_with_notes(state, path, format, target, move |project, path| {
-        export_fn(project, path).map(|()| Vec::new())
+    export_format_with_notes(state, path, format, target, move |project, dest| {
+        export_fn(project, dest).map(|()| Vec::new())
     })
     .map(|_| ())
 }
@@ -88,7 +145,7 @@ fn export_format_with_notes(
     path: PathBuf,
     format: &str,
     target: WriteTarget,
-    export_fn: impl FnOnce(&Project, &Path) -> Result<Vec<String>, anyhow::Error>,
+    export_fn: impl FnOnce(&Project, Destination<'_>) -> Result<Vec<String>, anyhow::Error>,
 ) -> Result<Vec<String>, String> {
     let project = state.settled_snapshot().ok_or_else(|| {
         tracing::warn!(
@@ -112,8 +169,9 @@ fn export_format_with_notes(
         );
         return Err("Cannot export over the open project file".to_string());
     }
-    // [#576 C11-D1] The format's own extension, nowhere app-internal or system.
-    check_write_path(&path, target)?;
+    // [#576 C11-D1] The format's own extension, nowhere app-internal or system;
+    // [#576 PREPR-594-3] written where that check looked.
+    let landing = checked_landing(&path, target, &project)?;
 
     tracing::info!(
         path = ?path,
@@ -121,7 +179,13 @@ fn export_format_with_notes(
         format = format,
         "Exporting project to {}", format.to_uppercase()
     );
-    match export_fn(&project, &path) {
+    #[cfg(test)]
+    between_check_and_write::reached(&path);
+    let dest = Destination::Checked {
+        name: &path,
+        landing: &landing,
+    };
+    match export_fn(&project, dest) {
         Ok(notes) => {
             tracing::info!(
                 path = ?path,
@@ -154,7 +218,7 @@ pub async fn export_csv<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result<
             path,
             "csv",
             WriteTarget::Csv,
-            crate::export::export_csv,
+            crate::export::export_csv_to,
         )
         .map_err(CommandError::from)
     })
@@ -170,7 +234,7 @@ pub async fn export_json<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result
             path,
             "json",
             WriteTarget::Json,
-            crate::export::export_json,
+            crate::export::export_json_to,
         )
         .map_err(CommandError::from)
     })
@@ -193,7 +257,7 @@ pub async fn export_tml<R: Runtime>(
             path,
             "tml",
             WriteTarget::Ariane,
-            crate::export::export_tml,
+            crate::export::export_tml_to,
         )
         .map_err(CommandError::from)
     })
@@ -253,8 +317,9 @@ pub async fn export_image<R: Runtime>(
                 "Cannot export over the open project file",
             ));
         }
-        // [#576 C11-D1] The image format's own extension, nowhere app-internal or system.
-        check_write_path(&path, WriteTarget::Image(options.format))?;
+        // [#576 C11-D1] The image format's own extension, nowhere app-internal or system;
+        // [#576 PREPR-594-3] written where that check looked.
+        let landing = checked_landing(&path, WriteTarget::Image(options.format), project)?;
 
         tracing::info!(
             path = ?path,
@@ -277,7 +342,14 @@ pub async fn export_image<R: Runtime>(
         emitter.start_phase(LoadingPhase::ExportGenerating);
 
         // Perform the actual export
-        let result = crate::export::export_image_with_stations(project, &path, &options, stations);
+        #[cfg(test)]
+        between_check_and_write::reached(&path);
+        let dest = Destination::Checked {
+            name: &path,
+            landing: &landing,
+        };
+        let result =
+            crate::export::export_image_with_stations_to(project, dest, &options, stations);
 
         if result.is_ok() {
             // Writing phase
@@ -411,8 +483,9 @@ pub async fn export_dive_profile(
         if is_project_owned_file(&path, &project) {
             return Err(refuse(&path));
         }
-        // [#576 C11-D1] The profile format's own extension, nowhere app-internal or system.
-        check_write_path(&path, WriteTarget::DiveProfile(format))?;
+        // [#576 C11-D1] The profile format's own extension, nowhere app-internal or system;
+        // [#576 PREPR-594-3] written where that check looked.
+        let landing = checked_landing(&path, WriteTarget::DiveProfile(format), &project)?;
         let rendered = render_profile_for(&project, request, format)?;
         tracing::info!(
             path = ?path,
@@ -426,9 +499,13 @@ pub async fn export_dive_profile(
         if is_project_owned_file(&path, &project) {
             return Err(refuse(&path));
         }
-        // Staged and renamed over `path` (#576 B9), so a write that fails part-way keeps the
-        // previous profile instead of leaving a truncated one under its name.
-        crate::export::write_atomic_bytes(&path, rendered.as_bytes()).map_err(|e| {
+        // Staged and renamed over the checked landing (#576 B9), so a write that fails part-way
+        // keeps the previous profile instead of leaving a truncated one under its name.
+        let dest = Destination::Checked {
+            name: &path,
+            landing: &landing,
+        };
+        crate::export::write_atomic_bytes_to(dest, rendered.as_bytes()).map_err(|e| {
             tracing::error!(path = ?path, reason = %format!("{e:#}"), "Dive profile export failed");
             format!("{e:#}")
         })?;

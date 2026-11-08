@@ -12,7 +12,10 @@ mod tml_comment_order_tests;
 mod tml_golden_tests;
 mod tml_topology;
 
-pub use atomic::{write_atomic, write_atomic_bytes};
+pub use atomic::{
+    resolve_destination, write_atomic, write_atomic_bytes, write_atomic_bytes_to, write_atomic_to,
+    Destination,
+};
 pub use csv::*;
 pub use dive_profile::*;
 pub use image::*;
