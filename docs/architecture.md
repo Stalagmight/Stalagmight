@@ -231,7 +231,9 @@ explicit deep copy, for the few callers that must own the project.
 `cancel_loading` is not a command in this sense: it flips the active load's token -
 only when the Cancel names that load (the `loadToken` the webview gave it, #576
 W44-NF3) - and takes no `command_lock`, so it is never queued behind the import or
-load it cancels (`commands/import_offthread_tests.rs`, `core/state/command_ordering_tests.rs`).
+load it cancels. A Cancel that names no load in progress is kept, a bounded few, so a
+file import it overtook starts cancelled when it registers (`AppState::start_named_import`).
+See the tests (`commands/import_offthread_tests.rs`, `core/state/command_ordering_tests.rs`).
 A load reads its file with no lock held and commits under `command_lock`, so its
 commit re-checks what may have changed meanwhile: its cancel token (right after
 taking the lock, and again at the last point before the commit's first side

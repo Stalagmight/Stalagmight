@@ -544,7 +544,9 @@ pub async fn load_project_full_binary(
 ///
 /// [#576 W44-NF3] A Cancel names its load: one that runs after its load ended and
 /// a newer one started must not cancel the newer one. A name that is not the
-/// active load's, and no name, cancel nothing.
+/// active load's, and no name, cancel nothing. A name that is not the active
+/// load's is kept, a bounded few: a file import of that name that has not
+/// registered yet starts cancelled (Codex review on #630).
 #[tauri::command]
 pub async fn cancel_loading<R: Runtime>(
     app: tauri::AppHandle<R>,
