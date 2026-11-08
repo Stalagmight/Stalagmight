@@ -6,6 +6,7 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invokeIpc } from './ipc';
 import { useProjectStore } from '../store/projectStore';
+import { mutationsSettled } from '../store/mutationQueue';
 import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { holdAutosave, withAutosaveHeld } from './autosaveHold';
@@ -97,6 +98,33 @@ export function performQuit(): void {
     clearTimeout(expiry);
     release();
   });
+}
+
+/**
+ * [#576 W83] How long an exit waits for the edits queued before it, see
+ * {@link editsSettledForExit}. A settled queue answers at once, and a healthy
+ * edit takes well under a second, so this only bounds an edit that is stuck: the
+ * user who asked to quit is not kept waiting on it for ever, and is asked instead.
+ */
+const EXIT_EDITS_SETTLE_TIMEOUT_MS = 5_000;
+
+/**
+ * [#576 W83] Wait for the edits queued so far before an exit reads the dirty
+ * state. `isDirty` is set only once an edit's IPC AND the refresh after it have
+ * both returned, so an edit still in flight (a grid cell committed on blur by the
+ * very click that asked to quit or restart) reads as a clean project.
+ *
+ * Resolves `true` once they have settled, whether they succeeded or not, and
+ * `false` when {@link EXIT_EDITS_SETTLE_TIMEOUT_MS} passed first: the caller then
+ * cannot trust `isDirty`, and treats the project as dirty. Never rejects. Edits
+ * queued after the call are not waited for, as in `mutationsSettled`.
+ */
+export function editsSettledForExit(): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), EXIT_EDITS_SETTLE_TIMEOUT_MS);
+  });
+  return Promise.race([mutationsSettled().then(() => true), timedOut]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -388,8 +416,12 @@ export function openExitPrompt(dialog: string, data?: Record<string, unknown>): 
  * Both branches terminate: each dialog quits via {@link performQuit}, which
  * arms the one-shot confirmation so the resulting close request skips this
  * guard entirely.
+ *
+ * `exit.editsSettled === false` says the caller gave up waiting for queued edits
+ * ({@link editsSettledForExit}): one may still dirty the project, so it counts as
+ * unsaved work.
  */
-export function guardQuit(): boolean {
+export function guardQuit(exit?: { editsSettled?: boolean }): boolean {
   const { project, isDirty } = useProjectStore.getState();
   if (!project) return false;
 
@@ -405,7 +437,7 @@ export function guardQuit(): boolean {
     return true;
   }
 
-  if (isDirty) {
+  if (isDirty || exit?.editsSettled === false) {
     openExitPrompt('unsaved-changes', { pendingQuit: true });
     return true;
   }
