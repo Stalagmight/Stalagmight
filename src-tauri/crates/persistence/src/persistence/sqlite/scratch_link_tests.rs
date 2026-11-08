@@ -285,6 +285,61 @@ fn scratch_files_in_a_folder_reached_through_a_link_are_written_as_before() {
     );
 }
 
+/// [#576 W87b] The non-UTF-8 name goes to `VACUUM INTO` as a `file:` URI, where
+/// `?`, `#` and `%` are syntax (the query, the fragment, an escape). A real folder
+/// name holding all three beside a non-UTF-8 byte must still be reached byte for
+/// byte: the push snapshot lands in exactly that folder.
+#[test]
+fn a_snapshot_lands_in_a_folder_whose_name_holds_uri_syntax_and_is_not_utf8() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let root = TempDir::new().expect("dir");
+    let name: &[u8] = b"caves-?#%25-\xff";
+    let real = root.path().join(std::ffi::OsStr::from_bytes(name));
+    if let Err(e) = std::fs::create_dir(&real) {
+        println!("[W87b] skipped: this file system refuses the name ({e})");
+        return;
+    }
+    let linked = root.path().join("caves");
+    symlink(&real, &linked).expect("a link to the folder");
+    let live = project_at(&linked.join("CaveA.stalx"));
+
+    let snapshotted = Database::vacuum_snapshot(&live, &linked.join("snapshot.stalx"));
+    let folders: Vec<Vec<u8>> = std::fs::read_dir(root.path())
+        .expect("list the root")
+        .map(|entry| entry.expect("an entry").file_name().as_bytes().to_vec())
+        .collect();
+    let in_real: Vec<String> = std::fs::read_dir(&real)
+        .expect("list the real folder")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    println!(
+        "[W87b] snapshot {snapshotted:?}\n  in the root: {:?}\n  in the real folder: \
+         {in_real:?}",
+        folders
+            .iter()
+            .map(|f| String::from_utf8_lossy(f).into_owned())
+            .collect::<Vec<_>>()
+    );
+    snapshotted.expect("a push snapshot into the linked folder");
+    let sections = Database::open_existing(&real.join("snapshot.stalx"))
+        .expect("the snapshot is in the folder named by those exact bytes")
+        .load_project()
+        .expect("the snapshot loads")
+        .sections
+        .len();
+    assert_eq!(sections, 1, "and holds the project");
+    assert!(
+        folders.iter().all(|f| f == name || f == b"caves"),
+        "and nothing was written anywhere else in the root"
+    );
+}
+
 /// [#576 RVF-d-10] The same through a link to a folder whose real name is not
 /// UTF-8 (a legacy Latin-1 name, some USB or SMB mounts). The scratch spelling
 /// resolves the link, so `VACUUM INTO` gets the real name, and has to get it

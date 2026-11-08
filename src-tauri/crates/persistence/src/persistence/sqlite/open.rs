@@ -862,6 +862,24 @@ impl Database {
     }
 }
 
+#[cfg(all(test, unix))]
+mod file_uri_tests {
+    use super::file_uri;
+
+    /// [#576 W87b] Every byte outside the unreserved set and `/` is
+    /// percent-encoded. SQLite reads a raw `?` as the start of the URI's query, a
+    /// raw `#` as its fragment and a raw `%` as an escape, so each would name
+    /// another file than the path's own bytes.
+    #[test]
+    fn file_uri_percent_encodes_every_byte_a_uri_reads_as_syntax() {
+        assert_eq!(
+            file_uri(b"/caves/a?b#c%d e\xff.stalx"),
+            "file:///caves/a%3Fb%23c%25d%20e%FF.stalx"
+        );
+        assert_eq!(file_uri(b"rel/Az09-._~"), "file:rel/Az09-._~");
+    }
+}
+
 /// Test-only seam (#576 RV18-2): a hook that runs between the two opens of one
 /// existing file - the refusing first open of [`Database::open_existing_to_read`]
 /// and its copy into memory, the handle [`Database::into_read_only`] drops
