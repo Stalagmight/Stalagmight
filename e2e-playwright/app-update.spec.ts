@@ -258,11 +258,16 @@ test.describe('In-app update banner', () => {
    * without a word. From the moment the install starts the app is held still: a
    * shortcut does nothing (Ctrl+Z sends no undo), and a failed install gives the
    * app back with the existing failure toast.
+   *
+   * "Sends no undo" is read off the mutation queue, not a timer: undo and redo run
+   * on one first-in first-out queue, and Ctrl+Z puts its undo on it inside the key
+   * handler. So once the redo pressed after the install failed has reached the
+   * backend, an undo the held Ctrl+Z had queued would have reached it first.
    */
   test('while the update installs, shortcuts do nothing; a failed install lifts the hold', async ({ page }) => {
     await dirtyProjectWithReadyUpdate(page);
     await holdInstall(page);
-    await recordIpcCalls(page, ['install_app_update_and_restart', 'undo']);
+    await recordIpcCalls(page, ['install_app_update_and_restart', 'undo', 'redo']);
     const count = async (cmd: string) => (await getIpcCalls(page, cmd)).length;
 
     await page.getByTestId('update-banner-restart').click();
@@ -271,9 +276,8 @@ test.describe('In-app update banner', () => {
     await simulateCloseRequested(page);
     await expect.poll(() => count('install_app_update_and_restart')).toBe(1);
 
+    // The sentinel: Ctrl+Z sends an undo whenever the app is not held.
     await page.keyboard.press('Control+z');
-    // settle: an undo that is never sent leaves nothing to poll for
-    await page.waitForTimeout(500);
     expect(await count('undo')).toBe(0);
     const overlay = page.getByTestId('update-install-overlay');
     await expect(overlay).toBeVisible();
@@ -289,6 +293,15 @@ test.describe('In-app update banner', () => {
     await expect(overlay).toHaveCount(0);
     await expect(page.locator('[data-toast-key="app-update-install-failed"]')).toBeVisible();
     await expect(page.getByTestId('update-banner-download')).toBeVisible();
+
+    // The control: a redo queued behind anything the sentinel queued. Once it is sent,
+    // the sentinel's undo would have been sent before it.
+    await page.keyboard.press('Control+y');
+    await expect.poll(() => count('redo')).toBe(1);
+    expect(await getIpcCalls(page), 'the held Ctrl+Z sent nothing before the redo').toEqual(
+      [expect.objectContaining({ cmd: 'install_app_update_and_restart' }), expect.objectContaining({ cmd: 'redo' })],
+    );
+
     await page.keyboard.press('Control+z');
     await expect.poll(() => count('undo')).toBe(1);
   });
