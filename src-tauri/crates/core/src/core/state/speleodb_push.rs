@@ -796,6 +796,11 @@ impl AppState {
         }
         let link = self.speleodb_link_made_for("Discard changes")?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        // [#576 W89] The return to the tip downloads the signed-in server's project
+        // under the link's id and re-stamps the link with the session's server, so a
+        // copy of another server is refused before anything is sent.
+        super::speleodb_session::refuse_a_copy_on_another_server(&link.endpoint, Some(&endpoint))
+            .map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
         let (tip, _) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
@@ -835,6 +840,11 @@ impl AppState {
     pub fn speleodb_update(&self) -> Result<UpdateResult, SpeleoErrorDto> {
         let link = self.speleodb_link_made_for("Update from SpeleoDB")?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        // [#576 W89] A fast-forward downloads the signed-in server's project under the
+        // link's id and re-stamps the link with the session's server, so a copy of
+        // another server is refused before anything is sent.
+        super::speleodb_session::refuse_a_copy_on_another_server(&link.endpoint, Some(&endpoint))
+            .map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
         let (tip, commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {

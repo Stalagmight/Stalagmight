@@ -669,6 +669,14 @@ impl AppState {
         )?;
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        // [#576 W89] View and Restore download the signed-in server's project under the
+        // link's id and stamp the link with the session's server, so a copy of another
+        // server is refused before the download.
+        super::speleodb_session::refuse_a_copy_on_another_server(
+            &open_link.endpoint,
+            Some(&endpoint),
+        )
+        .map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
         let zip = self

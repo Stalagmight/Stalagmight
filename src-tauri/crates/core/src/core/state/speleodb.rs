@@ -2445,6 +2445,11 @@ impl AppState {
         self.speleodb_guard_workspace("Take remote")?;
         let link = self.speleodb_link_made_for("Take remote")?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        // [#576 W89] The take downloads the signed-in server's project under the link's
+        // id, re-stamps the link with the session's server and drops the local edits
+        // for it, so a copy of another server is refused before anything is sent.
+        super::speleodb_session::refuse_a_copy_on_another_server(&link.endpoint, Some(&endpoint))
+            .map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
         // Authoritative server tip from the revision topology, NOT the unreliable

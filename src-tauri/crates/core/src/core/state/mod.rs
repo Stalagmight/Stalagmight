@@ -485,6 +485,17 @@ mod sdb_endpoint_gate_tests;
 #[expect(
     clippy::expect_used,
     clippy::print_stdout,
+    clippy::panic,
+    clippy::result_large_err,
+    reason = "test module: panics on a failed assumption are the point, the printed \
+              answers are the evidence a run captures, and a closure returns the verb's \
+              own large SpeleoErrorDto"
+)]
+mod sdb_endpoint_relink_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \
               values are the evidence a run captures"
 )]
