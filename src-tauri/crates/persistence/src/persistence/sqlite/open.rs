@@ -136,7 +136,39 @@ pub(super) fn scratch_spelling(path: &Path) -> std::io::Result<PathBuf> {
 /// to the file system as it is, and `VACUUM INTO` takes TEXT only, never a
 /// BLOB. Elsewhere the path goes as it did, lossily (Windows file names are
 /// UTF-16, and these were never resolved there).
+///
+/// [#619 x RVF-d-10] A path that is not UTF-8 goes as a `file:` URI instead,
+/// each byte outside the URI's unreserved set percent-encoded. `VACUUM INTO`
+/// ATTACHes its target, and SQLite hands the attached file name to the
+/// authorizer ([`super::deny_stripped_sqlite_features`], on Repair's
+/// connection), whose safe rusqlite wrapper panics on a name that is not UTF-8
+/// and so refuses the statement: Repair in such a folder failed with
+/// "authorization denied". The URI is ASCII, and SQLite decodes it back to the
+/// same bytes when it opens the file (rusqlite's default flags, which
+/// [`scratch_flags`] keeps, include `SQLITE_OPEN_URI`; `SQLITE_OPEN_NOFOLLOW`
+/// still applies). A UTF-8 path goes as before, as plain text.
 pub(super) struct VacuumTarget<'a>(pub(super) &'a Path);
+
+/// `bytes`, an absolute (or relative) Unix path, as a `file:` URI SQLite reads
+/// back to the same bytes: unreserved ASCII and `/` as they are, every other
+/// byte as `%XX`.
+#[cfg(unix)]
+fn file_uri(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut uri = String::from(if bytes.first() == Some(&b'/') {
+        "file://"
+    } else {
+        "file:"
+    });
+    for &byte in bytes {
+        if byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte) {
+            uri.push(char::from(byte));
+        } else {
+            let _ = write!(uri, "%{byte:02X}");
+        }
+    }
+    uri
+}
 
 impl rusqlite::ToSql for VacuumTarget<'_> {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
@@ -144,8 +176,12 @@ impl rusqlite::ToSql for VacuumTarget<'_> {
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStrExt as _;
+            let bytes = self.0.as_os_str().as_bytes();
+            if std::str::from_utf8(bytes).is_err() {
+                return Ok(ToSqlOutput::from(file_uri(bytes)));
+            }
             Ok(ToSqlOutput::Borrowed(rusqlite::types::ValueRef::Text(
-                self.0.as_os_str().as_bytes(),
+                bytes,
             )))
         }
         #[cfg(not(unix))]
