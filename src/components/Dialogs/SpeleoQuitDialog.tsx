@@ -4,6 +4,7 @@ import { useUIStore } from '../../store/uiStore';
 import { doneFinished, isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { expectedOpenProject } from '../../store/expectedOpenProject';
+import { isProjectChangedRefusal } from '../../store/commandResult';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
@@ -103,6 +104,16 @@ export default function SpeleoQuitDialog() {
     try {
       const result = await saveProject();
       if (!result?.success) {
+        // [#576 W87a-4] A save refused because a project switch is under way is no
+        // failure to report, so `surfaceSaveFailure` shows nothing for it; the user
+        // pressed a button, though, and the prompt stays open. Say why, with the
+        // quiet notice an edit refused during a switch gets (`switchEditNotice.ts`);
+        // the backend's own PROJECT_CHANGED gets a user-started verb's short line.
+        if (isProjectChangedRefusal(result)) {
+          if (result.code === 'PROJECT_CHANGED') toastProjectChanged(result);
+          else showToast(t('editGate.switchPendingNotice'), TOAST_KEYS.EDIT_DURING_SWITCH, 'info');
+          return false;
+        }
         surfaceSaveFailure(result, openDialog, useProjectStore.getState());
         return false;
       }
