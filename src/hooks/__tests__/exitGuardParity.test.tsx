@@ -110,8 +110,8 @@ const openPrompts = async (): Promise<boolean> => {
 };
 
 /** Did New Project over this project raise the prompt? Same dialog, same carry. */
-const newPrompts = (): boolean => {
-  newProjectGuarded();
+const newPrompts = async (): Promise<boolean> => {
+  await newProjectGuarded();
   return openDialog.mock.calls.some(
     (c) => c[0] === 'speleodb-close' && (c[1] as { pendingNewProject?: boolean })?.pendingNewProject === true,
   );
@@ -135,7 +135,7 @@ const allExits = async (): Promise<{
   openDialog.mockClear();
   const open = await openPrompts();
   openDialog.mockClear();
-  const nu = newPrompts();
+  const nu = await newPrompts();
   openDialog.mockClear();
   return { quit, close, open, new: nu };
 };
@@ -226,7 +226,7 @@ describe('the disk-dirty guard still runs, but only after the SpeleoDB one', () 
     expect(openDialog).toHaveBeenCalledWith('speleodb-close', { pendingOpenPath: OTHER });
 
     openDialog.mockClear();
-    newProjectGuarded();
+    await newProjectGuarded();
     expect(openDialog).toHaveBeenCalledTimes(1);
     expect(openDialog).toHaveBeenCalledWith('speleodb-close', { pendingNewProject: true });
   });
@@ -238,7 +238,7 @@ describe('the disk-dirty guard still runs, but only after the SpeleoDB one', () 
     expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingOpenPath: OTHER });
 
     openDialog.mockClear();
-    newProjectGuarded();
+    await newProjectGuarded();
     expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingNewProject: true });
   });
 });

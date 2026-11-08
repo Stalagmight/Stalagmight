@@ -48,7 +48,7 @@ export function runFileShortcutAction(action: FileShortcutAction): void {
       setProjectActionSource('keyboard');
       // Shared with the menu "New" path: the dirty-project unsaved-changes guard
       // lives in newProjectGuarded so the two can't drift.
-      newProjectGuarded();
+      void newProjectGuarded();
       break;
     case 'open_file':
       setProjectActionSource('keyboard');

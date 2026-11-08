@@ -1,0 +1,285 @@
+// @vitest-environment jsdom
+/**
+ * [#576 W84] The three hand-back exits wait for the edits queued before them, as
+ * quitting does (W83, `useBeforeUnload.inflightEdit.test.tsx`).
+ *
+ * Close, New Project and opening another `.stalx` decide from `isDirty`, which an
+ * edit sets only once its IPC and the refresh after it have both returned. The
+ * click on the exit is also the blur that commits a grid cell being edited, so on
+ * a clean project that edit is still in flight when the guard reads the flag. The
+ * project switch then waits for the edit (`runProjectSwitch`), so it lands on the
+ * project being replaced, which goes with the edit unsaved and no prompt.
+ *
+ * These run each exit with the REAL guard and the REAL store (`updateShot` through
+ * the mutation queue, the real `closeProject`), holding the edit's IPC open by hand.
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { renderHook } from '@testing-library/react';
+
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({ close: vi.fn(async () => {}), destroy: vi.fn(async () => {}) }),
+}));
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: vi.fn(async () => null),
+  save: vi.fn(async () => null),
+  confirm: vi.fn(async () => false),
+}));
+vi.mock('../../utils/ipc');
+
+import { useProject } from '../useProject';
+import { newProjectGuarded } from '../../utils/projectActions';
+import { routeOpenedFile } from '../../utils/openOrImport';
+import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore } from '../../store/speleoStore';
+import { useUIStore } from '../../store/uiStore';
+import { mutationsSettled } from '../../store/mutationQueue';
+import { deferred, type Deferred } from '../../test/factories/async';
+import { emptyBinaryRefresh, invokeIpcMock } from '../../test/factories/ipc';
+
+emptyBinaryRefresh();
+
+const EDIT = 'update_shot';
+const CLOSE = 'close_project';
+/** The other project the "open another .stalx" exit is asked for. */
+const OTHER = '/cave/other.stalx';
+
+let loadProject: ReturnType<typeof vi.fn>;
+
+function calls(cmd: string): number {
+  return invokeIpcMock.mock.calls.filter((c) => c[0] === cmd).length;
+}
+
+/**
+ * Await `p` while letting fake time run in short steps: the edit's aftermath (the
+ * refresh, the integrity re-check) waits on timers too. Fails rather than hangs,
+ * and stays well inside the exits' settle timeout.
+ */
+async function settle<T>(p: Promise<T>): Promise<T> {
+  let done = false;
+  const tracked = p.finally(() => {
+    done = true;
+  });
+  for (let i = 0; i < 100 && !done; i += 1) await vi.advanceTimersByTimeAsync(10);
+  expect(done).toBe(true);
+  return tracked;
+}
+
+/** The edit `holdEdit` is holding, so a failed test cannot leave the queue stuck for the next. */
+let heldEdit: Deferred<unknown> | null = null;
+
+/** Hold the edit's IPC open until the test settles it. */
+function holdEdit() {
+  const edit = deferred<unknown>();
+  heldEdit = edit;
+  invokeIpcMock.mockImplementation((cmd: string) => {
+    if (cmd === EDIT) return edit.promise;
+    if (cmd === 'check_project_integrity') return Promise.resolve({ messages: [], save_blocked: false });
+    return Promise.resolve(null);
+  });
+  return edit;
+}
+
+/**
+ * A grid cell committed on blur: the edit is queued, its IPC not yet answered.
+ * Hands back the edit's promise boxed, so awaiting this does not await the edit.
+ */
+async function startEdit(): Promise<{ done: Promise<unknown> }> {
+  const done = useProjectStore.getState().updateShot(1, 1, { length: 55 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(calls(EDIT)).toBe(1);
+  expect(useProjectStore.getState().isDirty).toBe(false);
+  return { done };
+}
+
+const ui = () => useUIStore.getState();
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  invokeIpcMock.mockReset();
+  invokeIpcMock.mockResolvedValue(null);
+  loadProject = vi.fn(async () => ({ success: true }));
+  useUIStore.setState({ activeDialog: null, dialogData: {}, toasts: [] });
+  useSpeleoStore.setState({ link: null });
+  // A saved, local project: nothing for any guard to protect yet.
+  useProjectStore.setState({
+    project: { name: 'CaveA', file_path: '/cave/a.stalx' } as never,
+    isDirty: false,
+    isClosing: false,
+    loadProject: loadProject as never,
+  });
+});
+
+afterEach(async () => {
+  heldEdit?.resolve({ remote_link: null });
+  heldEdit = null;
+  await settle(mutationsSettled());
+  vi.useRealTimers();
+});
+
+describe('Close waits for the edits queued before it', () => {
+  it('an edit in flight on a clean project: Close prompts once the edit lands, and does not close', async () => {
+    const { result } = renderHook(() => useProject());
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const closing = result.current.handleCloseProject();
+    await vi.advanceTimersByTimeAsync(0);
+    // Still waiting on the edit: no decision yet either way.
+    expect(ui().activeDialog).toBeNull();
+    expect(calls(CLOSE)).toBe(0);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    const outcome = await settle(closing);
+
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(calls(CLOSE)).toBe(0);
+    expect(outcome.success).toBe(false);
+    expect(useProjectStore.getState().project).not.toBeNull();
+    expect(useProjectStore.getState().isDirty).toBe(true);
+  });
+
+  it('control: a clean project with nothing in flight closes at once, with no prompt', async () => {
+    const { result } = renderHook(() => useProject());
+
+    // No fake time passes: the close does not sit out the settle timeout.
+    const outcome = await result.current.handleCloseProject();
+
+    expect(outcome.success).toBe(true);
+    expect(calls(CLOSE)).toBe(1);
+    expect(ui().activeDialog).toBeNull();
+  });
+
+  it('an edit that never settles counts as unsaved work once the wait runs out', async () => {
+    const { result } = renderHook(() => useProject());
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const closing = result.current.handleCloseProject();
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(ui().activeDialog).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    // The project still reads clean, but the edit may yet land: ask.
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(calls(CLOSE)).toBe(0);
+    expect(useProjectStore.getState().isDirty).toBe(false);
+    await settle(closing);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+  });
+});
+
+describe('New Project waits for the edits queued before it', () => {
+  it('an edit in flight on a clean project: New Project prompts once the edit lands', async () => {
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const starting = newProjectGuarded();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ui().activeDialog).toBeNull();
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(starting);
+
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData).toMatchObject({ pendingNewProject: true });
+  });
+
+  it('control: a clean project with nothing in flight opens the new-project dialog at once', async () => {
+    await newProjectGuarded();
+
+    expect(ui().activeDialog).toBe('new-project');
+  });
+
+  it('an edit that never settles counts as unsaved work once the wait runs out', async () => {
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const starting = newProjectGuarded();
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(ui().activeDialog).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settle(starting);
+    expect(useProjectStore.getState().isDirty).toBe(false);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData).toMatchObject({ pendingNewProject: true });
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+  });
+});
+
+describe('Opening another .stalx waits for the edits queued before it', () => {
+  it('an edit in flight on a clean project: the open prompts about unsaved changes once the edit lands', async () => {
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const opening = routeOpenedFile(OTHER);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ui().activeDialog).toBeNull();
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(opening);
+
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData).toMatchObject({ pendingOpenPath: OTHER });
+    expect(loadProject).not.toHaveBeenCalled();
+  });
+
+  // The confirmed swap re-enters with `swapConfirmed`, which used to fall straight
+  // through to the load: an edit still in flight then landed on the project the
+  // load replaced.
+  it('an edit in flight when the swap is confirmed: prompts instead of loading', async () => {
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+    // LaunchOpenConfirmDialog routes the confirmed open before it closes itself.
+    useUIStore.setState({ activeDialog: 'launch-open-confirm', dialogData: { path: OTHER } });
+
+    const opening = routeOpenedFile(OTHER, 'Open Failed', { swapConfirmed: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loadProject).not.toHaveBeenCalled();
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(opening);
+
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData).toMatchObject({ pendingOpenPath: OTHER });
+    expect(loadProject).not.toHaveBeenCalled();
+  });
+
+  it('control: a clean project with nothing in flight asks to swap at once, and a confirmed swap loads at once', async () => {
+    await routeOpenedFile(OTHER);
+    expect(ui().activeDialog).toBe('launch-open-confirm');
+    expect(loadProject).not.toHaveBeenCalled();
+
+    await routeOpenedFile(OTHER, 'Open Failed', { swapConfirmed: true });
+    expect(loadProject).toHaveBeenCalledWith(OTHER);
+  });
+
+  it('an edit that never settles counts as unsaved work once the wait runs out', async () => {
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const opening = routeOpenedFile(OTHER);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(ui().activeDialog).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settle(opening);
+    expect(useProjectStore.getState().isDirty).toBe(false);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData).toMatchObject({ pendingOpenPath: OTHER });
+    expect(loadProject).not.toHaveBeenCalled();
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+  });
+});

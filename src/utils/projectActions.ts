@@ -16,7 +16,7 @@
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
-import { needsSpeleoHandBackPrompt } from './quit';
+import { editsSettledForExit, needsSpeleoHandBackPrompt } from './quit';
 import { saveFailureOf, surfaceSaveFailure } from './saveFeedback';
 import {
   ensureExtension,
@@ -47,15 +47,24 @@ import type { SaveOutcome } from '../types/ipc/SaveOutcome';
  * changes locally" checkbox), and the reverse order would let "Discard Changes"
  * walk straight past the lock. The prompt reopens the new-project dialog itself
  * once resolved, so the user's New Project is not swallowed by the prompt.
+ *
+ * [#576 W84] With a project open, the guards run once the edits queued so far
+ * have settled, as at quit (`editsSettledForExit`): an edit still in flight (a
+ * grid cell committed on blur on the way to New Project) reads as a clean
+ * project, and the switch to the new one waits for it to land on this project
+ * and then replaces it, unsaved. One that has not settled in time counts as
+ * unsaved work. With no project open there is nothing to wait for, and the
+ * dialog opens synchronously as before.
  */
-export function newProjectGuarded(): void {
+export async function newProjectGuarded(): Promise<void> {
   const { openDialog } = useUIStore.getState();
+  const editsSettled = useProjectStore.getState().project ? await editsSettledForExit() : true;
   const ps = useProjectStore.getState();
   if (!ps.project) {
     openDialog('new-project');
   } else if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
     openDialog('speleodb-close', { pendingNewProject: true });
-  } else if (ps.isDirty) {
+  } else if (ps.isDirty || !editsSettled) {
     openDialog('unsaved-changes', { pendingNewProject: true });
   } else {
     openDialog('new-project');

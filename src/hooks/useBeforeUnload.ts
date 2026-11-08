@@ -4,7 +4,12 @@ import { IPC_EVENTS, listenIpc } from '../utils/ipcEvents';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { debugLog } from '../utils/debugLog';
-import { consumeQuitConfirmation, consumeUpdateRestartArmed, abandonUpdateRestart } from '../utils/quit';
+import {
+  consumeQuitConfirmation,
+  consumeUpdateRestartArmed,
+  abandonUpdateRestart,
+  editsSettledForExit,
+} from '../utils/quit';
 import { invokeIpc } from '../utils/ipc';
 import { useUIStore } from '../store/uiStore';
 import { useUpdateStore } from '../store/updateStore';
@@ -32,14 +37,16 @@ import i18n from '../i18n';
  * @param shouldBlock - Whether to block the close action and show confirmation
  * @param message - The message to show in the confirmation dialog
  * @param onConfirm - Optional callback to run cleanup before closing (e.g., delete placed sections)
- * @param guard - Optional in-app guard run after any `shouldBlock` confirmation.
- *   Returns true when it opened a dialog and the close must be abandoned.
+ * @param guard - Optional in-app guard run after any `shouldBlock` confirmation,
+ *   once the edits queued before the close request have settled (`editsSettled`
+ *   is false when they did not settle in time). Returns true when it opened a
+ *   dialog and the close must be abandoned.
  */
 export function useBeforeUnload(
   shouldBlock: boolean,
   message: string,
   onConfirm?: () => Promise<void>,
-  guard?: () => boolean
+  guard?: (exit: { editsSettled: boolean }) => boolean
 ) {
   // Track if a dialog is currently being shown to prevent duplicates
   const isShowingDialog = useRef(false);
@@ -69,6 +76,13 @@ export function useBeforeUnload(
   // Dropped on any un-confirmed close request, so an attempt the user abandoned at
   // the dialog cannot lend its answer to a later one.
   const tier1Confirmed = useRef(false);
+  // [#576 W83] Set while a close request waits for the edits queued before it.
+  // Another un-confirmed request in that window is the same exit asked twice (a
+  // second X, Restart pressed during a quit) and is dropped: two passes that both
+  // got past the guard would both reach the one-way tail, and with an update
+  // restart armed the second would destroy the window under the install the first
+  // started. The arm itself stays set, so the pass that is waiting carries it.
+  const awaitingEdits = useRef(false);
 
   // Keep ref in sync with prop
   useEffect(() => {
@@ -136,6 +150,14 @@ export function useBeforeUnload(
           // Quit" would re-open the dialog it came from, forever.
           const preConfirmed = consumeQuitConfirmation();
 
+          // [#576 W83] The exit already waiting on queued edits answers this request
+          // too - see `awaitingEdits`. A confirmed quit is not dropped: it comes from a
+          // prompt the user just answered, and it takes the window itself.
+          if (!preConfirmed && awaitingEdits.current) {
+            debugLog('[useBeforeUnload] Close requested while waiting for queued edits, ignoring');
+            return;
+          }
+
           // A close request that is NOT pre-confirmed starts a fresh quit attempt,
           // so any tier-1 answer left over from one the user abandoned at a tier-2
           // dialog must not carry into it.
@@ -179,9 +201,23 @@ export function useBeforeUnload(
           // write lock, then unsaved-to-disk changes). Opening a dialog abandons
           // this close; the dialog's own action re-issues it via performQuit,
           // which arms `preConfirmed` so we land past this branch next time.
-          if (!preConfirmed && guardRef.current?.()) {
-            debugLog('[useBeforeUnload] In-app guard opened a dialog, aborting close');
-            return;
+          //
+          // [#576 W83] The guard decides from `isDirty`, which an edit sets only once
+          // its IPC and the refresh after it have returned - so an edit still in
+          // flight (a grid cell committed on blur by the click on Restart) read as a
+          // clean project, and the exit went ahead with no prompt and dropped it. Wait
+          // for the edits queued before this request first; one that has not settled
+          // in time counts as unsaved work.
+          if (!preConfirmed && guardRef.current) {
+            awaitingEdits.current = true;
+            const editsSettled = await editsSettledForExit();
+            awaitingEdits.current = false;
+            // A confirmed quit that arrived during the wait has taken the window.
+            if (isClosing.current) return;
+            if (guardRef.current?.({ editsSettled })) {
+              debugLog('[useBeforeUnload] In-app guard opened a dialog, aborting close');
+              return;
+            }
           }
 
           // Past every guard: the window IS going away, so the tier-1 cleanup is

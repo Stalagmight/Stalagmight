@@ -43,7 +43,7 @@ import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
-import { needsSpeleoHandBackPrompt } from './quit';
+import { editsSettledForExit, needsSpeleoHandBackPrompt } from './quit';
 import { openPendingImport, type PendingImport } from './pendingImport';
 import { TOAST_KEYS } from './toastKeys';
 import i18n from '../i18n';
@@ -451,13 +451,21 @@ export async function routeOpenedFile(
       // unpushed edits. The prompt carries the chosen path and performs the open
       // itself once the SpeleoDB side is resolved, so the user's Ctrl+O is not
       // silently swallowed by the prompt it raised.
-      if (store.project && needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
+      //
+      // [#576 W84] Over an open project the guards run once the edits queued so far
+      // have settled, as at quit (`editsSettledForExit`): an edit still in flight
+      // reads as a clean project, and `loadProject` waits for it to land on this
+      // project and then replaces it, unsaved. One that has not settled in time
+      // counts as unsaved work. The state is read again after the wait.
+      const editsSettled = store.project ? await editsSettledForExit() : true;
+      const current = useProjectStore.getState();
+      if (current.project && needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
         ui.openDialog('speleodb-close', { pendingOpenPath: path });
         handedOff = true;
-      } else if (store.project && store.isDirty) {
+      } else if (current.project && (current.isDirty || !editsSettled)) {
         ui.openDialog('unsaved-changes', { pendingOpenPath: path });
         handedOff = true;
-      } else if (store.project && !opts?.swapConfirmed) {
+      } else if (current.project && !opts?.swapConfirmed) {
         // A clean, locally-owned project is open - dirty and SpeleoDB already
         // prompt above, but a clean project used to fall straight through to
         // loadProject and get swapped out with no notice at all. Reuses the
