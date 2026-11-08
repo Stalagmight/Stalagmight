@@ -34,6 +34,7 @@ vi.mock('../../utils/ipc');
 import { useBeforeUnload } from '../useBeforeUnload';
 import {
   guardQuit,
+  performQuit,
   quitApp,
   requestUpdateRestart,
   resetQuitConfirmationForTests,
@@ -237,5 +238,101 @@ describe('an exit waits for the edits queued before it', () => {
     expect(useUIStore.getState().activeDialog).toBeNull();
     expect(calls(INSTALL)).toBe(1);
     expect(destroyMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * [#576 W85] A close request that waits for the queued edits ends once another pass
+ * has run the one-way tail in the meantime - also when that pass failed and gave
+ * the window back.
+ *
+ * The scenario: an edit is stuck, so the first quit's wait ran out and the
+ * unsaved-changes prompt is up. The user presses the window X again (that pass waits
+ * on the same edit), then answers the prompt: the confirmed quit takes the tail, and
+ * its destroy - or, for an update restart, its install - fails, which releases
+ * `isClosing` so the app stays quittable. The waiting pass used to check `isClosing`
+ * alone, found it released, and ran the guard again: a second prompt the user never
+ * asked for, or, with the project clean, a destroy straight after the failed install.
+ */
+describe('a waiting close request ends when a confirmed quit took the tail meanwhile', () => {
+  const guard = vi.fn((exit: { editsSettled: boolean }) => guardQuit(exit));
+  function GuardedApp() {
+    useBeforeUnload(false, 'unused', undefined, guard);
+    return null;
+  }
+
+  /** The stuck edit, the prompt its timed-out wait raised, and the X pressed again during a second wait. */
+  async function promptUpThenXAgain(): Promise<{ edit: Deferred<unknown>; editDone: Promise<unknown>; waiting: Promise<void> }> {
+    render(<GuardedApp />);
+    await vi.advanceTimersByTimeAsync(0);
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+
+    const first = closeRequested();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settle(first);
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(useUIStore.getState().activeDialog).toBe('unsaved-changes');
+
+    const waiting = closeRequested();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(guard).toHaveBeenCalledTimes(1);
+    return { edit, editDone, waiting };
+  }
+
+  /** "Discard & Quit": the prompt closes itself and re-issues the close, confirmed. */
+  async function discardAndQuit(): Promise<void> {
+    useUIStore.getState().closeDialog();
+    performQuit();
+    await settle(closeRequested());
+  }
+
+  beforeEach(() => {
+    guard.mockClear();
+  });
+
+  it('a quit whose destroy failed: the waiting pass does not prompt again', async () => {
+    quitApp();
+    const { edit, editDone, waiting } = await promptUpThenXAgain();
+    destroyMock.mockRejectedValueOnce(new Error('destroy denied'));
+
+    await discardAndQuit();
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(waiting);
+
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    expect.soft(guard).toHaveBeenCalledTimes(1);
+    expect.soft(useUIStore.getState().activeDialog).toBeNull();
+    expect.soft(destroyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('an update restart whose install failed: the waiting pass neither prompts, destroys nor installs again', async () => {
+    await requestUpdateRestart();
+    const { edit, editDone, waiting } = await promptUpThenXAgain();
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === EDIT) return edit.promise;
+      if (cmd === INSTALL) return Promise.reject({ code: 'FAILED', message: 'disk full' });
+      if (cmd === 'check_project_integrity') return Promise.resolve({ messages: [], save_blocked: false });
+      return Promise.resolve(null);
+    });
+
+    await discardAndQuit();
+    expect(calls(INSTALL)).toBe(1);
+    expect(useUpdateStore.getState().installing).toBe(false);
+
+    // The backend refuses the stuck edit: the project stays clean.
+    edit.reject({ code: 'VALIDATION', message: 'refused' });
+    await settle(editDone);
+    await settle(waiting);
+
+    expect(useProjectStore.getState().isDirty).toBe(false);
+    expect.soft(guard).toHaveBeenCalledTimes(1);
+    expect.soft(calls(INSTALL)).toBe(1);
+    expect.soft(destroyMock).not.toHaveBeenCalled();
+    expect.soft(useUpdateStore.getState().installing).toBe(false);
+    expect.soft(useUIStore.getState().activeDialog).toBeNull();
   });
 });

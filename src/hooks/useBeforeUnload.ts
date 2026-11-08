@@ -83,6 +83,12 @@ export function useBeforeUnload(
   // restart armed the second would destroy the window under the install the first
   // started. The arm itself stays set, so the pass that is waiting carries it.
   const awaitingEdits = useRef(false);
+  // [#576 W85] How many passes have reached the one-way tail. A pass that waited for
+  // queued edits ends when another one got there in the meantime: that pass answered
+  // this request too, whether its destroy or install went through or failed. A failed
+  // one releases `isClosing` so the app stays quittable, so `isClosing` alone cannot
+  // tell the waiting pass it was answered.
+  const tailRuns = useRef(0);
 
   // Keep ref in sync with prop
   useEffect(() => {
@@ -210,10 +216,13 @@ export function useBeforeUnload(
           // in time counts as unsaved work.
           if (!preConfirmed && guardRef.current) {
             awaitingEdits.current = true;
+            const tailRunsBefore = tailRuns.current;
             const editsSettled = await editsSettledForExit();
             awaitingEdits.current = false;
-            // A confirmed quit that arrived during the wait has taken the window.
-            if (isClosing.current) return;
+            // A confirmed quit that arrived during the wait has taken the window, or
+            // tried to and failed (see `tailRuns`): running the guard now would prompt
+            // again, or destroy the window straight after a failed install.
+            if (isClosing.current || tailRuns.current !== tailRunsBefore) return;
             if (guardRef.current?.({ editsSettled })) {
               debugLog('[useBeforeUnload] In-app guard opened a dialog, aborting close');
               return;
@@ -239,6 +248,7 @@ export function useBeforeUnload(
           // Mark that we're closing, so a close request arriving while `destroy()`
           // is in flight is ignored rather than running this whole flow again.
           isClosing.current = true;
+          tailRuns.current += 1;
 
           // [#579] An update restart armed by `requestUpdateRestart` has now
           // passed every guard exactly like a plain quit would - swap the
