@@ -54,6 +54,10 @@ pub(super) enum Claim {
     AllLocksReleased,
     /// A silent best-effort release ran (logout / close / quit) over a clean copy.
     LockReleaseBestEffort { project_id: String },
+    /// [#576 SDB-2MACHINE-D1] Close, quit or Done ended an edit session under a lock
+    /// the app ADOPTED from the account and made no edit under: the lock is left
+    /// with the session of the account that is using it.
+    LockLeftWithAccount { project_id: String },
     /// The project was deleted on the server.
     Deleted { project_id: String },
     /// The user confirmed losing local edits (take remote, discard, a discarding
@@ -127,6 +131,16 @@ pub(super) struct App {
     publishes: usize,
     /// The frontend's `isDirty`: an edit not yet saved to the file.
     pub(super) unsaved: bool,
+    /// [#576 SDB-2MACHINE-D1] The open project on which an edit (or a confirmed
+    /// upload) was accepted while the app edited it under the lock, since its edit
+    /// gate was last seen shut: what the fuzzer itself saw, so the oracle's
+    /// expectation for an adopted lock does not rest on the app's own bookkeeping.
+    /// While the gate stays open the claim stands (or is recorded again with its
+    /// edit), so an edit seen here is one the claim carries.
+    edited_here: Option<String>,
+    /// The projects with any edit or confirmed upload accepted since the app last
+    /// started: with none, no claim of this run can carry an edit.
+    edited_this_run: std::collections::HashSet<String>,
     /// The run tag, so names are unique on the shared instance.
     tag: String,
 }
@@ -165,6 +179,8 @@ impl App {
             copies: 0,
             publishes: 0,
             unsaved: false,
+            edited_here: None,
+            edited_this_run: std::collections::HashSet::new(),
             tag,
         }
     }
@@ -194,6 +210,41 @@ impl App {
             return None;
         }
         self.open_link().map(|l| l.project_id)
+    }
+
+    /// [#576 SDB-2MACHINE-D1] What a close, a quit or a Done over a CLEAN copy owes
+    /// the lock of the edit session the app holds. Read before the verb, while the
+    /// claim still stands:
+    ///
+    /// - a lock the app took, or an adopted one (its claim is a resumed one) the
+    ///   fuzzer saw an edit made under while the gate stayed open: handed back
+    ///   ([`Claim::LockReleaseBestEffort`]);
+    /// - an adopted one with no edit on that project since the app started: left
+    ///   with the account ([`Claim::LockLeftWithAccount`]);
+    /// - an adopted one edited earlier in the run, under a claim that may since have
+    ///   ended (the gate shut in between): no claim either way.
+    ///
+    /// `None` too when the app holds no edit session.
+    fn owed_on_leave(&self) -> Option<Claim> {
+        let project_id = self.held_here()?;
+        let adopted = self.state.speleodb_lock_resumed_here(&project_id);
+        if !adopted || self.edited_here.as_deref() == Some(project_id.as_str()) {
+            Some(Claim::LockReleaseBestEffort { project_id })
+        } else if !self.edited_this_run.contains(&project_id) {
+            Some(Claim::LockLeftWithAccount { project_id })
+        } else {
+            None
+        }
+    }
+
+    /// Record an edit accepted while the app edits the open project under the lock.
+    fn note_edited_here(&mut self) {
+        if self.editing() {
+            self.edited_here = self.open_link().map(|l| l.project_id);
+            if let Some(project_id) = &self.edited_here {
+                self.edited_this_run.insert(project_id.clone());
+            }
+        }
     }
 
     pub(super) fn logged_in(&self) -> bool {
@@ -227,6 +278,10 @@ impl App {
                 .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
                 .unwrap_or_else(|| "non-string panic".to_owned());
             out.panicked = Some(text);
+        }
+        // [#576 SDB-2MACHINE-D1] An edit session that ended takes its edits with it.
+        if !self.editing() {
+            self.edited_here = None;
         }
         out
     }
@@ -602,6 +657,7 @@ impl App {
         });
         if r.success {
             self.unsaved = true;
+            self.note_edited_here();
             out.note(format!("edit {token} -> Ok"));
             out.claims.push(Claim::Edited(token));
         } else {
@@ -629,6 +685,7 @@ impl App {
         });
         if r.success {
             self.unsaved = true;
+            self.note_edited_here();
         }
         out.note(format!(
             "edit_shot -> {}",
@@ -667,6 +724,8 @@ impl App {
                 if matches!(report.result, PushResult::Pushed) {
                     self.save(out);
                     if let Some(project_id) = pid {
+                        // [#576 SDB-2MACHINE-D1] An upload is an edit made under the lock.
+                        self.note_edited_here();
                         out.claims.push(Claim::InSync { project_id });
                     }
                 }
@@ -675,28 +734,57 @@ impl App {
         }
     }
 
-    /// Done; `true` when it released.
+    /// Done; `true` when it finished the edit session (`doneFinished`): it released,
+    /// or [#576 SDB-2MACHINE-D1] it left an adopted lock with no edit made here with
+    /// the account.
     fn done(&mut self, out: &mut Outcome) -> bool {
         let link = self.open_link();
         let uploads = link.as_ref().is_some_and(|l| l.has_unpushed_edits);
         let pid = link.map(|l| l.project_id);
+        // What the lock is owed, read while the claim stands: an upload is an edit
+        // made here, so a Done that uploads owes the release.
+        let owed = match &pid {
+            Some(project_id) if uploads => Some(Claim::LockReleaseBestEffort {
+                project_id: project_id.clone(),
+            }),
+            _ => self.owed_on_leave(),
+        };
         match self
             .state
             .speleodb_done_reported(Some("fuzz done".to_owned()), false)
         {
             Ok(report) => {
                 out.note(format!("done -> Ok({:?})", report.result));
-                let released = matches!(report.result, DoneResult::Released);
-                if released {
+                let finished = matches!(
+                    report.result,
+                    DoneResult::Released | DoneResult::LockHeldElsewhere
+                );
+                if finished {
                     self.save(out);
                 }
-                if let (true, true, Some(project_id)) = (released, uploads, pid.clone()) {
+                if let (true, true, Some(project_id)) = (finished, uploads, pid.clone()) {
                     out.claims.push(Claim::InSync { project_id });
                 }
-                if let (DoneResult::Released, Some(project_id)) = (report.result, pid) {
-                    out.claims.push(Claim::LockReleased { project_id });
+                match (&report.result, pid, owed) {
+                    // Released a lock it was to leave with the account: the oracle
+                    // finds it free (I2c).
+                    (
+                        DoneResult::Released,
+                        Some(_),
+                        Some(left @ Claim::LockLeftWithAccount { .. }),
+                    ) => {
+                        out.claims.push(left);
+                    }
+                    (DoneResult::Released, Some(project_id), _) => {
+                        out.claims.push(Claim::LockReleased { project_id });
+                    }
+                    // Left with the account: right for an adopted lock with no edit
+                    // made here (I2c checks it stayed held), and a lock the app owed a
+                    // release otherwise (I2b).
+                    (DoneResult::LockHeldElsewhere, _, Some(claim)) => out.claims.push(claim),
+                    _ => {}
                 }
-                released
+                finished
             }
             Err(e) => {
                 out.refused("done", &e);
@@ -886,11 +974,11 @@ impl App {
     /// `close_project(releaseLock)` as the command runs it.
     fn close_project(&mut self, release: bool, out: &mut Outcome) {
         let (_, _, dirty, _) = self.hint_bits();
-        let held = self.held_here();
+        let owed = self.owed_on_leave();
         if release {
             self.state.speleodb_release_held_lock_best_effort();
-            if let (false, Some(project_id)) = (dirty, held) {
-                out.claims.push(Claim::LockReleaseBestEffort { project_id });
+            if let (false, Some(claim)) = (dirty, owed) {
+                out.claims.push(claim);
             }
         } else {
             self.state.speleodb_keep_open_lock_deliberately();
@@ -950,11 +1038,11 @@ impl App {
         }
         // The exit hook (`lib.rs`, RunEvent::ExitRequested).
         let still_dirty = self.hint_bits().2;
-        let held = self.held_here();
+        let owed = self.owed_on_leave();
         self.state
             .speleodb_release_held_lock_bounded(Duration::from_secs(5));
-        if let (false, Some(project_id)) = (still_dirty, held) {
-            out.claims.push(Claim::LockReleaseBestEffort { project_id });
+        if let (false, Some(claim)) = (still_dirty, owed) {
+            out.claims.push(claim);
         }
         out.note("quit -> restart");
         self.restart();
@@ -1032,6 +1120,8 @@ impl App {
         let old = std::mem::replace(&mut self.state, fresh_state());
         drop(old);
         self.unsaved = false;
+        self.edited_here = None;
+        self.edited_this_run.clear();
     }
 
     /// The endpoint the app session is signed in to, if any.

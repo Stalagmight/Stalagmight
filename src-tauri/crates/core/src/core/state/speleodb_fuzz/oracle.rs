@@ -19,6 +19,14 @@
 //!   [#576 SDB-ACCT-D1, SDB-QUIT-D1] That holds for a lock the app ADOPTED from the
 //!   account too (the second client took it as the owner, and the app's gate opened
 //!   over it): only a change to the owner's access or a delete excuses I2b.
+//!   [#576 SDB-2MACHINE-D1] Once an edit was made under it in the app (seen while
+//!   its gate stayed open): a close, quit or Done over an adopted lock with no edit
+//!   on that project since the app started makes the opposite claim, **I2c**: the
+//!   lock the owner held before the step is still the owner's after it (the app left
+//!   it with the session using it). One edited earlier in the run, under a claim
+//!   that may since have ended, makes neither claim. Whether an edit was made is the
+//!   fuzzer's own record (an accepted edit or a confirmed upload while editing);
+//!   whether the lock was adopted is the app's claim.
 //!   [#576 Q-W61-3-D1] A logout whose answer names the project as still locked is
 //!   not silent (the user is warned), so it makes no I2b claim; [#576 NF-W72-1] nor
 //!   does a sign-in that replaced the session and names it. [#576
@@ -82,7 +90,7 @@ fn violation(id: &str, detail: String) -> Violation {
     let severity = match id {
         "I8" => "critical",
         "I1" | "I4" | "I6" | "I9" | "I10" | "I7-panic" => "high",
-        "I2" | "I3" | "I11" | "I6b" => "medium",
+        "I2" | "I2c" | "I3" | "I11" | "I6b" => "medium",
         _ => "low",
     };
     Violation {
@@ -259,6 +267,29 @@ pub(super) fn check(
         cache_root,
         &mut v,
     );
+
+    // I2c: an adopted lock with no edit made here, left with the account.
+    for c in &out.claims {
+        let Claim::LockLeftWithAccount { project_id } = c else {
+            continue;
+        };
+        let held_before = before
+            .server
+            .get(project_id)
+            .is_some_and(|s| s.exists && s.lock_holder.as_deref() == Some(owner));
+        if let Some(view) = after.server.get(project_id) {
+            if held_before && view.exists && view.lock_holder.as_deref() != Some(owner) {
+                v.push(violation(
+                    "I2c",
+                    format!(
+                        "{project_id}: an adopted lock with no edit made here was handed \
+                         back (holder now {:?})",
+                        view.lock_holder
+                    ),
+                ));
+            }
+        }
+    }
 
     // I11: an open edit gate means the lock is held (unless someone else touched it).
     let _ = is_actor;
@@ -548,6 +579,8 @@ fn check_claims(
             // refuses after the owner's access was lowered is that change's doing.
             // [#576 SDB-ACCT-D1, SDB-QUIT-D1] A lock the owner account took in another
             // session no longer excuses it: the app hands back any lock it edits under.
+            // [#576 SDB-2MACHINE-D1] An adopted one once an edit was made under it; a
+            // close, quit or Done before that claims I2c instead (`App::owed_on_leave`).
             Claim::LockReleaseBestEffort { project_id }
                 if holder_is_owner(project_id) && !interference.contains(project_id) =>
             {

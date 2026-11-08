@@ -271,6 +271,27 @@ fn a_released_lock_still_held_is_i2_and_a_false_delete_is_i9() {
 }
 
 #[test]
+fn an_adopted_lock_with_no_edit_made_here_handed_back_is_i2c() {
+    // [#576 SDB-2MACHINE-D1] The owner held the lock before the step (another computer
+    // of the account edits under it); a close, quit or Done over it with no edit made
+    // in the app must leave it held.
+    let held = snap(&["A", "B"], &["A", "B"], link("c2", false), Some(OWNER));
+    let freed = snap(&["A", "B"], &["A", "B"], link("c2", false), None);
+    let left = claims(vec![Claim::LockLeftWithAccount {
+        project_id: "p1".to_owned(),
+    }]);
+    let v = ids(&left, &held, &freed, &mut Ghost::default());
+    assert!(v.contains(&"I2c".to_owned()), "handed back: {v:?}");
+    let v = ids(&left, &held, &held, &mut Ghost::default());
+    assert!(v.is_empty(), "left held: {v:?}");
+    // Not the owner's before the step: the claim says nothing about it.
+    let v = ids(&left, &freed, &freed, &mut Ghost::default());
+    assert!(!v.contains(&"I2c".to_owned()), "free before: {v:?}");
+    // And it is no I2b claim: a lock left held for the account is not stranded.
+    assert!(!ids(&left, &held, &held, &mut Ghost::default()).contains(&"I2b".to_owned()));
+}
+
+#[test]
 fn a_push_that_disagrees_with_the_tip_is_i6() {
     let before = snap(&["A", "B"], &["A", "B"], link("c2", false), Some(OWNER));
     let stale = snap(&["A", "B", "E1"], &["A", "B", "E1"], link("c1", true), None);

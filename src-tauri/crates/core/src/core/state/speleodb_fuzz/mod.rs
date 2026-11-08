@@ -95,16 +95,19 @@ fn directed_steps() -> Vec<(&'static str, Vec<Step>)> {
             "sdb-acct-d1-start",
             sdb_acct_d1_steps(model::Act::StartEditing),
         ),
+        ("sdb-2machine-d1-edited", sdb_2machine_d1_edited_steps()),
     ]
 }
 
 /// [#576 SDB-ACCT-D1, SDB-QUIT-D1] The owner ACCOUNT takes the lock in another session
 /// (the second client, as the website or another computer would) while the app has
-/// the project open read-only; the app then edits under it - through the status
-/// poll's inherited-lock reopen (`Act::Poll`) or a plain Start Editing
-/// (`Act::StartEditing`) - and the quit over the clean copy must hand that lock back
-/// (I2b): a lock the account holds is the user's, and the quit releases any lock the
-/// session edits under. It used to keep it (no claim of this session's).
+/// the project open read-only; the app then opens editing over it - through the
+/// status poll's inherited-lock reopen (`Act::Poll`) or a plain Start Editing
+/// (`Act::StartEditing`) - and quits over the clean copy. These lists used to pin the
+/// hand-back (I2b; a lock the account holds is the user's). [#576 SDB-2MACHINE-D1]
+/// The app made no edit under the lock, so the quit must leave it with the session
+/// that took it (I2c): another computer of the account may be editing under it.
+/// `sdb-2machine-d1-edited` pins the hand-back after one edit.
 fn sdb_acct_d1_steps(adopt: model::Act) -> Vec<Step> {
     use model::{Act, LeaveMode, OnUnpushed};
     let plain = |act| Step {
@@ -123,6 +126,35 @@ fn sdb_acct_d1_steps(adopt: model::Act) -> Vec<Step> {
             p: 0,
         }),
         plain(adopt),
+        plain(Act::Quit {
+            mode: LeaveMode::KeepLock,
+        }),
+    ]
+}
+
+/// [#576 SDB-2MACHINE-D1] As `sdb-acct-d1-poll`, but the app makes one edit under
+/// the adopted lock and pushes it: the lock is then this session's to hand back, and
+/// the quit over the clean copy must release it (I2b).
+fn sdb_2machine_d1_edited_steps() -> Vec<Step> {
+    use model::{Act, LeaveMode, OnUnpushed};
+    let plain = |act| Step {
+        act,
+        fault: None,
+        then: Vec::new(),
+    };
+    vec![
+        plain(Act::Login),
+        plain(Act::Open {
+            p: 0,
+            on_unpushed: OnUnpushed::KeepLocal,
+        }),
+        plain(Act::ActorLock {
+            who: world::Who::Owner,
+            p: 0,
+        }),
+        plain(Act::Poll),
+        plain(Act::Edit),
+        plain(Act::Push),
         plain(Act::Quit {
             mode: LeaveMode::KeepLock,
         }),
@@ -199,6 +231,17 @@ const SDB_ACCT_D1_START_REPLAY: &str = r#"[
   {"act": {"Quit": {"mode": "KeepLock"}}, "fault": null}
 ]"#;
 
+/// The SDB-2MACHINE-D1 directed list as a saved step list, for `speleodb_fuzz_replay`.
+const SDB_2MACHINE_D1_EDITED_REPLAY: &str = r#"[
+  {"act": "Login", "fault": null},
+  {"act": {"Open": {"p": 0, "on_unpushed": "KeepLocal"}}, "fault": null},
+  {"act": {"ActorLock": {"who": "Owner", "p": 0}}, "fault": null},
+  {"act": "Poll", "fault": null},
+  {"act": "Edit", "fault": null},
+  {"act": "Push", "fault": null},
+  {"act": {"Quit": {"mode": "KeepLock"}}, "fault": null}
+]"#;
+
 /// [#576 SDB-POLL-D1, SDB-ACCT-D1] Offline: each directed list is the saved list the
 /// replay entry point reads, so a replay of that file runs exactly the regression
 /// set's steps.
@@ -209,6 +252,7 @@ fn the_directed_list_is_its_saved_replay() {
         ("sdb-poll-d1", SDB_POLL_D1_REPLAY),
         ("sdb-acct-d1-poll", SDB_ACCT_D1_POLL_REPLAY),
         ("sdb-acct-d1-start", SDB_ACCT_D1_START_REPLAY),
+        ("sdb-2machine-d1-edited", SDB_2MACHINE_D1_EDITED_REPLAY),
     ];
     assert_eq!(lists.len(), saved.len(), "one saved list per directed list");
     for ((name, steps), (saved_name, json)) in lists.iter().zip(saved) {
