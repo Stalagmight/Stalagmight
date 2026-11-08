@@ -12,8 +12,15 @@
 // on clear, and - since there is no stock tint behind it - surface a GL failure
 // via `onFatal` while dropping the dead layer, rather than vanishing silently.
 
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import { SurveyMeasurePathLayer, type MeasurePathRenderData } from './surveyMeasurePathLayer';
+import {
+  addCustomLayer,
+  isStyleRestoring,
+  reAddCustomLayer,
+  removeCustomLayer,
+  type RestorableCustomLayer,
+} from './styleRestore';
 
 /** The surface the controller uses from its GL layer (real or a test fake). */
 export interface MeasurePathLayerLike {
@@ -59,6 +66,8 @@ export class MeasurePathController {
   private fatalEmitted = false;
   /** Last render data handed to the layer, for {@link drawnCounts}. */
   private lastData: MeasurePathRenderData | null = null;
+  /** z-order anchors of the last {@link setPath}, replayed by {@link reattach}. */
+  private beforeIdCandidates: readonly string[] = [];
 
   constructor(
     private readonly map: maplibregl.Map,
@@ -113,6 +122,7 @@ export class MeasurePathController {
       this.clear();
       return;
     }
+    this.beforeIdCandidates = beforeIdCandidates;
     if (this.layer) {
       this.lastData = data;
       this.layer.setData(data);
@@ -122,11 +132,27 @@ export class MeasurePathController {
     this.add(data, beforeIdCandidates);
   }
 
+  /** Re-add the layer after MapLibre rebuilt the style without it (context
+   *  restore / worker restart, see styleRestore.ts). */
+  reattach(): void {
+    const layer = this.layer;
+    if (!layer) return;
+    const restorable = layer as unknown as RestorableCustomLayer;
+    if (!reAddCustomLayer(this.map, restorable, this.resolveBeforeId(this.beforeIdCandidates))) {
+      removeCustomLayer(this.map, layer);
+      this.layer = null;
+      this.lastData = null;
+      this.emitFatal(layer.getDisabledReason() ?? 'unknown');
+      return;
+    }
+    this.map.triggerRepaint();
+  }
+
   /** Remove the custom measure-path layer (idempotent). */
   clear(): void {
     this.generation++;
     this.selfDisableScheduled = false;
-    if (this.layer && this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.lastData = null;
   }
@@ -143,10 +169,10 @@ export class MeasurePathController {
     try {
       const layer = this.makeLayer(this.layerId, data, (reason) => this.handleSelfDisable(reason));
       const beforeId = this.resolveBeforeId(beforeIdCandidates);
-      this.map.addLayer(layer as unknown as maplibregl.CustomLayerInterface, beforeId);
+      addCustomLayer(this.map, layer as unknown as maplibregl.CustomLayerInterface, beforeId);
       if (layer.isDisabled()) {
         const reason = layer.getDisabledReason() ?? 'unknown';
-        if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+        removeCustomLayer(this.map, layer);
         console.warn(`[measurePath] custom measure-path failed to initialize (${reason})`);
         this.emitFatal(reason);
         return;
@@ -178,14 +204,15 @@ export class MeasurePathController {
    * otherwise. Idempotent + generation-guarded.
    */
   private handleSelfDisable(reason: string): void {
-    if (!this.layer || this.selfDisableScheduled) return;
+    // A lost context fails every GL call; the restore's re-add rebuilds the layer.
+    if (!this.layer || this.selfDisableScheduled || isStyleRestoring(this.map)) return;
     this.selfDisableScheduled = true;
     const gen = this.generation;
     console.warn(`[measurePath] custom measure-path self-disabled (${reason})`);
     this.scheduleRestore(() => {
       if (gen !== this.generation) return; // superseded by a clear / new path
       this.selfDisableScheduled = false;
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      removeCustomLayer(this.map, this.layer);
       this.layer = null;
       this.emitFatal(reason);
     });

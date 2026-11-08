@@ -15,7 +15,10 @@ import { setIpcOverrides } from './helpers/ipcOverrides';
 interface UpdateStoreApi {
   getState: () => {
     beginCheck: () => number;
-    setAvailable: (seq: number, info: { version: string; notesUrl: string }) => void;
+    setAvailable: (
+      seq: number,
+      info: { version: string; notesUrl: string; installsOnQuit: boolean },
+    ) => void;
     startDownloading: (version: string) => void;
     setReady: (version: string) => void;
   };
@@ -35,7 +38,9 @@ async function seedAvailable(page: import('@playwright/test').Page, version = '9
     // sequence of the check it answers, and one seeded outside that contract
     // would be dropped as stale.
     const seq = store.getState().beginCheck();
-    store.getState().setAvailable(seq, { version: v, notesUrl: 'https://example.com/notes' });
+    store
+      .getState()
+      .setAvailable(seq, { version: v, notesUrl: 'https://example.com/notes', installsOnQuit: true });
   }, version);
 }
 
@@ -137,6 +142,9 @@ test.describe('In-app update banner', () => {
    * its "see the update banner" line pointed at a banner the store had never
    * been told about. It now runs the SAME check path the launch hook does, and
    * the banner is the observable proof of that.
+   *
+   * [#631] That path also downloads in the background, so the banner arrives
+   * already "ready", promising the install on quit.
    */
   test('the About check raises the banner, not just its own line', async ({ page }) => {
     await setIpcOverrides(page, {
@@ -147,7 +155,9 @@ test.describe('In-app update banner', () => {
           notes_url: 'https://example.com/notes',
         },
         current_version: '0.5.0',
+        installs_on_quit: true,
       },
+      download_app_update: null,
     });
     await expect(page.getByTestId('update-banner')).toHaveCount(0);
 
@@ -167,6 +177,9 @@ test.describe('In-app update banner', () => {
     const banner = page.getByTestId('update-banner');
     await expect(banner).toBeVisible();
     await expect(banner).toContainText('9.9.9');
+    await expect(banner).toContainText('will be installed when you quit');
+    await expect(page.getByTestId('update-banner-restart')).toBeVisible();
+    await expect(page.getByTestId('update-banner-download')).toHaveCount(0);
   });
 
   test('Dismiss hides the banner for the session, for that version only', async ({ page }) => {

@@ -19,7 +19,7 @@ function makeFakeMap(options: { withHandlers?: boolean; dragActive?: boolean } =
   const map = {
     getCanvasContainer: () => canvasContainer,
     dragPan: { isActive: () => options.dragActive !== false },
-    ...(options.withHandlers === false ? {} : { handlers: { handleEvent } }),
+    ...(options.withHandlers === false ? {} : { _handlers: { handleEvent } }),
   } as unknown as MaplibreMap;
 
   return { map, canvasContainer, canvas, handleEvent };
@@ -99,7 +99,7 @@ describe('attachDragReleaseForwarder', () => {
     const withoutHandleEvent = {
       getCanvasContainer: map.getCanvasContainer.bind(map),
       dragPan: { isActive: () => true },
-      handlers: {},
+      _handlers: {},
     } as unknown as MaplibreMap;
     const chrome = document.createElement('button');
     document.body.appendChild(chrome);

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, memo, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
 import type { GasReachField } from '../../types/ipc.generated';
 import type { BatchCommand, ProjectWarning } from '../../types/commands';
@@ -52,6 +52,8 @@ import { MapDevStatsPanels } from './MapDevStatsPanels';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
 import { installPanZoomDebug } from './panZoomDebug';
+import { createMap } from './createMap';
+import { MapUnavailable } from './MapUnavailable';
 import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -316,6 +318,7 @@ function MapCanvas() {
   const [zoomBox, setZoomBox] = useState<ZoomBoxState>({ start: null, end: null });
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [webgl2Unavailable, setWebgl2Unavailable] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
   // True briefly after placement confirmation to suppress the spurious MapLibre click
   const placementJustConfirmedRef = useRef(false);
@@ -1732,7 +1735,7 @@ function MapCanvas() {
     // Transform to map coordinates
     const mapCenter = metersToMapCoords(centerX, centerY, gpsOrigin);
 
-    map.current = new maplibregl.Map({
+    const created = createMap({
       container: mapContainer.current,
       style: {
         version: 8,
@@ -1776,6 +1779,11 @@ function MapCanvas() {
         },
       } as Record<string, unknown>),
     });
+    if (!created) {
+      setWebgl2Unavailable(true);
+      return;
+    }
+    map.current = created;
 
     // Optional MapLibre instrumentation; inert unless VITE_DEBUG_MACOS_LOCKUP
     // is set at build time. See docs/debugging-macos-pan-zoom.md.
@@ -3212,7 +3220,7 @@ function MapCanvas() {
 
     // Store reference for cleanup
     const currentMap = map.current;
-    let errorHandler: ((e: { error?: { status?: number }; sourceId?: string }) => void) | null = null;
+    let errorHandler: ((e: maplibregl.ErrorEvent & { sourceId?: string }) => void) | null = null;
 
     if (showSatellite) {
       // Add satellite layer if not already present
@@ -3243,7 +3251,7 @@ function MapCanvas() {
 
         // Add error handler for tile fetch failures
         const sourceId = 'satellite-tiles';
-        errorHandler = (e: { error?: { status?: number }; sourceId?: string }) => {
+        errorHandler = (e: maplibregl.ErrorEvent & { sourceId?: string }) => {
           if (e.sourceId === sourceId) {
             console.warn('[MapCanvas] Satellite tile load failed - the imagery provider could not be reached');
             // The map will gracefully show the background color where tiles fail to load
@@ -4035,6 +4043,7 @@ function MapCanvas() {
       onContextMenu={handleContextMenu}
     >
       <div ref={mapContainer} className="w-full h-full" data-testid="maplibre-container" />
+      {webgl2Unavailable && <MapUnavailable testId="map-webgl2-unavailable" />}
 
       {/* Zoom box overlay */}
       {zoomBox.start && zoomBox.end && (

@@ -622,8 +622,8 @@ a featureless run filters them out. The telemetry member's `build.rs` also
 #### Running one crate
 
 The backend is a cargo workspace: the `stalagmight` app package at `src-tauri/`
-plus seven members under `src-tauri/crates/` (`stalagmight-models`,
-`-telemetry`, `-parsers`, `-persistence`, `-export`, `-speleodb`, `-core`).
+plus eight members under `src-tauri/crates/` (`stalagmight-models`,
+`-telemetry`, `-parsers`, `-persistence`, `-export`, `-speleodb`, `-core`, and `stalx-reader`).
 Select one with `-p` for fast iteration:
 
 ```bash

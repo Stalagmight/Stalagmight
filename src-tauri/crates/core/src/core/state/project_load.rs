@@ -460,6 +460,17 @@ impl AppState {
         let db = match Database::open_existing(&path) {
             Ok(db) => db,
             Err(e) => {
+                // A hostile schema is refused before anything reads the file (#608);
+                // say so plainly rather than as a generic database error.
+                if let Some(refused) = crate::core::loading::refused_schema(&e) {
+                    tracing::warn!(
+                        path = ?path,
+                        what = refused.what,
+                        purpose = "never open a file whose schema could run its own SQL",
+                        "Refused to open a file with a hostile schema"
+                    );
+                    early_return_err!(LoadError::unsafe_file(refused, &path.display().to_string()));
+                }
                 let msg = e.to_string();
                 // A permission denial (e.g. macOS forgot folder access after an
                 // update) otherwise masquerades as corruption - check it first.

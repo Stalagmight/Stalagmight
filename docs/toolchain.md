@@ -91,3 +91,12 @@ editor settings, e.g. gitignored `.vscode/settings.json`:
   "rust-analyzer.cargo.extraEnv": { "TELEMETRY_ENDPOINT": "http://localhost/dummy" }
 }
 ```
+
+## Bundled SQLite build flags
+
+A `.stalx` can come from anyone, so the bundled SQLite drops FTS3/4/5, RTREE,
+DBSTAT and extension loading (#608) via `LIBSQLITE3_FLAGS`, which every
+Rust-building workflow sets at the top level and the build scripts under
+`scripts/` export. A plain local `cargo test` lacks it, so the pinning test
+`bundled_sqlite_omits_virtual_table_modules_and_extension_loading` is ignored
+locally and CI runs it with `--ignored`.

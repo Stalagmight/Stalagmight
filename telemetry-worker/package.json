@@ -8,6 +8,6 @@
     "db:init": "wrangler d1 execute stalagmight-telemetry --file=schema.sql"
   },
   "devDependencies": {
-    "wrangler": "^3"
+    "wrangler": "^4"
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import {
   DRAG_PREVIEW_SOURCE,
   createDragPreviewLayers,

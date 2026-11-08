@@ -89,6 +89,14 @@ if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
   echo "APPLE_SIGNING_IDENTITY set - verifying Developer ID signature and notarization staple"
   spctl -a -vv "$APP"
   xcrun stapler validate "$APP"
+  # The DMG is what gets double-clicked. Once it carries a Developer ID
+  # signature Gatekeeper assesses the image itself on open, and rejects one
+  # that is signed but not notarized ("source=Unnotarized Developer ID") -
+  # seen on the first real-signing rehearsal, where the .app passed both
+  # checks above. This is the assessment run when the image is opened.
+  echo "verifying the DMG's own notarization"
+  spctl -a -vv -t open --context context:primary-signature "$DMG"
+  xcrun stapler validate "$DMG"
 fi
 
 echo "macOS signature verified: $(basename "$APP") inside $(basename "$DMG")"

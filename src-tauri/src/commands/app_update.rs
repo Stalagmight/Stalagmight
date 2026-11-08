@@ -20,6 +20,11 @@
 //! the download from the install is what keeps the point of no return behind
 //! the existing quit guards.
 //!
+//! A download nobody restarts into is installed as the app exits instead
+//! ([`install_downloaded_update_on_exit`], #631), so an ordinary quit is
+//! enough to update and nothing ever forces a restart. Not on Windows, nor
+//! where it would need an admin prompt - see [`installs_on_quit`].
+//!
 //! ## What is trusted, and where
 //!
 //! The manifest is fetched over https but is NOT itself signed - only the
@@ -42,7 +47,8 @@ use std::task::Poll;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State, Url};
+use tauri::utils::config::BundleType;
+use tauri::{AppHandle, Emitter, Manager, State, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use ts_rs::TS;
 
@@ -123,6 +129,59 @@ pub struct AppUpdateCheck {
     /// The version the RUNNING app was built as, so the UI can say "you have X"
     /// without a second round trip.
     pub current_version: String,
+    /// Whether a downloaded update is installed when the app quits
+    /// ([`installs_on_quit`]), so the banner can promise it - or not.
+    pub installs_on_quit: bool,
+}
+
+/// Whether [`install_downloaded_update_on_exit`] can run on this platform.
+///
+/// Not on Windows: the plugin's NSIS install passes `/R` in the passive mode
+/// this app uses (`WindowsUpdateInstallMode::nsis_args`, tauri-plugin-updater
+/// 2.9.0), so the installer reopens the app when it finishes. Installing on
+/// quit there would bring back the window the user just closed, which is a
+/// restart they never asked for. Windows keeps "Restart to update".
+const PLATFORM_INSTALLS_ON_QUIT: bool = !cfg!(windows);
+
+/// Whether an update downloaded now would be installed when the app quits.
+///
+/// On macOS this also asks whether the folder holding the app is writable.
+/// When it is not (a non-admin account, an app copied in by another user), the
+/// plugin falls back to an administrator password prompt, and raising that
+/// from an app whose window has already closed, on every quit, is not
+/// acceptable. Such installs keep "Restart to update", where the prompt follows
+/// a click.
+pub fn installs_on_quit() -> bool {
+    PLATFORM_INSTALLS_ON_QUIT && install_dir_is_writable()
+}
+
+/// Can the install replace the app without elevation? Probed by creating and
+/// removing a directory next to the bundle, since permission bits alone do not
+/// answer it (ACLs, group membership). Only macOS has an elevation fallback;
+/// elsewhere a failed write is just a logged failure.
+fn install_dir_is_writable() -> bool {
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
+    let Ok(exe) = tauri::utils::platform::current_exe() else {
+        return false;
+    };
+    let Ok(bundle) = tauri_plugin_updater::extract_path_from_executable(&exe) else {
+        return false;
+    };
+    let Some(dir) = bundle.parent() else {
+        return false;
+    };
+    let probe = dir.join(format!(".stalagmight-update-probe-{}", std::process::id()));
+    match std::fs::create_dir(&probe) {
+        Ok(()) => {
+            if let Err(e) = std::fs::remove_dir(&probe) {
+                tracing::warn!(error = %e, path = %probe.display(), "Could not remove the update write probe");
+            }
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Whether an update is on offer.
@@ -245,6 +304,44 @@ fn updater_not_configured() -> String {
     "This build has no update signing key, so it cannot check for updates".to_owned()
 }
 
+/// Why THIS install cannot replace itself with what the manifest offers, or
+/// `None` when it can.
+///
+/// A manifest carries one entry per OS/arch - the AppImage for Linux, the NSIS
+/// `-setup.exe` for Windows (`scripts/gen-updater-manifest.mjs`) - and
+/// tauri-plugin-updater 2.9 looks entries up by `{os}-{arch}` alone, never by
+/// how the running copy was installed. Without this gate a `.deb` install would
+/// download an AppImage its `install_deb` path rejects, an `.rpm` install would
+/// try to overwrite its package-owned binary with an AppImage, and an `.msi`
+/// install would run the NSIS installer and end up with a second, separately
+/// registered copy. Those installs update through their package instead.
+///
+/// `bundle` comes from the marker the bundler patches into each packaged
+/// binary. An unmarked binary (a bare `cargo build`, or a packaging step that
+/// stopped patching) is refused in a release build - fail closed, the updater
+/// goes quiet - but allowed in a debug build so the dev recipe
+/// (`STALAGMIGHT_UPDATE_URL`) keeps working.
+fn self_update_refusal(bundle: Option<BundleType>, release_build: bool) -> Option<String> {
+    let package = match bundle {
+        Some(BundleType::AppImage | BundleType::Nsis | BundleType::App | BundleType::Dmg) => {
+            return None
+        }
+        None if !release_build => return None,
+        None => {
+            return Some(
+                "This copy of Stalagmight was not installed from a release package, so it cannot update itself"
+                    .to_owned(),
+            )
+        }
+        Some(BundleType::Deb) => ".deb",
+        Some(BundleType::Rpm) => ".rpm",
+        Some(BundleType::Msi) => ".msi",
+    };
+    Some(format!(
+        "Stalagmight was installed from a {package} package, which the in-app updater cannot replace; install the new version the same way"
+    ))
+}
+
 /// Is this a manifest URL a release build may fetch?
 ///
 /// https, and `github.com` exactly - not a suffix match, which would accept
@@ -302,6 +399,9 @@ enum DownloadAbort {
     OverCap,
     /// More bytes than the server itself said it would send.
     OverDeclaredLength,
+    /// A later check replaced the update this download is for, so its bytes
+    /// could never be stored (see [`store_downloaded_bytes`]).
+    Superseded,
 }
 
 impl DownloadAbort {
@@ -314,6 +414,7 @@ impl DownloadAbort {
             Self::OverDeclaredLength => {
                 "The update download sent more data than it declared and was stopped".to_owned()
             }
+            Self::Superseded => SUPERSEDED_MESSAGE.to_owned(),
         }
     }
 }
@@ -333,6 +434,32 @@ fn download_abort_reason(downloaded: u64, content_length: Option<u64>) -> Option
         Some(declared) if downloaded > declared => Some(DownloadAbort::OverDeclaredLength),
         _ => None,
     }
+}
+
+const SUPERSEDED_MESSAGE: &str =
+    "A newer update check replaced this one while it was downloading; check again";
+
+/// Should the download for `generation` stop at this chunk?
+///
+/// Adds the one stateful reason to [`download_abort_reason`]: a newer check
+/// (a track switch mid-download) has replaced the offer. Its bytes would be
+/// refused at the end anyway, so stopping now is what frees the bandwidth and
+/// the partial buffer instead of holding both until the body ends or
+/// `DOWNLOAD_TIMEOUT` fires. A poisoned lock also stops it: nothing could be
+/// stored under one.
+fn chunk_abort_reason(
+    update_state: &AppUpdateState,
+    generation: u64,
+    downloaded: u64,
+    content_length: Option<u64>,
+) -> Option<DownloadAbort> {
+    let current = update_state
+        .with(|pending| pending.generation == generation)
+        .unwrap_or(false);
+    if !current {
+        return Some(DownloadAbort::Superseded);
+    }
+    download_abort_reason(downloaded, content_length)
 }
 
 /// The parked update and the generation it belongs to.
@@ -360,10 +487,7 @@ fn store_downloaded_bytes(
 ) -> Result<(), String> {
     update_state.with(|pending| {
         if pending.generation != generation {
-            return Err(
-                "A newer update check replaced this one while it was downloading; check again"
-                    .to_owned(),
-            );
+            return Err(SUPERSEDED_MESSAGE.to_owned());
         }
         pending.bytes = Some((generation, bytes));
         Ok(())
@@ -478,6 +602,15 @@ pub async fn check_for_app_update(
     if !updater_configured() {
         return Err(updater_not_configured());
     }
+    // Before any state is touched, for the same reason as the transport-failure
+    // arm below. Gating the check is enough: download and install refuse
+    // without the `Update` only a successful check parks.
+    if let Some(refusal) = self_update_refusal(
+        tauri::utils::platform::bundle_type(),
+        !cfg!(debug_assertions),
+    ) {
+        return Err(refusal);
+    }
     let current_version = app.package_info().version.to_string();
     let track = state.get_config().general.update_track;
     let endpoint = endpoint_for_track(track);
@@ -524,6 +657,7 @@ pub async fn check_for_app_update(
         return Ok(AppUpdateCheck {
             status: AppUpdateStatus::UpToDate,
             current_version,
+            installs_on_quit: installs_on_quit(),
         });
     };
 
@@ -544,6 +678,7 @@ pub async fn check_for_app_update(
             version,
         },
         current_version,
+        installs_on_quit: installs_on_quit(),
     })
 }
 
@@ -576,7 +711,9 @@ pub async fn download_app_update(
         let mut download = Box::pin(update.download(
             |chunk, content_length| {
                 downloaded += chunk as u64;
-                if let Some(why) = download_abort_reason(downloaded, content_length) {
+                if let Some(why) =
+                    chunk_abort_reason(&update_state, generation, downloaded, content_length)
+                {
                     reason = Some(why);
                     abort.store(true, Ordering::Relaxed);
                     return;
@@ -727,6 +864,61 @@ pub fn install_app_update_and_restart(
         return Err(format!("Update install failed: {e}"));
     }
     app.restart();
+}
+
+/// Take a verified download for the exit-time install, if one is waiting for
+/// the CURRENT check.
+///
+/// Needs no arm, unlike [`take_installable`]. The arm exists so a stray
+/// `invoke` cannot restart the app out from under unsaved work; this runs only
+/// from the `RunEvent::Exit` handler, after the process has already committed
+/// to exiting, so there is no work left to protect and no webview path to it.
+///
+/// Taking the bytes (not peeking) also keeps the restart path from installing
+/// twice: `install_app_update_and_restart` has already taken them by the time
+/// its `app.restart()` reaches the exit event.
+fn take_for_exit(pending: &mut Pending) -> Option<(Update, Vec<u8>)> {
+    let (generation, _) = pending.bytes.as_ref()?;
+    if *generation != pending.generation {
+        return None;
+    }
+    let (_, bytes) = pending.bytes.take()?;
+    pending.update.clone().map(|update| (update, bytes))
+}
+
+/// Install a downloaded update as the app exits, without relaunching (#631).
+///
+/// Called from the `RunEvent::Exit` handler in `lib.rs`, so it runs after every
+/// exit guard has passed and the window is gone: the user quit normally, and
+/// the next launch starts the new version. Nothing is restarted.
+///
+/// Best-effort: a failure is logged and the exit goes ahead. The next launch
+/// re-checks and downloads the update again. Skipped wherever
+/// [`installs_on_quit`] says no, which on macOS includes a location the user
+/// cannot write - the plugin would otherwise raise an admin password prompt
+/// after the window has gone.
+pub fn install_downloaded_update_on_exit(app: &AppHandle) {
+    if !installs_on_quit() {
+        return;
+    }
+    let Some(update_state) = app.try_state::<AppUpdateState>() else {
+        return;
+    };
+    let taken = match update_state.with(take_for_exit) {
+        Ok(taken) => taken,
+        Err(e) => {
+            tracing::warn!(error = %e, "Update state unusable at exit; not installing");
+            return;
+        }
+    };
+    let Some((update, bytes)) = taken else {
+        return;
+    };
+    let version = update.version.clone();
+    match update.install(&bytes) {
+        Ok(()) => tracing::info!(%version, "Installed the downloaded update on quit"),
+        Err(e) => tracing::warn!(%version, error = %e, "Installing the update on quit failed"),
+    }
 }
 
 #[cfg(test)]
@@ -935,6 +1127,44 @@ mod tests {
         assert!(DownloadAbort::OverDeclaredLength
             .message()
             .contains("more data than it declared"));
+        assert!(DownloadAbort::Superseded
+            .message()
+            .contains("newer update check"));
+    }
+
+    /// A track switch mid-download replaces the offer; the old transfer stops
+    /// at its next chunk instead of running to the end of the body.
+    #[test]
+    fn a_download_a_newer_check_replaced_stops_at_the_next_chunk() {
+        let state = AppUpdateState::default();
+        let started = state.with(|pending| pending.generation).expect("lock");
+        assert_eq!(
+            chunk_abort_reason(&state, started, 1_000, Some(10_000)),
+            None
+        );
+
+        state
+            .with(|pending| pending.generation = pending.generation.wrapping_add(1))
+            .expect("lock");
+        assert_eq!(
+            chunk_abort_reason(&state, started, 2_000, Some(10_000)),
+            Some(DownloadAbort::Superseded)
+        );
+    }
+
+    /// The generation check is added to the size bounds, not swapped in for them.
+    #[test]
+    fn a_current_download_still_obeys_the_size_bounds() {
+        let state = AppUpdateState::default();
+        let current = state.with(|pending| pending.generation).expect("lock");
+        assert_eq!(
+            chunk_abort_reason(&state, current, MAX_UPDATE_BYTES + 1, None),
+            Some(DownloadAbort::OverCap)
+        );
+        assert_eq!(
+            chunk_abort_reason(&state, current, 1_001, Some(1_000)),
+            Some(DownloadAbort::OverDeclaredLength)
+        );
     }
 
     // ── Updater configuration ────────────────────────────────────────────────
@@ -967,6 +1197,42 @@ mod tests {
             pubkey_present(conf),
             "the cached gate disagrees with tauri.conf.json"
         );
+    }
+
+    /// Only the installs the manifest's artifacts can replace may check; every
+    /// package-managed install is refused by name, and an unmarked binary only
+    /// in a release build.
+    #[test]
+    fn only_self_replaceable_installs_may_check() {
+        for allowed in [
+            BundleType::AppImage,
+            BundleType::Nsis,
+            BundleType::App,
+            BundleType::Dmg,
+        ] {
+            assert_eq!(
+                self_update_refusal(Some(allowed.clone()), true),
+                None,
+                "{allowed:?}"
+            );
+        }
+        for (refused, package) in [
+            (BundleType::Deb, ".deb"),
+            (BundleType::Rpm, ".rpm"),
+            (BundleType::Msi, ".msi"),
+        ] {
+            for release_build in [true, false] {
+                // An allowed install yields "", which names no package.
+                let message =
+                    self_update_refusal(Some(refused.clone()), release_build).unwrap_or_default();
+                assert!(
+                    message.contains(package),
+                    "{refused:?} must be refused naming {package}, got {message:?}"
+                );
+            }
+        }
+        assert!(self_update_refusal(None, true).is_some());
+        assert_eq!(self_update_refusal(None, false), None);
     }
 
     // ── State machine ────────────────────────────────────────────────────────
@@ -1208,6 +1474,44 @@ mod tests {
                 .expect("lockable"),
             Some((generation, vec![1u8; 4]))
         );
+    }
+
+    // ── Install on quit (#631) ───────────────────────────────────────────────
+
+    /// Bytes from a check a later one superseded must not be installed: they
+    /// would be applied by the newer `Update`, a version nobody downloaded.
+    /// They are left in place, which is what makes the refusal observable here.
+    #[test]
+    fn the_exit_install_skips_bytes_a_newer_check_superseded() {
+        let state = AppUpdateState::default();
+        seed_download(&state, 1);
+        state
+            .with(|pending| pending.generation = 2)
+            .expect("lockable");
+
+        assert!(state.with(take_for_exit).expect("lockable").is_none());
+        assert!(state
+            .with(|pending| pending.bytes.is_some())
+            .expect("lockable"));
+    }
+
+    /// The exit install needs no arm, but it does take the bytes, so the
+    /// restart path (which takes them first) can never install a second time
+    /// from the exit event its own `app.restart()` raises.
+    #[test]
+    fn the_exit_install_takes_a_current_download_without_an_arm() {
+        let state = AppUpdateState::default();
+        seed_download(&state, 1);
+        assert!(!state
+            .with(|pending| pending.restart_armed)
+            .expect("lockable"));
+
+        // An `Update` cannot be constructed outside a live plugin, so the take
+        // stops at the last step; the bytes being gone proves it got there.
+        assert!(state.with(take_for_exit).expect("lockable").is_none());
+        assert!(state
+            .with(|pending| pending.bytes.is_none())
+            .expect("lockable"));
     }
 
     /// Put the state where a real check + download would leave it, without an

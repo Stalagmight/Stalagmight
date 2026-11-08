@@ -103,6 +103,61 @@ pub fn gps_to_local(gps: &GpsCoordinates, origin: &GpsCoordinates) -> (f64, f64)
     (east, north)
 }
 
+/// The exact inverse of [`gps_to_local`] on the origin's side of the earth: the
+/// point on the WGS84 ellipsoid whose local `(east, north)` relative to `origin`
+/// is the one given, as `(latitude, longitude)` in degrees. A far-side point
+/// shares its `(east, north)` with a near-side one and comes back as that one;
+/// no survey spans that distance.
+///
+/// [`gps_to_local`] drops the "up" component, so the inverse puts the point back
+/// on the ellipsoid: it solves for the up offset that lands
+/// `origin + east*E + north*N + up*U` on the surface (taking the root nearest
+/// the origin), then converts that ECEF point to geodetic, which is exact in
+/// closed form for a point on the surface. `None` only when no such point exists
+/// (an offset beyond the horizon, thousands of kilometres out).
+pub fn local_to_gps(east: f64, north: f64, origin: &GpsCoordinates) -> Option<(f64, f64)> {
+    let b2 = WGS84_A * WGS84_A * (1.0 - WGS84_E2);
+    let a2 = WGS84_A * WGS84_A;
+
+    let lat0 = origin.latitude.to_radians();
+    let lon0 = origin.longitude.to_radians();
+    let (sin_lat, cos_lat) = lat0.sin_cos();
+    let (sin_lon, cos_lon) = lon0.sin_cos();
+    // ENU unit vectors at the origin, in ECEF.
+    let e = (-sin_lon, cos_lon, 0.0);
+    let n = (-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat);
+    let u = (cos_lat * cos_lon, cos_lat * sin_lon, sin_lat);
+
+    let (x0, y0, z0) = geodetic_to_ecef(origin.latitude, origin.longitude, 0.0);
+    let q = (
+        x0 + east * e.0 + north * n.0,
+        y0 + east * e.1 + north * n.1,
+        z0 + east * e.2 + north * n.2,
+    );
+    // |(q + t*u)| on the ellipsoid: A t^2 + B t + C = 0.
+    let qa = (u.0 * u.0 + u.1 * u.1) / a2 + u.2 * u.2 / b2;
+    let qb = 2.0 * ((q.0 * u.0 + q.1 * u.1) / a2 + q.2 * u.2 / b2);
+    let qc = (q.0 * q.0 + q.1 * q.1) / a2 + q.2 * q.2 / b2 - 1.0;
+    let disc = qb * qb - 4.0 * qa * qc;
+    if !disc.is_finite() || disc < 0.0 {
+        return None;
+    }
+    let sqrt_disc = disc.sqrt();
+    let (t1, t2) = (
+        (-qb + sqrt_disc) / (2.0 * qa),
+        (-qb - sqrt_disc) / (2.0 * qa),
+    );
+    let t = if t1.abs() <= t2.abs() { t1 } else { t2 };
+    let (x, y, z) = (q.0 + t * u.0, q.1 + t * u.1, q.2 + t * u.2);
+
+    // On the surface (height 0) geodetic latitude satisfies
+    // tan(lat) = z / (p * (1 - e^2)) exactly.
+    let p = x.hypot(y);
+    let lat = z.atan2(p * (1.0 - WGS84_E2)).to_degrees();
+    let lon = y.atan2(x).to_degrees();
+    (lat.is_finite() && lon.is_finite()).then_some((lat, lon))
+}
+
 /// Haversine distance between two GPS points in meters.
 ///
 /// Uses WGS84 mean earth radius for the calculation.
@@ -348,5 +403,39 @@ mod tests {
             (b - 270.0).abs() < 0.01,
             "Due west should be ~270 degrees, got {b}"
         );
+    }
+
+    /// `local_to_gps` must invert `gps_to_local` exactly in both directions, at any
+    /// latitude, from cave scale up to regional distances (near side only).
+    #[test]
+    fn local_to_gps_inverts_gps_to_local() {
+        let origins = [(0.0, 0.0), (20.5, -87.4), (-60.0, 150.0), (80.0, 10.0)];
+        let offsets = [
+            (0.0, 0.0),
+            (10.0, -3.0),
+            (-4_000.0, 2_500.0),
+            (90_000.0, 120_000.0),
+        ];
+        for (lat0, lon0) in origins {
+            let origin = GpsCoordinates::new(lat0, lon0, 0.0).unwrap();
+            for (east, north) in offsets {
+                let (lat, lon) = local_to_gps(east, north, &origin).unwrap();
+                let back = gps_to_local(&GpsCoordinates::new(lat, lon, 0.0).unwrap(), &origin);
+                assert!(
+                    (back.0 - east).abs() < 1e-6 && (back.1 - north).abs() < 1e-6,
+                    "origin ({lat0}, {lon0}) offset ({east}, {north}) came back as {back:?}"
+                );
+                let target = GpsCoordinates::new(lat, lon, 0.0).unwrap();
+                let (e2, n2) = gps_to_local(&target, &origin);
+                let (lat2, lon2) = local_to_gps(e2, n2, &origin).unwrap();
+                assert!((lat2 - lat).abs() < 1e-9 && (lon2 - lon).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn local_to_gps_refuses_a_point_beyond_the_horizon() {
+        let origin = GpsCoordinates::new(20.5, -87.4, 0.0).unwrap();
+        assert_eq!(local_to_gps(20_000_000.0, 0.0, &origin), None);
     }
 }

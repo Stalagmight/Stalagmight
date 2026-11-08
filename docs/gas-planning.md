@@ -243,8 +243,8 @@ matching chip, keyed off the engine's own `waypoint_route_indices` rather than
 re-matching stations client-side (a route can double back, and a merge makes one
 physical station several refs).
 
-A DPV rig (`GasConfig.dpv`, edited beside the cylinders in the Plan dock's
-**Equipment** tab) is a primary scooter plus a mandatory backup - there is no
+A DPV rig (`GasConfig.dpv`, edited in the Plan dock's **DPV** tab, next to the
+cylinders) is a primary scooter plus a mandatory backup - there is no
 dead-scooter swim-out to model, so the exit mirrors the entry span for span and
 the gas half of the reach predicate is untouched. The rig's usable one-way range
 is the weaker unit by LINE COVERED (`speed x burn` - not halved: primary flies
@@ -359,8 +359,14 @@ survives Survey/Plan/Export switches and resets only on project load.
 Frontend seams, all under `src/`: `store/gasPlanStore.ts` (plan inputs,
 runtime-only), `components/SingleSystemView/GasPlanPanel.tsx` (setup sidebar +
 readout), its `DivePlanBar.tsx` (save/load/delete); the bottom Plan dock's
-`PlanTablesPanel.tsx` with `CylindersTable.tsx` + `DpvRigEditor.tsx` (the
-Equipment tab), `SegmentsTable.tsx` and `ProfileChart.tsx`;
+`PlanTablesPanel.tsx` with `CylindersTable.tsx` (the Cylinders tab, whose
+add-cylinder + conservative-gas controls ride in the tab strip) +
+`DpvRigEditor.tsx` (the DPV tab), `SegmentsTable.tsx` and `ProfileChart.tsx` -
+both tables render
+on the shared `SpreadsheetGrid` (#403), with column defs in
+`segmentsGridColumns.tsx` / `cylindersGridColumns.tsx` and the pure edit
+reducers (unit conversion, clamps, the scooter coupling) in
+`segmentsGridEdits.ts` / `cylindersGridEdits.ts`;
 `components/Map/MapCanvas.tsx` (fetch, turn dots, draggable drops, final-turn
 marker), `components/Map/useGasPlanPointMarkers.ts` (datum stars, way points,
 marked points), `components/Map/useGasPlanDropMarkers.ts` (stage drops + the

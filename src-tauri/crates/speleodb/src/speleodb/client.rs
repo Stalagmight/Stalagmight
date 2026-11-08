@@ -985,7 +985,8 @@ pub fn create_project_with(
     parse_project(&body, "create project response")
 }
 
-/// Convenience: create a minimal `other`-type project by name. Test/seed helper
+/// Convenience: create a minimal project by name, typed with the LEGACY `other`
+/// on purpose so live tests exercise the relabel to `stalagmight`. Test/seed helper
 /// (the #207 production path uses [`create_project_with`] with a full payload).
 /// `pub` because the root crate's live tests drive it across the crate
 /// boundary, which also retires the old non-test dead-code expectation.

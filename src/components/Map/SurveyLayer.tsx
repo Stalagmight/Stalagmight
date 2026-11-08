@@ -1,5 +1,5 @@
 import type { Map as MaplibreMap, MapMouseEvent, ExpressionSpecification } from 'maplibre-gl';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { LoopClosure, Section, SectionId, ShotId, Station, StationRef } from '../../types/project';
 import type { Config, GpsOrigin, DecimalPrecision } from '../../types/config';
 import type { RouteLeg } from '../../types/ipc.generated';
@@ -44,6 +44,7 @@ import { SurveyCustomController, buildCustomDimState, type CustomRenderExclusion
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
 import { MeasurePathController } from './surveyLayer/customRender/measurePathController';
+import { isStyleRestoring, onStyleRestored } from './surveyLayer/customRender/styleRestore';
 import type { MeasurePathRenderData } from './surveyLayer/customRender/surveyMeasurePathLayer';
 import {
   buildMeasurePathBuffers,
@@ -407,6 +408,11 @@ export default class SurveyLayer {
   private measurePath: MeasurePathController | null = null;
   /** Dispose for the device-pixel-ratio watcher (custom layers bake dpr). */
   private dprWatcherDispose: (() => void) | undefined;
+  /** Dispose for the re-add after a style rebuild (context / worker restore). */
+  private styleRestoreDispose: (() => void) | undefined;
+  /** The last update that arrived while a restore was under way; replayed once
+   *  the rebuilt style has loaded. */
+  private deferredUpdate: (() => void) | null = null;
 
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
@@ -443,6 +449,25 @@ export default class SurveyLayer {
     // The custom layers bake devicePixelRatio into their device-pixel sizes, so a
     // DPR change (window dragged to a different-scale monitor) must rebuild them.
     this.dprWatcherDispose = watchDevicePixelRatio(() => this.handleDprChange());
+    this.styleRestoreDispose = onStyleRestored(map, () => this.reattachCustomLayers());
+  }
+
+  /** MapLibre rebuilt the style without the custom layers; put them back in
+   *  their original z-order (geometry, measure tint above it, labels, then the
+   *  drag ghost on top). */
+  private reattachCustomLayers(): void {
+    this.customRender?.reattach();
+    this.measurePath?.reattach();
+    this.customLabels?.reattach();
+    this.dragGhost.reattach();
+    const update = this.deferredUpdate;
+    this.deferredUpdate = null;
+    update?.();
+    // Overlay changes made while the style was gone never reached the rebuilt
+    // one (the snapshot predates them); redraw the ones derived from live state.
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
+    this.syncCustomMeasurePath();
   }
 
   /**
@@ -3349,6 +3374,14 @@ export default class SurveyLayer {
     showIssueSeverity: boolean = false,
     warnings: ProjectWarning[] = [],
   ): void {
+    if (isStyleRestoring(this.map)) {
+      this.deferredUpdate = () =>
+        this.flushUpdate(
+          sections, stations, loopClosures, gpsOrigin, showDepthGradient, depthRange,
+          precision, showIssueSeverity, warnings,
+        );
+      return;
+    }
     // Early bail when the map is gone or its style has been torn down - the
     // coalescer's queueMicrotask can race with MapCanvas unmount → map.remove().
     if (!hasLiveStyle(this.map)) return;
@@ -3588,6 +3621,8 @@ export default class SurveyLayer {
     // Remove the dedicated custom measure-path layer (#26, stage 2a).
     this.measurePath?.destroy();
     this.measurePath = null;
+    this.styleRestoreDispose?.();
+    this.styleRestoreDispose = undefined;
 
     // Drop the module-level VT registry entries + zero the memory-probe counts.
     // (releaseVtRegistry also disposes the DPR watcher, covering both this path

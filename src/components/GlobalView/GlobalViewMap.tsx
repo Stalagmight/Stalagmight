@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
 import GlobalSurveyLayer, { type SystemGeometry, generateSystemColor } from './GlobalSurveyLayer';
 import type { SurveyGeometry } from '../../types/survey';
@@ -15,6 +15,8 @@ import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { testIdPart } from '../../utils/testId';
 import { MapAttribution } from '../Map/MapAttribution';
+import { createMap } from '../Map/createMap';
+import { MapUnavailable } from '../Map/MapUnavailable';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -138,6 +140,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   const markerTooltipRef = useRef<HTMLDivElement | null>(null);
   const contextMenuOpenRef = useRef(false);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [webgl2Unavailable, setWebgl2Unavailable] = useState(false);
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
@@ -371,7 +374,12 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     };
 
     // No maxBounds - allow free panning and zooming
-    map.current = new maplibregl.Map(mapOptions);
+    const created = createMap(mapOptions);
+    if (!created) {
+      setWebgl2Unavailable(true);
+      return;
+    }
+    map.current = created;
 
     // Disable rotation
     map.current.dragRotate.disable();
@@ -471,7 +479,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     let isRubberBanding = false;
     let rubberBandIdleHandler: (() => void) | null = null;
 
-    const handleMoveEndRubberBand = (e: maplibregl.MapLibreEvent & { originalEvent?: Event }) => {
+    const handleMoveEndRubberBand = (e: maplibregl.MapMovementEvent) => {
       if (!map.current || !softBoundsRef.current) return;
 
       // Skip if we're already in a rubber-band animation (prevents infinite loop)
@@ -1168,6 +1176,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   return (
     <div data-testid="globalview-map" className="h-full relative">
       <div ref={mapContainer} className="w-full h-full" />
+      {webgl2Unavailable && <MapUnavailable testId="globalview-webgl2-unavailable" />}
 
       {/* Fit to bounds button */}
       <button

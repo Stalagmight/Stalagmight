@@ -112,7 +112,7 @@ stalagmight/
 
 `src-tauri/Cargo.toml` is the workspace root - a hybrid one: it is both the
 `stalagmight` app package's manifest and the `[workspace]` declaration for the
-seven members under `src-tauri/crates/`. The lockfile (`Cargo.lock`), the wry
+eight members under `src-tauri/crates/`. The lockfile (`Cargo.lock`), the wry
 `[patch.crates-io]`, the build profiles, `[workspace.dependencies]` and the
 `[workspace.lints]` policy all live there; each member inherits the lints via
 `[lints] workspace = true`. See the workspace-layout table in

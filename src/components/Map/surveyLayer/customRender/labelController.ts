@@ -81,6 +81,7 @@ import {
 import { resolveHaloColors, type LabelStyleInputs } from './labelStyle';
 import { SurveyCustomLabelLayer, type LabelRenderData } from './surveyCustomLabelLayer';
 import { CUSTOM_LABELS_SYNC_HOOK } from './labelsGate';
+import { addCustomLayer, isStyleRestoring, reAddCustomLayer, removeCustomLayer } from './styleRestore';
 
 /** Same off-the-render-stack deferral as the geometry controller. Used both for
  *  the fail-safe restore and to coalesce camera-settle viewport rebuilds. */
@@ -956,7 +957,7 @@ export class SurveyLabelController {
     const layer = new SurveyCustomLabelLayer(this.layerId, data, (reason) => this.handleSelfDisable(reason));
     layer.setStyleInputs(this.computeStyle());
     // No beforeId: the label layer draws on top (labels above geometry + overlays).
-    this.map.addLayer(layer);
+    addCustomLayer(this.map, layer);
     if (layer.isDisabled()) {
       // FATAL: the custom label layer cannot draw (no WebGL2 / shader link
       // failure). There is NO stock fallback - remove the dead layer and route
@@ -966,7 +967,7 @@ export class SurveyLabelController {
         `[customRender] custom label layer failed to initialize (${reason}); ` +
           'survey labels unavailable',
       );
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      removeCustomLayer(this.map, layer);
       this.layer = null;
       this.fatal = true;
       this.setActive(false); // active was never true here, so this does not fire.
@@ -981,6 +982,18 @@ export class SurveyLabelController {
     this.map.triggerRepaint();
   }
 
+  /** Re-add the layer after MapLibre rebuilt the style without it (context
+   *  restore / worker restart, see styleRestore.ts). Labels stay on top. */
+  reattach(): void {
+    const layer = this.layer;
+    if (!this.active || !layer) return;
+    if (!reAddCustomLayer(this.map, layer)) {
+      this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
+      return;
+    }
+    this.map.triggerRepaint();
+  }
+
   private disable(): void {
     this.teardown();
     console.info('[customRender] label layer disabled');
@@ -990,7 +1003,7 @@ export class SurveyLabelController {
    *  restore). Safe when already inactive. Non-fatal teardown only (destroy). */
   private teardown(): void {
     this.setActive(false);
-    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.map.triggerRepaint();
   }
@@ -1011,7 +1024,8 @@ export class SurveyLabelController {
    * not the stock-restoring {@link teardown}.
    */
   private handleSelfDisable(reason: string): void {
-    if (!this.active || this.selfDisableScheduled) return;
+    // A lost context fails every GL call; the restore's re-add rebuilds the layer.
+    if (!this.active || this.selfDisableScheduled || isStyleRestoring(this.map)) return;
     this.selfDisableScheduled = true;
     console.warn(
       `[customRender] custom label layer self-disabled (${reason}); survey labels unavailable`,
@@ -1031,7 +1045,7 @@ export class SurveyLabelController {
    */
   private tearDownFatal(reason: string): void {
     this.fatal = true;
-    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.active = false; // set directly: onActiveChange must NOT fire (no republish).
     this.map.triggerRepaint();

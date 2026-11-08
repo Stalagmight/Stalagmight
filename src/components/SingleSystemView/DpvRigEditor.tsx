@@ -10,9 +10,9 @@ import { flushGasConfigWrite, queueGasConfigWrite } from '../../utils/gasConfigD
 import type { DpvRig, DpvUnit } from '../../types/ipc.generated';
 
 /**
- * The optional DPV (scooter) rig editor (#317) - a block under the cylinder table in the
- * Plan-mode bottom panel's "Equipment" tab. Moved out of Settings so the rig lives alongside
- * the rest of the dive's equipment rather than in a separate dialog. Every commit updates both
+ * The optional DPV (scooter) rig editor (#317) - the "DPV" tab of the Plan-mode bottom
+ * panel. Moved out of Settings so the rig lives alongside the rest of the dive's equipment
+ * rather than in a separate dialog. Every commit updates both
  * the working `gasConfig` (via `setDpvRig`, which also resets scootered segments and nulls the
  * cached reach field so the map overlay refetches) and, through `queueGasConfigWrite`, the
  * persisted config on disk. The disk half MUST be debounced: `PositiveNumberField` commits on
@@ -61,8 +61,9 @@ export function DpvRigEditor() {
   };
 
   return (
-    // mt-3 + the top padding = roughly two text lines below the add-tank row above (#317 feedback).
-    <div className="mt-3 p-3 border-t border-border text-sm text-text-primary" data-testid="dpv-rig-editor">
+    // Plain padding, no top margin/rule: this is the whole "DPV" tab now, and a border-t at
+    // the very top of the pane would just double the tab strip's own bottom border.
+    <div className="p-3 text-sm text-text-primary" data-testid="dpv-rig-editor">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-xs uppercase tracking-wide opacity-60 font-semibold">
           {t('gasPanel.dpv.title')}

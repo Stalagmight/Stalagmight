@@ -12,6 +12,7 @@ import type { ProjectMetadata } from '../../../../types/project';
 import type { GeometryShot, SurveyGeometry } from '../../../../types/survey';
 import type { SystemGeometry } from '../../systemColor';
 import { GlobalCustomController } from '../globalController';
+import { onStyleRestored } from '../../../Map/surveyLayer/customRender/styleRestore';
 import type { ProjectFn } from '../globalHitIndex';
 
 const h = vi.hoisted(() => {
@@ -40,6 +41,10 @@ const h = vi.hoisted(() => {
         this.disabled = true;
         this.reason = layerState.disabledReason;
       }
+    }
+    onRemoveCalls = 0;
+    onRemove(): void {
+      this.onRemoveCalls++;
     }
     isDisabled(): boolean {
       return this.disabled;
@@ -73,11 +78,12 @@ const CUSTOM_ID = 'global-survey-custom';
  * them). The custom layer is added at the top; `added` / `removed` record the
  * layer lifecycle so the tests can assert it without a real style.
  */
-function makeFakeMap(): { map: MaplibreMap; added: string[]; removed: string[] } {
+function makeFakeMap(): { map: MaplibreMap; added: string[]; removed: string[]; existing: Set<string> } {
   const existing = new Set<string>();
   const added: string[] = [];
   const removed: string[] = [];
   const map = {
+    painter: { context: { gl: {} } },
     getStyle: () => ({}),
     getLayer: (id: string) => (existing.has(id) ? { id } : undefined),
     addLayer: (layer: { id: string; onAdd?: (m: unknown, gl: unknown) => void }) => {
@@ -92,7 +98,63 @@ function makeFakeMap(): { map: MaplibreMap; added: string[]; removed: string[] }
     project: ([lng, lat]: [number, number]) => ({ x: lng, y: lat }),
     triggerRepaint: () => {},
   } as unknown as MaplibreMap;
-  return { map, added, removed };
+  return { map, added, removed, existing };
+}
+
+/**
+ * Fake map modelling MapLibre 6 across a style rebuild: during a context loss
+ * the style is null and `addLayer` lazily builds one, running `onAdd` against
+ * the dead context (the layer disables itself); the rebuilt style refuses
+ * layers until `style.load` ("Style is not done loading"); the rebuild drops
+ * every custom layer.
+ */
+function makeRestoringMap() {
+  type Phase = 'loaded' | 'null' | 'rebuilt';
+  let phase: Phase = 'loaded';
+  const existing = new Set<string>();
+  const added: string[] = [];
+  const listeners: Array<{ type: string; fn: () => void; once: boolean }> = [];
+  const fire = (type: string): void => {
+    for (const l of listeners.filter((x) => x.type === type)) {
+      if (l.once) listeners.splice(listeners.indexOf(l), 1);
+      l.fn();
+    }
+  };
+  const map = {
+    painter: { context: { gl: {} } },
+    getStyle: () => ({}),
+    getLayer: (id: string) => (existing.has(id) ? { id } : undefined),
+    addLayer: (layer: { id: string; onAdd?: (m: unknown, gl: unknown) => void }) => {
+      if (phase === 'rebuilt') throw new Error('Style is not done loading.');
+      const deadContext = phase === 'null';
+      h.layerState.disabledAfterAdd = deadContext;
+      existing.add(layer.id);
+      added.push(layer.id);
+      layer.onAdd?.(map, {});
+      h.layerState.disabledAfterAdd = false;
+    },
+    removeLayer: (id: string) => existing.delete(id),
+    on: (type: string, fn: () => void) => listeners.push({ type, fn, once: false }),
+    once: (type: string, fn: () => void) => listeners.push({ type, fn, once: true }),
+    off: () => {},
+    project: ([lng, lat]: [number, number]) => ({ x: lng, y: lat }),
+    triggerRepaint: () => {},
+  } as unknown as MaplibreMap;
+  const lose = (): void => {
+    phase = 'null';
+    existing.clear();
+    fire('webglcontextlost');
+  };
+  const rebuild = (): void => {
+    phase = 'rebuilt';
+    existing.clear();
+    fire('webglcontextrestored');
+  };
+  const load = (): void => {
+    phase = 'loaded';
+    fire('style.load');
+  };
+  return { map, added, lose, rebuild, load, restore: () => (rebuild(), load()) };
 }
 
 function shot(from: [number, number], to: [number, number], isReference = false): GeometryShot {
@@ -172,6 +234,71 @@ describe('GlobalCustomController', () => {
     c.sync(makeSystems());
     expect(removed.filter((id) => id === CUSTOM_ID).length).toBe(1);
     expect(fatals).toEqual(['webgl2-unavailable']); // at most once
+  });
+
+  it('reattach re-adds the same layer after a style rebuild dropped it, freeing it first', () => {
+    const { map, added, existing } = makeFakeMap();
+    const c = new GlobalCustomController(map);
+    c.sync(makeSystems());
+    const layer = h.layerState.last!;
+    existing.clear(); // the rebuilt style holds no custom layers
+    c.reattach();
+    expect(added).toEqual([CUSTOM_ID, CUSTOM_ID]);
+    expect(h.layerState.last).toBe(layer);
+    expect(layer.onRemoveCalls).toBe(1);
+    expect(c.isActive()).toBe(true);
+    c.reattach(); // still in the style: no-op
+    expect(added).toEqual([CUSTOM_ID, CUSTOM_ID]);
+  });
+
+  it('reattach that cannot start again routes to onFatal', () => {
+    const { map, existing, removed } = makeFakeMap();
+    const fatals: string[] = [];
+    const c = new GlobalCustomController(map, undefined, { onFatal: (r) => fatals.push(r) });
+    c.sync(makeSystems());
+    existing.clear();
+    h.layerState.disabledAfterAdd = true;
+    c.reattach();
+    expect(removed).toContain(CUSTOM_ID);
+    expect(fatals).toEqual(['program-link-failed']);
+    expect(c.isActive()).toBe(false);
+  });
+
+  it('a controller started while the style is null (context lost) draws after the restore', () => {
+    const m = makeRestoringMap();
+    const fatals: string[] = [];
+    const c = new GlobalCustomController(m.map, undefined, { onFatal: (r) => fatals.push(r) });
+    onStyleRestored(m.map, () => c.reattach());
+    m.lose();
+    c.sync(makeSystems());
+    m.restore();
+    expect(m.added).toEqual([CUSTOM_ID]);
+    expect(h.layerState.last!.isDisabled()).toBe(false);
+    expect(c.isActive()).toBe(true);
+    expect(fatals).toEqual([]);
+  });
+
+  it('a controller started before the rebuilt style loads draws after it does', () => {
+    const m = makeRestoringMap();
+    const c = new GlobalCustomController(m.map);
+    onStyleRestored(m.map, () => c.reattach());
+    m.lose();
+    m.rebuild();
+    expect(() => c.sync(makeSystems())).not.toThrow();
+    m.load();
+    expect(m.added).toEqual([CUSTOM_ID]);
+    expect(c.isActive()).toBe(true);
+  });
+
+  it('teardown frees the GL resources of a layer a worker restart already dropped', () => {
+    const { map, existing, removed } = makeFakeMap();
+    const c = new GlobalCustomController(map);
+    c.sync(makeSystems());
+    const layer = h.layerState.last!;
+    existing.clear();
+    c.destroy();
+    expect(removed).toEqual([]);
+    expect(layer.onRemoveCalls).toBe(1);
   });
 
   it('self-disable fires onFatal (deferred), removes the layer, no stock republish', () => {

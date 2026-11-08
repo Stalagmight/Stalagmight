@@ -12,7 +12,11 @@ import { useTranslation } from 'react-i18next';
 import type { GridLabels } from '../components/common/SpreadsheetGrid';
 
 /** i18n key for the row noun, taking a `count` for pluralization. */
-export type RowNounKey = 'dataTable.shotNoun' | 'dataTable.stationNoun';
+export type RowNounKey =
+  | 'dataTable.shotNoun'
+  | 'dataTable.stationNoun'
+  | 'gasPanel.segments.segmentNoun'
+  | 'gasPanel.tanks.tankNoun';
 
 export function useGridLabels(rowNounKey: RowNounKey): GridLabels {
   const { t } = useTranslation();

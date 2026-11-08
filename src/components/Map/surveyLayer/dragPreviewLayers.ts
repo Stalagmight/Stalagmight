@@ -13,7 +13,7 @@
 // / section-name layers for the drag duration (composed filters in SurveyLayer)
 // and restored on commit-settle / Escape. Previewing it as well read as clutter.
 
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { ExpressionSpecification } from 'maplibre-gl';
 
 export const DRAG_PREVIEW_SOURCE = 'survey-drag-preview';

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useUpdateStore } from '../updateStore';
 
-const INFO = { version: '1.2.3', notesUrl: 'https://x' };
+const INFO = { version: '1.2.3', notesUrl: 'https://x', installsOnQuit: true };
 
 beforeEach(() => {
   useUpdateStore.getState().reset();
@@ -104,10 +104,10 @@ describe('a check reply that has been overtaken is dropped', () => {
     const stale = check();
     const fresh = check();
 
-    useUpdateStore.getState().setAvailable(fresh, { version: '2.0.0', notesUrl: 'https://new' });
-    useUpdateStore.getState().setAvailable(stale, { version: '1.0.0', notesUrl: 'https://old' });
+    useUpdateStore.getState().setAvailable(fresh, { version: '2.0.0', notesUrl: 'https://new', installsOnQuit: true });
+    useUpdateStore.getState().setAvailable(stale, { version: '1.0.0', notesUrl: 'https://old', installsOnQuit: true });
 
-    expect(useUpdateStore.getState().info).toEqual({ version: '2.0.0', notesUrl: 'https://new' });
+    expect(useUpdateStore.getState().info).toEqual({ version: '2.0.0', notesUrl: 'https://new', installsOnQuit: true });
   });
 
   it('a stale setUpToDate cannot erase a newer available', () => {
@@ -192,12 +192,12 @@ describe('download events are pinned to the version they started for', () => {
     useUpdateStore.getState().startDownloading(INFO.version);
 
     // A check lands mid-download and finds a different version.
-    useUpdateStore.getState().setAvailable(check(), { version: '9.9.9', notesUrl: 'https://n' });
+    useUpdateStore.getState().setAvailable(check(), { version: '9.9.9', notesUrl: 'https://n', installsOnQuit: true });
     useUpdateStore.getState().setReady(INFO.version);
 
     const s = useUpdateStore.getState();
     expect(s.status).toBe('available');
-    expect(s.info).toEqual({ version: '9.9.9', notesUrl: 'https://n' });
+    expect(s.info).toEqual({ version: '9.9.9', notesUrl: 'https://n', installsOnQuit: true });
   });
 
   it('setReady is ignored when the offer was withdrawn entirely', () => {

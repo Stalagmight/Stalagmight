@@ -7,6 +7,9 @@
 
 set -euo pipefail
 
+# Strip SQLite modules a hostile .stalx could reach (#608, docs/toolchain.md).
+export LIBSQLITE3_FLAGS="-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION"
+
 APK_DIR="src-tauri/gen/android/app/build/outputs/apk/universal/release"
 KEYSTORE="$APK_DIR/debug.keystore"
 UNSIGNED="$APK_DIR/app-universal-release-unsigned.apk"

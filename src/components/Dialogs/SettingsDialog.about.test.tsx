@@ -20,9 +20,15 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig } from '../../types/config';
+import { useUpdateStore } from '../../store/updateStore';
+import { resetAppUpdateLaunchCheckForTests } from '../../hooks/useAppUpdate';
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
+  // A check that finds an update leaves a download behind, and About answers
+  // later presses from it (#631), so each case starts from an empty store.
+  useUpdateStore.getState().reset();
+  resetAppUpdateLaunchCheckForTests();
   useProjectStore.setState({ config: defaultConfig, updateConfig: vi.fn() });
   useUIStore.setState({
     closeDialog: vi.fn(),

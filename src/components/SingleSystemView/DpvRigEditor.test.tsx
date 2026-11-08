@@ -1,6 +1,6 @@
 /**
- * Component test (#317) - the DPV rig editor, the "Equipment" tab block that replaced the
- * Settings-dialog rig UI. Every commit here must both update the working `gasConfig` (via
+ * Component test (#317) - the DPV rig editor, the Plan panel's "DPV" tab, which replaced
+ * the Settings-dialog rig UI. Every commit here must both update the working `gasConfig` (via
  * `setDpvRig`, the real gasPlanStore action) and persist to disk through the shared
  * `queueGasConfigWrite` queue. The disk half is trailing-debounced because
  * `PositiveNumberField` commits on every valid KEYSTROKE, not on blur - the per-keystroke

@@ -6,8 +6,10 @@ A self-contained, **library-free**, Excel-like editing grid for issue #61.
 > (Excel / Google Sheets) and commodity algorithms only. No third-party grid
 > library source was read or referenced.
 
-It backs the survey data table (`DataTable.tsx`) and the raw table view
-(`RawTableView.tsx`).
+It backs the survey data table (`DataTable.tsx`), the raw table view
+(`RawTableView.tsx`), the dialog-embedded shot table (`ShotTableEditor.tsx`,
+#401) and Plan mode's gas tables (`SegmentsTable.tsx` / `CylindersTable.tsx`,
+#403).
 
 ## Features
 

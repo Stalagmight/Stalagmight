@@ -12,9 +12,9 @@
     />
 
     <title>Stalagmight</title>
-    <!-- Remote origin is why style-src in src-tauri/tauri.conf.json's CSP lists
-         https://unpkg.com explicitly (#357 item 12). The <style> block below
-         needs no 'unsafe-inline', but the mechanism is a NONCE, not a hash:
+    <!-- The <style> block below needs no 'unsafe-inline' in
+         src-tauri/tauri.conf.json's CSP (#357 item 12), but the mechanism is a
+         NONCE, not a hash:
          tauri-codegen stamps nonce="__TAURI_STYLE_NONCE__" onto every <style>
          at build time (map_core_assets -> inject_nonce_token), and at serve time
          set_csp -> replace_csp_nonce swaps in a random value and appends the
@@ -28,7 +28,6 @@
          dangerousDisableAssetCspModification to true or to a list containing
          "style-src" - either drops the nonce and this block is refused in
          production only, since devCsp carries 'unsafe-inline'. -->
-    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
     <style>
       /* Anti-flash cover for the frame before the CSS bundle loads;
          html[data-theme] then hands over to the live token. #1a1a2e is :root's

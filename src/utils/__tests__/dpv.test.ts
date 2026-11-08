@@ -14,8 +14,8 @@ import type { DpvRig } from '../../types/ipc.generated';
  * `src-tauri/src/config/gas.rs` - `dpvUnitInvalid` mirrors `dpv_unit_is_valid`,
  * `dpvUsableRangeM` mirrors `DpvRig::usable_range_m`, and `normalizedReserveFraction`
  * mirrors the branch-asymmetric clamp inside `GasConfig::normalize`. They moved here,
- * unchanged, when the DPV rig editor moved out of Settings into Plan mode's Equipment
- * tab (#317) - GasSettings.test.tsx used to hold them rendered through the Settings
+ * unchanged, when the DPV rig editor moved out of Settings into Plan mode's bottom
+ * panel (#317) - GasSettings.test.tsx used to hold them rendered through the Settings
  * panel; they are exercised directly against the pure functions now.
  */
 

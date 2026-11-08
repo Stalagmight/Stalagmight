@@ -1,4 +1,4 @@
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import { useMapDevStats } from './useMapDevStats';
 import { DevStatsPanel } from './DevStatsPanel';
 import { MapStatsPanel } from './MapStatsPanel';

@@ -687,6 +687,12 @@ mod tests {
             .expect_err("a history-metadata cleanup failure must refuse the push");
         assert!(format!("{err:#}").contains("speleo_undo_chain"));
 
+        // The inducer is a trigger, which the app's own open refuses (#608); drop
+        // it before reopening to inspect what the refused push left behind.
+        rusqlite::Connection::open(&snapshot)
+            .expect("open to drop the inducer")
+            .execute_batch("DROP TRIGGER block_chain_delete")
+            .expect("drop the inducer");
         let db = Database::open_existing(&snapshot).expect("reopen refused snapshot");
         assert_eq!(db.load_undo_stack().expect("load undo").len(), 1);
         assert_eq!(

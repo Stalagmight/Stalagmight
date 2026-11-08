@@ -464,7 +464,7 @@ describe('useBeforeUnload - the armed update restart (#579)', () => {
 
     // A banner sitting on "ready" is what a rejected install has to walk back.
     const seq = useUpdateStore.getState().beginCheck();
-    useUpdateStore.getState().setAvailable(seq, { version: '9.9.9', notesUrl: 'https://x' });
+    useUpdateStore.getState().setAvailable(seq, { version: '9.9.9', notesUrl: 'https://x', installsOnQuit: true });
     useUpdateStore.getState().startDownloading('9.9.9');
     useUpdateStore.getState().setReady('9.9.9');
 

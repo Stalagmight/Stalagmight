@@ -39,6 +39,34 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # shellcheck source=lib/release-version.sh
 . "$SCRIPT_DIR/lib/release-version.sh"
 
+# Compares two dotted X.Y.Z version strings numerically, component by
+# component - a plain string compare would rank "0.5.9" above "0.5.10" (and,
+# via `sort`, put "0.5.10" ahead of "0.5.9" lexically too - the boundary the
+# weekly-supersession scan below is written to never depend on). Bash arrays
+# only, no external tools, so it works the same under the BSD userland
+# (macOS) this script otherwise avoids GNU flags for.
+version_ge() {
+  local IFS=.
+  local -a av=($1) bv=($2)
+  local i x y
+  for i in 0 1 2; do
+    x="${av[i]:-0}"
+    y="${bv[i]:-0}"
+    if [ "$x" -gt "$y" ]; then return 0; fi
+    if [ "$x" -lt "$y" ]; then return 1; fi
+  done
+  return 0
+}
+
+# Strictly greater, same numeric-component comparison. The weekly-supersession
+# warning only fires on THIS - at an equal base the stable release and the
+# weekly series converge (see docs/releasing.md, "The weekly version
+# invariant"), and the stable correctly supersedes it there, so `version_ge`
+# would over-warn on the one case that is not actually a problem.
+version_gt() {
+  version_ge "$1" "$2" && ! version_ge "$2" "$1"
+}
+
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/release-tag.XXXXXX")"
 trap 'rm -rf "$SCRATCH"' EXIT
 
@@ -78,6 +106,23 @@ if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
   echo "Expected vX.Y.Z for a release, or vX.Y.Z-<suffix> (e.g. v0.5.1-rc1) for a candidate." >&2
   exit 1
 fi
+
+# A weekly tag (v0.5.1-weekly.20260817) matches the shape check above too,
+# but it is not one this script hand-tags: weekly tags are reserved for the
+# automated weekly pipeline (issue #579, lands separately from this script),
+# and a hand-typed weekly tag would either collide with, or masquerade as,
+# one of those. Refuse it here rather than let it silently succeed as a
+# candidate.
+case "$TAG" in
+  *-weekly.*)
+    echo "Error: '$TAG' looks like a weekly tag." >&2
+    echo "Weekly tags are reserved for the automated weekly pipeline (#579," >&2
+    echo "lands separately) - they are never hand-tagged." >&2
+    echo "See docs/releasing.md (Updater manifests) for the weekly-track flow." >&2
+    echo "Nothing was tagged." >&2
+    exit 1
+    ;;
+esac
 
 VERSION="${TAG#v}"
 BASE_VERSION="${VERSION%%-*}"
@@ -205,6 +250,41 @@ if [ "$PRERELEASE" = false ]; then
     echo "note: CHANGELOG.md dates $BASE_VERSION as $SECTION_DATE, but today is $TODAY." >&2
     echo "      That date is published as-is; it is stamped when the version is bumped," >&2
     echo "      not when it ships. Update it first if it should read today." >&2
+  fi
+
+  # Weekly-track supersession warning (issue #579). The updater's weekly
+  # manifest only ever moves a track forward, so a weekly tag whose base is
+  # STRICTLY GREATER than this stable's version means weekly-track users on
+  # that build (or later in the same series) will never be offered this
+  # stable release - the weekly manifest already points past it. An EQUAL
+  # base is not a problem: that is the convergence point the weekly series
+  # was built toward (see docs/releasing.md, "The weekly version invariant"),
+  # and the stable correctly supersedes it there. This is advisory, not a
+  # refusal: a maintainer may already know and be fine with it (e.g. a patch
+  # cut behind a weekly build that shipped nothing users need).
+  #
+  # Scans every `v*-weekly.*` tag and keeps the numerically HIGHEST base
+  # found, rather than the first `sort`-ordered match: `sort` orders
+  # lexically, which puts "0.5.10" ahead of "0.5.9" for the wrong reason (a
+  # leading "1" sorts before "9"), so stopping at the first hit can both
+  # false-positive on an equal-base tag that happens to sort first and miss a
+  # genuinely higher one further down the list.
+  HIGHEST_WEEKLY=""
+  HIGHEST_WEEKLY_BASE=""
+  while IFS= read -r wtag; do
+    [ -z "$wtag" ] && continue
+    wbase="${wtag#v}"
+    wbase="${wbase%%-weekly.*}"
+    if [ -z "$HIGHEST_WEEKLY_BASE" ] || version_gt "$wbase" "$HIGHEST_WEEKLY_BASE"; then
+      HIGHEST_WEEKLY_BASE="$wbase"
+      HIGHEST_WEEKLY="$wtag"
+    fi
+  done < <(git -C "$PROJECT_ROOT" tag --list 'v*-weekly.*')
+  if [ -n "$HIGHEST_WEEKLY" ] && version_gt "$HIGHEST_WEEKLY_BASE" "$BASE_VERSION"; then
+    echo "note: weekly tag $HIGHEST_WEEKLY already carries a base version > $BASE_VERSION." >&2
+    echo "      Weekly-track users on or past that build will not be offered $TAG:" >&2
+    echo "      the weekly manifest only moves forward, and this stable release does" >&2
+    echo "      not supersede it. Continuing is fine if that is expected." >&2
   fi
 fi
 

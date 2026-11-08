@@ -106,9 +106,9 @@
         "updates": "Updates"
       },
       "updateCheck": {
-        "label": "Check for updates automatically",
-        "help": "Checks GitHub for new releases shortly after Stalagmight starts. Checking contacts GitHub; nothing is downloaded until you choose to.",
-        "aria": "Enable automatic update checks"
+        "label": "Update automatically",
+        "help": "Checks GitHub for new releases when Stalagmight starts and every 4 hours while it is open, and downloads them in the background. A downloaded update installs when you quit (on Windows, when you choose Restart to update). Turn this off to check and download only when you ask.",
+        "aria": "Enable automatic updates"
       },
       "updateTrack": {
         "label": "Update track",
@@ -2364,6 +2364,10 @@
   },
   "map": {
     "fitToViewTitle": "Fit to view",
+    "webgl2Unavailable": {
+      "title": "This map needs WebGL2",
+      "body": "Your graphics driver did not provide WebGL2, so the map cannot be drawn. Updating the driver may help. The rest of the app still works."
+    },
     "attribution": {
       "expandAria": "Show map imagery sources",
       "collapsed": "by {{source}}"
@@ -2548,9 +2552,11 @@
     "available": "Stalagmight {{version}} is available",
     "download": "Download",
     "releaseNotes": "Release notes",
-    "dismiss": "Dismiss",
+    "dismiss": "Hide",
     "downloading": "Downloading update…",
     "restart": "Restart to update",
+    "readyOnQuit": "Stalagmight {{version}} will be installed when you quit",
+    "restartNow": "Restart now",
     "toasts": {
       "downloadFailed": "Could not download the update. Try again from the update banner.",
       "installFailed": "Could not install the update. Download it again from the update banner."
@@ -2803,10 +2809,10 @@
       "label": "Tanks",
       "bar": "bar",
       "psi": "psi",
-      "fillAria": "Fill pressure for {{tank}}",
       "removeAria": "Remove {{tank}}",
-      "addPlaceholder": "Add tank…",
-      "conservative": "Conservative gas (cap overfills to rated)",
+      "addPlaceholder": "Add cylinder…",
+      "conservative": "Conservative gas",
+      "conservativeHint": "Caps an overfilled cylinder to its rated pressure when computing usable gas.",
       "notCounted": "This role isn't counted toward the open-circuit penetration budget.",
       "disabledHint": "This tank is switched off and excluded from the gas plan.",
       "enabledAria": "Carry {{tank}} on this dive",
@@ -2818,10 +2824,12 @@
       "colUsableBar": "Usable (bar)",
       "colUsablePsi": "Usable (psi)",
       "usableHint": "Penetration gas: how much you'll breathe off this tank on the way in before turning. Computed by the strategy; editable under Free.",
-      "usableAria": "Usable gas for {{tank}}",
       "roleAria": "Role for {{tank}}",
       "colRole": "Role",
-      "editHint": "Edit your cylinders in the Equipment tab below."
+      "tankNoun_one": "tank",
+      "tankNoun_other": "tanks",
+      "negativePressure": "Pressure cannot be negative.",
+      "editHint": "Edit your cylinders in the Cylinders tab below."
     },
     "roles": {
       "back_gas": "Back gas",
@@ -2872,20 +2880,20 @@
     "segments": {
       "colFrom": "From",
       "colTo": "To",
-      "colSpeed": "Speed",
+      "colSpeedUnit": "Speed ({{unit}})",
       "colScooter": "DPV",
+      "segmentNoun_one": "segment",
+      "segmentNoun_other": "segments",
+      "inheritedHint": "Following the plan speed. Type a number to give this leg its own pace, or clear the cell to go back.",
+      "explicitHint": "This leg flies its own pace. Clear the cell to follow the plan speed again.",
       "origin": "Origin",
       "waypointN": "WP {{n}}",
       "endpoint": "Endpoint",
       "onward": "Onward",
-      "noRigHint": "Add a DPV rig in the Equipment tab to plan scooter legs.",
-      "speedAria": "Speed for the {{from}} to {{to}} leg",
+      "noRigHint": "Add a DPV rig in the DPV tab to plan scooter legs.",
       "scooterAria": "Riding a DPV for the {{from}} to {{to}} leg",
       "parkHere": "Parked here",
-      "parkHereHint": "The DPV is parked at this point - derived from the scootered legs above, not set directly.",
-      "resetSpeed": "Reset",
-      "resetSpeedHint": "Return to the plan's swim speed",
-      "resetSpeedAria": "Reset the {{from}} to {{to}} leg speed to the plan speed"
+      "parkHereHint": "The DPV is parked at this point - derived from the scootered legs above, not set directly."
     },
     "dpv": {
       "title": "DPV",
@@ -2954,7 +2962,8 @@
   },
   "planTables": {
     "tabs": {
-      "equipment": "Equipment",
+      "cylinders": "Cylinders",
+      "dpv": "DPV",
       "segments": "Segments",
       "profile": "Profile"
     },
@@ -3327,13 +3336,13 @@
     "adopt": {
       "confirmTitle": "Adopt this Ariane project?",
       "confirmBody": "\"{{name}}\" is an Ariane (.tml) project. Adopting it imports its survey into a new Stalagmight file, uploads that file to SpeleoDB, and links it to this project. Adopting takes the write lock for as long as it runs, and hands it back when the upload is done.",
-      "confirmConsequence": "The project type on SpeleoDB is changed to \"other\", and from now on only Stalagmight edits are recognized - later Ariane (.tml) edits are disregarded. To undo this, you will have to manually roll back to the Ariane-only version and change the project type in the SpeleoDB interface.",
+      "confirmConsequence": "The project type on SpeleoDB is changed to \"Stalagmight\", and from now on only Stalagmight edits are recognized - later Ariane (.tml) edits are disregarded. To undo this, you will have to manually roll back to the Ariane-only version and change the project type in the SpeleoDB interface.",
       "confirmButton": "Adopt",
       "doneToast": "Project adopted and uploaded to SpeleoDB.",
-      "doneToastNoTypeFlip": "Project adopted and uploaded, but its SpeleoDB type could not be changed to \"other\" (you may not have write access).",
+      "doneToastNoTypeFlip": "Project adopted and uploaded, but its SpeleoDB type could not be changed to \"Stalagmight\" (you may not have write access).",
       "doneToastLocalOnly": "Project adopted on this machine only - it could not be uploaded. Use Start editing, then Done, to push it to SpeleoDB.",
       "doneToastLockHeld": "Project adopted and uploaded to SpeleoDB, but handing the write lock back could not be confirmed. Your survey is safe on the server; check the SpeleoDB menu and release the lock if you still hold it, so others can edit.",
-      "doneToastLockHeldNoTypeFlip": "Project adopted and uploaded to SpeleoDB, but two things are unfinished: handing the write lock back could not be confirmed, and its SpeleoDB type could not be changed to \"other\". Your survey is safe on the server; check the SpeleoDB menu and release the lock if you still hold it, and change the type in SpeleoDB so the project stops offering to be adopted."
+      "doneToastLockHeldNoTypeFlip": "Project adopted and uploaded to SpeleoDB, but two things are unfinished: handing the write lock back could not be confirmed, and its SpeleoDB type could not be changed to \"Stalagmight\". Your survey is safe on the server; check the SpeleoDB menu and release the lock if you still hold it, and change the type in SpeleoDB so the project stops offering to be adopted."
     },
     "dumpPicker": {
       "titleStalx": "Choose which file to open",

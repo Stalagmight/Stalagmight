@@ -1,6 +1,5 @@
 import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
@@ -15,6 +14,7 @@ import {
   finishImportWithoutOrphanSuggestions,
 } from './utils/saveFeedback';
 import { extractFilename } from './utils/path';
+import { applyWindowTitle } from './utils/windowTitle';
 import { routeOpenedFile } from './utils/openOrImport';
 import { useLaunchWithFile } from './utils/launchWithFile';
 import { guardQuit } from './utils/quit';
@@ -320,12 +320,7 @@ function App() {
           title = `${title} *`;
         }
       }
-      try {
-        await getCurrentWindow().setTitle(title);
-      } catch (e) {
-        // Fallback for dev mode or if Tauri API unavailable
-        document.title = title;
-      }
+      await applyWindowTitle(title);
     };
     updateTitle();
   }, [project, project?.file_path, project?.name, isDirty]);

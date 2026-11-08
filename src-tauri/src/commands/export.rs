@@ -10,8 +10,8 @@ use crate::export::{ExportImageOptions, ProfileFormat};
 use crate::models::{Cylinder, Diver, PlanSegment, Project, StationRef};
 
 /// True when `target` resolves to the same file on disk as the open project's
-/// `.stalx` at `existing`. Image export writes raw bytes (`std::fs::write` /
-/// `pixmap.save_png`), so exporting over the live project database would corrupt
+/// `.stalx` at `existing`. Every export replaces its target wholesale
+/// (`write_atomic`), so exporting over the live project database would destroy
 /// it. `existing` always exists (it is the open DB); `target` may not exist yet
 /// (a fresh export destination), so when it can't be canonicalized directly,
 /// compare its canonicalized parent directory + file name against the
@@ -130,10 +130,10 @@ fn export_format_with_notes(
                 path = ?path,
                 purpose = "export project for sharing",
                 format = format,
-                reason = %e,
+                reason = %format_args!("{e:#}"),
                 "{} export failed", format.to_uppercase()
             );
-            Err(e.to_string())
+            Err(format!("{e:#}"))
         }
     }
 }
@@ -199,8 +199,8 @@ pub async fn export_image(
         "No project open".to_string()
     })?;
 
-    // Never let an image export clobber a file the open project owns: the raw
-    // file write in `export/image.rs` would overwrite the live database, or the
+    // Never let an image export clobber a file the open project owns: the export
+    // renamed into place by `export/image.rs` would replace the live database, or the
     // `.plnx` sibling holding every saved dive plan.
     //
     // `is_project_owned_file`, not `is_open_project_file`: this arm used the
@@ -275,12 +275,12 @@ pub async fn export_image(
                 path = ?path,
                 purpose = "export map image for sharing",
                 format = ?options.format,
-                reason = %e,
+                reason = %format_args!("{e:#}"),
                 "Image export failed"
             );
         }
 
-        result.map_err(|e| e.to_string())
+        result.map_err(|e| format!("{e:#}"))
     })
     .await
     .map_err(|e| {
@@ -339,10 +339,10 @@ pub(crate) fn export_image_impl(
                 path = ?path,
                 purpose = "export map image for sharing",
                 format = ?options.format,
-                reason = %e,
+                reason = %format_args!("{e:#}"),
                 "Map image export failed"
             );
-            Err(e.to_string())
+            Err(format!("{e:#}"))
         }
     }
 }
@@ -462,9 +462,13 @@ pub async fn export_dive_profile(
         if is_project_owned_file(&path, &project) {
             return Err(refuse(&path));
         }
-        std::fs::write(&path, rendered).map_err(|e| {
+        crate::export::write_atomic(&path, |w| {
+            std::io::Write::write_all(w, rendered.as_bytes())?;
+            Ok(())
+        })
+        .map_err(|e| {
             tracing::error!(path = ?path, reason = %e, "Dive profile export failed");
-            e.to_string()
+            format!("{e:#}")
         })?;
         tracing::info!(
             path = ?path,

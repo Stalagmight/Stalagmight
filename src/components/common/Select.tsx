@@ -25,6 +25,9 @@ export interface SelectOptionGroup {
 
 export type SelectSize = 'sm' | 'md';
 
+/** Trigger chrome. See the `variant` prop. */
+export type SelectVariant = 'default' | 'cell';
+
 const triggerSizeStyles: Record<SelectSize, string> = {
   sm: 'px-2 py-1 text-xs',
   md: 'px-3 py-2',
@@ -45,6 +48,18 @@ interface SelectProps {
   className?: string;
   /** Trigger button padding/text size - 'md' (default) matches the historical fixed size, 'sm' fits dense contexts (table rows, inline control strips). */
   size?: SelectSize;
+  /**
+   * Trigger chrome. 'default' (the default) is the standalone control: a bordered,
+   * rounded box on the app background, sized by `size`.
+   *
+   * 'cell' is for a Select embedded in a `SpreadsheetGrid` cell - today the Plan-mode
+   * Cylinders grid's Role column. It has no box of its own: it fills the cell it sits
+   * in, inherits the grid's cell font size, and pads its label to the same x-offset as the
+   * neighbouring cells' text, so the only thing marking it as a control is the chevron
+   * at the cell's right edge. `size` is ignored under 'cell' - the geometry comes from
+   * the grid, and the host must give the trigger a full-height/full-width box to fill.
+   */
+  variant?: SelectVariant;
   /** Highlights the trigger border to flag an uncommitted/staged value (e.g. arm-then-confirm pickers). */
   pending?: boolean;
   /** Test ID for E2E tests */
@@ -155,6 +170,7 @@ export function Select({
   disabled = false,
   className = '',
   size = 'md',
+  variant = 'default',
   pending = false,
   'data-testid': testId,
   'aria-label': ariaLabel,
@@ -452,6 +468,20 @@ export function Select({
 
   const selectedLabel = findLabel(options, value);
 
+  // Trigger chrome per `variant`. 'cell' drops the box (background, border, radius,
+  // size padding) so the trigger reads as the grid cell it fills, keeps `px-2` to line
+  // its label up with the neighbouring cells' text, and inherits the grid's font size.
+  // Its focus ring is INSET: the app's global `*:focus-visible` outline sits 2px
+  // outside the element, which the cell's `overflow: hidden` would shave off.
+  const triggerClass =
+    variant === 'cell'
+      ? `h-full w-full px-2 bg-transparent border-0 rounded-none text-left flex items-center justify-between focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent ${
+          disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+        }${pending ? ' ring-1 ring-inset ring-warning' : ''}`
+      : `w-full ${triggerSizeStyles[size]} bg-background border rounded text-left flex items-center justify-between ${
+          pending ? 'border-warning' : 'border-border'
+        } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-accent'}`;
+
   // Track current flattened index for rendering
   let flatIndex = -1;
 
@@ -548,9 +578,7 @@ export function Select({
         role="combobox"
         data-testid={testId}
         data-dropdown-open={isOpen || undefined}
-        className={`w-full ${triggerSizeStyles[size]} bg-background border rounded text-left flex items-center justify-between ${
-          pending ? 'border-warning' : 'border-border'
-        } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-accent'}`}
+        className={triggerClass}
         onClick={() => {
           if (disabled) return;
           if (isOpen) {

@@ -23,6 +23,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Build the bundled SQLite without FTS3/4/5, RTREE, DBSTAT and extension
+# loading, so a hostile .stalx cannot reach them (#608, docs/toolchain.md).
+env:
+  LIBSQLITE3_FLAGS: "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION"
+
 jobs:
   # The runner picker lives in its own reusable workflow so `check` and `smoke`
   # share ONE copy of the decision - see .github/workflows/pick-runner.yml for
@@ -183,6 +188,10 @@ jobs:
             echo "Run the Rust tests locally and commit the result; never hand-edit that tree."
             exit 1
           fi
+      # The flags above only take effect if libsqlite3-sys reads them; this pins
+      # the compiled-in options. Ignored in a plain local `cargo test` (#608).
+      - name: Bundled SQLite compile options
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib -- --ignored --exact persistence::sqlite::tests::bundled_sqlite_omits_virtual_table_modules_and_extension_loading
       # Vendored compass_data is [workspace]-excluded, so `cargo test --workspace`
       # compiles it (as a path dep) but never runs its tests (#494). Test it
       # directly. No telemetry feature or TELEMETRY_ENDPOINT - the crate defines
@@ -215,6 +224,21 @@ jobs:
         run: cargo check --release --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      # stalx-reader and the two internal crates it depends on are published to
+      # crates.io (#593). Keep them publishable between releases: a path
+      # dependency without a version, a new unpublished internal dependency or
+      # missing metadata fails here, not on release day; and each package must
+      # carry the AGPL text. `cargo package`, not `publish --dry-run`, so an
+      # already-published version cannot turn this red. --no-verify skips the
+      # rebuild from the packaged sources (minutes); the release runs it in full.
+      - name: crates.io packaging check (stalx-reader)
+        run: |
+          crates="stalagmight-models stalagmight-persistence stalx-reader"
+          cargo package --no-verify --manifest-path src-tauri/Cargo.toml $(printf -- '-p %s ' $crates)
+          for c in $crates; do
+            cargo package --list --manifest-path src-tauri/Cargo.toml -p "$c" | grep -qx LICENSE \
+              || { echo "::error::$c does not package a LICENSE"; exit 1; }
+          done
       # sccache health on the self-hosted path (the cache that replaces rust-cache
       # on the ephemeral runner). Skipped on hosted. !cancelled() (not always()):
       # still report on cargo FAILURE, but skip on a superseded/cancelled run.

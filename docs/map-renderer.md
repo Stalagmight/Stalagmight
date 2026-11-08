@@ -187,8 +187,33 @@ absorbed. Three paths reach it:
   not link (`program-link-failed`). The controller sees `isDisabled()` right
   after `addLayer`, removes the dead layer, and latches fatal. A successful
   link also resolves the program's uniform/attribute locations into its bundle
-  (`glProgram.ts`), so a context restore - which re-runs `onAdd` - rebuilds
-  the program and its location cache together.
+  (`glProgram.ts`), so a re-add after a style rebuild (below) rebuilds the
+  program and its location cache together.
+
+**Style rebuilds drop every custom layer.** MapLibre 6 rebuilds the style from
+`style.serialize()` after a WebGL context loss and after a worker restart
+(`watchWorkers()` pings the workers on every return to the foreground and
+restarts them if they stay silent for 500 ms). Custom layers cannot be
+serialized, so MapLibre leaves them out. Both paths fire `webglcontextrestored`,
+and the rebuilt style announces itself a frame later with `style.load`.
+`customRender/styleRestore.ts` waits for that pair, and each controller's
+`reattach()` re-adds its layer instance in the original z-order (geometry,
+measure tint, labels, drag ghost; one layer on the Global View). The instance
+still holds its last data, so `onRemove` + `onAdd` re-upload it to fresh GL
+objects. A layer that cannot start again goes down the same fatal path as a
+failed first `onAdd`.
+
+From the loss to that `style.load` no layer can be added (the style is null,
+then not yet loaded), so `addCustomLayer` holds a new layer back and the
+reattach adds it; a self-disable in that window is ignored, because the re-add
+rebuilds the layer. `SurveyLayer` also keeps the last survey update that
+arrived in the window and replays it, then redraws the interact overlay and
+the measure tint. Two limits: other stock overlay setters that ran in the window
+(gas route, closures highlight, and the like) show their pre-loss state until
+they next change, and the custom layers come back at their own anchors, so a
+stock layer that had been appended above the labels ends up below them.
+Teardown goes through `removeCustomLayer`, which frees the GL objects directly
+when a worker restart already dropped the layer from the style.
 - **Mid-render**: each layer calls `gl.getError()` after its draws for the first
   5 frames only (a `getError` is a pipeline stall, and WebKitGTK can drop a
   layer silently), self-disabling with a `gl-error-0x<code>` reason. This fires

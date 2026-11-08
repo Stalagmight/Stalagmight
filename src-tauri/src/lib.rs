@@ -2026,6 +2026,13 @@ pub fn run() {
                     }
                 }
 
+                // Install on quit (#631). `Exit`, not `ExitRequested`: the latter
+                // can still be prevented, and a cancelled exit must not have
+                // replaced the app underneath the running process.
+                if let tauri::RunEvent::Exit = event {
+                    commands::app_update::install_downloaded_update_on_exit(app_handle);
+                }
+
                 // macOS "open with" (#424). Finder never uses argv: both a cold
                 // launch and a double-click while the app runs arrive as an
                 // Apple event, which Tauri surfaces here. On a cold launch this

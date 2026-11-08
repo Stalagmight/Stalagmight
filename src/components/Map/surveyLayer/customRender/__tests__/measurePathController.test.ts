@@ -135,6 +135,19 @@ describe('MeasurePathController', () => {
     expect(layer!.setDataCalls).toBe(1);
   });
 
+  it('clear() frees the GL resources of a layer a worker restart already dropped', () => {
+    const { map, calls, present } = makeFakeMap([]);
+    let onRemoveCalls = 0;
+    const ctrl = new MeasurePathController(map, {
+      makeLayer: (id, d, cb) => Object.assign(new FakeLayer(id, d, cb), { onRemove: () => onRemoveCalls++ }),
+    });
+    ctrl.setPath(renderData(1, 1), []);
+    present.clear();
+    ctrl.clear();
+    expect(calls.removed).toEqual([]);
+    expect(onRemoveCalls).toBe(1);
+  });
+
   it('clears the layer on clear()', () => {
     const { map, calls } = makeFakeMap([]);
     const ctrl = new MeasurePathController(map, { makeLayer: (id, d, cb) => new FakeLayer(id, d, cb) });

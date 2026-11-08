@@ -126,15 +126,14 @@ impl PlnxStore {
             Ok(v) => Ok(v),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             // No `plnx_meta` table yet (schema was never initialized on this file) - not
-            // owned by anyone. rusqlite surfaces "no such table" as a SqliteFailure whose
-            // extended code is SQLITE_ERROR with no more specific sub-code, so match on the
-            // message rather than the code (verified against rusqlite 0.31 in the guard test
-            // below); any other SqliteFailure message (corruption, I/O) still propagates.
-            Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
-                if msg.contains("no such table") =>
-            {
-                Ok(None)
-            }
+            // owned by anyone. "No such table" has the bare SQLITE_ERROR code, so match on
+            // the message. rusqlite reports it as SqliteFailure, or as SqlInputError when
+            // SQLite also gives a byte offset into the SQL; accept both (guard test below,
+            // rusqlite 0.41 / SQLite 3.54). Any other failure (corruption, I/O) propagates.
+            Err(
+                rusqlite::Error::SqliteFailure(_, Some(ref msg))
+                | rusqlite::Error::SqlInputError { ref msg, .. },
+            ) if msg.contains("no such table") => Ok(None),
             Err(e) => Err(e.into()),
         }
     }

@@ -11,6 +11,23 @@ import type { UpdateTrack } from '../types/ipc/UpdateTrack';
 /** How long after config loads before the automatic launch check fires (#579). */
 const LAUNCH_CHECK_DELAY_MS = 10_000;
 
+/** How often the app re-checks while it stays open (#631). */
+export const PERIODIC_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * How often the periodic check looks at the clock. Comparing wall-clock time on
+ * a short tick, rather than arming one 4-hour timer, is what catches a laptop
+ * waking from sleep: timers do not advance while it sleeps, but `Date.now()`
+ * does, so the first tick after waking sees the interval has passed.
+ */
+const PERIODIC_TICK_MS = 5 * 60 * 1000;
+
+/** When the most recent check (of any kind) started; drives the periodic one. */
+let lastCheckStartedAt = 0;
+
+/** The running app's version, as the most recent successful check reported it. */
+let lastCurrentVersion: string | null = null;
+
 /**
  * Guards the automatic launch check to once per process - a module flag
  * (not a ref) because it must survive `useAppUpdate` being mounted more than
@@ -23,6 +40,8 @@ let launchCheckArmed = false;
 /** Test-only reset so a leaked arm can't bleed across cases. */
 export function resetAppUpdateLaunchCheckForTests(): void {
   launchCheckArmed = false;
+  lastCheckStartedAt = 0;
+  lastCurrentVersion = null;
 }
 
 /**
@@ -46,22 +65,75 @@ export type AppUpdateCheckOutcome =
   | { kind: 'failed' };
 
 /**
+ * Download and verify an offered update, driving the store through it.
+ *
+ * `background` marks a download no one asked for (#631): every check that finds
+ * an update starts one, and the banner stays hidden until it is ready. A
+ * failure is quiet either way - the banner drops back to offering Download, and
+ * the next check retries - so the caller decides whether to say anything.
+ *
+ * `stale` means a later download took over while this one ran, so its answer
+ * was not applied and is nothing to report.
+ */
+export async function downloadAppUpdate(
+  version: string,
+  background: boolean,
+): Promise<'ready' | 'failed' | 'stale'> {
+  const seq = useUpdateStore.getState().startDownloading(version, background);
+  // A later download owns the store now; this one's answer is not the current one.
+  const superseded = () => useUpdateStore.getState().downloadSeq !== seq;
+  try {
+    await invokeIpc('download_app_update', undefined, { purpose: 'download app update' });
+    if (superseded()) return 'stale';
+    useUpdateStore.getState().setReady(version);
+    return 'ready';
+  } catch (e) {
+    debugLog('[useAppUpdate] download failed:', e);
+    if (superseded()) return 'stale';
+    useUpdateStore.getState().setDownloadFailed();
+    return 'failed';
+  }
+}
+
+/**
  * Run one update check and put the answer in the store.
  *
- * The SINGLE path for every caller - the launch hook, a track switch, and
- * About's manual button - because the alternative (About keeping its own local
- * result) makes the two disagree in both directions: About promising a banner
- * the store never learned to show, and the backend's check nulling the parked
- * download bytes underneath a banner still offering "Restart to update".
+ * The SINGLE path for every caller - the launch hook, the periodic check, a
+ * track switch, and About's manual button - because the alternative (About
+ * keeping its own local result) makes the two disagree in both directions:
+ * About promising a banner the store never learned to show, and the backend's
+ * check nulling the parked download bytes underneath a banner still offering
+ * "Restart to update".
+ *
+ * A found update is downloaded straight away only when automatic updates are
+ * on (#631) - the setting is the user's opt-out, so a track switch or a manual
+ * check with it off leaves the Download button to them. `userInitiated` (About)
+ * shows that download's progress instead of hiding it, and never re-checks
+ * over an update already downloading or downloaded: the backend drops the
+ * parked bytes on every successful check, so pressing "Check" would throw away
+ * a finished download only to fetch the same one again.
  *
  * A failed check is never surfaced as a toast or banner (docs/notifications.md)
  * - it goes quietly to idle. Callers who ASKED for the check say so themselves.
  */
-export async function runAppUpdateCheck(): Promise<AppUpdateCheckOutcome> {
+export async function runAppUpdateCheck(
+  opts: { userInitiated?: boolean } = {},
+): Promise<AppUpdateCheckOutcome> {
+  const userInitiated = opts.userInitiated === true;
   const store = useUpdateStore.getState();
+  if (
+    userInitiated &&
+    store.info &&
+    lastCurrentVersion !== null &&
+    (store.status === 'downloading' || store.status === 'ready')
+  ) {
+    store.reveal();
+    return { kind: 'available', currentVersion: lastCurrentVersion, version: store.info.version };
+  }
   // Every reply is matched against this, so a check overtaken by a later one
   // (a track switch, a second press of the About button) cannot land.
   const seq = store.beginCheck();
+  lastCheckStartedAt = Date.now();
   try {
     const result = await invokeIpc<AppUpdateCheck>('check_for_app_update', undefined, {
       purpose: 'check for app update',
@@ -70,9 +142,20 @@ export async function runAppUpdateCheck(): Promise<AppUpdateCheckOutcome> {
     // the same fact. Returning the answer anyway let About render a result the
     // store had already rejected, so its line and the banner disagreed.
     if (useUpdateStore.getState().checkSeq !== seq) return { kind: 'stale' };
+    lastCurrentVersion = result.current_version;
     if (result.status.kind === 'available') {
       const { version, notes_url: notesUrl } = result.status;
-      useUpdateStore.getState().setAvailable(seq, { version, notesUrl });
+      useUpdateStore
+        .getState()
+        .setAvailable(seq, { version, notesUrl, installsOnQuit: result.installs_on_quit });
+      // About says "see the update banner"; a dismissal from earlier this
+      // session must not make that a lie.
+      if (userInitiated) useUpdateStore.getState().reveal();
+      // [#631] Fetch it straight away, so the banner's first appearance is
+      // already "ready" and an ordinary quit can install it.
+      if (useProjectStore.getState().config?.general.update_check_enabled) {
+        void downloadAppUpdate(version, !userInitiated);
+      }
       return { kind: 'available', currentVersion: result.current_version, version };
     }
     useUpdateStore.getState().setUpToDate(seq);
@@ -116,7 +199,26 @@ export function useAppUpdate(): void {
     return () => window.clearTimeout(timer);
   }, [config]);
 
-  // (b) Download progress, streamed while `download_app_update` is in flight.
+  // (b) The periodic check (#631): every PERIODIC_CHECK_INTERVAL_MS while the
+  // app stays open, gated on the same setting as the launch check. It waits for
+  // the launch check to own the first one, and it never runs over a download
+  // that is in flight or finished: the backend drops the downloaded bytes on
+  // every successful check, so a poll would throw away a ready update only to
+  // fetch the same one again. A newer release published meanwhile is picked up
+  // on the next launch, after this one has installed on quit.
+  useEffect(() => {
+    if (!config?.general.update_check_enabled) return;
+    const timer = window.setInterval(() => {
+      if (!launchCheckArmed) return;
+      if (Date.now() - lastCheckStartedAt < PERIODIC_CHECK_INTERVAL_MS) return;
+      const { status } = useUpdateStore.getState();
+      if (status === 'checking' || status === 'downloading' || status === 'ready') return;
+      void runAppUpdateCheck();
+    }, PERIODIC_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [config?.general.update_check_enabled]);
+
+  // (c) Download progress, streamed while `download_app_update` is in flight.
   useEffect(() => {
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
@@ -137,7 +239,7 @@ export function useAppUpdate(): void {
     };
   }, []);
 
-  // (c) A track switch (stable <-> weekly) re-checks against the new track,
+  // (d) A track switch (stable <-> weekly) re-checks against the new track,
   // which also clears a stale available-banner when the new track has
   // nothing on offer (runAppUpdateCheck -> setUpToDate resets info/progress).
   // Not gated on update_check_enabled: the user just made an explicit choice

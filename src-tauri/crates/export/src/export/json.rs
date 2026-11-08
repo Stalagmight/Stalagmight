@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::Serialize;
+use std::io::Write as _;
 use std::path::Path;
 
+use super::atomic_write::write_atomic;
 use crate::models::{Project, ShotKind};
 
 /// Export project data to JSON format
@@ -11,7 +13,8 @@ pub fn export_json(project: &Project, path: &Path) -> Result<()> {
 
     let json = serde_json::to_string_pretty(&export_data).context("Failed to serialize JSON")?;
 
-    std::fs::write(path, json).context("Failed to write JSON file")?;
+    write_atomic(path, |w| Ok(w.write_all(json.as_bytes())?))
+        .context("Failed to write JSON file")?;
 
     tracing::info!(path = ?path, "Exported JSON");
     Ok(())

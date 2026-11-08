@@ -84,7 +84,7 @@ function getChangedFields(originalConfig: Config, currentConfig: Config): Set<st
  * Get category-specific defaults from defaultConfig. Exported for its unit test.
  *
  * `current` supplies the fields a category reset must PRESERVE: the DPV rig lives on `gas` in
- * the data model but is planned in Plan mode's Equipment tab (#317), not on the Gas settings
+ * the data model but is planned in Plan mode's DPV tab (#317), not on the Gas settings
  * page - so resetting that page must not silently destroy equipment it no longer displays
  * (the working plan store would keep the rig, and the engine would keep planning a scootered
  * dive over a config that silently lost it).
@@ -437,7 +437,7 @@ export default function SettingsDialog() {
   const handleCheckUpdates = useCallback(async () => {
     const previous = checkUpdatesState;
     setCheckUpdatesState('checking');
-    const outcome = await runAppUpdateCheck();
+    const outcome = await runAppUpdateCheck({ userInitiated: true });
     // A newer check (a track switch, a second press) already owns the store, so
     // this reply was never applied to it. Rendering it anyway would put a line
     // on screen that contradicts the banner - keep whatever was there before.

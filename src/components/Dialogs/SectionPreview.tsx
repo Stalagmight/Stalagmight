@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import type { DmpSection, DmpShot } from '../../types/commands';
 import type { Section, Station, Shot } from '../../types/project';
 import { metersToMapCoords, getBounds } from '../../utils/coordinates';
@@ -10,6 +10,8 @@ import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { getTileConfig } from '../../utils/tileConfig';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
 import { MapAttribution } from '../Map/MapAttribution';
+import { createMap } from '../Map/createMap';
+import { MapUnavailable } from '../Map/MapUnavailable';
 import type { GpsOrigin } from '../../types/config';
 
 /**
@@ -213,6 +215,7 @@ export default function SectionPreview({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [webgl2Unavailable, setWebgl2Unavailable] = useState(false);
   const onStationClickRef = useRef(onStationClick);
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
 
@@ -260,7 +263,7 @@ export default function SectionPreview({
     const maxZoom = 22; // Maximum zoom for detailed inspection
 
     const initialThemeColors = getMapThemeColors();
-    const map = new maplibregl.Map({
+    const map = createMap({
       container: containerRef.current,
       style: {
         version: 8,
@@ -282,6 +285,10 @@ export default function SectionPreview({
       attributionControl: false,
       interactive: true,
     });
+    if (!map) {
+      setWebgl2Unavailable(true);
+      return;
+    }
 
     // Store map ref immediately for cleanup support
     mapRef.current = map;
@@ -1173,6 +1180,7 @@ export default function SectionPreview({
     >
       {/* Map container is always mounted for proper lifecycle */}
       <div ref={containerRef} className="w-full h-full" data-testid="section-preview-map" />
+      {webgl2Unavailable && <MapUnavailable testId="section-preview-webgl2-unavailable" />}
 
       {/* Imagery attribution, forced compact. This preview is a few hundred
           pixels square and the whole point of it is the geometry underneath, so

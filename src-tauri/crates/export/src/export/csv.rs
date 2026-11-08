@@ -2,12 +2,17 @@ use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::Path;
 
+use super::atomic_write::write_atomic;
 use crate::models::Project;
 
 /// Export project data to CSV format
 pub fn export_csv(project: &Project, path: &Path) -> Result<()> {
-    let mut file = std::fs::File::create(path).context("Failed to create CSV file")?;
+    write_atomic(path, |file| write_csv(project, file)).context("Failed to write CSV file")?;
+    tracing::info!(path = ?path, "Exported CSV");
+    Ok(())
+}
 
+fn write_csv(project: &Project, file: &mut impl Write) -> Result<()> {
     // Write header
     writeln!(
         file,
@@ -39,8 +44,6 @@ pub fn export_csv(project: &Project, path: &Path) -> Result<()> {
             )?;
         }
     }
-
-    tracing::info!(path = ?path, "Exported CSV");
     Ok(())
 }
 

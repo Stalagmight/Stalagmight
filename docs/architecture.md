@@ -5,7 +5,7 @@
 ## Workspace layout
 
 The Rust backend is a cargo workspace rooted at `src-tauri/Cargo.toml` (a
-hybrid root: the `stalagmight` app package lives there too). Seven library
+hybrid root: the `stalagmight` app package lives there too). Eight library
 crates sit under `src-tauri/crates/`:
 
 | Crate | Contents | Key deps |
@@ -17,7 +17,8 @@ crates sit under `src-tauri/crates/`:
 | `stalagmight-export` | CSV / JSON / image (SVG->PNG/PDF) / TML export, dive profile | models, parsers |
 | `stalagmight-speleodb` | SpeleoDB client: HTTP surface, auth/token storage, dump handling, sync, TLS policy, metrics | models, telemetry |
 | `stalagmight-core` | `AppState`, the command executors, undo/redo, project I/O orchestration, config I/O (`config/`), `tile_providers`; shared test helpers behind the `test-support` feature | export, models, parsers, persistence, speleodb |
-| `stalagmight` (app, at `src-tauri/`) | The thin Tauri layer: `commands/` (IPC handlers), `lib.rs` (the single `generate_handler!`), `main.rs`, `tile_attribution.rs`, `webkit_memory.rs`, `examples/`, `tests/` | all of the above |
+| `stalx-reader` | Read-only `.stalx` reader for external consumers (SpeleoDB server-side maps, #593); nothing in the app depends on it | models, persistence |
+| `stalagmight` (app, at `src-tauri/`) | The thin Tauri layer: `commands/` (IPC handlers), `lib.rs` (the single `generate_handler!`), `main.rs`, `tile_attribution.rs`, `webkit_memory.rs`, `examples/`, `tests/` | all of the above except stalx-reader |
 
 The layering is strict and one-way - models -> telemetry / parsers /
 persistence -> export / speleodb -> core -> app, where `->` reads "is depended

@@ -26,7 +26,7 @@ import { useUpdateStore } from '../../store/updateStore';
 import { useUIStore } from '../../store/uiStore';
 import { resetUpdateRestartForTests } from '../../utils/quit';
 
-const INFO = { version: '9.9.9', notesUrl: 'https://example.test/notes' };
+const INFO = { version: '9.9.9', notesUrl: 'https://example.test/notes', installsOnQuit: true };
 
 function seed(status: 'available' | 'ready'): void {
   const store = useUpdateStore.getState();
@@ -125,5 +125,61 @@ describe('Download', () => {
     );
     expect(useUpdateStore.getState().status).toBe('ready');
     expect(useUpdateStore.getState().downloadVersion).toBe(INFO.version);
+  });
+});
+
+describe('Download (manual) failure', () => {
+  it('toasts, because the user asked for this download', async () => {
+    invokeIpcMock.mockRejectedValueOnce(new Error('offline'));
+    seed('available');
+    render(<UpdateBanner />);
+
+    await userEvent.click(screen.getByTestId('update-banner-download'));
+
+    expect(showToast).toHaveBeenCalledTimes(1);
+    expect(showToast.mock.calls[0]?.[1]).toBe('app-update-download-failed');
+    expect(useUpdateStore.getState().status).toBe('available');
+  });
+});
+
+/** [#631] Background download and install on quit. */
+describe('the background download and install on quit', () => {
+  it('stays hidden while a download a check started is running', () => {
+    seed('available');
+    useUpdateStore.getState().startDownloading(INFO.version, true);
+    render(<UpdateBanner />);
+
+    expect(screen.queryByTestId('update-banner')).not.toBeInTheDocument();
+  });
+
+  it('shows the progress of a download the user started', () => {
+    seed('available');
+    useUpdateStore.getState().startDownloading(INFO.version, false);
+    render(<UpdateBanner />);
+
+    expect(screen.getByTestId('update-banner-progress')).toBeInTheDocument();
+  });
+
+  it('says a ready update installs on quit, and offers Restart now and Dismiss', () => {
+    seed('ready');
+    render(<UpdateBanner />);
+
+    expect(screen.getByTestId('update-banner')).toHaveTextContent(
+      'Stalagmight 9.9.9 will be installed when you quit',
+    );
+    expect(screen.getByTestId('update-banner-restart')).toHaveTextContent('Restart now');
+    expect(screen.getByTestId('update-banner-dismiss')).toBeInTheDocument();
+    expect(screen.getByTestId('update-banner-notes')).toBeInTheDocument();
+  });
+
+  it('promises nothing about quitting where the platform does not install on quit', () => {
+    const store = useUpdateStore.getState();
+    store.setAvailable(store.beginCheck(), { ...INFO, installsOnQuit: false });
+    useUpdateStore.getState().startDownloading(INFO.version);
+    useUpdateStore.getState().setReady(INFO.version);
+    render(<UpdateBanner />);
+
+    expect(screen.getByTestId('update-banner')).not.toHaveTextContent('when you quit');
+    expect(screen.getByTestId('update-banner-restart')).toHaveTextContent('Restart to update');
   });
 });

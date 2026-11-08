@@ -23,8 +23,14 @@ export function missingSystemRowTestId(filePath: string): string {
   return `system-row-missing-${testIdPart(filePath)}`;
 }
 
+/** Test-ID namespace for the Plan-mode cylinders table. Also the SpreadsheetGrid
+ *  `testIdPrefix` it is hosted under, which is what makes the grid emit
+ *  `gas-cylinder-row-N` verbatim - so the row helper below and the grid agree by
+ *  construction rather than by two copies of the same string. */
+export const GAS_CYLINDER_GRID_PREFIX = 'gas-cylinder';
+
 export function gasCylinderRowTestId(index: number): string {
-  return `gas-cylinder-row-${index}`;
+  return `${GAS_CYLINDER_GRID_PREFIX}-row-${index}`;
 }
 
 export function recoveryBackupItemTestId(index: number): string {

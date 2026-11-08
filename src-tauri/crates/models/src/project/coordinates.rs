@@ -578,8 +578,30 @@ impl Project {
     /// Total stations = shots + 1 per section (first station).
     pub fn compute_station_coordinates_with_progress(
         &self,
-        mut on_progress: Option<&mut dyn FnMut(u32, u32)>,
+        on_progress: Option<&mut dyn FnMut(u32, u32)>,
     ) -> Vec<Station> {
+        let mut stations: Vec<Station> = self
+            .compute_station_positions_with_progress(on_progress)
+            .into_iter()
+            .map(|(station_ref, coords)| Station::with_coordinates(station_ref, coords))
+            .collect();
+        self.attach_station_relationships(&mut stations);
+        stations
+    }
+
+    /// Every station's measured position, and nothing else: the same `x, y, z`
+    /// [`Self::compute_station_coordinates`] reports, without the merge and
+    /// closure relationship lists it attaches. Near-linear in the station count
+    /// whatever the merge-group sizes (#596), so it is the path for consumers
+    /// that only need geometry, e.g. `stalx-reader`.
+    pub fn compute_station_positions(&self) -> Vec<(StationRef, Coordinates)> {
+        self.compute_station_positions_with_progress(None)
+    }
+
+    fn compute_station_positions_with_progress(
+        &self,
+        mut on_progress: Option<&mut dyn FnMut(u32, u32)>,
+    ) -> Vec<(StationRef, Coordinates)> {
         // Calculate total stations first for progress reporting
         let total_stations: u32 = self.sections.iter().map(|s| s.shots.len() as u32 + 1).sum();
 
@@ -607,7 +629,7 @@ impl Project {
         );
         let t_phase = std::time::Instant::now();
 
-        let mut stations: Vec<Station> = Vec::new();
+        let mut stations: Vec<(StationRef, Coordinates)> = Vec::new();
         let mut station_count = 0u32;
 
         for section in &self.sections {
@@ -634,7 +656,7 @@ impl Project {
                     station_coords.z + oz,
                 );
             }
-            stations.push(Station::with_coordinates(first_station_ref, station_coords));
+            stations.push((first_station_ref, station_coords));
             station_count += 1;
 
             // Report progress for first station
@@ -665,7 +687,7 @@ impl Project {
                         station_coords.z + oz,
                     );
                 }
-                stations.push(Station::with_coordinates(station_ref, station_coords));
+                stations.push((station_ref, station_coords));
                 station_count += 1;
 
                 // Report progress after each station
@@ -682,12 +704,16 @@ impl Project {
             ms = t_phase.elapsed().as_millis() as u64,
             "compute_station_coordinates: xyz walk"
         );
-        let t_phase = std::time::Instant::now();
+        stations
+    }
 
-        // Mark merged stations - build merge groups (transitive closure)
-        // First, build a map of station_ref -> group_id using Union-Find logic
+    /// Merge groups (transitive closure of `station_merges`): each station in a
+    /// group maps to its group index. Union by size, so a pathological merge order
+    /// stays near-linear (#596). Member order is unchanged from the pre-#596 code
+    /// (`a`'s group, then `b`'s): `merged_with` is read in that order by the frontend.
+    fn merge_groups(&self) -> (HashMap<StationRef, usize>, Vec<Vec<StationRef>>) {
         let mut station_to_group: HashMap<StationRef, usize> = HashMap::new();
-        let mut groups: Vec<Vec<StationRef>> = Vec::new();
+        let mut groups: Vec<VecDeque<StationRef>> = Vec::new();
 
         for merge in &self.station_merges {
             let (Some(sa), Some(sb)) = (
@@ -703,34 +729,64 @@ impl Project {
                 (None, None) => {
                     // Neither station is in a group, create a new group
                     let group_id = groups.len();
-                    groups.push(vec![sa, sb]);
+                    groups.push(VecDeque::from([sa, sb]));
                     station_to_group.insert(sa, group_id);
                     station_to_group.insert(sb, group_id);
                 }
                 (Some(gid), None) => {
                     // station_a is in a group, add station_b to it
-                    groups[gid].push(sb);
+                    groups[gid].push_back(sb);
                     station_to_group.insert(sb, gid);
                 }
                 (None, Some(gid)) => {
                     // station_b is in a group, add station_a to it
-                    groups[gid].push(sa);
+                    groups[gid].push_back(sa);
                     station_to_group.insert(sa, gid);
                 }
                 (Some(gid_a), Some(gid_b)) => {
                     if gid_a != gid_b {
-                        // Both are in different groups, merge the groups
-                        // Move all from group_b to group_a
-                        let group_b_members: Vec<StationRef> = groups[gid_b].drain(..).collect();
-                        for member in &group_b_members {
-                            station_to_group.insert(*member, gid_a);
+                        // Both are in different groups: move the SMALLER into the
+                        // larger, so each station is re-pointed O(log n) times in
+                        // total rather than once per merge it is swept into (#596).
+                        let (keep, absorb) = if groups[gid_a].len() >= groups[gid_b].len() {
+                            (gid_a, gid_b)
+                        } else {
+                            (gid_b, gid_a)
+                        };
+                        let absorbed = std::mem::take(&mut groups[absorb]);
+                        for member in &absorbed {
+                            station_to_group.insert(*member, keep);
                         }
-                        groups[gid_a].extend(group_b_members);
+                        if keep == gid_a {
+                            groups[keep].extend(absorbed);
+                        } else {
+                            // `a` is absorbed into `b`: prepend so `a`'s members stay first.
+                            for member in absorbed.into_iter().rev() {
+                                groups[keep].push_front(member);
+                            }
+                        }
                     }
                     // If same group, nothing to do
                 }
             }
         }
+        (
+            station_to_group,
+            groups.into_iter().map(Vec::from).collect(),
+        )
+    }
+
+    /// Attach each station's merge (`merged_with`) and loop-closure (`closures_with`)
+    /// relationships. `merged_with` lists every other member of the station's merge
+    /// group, so its output is quadratic in group size by contract (the IPC shape the
+    /// frontend reads); geometry-only consumers use [`Self::compute_station_positions`].
+    fn attach_station_relationships(&self, stations_out: &mut Vec<Station>) {
+        let mut stations = std::mem::take(stations_out);
+        let t_phase = std::time::Instant::now();
+
+        // Mark merged stations - build merge groups (transitive closure)
+        // First, build a map of station_ref -> group_id using Union-Find logic
+        let (station_to_group, groups) = self.merge_groups();
 
         tracing::debug!(
             ms = t_phase.elapsed().as_millis() as u64,
@@ -957,7 +1013,7 @@ impl Project {
             "compute_station_coordinates: station comments"
         );
 
-        stations
+        *stations_out = stations;
     }
 }
 
@@ -1282,6 +1338,103 @@ mod tests {
             after,
             1 - before,
             "the anchor left its physical station: {before} -> {after}"
+        );
+    }
+
+    /// `2 * pairs` one-shot sections whose start stations are merged in the order
+    /// that made the old union quadratic: each new pair forms a small group, then
+    /// joins the big one, and "move b into a" re-pointed the whole big group.
+    fn adversarial_merge_order(pairs: usize) -> Project {
+        use crate::station::{StationAnchor, StationKey};
+        let mut project = Project::new("Big group".to_string(), None);
+        let ids: Vec<SectionId> = (0..2 * pairs)
+            .map(|_| add_section(&mut project, vec![shot(90.0, 1.0)]))
+            .collect();
+        let merge = |a: SectionId, b: SectionId| StationMerge {
+            station_a: StationKey::new(a, StationAnchor::SectionStart),
+            station_b: StationKey::new(b, StationAnchor::SectionStart),
+            merged_at: Utc::now(),
+        };
+        project.station_merges.push(merge(ids[0], ids[1]));
+        for pair in ids.chunks(2).skip(1) {
+            project.station_merges.push(merge(pair[0], pair[1]));
+            project.station_merges.push(merge(pair[0], ids[0]));
+        }
+        project
+    }
+
+    #[test]
+    fn merge_groups_stay_near_linear_in_the_worst_merge_order() {
+        let project = adversarial_merge_order(10_000);
+
+        let started = std::time::Instant::now();
+        let (station_to_group, groups) = project.merge_groups();
+        let elapsed = started.elapsed();
+
+        assert_eq!(station_to_group.len(), 20_000);
+        assert_eq!(groups.iter().filter(|g| !g.is_empty()).count(), 1);
+        assert_eq!(groups.iter().map(Vec::len).sum::<usize>(), 20_000);
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "union by size keeps this near-linear; took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn merge_groups_keep_the_first_groups_members_first() {
+        use crate::station::{StationAnchor, StationKey};
+        let mut project = Project::new("Order".to_string(), None);
+        let ids: Vec<SectionId> = (0..5)
+            .map(|_| add_section(&mut project, vec![shot(90.0, 1.0)]))
+            .collect();
+        let key = |i: usize| StationKey::new(ids[i], StationAnchor::SectionStart);
+        let merge = |a: usize, b: usize| StationMerge {
+            station_a: key(a),
+            station_b: key(b),
+            merged_at: Utc::now(),
+        };
+        // {0,1} then {2,3,4}; the last merge joins the SMALLER group (a) to the
+        // larger one (b), which union by size absorbs the other way round.
+        for m in [merge(0, 1), merge(2, 3), merge(2, 4), merge(0, 2)] {
+            project.station_merges.push(m);
+        }
+
+        let (station_to_group, groups) = project.merge_groups();
+        let expected: Vec<StationRef> = (0..5)
+            .filter_map(|i| project.resolve_key(&key(i)))
+            .collect();
+        assert_eq!(expected.len(), 5);
+        assert_eq!(groups[station_to_group[&expected[0]]], expected);
+    }
+
+    #[test]
+    fn positions_are_exactly_the_full_coordinates() {
+        let project = adversarial_merge_order(20);
+
+        let full = project.compute_station_coordinates();
+        let positions = project.compute_station_positions();
+
+        assert_eq!(full.len(), positions.len());
+        for (station, (station_ref, coords)) in full.iter().zip(&positions) {
+            assert_eq!(station.station_ref, *station_ref);
+            let bits = |c: &Coordinates| (c.x.to_bits(), c.y.to_bits(), c.z.to_bits());
+            assert_eq!(bits(&station.coordinates), bits(coords));
+        }
+    }
+
+    #[test]
+    fn positions_skip_the_quadratic_relationship_lists() {
+        // A 20,000-member merge group: `merged_with` would be 20,000^2 entries.
+        let project = adversarial_merge_order(10_000);
+
+        let started = std::time::Instant::now();
+        let positions = project.compute_station_positions();
+        let elapsed = started.elapsed();
+
+        assert_eq!(positions.len(), 40_000);
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "positions are near-linear; took {elapsed:?}"
         );
     }
 }

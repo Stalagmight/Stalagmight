@@ -27,6 +27,7 @@ use quick_xml::Writer;
 use crate::models::comment_split;
 use crate::models::{normalize_azimuth, Project, SectionId, Shot, StationRef};
 
+use super::atomic_write::write_atomic;
 use super::tml_azimuth::AzimuthExport;
 use super::tml_topology::{
     build_parent_map, choose_default_root_section_id, section_datum, station_depth,
@@ -285,8 +286,12 @@ fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
         .unwrap_or_default();
     match ext.as_str() {
         "tml" => write_zip(path, xml),
-        "tmlu" => std::fs::write(path, xml).context("Failed to write TMLU file"),
-        _ => std::fs::write(path, xml).context("Failed to write TML export file"),
+        "tmlu" => {
+            write_atomic(path, |w| Ok(w.write_all(xml)?)).context("Failed to write TMLU file")
+        }
+        _ => {
+            write_atomic(path, |w| Ok(w.write_all(xml)?)).context("Failed to write TML export file")
+        }
     }
 }
 
@@ -516,19 +521,19 @@ fn format_f64(v: f64) -> String {
 // ============================================================================
 
 fn write_zip(path: &Path, xml: &[u8]) -> Result<()> {
-    let file = std::fs::File::create(path).context("Failed to create TML file")?;
-    let mut zip = zip::ZipWriter::new(file);
+    write_atomic(path, |file| {
+        let mut zip = zip::ZipWriter::new(file);
 
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
 
-    zip.start_file("Data.xml", options)
-        .context("Failed to start Data.xml in ZIP")?;
-    zip.write_all(xml)
-        .context("Failed to write Data.xml to ZIP")?;
-    zip.finish().context("Failed to finalize TML ZIP")?;
-
-    Ok(())
+        zip.start_file("Data.xml", options)
+            .context("Failed to start Data.xml in ZIP")?;
+        zip.write_all(xml)
+            .context("Failed to write Data.xml to ZIP")?;
+        zip.finish().context("Failed to finalize TML ZIP")?;
+        Ok(())
+    })
 }
 
 /// Refuse to write a chain Ariane would draw as an empty map.
@@ -2398,6 +2403,58 @@ mod tests {
             ..Default::default()
         });
         project
+    }
+
+    /// Every entry in `dir`, sorted, so a stray export temp shows up by name.
+    fn dir_entries(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn re_export_replaces_the_target_and_leaves_no_temp() {
+        // #570: a re-export leaves exactly one entry - the new, parseable export -
+        // and no temp. This alone cannot tell an atomic write from a direct one;
+        // the symlinked-target test below is what pins both writers to the rename.
+        let project = simple_project();
+        for name in ["cave.tml", "cave.tmlu"] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"a previous export").unwrap();
+
+            export_tml(&project, &path).unwrap();
+
+            assert_eq!(dir_entries(dir.path()), vec![name.to_string()]);
+            let parsed = crate::parsers::tml::parse_tml(&path).unwrap();
+            assert_eq!(parsed.sections.len(), 1, "{name}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_replaces_a_symlinked_target_instead_of_writing_through_it() {
+        // #570: the rename replaces a symlink at the target; a direct truncating
+        // write (`std::fs::write` / `File::create`) follows it and destroys the
+        // file it points at. That difference is what pins both writers to the
+        // temp + rename path.
+        let project = simple_project();
+        for name in ["cave.tml", "cave.tmlu"] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let victim = dir.path().join("victim.stalx");
+            std::fs::write(&victim, b"not an export").unwrap();
+            let path = dir.path().join(name);
+            std::os::unix::fs::symlink(&victim, &path).unwrap();
+
+            export_tml(&project, &path).unwrap();
+
+            assert_eq!(std::fs::read(&victim).unwrap(), b"not an export", "{name}");
+            let meta = std::fs::symlink_metadata(&path).unwrap();
+            assert!(!meta.file_type().is_symlink(), "{name}");
+        }
     }
 
     #[test]

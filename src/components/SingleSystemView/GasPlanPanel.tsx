@@ -27,8 +27,8 @@ function formatRouteRuntime(min: number): string {
 /**
  * Gas & route-planning setup sidebar (#38). The right Dock slot while in Plan mode:
  * origin, diver RMV, gas strategy + per-stage reserve, units, and the plan readout. The cylinder
- * rig editor lives in the bottom panel's "Equipment" tab (see PlanTablesPanel) - this sidebar
- * reads the cylinders only to compute the turn / drop pressures. Every input nulls the cached
+ * table and DPV rig editor live in the bottom panel's "Cylinders" and "DPV" tabs (see
+ * PlanTablesPanel) - this sidebar reads the cylinders only to compute the turn / drop pressures. Every input nulls the cached
  * field via gasPlanStore, so MapCanvas refetches + repaints the reachable overlay. Volumes follow
  * the master units toggle; RMV flips L·min⁻¹ ↔ cuft·min⁻¹.
  */
@@ -317,7 +317,7 @@ export function GasPlanPanel() {
   };
   const confirmPushy = () => {
     if (!pendingPushy) return;
-    // Re-check: the rig may have lost stages while the ack panel was open (the Equipment tab is
+    // Re-check: the rig may have lost stages while the ack panel was open (the Cylinders tab is
     // visible alongside it). Only apply if the rig still satisfies the strategy - otherwise we'd
     // show a staged strategy selected on a stage-short rig while the backend falls back to
     // All-thirds (broken UI/backend parity). Insufficient → dismiss without applying.

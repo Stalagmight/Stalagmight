@@ -536,7 +536,7 @@ pub struct SpeleoProjectMetadataPatch {
 }
 
 /// [#207] Parameters for creating + publishing a local project on SpeleoDB. The
-/// server injects `created_by`; `type` is fixed to `other`; `exclude_geojson` is
+/// server injects `created_by`; `type` is fixed to `stalagmight`; `exclude_geojson` is
 /// sent `false` explicitly. `latitude`/`longitude` are both-or-neither.
 #[derive(Debug, Clone, Deserialize, TS)]
 pub struct SpeleoPublishParams {
@@ -634,7 +634,7 @@ pub enum AdoptUpload {
 /// [#214] Result of adopting an Ariane (`.tml`-only) project: the imported
 /// `.stalx` now lives at `local_path` (the webview reloads it through the normal
 /// `open_project` flow). `type_flipped` reports whether the server project `type`
-/// ended up PATCHed ariane→other. `false` covers TWO cases now, and the webview must
+/// ended up PATCHed ariane→stalagmight. `false` covers TWO cases now, and the webview must
 /// not read it alone: the PATCH was attempted and refused (no write access), or it was
 /// never attempted because the upload did not land. `upload` is what tells them apart,
 /// which is why the toast keys on `pushed && type_flipped` rather than on this field.
@@ -642,7 +642,7 @@ pub enum AdoptUpload {
 /// `upload` is the hand-over half: adoption uploads the converted project before
 /// returning, so a successful adopt leaves nothing stranded in the local cache.
 /// The type flip is ordered AFTER that upload deliberately - a project typed
-/// `other` with no `.stalx` behind it is openable by nobody, since the Ariane file
+/// `stalagmight` with no `.stalx` behind it is openable by nobody, since the Ariane file
 /// it still holds is the one the new type says to disregard.
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct SpeleoAdoptResult {

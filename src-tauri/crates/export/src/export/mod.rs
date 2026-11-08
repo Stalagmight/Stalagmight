@@ -1,3 +1,4 @@
+mod atomic_write;
 pub mod csv;
 mod depth_colors;
 pub mod dive_profile;
@@ -7,6 +8,7 @@ pub mod tml;
 mod tml_azimuth;
 mod tml_topology;
 
+pub use atomic_write::write_atomic;
 pub use csv::*;
 pub use dive_profile::*;
 pub use image::*;

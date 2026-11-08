@@ -53,9 +53,10 @@ export function attachDragReleaseForwarder(source: DragReleaseMapSource): () => 
     const canvasContainer = map.getCanvasContainer();
     if (e.target instanceof Node && canvasContainer.contains(e.target)) return;
     // Dispatching with no event name runs the plain `mouseup` handlers, i.e.
-    // dragEnd. Guarded so a future MapLibre without these public members
-    // degrades to the old (stuck drag) behavior instead of throwing.
-    const handlers = map.handlers as { handleEvent?: (event: Event) => void } | undefined;
+    // dragEnd. MapLibre 6 renamed the handler manager to `_handlers`. Guarded
+    // so a future MapLibre without these members degrades to the old (stuck
+    // drag) behavior instead of throwing.
+    const handlers = map._handlers as { handleEvent?: (event: Event) => void } | undefined;
     if (typeof handlers?.handleEvent === 'function') {
       handlers.handleEvent(e);
     }

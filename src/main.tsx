@@ -4,6 +4,10 @@
 import './utils/debugLockup';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { setWorkerUrl } from 'maplibre-gl';
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
+// Before App so every app stylesheet cascades over MapLibre's own rules.
+import 'maplibre-gl/dist/maplibre-gl.css';
 import App from './App';
 import './i18n';
 import './index.css';
@@ -51,6 +55,8 @@ installGlobalErrorCapture();
 // Keyboard-only focus rings: tag <html data-input-modality> from the first
 // interaction (set before render so there's no initial ring flash).
 initInputModalityTracking();
+
+setWorkerUrl(maplibreWorkerUrl);
 
 // The frame-gap freeze detector is no longer started automatically - it
 // was producing a stream of `freeze #N` entries in the memory probe for

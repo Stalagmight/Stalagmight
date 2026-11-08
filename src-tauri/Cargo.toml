@@ -18,6 +18,7 @@ members = [
     "crates/parsers",
     "crates/persistence",
     "crates/speleodb",
+    "crates/stalx-reader",
     "crates/telemetry",
 ]
 resolver = "2"
@@ -39,7 +40,7 @@ license = "AGPL-3.0-or-later"
 [workspace.dependencies]
 serde = "1"
 serde_json = "1"
-rusqlite = "0.31"
+rusqlite = "0.41"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tracing-appender = "0.2"

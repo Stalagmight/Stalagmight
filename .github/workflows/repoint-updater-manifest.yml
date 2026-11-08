@@ -1,0 +1,158 @@
+name: Repoint updater manifest
+
+# Rollback/repoint tool for the updater manifests (issue #579). The release
+# job publishes a manifest automatically on every stable/weekly tag; this
+# workflow exists for the day that automatic publish needs to be undone or
+# redirected by hand - "repoint latest-stable.json back at v0.5.0 because
+# v0.5.1 has a bad regression" - without cutting a whole new release.
+#
+# Regenerates one track's manifest from a PAST tag's already-published
+# release assets and its own notes, then clobber-uploads it to the rolling
+# `updater` release - the same file the automatic publish step would have
+# written for that tag. Nothing here builds anything or touches the tagged
+# release itself; it only re-derives and re-publishes the manifest.
+#
+# docs/releasing.md (Updater manifests) has the runbook: repoint first,
+# delete the bad release only after, never the other way around.
+#
+# workflow_dispatch only - this is a deliberate, occasional operator action,
+# never something a push or a schedule should trigger.
+on:
+  workflow_dispatch:
+    inputs:
+      track:
+        description: 'Which manifest to repoint'
+        required: true
+        type: choice
+        options:
+          - stable
+          - weekly
+      tag:
+        description: 'Tag to repoint the manifest at (e.g. v0.5.0, v0.5.1-weekly.20260817)'
+        required: true
+        type: string
+      include-darwin:
+        # Deliberately required with no default, and not inferred from asset
+        # presence: a release can carry an *.app.tar.gz built ad-hoc (see
+        # release.yml's Developer-ID-only gate for why that must never enter
+        # a manifest), so "the pair exists" is not the same question as "was
+        # this actually a Developer ID build" - only the operator checking
+        # the original run's log knows the answer.
+        description: 'Include the macOS entry? true ONLY for a release built with Developer ID signing - check the original build run''s log first.'
+        required: true
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+permissions:
+  contents: write
+
+jobs:
+  repoint:
+    # Guards a fork running this from its own Actions tab: `updater` and the
+    # tags it reads are this repository's releases, not a fork's.
+    if: github.repository == 'Stalagmight/Stalagmight'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      # Same fact release.yml's `release` job derives, read the same way: a
+      # non-empty plugins.updater.pubkey in the checked-out tauri.conf.json.
+      # Repointing a manifest that was never being published makes no sense.
+      - name: Determine updater enablement
+        id: updater
+        shell: bash
+        run: |
+          PUBKEY=$(jq -r '.plugins.updater.pubkey // empty' src-tauri/tauri.conf.json)
+          if [ -n "$PUBKEY" ]; then
+            echo "on=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "on=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Validate inputs and tag shape
+        shell: bash
+        env:
+          UPDATER_ON: ${{ steps.updater.outputs.on }}
+          TRACK: ${{ inputs.track }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$UPDATER_ON" != "true" ]; then
+            echo "::error::updater artifacts are disabled (no plugins.updater.pubkey committed) - there is no manifest to repoint."
+            exit 1
+          fi
+          # The same shape rule release.yml uses to pick a track from a tag,
+          # checked here in the other direction: the chosen track must be
+          # able to have produced this tag, or the repoint would publish a
+          # manifest under the wrong track entirely.
+          case "$TRACK" in
+            weekly)
+              if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-weekly\.[0-9]{8}$ ]]; then
+                echo "::error::track is 'weekly' but tag '$TAG' is not a vX.Y.Z-weekly.YYYYMMDD tag."
+                exit 1
+              fi
+              ;;
+            stable)
+              if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::track is 'stable' but tag '$TAG' is not a bare vX.Y.Z release tag."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::unknown track '$TRACK'."
+              exit 1
+              ;;
+          esac
+      - name: Fetch the target release's assets and notes
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          INCLUDE_DARWIN: ${{ inputs.include-darwin }}
+        run: |
+          if ! gh release view "$TAG" --json body > "$RUNNER_TEMP/release.json" 2>/dev/null; then
+            echo "::error::release '$TAG' does not exist."
+            exit 1
+          fi
+          jq -r '.body' "$RUNNER_TEMP/release.json" > "$RUNNER_TEMP/notes.md"
+          mkdir -p release-artifacts
+          # Only the files the manifest actually reads - not the .deb/.rpm/
+          # .msi/.dmg installers, which this workflow has no use for and
+          # would otherwise pull down for nothing. Which pair to fetch is the
+          # operator's explicit include-darwin input, never inferred from
+          # which assets merely exist on the release (an ad-hoc .app.tar.gz
+          # can exist there too - see the input's description).
+          PATTERNS=(-p '*.AppImage' -p '*.AppImage.sig' -p '*-setup.exe' -p '*-setup.exe.sig')
+          if [ "$INCLUDE_DARWIN" = true ]; then
+            PATTERNS+=(-p '*.app.tar.gz' -p '*.app.tar.gz.sig')
+          fi
+          gh release download "$TAG" -D release-artifacts "${PATTERNS[@]}"
+          ls -lh release-artifacts/
+      - name: Regenerate and upload the manifest
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          TRACK: ${{ inputs.track }}
+          INCLUDE_DARWIN: ${{ inputs.include-darwin }}
+        run: |
+          VERSION="${TAG#v}"
+          OUT="release-artifacts/latest-${TRACK}.json"
+          node scripts/gen-updater-manifest.mjs \
+            --version "$VERSION" \
+            --tag "$TAG" \
+            --dir release-artifacts \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --out "$OUT" \
+            --include-darwin "$INCLUDE_DARWIN"
+          # Same rule as the release job: this workflow only ever uploads to
+          # the rolling release, never creates it.
+          if ! gh release view updater >/dev/null 2>&1; then
+            echo "::error::the rolling 'updater' GitHub release does not exist. See docs/releasing.md (Updater manifests) to create it once, then re-run."
+            exit 1
+          fi
+          gh release upload updater "$OUT" --clobber
+          echo "Repointed latest-${TRACK}.json at $TAG (include-darwin=$INCLUDE_DARWIN)."

@@ -1,6 +1,6 @@
 /**
  * #317 review round: Settings ▸ Gas "Reset to Defaults" must PRESERVE the DPV rig. The rig
- * lives on `gas` in the config data model, but it is planned in Plan mode's Equipment tab and
+ * lives on `gas` in the config data model, but it is planned in Plan mode's DPV tab and
  * the Gas settings page no longer displays it - so a category reset that wholesale-replaced
  * `gas` silently destroyed equipment with zero on-screen indication, while the working plan
  * store kept its copy and the engine went on planning a scootered dive over a config that had

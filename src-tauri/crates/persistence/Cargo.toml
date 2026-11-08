@@ -1,7 +1,8 @@
 [package]
 name = "stalagmight-persistence"
-version = "0.0.0"
-publish = false
+version = "0.1.0"
+description = "Stalagmight .stalx persistence. Internal to Stalagmight, published only so `stalx-reader` can depend on it; no semver promise - use stalx-reader."
+repository = "https://github.com/Stalagmight/Stalagmight"
 edition.workspace = true
 license.workspace = true
 
@@ -20,7 +21,7 @@ workspace = true
 test-support = []
 
 [dependencies]
-stalagmight-models = { path = "../models" }
+stalagmight-models = { path = "../models", version = "=0.1.0" }
 serde = { workspace = true, features = ["derive"] }
 # `float_roundtrip` mirrors the root crate's serde_json entry (see the rationale
 # there): features are additive, so workspace builds already parse floats
@@ -28,7 +29,7 @@ serde = { workspace = true, features = ["derive"] }
 # `cargo test -p stalagmight-persistence` on the same parser, and this crate is
 # precisely where the roundtrip matters (it deserializes saved projects).
 serde_json = { workspace = true, features = ["float_roundtrip"] }
-rusqlite = { workspace = true, features = ["bundled"] }
+rusqlite = { workspace = true, features = ["bundled", "hooks", "limits"] }
 chrono = { workspace = true, features = ["serde"] }
 tracing = { workspace = true }
 anyhow = { workspace = true }

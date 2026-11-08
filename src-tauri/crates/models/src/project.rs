@@ -45,6 +45,7 @@ mod offsets;
 mod relationships;
 mod reverse;
 mod stats;
+mod union_find;
 
 #[cfg(test)]
 mod anchor_fuzz;

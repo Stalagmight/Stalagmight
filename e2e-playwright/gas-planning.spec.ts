@@ -367,14 +367,37 @@ async function lastGasReachDpv(page: Page): Promise<unknown> {
   });
 }
 
-/** Enable a DPV rig from the Plan-mode bottom panel's "Equipment" tab (#317, moved out of
- *  Settings). Requires Plan mode already entered with the bottom panel visible - unlike the old
- *  Settings dialog, there is no route to the rig editor before `plan-tables-panel` exists. */
+/** Enable a DPV rig from the Plan-mode bottom panel's "DPV" tab (#317, moved out of Settings;
+ *  its own tab since the Equipment split). Requires Plan mode already entered with the bottom
+ *  panel visible - unlike the old Settings dialog, there is no route to the rig editor before
+ *  `plan-tables-panel` exists. */
 async function enableDpvRig(page: Page): Promise<void> {
   await expect(page.locator('[data-testid="plan-tables-panel"]')).toBeVisible({ timeout: 3000 });
-  await page.locator('[data-testid="plan-tab-equipment"]').click();
+  await page.locator('[data-testid="plan-tab-dpv"]').click();
   await page.locator('[data-testid="toggle-dpv-enabled"]').click();
   await expect(page.locator('[data-testid="dpv-rig-fields"]')).toBeVisible();
+}
+
+/**
+ * Edit one cell of a Plan-mode grid: open the overlay editor, replace the value, commit
+ * (#403). Both plan tables are `SpreadsheetGrid` hosts now, so a cell is a div and the only
+ * `<input>` in play is the grid's single shared editor - there is no per-cell field to
+ * `.fill()`, and nothing commits until Enter (or a blur/navigate), unlike the per-keystroke
+ * fields these tables used to render.
+ */
+async function editGridCell(
+  page: Page,
+  prefix: 'segment' | 'gas-cylinder',
+  row: number,
+  colKey: string,
+  value: string
+): Promise<void> {
+  await page.getByTestId(`${prefix}-cell-${row}-${colKey}`).dblclick();
+  const editor = page.getByTestId(`${prefix}-cell-editor`);
+  await expect(editor).toBeVisible();
+  await editor.fill(value);
+  await editor.press('Enter');
+  await expect(editor).toHaveCount(0);
 }
 
 test.describe('Gas planning', () => {
@@ -642,7 +665,7 @@ test.describe('Gas planning', () => {
     expect(timePath).not.toContain('NaN');
 
     // Switching tabs away and back keeps the chart (the tab state is local + transient).
-    await page.locator('[data-testid="plan-tab-equipment"]').click();
+    await page.locator('[data-testid="plan-tab-cylinders"]').click();
     await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible();
     await page.locator('[data-testid="plan-tab-profile"]').click();
     await expect(page.locator('[data-testid="plan-profile-svg"]')).toBeVisible();
@@ -818,9 +841,14 @@ test.describe('Gas planning', () => {
     const firstRow = gasCylinderRows(page).first();
     const toggle = qualifiedIndexTestIds(page, 'gas-cylinder-enabled').first();
     await expect(toggle).toBeChecked();
+    // Pin the BEFORE state: a carried back-gas tank is undimmed, so the class below is a real
+    // state change and not something every row happens to carry.
+    await expect(firstRow).not.toHaveClass(/opacity-50/);
     await toggle.uncheck();
     // The row shows its disabled state, and the store carries the flag through to the engine.
-    await expect(firstRow).toHaveAttribute('data-enabled', 'false');
+    // On the grid (#403) that state is the dim class the row carries, not a `data-enabled`
+    // attribute a grid row has no way to hold.
+    await expect(firstRow).toHaveClass(/opacity-50/);
     await expect
       .poll(
         () =>
@@ -869,7 +897,8 @@ test.describe('Gas planning', () => {
     await expect(qualifiedIndexTestIds(page, 'gas-cylinder-usable')).toHaveCount(0);
 
     // Free is advanced (manual reserves, incl. zero-reserve), so it routes through the advanced
-    // acknowledgment the first time - then flips the column to an editable field per budget-role tank.
+    // acknowledgment the first time - then flips the column to an editable cell per budget-role
+    // tank (the `-usable-N` / `-usable-readonly-N` test ids name which mode the row is in).
     await page.locator('[data-testid="gas-reserve-free"]').click();
     await expect(page.locator('[data-testid="gas-pushy-ack"]')).toBeVisible();
     await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
@@ -890,13 +919,14 @@ test.describe('Gas planning', () => {
           ).__E2E_TEST__.gasPlanStore.getState().cylinders[idx].usable_gas_bar,
         i,
       );
-    await usable.fill('80');
-    await usable.blur();
+    await editGridCell(page, 'gas-cylinder', 0, 'usable', '80');
+    await expect(usable).toHaveText('80');
     await expect.poll(() => usableOf(0), { timeout: 2000 }).toBe(80);
 
-    // A diver must be able to zero out a tank's usable in Free (#245 bug: the field rejected 0).
-    await usable.fill('0');
-    await usable.blur();
+    // A diver must be able to zero out a tank's usable in Free (#245 bug: the field rejected 0;
+    // on the grid the cell's own `parse` keeps an emptied/zeroed cell writing a real 0).
+    await editGridCell(page, 'gas-cylinder', 0, 'usable', '0');
+    await expect(usable).toHaveText('0');
     await expect.poll(() => usableOf(0), { timeout: 2000 }).toBe(0);
   });
 
@@ -1804,8 +1834,10 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await page.locator('[data-testid="plan-tab-segments"]').click();
     const speed = page.locator('[data-testid="segment-speed-0"]');
-    // Shows the plan's own speed (the default swim speed, 10 m/min metric) without adopting it.
-    await expect(speed).toHaveValue(/^10(\.0)?$/);
+    // Shows the plan's own speed (the default swim speed, 10 m/min metric) without adopting it -
+    // dimmed + marked inherited (#403), so the displayed number never reads as one typed here.
+    await expect(speed).toHaveText('10.0');
+    await expect(page.locator('[data-testid="segment-speed-inherited-0"]')).toBeVisible();
     // ...and the request carries NO speed for that span, so the engine applies the configured one.
     // Sending a number here - even the right one - is exactly what disabled the swim-speed setting
     // in the first pass, while every screen assertion above still passed.
@@ -1819,8 +1851,11 @@ test.describe('Gas planning', () => {
       )
       .toBeNull();
 
-    await speed.fill('23');
-    await speed.blur();
+    await editGridCell(page, 'segment', 0, 'speed', '23');
+    // The span now carries a speed of its own: the inherited marker is gone and the cell shows
+    // the committed number.
+    await expect(page.locator('[data-testid="segment-speed-inherited-0"]')).toHaveCount(0);
+    await expect(speed).toHaveText('23.0');
 
     // The wiring guard: `setSegments` nulls the cached field, so this is only reachable if the
     // edit flowed all the way to a recompute request - a table that only re-rendered its own
@@ -1828,6 +1863,17 @@ test.describe('Gas planning', () => {
     await expect
       .poll(async () => (await lastGasReachSegments(page))[0]?.speed_m_per_min, { timeout: 3000 })
       .toBe(23);
+
+    // Clearing the cell hands the span back to the plan speed. This is the ONLY route back once a
+    // number has been typed - the per-row Reset button is gone with the grid migration (#403) -
+    // and it has to reach the engine as `null`, not as the 10 the cell goes back to showing.
+    await page.locator('[data-testid="segment-cell-0-speed"]').click();
+    await page.keyboard.press('Delete');
+    await expect(page.locator('[data-testid="segment-speed-inherited-0"]')).toBeVisible();
+    await expect(speed).toHaveText('10.0');
+    await expect
+      .poll(async () => (await lastGasReachSegments(page))[0]?.speed_m_per_min, { timeout: 3000 })
+      .toBeNull();
   });
 
   test('the DPV scooter checkbox is disabled without a configured rig, and the readout has no scooter row (#317) @smoke', async ({
@@ -1850,7 +1896,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="segments-no-rig-hint"]')).toBeVisible();
   });
 
-  test('configuring a DPV rig in the Equipment tab enables the segment scooter checkbox and its readout row (#317)', async ({
+  test('configuring a DPV rig in the DPV tab enables the segment scooter checkbox and its readout row (#317)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -1895,7 +1941,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toBeVisible({
       timeout: 3000,
     });
-    await page.locator('[data-testid="plan-tab-equipment"]').click();
+    await page.locator('[data-testid="plan-tab-dpv"]').click();
     await expect(page.locator('[data-testid="toggle-dpv-enabled"]')).toHaveAttribute(
       'aria-checked',
       'true',
@@ -1979,7 +2025,7 @@ test.describe('Gas planning', () => {
       .poll(async () => (await lastGasReachSegments(page))[0]?.on_scooter, { timeout: 3000 })
       .toBe(true);
 
-    await page.locator('[data-testid="plan-tab-equipment"]').click();
+    await page.locator('[data-testid="plan-tab-dpv"]').click();
     await page.locator('[data-testid="toggle-dpv-enabled"]').click();
     await expect(page.locator('[data-testid="dpv-rig-fields"]')).toHaveCount(0);
 

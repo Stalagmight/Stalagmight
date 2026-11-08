@@ -1,23 +1,51 @@
 /**
- * Component test (#317) - the Segments tab: one row per span between way points, the
- * length-sync invariant is exercised at the store level (gasPlanStore.test.ts), so this
- * covers the table's OWN responsibilities: labeling a span's endpoints, editing speed,
- * gating the scooter checkbox on a configured DPV rig, and marking the engine-derived park
- * point without re-deriving it.
+ * Component test (#317, regridded in #403) - the Segments tab: one row per span between
+ * way points, the length-sync invariant is exercised at the store level
+ * (gasPlanStore.test.ts), so this covers the table's OWN responsibilities: labeling a
+ * span's endpoints, editing speed through the grid, gating the scooter checkbox on a
+ * configured DPV rig, and marking the engine-derived park point without re-deriving it.
+ *
+ * The pure edit rules (clamp arithmetic, scooter/speed coupling, boolean token table) are
+ * pinned in `__tests__/segmentsGridEdits.test.ts`; what is left here is the wiring - that
+ * the grid's gestures reach that reducer and that the store is what changes.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+
+// The grid is virtualized and jsdom gives the virtualizer no layout to measure, so without
+// this mock it renders zero rows and every cell query fails - the same shim the grid's own
+// component tests use.
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        key: index,
+        start: 33 + index * 33,
+        size: 33,
+      })),
+    getTotalSize: () => count * 33,
+    scrollToIndex: () => {},
+  }),
+}));
+
 import { SegmentsTable } from './SegmentsTable';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { defaultConfig } from '../../types/config';
 import { segmentColor } from '../../utils/segmentColors';
-import type { GasReachField } from '../../types/ipc.generated';
+import type { DpvRig, GasReachField } from '../../types/ipc.generated';
 
 const A = { section_id: 1, station_index: 2 };
 const B = { section_id: 1, station_index: 5 };
 const C = { section_id: 1, station_index: 8 };
 const D = { section_id: 1, station_index: 11 };
+
+const RIG: DpvRig = {
+  primary: { speed_m_per_min: 24, burn_minutes: 60 },
+  backup: { speed_m_per_min: 18, burn_minutes: 45 },
+  range_reserve_fraction: 0.2,
+};
 
 function fakeField(overrides: Partial<GasReachField> = {}): GasReachField {
   return {
@@ -52,9 +80,31 @@ function fakeField(overrides: Partial<GasReachField> = {}): GasReachField {
   };
 }
 
+beforeAll(() => {
+  // jsdom has no ResizeObserver; the grid measures its scroller with one.
+  if (typeof ResizeObserver === 'undefined') {
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+  }
+});
+
 beforeEach(() => {
   useGasPlanStore.getState().reset();
 });
+
+/** The grid's keyboard surface: the focusable scroller inside the grid root. */
+const scroller = () => document.querySelector('.sg-grid [tabindex="0"]')!;
+
+/** Open a cell's editor, type `value` and commit it with Enter. */
+function editCell(cellTestId: string, value: string) {
+  fireEvent.doubleClick(screen.getByTestId(cellTestId));
+  const editor = screen.getByTestId('segment-cell-editor');
+  fireEvent.change(editor, { target: { value } });
+  fireEvent.keyDown(editor, { key: 'Enter' });
+}
 
 describe('SegmentsTable', () => {
   it('renders one row per segment, labeling the first Entrance and the last Onward', () => {
@@ -69,11 +119,12 @@ describe('SegmentsTable', () => {
   it('labels the origin instead of Entrance once one is set, keeping the station id as a tooltip', () => {
     useGasPlanStore.getState().setOrigin(A);
     render(<SegmentsTable />);
-    const row = screen.getByTestId('segment-row-0');
-    expect(row).toHaveTextContent('Origin');
-    expect(row).not.toHaveTextContent('Entrance');
-    expect(row).not.toHaveTextContent('1:2');
-    expect(row.querySelector('td')).toHaveAttribute('title', '1:2');
+    const cell = screen.getByTestId('segment-cell-0-from');
+    expect(cell).toHaveTextContent('Origin');
+    expect(cell).not.toHaveTextContent('Entrance');
+    // The id stays OFF the row and reachable only as a tooltip on the label span.
+    expect(cell).not.toHaveTextContent('1:2');
+    expect(cell.querySelector('[title]')).toHaveAttribute('title', '1:2');
   });
 
   it('labels every boundary by role: origin, each way point in order, and the endpoint', () => {
@@ -98,13 +149,16 @@ describe('SegmentsTable', () => {
 
   it('shows the plan speed on a span the diver has not given one, without writing it into the plan', () => {
     // #317: a fresh span carries `speed_m_per_min: null` = "fly this at the plan's speed", so the
-    // field has to render that speed while the STORE keeps the null - otherwise the diver's
+    // cell has to render that speed while the STORE keeps the null - otherwise the diver's
     // configured swim / survey speed would stop reaching the engine the moment Plan mode opened.
     useGasPlanStore.setState({
       gasConfig: { ...defaultConfig.gas, swim_speed_m_per_min: 23, survey_speed_m_per_min: null },
     });
     render(<SegmentsTable />);
-    expect(screen.getByTestId('segment-speed-0')).toHaveValue(23);
+
+    expect(screen.getByTestId('segment-speed-0')).toHaveTextContent('23.0');
+    // Dimmed marker, so the inherited number never reads as one the diver typed here.
+    expect(screen.getByTestId('segment-speed-inherited-0')).toBeInTheDocument();
     expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBeNull();
   });
 
@@ -113,18 +167,14 @@ describe('SegmentsTable', () => {
       gasConfig: { ...defaultConfig.gas, swim_speed_m_per_min: 23, survey_speed_m_per_min: 7 },
     });
     render(<SegmentsTable />);
-    expect(screen.getByTestId('segment-speed-0')).toHaveValue(7);
+    expect(screen.getByTestId('segment-speed-0')).toHaveTextContent('7.0');
   });
 
-  it('committing a speed edit updates the store and nulls the cached reach field', async () => {
-    const user = userEvent.setup();
+  it('committing a speed edit updates the store and nulls the cached reach field', () => {
     useGasPlanStore.setState({ reachField: fakeField() });
     render(<SegmentsTable />);
 
-    const input = screen.getByTestId('segment-speed-0');
-    await user.clear(input);
-    await user.type(input, '18');
-    await user.tab();
+    editCell('segment-cell-0-speed', '18');
 
     expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBe(18);
     expect(useGasPlanStore.getState().reachField).toBeNull();
@@ -139,16 +189,7 @@ describe('SegmentsTable', () => {
 
   it('enables the scooter checkbox once a rig is configured, and toggling it updates the store', async () => {
     const user = userEvent.setup();
-    useGasPlanStore.setState({
-      gasConfig: {
-        ...defaultConfig.gas,
-        dpv: {
-          primary: { speed_m_per_min: 24, burn_minutes: 60 },
-          backup: { speed_m_per_min: 18, burn_minutes: 45 },
-          range_reserve_fraction: 0.2,
-        },
-      },
-    });
+    useGasPlanStore.setState({ gasConfig: { ...defaultConfig.gas, dpv: RIG } });
     render(<SegmentsTable />);
 
     const checkbox = screen.getByTestId('segment-scooter-0');
@@ -165,16 +206,7 @@ describe('SegmentsTable', () => {
     // span's speed - the only value that keeps the two consistent for a span with no speed
     // of its own to begin with.
     const user = userEvent.setup();
-    useGasPlanStore.setState({
-      gasConfig: {
-        ...defaultConfig.gas,
-        dpv: {
-          primary: { speed_m_per_min: 24, burn_minutes: 60 },
-          backup: { speed_m_per_min: 18, burn_minutes: 45 },
-          range_reserve_fraction: 0.2,
-        },
-      },
-    });
+    useGasPlanStore.setState({ gasConfig: { ...defaultConfig.gas, dpv: RIG } });
     render(<SegmentsTable />);
 
     await user.click(screen.getByTestId('segment-scooter-0'));
@@ -184,17 +216,23 @@ describe('SegmentsTable', () => {
     expect(segment?.speed_m_per_min).toBe(24);
   });
 
+  it('turns the scooter on from the keyboard, through the column parser', () => {
+    // The checkbox is a `noInlineEdit` cell: no editor opens over it, so a typed character
+    // goes straight through `parse` (`y` -> true). Without this path a keyboard-only diver
+    // could focus the cell and never change it.
+    useGasPlanStore.setState({ gasConfig: { ...defaultConfig.gas, dpv: RIG } });
+    render(<SegmentsTable />);
+
+    fireEvent.mouseDown(screen.getByTestId('segment-cell-0-scooter'));
+    fireEvent.keyDown(scroller(), { key: 'y' });
+
+    expect(useGasPlanStore.getState().segments[0]?.on_scooter).toBe(true);
+  });
+
   it('leaves an explicit speed alone when on_scooter is ticked on a span that already has one', async () => {
     const user = userEvent.setup();
     useGasPlanStore.setState({
-      gasConfig: {
-        ...defaultConfig.gas,
-        dpv: {
-          primary: { speed_m_per_min: 24, burn_minutes: 60 },
-          backup: { speed_m_per_min: 18, burn_minutes: 45 },
-          range_reserve_fraction: 0.2,
-        },
-      },
+      gasConfig: { ...defaultConfig.gas, dpv: RIG },
       segments: [{ speed_m_per_min: 12, on_scooter: false }],
     });
     render(<SegmentsTable />);
@@ -213,14 +251,7 @@ describe('SegmentsTable', () => {
     // the span to `speed_m_per_min: null`, never keep whatever value happens to be sitting there.
     const user = userEvent.setup();
     useGasPlanStore.setState({
-      gasConfig: {
-        ...defaultConfig.gas,
-        dpv: {
-          primary: { speed_m_per_min: 24, burn_minutes: 60 },
-          backup: { speed_m_per_min: 18, burn_minutes: 45 },
-          range_reserve_fraction: 0.2,
-        },
-      },
+      gasConfig: { ...defaultConfig.gas, dpv: RIG },
       segments: [{ speed_m_per_min: 45, on_scooter: true }],
     });
     render(<SegmentsTable />);
@@ -276,51 +307,39 @@ describe('SegmentsTable', () => {
    * (and the exported dive profile) priced a completely different one.
    */
   describe('speed commit clamps to the range the engine honors ([0.1, 1000] m/min)', () => {
-    it('clamps an over-range commit down to the engine max (1000)', async () => {
-      const user = userEvent.setup();
+    it('clamps an over-range commit down to the engine max (1000)', () => {
       render(<SegmentsTable />);
-
-      const input = screen.getByTestId('segment-speed-0');
-      await user.clear(input);
-      await user.type(input, '5000');
-      await user.tab();
-
+      editCell('segment-cell-0-speed', '5000');
       expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBe(1000);
     });
 
-    it('clamps an under-range commit up to the engine min (0.1)', async () => {
-      const user = userEvent.setup();
+    it('clamps an under-range commit up to the engine min (0.1)', () => {
       render(<SegmentsTable />);
-
-      const input = screen.getByTestId('segment-speed-0');
-      await user.clear(input);
-      await user.type(input, '0.01');
-      await user.tab();
-
+      editCell('segment-cell-0-speed', '0.01');
       expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBe(0.1);
     });
   });
 
-  describe('reset-to-inherit control (#317 FIX 5)', () => {
-    it('hides the reset control on a span with no explicit speed', () => {
-      render(<SegmentsTable />);
-      expect(screen.queryByTestId('segment-speed-reset-0')).not.toBeInTheDocument();
-    });
-
-    it('shows the reset control once a span has an explicit speed, and resetting it writes null and shows the inherited speed again', async () => {
-      const user = userEvent.setup();
+  describe('clear-to-inherit (#403, replacing the per-row Reset button)', () => {
+    it('returns the span to the plan speed and does not mark the cell missing', () => {
+      // The column is `number-nullable`, so Delete writes a real `null` rather than the
+      // "required field emptied" mark a plain number column would leave behind - the span
+      // goes back to following the plan speed, which is the only way back once a number has
+      // been typed.
       useGasPlanStore.setState({
         gasConfig: { ...defaultConfig.gas, swim_speed_m_per_min: 23, survey_speed_m_per_min: null },
         segments: [{ speed_m_per_min: 12, on_scooter: false }],
       });
       render(<SegmentsTable />);
+      expect(screen.queryByTestId('segment-speed-inherited-0')).not.toBeInTheDocument();
 
-      expect(screen.getByTestId('segment-speed-reset-0')).toBeInTheDocument();
-      await user.click(screen.getByTestId('segment-speed-reset-0'));
+      fireEvent.mouseDown(screen.getByTestId('segment-cell-0-speed'));
+      fireEvent.keyDown(scroller(), { key: 'Delete' });
 
       expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBeNull();
-      expect(screen.getByTestId('segment-speed-0')).toHaveValue(23);
-      expect(screen.queryByTestId('segment-speed-reset-0')).not.toBeInTheDocument();
+      const inherited = screen.getByTestId('segment-speed-inherited-0');
+      expect(inherited).toHaveTextContent('23.0');
+      expect(screen.getByTestId('segment-cell-0-speed')).not.toHaveClass('sg-cell-missing');
     });
   });
 });

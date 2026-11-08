@@ -30,9 +30,9 @@ function filterMockErrors(errors: string[]): string[] {
     // errors in the app - this assertion exists for the getLayer crash class.
     // Scoped by the captured location URL (appended in beforeEach): a failed
     // SAME-ORIGIN load (a 404'd app chunk or asset) still fails the spec.
-    // The known external fetch is the unpkg.com maplibre CSS (#357); the
-    // former offender, the dev agent bridge's /__agent/token probe, is gated
-    // off under VITE_E2E since #417.
+    // No external fetch is known: the maplibre CSS is bundled since #606, and
+    // the dev agent bridge's /__agent/token probe is gated off under VITE_E2E
+    // since #417.
     if (error.startsWith('Failed to load resource') && !error.includes('[http://localhost')) {
       return false;
     }

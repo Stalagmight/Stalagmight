@@ -17,6 +17,11 @@ export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | '
 export interface UpdateInfo {
   version: string;
   notesUrl: string;
+  /**
+   * Whether this platform installs a downloaded update when the app quits
+   * (#631; the backend's `INSTALLS_ON_QUIT`), so the banner can promise it.
+   */
+  installsOnQuit: boolean;
 }
 
 interface UpdateStore {
@@ -48,6 +53,19 @@ interface UpdateStore {
    * nothing.
    */
   downloadVersion: string | null;
+  /**
+   * The running download was started by a check, not by the user (#631). The
+   * banner stays hidden while it runs and appears once it is ready, so an
+   * update nobody asked about does not put a progress bar on screen.
+   */
+  backgroundDownload: boolean;
+  /**
+   * Which download the store is willing to hear from, as `checkSeq` is for
+   * checks. A version alone cannot tell two downloads apart: a re-check during
+   * a download makes the backend refuse the first one's bytes, and its failure
+   * must not knock back the second download of the SAME version.
+   */
+  downloadSeq: number;
 
   /** Start a check; the returned sequence must be passed back with the reply. */
   beginCheck: () => number;
@@ -56,19 +74,33 @@ interface UpdateStore {
   /** A background check failed - idle, silently (no toast/banner). */
   setCheckFailed: (seq: number) => void;
   setAvailable: (seq: number, info: UpdateInfo) => void;
-  startDownloading: (version: string) => void;
+  /** Start a download; the returned sequence identifies it to its caller. */
+  startDownloading: (version: string, background?: boolean) => number;
   setProgress: (progress: AppUpdateProgress) => void;
   setReady: (version: string) => void;
-  /** A download failed - the banner re-offers the download it already knows about. */
+  /** A download (or the install of one) failed - the banner re-offers the download it already knows about. */
   setDownloadFailed: () => void;
   dismiss: (version: string) => void;
+  /**
+   * Make the banner show what is in hand: clears a dismissal and turns a
+   * background download into a visible one. For a caller that has just told
+   * the user to look at the banner (About's "Check for updates").
+   */
+  reveal: () => void;
   /** Test-only reset. */
   reset: () => void;
 }
 
 const INITIAL_STATE: Pick<
   UpdateStore,
-  'status' | 'info' | 'progress' | 'dismissedVersion' | 'checkSeq' | 'downloadVersion'
+  | 'status'
+  | 'info'
+  | 'progress'
+  | 'dismissedVersion'
+  | 'checkSeq'
+  | 'downloadVersion'
+  | 'backgroundDownload'
+  | 'downloadSeq'
 > = {
   status: 'idle',
   info: null,
@@ -76,6 +108,8 @@ const INITIAL_STATE: Pick<
   dismissedVersion: null,
   checkSeq: 0,
   downloadVersion: null,
+  backgroundDownload: false,
+  downloadSeq: 0,
 };
 
 export const useUpdateStore = create<UpdateStore>((set, get) => ({
@@ -98,7 +132,16 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
   },
   setUpToDate: (seq) => {
     if (get().checkSeq !== seq) return;
-    set({ status: 'idle', info: null, progress: null, downloadVersion: null });
+    // A download still in flight for the old offer is now refused by the
+    // backend; bumping `downloadSeq` makes its failure land nowhere.
+    set((state) => ({
+      status: 'idle',
+      info: null,
+      progress: null,
+      downloadVersion: null,
+      backgroundDownload: false,
+      downloadSeq: state.downloadSeq + 1,
+    }));
   },
   setCheckFailed: (seq) => {
     if (get().checkSeq !== seq) return;
@@ -115,9 +158,25 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
   },
   setAvailable: (seq, info) => {
     if (get().checkSeq !== seq) return;
-    set({ status: 'available', info, progress: null, downloadVersion: null });
+    set((state) => ({
+      status: 'available',
+      info,
+      progress: null,
+      downloadVersion: null,
+      backgroundDownload: false,
+      downloadSeq: state.downloadSeq + 1,
+    }));
   },
-  startDownloading: (version) => set({ status: 'downloading', downloadVersion: version }),
+  startDownloading: (version, background = false) => {
+    const seq = get().downloadSeq + 1;
+    set({
+      status: 'downloading',
+      downloadVersion: version,
+      backgroundDownload: background,
+      downloadSeq: seq,
+    });
+    return seq;
+  },
   setProgress: (progress) => {
     // Only while a download is actually running: a tick that arrives after the
     // download ended (or was superseded by a check) would otherwise paint a
@@ -137,7 +196,9 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
       status: state.info ? 'available' : 'error',
       progress: null,
       downloadVersion: null,
+      backgroundDownload: false,
     })),
   dismiss: (version) => set({ dismissedVersion: version }),
+  reveal: () => set({ dismissedVersion: null, backgroundDownload: false }),
   reset: () => set(INITIAL_STATE),
 }));

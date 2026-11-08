@@ -24,9 +24,10 @@ export type AttribMap<N extends readonly string[]> = Record<N[number], number>;
  *
  * Locations are fixed for the life of a program, so they are resolved once at
  * link time and `render()` never calls `getUniformLocation` /
- * `getAttribLocation` (#339). Built in `onAdd()` - MapLibre re-invokes onAdd on
- * context restore, so the cache rebuilds together with the program it describes
- * - and freed in `onRemove()`.
+ * `getAttribLocation` (#339). Built in `onAdd()` and freed in `onRemove()`.
+ * MapLibre does not re-add a custom layer after a context restore or a worker
+ * restart; `styleRestore.ts` does, running onRemove then onAdd, so the cache
+ * rebuilds together with the program it describes.
  *
  * Deliberately NOT stored on the buffer GPU-state objects: `uploadBuffers()` /
  * `freeGpu()` recreate those on every data change, a shorter lifecycle than the

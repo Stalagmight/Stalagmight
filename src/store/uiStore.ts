@@ -1722,7 +1722,7 @@ export const useUIStore = create<UIStore>((set) => ({
       set({ detailPanelOpen: true });
     }
     // Plan no longer pins the bottom Dock here: with staged entry (#395) the
-    // Equipment/Segments/Profile tabs only exist once an origin is chosen, so
+    // Cylinders/DPV/Segments/Profile tabs only exist once an origin is chosen, so
     // SingleSystemView pins it open at that moment instead (revealPlanTables).
     // Export shows the read-only map + export stub. We do NOT reset the gas store on
     // entry: the overlay is appMode-gated (hidden outside Plan) and a loaded plan must

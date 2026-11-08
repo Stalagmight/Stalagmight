@@ -94,7 +94,7 @@ export default function SingleSystemView() {
   // stub and hides the bottom table. The carousel owns enter/exit; setView()/setColorMode
   // reset it. The left Sections Dock is survey-only (Plan/Export are read-only).
   const appMode = useUIStore((s) => s.appMode);
-  // R9/R10 (#395): the bottom Equipment/Segments/Profile panel belongs to the full rig, which
+  // R9/R10 (#395): the bottom Cylinders/DPV/Segments/Profile panel belongs to the full rig, which
   // only exists once the diver has answered "Where does this dive start?".
   const gasOriginChosen = useGasPlanStore((s) => s.originChosen);
   // Drives the imagery attribution overlay below; MapCanvas adds and removes the
@@ -695,7 +695,7 @@ export default function SingleSystemView() {
     const name = {
       sections: t('singleView.panels.sectionsName'),
       detail: t('singleView.panels.detailName'),
-      // In Plan mode the bottom Dock holds the Equipment/Segments/Profile tables,
+      // In Plan mode the bottom Dock holds the Cylinders/DPV/Segments/Profile tables,
       // so its tab says "Gear" rather than "Data" (#395).
       data: appMode === 'plan' ? t('singleView.panels.gearName') : t('singleView.panels.dataName'),
     };

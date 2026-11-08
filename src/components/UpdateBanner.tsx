@@ -1,10 +1,10 @@
 import { useTranslation } from 'react-i18next';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { useUpdateStore } from '../store/updateStore';
-import { invokeIpc } from '../utils/ipc';
 import { useUIStore } from '../store/uiStore';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import { requestUpdateRestart } from '../utils/quit';
+import { downloadAppUpdate } from '../hooks/useAppUpdate';
 
 /**
  * In-app update banner (#579). Rendered alongside the app's other
@@ -12,24 +12,30 @@ import { requestUpdateRestart } from '../utils/quit';
  * only ever offers one of three states at a time:
  *  - `available`: version + Download / Release notes / Dismiss.
  *  - `downloading`: progress bar (indeterminate while total is unknown).
- *  - `ready`: Restart to update, threaded through the exit guards via
- *    `requestUpdateRestart` (docs: see quit.ts / useBeforeUnload.ts).
+ *  - `ready`: Restart, threaded through the exit guards via
+ *    `requestUpdateRestart` (docs: see quit.ts / useBeforeUnload.ts). Where
+ *    the update installs on quit (#631) the banner says so and the button is
+ *    "Restart now"; quitting is enough.
  *
- * Hidden for `idle`/`checking`/`error`, and for the version the user already
- * dismissed this session (`dismissedVersion`).
+ * Hidden for `idle`/`checking`/`error`, for a download a check started on its
+ * own (#631: the banner appears once it is ready, not as a progress bar for an
+ * update nobody asked about), and for the version the user already dismissed
+ * this session (`dismissedVersion`).
  */
 export function UpdateBanner() {
   const { t } = useTranslation();
   const status = useUpdateStore((s) => s.status);
   const info = useUpdateStore((s) => s.info);
   const progress = useUpdateStore((s) => s.progress);
+  const backgroundDownload = useUpdateStore((s) => s.backgroundDownload);
   const dismissedVersion = useUpdateStore((s) => s.dismissedVersion);
   const dismiss = useUpdateStore((s) => s.dismiss);
-  const startDownloading = useUpdateStore((s) => s.startDownloading);
-  const setReady = useUpdateStore((s) => s.setReady);
   const setDownloadFailed = useUpdateStore((s) => s.setDownloadFailed);
 
   if (!info || (status !== 'available' && status !== 'downloading' && status !== 'ready')) {
+    return null;
+  }
+  if (status === 'downloading' && backgroundDownload) {
     return null;
   }
   if (dismissedVersion === info.version) {
@@ -41,21 +47,19 @@ export function UpdateBanner() {
   // marking a DIFFERENT version ready (updateStore: `downloadVersion`).
   const downloadingVersion = info.version;
 
+  // The user asked for this one, so unlike a background download its failure
+  // is reported.
   const handleDownload = () => {
-    startDownloading(downloadingVersion);
-    void invokeIpc('download_app_update', undefined, { purpose: 'download app update' })
-      .then(() => setReady(downloadingVersion))
-      .catch((e: unknown) => {
-        console.error('[UpdateBanner] download_app_update failed:', e);
-        setDownloadFailed();
-        useUIStore
-          .getState()
-          .showToast(
-            t('updateBanner.toasts.downloadFailed'),
-            TOAST_KEYS.APP_UPDATE_DOWNLOAD_FAILED,
-            'error',
-          );
-      });
+    void downloadAppUpdate(downloadingVersion, false).then((outcome) => {
+      if (outcome !== 'failed') return;
+      useUIStore
+        .getState()
+        .showToast(
+          t('updateBanner.toasts.downloadFailed'),
+          TOAST_KEYS.APP_UPDATE_DOWNLOAD_FAILED,
+          'error',
+        );
+    });
   };
 
   // `openUrl`, not `window.open`: the Tauri webview has no browser chrome to
@@ -96,33 +100,29 @@ export function UpdateBanner() {
       data-testid="update-banner"
     >
       <span className="text-text-primary font-medium flex-1 min-w-0">
-        {t('updateBanner.available', { version: info.version })}
+        {status === 'ready' && info.installsOnQuit
+          ? t('updateBanner.readyOnQuit', { version: info.version })
+          : t('updateBanner.available', { version: info.version })}
       </span>
 
+      {(status === 'available' || status === 'ready') && (
+        <button
+          onClick={handleOpenNotes}
+          className="px-2 py-1 text-text-secondary hover:text-text text-xs"
+          data-testid="update-banner-notes"
+        >
+          {t('updateBanner.releaseNotes')}
+        </button>
+      )}
+
       {status === 'available' && (
-        <>
-          <button
-            onClick={handleOpenNotes}
-            className="px-2 py-1 text-text-secondary hover:text-text text-xs"
-            data-testid="update-banner-notes"
-          >
-            {t('updateBanner.releaseNotes')}
-          </button>
-          <button
-            onClick={handleDownload}
-            className="px-3 py-1 rounded bg-accent text-white text-xs"
-            data-testid="update-banner-download"
-          >
-            {t('updateBanner.download')}
-          </button>
-          <button
-            onClick={() => dismiss(info.version)}
-            className="px-2 py-1 text-text-secondary hover:text-text text-xs"
-            data-testid="update-banner-dismiss"
-          >
-            {t('updateBanner.dismiss')}
-          </button>
-        </>
+        <button
+          onClick={handleDownload}
+          className="px-3 py-1 rounded bg-accent text-white text-xs"
+          data-testid="update-banner-download"
+        >
+          {t('updateBanner.download')}
+        </button>
       )}
 
       {status === 'downloading' && (
@@ -158,7 +158,17 @@ export function UpdateBanner() {
           className="px-3 py-1 rounded bg-accent text-white text-xs"
           data-testid="update-banner-restart"
         >
-          {t('updateBanner.restart')}
+          {info.installsOnQuit ? t('updateBanner.restartNow') : t('updateBanner.restart')}
+        </button>
+      )}
+
+      {(status === 'available' || status === 'ready') && (
+        <button
+          onClick={() => dismiss(info.version)}
+          className="px-2 py-1 text-text-secondary hover:text-text text-xs"
+          data-testid="update-banner-dismiss"
+        >
+          {t('updateBanner.dismiss')}
         </button>
       )}
     </div>

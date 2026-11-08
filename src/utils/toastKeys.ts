@@ -43,6 +43,9 @@ export const TOAST_KEYS = {
   IMPORT_SHOTS_VIEW_SAVE: 'import-shots-view-save',
   PROFILE_EXPORT_FAILED: 'profile-export-failed',
   PROFILE_EXPORT_OK: 'profile-export-ok',
+  /** Paste outcome on the Plan-mode Segments/Cylinders grids (#590). */
+  PLAN_SEGMENTS_PASTE: 'plan-segments-paste',
+  PLAN_CYLINDERS_PASTE: 'plan-cylinders-paste',
   /**
    * A CSV/JSON/TML/image export the user asked for did not produce a file.
    *
