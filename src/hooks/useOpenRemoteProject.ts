@@ -19,7 +19,7 @@ import {
   dumpCandidates,
   dumpCandidateKind,
 } from '../utils/speleoError';
-import { needsSpeleoHandBackPrompt } from '../utils/quit';
+import { editsSettledForExit, needsSpeleoHandBackPrompt } from '../utils/quit';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   SpeleoProjectSummary,
@@ -350,7 +350,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * settles a project that is dirty in both senses in one hop rather than two.
    */
   const handBackRefusal = useCallback(
-    (summary: SpeleoProjectSummary): string | null => {
+    (summary: SpeleoProjectSummary, exit?: { editsSettled?: boolean }): string | null => {
       const { project, isDirty } = useProjectStore.getState();
       if (!project) return null;
       const speleo = useSpeleoStore.getState();
@@ -374,10 +374,35 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // first, but `mark_remote_dirty` logs and swallows a failure to write it, and a
       // frontend-only edit can leave `isDirty` as the only evidence there is anything
       // to lose. Exempting the re-open from this too was the wrong half to widen.
-      if (isDirty) return t('speleodb.errors.openBlockedUnsaved', { name: summary.name });
+      // [#576 W84-NF] An edit that did not settle in time counts as unsaved work, as at
+      // every other exit (`settledHandBackRefusal`).
+      if (isDirty || exit?.editsSettled === false)
+        return t('speleodb.errors.openBlockedUnsaved', { name: summary.name });
       return null;
     },
     [t],
+  );
+
+  /**
+   * [#576 W84-NF] {@link handBackRefusal} as the entry checks run it: once the edits
+   * queued so far have settled, as every other exit reads its guard
+   * (`editsSettledForExit`, `utils/quit.ts`). `isDirty` is set only once an edit's IPC
+   * and the refresh after it have returned, so an edit still in flight (a grid cell
+   * committed on blur on the way to the SpeleoDB browser) read as a clean project and
+   * the open went ahead; the command then waited for that edit (`afterQueuedEdits`), and
+   * only the backend's persisted dirty bit refused the replace, with its own wording.
+   * Waits only while a project is open: with none there is nothing to hand back. The
+   * bare wait, not the hand-back exits' gate (`settleEditsBeforeHandBack`): these verbs
+   * end in a `loadProject`, a switch, which already follows the latest-wins rule, and a
+   * remote open never replaces a dialog of its own.
+   */
+  const settledHandBackRefusal = useCallback(
+    async (summary: SpeleoProjectSummary): Promise<string | null> => {
+      if (!useProjectStore.getState().project) return handBackRefusal(summary);
+      const editsSettled = await editsSettledForExit();
+      return handBackRefusal(summary, { editsSettled });
+    },
+    [handBackRefusal],
   );
 
   /**
@@ -488,7 +513,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     ): Promise<OpenRemoteOutcome> => {
       // Before the pull, the seed and the load: nothing about the open project may be
       // given up silently (see `handBackRefusal`).
-      const refusal = handBackRefusal(summary);
+      const refusal = await settledHandBackRefusal(summary);
       if (refusal) return { status: 'error', message: refusal, reLogin: false };
       // Captured immediately before the request, so an Ambiguous reply that lands
       // after the session ended routes nowhere (see `sessionStillCurrent`).
@@ -566,7 +591,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     },
     [
       finishOpen,
-      handBackRefusal,
+      settledHandBackRefusal,
       handBackRefusalAfterPull,
       openDialog,
       openDumpPicker,
@@ -630,7 +655,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       const replacesOpenProject =
         (useProjectStore.getState().project?.file_path ?? null) !== localPath;
       if (replacesOpenProject) {
-        const refusal = handBackRefusal(summary);
+        const refusal = await settledHandBackRefusal(summary);
         if (refusal) return { status: 'error', message: refusal, reLogin: false };
       }
       return finishOpen(
@@ -642,7 +667,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         { hasUnpushedEdits: true },
       );
     },
-    [finishOpen, handBackRefusal],
+    [finishOpen, settledHandBackRefusal],
   );
 
   /**
@@ -675,7 +700,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
        * unsaved in-memory survey goes with it. Nothing is stranded by refusing - the
        * user saves and presses it again.
        */
-      const refusal = handBackRefusal(summary);
+      const refusal = await settledHandBackRefusal(summary);
       if (refusal) return { status: 'error', message: refusal, reLogin: false };
       // Captured immediately before the request, so an Ambiguous reply that lands
       // after the session ended routes nowhere (see `sessionStillCurrent`).
@@ -733,7 +758,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     },
     [
       finishOpen,
-      handBackRefusal,
+      settledHandBackRefusal,
       handBackRefusalAfterPull,
       openDumpPicker,
       onAdoptAfterPick,
@@ -772,7 +797,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
        * `discardLocal` is no waiver here: it answers for the TARGET's cache copy,
        * whereas this asks about the project on screen.
        */
-      const refusal = handBackRefusal(summary);
+      const refusal = await settledHandBackRefusal(summary);
       if (refusal) return { status: 'error', message: refusal, reLogin: false };
       // Same capture as the two pull verbs, and it matters most here: adoption can
       // raise the ambiguity itself on a tree that moved while its confirm was open.
@@ -968,7 +993,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     },
     [
       finishOpen,
-      handBackRefusal,
+      settledHandBackRefusal,
       openDumpPicker,
       onAdoptAfterPick,
       failReplay,

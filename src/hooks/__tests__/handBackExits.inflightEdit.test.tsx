@@ -340,6 +340,35 @@ describe('Import as new project waits for the edits queued before it', () => {
     await settle(editDone);
   });
 
+  // [#576 W84-NF] Pin: the check runs AFTER the parse, on a wait of its own, so an edit
+  // queued while the file was still being read is waited for too (a wait before the
+  // parse alone would read it as a clean project and close it, dropping the file).
+  it('an edit queued while the file is still parsing: the prompt carries the parsed file', async () => {
+    const { result } = renderHook(() => useProject());
+    const parse = deferred<typeof PARSED>();
+    useProjectStore.setState({ parseTml: vi.fn(() => parse.promise) as never });
+    useUIStore.setState({ activeDialog: 'import-as-new-project', dialogData: { path: TML, fileName: 'CaveA.tml' } });
+    const importing = routeOpenedFile(TML, 'Open Failed', {
+      importAsNew: { closeCurrent: () => result.current.handleCloseProject() },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const edit = holdEdit();
+    const { done: editDone } = await startEdit();
+    parse.resolve(PARSED);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls(CLOSE)).toBe(0);
+
+    edit.resolve({ remote_link: null });
+    await settle(editDone);
+    await settle(importing);
+
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    expect(ui().activeDialog).toBe('unsaved-changes');
+    expect(ui().dialogData.pendingImport).toMatchObject({ filePath: TML, importType: 'tml', tmlFile: PARSED });
+    expect(calls(CLOSE)).toBe(0);
+  });
+
   it('a confirm cancelled while the edit is still landing drops the file: no prompt, the project stays', async () => {
     const { result } = renderHook(() => useProject());
     const edit = holdEdit();
