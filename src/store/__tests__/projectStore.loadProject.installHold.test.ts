@@ -73,7 +73,8 @@ describe('a project load asked for during an update install', () => {
     const outcome = await loading;
 
     expect(loadBinaryMock).toHaveBeenCalledTimes(1);
-    expect(loadBinaryMock).toHaveBeenCalledWith(PATH);
+    // The fuzz branch's load names itself (its load token, #576 W44-NF3).
+    expect(loadBinaryMock).toHaveBeenCalledWith(PATH, expect.any(String));
     expect(outcome.success).toBe(true);
     expect(useUIStore.getState().view).toBe('single');
   });
@@ -94,6 +95,29 @@ describe('a project load asked for during an update install', () => {
     useUpdateStore.getState().setInstalling(false);
     expect((await loading).success).toBe(true);
     expect(loadBinaryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a newer load asked for while one waits for the hold wins: only the newer one opens, and no loading window shows meanwhile', async () => {
+    // [#576 W86 x FZ-FZ-INT-1] Loads are switches, serialised with the latest winning.
+    // The waiting load has started its turn, so it is not dropped, only told it was
+    // superseded; it must then end at the hold instead of opening its project first.
+    const OLDER = '/cache/older.stalx';
+    useUpdateStore.getState().setInstalling(true);
+    const older = useProjectStore.getState().loadProject(OLDER);
+    await flush();
+    const newer = useProjectStore.getState().loadProject(PATH);
+    await flush();
+
+    expect(loadBinaryMock).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().loading.isLoading).toBe(false);
+
+    useUpdateStore.getState().setInstalling(false);
+    const [olderOutcome, newerOutcome] = await Promise.all([older, newer]);
+
+    expect(olderOutcome).toMatchObject({ success: false, superseded: true });
+    expect(newerOutcome.success).toBe(true);
+    expect(loadBinaryMock).toHaveBeenCalledTimes(1);
+    expect(loadBinaryMock).toHaveBeenCalledWith(PATH, expect.any(String));
   });
 
   it('control: with no install running, the load runs at once', async () => {

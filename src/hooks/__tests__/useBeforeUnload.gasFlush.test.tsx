@@ -4,10 +4,14 @@
  *
  * Plan-mode gas fields persist through one debounced writer (`gasConfigDisk.ts`,
  * 450 ms). A value typed and then Restart pressed inside that window was still
- * waiting when the install started, and its `update_gas_config` fired from the timer
- * mid-install - or never, once the restart ended the process. The install now
- * flushes the writer first and waits for it, bounded so a write that never answers
- * cannot hold the install window up for ever.
+ * waiting when the install started, and its write fired from the timer mid-install -
+ * or never, once the restart ended the process. The install now flushes the writer
+ * first and waits for it, bounded so a write that never answers cannot hold the
+ * install window up for ever.
+ *
+ * On this branch that writer sends only the fields queued, as `patch_config`
+ * patches under `[gas]` (#576 FZ-INT-3-D1), not #594's whole-block
+ * `update_gas_config`; the flush is the same one writer's (`flushGasConfigWrite`).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/react';
@@ -45,7 +49,7 @@ import { emptyBinaryRefresh, invokeIpcMock } from '../../test/factories/ipc';
 emptyBinaryRefresh();
 
 const INSTALL = 'install_app_update_and_restart';
-const GAS = 'update_gas_config';
+const GAS = 'patch_config';
 
 function App() {
   useBeforeUnload(false, 'unused', undefined, guardQuit);
@@ -116,7 +120,7 @@ describe('a pending gas-config write when an update restart installs', () => {
 
     expect(sentInOrder()).toEqual([GAS, INSTALL]);
     const call = invokeIpcMock.mock.calls.find((c) => c[0] === GAS);
-    expect((call?.[1] as { gas: { swim_speed_m_per_min: number } }).gas.swim_speed_m_per_min).toBe(17);
+    expect(call?.[1]).toEqual({ patches: [{ path: ['gas', 'swim_speed_m_per_min'], value: 17 }] });
     expect(useUpdateStore.getState().installing).toBe(true);
   });
 

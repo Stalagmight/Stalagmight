@@ -961,6 +961,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // moved already (a fast-forward swaps the tree in place), and a refused reload
       // would leave the frontend showing a tree the backend no longer has.
       while (selectUpdateInstalling(useUpdateStore.getState())) await updateInstallHoldLifted();
+      // [#576 W86 x FZ-FZ-INT-1] A newer switch requested while this load waited for the
+      // hold wins: this load has opened nothing and cancelled nothing yet, so it ends
+      // here rather than open a project only for the newer switch to replace it.
+      if (turn.superseded) return { success: false, superseded: true };
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
