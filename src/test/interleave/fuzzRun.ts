@@ -12,6 +12,7 @@
  */
 import { vi } from 'vitest';
 
+import type { DisplaySettingTarget } from '../../types/ipc.generated';
 import { BackendModel, type Storage } from './backendModel';
 import { IpcScheduler } from './ipcScheduler';
 
@@ -19,7 +20,9 @@ export const INVARIANTS = {
   'identity': 'the store never shows one project generation\'s data under another\'s identity (checked after every step)',
   'display-target': 'a display write lands only in a file (or cache) of the project it was made in',
   'edit-target': 'an edit is applied only to the project it was issued in (a reload of the same file counts as it)',
-  'display-lost': 'the last display write made in a project still open at the end is what that project stores',
+  'display-lost':
+    'the last display write made in a project still open at the end is what that project stores (one still queued ' +
+    'when a switch\'s flush of the display writes timed out is left out: dropped by design, #576 Q-W22S-1-D1)',
   'display-shown': 'after quiescence the display settings shown equal what the open project stores',
   'edit-lost': 'an edit issued in a project still open at the end was not refused or dropped',
   'dirty-flag': 'after quiescence a clean (isDirty=false) project has no unsaved change in the backend',
@@ -167,17 +170,18 @@ export function parseActions(text: string): Action[] {
 
 /** The store modules a run drives: imported fresh for every run (`vi.resetModules`). */
 async function loadModules() {
-  const [project, ui, gas, session] = await Promise.all([
+  const [project, ui, gas, session, chain] = await Promise.all([
     import('../../store/projectStore'),
     import('../../store/uiStore'),
     import('../../utils/gasConfigDisk'),
     import('../../store/projectSession'),
+    import('../../utils/settingWriteChain'),
     // The stores import these lazily; loaded here so their `await import` resolves
     // within a tick or two, inside the settle window below.
     import('../../utils/memoryProbe'),
     import('../../utils/loadProjectBinary'),
   ]);
-  return { project: project.useProjectStore, ui: ui.useUIStore, gas, session };
+  return { project: project.useProjectStore, ui: ui.useUIStore, gas, session, chain };
 }
 
 type Modules = Awaited<ReturnType<typeof loadModules>>;
@@ -204,6 +208,12 @@ interface DisplayWrite {
   value: string;
   madeGen: number | null;
   faulted: boolean;
+  /** Seen by the harness at the setting write chain: queued there, sent by it, its turn over. */
+  chained: boolean;
+  sent: boolean;
+  settled: boolean;
+  /** Still queued (chained, unsent, unsettled) when a flush of the writes ran out of its bound. */
+  queuedAtTimeout: boolean;
 }
 
 interface ConfigIntent {
@@ -269,6 +279,59 @@ export async function runActions(actions: Action[], options: RunOptions = DEFAUL
   });
   const violations: Violation[] = [];
   const writes: DisplayWrite[] = [];
+  /**
+   * [#576 FZ-INT-6-D1, Q-W22S-1-D1] Which display writes a timed-out flush cleared, as
+   * the harness sees them, not as the chain books them. `making` is the write being
+   * made: uiStore persistDisplaySetting hands it to the chain synchronously, so that
+   * call is its own, and the chain running its send marks it sent. A flush that settles
+   * only once the fake clock has run its whole bound timed out; each write still queued
+   * then is marked. Neither wrapper adds a step to a promise the stores wait on.
+   */
+  let making: DisplayWrite | null = null;
+  const chain = m.chain;
+  const chainWrite = chain.chainProjectSettingWrite;
+  const flushWrites = chain.flushProjectSettingWrites;
+  const fakeNow = () => vi.getMockedSystemTime()?.getTime() ?? 0;
+  /**
+   * Replace an export of this run's chain module, as the stores call it; returns the
+   * restore. Not `vi.spyOn`: vitest adds every spy to a set it never empties, and a spy
+   * holds the module it replaced an export of, so each run's store graph stayed in
+   * memory (a 20884-seed window ran out of heap).
+   */
+  const replaceExport = <K extends keyof Modules['chain']>(name: K, replacement: Modules['chain'][K]) => {
+    const original = Object.getOwnPropertyDescriptor(chain, name)!;
+    Object.defineProperty(chain, name, { configurable: true, enumerable: true, get: () => replacement });
+    return () => Object.defineProperty(chain, name, original);
+  };
+  const chainRestores = [
+    replaceExport(
+      'chainProjectSettingWrite',
+      <T,>(key: string, write: (madeFor: DisplaySettingTarget | null) => Promise<T>) => {
+        const w = making !== null && key === chain.SETTING_KEYS.displaySetting(making.key) ? making : null;
+        const result = chainWrite(key, (madeFor) => {
+          if (w) w.sent = true;
+          return write(madeFor);
+        });
+        if (w) {
+          w.chained = true;
+          const turnOver = () => {
+            w.settled = true;
+          };
+          void result.then(turnOver, turnOver);
+        }
+        return result;
+      },
+    ),
+    replaceExport('flushProjectSettingWrites', (timeoutMs = chain.PROJECT_SETTING_FLUSH_TIMEOUT_MS) => {
+      const from = fakeNow();
+      const flushed = flushWrites(timeoutMs);
+      void flushed.then(() => {
+        if (fakeNow() - from < timeoutMs) return;
+        for (const w of writes) if (w.chained && !w.sent && !w.settled) w.queuedAtTimeout = true;
+      });
+      return flushed;
+    }),
+  ];
   const edits = new Map<
     string,
     { madeGen: number | null; duringSwitch?: boolean; outcome?: { success: boolean; code?: string | null } }
@@ -402,6 +465,7 @@ export async function runActions(actions: Action[], options: RunOptions = DEFAUL
   } finally {
     vi.useRealTimers();
     for (const spy of consoleSpies) spy.mockRestore();
+    for (const restore of chainRestores) restore();
   }
   return {
     violations,
@@ -426,8 +490,17 @@ export async function runActions(actions: Action[], options: RunOptions = DEFAUL
       if (!open) return false;
       // Only a Survey-mode change persists (uiStore setGridSpacing / toggleDisplay).
       if (key !== 'geometryMode' && U.appMode !== 'survey') return false;
-      writes.push({ id: writes.length, key, value, madeGen: gen, faulted: false });
-      apply();
+      const w: DisplayWrite = {
+        id: writes.length, key, value, madeGen: gen, faulted: false,
+        chained: false, sent: false, settled: false, queuedAtTimeout: false,
+      };
+      writes.push(w);
+      making = w;
+      try {
+        apply();
+      } finally {
+        making = null;
+      }
       return true;
     };
     switch (op.k) {
@@ -639,8 +712,15 @@ export async function runActions(actions: Action[], options: RunOptions = DEFAUL
         }
       }
       // The last display write made in the open project, per key, is what it stores.
+      // [#576 FZ-INT-6-D1, Q-W22S-1-D1] Decided: a write still queued (unsent) when a
+      // switch's flush ran out of its bound is dropped, and the switch shows the stored
+      // value again (display-shown checks that). Such a write, never sent after, is left
+      // out, and the last write made before it is checked instead. One made after the
+      // timeout, one sent, or one dropped before it still counts.
       const lastByKey = new Map<string, DisplayWrite>();
-      for (const w of writes) if (w.madeGen === open.gen) lastByKey.set(w.key, w);
+      for (const w of writes) {
+        if (w.madeGen === open.gen && !(w.queuedAtTimeout && !w.sent)) lastByKey.set(w.key, w);
+      }
       for (const [key, w] of lastByKey) {
         if (w.faulted) continue;
         const stored = backend.storedDisplay(key);

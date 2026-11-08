@@ -491,7 +491,13 @@ switch guards too: a save or an edit naming another project is refused with
 `FILE_REPLACED_DURING_LOAD`, and a load re-checks `ALREADY_OPEN` and its cancel
 token at its commit. The `edit-lost` invariant accepts the switch gate's local
 refusal of an edit made while a switch is undecided (more than one in flight, or the
-only one not answered yet); a refusal after that is a failure. The generator never
+only one not answered yet); a refusal after that is a failure. The `display-lost`
+invariant accepts a display write that was still queued, unsent, when a switch's flush
+of the display writes timed out, and was never sent after (dropped by design, #576
+FZ-INT-6-D1 / Q-W22S-1-D1; the harness tracks it at the setting write chain), and checks
+the write made before it instead. A write made after the timeout, one sent, or one
+dropped before the timeout still fails it, and so does one a later flush drops at once
+behind a key still stuck. The generator never
 saves onto a path it loads, so no seed reaches `FILE_REPLACED_DURING_LOAD`. A command the stores start sending that the
 model does not know fails the gate (`unmodelled`): model it in `backendModel.ts`
 (mirroring the backend's guard, with file:line) or list it in `AMBIENT`.

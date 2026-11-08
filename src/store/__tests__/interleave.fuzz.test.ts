@@ -264,6 +264,11 @@ const REGRESSION_SEEDS: Array<{ id: string; seed: number; options: Partial<RunOp
   // load_display_settings, which the scheduler did not route to the model: answered
   // undefined, unchecked ("unmodelled").
   { id: 'FZ-FARM-6452743', seed: 6452743, options: ALL_SHAPES },
+  // The farm job fzint-vitest-all-shapes (dcd52adea): a grid toggle made while a close's
+  // display flush waited on a wedged one was dropped when the flush timed out, and a load
+  // of the same file that superseded the close kept the project open (ALREADY_OPEN): the
+  // decided loss of FZ-INT-6-D1 / Q-W22S-1-D1, which display-lost did not yet accept.
+  { id: 'FZ-FARM-3251939', seed: 3251939, options: ALL_SHAPES },
 ];
 
 
