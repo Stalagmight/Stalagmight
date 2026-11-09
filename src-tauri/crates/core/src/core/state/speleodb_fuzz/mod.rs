@@ -62,6 +62,29 @@ fn directed_steps() -> Vec<(&'static str, Vec<Step>)> {
     vec![
         ("same-account-overwrite", same_account_overwrite_steps()),
         ("saved-unpushed-close", saved_unpushed_close_steps()),
+        ("crash-residue-reopen", crash_residue_reopen_steps()),
+    ]
+}
+
+/// [R6] A crash mid-save leaves a hot journal beside the cache copy; reopening
+/// from SpeleoDB installs the server copy next to it, and the next open must
+/// still read exactly the server revision.
+fn crash_residue_reopen_steps() -> Vec<Step> {
+    use model::{Acct, Act};
+    vec![
+        Step::plain(Act::Login { acct: Acct::Owner }),
+        Step::plain(Act::Open {
+            p: 0,
+            take_server: false,
+        }),
+        Step::plain(Act::Edit),
+        Step::plain(Act::Autosave),
+        Step::plain(Act::Crash { residue: true }),
+        Step::plain(Act::Open {
+            p: 0,
+            take_server: true,
+        }),
+        Step::plain(Act::Refresh),
     ]
 }
 
@@ -126,6 +149,17 @@ const SAVED_UNPUSHED_CLOSE_REPLAY: &str = r#"[
   {"act": {"Open": {"p": 0, "take_server": false}}, "fault": null}
 ]"#;
 
+/// The R6 directed list as a saved step list, for `speleodb_fuzz_replay`.
+const CRASH_RESIDUE_REOPEN_REPLAY: &str = r#"[
+  {"act": {"Login": {"acct": "Owner"}}, "fault": null},
+  {"act": {"Open": {"p": 0, "take_server": false}}, "fault": null},
+  {"act": "Edit", "fault": null},
+  {"act": "Autosave", "fault": null},
+  {"act": {"Crash": {"residue": true}}, "fault": null},
+  {"act": {"Open": {"p": 0, "take_server": true}}, "fault": null},
+  {"act": "Refresh", "fault": null}
+]"#;
+
 /// Offline: each directed list is the saved list the replay entry point reads.
 #[test]
 fn the_directed_lists_are_their_saved_replays() {
@@ -133,6 +167,7 @@ fn the_directed_lists_are_their_saved_replays() {
     let saved = [
         ("same-account-overwrite", SAME_ACCOUNT_OVERWRITE_REPLAY),
         ("saved-unpushed-close", SAVED_UNPUSHED_CLOSE_REPLAY),
+        ("crash-residue-reopen", CRASH_RESIDUE_REOPEN_REPLAY),
     ];
     assert_eq!(lists.len(), saved.len(), "one saved list per directed list");
     for ((name, steps), (saved_name, json)) in lists.iter().zip(saved) {
