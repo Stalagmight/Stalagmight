@@ -334,7 +334,7 @@ mod tests {
             "https://www.speleodb.org/",
             "http://www.speleodb.org/",
             "http://10.0.0.5:8000/",
-            "http://localhost:18000/",
+            "http://localhost:4567/",
         ] {
             let err = request(base, "GET", "api/v2/projects/", Some("t"), None)
                 .err()

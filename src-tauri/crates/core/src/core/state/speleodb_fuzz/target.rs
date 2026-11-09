@@ -204,13 +204,13 @@ mod tests {
             "http://127.0.0.1:4567/",
             "http://127.0.0.1:4567",
             "http://127.1.2.3:8000/",
-            "http://[::1]:18000/",
+            "http://[::1]:4567/",
         ] {
             assert!(check_target_url(ok).is_ok(), "{ok} should be allowed");
         }
         for bad in [
             "https://127.0.0.1:4567/",
-            "http://localhost:18000/",
+            "http://localhost:4567/",
             "http://www.speleodb.org/",
             "https://www.speleodb.org/",
             "http://stage.speleodb.org:80/",
@@ -222,7 +222,7 @@ mod tests {
             "http://127.0.0.1:4567/api/v2/",
             "http://user@127.0.0.1:4567/",
             "http://127.0.0.1:4567/?x=1",
-            "http://127.0.0.1.nip.io:18000/",
+            "http://127.0.0.1.nip.io:4567/",
             "ftp://127.0.0.1:4567/",
             "",
         ] {
