@@ -191,7 +191,7 @@ fn a_lifecycle_release_over_saved_unuploaded_work_is_r1() {
         residue: false,
         newer: false,
     };
-    after.files.insert(cache.clone(), saved.clone());
+    after.files.insert(cache.clone(), saved);
     let v = run_check(
         &mut Ghost::default(),
         &Act::Quit,
