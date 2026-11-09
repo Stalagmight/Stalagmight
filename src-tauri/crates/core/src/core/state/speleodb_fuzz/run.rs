@@ -137,6 +137,12 @@ impl Harness {
         match s.create_legacy_project(Who::Owner, &format!("{tag}-legacy"), &base) {
             Ok(id) => {
                 let _ = s.observe(Who::Owner, &id);
+                let _ = s.grant(
+                    Who::Owner,
+                    &id,
+                    s.email(Who::Collab),
+                    Permission::ReadAndWrite,
+                );
                 admin_of.insert(id.clone(), Who::Owner);
                 legacy.insert(id.clone());
                 projects.push(Proj {

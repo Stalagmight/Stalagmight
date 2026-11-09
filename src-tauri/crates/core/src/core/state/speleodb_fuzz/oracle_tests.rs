@@ -179,7 +179,19 @@ fn a_close_that_leaves_the_lock_held_is_flagged_unless_its_release_was_faulted()
 #[test]
 fn a_lifecycle_release_over_saved_unuploaded_work_is_r1() {
     let before = snap(Some(OWNER), true, Some(link("c1", true)), fp(&["A"]));
-    let after = snap(None, false, None, Fp::new());
+    let mut after = snap(None, false, None, Fp::new());
+    let cache = PathBuf::from("/nonexistent-cache")
+        .join(P)
+        .join("project.stalx");
+    let saved = FileSnap {
+        fp: Ok(fp(&["A", "E1"])),
+        link: Ok(Some(link("c1", true))),
+        hash: 1,
+        integrity: Ok(()),
+        residue: false,
+        newer: false,
+    };
+    after.files.insert(cache.clone(), saved.clone());
     let v = run_check(
         &mut Ghost::default(),
         &Act::Quit,
@@ -190,6 +202,22 @@ fn a_lifecycle_release_over_saved_unuploaded_work_is_r1() {
         &mut Commits::default(),
     );
     assert_eq!(ids(&v), ["R1-stranded-unpushed"]);
+    // A dirty mark over content the server has (unsaved edits discarded) strands
+    // nothing.
+    let mut discarded = after.clone();
+    if let Some(f) = discarded.files.get_mut(&cache) {
+        f.fp = Ok(fp(&["A"]));
+    }
+    let v = run_check(
+        &mut Ghost::default(),
+        &Act::Close,
+        &left(Exit::Close, true),
+        &[],
+        &before,
+        &discarded,
+        &mut Commits::default(),
+    );
+    assert!(v.iter().all(|x| x.id != "R1-stranded-unpushed"), "{v:?}");
     // Logout keeps such a lock on purpose: neither id fires.
     let held = snap(Some(OWNER), false, None, Fp::new());
     let v = run_check(

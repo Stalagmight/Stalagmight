@@ -85,6 +85,21 @@ fn verified_editor(cx: &StepCtx<'_>, project_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The sections of P's cache copy that no server commit of P holds: saved work
+/// that exists only on this machine. (A dirty mark alone is not that: discarding
+/// unsaved edits leaves the mark over content the server has.)
+fn saved_unuploaded(cx: &StepCtx<'_>, project_id: &str) -> Vec<String> {
+    let path = cx.cache_root.join(project_id).join("project.stalx");
+    let Some(Ok(fp)) = cx.after.files.get(&path).map(|f| f.fp.as_ref()) else {
+        return Vec::new();
+    };
+    let server = cx.after.server_tokens.get(project_id);
+    fp.keys()
+        .filter(|k| server.is_some_and(|s| !s.contains(*k)))
+        .cloned()
+        .collect()
+}
+
 fn exit_id(exit: Exit, cx: &StepCtx<'_>, ghost: &Ghost, project_id: &str) -> &'static str {
     if ghost.lost_acquire.contains(project_id) {
         return "P2-ambiguous-acquire-leak";
@@ -139,10 +154,11 @@ pub(super) fn check(ghost: &Ghost, cx: &StepCtx<'_>, v: &mut Vec<Violation>) {
                 }
                 let lifecycle = matches!(exit, Exit::Close | Exit::Quit | Exit::Switch);
                 let exists = cx.after.server.get(project_id).is_some_and(|s| s.exists);
-                if lifecycle && *dirty && !held && exists {
+                let stranded = saved_unuploaded(cx, project_id);
+                if lifecycle && *dirty && !held && exists && !stranded.is_empty() {
                     v.push(violation(
                         "R1-stranded-unpushed",
-                        format!("{project_id}: {exit:?} released the lock over saved, un-uploaded edits; online the next open offers only Cancel or discard"),
+                        format!("{project_id}: {exit:?} released the lock over saved, un-uploaded edits {stranded:?}; online the next open offers only Cancel or discard"),
                     ));
                 }
             }

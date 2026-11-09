@@ -293,7 +293,22 @@ pub(super) fn run(
             out
         })
     };
-    let engaged = proxy.wait_held(REACH_HOLD);
+    // Until the hold engages, or the first verb returns without reaching it
+    // (a frontend guard, a refusal before the held request).
+    let reach = Instant::now();
+    let mut first_done = None;
+    let engaged = loop {
+        if proxy.wait_held(Duration::from_millis(200)) {
+            break true;
+        }
+        if let Ok(o) = first_rx.try_recv() {
+            first_done = Some(o);
+            break false;
+        }
+        if reach.elapsed() > REACH_HOLD {
+            break false;
+        }
+    };
     out.note(format!(
         "hold {} {} engaged: {engaged}",
         hold.method, hold.path
@@ -323,7 +338,7 @@ pub(super) fn run(
         proxy.release_holds();
     }
     let mut hung = false;
-    if let Ok(o) = first_rx.recv_timeout(VERB_BUDGET) {
+    if let Some(o) = first_done.or_else(|| first_rx.recv_timeout(VERB_BUDGET).ok()) {
         out.merge(o);
     } else {
         hung = true;
