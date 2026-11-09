@@ -250,3 +250,79 @@ Clippy retains existing repository warnings. Ignored and environment-gated check
 are not equivalent to executed coverage; native desktop UAT and live-server
 acceptance were not separately verified. No external fixtures were added or
 committed. Logs and browser failure artifacts are under `/tmp/stalagmight-*`.
+
+## Protocol fuzzer
+
+A stateful fuzzer drives the app's SpeleoDB verbs against a **private** SpeleoDB
+instance: `src-tauri/crates/core/src/core/state/speleodb_fuzz/`. Each run builds a
+fresh world on the instance (an owner project the collaborator also administers, a
+collaborator project shared read-write with the owner, a second owner project, and
+a project uploaded through the generic route as v0.5.x builds did when the server
+accepts it), signs an `AppState` in as the owner through an in-process fault proxy,
+and plays a seeded sequence of the frontend's flows in its IPC order: open with
+auto-acquire and the un-pushed-local prompt, the file-open path, edits, autosave,
+Save Changes, Save and Close, Close, project switch, Quit (the exit hook's bounded
+release), crash (optionally leaving a hot journal), restart-to-update, Switch to
+Read Only, Reload, status refresh, Take remote, Discard, History View / Revert /
+Unwind / Rewind, Save copy, local projects and Publish, sign-in as another account
+or to another deployment, sign-out. A second client (the collaborator, or another
+session of the app's own account) takes and drops locks, pushes competing or
+newer-schema revisions, renames or deletes projects and changes the app account's
+access. The proxy answers 4xx / 5xx, a status after the server applied the request,
+latency, a dropped upload, a lost reply, a truncated, halved or scrambled body, a
+connection reset, and a hang past the 5 s lock-probe budget. Interleaving steps hold
+one request (or reply) of a verb at the proxy while a second verb runs, then let it
+go, or drop it when the second verb ends the process.
+
+After every step an oracle checks the invariants documented in
+`speleodb_fuzz/oracle.rs` and its `oracle_*.rs` and `interleave.rs` siblings: lock
+release on every exit path, the edit gate against the server's lock holder and
+permission, other accounts' locks, BASE and the dirty bit against the server's
+history and content, no silent loss of an edit, no silent overwrite of a revision,
+newer-schema refusals, cache installs and failed transfers, the offline fallback,
+late replies after a session move, and synchronous commands waiting on a held
+network span. Ids that reproduce a finding of the master review name it (`R1-...`,
+`R3-...`, `P2-...`). Each run writes a JSONL trace; a failing run is delta-debugged
+to a short step list.
+
+It refuses to start unless every condition below holds, before it sends anything:
+
+- `STALAGMIGHT_SPELEODB_FUZZ_URL` is `http://<loopback IP literal>:<port>/`;
+- every account email is under the reserved `.invalid` domain;
+- `DEV_SPELEODB_URL` is unset (the app would prefer it over its own endpoint).
+
+| Env var | Meaning |
+|---------|---------|
+| `STALAGMIGHT_SPELEODB_FUZZ_URL` | The instance base URL (loopback only). |
+| `STALAGMIGHT_SPELEODB_FUZZ_EMAIL` / `_PASSWORD` | The app's account. |
+| `STALAGMIGHT_SPELEODB_FUZZ_EMAIL2` / `_PASSWORD2` | The second account (second client, account switches). |
+| `STALAGMIGHT_SPELEODB_FUZZ_ADMIN_EMAIL` / `_ADMIN_PASSWORD` | A superuser: the oracle's view of locks, history and every commit. |
+| `STALAGMIGHT_SPELEODB_FUZZ_RO_EMAIL` / `_RO_PASSWORD` | Optional read-only account (both or neither). |
+| `STALAGMIGHT_SPELEODB_FUZZ_SEEDS` | Seed range `a..b` (default `1..4`). |
+| `STALAGMIGHT_SPELEODB_FUZZ_STEPS` | Steps per seed (default 40). |
+| `STALAGMIGHT_SPELEODB_FUZZ_FAULT_PCT` | Percent of app steps with a fault (default 25). |
+| `STALAGMIGHT_SPELEODB_FUZZ_MINUTES` | Stop starting new seeds after this long (default: no limit). |
+| `STALAGMIGHT_SPELEODB_FUZZ_SHRINK` / `_SHRINK_BUDGET` | Shrink failures (default on) / at most this many replays (40). |
+| `STALAGMIGHT_SPELEODB_FUZZ_MUTE` | Comma-separated invariant ids or id prefixes that do not fail a seed; each is printed once per seed as `seed <N>: muted <id> at step <K>` and the seed goes on. |
+| `STALAGMIGHT_SPELEODB_FUZZ_SKIP_ACTS` | Comma-separated act names the generator never draws (e.g. `Interleave,RestartUpdate`). |
+| `STALAGMIGHT_SPELEODB_FUZZ_DIR` | The app's folders for the run (default: a temp dir per process). |
+| `STALAGMIGHT_SPELEODB_FUZZ_TRACE_DIR` | Where traces and step lists go (default: a private temp dir per process, kept). |
+| `STALAGMIGHT_SPELEODB_FUZZ_REPLAY` | A saved step list for the replay entry point. |
+| `STALAGMIGHT_SPELEODB_FUZZ_SEED_OUT` / `_SEED_SECTIONS` | Instance tooling: where to write a synthetic seed `.stalx` / its sections (`A:3,B:2,C:2`). |
+
+```bash
+cargo test --manifest-path src-tauri/crates/core/Cargo.toml --lib \
+  core::state::speleodb_fuzz::speleodb_fuzz_campaign -- --exact --ignored --nocapture
+```
+
+Run it alone (`--exact`): it sets the process-wide app folders. Parallel workers
+need one account pair each. Each seed prints `seed <N>: ok (...)`, `seed <N>: SETUP
+ERROR ...` or `seed <N>: FAIL at step <K>: <violations as JSON>`. The other entry
+points are `speleodb_fuzz_replay`, `speleodb_fuzz_regression_seeds` (the seeds in
+`REGRESSION_SEEDS` plus the directed step lists) and
+`speleodb_fuzz_write_seed_stalx`. Normal `cargo test` runs only the offline unit
+tests (allowlist, generator, proxy, stub, raw HTTP, oracle helpers); the entry points
+are `#[ignore]` and fail naming the missing variable when run without one.
+
+The instance itself (deployment, accounts, reset to a clean snapshot) is tooling
+on the maintainer's harness host and is not part of this repo.
