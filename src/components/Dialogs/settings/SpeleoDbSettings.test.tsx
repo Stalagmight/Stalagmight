@@ -69,7 +69,7 @@ it('shows an empty server box as unset, not as a server address', () => {
   renderSettings({ ...defaultConfig, speleodb: { ...defaultConfig.speleodb, endpoint: null } });
   const input = screen.getByTestId('input-speleodb-endpoint') as HTMLInputElement;
   expect(input.value).toBe('');
-  expect(input.placeholder).not.toMatch(/https?:\/\/|speleodb\.org/i);
+  expect(input.placeholder).toBe('');
 });
 
 it.each(['input-speleodb-endpoint', 'speleodb-settings-email'])('turns off text correction on %s', (testId) => {

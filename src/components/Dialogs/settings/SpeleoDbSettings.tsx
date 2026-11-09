@@ -255,7 +255,6 @@ export function SpeleoDbSettings({
             value={speleo.endpoint ?? ''}
             onChange={(e) => handleEndpointChange(e.target.value)}
             className="w-full max-w-64 px-2 py-1 bg-background border border-border rounded text-sm"
-            placeholder={t('settings.speleodb.endpoint.placeholder')}
             inputMode="url"
             autoCapitalize="off"
             autoCorrect="off"

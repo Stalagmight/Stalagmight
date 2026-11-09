@@ -658,8 +658,7 @@
       "endpoint": {
         "label": "Server endpoint",
         "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/). Saving a different server signs you out. Log in now connects to the server entered here immediately.",
-        "aria": "SpeleoDB server endpoint",
-        "placeholder": "No server set"
+        "aria": "SpeleoDB server endpoint"
       },
       "insecureHttp": {
         "label": "Allow insecure HTTP",
