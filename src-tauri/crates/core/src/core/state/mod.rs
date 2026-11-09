@@ -129,6 +129,16 @@ mod shot_uuid_tests;
     clippy::print_stdout
 )]
 mod tests;
+// [FZ-SDB] The SpeleoDB protocol fuzzer: env-gated `#[ignore]` entry points
+// against a private instance, plus offline unit tests of its parts.
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test module: the fuzzer panics on a broken invariant and reports on stdout"
+)]
+mod speleodb_fuzz;
 // `any(test, feature = "test-support")`: the root crate's tests reach the
 // AppState test setters in here (via the `test-support` feature the root's
 // [dev-dependencies] enable); the source-scan tripwires inside stay
