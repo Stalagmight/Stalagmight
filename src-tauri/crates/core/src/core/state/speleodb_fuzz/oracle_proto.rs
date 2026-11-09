@@ -73,12 +73,6 @@ fn update_ghost(ghost: &mut Ghost, cx: &StepCtx<'_>) {
             _ => {}
         }
     }
-    ghost.residue.retain(|pid| {
-        cx.after
-            .files
-            .get(&cx.cache_root.join(pid).join("project.stalx"))
-            .is_some_and(|f| f.residue)
-    });
 }
 
 fn requests<'a>(

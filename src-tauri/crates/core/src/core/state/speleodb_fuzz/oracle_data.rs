@@ -26,6 +26,8 @@
 //! - **CA-ORPHAN** the cache holds a file other than `<id>/project.stalx`, its
 //!   SQLite sidecars and the upload snapshot.
 
+use std::path::Path;
+
 use super::app::Claim;
 use super::model::Act;
 use super::oracle::{diff, short, violation, CommitFps, Ghost, StepCtx, Violation};
@@ -112,7 +114,15 @@ fn check_files(
             ));
         }
         if let (Err(why), true) = (&file.integrity, changed || file.residue) {
+            // The cache folder names the project even when the copy is too
+            // damaged to read its link.
+            let folder = path
+                .parent()
+                .and_then(Path::file_name)
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let id = if file.residue
+                || ghost.residue.contains(&folder)
                 || link
                     .as_ref()
                     .is_some_and(|l| ghost.residue.contains(&l.project_id))
@@ -375,6 +385,13 @@ pub(super) fn check(
 ) {
     check_loss(ghost, cx, v);
     check_files(ghost, cx, server, v);
+    // A crash's residue is settled once its copy reads back whole without it.
+    ghost.residue.retain(|pid| {
+        cx.after
+            .files
+            .get(&cx.cache_root.join(pid).join("project.stalx"))
+            .is_some_and(|f| f.residue || f.integrity.is_err())
+    });
     check_claims(cx, server, v);
     if !cx.act.is_actor() {
         check_overwrites(cx, server, v);
