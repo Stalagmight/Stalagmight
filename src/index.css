@@ -1212,25 +1212,6 @@ input[type="color"] {
   cursor: pointer;
 }
 
-/* A color input drawn as a plain round swatch (the Sections panel dot). */
-input[type="color"].color-dot {
-  -webkit-appearance: none;
-  appearance: none;
-  border: none;
-  background: transparent;
-}
-input[type="color"].color-dot::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-input[type="color"].color-dot::-webkit-color-swatch {
-  border: none;
-  border-radius: 9999px;
-}
-input[type="color"].color-dot:disabled {
-  cursor: inherit;
-  pointer-events: none;
-}
-
 /* Hide number input spinners */
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button {

@@ -449,11 +449,17 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
 
   // The row's color dot commits through the same update_section command as the
   // Edit Section dialog. Re-checked at commit time: the mode can change while the
-  // system picker is open, and Plan/Export have no server-side backstop.
+  // system picker is open, and the closure-adjusted view and Plan/Export have no
+  // server-side backstop. A transport rejection is surfaced by executeCommand
+  // (which refreshes and re-throws); here it only means "not applied".
   const handleSectionColorChange = useCallback(async (sectionId: SectionId, color: string) => {
     if (isEditingBlockedNow()) return false;
     setSource('sections-panel');
-    return (await updateSection(sectionId, { color })).success;
+    try {
+      return (await updateSection(sectionId, { color })).success;
+    } catch {
+      return false;
+    }
   }, [updateSection]);
 
   const handleFocusButtonMouseDown = useCallback((e: React.MouseEvent) => {
@@ -815,18 +821,26 @@ const SectionRow = memo(function SectionRow({
         className="flex items-center gap-2"
         data-testid={`section-item-${section.id}`}
       >
-        <input
-          ref={colorRef}
-          type="color"
-          className="color-dot w-3 h-3 rounded-full flex-shrink-0"
-          disabled={!colorEditable}
-          onMouseDown={onControlMouseDown}
-          onDoubleClick={onControlDoubleClick}
-          tabIndex={-1}
-          title={colorEditable ? t('sections.actions.color') : undefined}
-          aria-label={t('sections.actions.color')}
-          data-testid={`section-color-${section.id}`}
-        />
+        {/* The span draws the dot (any CSS color, as before); the color input
+            over it is invisible and only opens the system picker. Disabled, it
+            lets clicks fall through to the row. */}
+        <span
+          className="relative w-3 h-3 rounded-full flex-shrink-0"
+          style={{ backgroundColor: section.color }}
+        >
+          <input
+            ref={colorRef}
+            type="color"
+            className="absolute inset-0 w-full h-full opacity-0 disabled:pointer-events-none"
+            disabled={!colorEditable}
+            onMouseDown={onControlMouseDown}
+            onDoubleClick={onControlDoubleClick}
+            tabIndex={-1}
+            title={colorEditable ? t('sections.actions.color') : undefined}
+            aria-label={t('sections.actions.color')}
+            data-testid={`section-color-${section.id}`}
+          />
+        </span>
         <span className="flex-1 truncate">
           {section.name ?? t('sections.defaultName', { id: section.id })}
         </span>

@@ -269,24 +269,47 @@ test.describe('Panel Interactions', () => {
         const state = (window as any).__E2E_TEST__.projectStore.getState();
         return state.project.sections.find((s: any) => s.id === id).color as string;
       }, sectionId);
-    const before = await readColor();
+    // The picker opens at the section's current color.
+    await expect(dot).toHaveValue((await readColor()).toLowerCase());
+
+    let updateCalls = 0;
+    page.on('console', (msg) => {
+      if (msg.text().startsWith('[Mock IPC] update_section called')) updateCalls += 1;
+    });
 
     // The dot is a control of its own: clicking it does not select the row.
     await dot.click();
     await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
 
     // Steps through the open picker (`input`) commit nothing; only the
-    // confirmed pick (`change`) does, so one pick is one undo step.
-    const pick = (type: 'input' | 'change') =>
-      dot.evaluate((el, t) => {
-        (el as HTMLInputElement).value = '#ff0000';
-        el.dispatchEvent(new Event(t, { bubbles: true }));
-      }, type);
-    await pick('input');
-    expect(await readColor()).toBe(before);
-    await pick('change');
+    // confirmed pick (`change`) does, so one pick is one command (one undo step).
+    const pick = (type: 'input' | 'change', value: string) =>
+      dot.evaluate((el, [t, v]) => {
+        (el as HTMLInputElement).value = v!;
+        el.dispatchEvent(new Event(t!, { bubbles: true }));
+      }, [type, value]);
+    await pick('input', '#00ff00');
+    await pick('input', '#0000ff');
+    await pick('change', '#ff0000');
     await expect.poll(readColor).toBe('#ff0000');
-    await expect(dot).toHaveValue('#ff0000');
+    expect(updateCalls).toBe(1);
+
+    // A color changed elsewhere (undo, Edit Section) resyncs the dot.
+    await page.evaluate(
+      (id) => (window as any).__E2E_TEST__.projectStore.getState().updateSection(id, { color: '#336699' }),
+      sectionId,
+    );
+    await expect(dot).toHaveValue('#336699');
+
+    // The visible dot draws any CSS color the section carries (the free-text
+    // field in Edit Section accepts one), not the input's #rrggbb-only value.
+    await page.evaluate(
+      (id) => (window as any).__E2E_TEST__.projectStore.getState().updateSection(id, { color: 'red' }),
+      sectionId,
+    );
+    await expect
+      .poll(() => dot.evaluate((el) => getComputedStyle(el.parentElement!).backgroundColor))
+      .toBe('rgb(255, 0, 0)');
   });
 
   test('section color dot is inert while editing is blocked (#654)', async ({ page }) => {
