@@ -421,7 +421,7 @@ mod tests {
         let (addr, server) = serve_once(
             b"HTTP/1.1 201 Created\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\n{\"a\"\r\n3\r\n:1}\r\n0\r\n\r\n",
         );
-        let body = serde_json::json!({ "user": "collab@fuzz.invalid", "level": "READ_ONLY" });
+        let body = serde_json::json!({ "user": "collab@example.invalid", "level": "READ_ONLY" });
         let reply = request(
             &format!("http://{addr}"),
             "POST",

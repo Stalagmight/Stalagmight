@@ -20,7 +20,7 @@ fn commit(id: &str, parents: &[&str], date: Option<&str>) -> RevisionCommit {
     RevisionCommit {
         id: id.to_owned(),
         parent_ids: parents.iter().map(|p| (*p).to_owned()).collect(),
-        author_email: "owner@fuzz.invalid".to_owned(),
+        author_email: "owner@example.invalid".to_owned(),
         authored_date: date.map(str::to_owned),
         message: None,
     }

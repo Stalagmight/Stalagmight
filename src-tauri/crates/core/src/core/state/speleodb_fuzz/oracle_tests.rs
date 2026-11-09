@@ -15,8 +15,8 @@ use crate::models::SpeleoLink;
 use crate::speleodb::Permission;
 
 const P: &str = "0b5c2d1e-0000-4000-8000-123456789abc";
-const OWNER: &str = "owner@fuzz.invalid";
-const COLLAB: &str = "collab@fuzz.invalid";
+const OWNER: &str = "owner@example.invalid";
+const COLLAB: &str = "collab@example.invalid";
 
 #[derive(Default)]
 struct Commits(HashMap<String, Fp>);

@@ -204,7 +204,7 @@ mod tests {
     use super::{OtherServer, TOKEN};
     use crate::speleodb::{client, SpeleoDbError};
 
-    const EMAIL: &str = "other@fuzz.invalid";
+    const EMAIL: &str = "other@example.invalid";
 
     #[test]
     fn the_real_client_signs_in_names_the_user_and_finds_no_projects() {

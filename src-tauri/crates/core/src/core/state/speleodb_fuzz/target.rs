@@ -19,7 +19,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 
-/// The env var naming the instance's base URL (e.g. `http://127.0.0.1:18000/`).
+/// The env var naming the instance's base URL (e.g. `http://127.0.0.1:4567/`).
 pub(super) const URL_VAR: &str = "STALAGMIGHT_SPELEODB_FUZZ_URL";
 
 /// The optional read-only account's variables: both set, or neither.
@@ -179,14 +179,14 @@ mod tests {
 
     fn base_env() -> HashMap<&'static str, &'static str> {
         [
-            ("STALAGMIGHT_SPELEODB_FUZZ_URL", "http://127.0.0.1:18000/"),
-            ("STALAGMIGHT_SPELEODB_FUZZ_EMAIL", "owner@fuzz.invalid"),
+            ("STALAGMIGHT_SPELEODB_FUZZ_URL", "http://127.0.0.1:4567/"),
+            ("STALAGMIGHT_SPELEODB_FUZZ_EMAIL", "owner@example.invalid"),
             ("STALAGMIGHT_SPELEODB_FUZZ_PASSWORD", "p1"),
-            ("STALAGMIGHT_SPELEODB_FUZZ_EMAIL2", "collab@fuzz.invalid"),
+            ("STALAGMIGHT_SPELEODB_FUZZ_EMAIL2", "collab@example.invalid"),
             ("STALAGMIGHT_SPELEODB_FUZZ_PASSWORD2", "p2"),
             (
                 "STALAGMIGHT_SPELEODB_FUZZ_ADMIN_EMAIL",
-                "admin@fuzz.invalid",
+                "admin@example.invalid",
             ),
             ("STALAGMIGHT_SPELEODB_FUZZ_ADMIN_PASSWORD", "p3"),
         ]
@@ -201,15 +201,15 @@ mod tests {
     #[test]
     fn only_a_loopback_ip_literal_over_http_is_a_target() {
         for ok in [
-            "http://127.0.0.1:18000/",
-            "http://127.0.0.1:18000",
+            "http://127.0.0.1:4567/",
+            "http://127.0.0.1:4567",
             "http://127.1.2.3:8000/",
             "http://[::1]:18000/",
         ] {
             assert!(check_target_url(ok).is_ok(), "{ok} should be allowed");
         }
         for bad in [
-            "https://127.0.0.1:18000/",
+            "https://127.0.0.1:4567/",
             "http://localhost:18000/",
             "http://www.speleodb.org/",
             "https://www.speleodb.org/",
@@ -219,31 +219,31 @@ mod tests {
             "http://0.0.0.0:8000/",
             "http://127.0.0.1/",
             "http://127.0.0.1:0/",
-            "http://127.0.0.1:18000/api/v2/",
-            "http://user@127.0.0.1:18000/",
-            "http://127.0.0.1:18000/?x=1",
+            "http://127.0.0.1:4567/api/v2/",
+            "http://user@127.0.0.1:4567/",
+            "http://127.0.0.1:4567/?x=1",
             "http://127.0.0.1.nip.io:18000/",
-            "ftp://127.0.0.1:18000/",
+            "ftp://127.0.0.1:4567/",
             "",
         ] {
             assert!(check_target_url(bad).is_err(), "{bad} must be refused");
         }
         assert_eq!(
-            check_target_url("http://127.0.0.1:18000")
+            check_target_url("http://127.0.0.1:4567")
                 .expect("allowed")
                 .0,
-            "http://127.0.0.1:18000/"
+            "http://127.0.0.1:4567/"
         );
     }
 
     #[test]
     fn accounts_must_be_under_the_reserved_invalid_domain() {
-        assert!(check_account_email("E", "owner@fuzz.invalid").is_ok());
+        assert!(check_account_email("E", "owner@example.invalid").is_ok());
         assert!(check_account_email("E", "Owner@Fuzz.INVALID").is_ok());
         for bad in [
             "owner@example.com",
             "owner@invalid",
-            "@fuzz.invalid",
+            "@example.invalid",
             "owner",
             "",
         ] {
@@ -268,7 +268,7 @@ mod tests {
             assert!(err.contains(missing), "{err} names {missing}");
         }
         let mut dev = full.clone();
-        dev.insert("DEV_SPELEODB_URL", "http://127.0.0.1:18000/");
+        dev.insert("DEV_SPELEODB_URL", "http://127.0.0.1:4567/");
         assert!(target_from(&|n| get(&dev, n)).is_err());
         let mut public = full;
         public.insert("STALAGMIGHT_SPELEODB_FUZZ_URL", "https://www.speleodb.org/");
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn the_read_only_account_is_both_or_neither_and_its_email_is_checked() {
         let mut both = base_env();
-        both.insert(RO_EMAIL_VAR, "ro@fuzz.invalid");
+        both.insert(RO_EMAIL_VAR, "ro@example.invalid");
         both.insert(RO_PASSWORD_VAR, "p4");
         let ro = target_from(&|n| get(&both, n))
             .expect("both set is a target")
@@ -302,14 +302,14 @@ mod tests {
             .expect("the read-only account is present");
         assert_eq!(
             (ro.email.as_str(), ro.password.as_str()),
-            ("ro@fuzz.invalid", "p4")
+            ("ro@example.invalid", "p4")
         );
         for (present, missing) in [
             (RO_EMAIL_VAR, RO_PASSWORD_VAR),
             (RO_PASSWORD_VAR, RO_EMAIL_VAR),
         ] {
             let mut half = base_env();
-            half.insert(present, "ro@fuzz.invalid");
+            half.insert(present, "ro@example.invalid");
             let err = target_from(&|n| get(&half, n))
                 .err()
                 .expect("half a read-only account is refused");
