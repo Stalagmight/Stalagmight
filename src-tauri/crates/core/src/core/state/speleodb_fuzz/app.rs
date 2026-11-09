@@ -343,26 +343,85 @@ pub(super) fn short(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Plant a hot rollback journal next to `db`, as a process killed mid-save
-/// leaves one: open a write transaction, copy the journal it writes, roll back,
-/// and put the copy back once the connection is gone. The database content is
-/// unchanged; the journal holds the pages a rollback would write.
-pub(super) fn plant_hot_journal(db: &Path) -> Result<(), String> {
-    let journal = PathBuf::from(format!("{}-journal", db.display()));
-    let saved = {
-        let conn = rusqlite::Connection::open(db).map_err(|e| format!("open: {e}"))?;
-        conn.execute_batch(
-            "PRAGMA journal_mode=DELETE; BEGIN IMMEDIATE; \
-             UPDATE sections SET name = name || '*';",
-        )
-        .map_err(|e| format!("write: {e}"))?;
-        let bytes = std::fs::read(&journal).map_err(|e| format!("read journal: {e}"))?;
-        conn.execute_batch("ROLLBACK;")
-            .map_err(|e| format!("rollback: {e}"))?;
-        bytes
-    };
-    if saved.is_empty() {
-        return Err("the transaction wrote an empty journal".to_owned());
+/// The rollback-journal magic SQLite writes once a journal is synced.
+const JOURNAL_MAGIC: [u8; 8] = [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7];
+/// The journal sector size the header declares.
+const JOURNAL_SECTOR: usize = 512;
+
+/// SQLite's page checksum (`pager_cksum`): the nonce plus every 200th byte,
+/// counted down from 200 bytes before the end of the page.
+fn journal_checksum(nonce: u32, page: &[u8]) -> u32 {
+    let mut sum = nonce;
+    let mut i = page.len().saturating_sub(200);
+    while i > 0 {
+        sum = sum.wrapping_add(u32::from(page.get(i).copied().unwrap_or(0)));
+        i = i.saturating_sub(200);
     }
-    std::fs::write(&journal, saved).map_err(|e| format!("plant: {e}"))
+    sum
+}
+
+/// Plant a hot rollback journal next to `db`, as a process killed mid-commit
+/// leaves one: SQLite synced the journal (magic, record count, the original
+/// size) and was writing the database when it died. The journal holds the
+/// current images of the first pages, so a replay onto this same file changes
+/// nothing, while a replay onto a file installed in its place mixes this file's
+/// pages into it.
+pub(super) fn plant_hot_journal(db: &Path) -> Result<(), String> {
+    let bytes = std::fs::read(db).map_err(|e| format!("read: {e}"))?;
+    let page_size = match bytes.get(16..18) {
+        Some([1, 0]) => 65_536,
+        Some(&[hi, lo]) => usize::from(u16::from_be_bytes([hi, lo])),
+        _ => return Err("not a SQLite file".to_owned()),
+    };
+    if page_size < 512 || bytes.len() < page_size {
+        return Err(format!("unexpected page size {page_size}"));
+    }
+    let pages = bytes.len() / page_size;
+    let records = pages.min(6);
+    let nonce: u32 = 0x5eed_0f00;
+    let be = |n: usize| u32::try_from(n).unwrap_or(u32::MAX).to_be_bytes();
+    let mut journal = Vec::with_capacity(JOURNAL_SECTOR + records * (page_size + 8));
+    journal.extend_from_slice(&JOURNAL_MAGIC);
+    journal.extend_from_slice(&be(records));
+    journal.extend_from_slice(&nonce.to_be_bytes());
+    journal.extend_from_slice(&be(pages));
+    journal.extend_from_slice(&be(JOURNAL_SECTOR));
+    journal.extend_from_slice(&be(page_size));
+    journal.resize(JOURNAL_SECTOR, 0);
+    for n in 0..records {
+        let page = bytes
+            .get(n * page_size..(n + 1) * page_size)
+            .ok_or("short file")?;
+        journal.extend_from_slice(&be(n + 1));
+        journal.extend_from_slice(page);
+        journal.extend_from_slice(&journal_checksum(nonce, page).to_be_bytes());
+    }
+    let path = PathBuf::from(format!("{}-journal", db.display()));
+    std::fs::write(&path, journal).map_err(|e| format!("plant: {e}"))
+}
+
+#[test]
+fn a_planted_journal_is_hot_and_harmless_to_its_own_file() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let path = dir.path().join("project.stalx");
+    super::data::write_stalx(&path, &[("A".to_owned(), 3), ("B".to_owned(), 2)]).expect("seed");
+    let before = super::data::fingerprint_file(&path).expect("read");
+    plant_hot_journal(&path).expect("plant");
+    let journal = PathBuf::from(format!("{}-journal", path.display()));
+    assert!(journal.exists());
+    // The next read-write open replays it (it is hot) and consumes it.
+    let conn = rusqlite::Connection::open(&path).expect("open");
+    let ok: String = conn
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .expect("check");
+    drop(conn);
+    assert_eq!(ok, "ok");
+    assert!(
+        !journal.exists(),
+        "a hot journal is rolled back and removed"
+    );
+    assert_eq!(
+        super::data::fingerprint_file(&path).expect("reread"),
+        before
+    );
 }
