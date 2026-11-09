@@ -16,6 +16,9 @@
 //!   [`MAIN_THREAD_BUDGET`] while the first verb's network span was held.
 //!   **P2-project-mutex-block** the same for a read or an edit of the open
 //!   project (`get_project_state`, an edit command).
+//! - **P2-quit-mid-op** the app quit (the exit hook's bounded release included)
+//!   while its upload or acquire was still in flight, and the server shows the
+//!   app's account holding the lock at the moment the process ended.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -269,6 +272,7 @@ pub(super) fn run(
     hold: &HoldSpec,
     second: &Act,
     projects: &[Proj],
+    holder_of: &dyn Fn(&str) -> Option<String>,
 ) -> Interleaved {
     let mut out = Outcome::default();
     let mut violations = Vec::new();
@@ -318,7 +322,36 @@ pub(super) fn run(
     let mut second_rx = None;
     let mut second_out = None;
     let mut blocked = None;
-    if engaged {
+    if engaged && ends_process {
+        // The process ends while the first verb is still in flight: the quit's
+        // bounded release runs and the process is gone with the hold still in
+        // place. Whatever the stranded threads do after that, a dead process would
+        // not, so the lock is read at the moment of death.
+        let editing = app.leaving(super::app::Exit::Quit);
+        let rx = {
+            let (second, projects) = (second.clone(), projects.to_vec());
+            spawn(app, move |app| app.run(&second, &projects))
+        };
+        second_out = rx.recv_timeout(VERB_BUDGET).ok();
+        if let (
+            true,
+            Some(super::app::Claim::Left {
+                project_id,
+                account,
+                ..
+            }),
+        ) = (matches!(second, Act::Quit), editing)
+        {
+            let holder = holder_of(&project_id);
+            out.note(format!("at exit {project_id} is held by {holder:?}"));
+            if holder.is_some_and(|h| h.eq_ignore_ascii_case(&account)) {
+                violations.push(violation(
+                    "P2-quit-mid-op",
+                    format!("{project_id}: the app quit while {} was in flight ({} {} held) and exited with {account}'s lock still held", first.name(), hold.method, hold.path),
+                ));
+            }
+        }
+    } else if engaged {
         let started = Instant::now();
         let rx = {
             let (second, projects) = (second.clone(), projects.to_vec());

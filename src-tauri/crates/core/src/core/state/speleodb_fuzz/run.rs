@@ -298,7 +298,16 @@ impl Harness {
                     second,
                 } => {
                     proxy.clear();
-                    let r = super::interleave::run(&app, &proxy, first, hold, second, &projects);
+                    let server = &self.server;
+                    let holder_of = |pid: &str| {
+                        server
+                            .views(&[pid.to_owned()])
+                            .remove(pid)
+                            .and_then(|v| v.lock_holder)
+                    };
+                    let r = super::interleave::run(
+                        &app, &proxy, first, hold, second, &projects, &holder_of,
+                    );
                     hung = r.hung;
                     extra.extend(r.violations);
                     proxy.clear();
