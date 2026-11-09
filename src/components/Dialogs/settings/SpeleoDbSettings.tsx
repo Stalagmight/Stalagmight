@@ -162,6 +162,9 @@ export function SpeleoDbSettings({
                   disabled={loggingIn || busy}
                   value={login.email}
                   onChange={(e) => updateLogin({ email: e.target.value })}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
                   className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
                   data-testid="speleodb-settings-email"
                 />
@@ -252,7 +255,11 @@ export function SpeleoDbSettings({
             value={speleo.endpoint ?? ''}
             onChange={(e) => handleEndpointChange(e.target.value)}
             className="w-full max-w-64 px-2 py-1 bg-background border border-border rounded text-sm"
-            placeholder="https://www.speleodb.org/"
+            placeholder={t('settings.speleodb.endpoint.placeholder')}
+            inputMode="url"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             aria-label={t('settings.speleodb.endpoint.aria')}
             data-testid="input-speleodb-endpoint"
           />
