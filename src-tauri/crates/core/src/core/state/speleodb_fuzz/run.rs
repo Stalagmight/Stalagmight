@@ -329,10 +329,19 @@ impl Harness {
                     (out, proxy.take_log())
                 }
             };
+            // A published project belongs to whoever the app was signed in as.
+            let publisher = app
+                .account()
+                .and_then(|e| {
+                    [Who::Owner, Who::Collab, Who::Ro]
+                        .into_iter()
+                        .find(|w| self.server.email(*w).eq_ignore_ascii_case(&e))
+                })
+                .unwrap_or(Who::Owner);
             for c in &out.claims {
                 if let Claim::Published(p) = c {
-                    let _ = self.server.observe(Who::Owner, &p.id);
-                    admin_of.insert(p.id.clone(), Who::Owner);
+                    let _ = self.server.observe(publisher, &p.id);
+                    admin_of.insert(p.id.clone(), publisher);
                     if !projects.iter().any(|q| q.id == p.id) {
                         projects.push(p.clone());
                     }
