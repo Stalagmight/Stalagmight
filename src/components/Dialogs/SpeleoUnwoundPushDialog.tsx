@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { getErrorMessage } from '../../utils/ipc';
-import { handBackProject, performQuit, readPendingExit } from '../../utils/quit';
+import { closeExitStillCurrent, handBackProject, performQuit, readPendingExit } from '../../utils/quit';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -54,6 +56,29 @@ export default function SpeleoUnwoundPushDialog() {
   // them back - the request is gone with no trace. `null` for the routes where this
   // dialog IS the whole interaction (the status button, the lock menu).
   const pendingExit = readPendingExit(dialogData);
+  const mounted = useRef(true);
+  const project = useProjectStore.getState();
+  const identity = { data: dialogData, sessionGeneration: useSpeleoStore.getState().sessionGeneration,
+    projectPath: project.project?.file_path, clientOpId: project.loading.clientOpId };
+  const owner = useRef(identity);
+  if (owner.current.data !== dialogData) owner.current = identity;
+  const issuedFor = owner.current;
+  useEffect(() => { setBusy(false); }, [dialogData]);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const current = () => mounted.current &&
+    useUIStore.getState().activeDialog === 'speleodb-unwound-push' &&
+    useUIStore.getState().dialogData === dialogData &&
+    useSpeleoStore.getState().sessionGeneration === issuedFor.sessionGeneration &&
+    useProjectStore.getState().project?.file_path === issuedFor.projectPath &&
+    useProjectStore.getState().loading.clientOpId === issuedFor.clientOpId &&
+    (pendingExit?.kind !== 'close' || closeExitStillCurrent(pendingExit));
+  const stopIfStale = () => {
+    if (current()) return false;
+    if (mounted.current && useUIStore.getState().dialogData === dialogData) setBusy(false);
+    return true;
+  };
+
+
   // The prompt that was displaced, recorded by `openExitPrompt` on the way in. Same pair
   // SpeleoQuitDialog reads for its own Cancel - see `openExitPrompt` in utils/quit.
   const cancelReturnsTo =
@@ -75,12 +100,14 @@ export default function SpeleoUnwoundPushDialog() {
   };
 
   const discardAndLock = async () => {
+    if (stopIfStale()) return;
     setBusy(true);
     try {
       // Keeps the lock: this branch exists so the user can carry on from the latest.
       // [#303] See SpeleoDiscardChangesDialog: the backend refuses an unacknowledged
       // discard, and this dialog's whole body is the acknowledgement.
       const outcome = await discardChanges(true);
+      if (stopIfStale()) return;
       if (outcome === 'editing') {
         showToast(t('speleodb.unwoundPush.discardedToast'), TOAST_KEYS.SPELEODB_DISCARDED, 'success');
       }
@@ -91,6 +118,7 @@ export default function SpeleoUnwoundPushDialog() {
       // it was raised for has just changed under it.
       returnToCaller();
     } catch (e) {
+      if (stopIfStale()) return;
       openDialog('error', {
         title: t('speleodb.unwoundPush.discardFailedTitle'),
         message: getErrorMessage(e, t('speleodb.unwoundPush.discardFailedMessage')),
@@ -100,9 +128,11 @@ export default function SpeleoUnwoundPushDialog() {
   };
 
   const pushAnyway = async () => {
+    if (stopIfStale()) return;
     setBusy(true);
     if (mode === 'push') {
       const resolved = await push(message, { acceptOlderVersion: true });
+      if (stopIfStale()) return;
       if (resolved?.kind === 'pushed') {
         trackDialogComplete('speleodb-unwound-push');
         closeDialog();
@@ -113,7 +143,8 @@ export default function SpeleoUnwoundPushDialog() {
     // The acknowledgement the guard in `useSpeleoActions.done` is waiting for - without it
     // this would raise this same dialog again.
     if (!pendingExit) {
-      const resolved = await done(message, { acceptOlderVersion: true });
+      const resolved = await done(message, { acceptOlderVersion: true, isCurrent: current });
+      if (stopIfStale()) return;
       if (resolved?.kind === 'released') {
         trackDialogComplete('speleodb-unwound-push');
         closeDialog();
@@ -124,7 +155,8 @@ export default function SpeleoUnwoundPushDialog() {
       }
       return;
     }
-    const resolved = await done(message, { acceptOlderVersion: true });
+    const resolved = await done(message, { acceptOlderVersion: true, isCurrent: current });
+    if (stopIfStale()) return;
     if (resolved?.kind === 'released') {
       trackDialogComplete('speleodb-unwound-push');
       closeDialog();

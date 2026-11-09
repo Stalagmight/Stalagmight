@@ -37,7 +37,7 @@ stalagmight/
 │   │   │                         #   tml (Ariane), compass, gpx, walls/
 │   │   ├── persistence/          # SQLite operations (.stalx, .plnx), tile caches
 │   │   ├── export/               # CSV, JSON, image, TML export
-│   │   ├── speleodb/             # SpeleoDB integration (auth, dump, sync)
+│   │   ├── speleodb/             # SpeleoDB integration (auth, native files, sync)
 │   │   └── core/                 # Business logic (AppState, command executors, undo,
 │   │                             #   config/ I/O, tile_providers)
 │   ├── capabilities/             # Tauri 2.x permissions

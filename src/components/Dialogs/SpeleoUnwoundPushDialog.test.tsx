@@ -12,7 +12,7 @@
  * without the acknowledgement.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -33,6 +33,7 @@ vi.mock('../../utils/quit', async (importOriginal) => ({
 }));
 
 import SpeleoUnwoundPushDialog from './SpeleoUnwoundPushDialog';
+import { reserveProjectRequest } from '../../utils/projectTransition';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -150,7 +151,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
   });
 
   it('acknowledges an explicit push without releasing the lock', async () => {
-    useUIStore.setState({ dialogData: { message: 'push old', mode: 'push' } });
+    useUIStore.setState({ activeDialog: 'speleodb-unwound-push', dialogData: { message: 'push old', mode: 'push' } });
     invokeIpcMock.mockResolvedValue({ kind: 'pushed' });
     render(<SpeleoUnwoundPushDialog />);
 
@@ -284,4 +285,64 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
       expect(handBackProjectMock).not.toHaveBeenCalled();
     });
   });
+
+  it.each(['request', 'session'])('refuses both actions after its %s is replaced', async (replacement) => {
+    const request = reserveProjectRequest();
+    const sessionGeneration = useSpeleoStore.getState().sessionGeneration;
+    useUIStore.setState({ activeDialog: 'speleodb-unwound-push', dialogData: {
+      message: 'old close', pendingExit: { kind: 'close', request, sessionGeneration, pendingOpenPath: '/synthetic/destination.stalx' },
+    } });
+    render(<SpeleoUnwoundPushDialog />);
+    if (replacement === 'request') reserveProjectRequest();
+    else useSpeleoStore.getState().clearSession();
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-push-anyway'));
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-discard'));
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(handBackProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('does not apply an old confirmation result or dismiss its replacement prompt', async () => {
+    let resolve!: (value: unknown) => void;
+    invokeIpcMock.mockReturnValue(new Promise((yes) => { resolve = yes; }));
+    const request = reserveProjectRequest();
+    useUIStore.setState({ activeDialog: 'speleodb-unwound-push', dialogData: {
+      message: 'old close', pendingExit: { kind: 'close', request },
+    } });
+    render(<SpeleoUnwoundPushDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-push-anyway'));
+    const replacement = { message: 'replacement confirmation' };
+    useUIStore.setState({ dialogData: replacement });
+    await act(async () => { resolve({ kind: 'released' }); });
+    expect(screen.getByTestId('speleodb-unwound-push-push-anyway')).toBeEnabled();
+    expect(useUIStore.getState().dialogData).toBe(replacement);
+    expect(useUIStore.getState().closeDialog).not.toHaveBeenCalled();
+    expect(handBackProjectMock).not.toHaveBeenCalled();
+  });
+
+
+  it('restores dismissal after logout while an upload is pending', async () => {
+    let resolve!: (value: unknown) => void;
+    invokeIpcMock.mockReturnValue(new Promise((yes) => { resolve = yes; }));
+    open();
+    render(<SpeleoUnwoundPushDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-push-anyway'));
+    expect(screen.getByTestId('speleodb-unwound-push-cancel')).toBeDisabled();
+    useSpeleoStore.getState().clearSession();
+    await act(async () => { resolve({ kind: 'released' }); });
+    expect(screen.getByTestId('speleodb-unwound-push-cancel')).toBeEnabled();
+    expect(handBackProjectMock).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-cancel'));
+    expect(useUIStore.getState().activeDialog).toBeNull();
+  });
+
+
+  it.each(['speleodb-unwound-push-push-anyway', 'speleodb-unwound-push-discard'])('does not apply %s to a replacement project without a pending exit', async (button) => {
+    open();
+    render(<SpeleoUnwoundPushDialog />);
+    useProjectStore.getState().startLoading('Replacement', '/synthetic/replacement.stalx');
+    await userEvent.click(screen.getByTestId(button));
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('speleodb-unwound-push-cancel')).toBeEnabled();
+  });
+
 });

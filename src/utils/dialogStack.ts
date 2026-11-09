@@ -160,3 +160,10 @@ export function isTopmost(element: HTMLElement): boolean {
   return stack.length > 0 && stack[stack.length - 1] === element;
 }
 
+/** Route an unfocused Escape through the visible dialog's own dismissal guard. */
+export function requestTopDialogClose(): boolean {
+  const top = stack[stack.length - 1];
+  if (!top) return false;
+  top.querySelector<HTMLButtonElement>('[data-dialog-close]')?.click();
+  return true;
+}

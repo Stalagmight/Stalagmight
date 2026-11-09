@@ -40,7 +40,6 @@ import {
 import { canPublishRecent, publishRecentToSpeleoDb } from './publishRecentToSpeleoDb';
 import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
 import { useSpeleoLocalStates } from '../../hooks/useSpeleoLocalStates';
-import { SpeleoAdoptConfirm } from '../Dialogs/SpeleoAdoptConfirm';
 import type { ProjectMetadata } from '../../types/project';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import { formatNumber } from '../../i18n/format';
@@ -127,17 +126,9 @@ export default function GlobalView() {
   const speleoEmail = useSpeleoStore((s) => s.session?.userEmail ?? null);
   const speleoLoggedIn = useSpeleoStore((s) => s.session?.loggedIn ?? false);
 
-  // #218: pull + open a purely-remote SpeleoDB project from a GlobalView row, via the
-  // shared flow. Errors surface as toasts; an Ariane (.tml-only) project routes to the
-  // shared adopt confirm (rendered inline below). No onBeforeLoad: GlobalView is not a
-  // dialog, so loadProject's LoadingState takes over the view directly.
-  const { openRemote, adoptRemote } = useOpenRemoteProject({
-    // [#258] See OpenFromSpeleoDbDialog: an Ariane entry chosen in the picker still
-    // has to reach its confirmation, and the retry answers to nobody.
-    onAdoptAfterPick: (summary) => setPendingAdopt(summary),
-  });
+  // Remote rows share the browser's access warning and native open flow.
+  const { openRemote } = useOpenRemoteProject();
   const [remoteBusy, setRemoteBusy] = useState(false);
-  const [pendingAdopt, setPendingAdopt] = useState<SpeleoProjectSummary | null>(null);
   // Synchronous re-entrancy guard: `remoteBusy` state only reflects on the next render,
   // so a second row click (or a click on a different remote row) before then would slip
   // past the visual disable and issue a concurrent open. The ref blocks it immediately.
@@ -148,9 +139,7 @@ export default function GlobalView() {
       remoteBusyRef.current = true;
       setRemoteBusy(true);
       try {
-        const outcome = await openRemote(summary);
-        if (outcome.status === 'adopt') setPendingAdopt(summary);
-        else if (outcome.status === 'error') {
+        const outcome = await openRemote(summary);if (outcome.status === 'error') {
           showToast(outcome.message, TOAST_KEYS.SPELEODB_OPEN_REMOTE_ERROR, 'error');
         }
       } finally {
@@ -160,20 +149,6 @@ export default function GlobalView() {
     },
     [openRemote, showToast],
   );
-  const handleConfirmAdopt = useCallback(async () => {
-    if (!pendingAdopt || remoteBusyRef.current) return;
-    const summary = pendingAdopt;
-    setPendingAdopt(null);
-    remoteBusyRef.current = true;
-    setRemoteBusy(true);
-    try {
-      const outcome = await adoptRemote(summary);
-      if (outcome.status === 'error') showToast(outcome.message, TOAST_KEYS.SPELEODB_OPEN_REMOTE_ERROR, 'error');
-    } finally {
-      remoteBusyRef.current = false;
-      setRemoteBusy(false);
-    }
-  }, [pendingAdopt, adoptRemote, showToast]);
   useEffect(() => {
     void scanLocksOnOpen();
   }, [scanLocksOnOpen]);
@@ -1017,7 +992,7 @@ export default function GlobalView() {
                         sectionCount={item.project.section_count}
                         totalLength={item.project.total_length}
                         isSelected={multiSelectedIds.has(item.filePath)}
-                        speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail, remoteProjects, localStates)}
+                        speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail, remoteProjects, localStates, remoteSummaries)}
                         onSelect={(ctrlKey) => handleProjectSelect(item.filePath, ctrlKey)}
                         onContextMenu={(e) => handleContextMenu(e, item.filePath)}
                         onOpen={handleOpenFromList}
@@ -1032,6 +1007,7 @@ export default function GlobalView() {
                           speleoEmail,
                           remoteProjects,
                           localStates,
+                          remoteSummaries,
                         )}
                         busy={remoteBusy}
                         onOpen={(summary) => void handleOpenRemote(summary)}
@@ -1212,17 +1188,7 @@ export default function GlobalView() {
         </div>
       )}
 
-      {/* #218: an Ariane (.tml-only) remote project routes Open to the shared adopt
-          confirm; confirming pulls + adopts it via the same flow as the browser. */}
-      {pendingAdopt && (
-        <SpeleoAdoptConfirm
-          projectName={pendingAdopt.name}
-          busy={remoteBusy}
-          onCancel={() => setPendingAdopt(null)}
-          onConfirm={() => void handleConfirmAdopt()}
-        />
-      )}
-    </div>
+</div>
   );
 }
 

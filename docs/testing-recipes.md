@@ -6,6 +6,11 @@ conventions, and the traps that have cost real debugging time.
 For *which tier a test belongs in*, and the testability contract a component has
 to satisfy, see the [Testing Guide](TESTING.md).
 
+For SpeleoDB live coverage, see [SpeleoDB testing](speleodb-dev-testing.md).
+It is opt-in, validates both email/password and token authentication, visibly skips
+incomplete credentials, and deletes only projects created by the run. Deterministic
+workspace validation must set `SPELEODB_API_TEST_ENABLED=false`.
+
 ## The undo fuzz gate (Rust tier)
 
 `src-tauri/crates/core/src/core/state/fuzz_undo_tests.rs` runs the undo/redo fuzzing model
@@ -1463,7 +1468,7 @@ mutex, which cost two distinct hazards:
 - While ANY test held the override, an unguarded test's save resolved **into
   that test's isolated dir**. That is #522: an unguarded test atomically renamed
   its own `config.toml` over an isolated test's file, between that test's save
-  and its read-back, and failed an assertion about keychain retry logic with an
+  and its read-back, and failed an assertion about credential persistence with an
   environment problem.
 
 | helper | what it does |

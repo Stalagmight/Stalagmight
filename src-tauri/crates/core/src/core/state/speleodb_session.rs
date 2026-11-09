@@ -59,6 +59,10 @@
 //!    into the slot (open / create / the fast-forward reload), clearing it
 //!    (close, which delete and project-switch route through), and logout
 //!    (which ends the edit session without touching the slot - footgun 5.8).
+//!    Cancelling native loading also invalidates older cache-writing downloads,
+//!    including when the newly confirmed file fails to open. Authentication
+//!    publication/rejection and download reservations also invalidate old work;
+//!    installing a cache consumes its reservation before another can replace it.
 //! 3. NOT a bump: an undo rollback (`restore_snapshot_into` restores the SAME
 //!    open project - footgun 5.7), and every save (`save_project` never
 //!    replaces the slot; a Save a Copy does not even move `file_path`).
@@ -98,8 +102,8 @@ pub(super) struct LockClaim {
     endpoint: String,
     /// The account it was taken as.
     email: String,
-    /// Whether this lock is being held back ON PURPOSE - the close dialog's
-    /// "Keep lock", or the un-pushed-edits veto declining a silent release.
+    /// Whether an internal close deliberately retained this lock, or the
+    /// un-pushed-edits veto declined a silent release.
     ///
     /// The janitor exists for claims whose session died without ever deciding;
     /// these decided. Left unmarked they look identical once the project is
@@ -608,9 +612,9 @@ impl AppState {
     /// Mark this account's claim on `project_id` as deliberately held back, so
     /// the janitor leaves it alone (see [`LockClaim::kept`]).
     ///
-    /// Two callers, one meaning: the close dialog's "Keep lock", and the
-    /// un-pushed-edits veto declining a silent release. Both are decisions -
-    /// the user's, or the data-safety rule's - and the janitor exists for the
+    /// Two callers, one meaning: an internal close retaining the lock, and the
+    /// un-pushed-edits veto declining a silent release. Both are explicit
+    /// decisions, and the janitor exists for the
     /// claims nobody ever decided about. Without the mark the two are the same
     /// state once the project closes (a claim, no project open), so the next
     /// status poll handed the mutex back and the decision was silently undone.
@@ -745,7 +749,7 @@ impl AppState {
             // One claim per visit - the poll comes back for the rest.
             let Some(position) = session.locks_acquired_here.iter().position(|claim| {
                 // Deliberately kept locks are not this cleanup's business: the
-                // user's "Keep lock", or the un-pushed-edits veto, already
+                // internal retention or the un-pushed-edits veto already
                 // decided that this mutex stays held. The janitor is for claims
                 // whose session died without deciding anything.
                 !claim.is_kept() && claim.taken_by(Some(&endpoint), me.as_deref())
@@ -881,7 +885,7 @@ mod tests {
     /// A signed-in session, so a claim has an account to be stamped with
     /// ([`super::LockClaim`]). Points at a dead endpoint: token resolution
     /// succeeds locally and every POST fails fast (nothing listens on port 1).
-    /// The in-memory token store keeps it hermetic - no OS keychain probe, and
+    /// The in-memory token store keeps it hermetic - no persistent credential lookup, and
     /// `endpoint.is_some()` short-circuits the rehydration.
     fn sign_in_unreachable(state: &AppState) {
         sign_in_as(state, UNREACHABLE, "diver@example.com");
@@ -919,10 +923,7 @@ mod tests {
         let mut session = state.speleodb_session_lock().expect("session lock");
         session.endpoint = None;
         session.email = None;
-        session.token_store = crate::speleodb::auth::TokenStore::from_stores(
-            Box::new(crate::speleodb::auth::InMemoryStore::new()),
-            None,
-        );
+        session.token_store = crate::speleodb::auth::TokenStore::default();
     }
 
     #[test]
@@ -1140,7 +1141,7 @@ mod tests {
 
     /// A signed-in session pointing at a dead endpoint: token resolution
     /// succeeds locally, every POST fails fast (nothing listens on port 1).
-    /// The in-memory token store keeps this hermetic - no OS keychain probe
+    /// The in-memory token store keeps this hermetic - no persistent credential lookup
     /// (and `endpoint.is_some()` short-circuits the rehydration).
     #[test]
     fn the_janitor_leaves_a_live_claim_and_a_signed_out_stranded_claim_alone() {
@@ -1273,8 +1274,9 @@ mod tests {
                         break;
                     }
                 }
+                let body = crate::core::state::tests_support::sdk_fixture(&body);
                 let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 let _ = stream.write_all(resp.as_bytes());
@@ -1465,8 +1467,8 @@ mod tests {
 
     #[test]
     fn the_janitor_leaves_a_deliberately_kept_lock_alone() {
-        // Round 14 (P1): "Keep lock" closes the project and holds the mutex on
-        // purpose, and the un-pushed-edits veto does the same on the app's own
+        // An internal close can retain the mutex deliberately, and the
+        // un-pushed-edits veto does the same on the app's own
         // authority. Once the project is closed both look exactly like the state
         // the janitor exists for - a claim, no project open - so without a mark
         // the very next status poll handed the mutex back and the choice was
@@ -1707,9 +1709,12 @@ mod tests {
         assert_eq!(
             bumping,
             vec![
+                "app_state.rs",
                 "project_create.rs",
                 "project_io.rs",
                 "project_load.rs",
+                "speleodb_cache_install.rs",
+                "speleodb_credentials.rs",
                 "speleodb_logout.rs",
             ],
             "the bump-site inventory moved; re-derive the session-boundary \
@@ -1942,7 +1947,7 @@ mod tests {
             .find("self.speleodb_logout_drop_gates()")
             .expect("logout drops the gates and releases the lock");
         let forget = body
-            .find(".forget_reporting()")
+            .find(".forget()")
             .expect("logout forgets the credential");
         assert!(
             guard < gates && gates < forget,

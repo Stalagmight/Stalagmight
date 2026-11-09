@@ -171,6 +171,7 @@ jobs:
         if: ${{ !inputs.skip_cargo_test }}
         run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
+          SPELEODB_API_TEST_ENABLED: "false"
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
 

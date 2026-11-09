@@ -10,5 +10,5 @@ export function emailsMatch(
   a: string | null | undefined,
   b: string | null | undefined,
 ): boolean {
-  return !!a && !!b && a.toLowerCase() === b.toLowerCase();
+  return !!a?.trim() && !!b?.trim() && a.trim().toLowerCase() === b.trim().toLowerCase();
 }

@@ -87,41 +87,4 @@ describe('SpeleoAdminTab', () => {
     expect(screen.getByTestId('speleodb-lock-release')).toBeInTheDocument();
     expect(screen.queryByTestId('speleodb-delete-button')).toBeNull();
   });
-
-  it('gates delete on typing the project name, then unlinks + closes', async () => {
-    seed('ADMIN');
-    render(<SpeleoAdminTab />);
-    const del = screen.getByTestId('speleodb-delete-button');
-    expect(del).toBeDisabled();
-    await userEvent.type(screen.getByTestId('speleodb-delete-confirm-input'), 'My Cave');
-    expect(del).toBeEnabled();
-    await userEvent.click(del);
-    await waitFor(() =>
-      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_delete_project')).toBe(true),
-    );
-    // Confirmed LOCAL, not merely unlinked: `clearLink()` would leave
-    // `projectLinkKind: 'unknown'`, which `selectSpeleoReadOnly` reads as
-    // read-only, stranding the still-open (now plain local) project uneditable
-    // with no poll left to re-resolve it.
-    await waitFor(() => expect(syncProjectLink).toHaveBeenCalledWith(false));
-    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
-  });
-
-  it('a FAILED delete does NOT unlink or close (no false success)', async () => {
-    seed('ADMIN');
-    invokeIpcMock.mockImplementation((cmd: string) =>
-      cmd === 'speleodb_delete_project'
-        ? Promise.reject(new Error('server 500'))
-        : Promise.resolve(null),
-    );
-    render(<SpeleoAdminTab />);
-    await userEvent.type(screen.getByTestId('speleodb-delete-confirm-input'), 'My Cave');
-    const del = screen.getByTestId('speleodb-delete-button');
-    await userEvent.click(del);
-    await waitFor(() => expect(showToast).toHaveBeenCalled());
-    expect(syncProjectLink).not.toHaveBeenCalled();
-    expect(closeDialog).not.toHaveBeenCalled();
-    // The button re-enables so the user can retry / cancel.
-    await waitFor(() => expect(del).toBeEnabled());
-  });
 });

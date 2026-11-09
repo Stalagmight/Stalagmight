@@ -45,9 +45,14 @@ resolves from `crates/<member>/` back to the single `src-tauri/bindings/`
 tree, and running the workspace tests rewrites every file in it. The **app
 crate hosts no bindings-defaulted exports** - keep it that way, so every
 writer of the committed tree follows the one explicit `export_to` convention.
-Its only ts exports are the two types in `commands/memory.rs`, which opt out
-with `#[ts(export, export_to = "../../src/types/ipc/")]` and land in the
-frontend tree instead.
+The two types in `commands/memory.rs` use
+`#[ts(export_to = "../src/types/ipc/")]` without `export`, so they generate no
+automatic export tests. Only `pnpm gen:ipc-types` writes their frontend files,
+anchored to the compile-time app-crate manifest directory. Automatic ts-rs
+exports instead resolve paths against the runtime `CARGO_MANIFEST_DIR`; if a
+test runner sets that to the app root, `../src/types/ipc/` escapes Stalagmight
+and writes into the parent `apps/src/` directory. Keep `export` off these types
+to avoid that second, environment-dependent writer.
 
 **Nothing consumes it.** No module in `src/`, `e2e-playwright/`, `e2e/` or
 `scripts/` imports from it, and it is in no tsconfig's `include` (see

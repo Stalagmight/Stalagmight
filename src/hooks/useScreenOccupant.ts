@@ -8,7 +8,7 @@ import { useUIStore } from '../store/uiStore';
  * e.g. the launch-file drain deciding whether to raise a dialog) - so the
  * NEXT independent top-layer overlay (one rendered outside the single
  * `activeDialog` slot, like TelemetryOptInDialog, HeldLockResumeDialog,
- * SpeleoStorageChoiceDialog or SpeleoDumpPickerDialog today) is covered by
+ * SpeleoDumpPickerDialog today) is covered by
  * calling this hook rather than by some other file remembering to enumerate
  * it (#445 review).
  *

@@ -370,10 +370,7 @@ without enumerating the acquisitions.
 - `commands::memory::tests::does_not_include_unrelated_processes` fails on a
   developer box with a dev server running (it sees WebKit processes). Environmental,
   not a regression.
-- `core::state::speleodb_logout::tests::a_keychain_record_that_could_not_be_saved_is_retried_not_swallowed`
-  is a pre-existing flake (measured 2/30 on this branch vs 1/30 on master). It
-  squats the config path to force a write failure and then calls `Config::load()`,
-  so it races any other test mutating `XDG_CONFIG_HOME`.
+
 
 ---
 

@@ -186,7 +186,7 @@ describe('drainLaunchFiles', () => {
 
   // #445 review: `screenBusy()` used to read only `activeDialog`/`placementMode`,
   // blind to the independent top-layer overlays (TelemetryOptInDialog,
-  // HeldLockResumeDialog, SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog) that
+  // HeldLockResumeDialog, SpeleoDumpPickerDialog) that
   // render OUTSIDE that slot - exactly the startup/login surfaces live at the
   // moment a cold-launch drain runs. A cold launch with a held SpeleoDB lock plus
   // a `.stalx` argv used to raise a dialog over the held-lock prompt, which says

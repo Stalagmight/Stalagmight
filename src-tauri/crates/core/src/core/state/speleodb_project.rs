@@ -9,7 +9,7 @@
 //!
 //! The create POST is the one non-idempotent call in the family: a retry would mint
 //! a second project, so every deterministic failure has to be caught before it.
-//! Collaborators, teams and project delete live in `speleodb_admin`.
+//! Lock release and file-access checks live in `speleodb_admin`.
 
 use super::speleodb::{local_dto, validate_project_id, MANAGED_PROJECT_TYPE};
 use super::AppState;
@@ -404,7 +404,7 @@ impl AppState {
                     &token,
                     insecure_http,
                     &link,
-                    Some("Initial publish from Stalagmight".to_owned()),
+                    params.message.clone(),
                     // Skip the #216 name fold: the project was just created with this
                     // exact name, so the fold GET would be a guaranteed no-op.
                     false,
@@ -556,6 +556,7 @@ mod tests {
         // #208: every create fixes type=stalagmight + exclude_geojson=false; visibility label;
         // country as given; lat/long omitted when not both present (#207 both-or-neither).
         let params = SpeleoPublishParams {
+            message: Some("Synthetic test publish".to_owned()),
             name: "Cave X".to_owned(),
             description: "desc".to_owned(),
             country: "US".to_owned(),
@@ -566,7 +567,7 @@ mod tests {
         let body = build_create_body(&params);
         assert_eq!(
             body.get("type").and_then(|v| v.as_str()),
-            Some("stalagmight"),
+            Some("STALAGMIGHT"),
             "#208: the repo type is always `stalagmight`"
         );
         assert_eq!(
@@ -589,6 +590,7 @@ mod tests {
     #[test]
     fn create_body_includes_both_coordinates_when_pinned() {
         let params = SpeleoPublishParams {
+            message: Some("Synthetic test publish".to_owned()),
             name: "Cave Y".to_owned(),
             description: String::new(),
             country: "FR".to_owned(),

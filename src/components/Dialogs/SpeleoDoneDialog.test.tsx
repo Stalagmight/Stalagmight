@@ -17,7 +17,7 @@
  * half of the contract lives in SpeleoBanner.test.tsx.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -46,6 +46,11 @@ const LINK: SpeleoLinkState = {
   serverError: null,
 };
 
+function fillCommitMessage() {
+  const input = screen.queryByTestId('speleodb-done-message') as HTMLTextAreaElement | null;
+  if (input && !input.value) fireEvent.change(input, { target: { value: 'Survey update' } });
+}
+
 beforeEach(() => {
   invokeIpcMock.mockReset();
   // A georeferenced zero datum keeps the unrelated `no_anchor` notice out of the
@@ -72,6 +77,7 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
     invokeIpcMock.mockRejectedValue(new Error('blackholed'));
     render(<SpeleoDoneDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
 
     const notice = await screen.findByTestId('speleodb-push-failure-inline');
@@ -88,6 +94,7 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
     invokeIpcMock.mockRejectedValue(new Error('blackholed'));
     render(<SpeleoDoneDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
     await screen.findByTestId('speleodb-push-failure-inline');
 
@@ -99,9 +106,11 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
     invokeIpcMock.mockRejectedValue(new Error('blackholed'));
     render(<SpeleoDoneDialog />);
     await userEvent.type(screen.getByTestId('speleodb-done-message'), 'sump survey');
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
     await screen.findByTestId('speleodb-push-failure-inline');
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
 
     await waitFor(() =>
@@ -119,10 +128,12 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
   it('a successful retry clears the inline notice and the banner slot, and closes', async () => {
     invokeIpcMock.mockRejectedValueOnce(new Error('blackholed'));
     render(<SpeleoDoneDialog />);
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
     await screen.findByTestId('speleodb-push-failure-inline');
 
     invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
 
     await waitFor(() => expect(useUIStore.getState().activeDialog).toBeNull());
@@ -137,6 +148,7 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
     invokeIpcMock.mockRejectedValue(new Error('blackholed'));
     render(<SpeleoDoneDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
 
     await screen.findByTestId('speleodb-push-failure-inline');
@@ -145,4 +157,52 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
       origin: 'push',
     });
   });
+});
+
+it('requires an associated message and saves to disk before uploading', async () => {
+  useUIStore.setState({ dialogData: { mode: 'push' } });
+  const order: string[] = [];
+  useProjectStore.setState({ saveProject: vi.fn(async () => { order.push('save'); return { success: true }; }) as never });
+  invokeIpcMock.mockImplementation(async (command) => { if (command === 'speleodb_push') order.push('push'); return { kind: 'pushed' }; });
+  render(<SpeleoDoneDialog />);
+  const textarea = screen.getByLabelText('Commit message');
+  expect(textarea).toHaveAttribute('id', 'speleodb-done-message');
+  expect(screen.getByTestId('speleodb-done-confirm')).toBeDisabled();
+  fireEvent.change(textarea, { target: { value: 'Synthetic update' } });
+  await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
+  await waitFor(() => expect(order.slice(0, 2)).toEqual(['save', 'push']));
+});
+it('disk-save failure prevents upload', async () => {
+  useUIStore.setState({ dialogData: { mode: 'push' }, openDialog: vi.fn() });
+  useProjectStore.setState({ saveProject: vi.fn(async () => ({ success: false, error: 'Synthetic disk failure' })) as never });
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
+  expect(invokeIpcMock).not.toHaveBeenCalled();
+});
+it.each(['not_editing', 'divergence_needed', 'push_unconfirmed'])('retains the message after %s without reporting combined success', async (kind) => {
+  useUIStore.setState({ dialogData: { mode: 'push' } });
+  invokeIpcMock.mockResolvedValue({ kind });
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
+  expect(await screen.findByTestId('speleodb-save-upload-failure')).toHaveTextContent(kind === 'push_unconfirmed' ? 'could not be confirmed' : 'but not uploaded');
+  expect(screen.getByLabelText('Commit message')).toHaveValue('Survey update');
+  expect(useUIStore.getState().activeDialog).toBe('speleodb-done');
+});
+it('blocks duplicate confirmation while saving and ignores a replacement dialog', async () => {
+  useUIStore.setState({ dialogData: { mode: 'push' } });
+  let finish!: (result: { success: boolean }) => void;
+  const save = vi.fn(() => new Promise<{ success: boolean }>((resolve) => { finish = resolve; }));
+  useProjectStore.setState({ saveProject: save as never });
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  fireEvent.click(screen.getByTestId('speleodb-done-confirm'));
+  fireEvent.click(screen.getByTestId('speleodb-done-confirm'));
+  expect(save).toHaveBeenCalledTimes(1);
+  useUIStore.setState({ activeDialog: 'replacement', dialogData: {} });
+  finish({ success: true });
+  await waitFor(() => expect(screen.getByTestId('speleodb-done-confirm')).not.toBeDisabled());
+  expect(invokeIpcMock).not.toHaveBeenCalled();
+  expect(useUIStore.getState().activeDialog).toBe('replacement');
 });

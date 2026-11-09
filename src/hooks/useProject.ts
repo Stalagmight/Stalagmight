@@ -55,6 +55,15 @@ export function useProject() {
   );
 
   const handleSaveProject = useCallback(async (opts?: { closeAfterSave?: boolean }) => {
+    const link = useSpeleoStore.getState().link;
+    if (link?.editState === 'editing' && !link.forceEditing) {
+      if (opts?.closeAfterSave) {
+        openDialog('speleodb-close');
+      } else {
+        openDialog('speleodb-done', { mode: 'push' });
+      }
+      return;
+    }
     // An untitled project goes through Save As, which surfaces its own failures
     // (saveProjectAs guards on !success). Surfacing again here would double-report
     // - the second openDialog('error') is treated as dialog-chaining. So only the
@@ -82,7 +91,7 @@ export function useProject() {
 
   const handleCloseProject = useCallback(async () => {
     // A SpeleoDB project we still hold the write lock for routes through the close-
-    // flow guard (push & release, or keep the lock) BEFORE the normal unsaved-changes
+    // flow guard (release with or without uploading) BEFORE the normal unsaved-changes
     // prompt, so no in-app close affordance - hamburger Close, Save-and-Close, the
     // overwrite-confirm close - can leave the server mutex stranded (fix 1). The
     // dialog owns the actual close and handles both dirty states itself.

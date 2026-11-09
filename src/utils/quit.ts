@@ -1,3 +1,5 @@
+import { isProjectMutationCurrent, isProjectRequestCurrent, reserveProjectRequest } from './projectTransition';
+import { confirmSpeleoFileOpen } from './confirmSpeleoOpen';
 /**
  * Quit entry point, shared by every affordance (GlobalView menu, in-project
  * menu, the Ctrl+Q shortcut in both shortcut hooks, AND the OS window close
@@ -267,6 +269,9 @@ export type PendingExit =
       pendingOpenPath?: string | null;
       /** A New Project request the close prompt displaced (#270). */
       pendingNewProject?: boolean;
+      accessConfirmed?: boolean;
+      request?: number;
+      sessionGeneration?: number;
     };
 
 /**
@@ -279,20 +284,28 @@ export type PendingExit =
 export function readPendingExit(data: Record<string, unknown>): PendingExit | null {
   const raw = data.pendingExit;
   if (typeof raw !== 'object' || raw === null) return null;
-  const { kind, pendingOpenPath, pendingNewProject } = raw as Record<string, unknown>;
+  const { kind, pendingOpenPath, pendingNewProject, accessConfirmed, request, sessionGeneration } = raw as Record<string, unknown>;
   if (kind === 'quit') return { kind: 'quit' };
   if (kind !== 'close') return null;
   return {
     kind: 'close',
     pendingOpenPath: typeof pendingOpenPath === 'string' ? pendingOpenPath : null,
     pendingNewProject: pendingNewProject === true,
+    ...(typeof request === 'number' ? { request } : {}),
+    ...(typeof sessionGeneration === 'number' ? { sessionGeneration } : {}),
+    ...(accessConfirmed === true ? { accessConfirmed: true } : {}),
   };
+}
+
+export function closeExitStillCurrent(exit: { request?: number; sessionGeneration?: number }, dispatched = false): boolean {
+  return (exit.request === undefined || isProjectRequestCurrent(exit.request) || (dispatched && isProjectMutationCurrent(exit.request))) &&
+    (exit.sessionGeneration === undefined || useSpeleoStore.getState().sessionGeneration === exit.sessionGeneration);
 }
 
 /**
  * Hand the open project back, then replay whatever the user actually asked for.
  *
- * The close has to land first in every case: it is what releases (or deliberately keeps)
+ * The destination access warning runs before the close. The close releases
  * the server lock and clears the SpeleoDB link, so replaying before it would leave the
  * shell linked to a project that is on its way out. A FAILED close replays nothing - the
  * project is still open, so the exit did not happen.
@@ -302,14 +315,29 @@ export function readPendingExit(data: Record<string, unknown>): PendingExit | nu
  * growing a second copy of the ordering argument above.
  */
 export async function handBackProject(
-  exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean },
+  exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean; accessConfirmed?: boolean; request?: number; sessionGeneration?: number },
   opts?: { releaseLock?: boolean },
 ): Promise<void> {
+  const request = exit.request ?? reserveProjectRequest();
+  let dispatched = false;
+  const current = () => (isProjectRequestCurrent(request) || (dispatched && isProjectMutationCurrent(request))) && closeExitStillCurrent(exit, dispatched);
+  if (!current()) return;
   const { closeProject, loadProject } = useProjectStore.getState();
-  const result = await closeProject(opts);
-  if (!result.success) return;
+  if (exit.pendingOpenPath && !exit.accessConfirmed) {
+    try {
+      if (!await confirmSpeleoFileOpen(exit.pendingOpenPath, current)) return;
+    } catch (error) {
+      if (!current()) return;
+      useUIStore.getState().openDialog('error', { title: 'Open Failed', message: String(error) });
+      return;
+    }
+  }
+  if (!current()) return;
+  dispatched = true;
+  const result = await closeProject({ ...opts, request });
+  if (!current() || !result.success) return;
   // loadProject switches the view and surfaces its own failures.
-  if (exit.pendingOpenPath) await loadProject(exit.pendingOpenPath);
+  if (exit.pendingOpenPath) await loadProject(exit.pendingOpenPath, { accessConfirmed: true, request });
   // `createProject` seeds the shell from here; the close above already left us on the
   // global view (App falls back to it whenever no project is open).
   else if (exit.pendingNewProject) useUIStore.getState().openDialog('new-project');
@@ -375,13 +403,9 @@ export function guardQuit(): boolean {
   if (!project) return false;
 
   const link = useSpeleoStore.getState().link;
-  // Keyed on the WORK AT RISK only - see {@link hasUnpushedSpeleoWork}. Whether we
-  // still hold the write lock changes which choices the dialog can offer (it
-  // adapts), not whether the user should be told. Holding the lock with nothing
-  // unpushed needs no prompt at QUIT time specifically: the backend's exit-time
-  // release is safe then, and vetoes itself otherwise (aab5121d). The close flow
-  // does not get that for free, so it guards on the lock as well.
-  if (hasUnpushedSpeleoWork(link)) {
+  // A held lock always offers a deliberate local keep-lock exit, including when
+  // nothing is pending. Unpushed work still prompts after loss of editing access.
+  if (needsSpeleoHandBackPrompt(link)) {
     openExitPrompt('speleodb-quit');
     return true;
   }

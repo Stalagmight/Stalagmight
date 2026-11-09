@@ -312,7 +312,7 @@ impl InflationBudget {
 
     /// Take `bytes` out of the budget, or fail without taking anything.
     ///
-    /// `fetch_update` rather than a load followed by a store: two threads reserving
+    /// `try_update` rather than a load followed by a store: two threads reserving
     /// concurrently off the same observed remainder would each believe they fit, and
     /// the budget would be overspent by exactly the amount it is meant to bound.
     ///
@@ -323,7 +323,7 @@ impl InflationBudget {
     fn reserve(&self, bytes: u64) -> Result<()> {
         use std::sync::atomic::Ordering;
         self.remaining
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(bytes)
             })
             .map_err(|left| {

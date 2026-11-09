@@ -2,13 +2,15 @@
 /**
  * Hook test (#218) - the shared pull+open flow for remote SpeleoDB projects.
  * Covers the outcome routing GlobalView + the browser dialog both depend on: a
- * normal open, the Ariane-adopt route, a load failure that rolls the link back, and
+ * normal open, access warnings, a load failure that rolls the link back, and
  * an open error that reports a re-login.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
+const confirmMock = vi.hoisted(() => vi.fn());
+vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
 vi.mock('../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
   getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
@@ -59,6 +61,7 @@ let setLinkOnOpenMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
+  confirmMock.mockReset().mockResolvedValue(true);
   loadProjectMock = vi.fn(async () => ({ success: true }));
   setLinkOnOpenMock = vi.fn();
   // `keepLocalCopy` compares the refused path against the LIVE open project, so the
@@ -103,7 +106,7 @@ describe('useOpenRemoteProject (#218)', () => {
       // it reading the PREVIOUS project for the length of the poll interval.
       projectId: 'p1',
     });
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
   });
 
   it('names the opened project immediately, so A -> B does not leave A on the store', async () => {
@@ -130,337 +133,6 @@ describe('useOpenRemoteProject (#218)', () => {
     // No poll has run - `loadProject` is mocked and `refreshLinkStatus` is not driven -
     // so this can only be the seed.
     expect(useSpeleoStore.getState().remoteProjectId).toBe('p1');
-  });
-
-  it('raises the file picker when the dump holds more than one openable file (#258)', async () => {
-    // The refusal must NOT come back as `error`: nothing failed, the app simply has
-    // no basis to choose. It reports `ambiguous` so the host clears its busy flag
-    // without toasting a dead end, and the picker is raised from HERE so all three
-    // hosts of this hook get the choice.
-    const candidates = [
-      { entry_path: 'misc/project.stalx', size_bytes: 4096, modified: null },
-      { entry_path: 'backup/old.stalx', size_bytes: 2048, modified: null },
-    ];
-    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === 'speleodb_open_project') {
-        // The retry carries the chosen entry, and only the retry succeeds - which is
-        // what proves the picker's callback re-invokes the real open rather than
-        // some parallel path.
-        if (args?.entryPath === 'backup/old.stalx')
-          return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
-        return Promise.reject({
-          message: 'more than one',
-          action: 'Ambiguous',
-          status: null,
-          dump_candidates: candidates,
-        });
-      }
-      return Promise.resolve(null);
-    });
-
-    const outcome = await hook().openRemote(SUMMARY);
-    expect(outcome).toEqual({ status: 'ambiguous' });
-    const picker = useSpeleoStore.getState();
-    expect(picker.dumpPickerOpen).toBe(true);
-    expect(picker.dumpPickerCandidates).toEqual(candidates);
-    expect(picker.dumpPickerKind).toBe('stalx');
-    expect(loadProjectMock).not.toHaveBeenCalled();
-
-    // Answering it opens the chosen file.
-    await useSpeleoStore.getState().resolveDumpPicker('backup/old.stalx');
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
-    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
-  });
-
-  it('hands an Ariane pick back for confirmation instead of ending silently (#258)', async () => {
-    // The backend refuses to EXTRACT a chosen `.tml` and routes to adoption, so the
-    // retry comes back `adopt`. Nobody is awaiting that call - the host asked once,
-    // got `ambiguous`, and stopped listening - so without an explicit hand-back the
-    // picker just closed: no confirmation, and `speleodb_adopt_ariane` never called.
-    const candidates = [
-      { entry_path: 'ariane.tml', size_bytes: 1, modified: null },
-      { entry_path: 'misc/ariane.tml', size_bytes: 2, modified: null },
-    ];
-    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === 'speleodb_open_project') {
-        if (args?.entryPath === 'misc/ariane.tml')
-          return Promise.reject({ message: 'ariane', action: 'Adopt', status: null });
-        return Promise.reject({
-          message: 'more than one',
-          action: 'Ambiguous',
-          status: null,
-          dump_candidates: candidates,
-        });
-      }
-      return Promise.resolve(null);
-    });
-    const onAdoptAfterPick = vi.fn();
-
-    const outcome = await hook({ onAdoptAfterPick }).openRemote(SUMMARY);
-    expect(outcome).toEqual({ status: 'ambiguous' });
-
-    await useSpeleoStore.getState().resolveDumpPicker('misc/ariane.tml');
-    expect(onAdoptAfterPick).toHaveBeenCalledWith(SUMMARY, false);
-  });
-
-  it('re-opens the picker when ADOPTION itself turns ambiguous (#258)', async () => {
-    // The Ariane tree can change while the adopt confirmation sits open - one `.tml`
-    // becoming several, or the remembered pick being replaced - so the adopt answers
-    // with a fresh candidate set rather than a file. That is a routing signal;
-    // collapsing it into a flat error stranded the user, who could not choose from
-    // the new tree without restarting the entire open flow.
-    const candidates = [
-      { entry_path: 'one/ariane.tml', size_bytes: 1, modified: null },
-      { entry_path: 'two/ariane.tml', size_bytes: 2, modified: null },
-    ];
-    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === 'speleodb_adopt_ariane') {
-        if (args?.entryPath === 'two/ariane.tml')
-          return Promise.resolve({
-            local_path: '/cache/p1.stalx',
-            type_flipped: true,
-            concurrent_session: false,
-          });
-        return Promise.reject({
-          message: 'more than one Ariane file',
-          action: 'Ambiguous',
-          status: null,
-          dump_candidates: candidates,
-          dump_candidate_kind: 'ariane',
-        });
-      }
-      return Promise.resolve(null);
-    });
-
-    const outcome = await hook().adoptRemote(SUMMARY, { discardLocal: true });
-    expect(outcome).toEqual({ status: 'ambiguous' });
-    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
-    // Offered with the ADOPT verb, which is only reachable via the carried kind.
-    expect(useSpeleoStore.getState().dumpPickerKind).toBe('ariane');
-    expect(loadProjectMock).not.toHaveBeenCalled();
-
-    await useSpeleoStore.getState().resolveDumpPicker('two/ariane.tml');
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
-    // The replay carries the discard the user already confirmed, so the backend's
-    // un-pushed-edits guard does not re-ask a question they have answered.
-    const adoptCalls = invokeIpcMock.mock.calls.filter((c) => c[0] === 'speleodb_adopt_ariane');
-    const replay = adoptCalls[adoptCalls.length - 1];
-    expect(replay?.[1]).toMatchObject({ entryPath: 'two/ariane.tml', discardLocal: true });
-  });
-
-  it('routes a fresh STALX ambiguity out of adoption instead of looping (#258)', async () => {
-    // If a `.stalx` appears while the adopt confirmation sits open, the answer is to
-    // extract it - and adoption accepts nothing but an Ariane entry. Replaying
-    // adoption there re-raised the identical picker on every confirmation, so the
-    // user could never get out of it.
-    const candidates = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
-    ];
-    let adoptCalls = 0;
-    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === 'speleodb_adopt_ariane') {
-        adoptCalls += 1;
-        return Promise.reject({
-          message: 'more than one Stalagmight file',
-          action: 'Ambiguous',
-          status: null,
-          dump_candidates: candidates,
-          dump_candidate_kind: 'stalx',
-        });
-      }
-      if (cmd === 'speleodb_open_project' && args?.entryPath === 'b.stalx')
-        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
-      return Promise.resolve(null);
-    });
-
-    const outcome = await hook().adoptRemote(SUMMARY);
-    expect(outcome).toEqual({ status: 'ambiguous' });
-    // Offered with the OPEN verb, matching what the replay will actually do.
-    expect(useSpeleoStore.getState().dumpPickerKind).toBe('stalx');
-
-    await useSpeleoStore.getState().resolveDumpPicker('b.stalx');
-    // The pick opened the project rather than bouncing off adoption again.
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
-    expect(adoptCalls).toBe(1);
-  });
-
-  it('replays the DISCARDING open for a stalx ambiguity raised by adoption (#258)', async () => {
-    // Same routing, but the user reached adoption through "take the server copy and
-    // discard my local changes". Replaying the plain open would meet the un-pushed
-    // edits guard and refuse a question they had already answered.
-    const candidates = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
-    ];
-    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === 'speleodb_adopt_ariane')
-        return Promise.reject({
-          message: 'more than one Stalagmight file',
-          action: 'Ambiguous',
-          status: null,
-          dump_candidates: candidates,
-          dump_candidate_kind: 'stalx',
-        });
-      if (cmd === 'speleodb_open_project_discarding_local' && args?.entryPath === 'b.stalx')
-        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
-      return Promise.resolve(null);
-    });
-
-    await hook().adoptRemote(SUMMARY, { discardLocal: true });
-    await useSpeleoStore.getState().resolveDumpPicker('b.stalx');
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
-    const opened = invokeIpcMock.mock.calls.filter(
-      (c) => c[0] === 'speleodb_open_project_discarding_local',
-    );
-    expect(opened.length).toBe(1);
-  });
-
-  it('raises the picker from the CONFIRMED-DISCARD open too (#258)', async () => {
-    // The only route that reaches an ambiguous dump with un-pushed local edits: the
-    // guard runs before the download, so a protected open is refused before anything
-    // is classified. Without this the user met a flat error immediately after
-    // confirming they wanted their local copy discarded - the worst moment to dead-end.
-    const candidates = [
-      { entry_path: 'misc/a.stalx', size_bytes: 1, modified: null },
-      { entry_path: 'misc/b.stalx', size_bytes: 2, modified: null },
-    ];
-    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === 'speleodb_open_project_discarding_local') {
-        if (args?.entryPath === 'misc/b.stalx')
-          return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
-        return Promise.reject({
-          message: 'more than one',
-          action: 'Ambiguous',
-          status: null,
-          dump_candidates: candidates,
-        });
-      }
-      return Promise.resolve(null);
-    });
-
-    const outcome = await hook().takeRemoteDiscardingLocal(SUMMARY);
-    expect(outcome).toEqual({ status: 'ambiguous' });
-    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
-    expect(loadProjectMock).not.toHaveBeenCalled();
-
-    // And the retry replays THIS verb, not the protected one - replaying the
-    // protected open would be refused all over again by the guard.
-    await useSpeleoStore.getState().resolveDumpPicker('misc/b.stalx');
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
-  });
-
-  it('does not raise the picker when the rejection carries no candidates (#258)', async () => {
-    // The fast-forward verbs produce `Ambiguous` with nothing to act on, because
-    // they have no way to send a choice back. Those must fall through to the
-    // ordinary error path, whose message names the remedy - an empty picker would
-    // be a dead end with extra steps.
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_open_project')
-        return Promise.reject({
-          message: 'more than one',
-          action: 'Ambiguous',
-          status: null,
-          dump_candidates: [],
-        });
-      return Promise.resolve(null);
-    });
-    const outcome = await hook().openRemote(SUMMARY);
-    expect(outcome.status).toBe('error');
-    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
-  });
-
-  it('routes an Ariane (.tml-only) project to adopt', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_open_project')
-        return Promise.reject({ message: 'ariane', action: 'Adopt', status: null });
-      return Promise.resolve(null);
-    });
-    const outcome = await hook().openRemote(SUMMARY);
-    expect(outcome).toEqual({ status: 'adopt' });
-    expect(loadProjectMock).not.toHaveBeenCalled();
-  });
-
-  /** The receipt an adoption's conversion produces, with something to report. */
-  const ADOPT_RECEIPT = {
-    source_format: 'Ariane TML',
-    file_name: 'ariane.tml',
-    sections_found: 3,
-    sections_imported: 2,
-    shot_count: 12,
-    closures_requested: 0,
-    closures_created: 0,
-    unit_conversion: null,
-    warnings: [
-      '2 excluded shots in the remote file were not imported',
-      '1 section had no shots after filtering and was dropped',
-    ],
-    info: [],
-  };
-
-  const adoptReplying = (result: Record<string, unknown>) => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_adopt_ariane') return Promise.resolve(result);
-      return Promise.resolve(null);
-    });
-  };
-
-  /**
-   * [#411] An adoption is an Ariane import, so it ends in the same receipt dialog -
-   * the only place this flow says what the conversion dropped. The backend used to
-   * discard the whole thing at the call site, so a pulled project lost its excluded
-   * shots and every parse anomaly in silence.
-   */
-  it('shows the import receipt for what the adoption converted', async () => {
-    adoptReplying({
-      local_path: '/cache/p1.stalx',
-      type_flipped: true,
-      concurrent_session: false,
-      upload: { kind: 'pushed' },
-      import_receipt: ADOPT_RECEIPT,
-    });
-
-    expect(await hook().adoptRemote(SUMMARY)).toEqual({ status: 'opened' });
-    expect(useUIStore.getState().openDialog).toHaveBeenCalledWith('import-receipt', {
-      receipt: ADOPT_RECEIPT,
-    });
-  });
-
-  it('shows no receipt for an adoption whose project never opened', async () => {
-    // A receipt describes what is on screen. After a failed load nothing is, and the
-    // load has already surfaced its own error - a modal over it says the import
-    // landed when it did not.
-    loadProjectMock.mockResolvedValue({ success: false });
-    adoptReplying({
-      local_path: '/cache/p1.stalx',
-      type_flipped: true,
-      concurrent_session: false,
-      upload: { kind: 'pushed' },
-      import_receipt: ADOPT_RECEIPT,
-    });
-
-    expect(await hook().adoptRemote(SUMMARY)).toEqual({ status: 'load_failed' });
-    expect(useUIStore.getState().openDialog).not.toHaveBeenCalledWith(
-      'import-receipt',
-      expect.anything(),
-    );
-  });
-
-  it('shows no receipt when the backend sent none', async () => {
-    // An older backend answers without the field at all; an empty modal is worse
-    // than none.
-    adoptReplying({
-      local_path: '/cache/p1.stalx',
-      type_flipped: true,
-      concurrent_session: false,
-      upload: { kind: 'pushed' },
-    });
-
-    expect(await hook().adoptRemote(SUMMARY)).toEqual({ status: 'opened' });
-    expect(useUIStore.getState().openDialog).not.toHaveBeenCalledWith(
-      'import-receipt',
-      expect.anything(),
-    );
   });
 
   /**
@@ -558,7 +230,7 @@ describe('useOpenRemoteProject (#218)', () => {
   it('keepLocalCopy loads the local path without any SpeleoDB command', async () => {
     const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
     expect(outcome).toEqual({ status: 'opened' });
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
     expect(invokeIpcMock.mock.calls.filter((c) => String(c[0]).startsWith('speleodb_'))).toEqual([]);
   });
 
@@ -587,7 +259,7 @@ describe('useOpenRemoteProject (#218)', () => {
     const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
     expect(outcome).toEqual({ status: 'opened' });
     expect(setLinkOnOpenMock).not.toHaveBeenCalled();
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
   });
 
   it('does not touch the live link when the already-open keep-local load fails', async () => {
@@ -641,41 +313,6 @@ describe('useOpenRemoteProject (#218)', () => {
       'speleodb-unpushed-local',
       expect.objectContaining({ cancelReturnsTo: 'open-from-speleodb' }),
     );
-  });
-
-  it('takeRemoteDiscardingLocal re-issues the refused open with the same arguments', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_open_project_discarding_local')
-        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
-      return Promise.resolve(null);
-    });
-    const outcome = await hook().takeRemoteDiscardingLocal(SUMMARY);
-    expect(outcome).toEqual({ status: 'opened' });
-    const call = invokeIpcMock.mock.calls.find(
-      (c) => c[0] === 'speleodb_open_project_discarding_local',
-    );
-    expect(call?.[1]).toEqual({
-      projectId: 'p1',
-      projectName: 'Cave A',
-      latestCommitSha: 'abc123',
-      // [#258] No chosen entry on a first attempt - this route can hit an ambiguous
-      // dump too, and sends the pick only on the picker's retry.
-      entryPath: null,
-    });
-    // The shared post-open tail ran, exactly as it does for a plain open.
-    expect(setLinkOnOpenMock).toHaveBeenCalledWith({
-      permission: 'READ_AND_WRITE',
-      // The path the seed belongs to, so the `syncProjectLink` inside the load
-      // that follows keeps THIS project's link instead of the previous one's.
-      forPath: '/cache/p1.stalx',
-      // A PULL has, by construction, nothing local the server has not seen.
-      hasUnpushedEdits: false,
-      // And WHICH project, so `remoteProjectId` names it from the same synchronous
-      // `set()` rather than after a status poll - which left every consumer keyed on
-      // it reading the PREVIOUS project for the length of the poll interval.
-      projectId: 'p1',
-    });
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
   });
 
   // End to end through the REAL store action: the whole point of the dirty-bit seed
@@ -749,7 +386,7 @@ describe('useOpenRemoteProject (#218)', () => {
     const outcome = await hook().openRemote(SUMMARY);
     expect(outcome).toEqual({ status: 'opened' });
     expect(setLinkOnOpenMock).not.toHaveBeenCalled();
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
   });
 
   /**
@@ -945,7 +582,7 @@ describe('useOpenRemoteProject (#218)', () => {
         remoteProjectId: null,
       });
       expect(await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx')).toEqual({ status: 'opened' });
-      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
     });
 
     /** The discarding re-open SUCCEEDS, so an unguarded branch runs all the way to the load. */
@@ -998,7 +635,7 @@ describe('useOpenRemoteProject (#218)', () => {
         remoteProjectId: 'p1',
       });
       expect(await hook().takeRemoteDiscardingLocal(SUMMARY)).toEqual({ status: 'opened' });
-      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
     });
 
     it('still refuses the take-remote for the open project over unsaved-to-disk edits', async () => {
@@ -1020,122 +657,6 @@ describe('useOpenRemoteProject (#218)', () => {
         'speleodb_open_project_discarding_local',
         expect.anything(),
       );
-      expect(loadProjectMock).not.toHaveBeenCalled();
-    });
-
-    /**
-     * [#270] The adopt route is the OTHER command that replaces the open project, and
-     * it ran no guard of its own - only whatever `openRemote` had concluded, which by
-     * then is stale by an unbounded amount. `openRemote` hands `adopt` back to the
-     * HOST, which parks the summary in its own state and puts up a confirm the user
-     * may sit on indefinitely, while the status poll (30 s to a user-configurable
-     * 24 h) keeps writing to the very link the guard reads. `adoptRemote` is also an
-     * exported entry point three components call from their own state, so its safety
-     * rested on a call-site convention rather than on anything in the hook.
-     *
-     * Driven at the hook boundary, the way the entry-guard cases above drive
-     * `openRemote`, with the adopt SUCCEEDING - so an unguarded adopt runs all the
-     * way to the load that replaces the open project.
-     */
-    const arianeThenAdopts = () => {
-      invokeIpcMock.mockImplementation((cmd: string) => {
-        if (cmd === 'speleodb_open_project')
-          return Promise.reject({ message: 'ariane', action: 'Adopt', status: null });
-        if (cmd === 'speleodb_adopt_ariane')
-          return Promise.resolve({
-            local_path: '/cache/p1.stalx',
-            type_flipped: true,
-            concurrent_session: false,
-          });
-        return Promise.resolve(null);
-      });
-    };
-
-    it('adoptRemote refuses over work SpeleoDB has never seen, before it adopts anything', async () => {
-      arianeThenAdopts();
-      anotherOpen(openLink({ hasUnpushedEdits: true }));
-      const outcome = await hook().adoptRemote(SUMMARY);
-      expect(outcome.status).toBe('error');
-      // Not a dead token - there is nothing to re-login for.
-      if (outcome.status === 'error') expect(outcome.reLogin).toBe(false);
-      // Nothing adopted, nothing seeded, nothing loaded: `speleodb_adopt_ariane`
-      // replaces the cache `.stalx` too, so the guard has to run before it.
-      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_adopt_ariane', expect.anything());
-      expect(setLinkOnOpenMock).not.toHaveBeenCalled();
-      expect(loadProjectMock).not.toHaveBeenCalled();
-    });
-
-    it('adoptRemote refuses while we still hold the write lock', async () => {
-      arianeThenAdopts();
-      anotherOpen(openLink({ editState: 'editing' }));
-      const outcome = await hook().adoptRemote(SUMMARY);
-      expect(outcome.status).toBe('error');
-      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_adopt_ariane', expect.anything());
-    });
-
-    it('adoptRemote refuses over unsaved-to-disk changes in a plain local project', async () => {
-      arianeThenAdopts();
-      useProjectStore.setState({ project: { file_path: '/cave/local.stalx' } as never, isDirty: true });
-      const outcome = await hook().adoptRemote(SUMMARY);
-      expect(outcome.status).toBe('error');
-      expect(loadProjectMock).not.toHaveBeenCalled();
-    });
-
-    it('refuses the adopt when the open project goes unpushed while the confirm is up', async () => {
-      // The real sequence rather than a synthetic one: the open IS guarded and the
-      // project on screen is clean, so it routes to the host's adopt confirm; the
-      // status poll then lands and marks that project un-pushed while the user is
-      // still reading the confirm. The stale "clean" answer must not carry.
-      arianeThenAdopts();
-      anotherOpen(openLink());
-      expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'adopt' });
-
-      useSpeleoStore.setState({ link: openLink({ hasUnpushedEdits: true }) });
-
-      const outcome = await hook().adoptRemote(SUMMARY);
-      expect(outcome.status).toBe('error');
-      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_adopt_ariane', expect.anything());
-      expect(loadProjectMock).not.toHaveBeenCalled();
-    });
-
-    it('still adopts the already-open project over its OWN un-pushed cache copy', async () => {
-      // The exemption is load-bearing on the adopt route too: the take-remote branch
-      // routes to an adopt for a project that is un-pushed BY DEFINITION (that is why
-      // the refused-open prompt was up), and it is the only way out of that state.
-      // Nothing is handed back to a project we are re-adopting, so the hand-back half
-      // must stay exempt - and the discard the user just confirmed is no waiver for
-      // it, because it answers about the TARGET, not about the project on screen.
-      arianeThenAdopts();
-      useProjectStore.setState({
-        project: { file_path: '/cache/p1.stalx' } as never,
-        isDirty: false,
-      });
-      useSpeleoStore.setState({
-        link: openLink({ hasUnpushedEdits: true, editState: 'editing' }),
-        remoteProjectId: 'p1',
-      });
-
-      expect(await hook().adoptRemote(SUMMARY, { discardLocal: true })).toEqual({
-        status: 'opened',
-      });
-      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
-    });
-
-    it('still refuses re-adopting the open project over unsaved-to-disk edits', async () => {
-      // Disk-dirty is NOT part of that exemption: `speleodb_adopt_ariane` replaces the
-      // cache `.stalx` exactly as the open command does, dropping unsaved in-memory
-      // survey with it.
-      arianeThenAdopts();
-      useProjectStore.setState({
-        project: { file_path: '/cache/p1.stalx' } as never,
-        isDirty: true,
-      });
-      useSpeleoStore.setState({ link: openLink(), remoteProjectId: 'p1' });
-
-      const outcome = await hook().adoptRemote(SUMMARY);
-      expect(outcome.status).toBe('error');
-      if (outcome.status === 'error') expect(outcome.message).toMatch(/sav/i);
-      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_adopt_ariane', expect.anything());
       expect(loadProjectMock).not.toHaveBeenCalled();
     });
 
@@ -1210,7 +731,7 @@ describe('useOpenRemoteProject (#218)', () => {
         pullDuringWhich(() => {});
 
         expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
-        expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+        expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
       });
 
       it('still opens when the pull names the project already on screen', async () => {
@@ -1234,7 +755,7 @@ describe('useOpenRemoteProject (#218)', () => {
         pullDuringWhich(() => useProjectStore.setState({ isDirty: true }));
 
         expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
-        expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+        expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
       });
 
       it('refuses the take-remote when the open project goes unpushed during ITS download', async () => {
@@ -1253,32 +774,6 @@ describe('useOpenRemoteProject (#218)', () => {
         if (outcome.status === 'error') expect(outcome.reLogin).toBe(false);
         expect(setLinkOnOpenMock).not.toHaveBeenCalled();
         expect(loadProjectMock).not.toHaveBeenCalled();
-      });
-
-      it('does NOT refuse the adopt when the link changes during it', async () => {
-        // DO-NOT-REGRESS on a deliberate asymmetry, so nobody "fixes the drift" by
-        // adding the late re-check to the adopt as well. The window is identical, but
-        // `speleodb_adopt_ariane` rebuilds its destination through
-        // `adopt_import_and_save` -> `do_create_project_full`, which commits the new
-        // project into `AppState` UNCONDITIONALLY - for every target, not only a
-        // re-adopt of the open one. The swap has therefore already happened by the
-        // time this resolves, and refusing would not undo it: it would leave the shell
-        // rendering the old project while every edit and every auto-save landed on the
-        // adopted one. Going through with the load is the lesser failure. Closing this
-        // window has to start in `speleodb_adopt_ariane`.
-        anotherOpen(openLink());
-        invokeIpcMock.mockImplementation((c: string) => {
-          if (c !== 'speleodb_adopt_ariane') return Promise.resolve(null);
-          useSpeleoStore.setState({ link: openLink({ hasUnpushedEdits: true }) });
-          return Promise.resolve({
-            local_path: '/cache/p1.stalx',
-            type_flipped: true,
-            concurrent_session: false,
-          });
-        });
-
-        expect(await hook().adoptRemote(SUMMARY)).toEqual({ status: 'opened' });
-        expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
       });
     });
   });
@@ -1338,459 +833,93 @@ describe('useOpenRemoteProject (#218)', () => {
     });
   });
 
-  it('adoptRemote adopts, loads, and reports opened', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_adopt_ariane')
-        return Promise.resolve({
-          local_path: '/cache/p1.stalx',
-          type_flipped: true,
-          concurrent_session: false,
-        });
-      return Promise.resolve(null);
-    });
-    const outcome = await hook().adoptRemote(SUMMARY);
-    expect(outcome).toEqual({ status: 'opened' });
-    const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_adopt_ariane');
-    expect(call?.[1]).toEqual({
-      projectId: 'p1',
-      projectName: 'Cave A',
-      latestCommitSha: 'abc123',
-      // The ordinary open->adopt route has confirmed no discard, so the backend's
-      // un-pushed-edits guard stays armed for it.
-      discardLocal: false,
-      // [#258] Absent on a first attempt - that is what lets the backend classify,
-      // and re-ask, normally. Only a replay from the picker carries a pick.
-      entryPath: null,
-    });
-  });
+});
 
-  /**
-   * [#270] An adopt is not a plain pull: the backend stamps the adopted `.stalx`
-   * `has_unpushed_edits: true` (it has just converted an Ariane .tml into a
-   * project the server has never been given). The shared seed defaults to the
-   * pull's answer - nothing outstanding - which is the exact flag `guardQuit` and
-   * `useProject`'s close guard read, so BOTH exit guards stayed disarmed over work
-   * that exists only locally. The only repair was the unawaited, error-swallowing
-   * status refresh: never, offline.
-   */
-  it('adoptRemote seeds the dirty bit TRUE when the hand-over did not push', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_adopt_ariane')
-        return Promise.resolve({
-          local_path: '/cache/p1.stalx',
-          type_flipped: false,
-          concurrent_session: false,
-          upload: { kind: 'lock_held', email: 'someone@else.example' },
-        });
-      return Promise.resolve(null);
-    });
 
-    await hook().adoptRemote(SUMMARY);
-
-    expect(setLinkOnOpenMock).toHaveBeenCalledWith({
-      permission: 'READ_AND_WRITE',
-      forPath: '/cache/p1.stalx',
-      hasUnpushedEdits: true,
-      projectId: 'p1',
-    });
-  });
-
-  /**
-   * The other half of the rule above, and the reason it is keyed on the outcome
-   * rather than on "this was an adopt": adoption now hands the conversion back to
-   * the server itself, and a landed hand-over clears the backend's dirty bit as part
-   * of the push. Seeding TRUE over that arms `guardQuit` and the close guard for a
-   * project with nothing outstanding - a "you have unsaved work" prompt on the way
-   * out of a project whose every byte is on the server.
-   */
-  /**
-   * The dirty seed asks ONE question - is the survey on the server - and a landed
-   * upload whose lock release failed answers it yes. Folding that outcome in with
-   * "never uploaded" marked a project dirty whose every byte was already safe, and
-   * told the user it was "on this machine only": the most alarming way to be wrong
-   * about where someone's only copy is.
-   */
-  it('adoptRemote seeds the dirty bit FALSE when the upload landed but the lock did not', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_adopt_ariane')
-        return Promise.resolve({
-          local_path: '/cache/p1.stalx',
-          type_flipped: true,
-          concurrent_session: false,
-          upload: { kind: 'pushed_lock_held' },
-        });
-      return Promise.resolve(null);
-    });
-
-    await hook().adoptRemote(SUMMARY);
-
-    expect(setLinkOnOpenMock).toHaveBeenCalledWith(
-      expect.objectContaining({ hasUnpushedEdits: false }),
-    );
-  });
-
-  it('adoptRemote seeds the dirty bit FALSE once the hand-over pushed', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_adopt_ariane')
-        return Promise.resolve({
-          local_path: '/cache/p1.stalx',
-          type_flipped: true,
-          concurrent_session: false,
-          upload: { kind: 'pushed' },
-        });
-      return Promise.resolve(null);
-    });
-
-    await hook().adoptRemote(SUMMARY);
-
-    expect(setLinkOnOpenMock).toHaveBeenCalledWith({
-      permission: 'READ_AND_WRITE',
-      forPath: '/cache/p1.stalx',
-      hasUnpushedEdits: false,
-      projectId: 'p1',
-    });
-  });
-
-  /**
-   * The toast's COLOUR is the only part of the outcome most users will read, so it has
-   * to track the outcome rather than the fact that a command returned. The neutral
-   * default said "done" over an adoption whose conversion never left this machine -
-   * the misleading direction, since that work is sitting in a cache directory nobody
-   * has a reason to look in.
-   *
-   * Green is reserved for the arm with nothing left to do. A push that landed under a
-   * project still typed `ariane` is amber with the local-only case, not green with the
-   * finished one: the `.stalx` is up there, but the project still advertises itself as
-   * an Ariane project, so it keeps offering Adopt and later `.tml` edits still look
-   * authoritative.
-   */
+describe('restricted-project warnings', () => {
   it.each([
-    ['pushed and re-typed', { kind: 'pushed' }, true, 'success', 'uploaded to SpeleoDB'],
-    // NOT keyed on "you still hold it": both lock-branch strings now contain it
-    // ("release the lock IF you still hold it"), because after the holder re-check
-    // this outcome also covers "the release may have landed but we could not
-    // establish whose the mutex is". The tail is what separates the two.
-    [
-      'pushed but the lock did not come back',
-      { kind: 'pushed_lock_held' },
-      true,
-      'warning',
-      'so others can edit',
-    ],
-    [
-      'pushed but still typed ariane',
-      { kind: 'pushed' },
-      false,
-      'warning',
-      'type could not be changed',
-    ],
-    // Both halves unfinished, from ONE cause: connectivity dropping after the upload
-    // lands fails the release AND the type call that follows it. The ladder used to
-    // stop at the lock-held rung and never read `type_flipped`, so this row was told
-    // about the lock alone - and after releasing it the project was still typed
-    // `ariane`, still offering Adopt over a `.stalx` that already exists. No later
-    // poll corrects that one; the toast is the only place it is ever said.
-    [
-      'pushed but neither the lock nor the type came back',
-      { kind: 'pushed_lock_held' },
-      false,
-      'warning',
-      'two things are unfinished',
-    ],
-    [
-      'never uploaded',
-      { kind: 'lock_held', email: null },
-      false,
-      'warning',
-      'on this machine only',
-    ],
-  ])(
-    'adoptRemote toasts %s as %s',
-    async (_label, upload, typeFlipped, expectedKind, expectedPhrase) => {
-    const showToast = vi.fn();
-    useUIStore.setState({ showToast });
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_adopt_ariane')
-        return Promise.resolve({
-          local_path: '/cache/p1.stalx',
-          type_flipped: typeFlipped,
-          concurrent_session: false,
-          upload,
-        });
-      return Promise.resolve(null);
-    });
-
-      await hook().adoptRemote(SUMMARY);
-
-      // The MESSAGE is pinned too, not just the colour. Two of these three rows are
-      // amber, so asserting the colour alone let the two amber messages swap places
-      // and stay green - and "uploaded, but the type could not be changed" shown for
-      // an adoption that never reached the server is a materially wrong thing to tell
-      // someone about where their work is.
-      expect(showToast).toHaveBeenCalledWith(
-        expect.stringContaining(expectedPhrase),
-        'speleodb-adopted',
-        expectedKind,
-      );
-    },
-  );
-
-  /**
-   * `pushed` is read from a shape that can grow arms, and only ONE of them means the
-   * bytes are on the server. An outcome this build cannot read - an older backend, a
-   * variant added later - must therefore fall to the protective answer, because the
-   * two ways of being wrong do not cost the same: a false "pushed" disarms both exit
-   * guards over a conversion that may exist only in this cache, while a false
-   * "unpushed" costs one redundant prompt until the next status poll.
-   */
-  it.each([
-    ['an outcome this build does not know', { kind: 'invented_later' }],
-    ['no outcome at all', undefined],
-  ])('adoptRemote treats %s as NOT pushed', async (_label, upload) => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_adopt_ariane')
-        return Promise.resolve({
-          local_path: '/cache/p1.stalx',
-          type_flipped: true,
-          concurrent_session: false,
-          upload,
-        });
-      return Promise.resolve(null);
-    });
-
-    await hook().adoptRemote(SUMMARY);
-
-    expect(setLinkOnOpenMock).toHaveBeenCalledWith(
-      expect.objectContaining({ hasUnpushedEdits: true }),
-    );
+    { permission: 'READ_ONLY' as const, lock_holder: null },
+    { permission: 'READ_AND_WRITE' as const, lock_holder: 'other@example.com' },
+    { permission: 'READ_ONLY' as const, lock_holder: 'other@example.com' },
+  ])('cancel prevents opening $permission / $lock_holder', async (access) => {
+    confirmMock.mockResolvedValue(false);
+    expect(await hook().openRemote({ ...SUMMARY, ...access })).toEqual({ status: 'cancelled' });
+    expect(confirmMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ kind: 'warning', title: SUMMARY.name }));
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(loadProjectMock).not.toHaveBeenCalled();
   });
 
-  // End to end through the REAL seed, since the point is the state the exit guards
-  // are left reading (mirrors the keepLocalCopy case above).
-  it('arms the quit guard after adoptRemote (real store seed)', async () => {
-    useSpeleoStore.setState({ setLinkOnOpen: realSetLinkOnOpen });
-    useUIStore.setState({ openDialog: vi.fn() as never, activeDialog: null, dialogData: {} });
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_adopt_ariane')
-        return Promise.resolve({
-          local_path: '/cache/p1.stalx',
-          type_flipped: false,
-          concurrent_session: false,
-        });
-      return Promise.resolve(null);
-    });
-
-    await hook().adoptRemote(SUMMARY);
-
-    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
-    useProjectStore.setState({ project: { name: 'Cave A' } as never, isDirty: false });
-    expect(guardQuit()).toBe(true);
-    expect(useUIStore.getState().openDialog).toHaveBeenCalledWith('speleodb-quit');
+  it('accepting the warning opens the project with read-only permission', async () => {
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
+    expect(await hook().openRemote({ ...SUMMARY, permission: 'READ_ONLY' })).toEqual({ status: 'opened' });
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith(expect.objectContaining({ permission: 'READ_ONLY' }));
+    expect(confirmMock.mock.invocationCallOrder[0]).toBeLessThan(invokeIpcMock.mock.invocationCallOrder[0]!);
   });
 
-  /**
-   * [#214/#270] The take-remote branch had to grow the Ariane route `openRemote`
-   * already had, and to carry the discard the user just confirmed into the adopt.
-   *
-   * Both halves are needed and neither is hypothetical: an adopt stamps the cache
-   * copy un-pushed and the server `type` flip is best-effort, so an adopt without
-   * write access leaves a project that is BOTH dirty locally (raising the refused-
-   * open prompt) and still classified Ariane (so taking the server copy lands on
-   * AdoptAriane). Without the route the user hit a flat "this project is an Ariane
-   * project" error with nothing opened; with the route but no waiver, the adopt's
-   * own guard then refused the discard they had already confirmed.
-   */
-  describe('takeRemoteDiscardingLocal on a still-Ariane project', () => {
-    const arianeRefusal = () => {
-      invokeIpcMock.mockImplementation((cmd: string) => {
-        if (cmd === 'speleodb_open_project_discarding_local')
-          return Promise.reject({ message: 'ariane', action: 'Adopt' });
-        if (cmd === 'speleodb_adopt_ariane')
-          return Promise.resolve({
-            local_path: '/cache/p1.stalx',
-            type_flipped: false,
-            concurrent_session: false,
-          });
-        return Promise.resolve(null);
-      });
-    };
-
-    it('routes to adoption instead of dead-ending on the raw error', async () => {
-      arianeRefusal();
-      const outcome = await hook().takeRemoteDiscardingLocal(SUMMARY);
-      expect(outcome).toEqual({ status: 'adopt', discardLocal: true });
-    });
-
-    it('and that adoption waives the guard the user already answered', async () => {
-      arianeRefusal();
-      await hook().adoptRemote(SUMMARY, { discardLocal: true });
-      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_adopt_ariane');
-      expect(call?.[1]).toMatchObject({ discardLocal: true });
-    });
+  it('unlocked writable projects open without a warning', async () => {
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
+    expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+    expect(confirmMock).not.toHaveBeenCalled();
   });
+});
 
-  describe('a picker replay that needs a re-login (#258)', () => {
-    const CANDIDATES = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
-    ];
+function deferredOpen<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
 
-    const session = () => ({
-      loggedIn: true,
-      userEmail: 'someone@example.test',
-      endpoint: 'https://example.test',
-      keychainBacked: true,
-      storage: 'keychain' as const,
-      keychain: { available: true, declined: false, probed: true } as never,
-    });
+it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)(
+  '%s cannot replay a slow remote download over a newer project selection', async (action) => {
+    const download = deferredOpen<{ local_path: string; concurrent_session: boolean }>();
+    const entered = deferredOpen<void>();
+    invokeIpcMock.mockImplementation(() => { entered.resolve(); return download.promise; });
+    const beforeLoad = vi.fn();
+    const pending = hook({ onBeforeLoad: beforeLoad })[action](SUMMARY);
+    await entered.promise;
+    const { runConfirmedProjectSwitch } = await import('../utils/projectTransition');
+    await runConfirmedProjectSwitch('/newer.stalx', () => null, true, async () => ({ success: true }));
+    download.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+    expect(await pending).toEqual({ status: 'cancelled' });
+    expect(setLinkOnOpenMock).not.toHaveBeenCalled();
+    expect(loadProjectMock).not.toHaveBeenCalled();
+    expect(beforeLoad).not.toHaveBeenCalled();
+  },
+);
 
-    /**
-     * The picker is a user interaction of unbounded length, so the token can die
-     * between the ambiguity that raised it and the pick that replays it. The backend
-     * has already dropped its session by then; the replay's `reLogin` is the only
-     * thing that tells this side to do the same, and all three replay callbacks used
-     * to throw the message and discard it - leaving the frontend claiming to be
-     * logged in, with the picker still up offering to retry against nothing.
-     */
-    /**
-     * The replayed verb is chosen by the ambiguity's KIND, not by the verb that
-     * raised it (an adoption whose new tree holds `.stalx` replays the OPEN), so each
-     * case has to announce the kind that routes back to the verb under test.
-     */
-    const ambiguousThenDeadToken = (cmd: string, kind: 'stalx' | 'ariane') => {
-      invokeIpcMock.mockImplementation((c: string, args?: Record<string, unknown>) => {
-        if (c !== cmd) return Promise.resolve(null);
-        if (args?.entryPath)
-          return Promise.reject({
-            message: 'your session has expired',
-            action: 'ReLogin',
-            status: 401,
-          });
-        return Promise.reject({
-          message: 'more than one',
-          action: 'Ambiguous',
-          status: null,
-          dump_candidates: CANDIDATES,
-          dump_candidate_kind: kind,
-        });
-      });
-    };
+it('suppresses a stale download error instead of replacing a newer dialog', async () => {
+  const download = deferredOpen<never>();
+  const entered = deferredOpen<void>();
+  invokeIpcMock.mockImplementation(() => { entered.resolve(); return download.promise; });
+  const pending = hook().openRemote(SUMMARY);
+  await entered.promise;
+  const { reserveProjectRequest } = await import('../utils/projectTransition');
+  reserveProjectRequest();
+  download.reject(new Error('stale download failure'));
+  expect(await pending).toEqual({ status: 'cancelled' });
+  expect(useUIStore.getState().openDialog).not.toHaveBeenCalled();
+});
 
-    type Case = [
-      verb: string,
-      cmd: string,
-      kind: 'stalx' | 'ariane',
-      run: (h: ReturnType<typeof hook>) => Promise<unknown>,
-    ];
-    const VERBS: Case[] = [
-      ['openRemote', 'speleodb_open_project', 'stalx', (h) => h.openRemote(SUMMARY)],
-      [
-        'takeRemoteDiscardingLocal',
-        'speleodb_open_project_discarding_local',
-        'stalx',
-        (h) => h.takeRemoteDiscardingLocal(SUMMARY),
-      ],
-      ['adoptRemote', 'speleodb_adopt_ariane', 'ariane', (h) => h.adoptRemote(SUMMARY)],
-    ];
+it('does not download after a stale native warning is accepted', async () => {
+  const warning = deferredOpen<boolean>();
+  confirmMock.mockReturnValue(warning.promise);
+  const pending = hook().openRemote({ ...SUMMARY, permission: 'READ_ONLY' });
+  const { reserveProjectRequest } = await import('../utils/projectTransition');
+  reserveProjectRequest();
+  warning.resolve(true);
+  expect(await pending).toEqual({ status: 'cancelled' });
+  expect(invokeIpcMock).not.toHaveBeenCalled();
+});
 
-    it.each(VERBS)('drops the session when the %s replay reports one', async (_v, cmd, kind, run) => {
-      useSpeleoStore.setState({ session: session() });
-      const before = useSpeleoStore.getState().sessionGeneration;
-      ambiguousThenDeadToken(cmd, kind);
-
-      const outcome = await run(hook());
-      expect(outcome).toEqual({ status: 'ambiguous' });
-      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
-
-      await useSpeleoStore.getState().resolveDumpPicker('a.stalx');
-
-      const s = useSpeleoStore.getState();
-      expect(s.session).toBeNull();
-      expect(s.sessionGeneration).toBe(before + 1);
-      // `clearSession` is what closes the picker, and it must actually close: a
-      // dialog offering to retry against a session that no longer exists is a dead
-      // end whichever button is pressed.
-      expect(s.dumpPickerOpen).toBe(false);
-      // ...and the replay's throw must not paint an error onto the closed dialog,
-      // where it would surface on whatever picker opens next.
-      expect(s.dumpPickerError).toBeNull();
-    });
-
-    it('does not raise a picker for a session that ended while the request was out', async () => {
-      // Ambiguity is a routing signal, so the catch that receives it opens a dialog
-      // rather than reporting anything - and these verbs make a call of unbounded
-      // length, so a 401 auto-drop on any concurrent call can end the session
-      // underneath them. Routing anyway put a picker on screen for an account nobody
-      // was signed in to, where every button fails.
-      useSpeleoStore.setState({ session: session() });
-      invokeIpcMock.mockImplementation((c: string) => {
-        if (c !== 'speleodb_open_project') return Promise.resolve(null);
-        // Something else drops the session while this request is in flight.
-        useSpeleoStore.getState().clearSession();
-        return Promise.reject({
-          message: 'more than one',
-          action: 'Ambiguous',
-          status: null,
-          dump_candidates: CANDIDATES,
-          dump_candidate_kind: 'stalx',
-        });
-      });
-
-      const outcome = await hook().openRemote(SUMMARY);
-
-      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
-      expect(outcome).toMatchObject({ status: 'error' });
-    });
-
-    it('does not raise a picker once a refresh has reported the session logged out', async () => {
-      // `setSession` writes whatever the backend reports and does NOT bump the
-      // generation - it is the benign refresh a project load and Settings both
-      // trigger - so a reply that comes back `logged_in: false` leaves a session
-      // object behind at the same generation. The picker must not open for it.
-      useSpeleoStore.setState({ session: session() });
-      invokeIpcMock.mockImplementation((c: string) => {
-        if (c !== 'speleodb_open_project') return Promise.resolve(null);
-        useSpeleoStore.setState({ session: { ...session(), loggedIn: false } });
-        return Promise.reject({
-          message: 'more than one',
-          action: 'Ambiguous',
-          status: null,
-          dump_candidates: CANDIDATES,
-          dump_candidate_kind: 'stalx',
-        });
-      });
-
-      await hook().openRemote(SUMMARY);
-      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
-    });
-
-    it('still reports an ordinary replay failure without dropping the session', async () => {
-      // The other half of the same branch: only `reLogin` ends the session. A replay
-      // that fails for any other reason has to leave the picker up, with its reason
-      // on it, so the user can simply answer again.
-      useSpeleoStore.setState({ session: session() });
-      invokeIpcMock.mockImplementation((c: string, args?: Record<string, unknown>) => {
-        if (c !== 'speleodb_open_project') return Promise.resolve(null);
-        if (args?.entryPath)
-          return Promise.reject({ message: 'that file is corrupt', action: null, status: 500 });
-        return Promise.reject({
-          message: 'more than one',
-          action: 'Ambiguous',
-          status: null,
-          dump_candidates: CANDIDATES,
-        });
-      });
-
-      await hook().openRemote(SUMMARY);
-      await useSpeleoStore.getState().resolveDumpPicker('a.stalx');
-
-      const s = useSpeleoStore.getState();
-      expect(s.session).not.toBeNull();
-      expect(s.dumpPickerOpen).toBe(true);
-      // The message itself comes from the mocked `getErrorMessage` at the top of this
-      // file; what matters here is that a reason was recorded ON the still-open
-      // picker rather than the session being torn down under it.
-      expect(s.dumpPickerError).not.toBeNull();
-    });
-  });
+it('does not continue a remote download across login/logout', async () => {
+  const download = deferredOpen<{ local_path: string; concurrent_session: boolean }>();
+  const entered = deferredOpen<void>();
+  invokeIpcMock.mockImplementation(() => { entered.resolve(); return download.promise; });
+  const pending = hook().openRemote(SUMMARY);
+  await entered.promise;
+  useSpeleoStore.setState((state) => ({ sessionGeneration: state.sessionGeneration + 1 }));
+  download.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+  expect(await pending).toEqual({ status: 'cancelled' });
+  expect(loadProjectMock).not.toHaveBeenCalled();
 });

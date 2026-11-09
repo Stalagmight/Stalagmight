@@ -66,7 +66,7 @@ pub fn app_state_with_project_db(project: Project) -> Result<(AppState, TestDb)>
 //     unguarded test's save resolved INTO that test's isolated dir. That is
 //     #522: an unguarded test atomically renamed its own `config.toml` over the
 //     isolated test's file, between that test's save and its read-back, and
-//     failed an assertion about keychain retry logic with an environment
+//     failed an assertion about credential persistence with an environment
 //     problem.
 //
 // Per-thread resolution closes both, and needs no process-wide mutex, so
@@ -269,12 +269,14 @@ pub fn with_isolated_config<T>(f: impl FnOnce() -> T) -> T {
 /// race, or a worker whose write the parent reads back - capture on the parent
 /// and adopt inside the worker:
 ///
-/// ```ignore
+/// ```
+/// use stalagmight_core::test_helpers::ConfigHandoff;
+///
 /// let handoff = ConfigHandoff::capture();
 /// std::thread::spawn(move || {
 ///     let _config = handoff.adopt();
 ///     // ... every Config::load()/save() here is the parent's file
-/// });
+/// }).join().expect("config worker should finish");
 /// ```
 ///
 /// `Clone` because a `'static` thread closure has to own its copy: capture once
@@ -366,14 +368,10 @@ mod tests {
     /// paths would pass just as well if the save had failed.
     fn save_marked_config(marked: bool) -> (PathBuf, bool) {
         let mut config = Config::default();
-        config.speleodb.keychain_has_token = marked;
+        config.speleodb.insecure_http = marked;
         config.save().expect("save the config");
         let path = Config::config_path().expect("config path");
-        let landed = Config::load()
-            .expect("read it back")
-            .speleodb
-            .keychain_has_token
-            == marked;
+        let landed = Config::load().expect("read it back").speleodb.insecure_http == marked;
         (path, landed)
     }
 
@@ -408,7 +406,7 @@ mod tests {
             Config::load()
                 .expect("read our config back")
                 .speleodb
-                .keychain_has_token,
+                .insecure_http,
             "the foreign write must not be able to land in the file this test wrote"
         );
         // And it took its directory with it: `join` returns after the worker's
@@ -492,7 +490,7 @@ mod tests {
             Config::load()
                 .expect("read our config back")
                 .speleodb
-                .keychain_has_token,
+                .insecure_http,
             "and the parent reads what the worker wrote"
         );
     }

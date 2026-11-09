@@ -4,6 +4,19 @@
 
 Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. Saves are triggered manually (Ctrl+S), automatically via a frontend debounced timer, or by the first import into a new project whose initial save was deferred (`finalize_deferred_import` in `src-tauri/src/commands/import.rs`). A failed deferred-import save degrades to a successful import carrying a warning, never a hard failure, so the imported data stays in memory under the close-guard. The save pipeline is optimized to return quickly by deferring non-critical work to background threads and avoiding unnecessary recomputation.
 
+For a linked SpeleoDB project being edited under its write lock, manual Save
+(Ctrl+S or the menu action) asks for a nonblank commit message, saves locally,
+and uploads the native SQLite `project.stalx` through the dedicated endpoint.
+Autosave writes locally, including while the message dialog is open or cancelled.
+Confirmation saves locally and immediately uploads; only a confirmed upload reports
+combined success. Failed or uncertain uploads retain the message and saved file for
+retry without making the local disk dirty. The lock remains held.
+Closing, switching projects or quitting offers Keep lock as the default local exit.
+Release without uploading requires explicit confirmation: edits remain local and
+another collaborator may advance the remote project. A requested local-save failure
+blocks exit; failed upload/release blocks the corresponding exit action. See
+[SpeleoDB integration](SpeleoDB.md) for the transfer and lock contract.
+
 Every import-into-new-project flow now creates its project deferred, so the
 `.stalx` appears on the first import rather than at the moment the name is typed
 (#394 F14) - a wizard abandoned before then leaves no empty file and no Recent
@@ -74,7 +87,7 @@ place, recorded in Recent Projects, and the function returns with
 `CommandResult.unlinked_copy_path` set - steps 7, 8 and 9 are skipped on
 purpose, because the session stays on the managed file.
 
-### Frontend (`saveProject` in `projectStore.ts`)
+### Frontend (`saveProject` in `projectSaveActions.ts`)
 
 ```
 1. invoke('save_project', { path })
@@ -83,8 +96,11 @@ purpose, because the session stays on the managed file.
    file_path and isDirty are left untouched
 3. If saved_path in result, update project.file_path in store
 4. refreshUndoState() - lightweight, just fetches can_undo/can_redo booleans
-5. Set isDirty: false
+5. Clear isDirty only if no newer edits arrived during the save
 ```
+
+Save completion checks the original project identity and load generation before
+updating paths or dirty state. A late result cannot repaint a replacement project.
 
 The frontend calls `refreshProjectState()` after a save ONLY when the project entered the save with integrity issues (the backend's save-time heals mutate the live project). A clean save skips it: it changes no computed data (stations, stats, warnings), so recomputing everything would be wasted work. The only state that changes is `file_path` (on first save or save-as), which the backend returns via `CommandResult.saved_path`. When the save produced a detached copy instead (see Save a Copy below), the path comes back in `unlinked_copy_path` and `saved_path` is absent.
 
@@ -216,7 +232,7 @@ The `save_project` backend command returns the save path as a string in `Command
 |------|---------|
 | `src-tauri/crates/core/src/core/state/project_io.rs` | Backend `save_project`, atomic save logic (`open_project` lives in `project_load.rs`) |
 | `src-tauri/crates/core/src/core/command.rs` | `CommandResult` with `saved_path` field |
-| `src/store/projectStore.ts` | Frontend `saveProject()` action |
+| `src/store/projectSaveActions.ts` | Frontend `saveProject()` action and completion ownership |
 | `src/hooks/useAutoSave.ts` | Debounced auto-save hook |
 | `src-tauri/crates/persistence/src/persistence/sqlite.rs` | SQLite database operations |
 | `docs/undo-redo.md` | Undo/redo stack persistence details |

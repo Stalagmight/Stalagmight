@@ -68,8 +68,6 @@ beforeEach(() => {
   invokeIpcMock.mockImplementation((cmd: string) => {
     if (cmd === 'speleodb_get_project_metadata') return Promise.resolve(META);
     if (cmd === 'speleodb_patch_project') return Promise.resolve({ ...META, name: 'Cave AB' });
-    if (cmd === 'speleodb_list_collaborators') return Promise.resolve({ users: [], teams: [] });
-    if (cmd === 'speleodb_list_teams') return Promise.resolve([]);
     if (cmd === 'speleodb_get_revisions') return Promise.resolve([]);
     return Promise.resolve(null);
   });
@@ -87,10 +85,10 @@ beforeEach(() => {
 });
 
 describe('SpeleoDbProjectDialog', () => {
-  it('renders all four tabs for a remote project, starting on General', async () => {
+  it('renders all three tabs for a remote project, starting on General', async () => {
     seed();
     render(<SpeleoDbProjectDialog />);
-    for (const tk of ['general', 'collaborators', 'history', 'admin']) {
+    for (const tk of ['general', 'history', 'admin']) {
       expect(screen.getByTestId(`speleodb-project-tab-${tk}`)).toBeInTheDocument();
     }
     expect(screen.getByTestId('speleodb-project-tab-general')).toHaveAttribute(
@@ -105,13 +103,13 @@ describe('SpeleoDbProjectDialog', () => {
     render(<SpeleoDbProjectDialog />);
     await screen.findByTestId('speleodb-settings-tab');
 
-    await userEvent.click(screen.getByTestId('speleodb-project-tab-collaborators'));
-    expect(await screen.findByTestId('speleodb-collaborators-tab')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('speleodb-project-tab-history'));
+    expect(await screen.findByTestId('speleodb-revisions')).toBeInTheDocument();
     expect(screen.queryByTestId('speleodb-settings-tab')).toBeNull();
 
     await userEvent.click(screen.getByTestId('speleodb-project-tab-admin'));
     expect(screen.getByTestId('speleodb-admin-tab')).toBeInTheDocument();
-    expect(screen.queryByTestId('speleodb-collaborators-tab')).toBeNull();
+    expect(screen.queryByTestId('speleodb-revisions')).toBeNull();
 
     await userEvent.click(screen.getByTestId('speleodb-project-tab-history'));
     expect(await screen.findByTestId('speleodb-revisions')).toBeInTheDocument();
@@ -145,7 +143,7 @@ describe('SpeleoDbProjectDialog', () => {
     expect(screen.getByTestId('speleodb-settings-save')).toBeEnabled();
 
     // Every other tab writes to the server on click - no staged Save to offer.
-    await userEvent.click(screen.getByTestId('speleodb-project-tab-collaborators'));
+    await userEvent.click(screen.getByTestId('speleodb-project-tab-history'));
     expect(screen.queryByTestId('speleodb-settings-save')).toBeNull();
     // The Close button is on every tab so the footer does not jump.
     expect(screen.getByTestId('speleodb-project-close')).toBeInTheDocument();

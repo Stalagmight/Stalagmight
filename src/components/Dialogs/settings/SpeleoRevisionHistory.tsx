@@ -4,15 +4,13 @@ import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
 import { useUIStore } from '../../../store/uiStore';
 import {
-  speleoProjectSessionIssuedFor,
-  speleoProjectSessionStillCurrent,
   useSpeleoStore,
 } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
 import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
 import { invokeIpc } from '../../../utils/ipc';
-import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../../../utils/speleoError';
+import { humanizeSpeleoError, unpushedLocalEdits, } from '../../../utils/speleoError';
 import { holdsWriteLock } from '../../../utils/quit';
 import { permissionAtLeast } from '../../../utils/speleoPermission';
 import { formatDate } from '../../../i18n/format';
@@ -65,7 +63,6 @@ export function SpeleoRevisionHistory() {
   // would clobber their unsaved, lock-less edits, so the backend refuses both and the
   // UI offers no action. Shared predicate - see `holdsWriteLock`.
   const iHoldLock = useSpeleoStore((s) => holdsWriteLock(s.link));
-  const openDumpPicker = useSpeleoStore((s) => s.openDumpPicker);
   // A View is read-only in INTENT, but not in effect: the backend swaps the working
   // copy to the chosen revision, so it runs the same un-pushed-edits guard a Restore
   // does and refuses whenever this copy holds work the server has never seen. That
@@ -112,11 +109,10 @@ export function SpeleoRevisionHistory() {
   // Read-only View of a past revision (no lock): check it out for inspection; the
   // SpeleoDB Update then fast-forwards back to the latest. Errors toast (there is no
   // confirm dialog for the non-destructive path).
-  const handleView = async (rev: SpeleoRevision, entryPath?: string) => {
+  const handleView = async (rev: SpeleoRevision) => {
     if (!projectId) return;
     setPendingId(rev.id);
     // Captured BEFORE the request; the ambiguity catch checks both.
-    const issuedFor = speleoProjectSessionIssuedFor(projectId);
     try {
       const applied = await restoreRevision({
         projectId,
@@ -124,25 +120,9 @@ export function SpeleoRevisionHistory() {
         hexsha: rev.id,
         shortSha: rev.id.slice(0, 8),
         restore: false,
-        ...(entryPath ? { entryPath } : {}),
       });
       if (!applied) return;
     } catch (e) {
-      // [#258] More than one openable file: a question, not a failure. No lock is
-      // ever held on the View path, so the retry is simply this same call again -
-      // and re-entering HERE rather than the hook means the retry's own failure
-      // lands in the toast below, exactly as a first attempt's would.
-      const candidates = dumpCandidates(e);
-      // [#258 review] Same issuing-session guard the open verbs use, PLUS the project
-      // one they must not use. A View binds to whatever is open, so dismissing this
-      // dialog and opening something else while the download is out would raise project
-      // A's picker over project B - and its retry cannot succeed, because the backend
-      // binds a revision swap to the open project. The owning component is unmounted by
-      // then too, so the picker could only sit there showing the mismatch.
-      if (candidates && speleoProjectSessionStillCurrent(issuedFor)) {
-        openDumpPicker(candidates, 'stalx', (chosen) => handleView(rev, chosen));
-        return;
-      }
       // The un-pushed-edits refusal is normally pre-empted by `viewBlocked`, but the
       // dirty bit can flip between render and click (an auto-save, a poll), so the
       // race still has to say the same thing the hint does rather than fall through

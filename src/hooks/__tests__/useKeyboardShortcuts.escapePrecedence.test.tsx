@@ -6,7 +6,8 @@
  * and the picker stays armed underneath it.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { render, renderHook } from '@testing-library/react';
+import { DialogWrapper } from '../../components/Dialogs/DialogWrapper';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { useUIStore } from '../../store/uiStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
@@ -51,4 +52,15 @@ describe('useKeyboardShortcuts Escape precedence (#395)', () => {
     expect(useGasPlanStore.getState().originPickArmed).toBe(true);
     expect(useUIStore.getState().activeDialog).toBeNull();
   });
+});
+
+
+it('routes Escape from outside the dialog through its dismissal guard', () => {
+  const guardedDismiss = vi.fn();
+  useUIStore.setState({ activeDialog: 'speleodb-close' });
+  renderHook(() => useKeyboardShortcuts());
+  render(<DialogWrapper title="Synthetic busy operation" onClose={guardedDismiss}><p>Busy</p></DialogWrapper>);
+  pressEscape();
+  expect(guardedDismiss).toHaveBeenCalledOnce();
+  expect(useUIStore.getState().activeDialog).toBe('speleodb-close');
 });

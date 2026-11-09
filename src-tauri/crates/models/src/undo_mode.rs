@@ -31,7 +31,7 @@ pub enum UndoMode {
     Disabled,
     /// Catch-all for a value this build does not know; normalized to `Full`.
     ///
-    /// Same `#[serde(other)]` idiom as `TokenFallback::Unknown` / `ThemeMode`: a
+    /// Same `#[serde(other)]` idiom as `ThemeMode`: a
     /// hand-edited config, or one written by a NEWER build, must not stop the file
     /// loading. It is normalized rather than honoured because the safe default for
     /// an unreadable policy is the documented one, and because every consumer asks

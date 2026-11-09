@@ -1,22 +1,11 @@
-//! Serde DTOs for the SpeleoDB v2 JSON API (read-only spike, #183), plus the
-//! IPC-facing summary types returned to the webview.
-//!
-//! Wire format: the `/api/v2/` endpoints return **bare** JSON (the serializer
-//! output directly). Only the deprecated `/api/v1/` alias is wrapped in a
-//! `{data, success, …}` envelope by `DRFWrapResponseMiddleware`, which
-//! early-returns unless `/api/v1/` is in the path. So a project list is a bare
-//! JSON array and a project detail is a bare JSON object - no envelope to peel.
-//!
-//! Only the fields the spike needs are modelled; serde ignores the rest. Fields
-//! the server *omits* when empty (notably `permission` when the user has no
-//! access) are `Option<_>` with `#[serde(default)]`.
+//! Application projections of SDK responses and IPC-facing types.
+//! The generated SDK owns the HTTP wire contract.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 // [Track A] #186/D-B2: the typed action carried on the IPC error DTO.
 use super::contract::{SpeleoDbAction, TransportCause};
-use crate::models::ImportReceipt;
 
 /// Project permission level.
 ///
@@ -26,7 +15,7 @@ use crate::models::ImportReceipt;
 /// an integer; that is incorrect for the wire format.
 ///
 /// Variants are ordered ascending so `>=` expresses capability thresholds
-/// (download ≥ `ReadOnly`, upload/lock ≥ `ReadAndWrite`, delete/collab = `Admin`).
+/// (download ≥ `ReadOnly`, upload/lock ≥ `ReadAndWrite`, administration = `Admin`).
 ///
 /// `export_to` without `export` (C3 rule): the file itself is still written
 /// only by the gen_ipc_types example (which takes the file name), but the path
@@ -245,7 +234,7 @@ pub struct Project {
     pub latest_commit: Option<Commit>,
     /// Raw project-type label (`ariane`/`compass`/…/`other`). Kept as the wire
     /// string: it is only a display heuristic, and staying a string is robust to
-    /// new server types. The dump classifier is the authoritative openability check.
+    /// new server types. The project browser includes only STALAGMIGHT projects.
     #[serde(default, rename = "type")]
     pub kind: String,
     // [Track A] #185/D-A-methods: the server's GeoJSON-export toggle. Parsed (not
@@ -271,61 +260,10 @@ pub struct Project {
     pub(crate) longitude: Option<f64>,
 }
 
-/// One active per-user permission grant on a project, from the `permissions[]`
-/// array of `GET /api/v2/projects/{id}/permissions/user/` (#215). Only the fields
-/// the collaborator UI needs are modelled; serde ignores `creation_date` etc.
-#[derive(Debug, Clone, Deserialize)]
-pub struct UserPermission {
-    /// Collaborator email.
-    pub user: String,
-    pub level: Permission,
-}
-
-/// Wrapper for `GET .../permissions/user/` -> `{project, permissions: [...]}`.
-/// Only the permissions array is consumed (the sibling `project` is ignored).
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct UserPermissionList {
-    #[serde(default)]
-    pub(crate) permissions: Vec<UserPermission>,
-}
-
-/// One active per-team permission grant, from `GET .../permissions/team/` (#215).
-/// `team` is the team UUID (resolved to a display name against the caller's team
-/// list, falling back to the raw UUID).
-#[derive(Debug, Clone, Deserialize)]
-pub struct TeamPermission {
-    pub team: String,
-    pub level: Permission,
-}
-
-/// Wrapper for `GET .../permissions/team/` -> `{project, permissions: [...]}`.
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct TeamPermissionList {
-    #[serde(default)]
-    pub(crate) permissions: Vec<TeamPermission>,
-}
-
-/// A survey team the authenticated user belongs to, from the bare-array
-/// `GET /api/v2/teams/` (#215). Only id + name are consumed (the name map for the
-/// team roster + the add-team picker).
-#[derive(Debug, Clone, Deserialize)]
-pub struct Team {
-    pub id: String,
-    pub name: String,
-}
-
-/// One autocomplete suggestion from the bare-array `GET /api/v2/user/autocomplete/`
-/// (#215): a user matched by email/name substring. The server pre-formats `label`
-/// as "Name <email>"; `name` is ignored (folded into `label`).
-#[derive(Debug, Clone, Deserialize)]
-pub struct UserAutocomplete {
-    pub email: String,
-    pub label: String,
-}
-
 /// IPC-facing summary of a project for the spike dialog's list. Derived from
 /// [`Project`]; carries only display fields - never a token or raw API detail.
 #[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "../../bindings/SpeleoProjectSummary.ts")]
 pub struct SpeleoProjectSummary {
     pub id: String,
     pub name: String,
@@ -336,6 +274,34 @@ pub struct SpeleoProjectSummary {
     pub type_tag: String,
     /// SHA of the latest commit, if the project has any commits.
     pub latest_commit_sha: Option<String>,
+}
+
+/// Access inspection is conservative when the server cannot be verified.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../bindings/")]
+pub struct SpeleoFileAccess {
+    pub project: SpeleoProjectSummary,
+    pub endpoint: String,
+    pub verification: SpeleoAccessVerification,
+    pub release_context: Option<SpeleoReleaseContext>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../bindings/")]
+pub enum SpeleoAccessVerification {
+    Verified,
+    Unavailable,
+}
+
+/// Consent to release local unpushed work belongs to this account and project.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../bindings/")]
+pub struct SpeleoReleaseContext {
+    pub session_generation: String,
+    pub project_id: String,
+    pub endpoint: String,
+    pub user_email: String,
 }
 
 impl SpeleoProjectSummary {
@@ -359,87 +325,6 @@ pub struct SpeleoLoginResult {
     /// The server this login authenticated against (the resolved endpoint), so the
     /// UI can show "signed in as … at …" immediately without re-querying.
     pub endpoint: String,
-    /// True when the token was stored in the OS keychain; false means a
-    /// session-only in-memory fallback (e.g. headless CI with no secret service).
-    ///
-    /// Kept alongside `storage` rather than replaced by it: this bool answers
-    /// "durable?" for existing callers, while `storage` answers "where?".
-    pub keychain_backed: bool,
-    /// Where the API key actually ended up. `keychain_backed` cannot distinguish
-    /// the plaintext file from session-only memory, and the two have very
-    /// different consequences for the user.
-    pub storage: TokenStorage,
-    /// What this login taught us about the OS keychain.
-    pub keychain: KeychainReport,
-    /// The keychain failed during THIS login and the user has not already told us
-    /// where to put the key instead - so the frontend should ask, now, while the
-    /// failure is in context. False when the keychain worked, and false when the
-    /// user has already declined it (we are not re-litigating a settled choice).
-    pub needs_storage_choice: bool,
-}
-
-/// Where the API key is being kept. Mirrors `auth::TokenTier` across the IPC
-/// boundary.
-#[derive(Debug, Clone, Copy, Serialize, TS, PartialEq, Eq)]
-#[ts(export, export_to = "../../bindings/")]
-#[serde(rename_all = "snake_case")]
-pub enum TokenStorage {
-    /// The OS keychain: survives a restart, encrypted by the platform.
-    Keychain,
-    /// A `0o600` file under the app config dir: survives a restart, but readable
-    /// by anything running as this user.
-    Plaintext,
-    /// This session only: gone when the app closes.
-    Memory,
-}
-
-/// What is known about the OS keychain - strictly what earlier access taught us,
-/// never the result of a probe. Probing a locked keyring is itself what raises a
-/// desktop unlock prompt, so `NotAttempted` is a real answer we show rather than
-/// go looking.
-#[derive(Debug, Clone, Copy, Serialize, TS, PartialEq, Eq)]
-#[ts(export, export_to = "../../bindings/")]
-#[serde(rename_all = "snake_case")]
-pub enum KeychainReport {
-    /// Nothing has touched it yet (no login this session, no rehydrate).
-    NotAttempted,
-    /// A read or write succeeded.
-    Available,
-    /// A read or write failed - absent, locked, or refused.
-    Unavailable,
-    /// The user declined it; we are deliberately leaving it alone until they sign
-    /// in again.
-    Declined,
-    /// Switched off in Settings. Reported apart from [`Self::Declined`] because the
-    /// retry verb revokes a decline but cannot bypass this, so a frontend that
-    /// cannot tell them apart offers a control that does nothing.
-    Disabled,
-}
-
-// The storage layer and the IPC surface keep separate enums on purpose, so the
-// tiers can be reworked without breaking the webview contract. These are the two
-// bridges, kept next to the IPC types they produce.
-
-impl From<super::auth::TokenTier> for TokenStorage {
-    fn from(tier: super::auth::TokenTier) -> Self {
-        match tier {
-            super::auth::TokenTier::Keychain => Self::Keychain,
-            super::auth::TokenTier::Plaintext => Self::Plaintext,
-            super::auth::TokenTier::Memory => Self::Memory,
-        }
-    }
-}
-
-impl From<super::auth::KeychainState> for KeychainReport {
-    fn from(state: super::auth::KeychainState) -> Self {
-        match state {
-            super::auth::KeychainState::NotAttempted => Self::NotAttempted,
-            super::auth::KeychainState::Available => Self::Available,
-            super::auth::KeychainState::Unavailable => Self::Unavailable,
-            super::auth::KeychainState::Declined => Self::Declined,
-            super::auth::KeychainState::Disabled => Self::Disabled,
-        }
-    }
 }
 
 /// [#206] The editable SpeleoDB project metadata, returned to the webview by
@@ -476,49 +361,6 @@ impl SpeleoProjectMetadata {
     }
 }
 
-/// [#215] One individual collaborator on the linked project, returned to the
-/// Project Settings tab. `is_self` marks the signed-in user so the FE disables
-/// its own row's actions (the server 401s a self grant/change/remove regardless).
-#[derive(Debug, Clone, Serialize, TS)]
-pub struct SpeleoCollaborator {
-    pub email: String,
-    pub permission: Permission,
-    pub is_self: bool,
-}
-
-/// [#215] One team grant on the linked project. `team_name` is resolved from the
-/// caller's team list; it falls back to the raw UUID when the team is not among
-/// the caller's teams (still removable by id).
-#[derive(Debug, Clone, Serialize, TS)]
-pub struct SpeleoTeamGrant {
-    pub team_id: String,
-    pub team_name: String,
-    pub permission: Permission,
-}
-
-/// [#215] A team the signed-in user can grant access to (the add-team picker).
-#[derive(Debug, Clone, Serialize, TS)]
-pub struct SpeleoTeamOption {
-    pub id: String,
-    pub name: String,
-}
-
-/// [#215] One suggestion for the add-collaborator email typeahead: the exact
-/// `email` to grant, plus the server's "Name <email>" `label` to display.
-#[derive(Debug, Clone, Serialize, TS)]
-pub struct SpeleoUserSuggestion {
-    pub email: String,
-    pub label: String,
-}
-
-/// [#215] The full collaborator roster for the linked project (individual users +
-/// teams), returned by `speleodb_list_collaborators`.
-#[derive(Debug, Clone, Serialize, TS)]
-pub struct SpeleoCollaborators {
-    pub users: Vec<SpeleoCollaborator>,
-    pub teams: Vec<SpeleoTeamGrant>,
-}
-
 /// [#206] A partial metadata edit from the webview. The frontend sends only the
 /// fields the user changed; the orchestration folds the `Some` fields into the
 /// `PATCH /projects/{id}/` body. `coordinates_edited` gates the location pin
@@ -540,6 +382,10 @@ pub struct SpeleoProjectMetadataPatch {
 /// sent `false` explicitly. `latitude`/`longitude` are both-or-neither.
 #[derive(Debug, Clone, Deserialize, TS)]
 pub struct SpeleoPublishParams {
+    /// Message for the first native-file commit.
+    #[serde(default)]
+    #[ts(optional)]
+    pub message: Option<String>,
     pub name: String,
     pub description: String,
     /// ISO 3166-1 alpha-2 country code; required.
@@ -570,111 +416,6 @@ pub struct SpeleoOpenResult {
     /// surfaces a notice (the ancestry self-heal assumes a single same-account
     /// session - a concurrent one would misattribute its commits as ours).
     pub concurrent_session: bool,
-}
-
-/// What adoption managed to do with the converted `.stalx` before returning.
-///
-/// Adoption hands the project straight back to SpeleoDB - take the write lock,
-/// upload the `.stalx` with its Ariane sidecar, hand the lock back - so the
-/// conversion is durable on the server rather than living only in this machine's
-/// cache. Every arm but [`Self::Pushed`] means the copy on disk is the only one
-/// that exists, so it is stamped `has_unpushed_edits` and the webview must say so
-/// instead of reporting a finished hand-over.
-///
-/// A discriminated union rather than a `bool` + reason pair, because the two can
-/// disagree: the frontend clears its dirty seed on exactly one arm, and a shape
-/// that lets "not pushed" travel without a reason is how that arm gets widened by
-/// accident.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../bindings/")]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum AdoptUpload {
-    /// The `.stalx` is on the server, the lock was handed back, and the local copy
-    /// is clean. The ONLY arm the webview may seed `hasUnpushedEdits: false` on.
-    Pushed,
-    /// Somebody holds the write lock, so the upload was not attempted: yanking a
-    /// mutex out from under another writer - or another window of our own account -
-    /// to finish an adopt is not a trade this flow makes. `email` is the holder when
-    /// the server named one.
-    LockHeld { email: Option<String> },
-    /// The lock was taken but the server had moved on from the revision this
-    /// adoption converted, so the push would have overwritten a stranger commit.
-    /// Nothing was uploaded and the user must reconcile.
-    Diverged,
-    /// The `.stalx` IS on the server, but handing the write lock back failed, so the
-    /// project is still locked by us.
-    ///
-    /// Kept apart from [`Self::Failed`] because the two differ on the only question
-    /// the user actually cares about - where their survey is. Folding this into
-    /// `Failed` told someone whose work had just landed that it was "on this machine
-    /// only", which is both wrong and the more alarming of the two directions to be
-    /// wrong in. Nothing is at risk here: the copy is safe on the server and the lock
-    /// is released by the next Done, a close, or the held-lock prompt at next login.
-    ///
-    /// Means "the mutex is still ours, OR we could not establish that it is not" - not
-    /// "the release was refused". The release is a non-idempotent POST whose client also
-    /// parses the reply, so a mid-response transport failure returns `Err` over a lock
-    /// the server has already handed back. Adoption re-reads the holder from the GET it
-    /// makes for the type flip and demotes this to [`Self::Pushed`] when the answer is
-    /// positively "not us"; an unreadable holder leaves this arm standing, because "we
-    /// could not ask" must not become "the lock is free".
-    PushedLockHeld,
-    /// The lock or the upload failed outright (no write access, offline, a server
-    /// error). `message` is the humanised reason.
-    ///
-    /// `message` here and `email` above are DIAGNOSTIC, not display: the webview
-    /// branches on `kind` alone and its three toasts are fixed strings, so neither
-    /// value reaches a user today. They are carried because the alternative is a
-    /// backend that knows why it stopped and throws it away before the boundary - the
-    /// log line in `adopt_hand_over` is what reads them. Rendering the holder's email
-    /// in the local-only toast is the obvious next use and needs no backend change.
-    Failed { message: String },
-}
-
-/// [#214] Result of adopting an Ariane (`.tml`-only) project: the imported
-/// `.stalx` now lives at `local_path` (the webview reloads it through the normal
-/// `open_project` flow). `type_flipped` reports whether the server project `type`
-/// ended up PATCHed ariane→stalagmight. `false` covers TWO cases now, and the webview must
-/// not read it alone: the PATCH was attempted and refused (no write access), or it was
-/// never attempted because the upload did not land. `upload` is what tells them apart,
-/// which is why the toast keys on `pushed && type_flipped` rather than on this field.
-///
-/// `upload` is the hand-over half: adoption uploads the converted project before
-/// returning, so a successful adopt leaves nothing stranded in the local cache.
-/// The type flip is ordered AFTER that upload deliberately - a project typed
-/// `stalagmight` with no `.stalx` behind it is openable by nobody, since the Ariane file
-/// it still holds is the one the new type says to disregard.
-#[derive(Debug, Clone, Serialize, TS)]
-pub struct SpeleoAdoptResult {
-    pub local_path: String,
-    pub type_flipped: bool,
-    /// Same meaning as [`SpeleoOpenResult::concurrent_session`]: a write lock held
-    /// by THIS account at adopt time (a second same-account session). Read BEFORE
-    /// the hand-over takes a lock of its own, or the probe would be answering about
-    /// this very call.
-    pub concurrent_session: bool,
-    pub upload: AdoptUpload,
-    /// [#411] What the `.tml` -> project conversion actually did: the same receipt
-    /// every other foreign-format import produces, carrying the converter's anomaly
-    /// warnings plus a line naming the excluded shots this path drops on purpose.
-    ///
-    /// Adoption IS an Ariane import, and import-quality warnings ride an import
-    /// receipt (docs/notifications.md). This flow used to discard both at the call
-    /// site - it has no import wizard to have shown them - so a pulled Ariane
-    /// project lost its excluded shots and every parse anomaly in silence.
-    ///
-    /// `None` when the import produced no receipt at all. That is reachable today,
-    /// not hypothetical: `execute_import_sections` attaches none when it is handed no
-    /// sections, which is what a `.tml` whose every shot is excluded converts to - so
-    /// the adoption synthesizes one there rather than letting the emptiest possible
-    /// result be the quietest (see `adopt_receipt`). The arm stays because a receipt
-    /// is not something this type can promise on its own.
-    ///
-    /// `#[ts(optional)]`: an older backend answers without the field at all, so the
-    /// webview's type has to admit `undefined` as well as `null` - the alternative is
-    /// a required field that is genuinely absent at runtime.
-    #[ts(optional)]
-    pub import_receipt: Option<ImportReceipt>,
 }
 
 /// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
@@ -755,27 +496,14 @@ pub enum UpdateResult {
 }
 
 /// Current backend session status, so the dialog can restore its view when
-/// reopened instead of forcing a re-login: the in-memory/keychain token lives in
+/// reopened instead of forcing a re-login: the cached token lives in
 /// `AppState` for the whole app run, but the dialog's React state resets on each
 /// remount. Carries no token - only whether one is held and for whom.
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct SpeleoSessionStatus {
     pub logged_in: bool,
-    /// Email of the logged-in user, when `logged_in`.
     pub user_email: Option<String>,
-    /// The server this session is authenticated against, when `logged_in`. Shown
-    /// in Settings ("signed in as … at …") so the user can see the session is tied
-    /// to a specific server - a later endpoint change only affects FUTURE logins.
     pub endpoint: Option<String>,
-    /// False when the token is held in memory only (no OS keychain) - surfaced so
-    /// the UI keeps showing the "won't survive a restart" note after a reopen.
-    pub keychain_backed: bool,
-    /// Where the API key actually lives, for the Settings credential-storage line.
-    /// `None` when logged out (there is no key to place).
-    pub storage: Option<TokenStorage>,
-    /// What is known about the OS keychain, WITHOUT probing it - see
-    /// [`KeychainReport`].
-    pub keychain: KeychainReport,
 }
 
 /// IPC-facing status of the currently open project's SpeleoDB link, so the
@@ -935,67 +663,8 @@ pub struct SpeleoErrorDto {
     /// what the frontend needs to offer the binary choice; `None` on every other
     /// error, which is what makes it a sound discriminant.
     pub unpushed_local: Option<UnpushedLocalEdits>,
-    /// [#258] Set ONLY when the dump held more than one openable file
-    /// (`action == Ambiguous`), listing them so the frontend can offer a picker
-    /// instead of dead-ending. `None` on every other error.
-    pub dump_candidates: Option<Vec<SpeleoDumpCandidate>>,
-    /// [#258] Which ambiguity [`Self::dump_candidates`] describes, set on exactly
-    /// the same errors and `None` on the rest.
-    ///
-    /// Carried rather than inferred from the candidates' extensions: which kind a
-    /// set is, is the classifier's decision, and re-deriving it on the frontend
-    /// would put a second copy of that rule where nothing keeps the two agreeing.
-    /// It changes the verb the picker offers - extracting a `.stalx` and adopting
-    /// an `ariane.tml` are different operations - so guessing it wrong shows the
-    /// wrong dialog rather than merely the wrong wording.
-    pub dump_candidate_kind: Option<DumpCandidateKind>,
-    /// [#649] Set ONLY when the download was refused because a newer Stalagmight
-    /// saved it, so the frontend renders the same refusal string the open dialog
-    /// uses. `None` on every other error.
+    /// Present when a downloaded native file requires a newer schema.
     pub newer_schema: Option<crate::models::NewerSchema>,
-}
-
-/// [#258] Which flavour of ambiguity a picker is being offered for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export, export_to = "../../bindings/")]
-#[serde(rename_all = "snake_case")]
-pub enum DumpCandidateKind {
-    /// Several `.stalx` - the chosen one is extracted.
-    Stalx,
-    /// No `.stalx` and several `ariane.tml` - the chosen one is adopted (imported).
-    Ariane,
-}
-
-/// [#258] One openable file inside an ambiguous project dump, carried on
-/// [`SpeleoErrorDto::dump_candidates`].
-///
-/// `size_bytes` and `modified` are free: the classifier already walks the central
-/// directory, which carries both. `modified` is `None` when the entry declares no
-/// timestamp - and note that a dump produced by `git archive` stamps every entry
-/// with the same commit time, so the frontend suppresses a metadata column whose
-/// values all agree rather than showing a uselessly uniform one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, export_to = "../../bindings/")]
-pub struct SpeleoDumpCandidate {
-    /// The entry's path inside the dump ZIP, and the value the frontend sends back
-    /// as `entryPath` to resolve. It must be byte-identical to the archive's own
-    /// name: it is looked up as an exact key and is never normalised, so a
-    /// helpfully-cleaned path resolves to "not found" rather than the wrong file.
-    pub entry_path: String,
-    /// Uncompressed size, from the central directory.
-    ///
-    /// Typed as a TS `number`, not ts-rs's default `bigint` for `u64`: serde emits
-    /// a JSON number and the webview parses it as one, so `bigint` would describe a
-    /// value that never arrives. Bounded by the 512 MiB per-entry cap and so well
-    /// inside the exact-integer range - but only because `Dump::entry_details` drops
-    /// any entry above it. That is load-bearing, not incidental: the raw value is the
-    /// central directory's unvalidated ZIP64 `u64`, and the cap used to be applied at
-    /// extraction alone, which left this claim justifying the `number` type by a bound
-    /// nothing on this path enforced.
-    #[ts(type = "number")]
-    pub size_bytes: u64,
-    /// Last-modified (RFC-3339) when the entry carries one.
-    pub modified: Option<String>,
 }
 
 /// The local work a refused re-pull would have destroyed, carried on
@@ -1027,10 +696,10 @@ pub struct UnpushedLocalEdits {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        DoneResult, KeychainReport, Permission, Project, PushResult, RemoteState, RevisionCommit,
-        RevisionHistory, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
-        SpeleoOpenResult, SpeleoProjectSummary, SpeleoRevision, SpeleoSessionStatus,
-        StartEditingResult, TokenStorage, UpdateResult, Visibility,
+        DoneResult, Permission, Project, PushResult, RemoteState, RevisionCommit, RevisionHistory,
+        SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
+        SpeleoProjectSummary, SpeleoRevision, SpeleoSessionStatus, StartEditingResult,
+        UpdateResult, Visibility,
     };
 
     #[test]
@@ -1041,19 +710,12 @@ mod tests {
         let login = serde_json::to_string(&SpeleoLoginResult {
             user_email: "u@x".to_owned(),
             endpoint: "https://x/".to_owned(),
-            keychain_backed: true,
-            storage: TokenStorage::Keychain,
-            keychain: KeychainReport::Available,
-            needs_storage_choice: false,
         })
         .expect("serialize login result");
         let status = serde_json::to_string(&SpeleoSessionStatus {
             logged_in: true,
             user_email: Some("u@x".to_owned()),
             endpoint: Some("https://x/".to_owned()),
-            keychain_backed: true,
-            storage: Some(TokenStorage::Keychain),
-            keychain: KeychainReport::Available,
         })
         .expect("serialize session status");
         let summary = serde_json::to_string(&SpeleoProjectSummary {
@@ -1080,8 +742,6 @@ mod tests {
             status: Some(401),
             transport: None,
             unpushed_local: None,
-            dump_candidates: None,
-            dump_candidate_kind: None,
             newer_schema: None,
         })
         .expect("serialize error dto");

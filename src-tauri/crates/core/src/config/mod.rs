@@ -3,6 +3,7 @@ mod column_widths;
 pub mod defaults;
 mod general;
 mod panels;
+mod speleodb_file;
 mod types;
 mod webkit;
 

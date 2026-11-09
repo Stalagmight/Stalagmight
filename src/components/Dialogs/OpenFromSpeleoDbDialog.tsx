@@ -7,7 +7,6 @@ import { invokeIpc } from '../../utils/ipc';
 import { speleoErrorAction, humanizeSpeleoError } from '../../utils/speleoError';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import { SpeleoAdoptConfirm } from './SpeleoAdoptConfirm';
 import type {
   SpeleoProjectSummary,
   SpeleoSessionStatus,
@@ -28,20 +27,13 @@ export default function OpenFromSpeleoDbDialog() {
   const setSession = useSpeleoStore((s) => s.setSession);
   const clearSession = useSpeleoStore((s) => s.clearSession);
   // Shared pull+open flow (#218): closeDialog runs right before loadProject so its
-  // LoadingState progress is visible. The Ariane-adopt route surfaces as an outcome.
+  // LoadingState progress is visible.
   // `cancelReturnsTo`: the refused-open prompt the hook may raise REPLACES this
   // browser in the single `activeDialog` slot, so its Cancel must hand the user back
   // here - otherwise cancelling leaves nothing open and nothing opened (#270).
-  const { openRemote, adoptRemote } = useOpenRemoteProject({
+  const { openRemote } = useOpenRemoteProject({
     onBeforeLoad: closeDialog,
     cancelReturnsTo: 'open-from-speleodb',
-    // [#258] The picker's retry resolved to an Ariane project, so show the same
-    // confirm a first-attempt `adopt` would have. The retry runs from the picker,
-    // so its outcome never comes back through `handleOpen`.
-    onAdoptAfterPick: (project) => {
-      setPendingAdopt(project);
-      setBusy(false);
-    },
   });
 
   // Start in 'checking' so the session probe settles before the first paint
@@ -54,9 +46,6 @@ export default function OpenFromSpeleoDbDialog() {
   // #270: the last project-list fetch failed, so an empty list means "we could not
   // load them", NOT "this account has no projects". Keeps the empty state honest.
   const [listFailed, setListFailed] = useState(false);
-  // #214: an Ariane (.tml-only) project the user is being asked to adopt. Set when
-  // speleodb_open_project reports SpeleoDbAction::Adopt; cleared on confirm/cancel.
-  const [pendingAdopt, setPendingAdopt] = useState<SpeleoProjectSummary | null>(null);
 
   const refreshProjects = async (isCancelled: () => boolean = () => false) => {
     const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
@@ -137,7 +126,7 @@ export default function OpenFromSpeleoDbDialog() {
   };
 
   // Route the shared open outcome (#218 `useOpenRemoteProject`) to this dialog's
-  // inline surfaces: adopt -> confirm; error -> inline banner (+ re-login drop); the
+  // inline surfaces: error -> inline banner (+ re-login drop); the
   // opened / load_failed cases are fully handled by the hook (it already closed the
   // dialog before loading), so there is nothing left to do here.
   const surfaceOpenError = (message: string, reLogin: boolean) => {
@@ -153,37 +142,13 @@ export default function OpenFromSpeleoDbDialog() {
     setBusy(true);
     setError(null);
     const outcome = await openRemote(project);
-    if (outcome.status === 'adopt') {
-      setPendingAdopt(project);
-      setBusy(false);
-    } else if (outcome.status === 'ambiguous') {
-      // #258: the hook raised the file picker, which is an independent overlay - so
-      // unlike the prompt below, THIS dialog stays mounted underneath it and has to
-      // release its busy flag or the list stays frozen behind the choice.
+    if (outcome.status === 'cancelled') {
       setBusy(false);
     } else if (outcome.status === 'unpushed_local') {
       // #270: the hook raised the keep-local / take-remote prompt, which has already
       // replaced this browser as the active dialog - so this component is unmounting
       // and there is deliberately nothing to do. (Backing out of that prompt re-opens
       // this dialog fresh via `cancelReturnsTo`, with its own state.)
-    } else if (outcome.status === 'error') {
-      surfaceOpenError(outcome.message, outcome.reLogin);
-    }
-  };
-
-  // #214: adopt the pending Ariane (.tml-only) project (imports the ariane.tml into a
-  // new .stalx, links it, flips the server type, reloads it), via the shared flow.
-  const handleAdopt = async (project: SpeleoProjectSummary) => {
-    setPendingAdopt(null);
-    setBusy(true);
-    setError(null);
-    const outcome = await adoptRemote(project);
-    if (outcome.status === 'ambiguous') {
-      // #258: same release the open handler makes, and for the same reason - adoption
-      // raises the picker on its own account when the Ariane tree moves under the
-      // confirm, and this dialog stays mounted underneath the overlay. Without it the
-      // list stays frozen behind a choice the user can still cancel.
-      setBusy(false);
     } else if (outcome.status === 'error') {
       surfaceOpenError(outcome.message, outcome.reLogin);
     }
@@ -256,10 +221,10 @@ export default function OpenFromSpeleoDbDialog() {
                       <div className="mt-1 flex flex-wrap items-center gap-1.5">
                         <span
                           className={`px-1.5 py-0.5 rounded text-xs ${
-                            p.permission ? 'bg-accent-10 text-accent' : 'bg-error-10 text-error'
+                            p.permission === 'READ_ONLY' ? 'bg-warning-20 text-warning' : p.permission ? 'bg-accent-10 text-accent' : 'bg-error-10 text-error'
                           }`}
                         >
-                          {p.permission ?? t('speleodb.browser.noAccess')}
+                          {p.permission === 'READ_ONLY' ? t('speleodb.browser.readOnly') : p.permission ?? t('speleodb.browser.noAccess')}
                         </span>
                         <span className="px-1.5 py-0.5 rounded text-xs bg-panel border border-border text-text-secondary">
                           {p.type_tag}
@@ -303,14 +268,7 @@ export default function OpenFromSpeleoDbDialog() {
         )}
       </div>
     </DialogWrapper>
-    {pendingAdopt && (
-      <SpeleoAdoptConfirm
-        projectName={pendingAdopt.name}
-        busy={busy}
-        onCancel={() => setPendingAdopt(null)}
-        onConfirm={() => void handleAdopt(pendingAdopt)}
-      />
-    )}
+
     </>
   );
 }

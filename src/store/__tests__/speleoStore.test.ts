@@ -20,7 +20,7 @@ vi.mock('../../utils/ipc', () => ({
 /** A logged-in session so `scanLocksOnOpen` skips the `refreshSession` prelude. */
 const loggedInAs = (email: string) =>
   useSpeleoStore.setState({
-    session: { loggedIn: true, userEmail: email, endpoint: 'https://x/', keychainBacked: true, storage: 'keychain', keychain: 'available' },
+    session: { loggedIn: true, userEmail: email, endpoint: 'https://x/', },
   });
 
 const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
@@ -54,7 +54,6 @@ const reset = () => {
     heldLocks: null,
     heldLockPromptOpen: false,
     heldLockPromptPending: true,
-    storageChoiceOpen: false,
     remoteProjectId: null,
     sessionGeneration: 0,
     chainTargetGeneration: 0,
@@ -81,10 +80,6 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().setSessionFromLogin({
         user_email: 'u@x',
         endpoint: 'https://x/',
-        keychain_backed: true,
-        storage: 'keychain',
-        keychain: 'available',
-        needs_storage_choice: false,
       });
 
       expect(speleoProjectSessionStillCurrent(issuedFor)).toBe(false);
@@ -97,121 +92,14 @@ describe('speleoStore', () => {
         logged_in: true,
         user_email: 'u@x',
         endpoint: 'https://x/',
-        keychain_backed: false,
-        storage: 'memory',
-        keychain: 'unavailable',
-      });
+        });
       expect(useSpeleoStore.getState().session).toEqual({
         loggedIn: true,
         userEmail: 'u@x',
         endpoint: 'https://x/',
-        keychainBacked: false,
         // Both new fields cross intact: "durable?" and "where?" are different
         // questions, and Settings needs the second one to say anything useful.
-        storage: 'memory',
-        keychain: 'unavailable',
-      });
-    });
-
-    it('[#258] a refresh that reports logged-out tears down an OPEN picker', () => {
-      // Suppressing NEW pickers after a logged-out refresh is only half of it: one
-      // already on screen offers to retry against an account nobody is signed in to,
-      // and `setSession` is the benign action every project load and Settings open
-      // calls, so nothing else was going to close it. The cancel has to fire too, or a
-      // caller suspended on the question is left waiting forever.
-      useSpeleoStore.getState().setSession({
-        logged_in: true,
-        user_email: 'u@x',
-        endpoint: 'https://x/',
-        keychain_backed: true,
-        storage: 'keychain',
-        keychain: 'available',
-      });
-      const onCancel = vi.fn();
-      useSpeleoStore
-        .getState()
-        .openDumpPicker(
-          [{ entry_path: 'a.stalx', size_bytes: 1, modified: null }],
-          'stalx',
-          async () => {},
-          onCancel,
-        );
-      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
-
-      useSpeleoStore.getState().setSession({
-        logged_in: false,
-        user_email: null,
-        endpoint: 'https://x/',
-        keychain_backed: false,
-        storage: null,
-        keychain: 'available',
-      });
-
-      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
-      expect(onCancel).toHaveBeenCalled();
-      // The refresh's own report still lands - this is a teardown, not a veto.
-      expect(useSpeleoStore.getState().session?.loggedIn).toBe(false);
-    });
-
-    it('[#258 review] tears the picker down on a logged-out refresh even with no prior session', () => {
-      // `sessionStillCurrent` lets a picker be raised while `session` is still null -
-      // an authenticated call can beat the first `speleodb_session` reply - so for that
-      // picker there is no true->false transition to detect. A transition test alone
-      // left it open over a session the same refresh had just reported dead: Confirm
-      // could only fail, and a flow suspended on the question stayed busy.
-      useSpeleoStore.setState({ session: null });
-      const onCancel = vi.fn();
-      useSpeleoStore
-        .getState()
-        .openDumpPicker(
-          [{ entry_path: 'a.stalx', size_bytes: 1, modified: null }],
-          'stalx',
-          async () => {},
-          onCancel,
-        );
-
-      useSpeleoStore.getState().setSession({
-        logged_in: false,
-        user_email: null,
-        endpoint: 'https://x/',
-        keychain_backed: false,
-        storage: null,
-        keychain: 'available',
-      });
-
-      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
-      expect(onCancel).toHaveBeenCalled();
-    });
-
-    it('[#258] a benign logged-in refresh leaves an open picker alone', () => {
-      // The other half: a project load and reopening Settings both call this, and a
-      // picker raised by an open in flight must survive them.
-      useSpeleoStore.getState().setSession({
-        logged_in: true,
-        user_email: 'u@x',
-        endpoint: 'https://x/',
-        keychain_backed: true,
-        storage: 'keychain',
-        keychain: 'available',
-      });
-      useSpeleoStore
-        .getState()
-        .openDumpPicker(
-          [{ entry_path: 'a.stalx', size_bytes: 1, modified: null }],
-          'stalx',
-          async () => {},
-        );
-
-      useSpeleoStore.getState().setSession({
-        logged_in: true,
-        user_email: 'u@x',
-        endpoint: 'https://x/',
-        keychain_backed: true,
-        storage: 'keychain',
-        keychain: 'available',
-      });
-
-      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
+        });
     });
 
     it('clearSession degrades an active edit to read-only', () => {
@@ -221,10 +109,6 @@ describe('speleoStore', () => {
         .setSessionFromLogin({
           user_email: 'u@x',
           endpoint: 'https://x/',
-          keychain_backed: true,
-          storage: 'keychain',
-          keychain: 'available',
-          needs_storage_choice: false,
         });
       useSpeleoStore.getState().clearSession();
       const s = useSpeleoStore.getState();
@@ -271,10 +155,6 @@ describe('speleoStore', () => {
         .setSessionFromLogin({
           user_email: 'u@x',
           endpoint: 'https://x/',
-          keychain_backed: true,
-          storage: 'keychain',
-          keychain: 'available',
-          needs_storage_choice: false,
         });
       useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
       invokeIpcMock.mockRejectedValue({
@@ -287,91 +167,6 @@ describe('speleoStore', () => {
       expect(result.ok).toBe(false);
       expect(useSpeleoStore.getState().session).toBeNull();
       expect(useSpeleoStore.getState().pendingAuth).toBeNull();
-    });
-  });
-
-  describe('credential storage', () => {
-    const login = (needs_storage_choice: boolean) => {
-      useSpeleoStore.getState().setPendingAuth({
-        kind: 'login',
-        email: 'u@x',
-        password: 'pw',
-        token: '',
-        useToken: false,
-      });
-      invokeIpcMock.mockImplementation(async (cmd: string) =>
-        cmd === 'speleodb_login'
-          ? {
-              user_email: 'u@x',
-              endpoint: 'https://x/',
-              keychain_backed: false,
-              storage: 'memory',
-              keychain: 'unavailable',
-              needs_storage_choice,
-            }
-          : [],
-      );
-      return useSpeleoStore.getState().applyPendingAuth('https://x/');
-    };
-
-    it('a login whose keychain failed raises the storage question', async () => {
-      // Raised from applyPendingAuth so BOTH login paths reach it: the staged one
-      // applied on Settings' Save, and the panel's "Log in now" button.
-      await login(true);
-      expect(useSpeleoStore.getState().storageChoiceOpen).toBe(true);
-    });
-
-    it('a login with a working keychain asks nothing', async () => {
-      await login(false);
-      expect(useSpeleoStore.getState().storageChoiceOpen).toBe(false);
-    });
-
-    it('setTokenStorage resolves the tier that took the key, not the one asked for', async () => {
-      // The plaintext write can itself fail, and then the truthful thing to show is
-      // session-only - so the answer is authoritative over what was asked for. It is
-      // handed back rather than collapsed to `true` because the caller has to report
-      // where the key went: a bare success over a fallback told the user their key
-      // was written to a file that does not exist, and they get signed out at exit.
-      useSpeleoStore.setState({ storageChoiceOpen: true });
-      invokeIpcMock.mockResolvedValue({
-        logged_in: true,
-        user_email: 'u@x',
-        endpoint: 'https://x/',
-        keychain_backed: false,
-        storage: 'memory',
-        keychain: 'declined',
-      });
-
-      expect(await useSpeleoStore.getState().setTokenStorage('plaintext')).toBe('memory');
-      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_token_storage', {
-        mode: 'plaintext',
-      });
-      expect(useSpeleoStore.getState().session?.storage).toBe('memory');
-      expect(useSpeleoStore.getState().storageChoiceOpen).toBe(false);
-    });
-
-    it('a refused setTokenStorage leaves the prompt up', async () => {
-      useSpeleoStore.setState({ storageChoiceOpen: true });
-      invokeIpcMock.mockRejectedValue({ message: 'not signed in' });
-
-      expect(await useSpeleoStore.getState().setTokenStorage('session_only')).toBeNull();
-      expect(useSpeleoStore.getState().storageChoiceOpen).toBe(true);
-    });
-
-    it('retryKeychain re-seeds the session from the refreshed status', async () => {
-      invokeIpcMock.mockResolvedValue({
-        logged_in: true,
-        user_email: 'u@x',
-        endpoint: 'https://x/',
-        keychain_backed: true,
-        storage: 'keychain',
-        keychain: 'available',
-      });
-
-      expect(await useSpeleoStore.getState().retryKeychain()).toBe(true);
-      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_retry_keychain');
-      expect(useSpeleoStore.getState().session?.keychain).toBe('available');
-      expect(useSpeleoStore.getState().session?.storage).toBe('keychain');
     });
   });
 
@@ -977,7 +772,7 @@ describe('speleoStore', () => {
 
     it('a logged-out scan clears the badges and consumes the app-open pending without prompting', async () => {
       useSpeleoStore.setState({
-        session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false, storage: null, keychain: 'not_attempted' },
+        session: { loggedIn: false, userEmail: null, endpoint: null, },
         remoteLocks: { p1: 'x' },
         remoteProjects: { p1: 'Stale' },
       });
@@ -995,7 +790,7 @@ describe('speleoStore', () => {
       // The prompt was open under the prior session; logging out must not leave it
       // lingering over a logged-out shell (not just consume the pending flag).
       useSpeleoStore.setState({
-        session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false, storage: null, keychain: 'not_attempted' },
+        session: { loggedIn: false, userEmail: null, endpoint: null, },
         heldLocks: [{ projectId: 'p1', projectName: 'A' }],
         heldLockPromptOpen: true,
       });
@@ -1030,7 +825,7 @@ describe('speleoStore', () => {
       invokeIpcMock.mockImplementation(async (cmd: string) => {
         if (cmd === 'speleodb_list_projects') {
           useSpeleoStore.setState({
-            session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false, storage: null, keychain: 'not_attempted' },
+            session: { loggedIn: false, userEmail: null, endpoint: null, },
           });
           return [{ id: 'p1', name: 'Held', lock_holder: 'me@x' }];
         }
@@ -1041,6 +836,21 @@ describe('speleoStore', () => {
       expect(s.remoteLocks).toEqual({});
       expect(s.heldLocks).toBeNull();
       expect(s.heldLockPromptOpen).toBe(false);
+    });
+
+    it('ignores a prior server scan after the same email signs in to another server', async () => {
+      loggedInAs('me@x');
+      invokeIpcMock.mockImplementation(async (cmd: string) => {
+        if (cmd === 'speleodb_list_projects') {
+          useSpeleoStore.getState().clearSession();
+          useSpeleoStore.getState().setSessionFromLogin({ user_email: 'me@x', endpoint: 'https://new.example' });
+          return [{ id: 'old', name: 'Old server', lock_holder: 'me@x' }];
+        }
+        return null;
+      });
+      await useSpeleoStore.getState().scanLocksOnOpen({ prompt: true });
+      expect(useSpeleoStore.getState().remoteSummaries).toEqual({});
+      expect(useSpeleoStore.getState().heldLocks).toBeNull();
     });
 
     it('releaseLock drops one lock and frees it in the badge map, emptying to null on the last', async () => {
@@ -1077,10 +887,7 @@ describe('speleoStore', () => {
       expect('releaseAllLocks' in useSpeleoStore.getState()).toBe(false);
     });
 
-    // #270: `applyPendingAuth`'s logout branch is the only logout path. Its dead twin
-    // swallowed a keychain-delete failure, so the user was never warned a credential
-    // might still be stored on the machine.
-    it('exposes no second logout path that could swallow a keychain failure', () => {
+    it('exposes no second logout path that could swallow a credential-file failure', () => {
       expect('logout' in useSpeleoStore.getState()).toBe(false);
     });
   });
@@ -1191,208 +998,5 @@ describe('speleoStore', () => {
     ])('covers %s', (id) => {
       expect(PUSH_FAILURE_DIALOGS).toContain(id);
     });
-  });
-});
-
-describe('speleoStore - the dump picker reports its own failures (#258)', () => {
-  it('keeps the picker open and records why, instead of rejecting into nothing', async () => {
-    // The retry runs from the DIALOG - its caller invokes this with `void` and no
-    // host receives an outcome - so a throw used to escape as an unhandled rejection
-    // and leave the picker sitting there saying nothing about why confirming failed.
-    const candidates = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
-    ];
-    useSpeleoStore
-      .getState()
-      .openDumpPicker(candidates, 'stalx', async () => {
-        throw new Error('the session expired while you were choosing');
-      });
-
-    await useSpeleoStore.getState().resolveDumpPicker('a.stalx');
-
-    const s = useSpeleoStore.getState();
-    expect(s.dumpPickerOpen).toBe(true);
-    expect(s.dumpPickerBusy).toBe(false);
-    expect(s.dumpPickerError).toContain('the session expired');
-    // The candidates survive, so the user can simply answer again.
-    expect(s.dumpPickerCandidates).toEqual(candidates);
-  });
-
-  it('clears a previous failure when the next attempt starts', async () => {
-    const candidates = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
-    ];
-    useSpeleoStore.getState().openDumpPicker(candidates, 'stalx', async () => {});
-    useSpeleoStore.setState({ dumpPickerError: 'stale' });
-
-    await useSpeleoStore.getState().resolveDumpPicker('b.stalx');
-
-    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
-    expect(useSpeleoStore.getState().dumpPickerError).toBeNull();
-  });
-
-  it('[#258 review] releases the displaced owner when a SECOND flow raises a picker', async () => {
-    // Two flows really can be in flight: the revision history disables View while its
-    // own download runs but leaves Revert live, so a revert probe can raise a picker
-    // and the older View download can then raise another over it. The displaced revert
-    // keeps `busy` deliberately - its cancel is what releases it - so dropping that
-    // callback left a dialog with every control and every dismissal route disabled.
-    const revertCancel = vi.fn();
-    useSpeleoStore
-      .getState()
-      .openDumpPicker(
-        [{ entry_path: 'a.stalx', size_bytes: 1, modified: null }],
-        'stalx',
-        async () => {},
-        revertCancel,
-      );
-
-    // The older download lands and takes the picker over.
-    useSpeleoStore
-      .getState()
-      .openDumpPicker(
-        [{ entry_path: 'b.stalx', size_bytes: 2, modified: null }],
-        'stalx',
-        async () => {},
-      );
-
-    expect(revertCancel).toHaveBeenCalledTimes(1);
-    // ...and the newcomer owns the picker, undisturbed.
-    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
-    expect(useSpeleoStore.getState().dumpPickerCandidates[0]?.entry_path).toBe('b.stalx');
-  });
-
-  it('[#258 review] does NOT release the flow when its OWN re-raise replaces it', async () => {
-    // The other half, and why this cannot just always fire. A retry that meets a fresh
-    // ambiguity re-raises from inside the same suspended flow; releasing its cancel
-    // there would un-suspend it out from under the picker that just replaced it.
-    const cancel = vi.fn();
-    const raise = (path: string) =>
-      useSpeleoStore
-        .getState()
-        .openDumpPicker(
-          [{ entry_path: path, size_bytes: 1, modified: null }],
-          'stalx',
-          async () => {},
-          cancel,
-          'flow-a',
-        );
-
-    raise('a.stalx');
-    raise('c.stalx');
-
-    expect(cancel).not.toHaveBeenCalled();
-    expect(useSpeleoStore.getState().dumpPickerCandidates[0]?.entry_path).toBe('c.stalx');
-  });
-
-  it('[#258 review] tells continuation from displacement by OWNER, not by timing', async () => {
-    // Codex's interleaving, and the reason the first attempt at this was wrong. That
-    // one marked a picker as a continuation when a retry happened to be in flight -
-    // a process-wide window, not a relationship. So a picker raised by a DIFFERENT
-    // flow during that window, and then displaced when the retry re-offered, had its
-    // cancel suppressed as if it were the retry's own re-raise. It is the one dialog
-    // that was actually suspended, and the cancel was the only thing that released it.
-    const revertCancel = vi.fn();
-    let releaseRetry = () => {};
-    const retryRan = new Promise<void>((resolve) => {
-      releaseRetry = resolve;
-    });
-
-    // A View picker: no owner, no cancel - it suspends nothing.
-    useSpeleoStore.getState().openDumpPicker(
-      [{ entry_path: 'view.stalx', size_bytes: 1, modified: null }],
-      'stalx',
-      async () => {
-        // ... while its retry is out, the revert raises its own question and
-        // suspends on the answer.
-        useSpeleoStore
-          .getState()
-          .openDumpPicker(
-            [{ entry_path: 'revert.stalx', size_bytes: 2, modified: null }],
-            'stalx',
-            async () => {},
-            revertCancel,
-            'speleodb-revert',
-          );
-        await retryRan;
-        // ... and then the View's retry meets a moved tree and re-offers, taking the
-        // overlay back from a revert that is still waiting to be released.
-        useSpeleoStore
-          .getState()
-          .openDumpPicker(
-            [{ entry_path: 'view2.stalx', size_bytes: 3, modified: null }],
-            'stalx',
-            async () => {},
-          );
-      },
-      undefined,
-      undefined,
-    );
-
-    const resolving = useSpeleoStore.getState().resolveDumpPicker('view.stalx');
-    releaseRetry();
-    await resolving;
-
-    expect(revertCancel).toHaveBeenCalledTimes(1);
-    expect(useSpeleoStore.getState().dumpPickerCandidates[0]?.entry_path).toBe('view2.stalx');
-  });
-
-  it('lets a retry that lost its picker settle without touching the one that replaced it', async () => {
-    // Confirming is a network round trip of unbounded length, so the picker it began
-    // on can be gone by the time it settles - closed, re-raised on a moved tree, or
-    // torn down by a session loss. Writing the outcome anyway landed it on a
-    // DIFFERENT dialog: the loser's error overwrote the newcomer's, and its `finally`
-    // re-enabled the newcomer's buttons in the middle of its own confirm.
-    const first = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
-    ];
-    const second = [
-      { entry_path: 'c.stalx', size_bytes: 3, modified: null },
-      { entry_path: 'd.stalx', size_bytes: 4, modified: null },
-    ];
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    useSpeleoStore.getState().openDumpPicker(first, 'stalx', async () => {
-      await gate;
-      throw new Error('the loser finally settled');
-    });
-
-    const inFlight = useSpeleoStore.getState().resolveDumpPicker('a.stalx');
-    expect(useSpeleoStore.getState().dumpPickerBusy).toBe(true);
-
-    // A second picker takes over while the first confirm is still in flight, and is
-    // itself mid-confirm with a failure of its own already on screen.
-    useSpeleoStore.getState().openDumpPicker(second, 'stalx', async () => {});
-    useSpeleoStore.setState({ dumpPickerBusy: true, dumpPickerError: 'the new one is working' });
-
-    release();
-    await inFlight;
-
-    const s = useSpeleoStore.getState();
-    expect(s.dumpPickerCandidates).toEqual(second);
-    expect(s.dumpPickerError).toBe('the new one is working');
-    expect(s.dumpPickerBusy).toBe(true);
-    expect(s.dumpPickerOpen).toBe(true);
-  });
-
-  it('still clears busy when the picker it owns succeeds', async () => {
-    // The ownership guard moved the un-busy off the unconditional `finally`, so the
-    // ordinary close has to carry it - or a successful pick would leave the next
-    // picker's buttons disabled from the moment it opened.
-    const candidates = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
-    ];
-    useSpeleoStore.getState().openDumpPicker(candidates, 'stalx', async () => {});
-
-    await useSpeleoStore.getState().resolveDumpPicker('a.stalx');
-
-    expect(useSpeleoStore.getState().dumpPickerBusy).toBe(false);
-    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
   });
 });

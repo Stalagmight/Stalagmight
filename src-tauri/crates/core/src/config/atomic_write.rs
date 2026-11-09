@@ -75,7 +75,7 @@ pub(super) fn temp_candidate(path: &Path) -> PathBuf {
 /// user who ran `chmod 600` on their config silently got it published back to
 /// 0644 on the next settings save - and saves fire on every project open, create
 /// and save. The file is not free of sensitive material: `[speleodb]` names the
-/// keychain account and `general.recent_projects` holds absolute paths.
+/// SpeleoDB account and `general.recent_projects` holds absolute paths.
 ///
 /// Created 0600 rather than chmod'ed after the fact so the window in which the
 /// content exists at a wider mode is never open at all;
@@ -155,6 +155,25 @@ pub(super) fn write_atomically_with(
     contents: &str,
     next_temp_path: &mut dyn FnMut() -> PathBuf,
 ) -> Result<()> {
+    write_with_mode(path, contents.as_bytes(), next_temp_path, true)
+}
+
+/// Write a credential document with mode 0600 even when replacing a wider file.
+pub(super) fn write_private_atomically(path: &Path, contents: &str) -> Result<()> {
+    write_private_bytes_atomically(path, contents.as_bytes())
+}
+
+/// Restore credential bytes verbatim, including an unreadable old document.
+pub(super) fn write_private_bytes_atomically(path: &Path, contents: &[u8]) -> Result<()> {
+    write_with_mode(path, contents, &mut || temp_candidate(path), false)
+}
+
+fn write_with_mode(
+    path: &Path,
+    contents: &[u8],
+    next_temp_path: &mut dyn FnMut() -> PathBuf,
+    _preserve_mode: bool,
+) -> Result<()> {
     // A temp file is left behind by any crash, power loss or SIGKILL between the
     // create and the rename, and because the name is unique per write it is never
     // overwritten - so they ACCUMULATE, one per interrupted write.
@@ -200,7 +219,9 @@ pub(super) fn write_atomically_with(
     // Before the rename, not after: after it, the mode is already live on
     // `config.toml` and every reader in that window sees the wider one.
     #[cfg(unix)]
-    inherit_destination_mode(&temp_path, path);
+    if _preserve_mode {
+        inherit_destination_mode(&temp_path, path);
+    }
 
     if let Err(e) = std::fs::rename(&temp_path, path) {
         // The destination is untouched, which is the recoverable direction:
@@ -212,8 +233,8 @@ pub(super) fn write_atomically_with(
 }
 
 /// Write the document into the already-created temp file and flush it to disk.
-fn fill_temp_file(mut file: std::fs::File, contents: &str) -> Result<()> {
-    file.write_all(contents.as_bytes())
+fn fill_temp_file(mut file: std::fs::File, contents: &[u8]) -> Result<()> {
+    file.write_all(contents)
         .context("Failed to write temporary config file")?;
     file.sync_all()
         .context("Failed to flush temporary config file")?;
@@ -227,6 +248,10 @@ fn fill_temp_file(mut file: std::fs::File, contents: &str) -> Result<()> {
 /// deleted by another sweeper mid-loop, a permission error) is ignored, because
 /// failing to collect a stale temp file must never stop the config from loading.
 pub(super) fn sweep_stale_temp_files(dir: &Path) {
+    sweep_stale_temp_files_named(dir, "config.toml.");
+}
+
+pub(super) fn sweep_stale_temp_files_named(dir: &Path, prefix: &str) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -240,7 +265,7 @@ pub(super) fn sweep_stale_temp_files(dir: &Path) {
         // does not start with `config.toml.`. Deliberately a prefix/suffix test
         // rather than a parse of the middle, so it keeps matching as the unique
         // part of the name changes shape (it has already gained a random nonce).
-        if !name.starts_with("config.toml.") || !name.ends_with(".tmp") {
+        if !name.starts_with(prefix) || !name.ends_with(".tmp") {
             continue;
         }
         let stale = entry

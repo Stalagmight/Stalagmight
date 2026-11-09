@@ -35,12 +35,6 @@ export interface RestoreRevisionArgs {
    */
   quiet?: boolean;
   /**
-   * [#258] The dump entry the user picked, when this call is a retry from the
-   * ambiguity picker. Absent on a first attempt, which is what makes the backend
-   * classify normally.
-   */
-  entryPath?: string;
-  /**
    * [#303] The "Unwind to previous SpeleoDB version" flavour: KEEP the downloaded
    * copy's undo history instead of dropping it, because that history is what the
    * action came for. Only the Unwind sets it, and the backend enforces its extra
@@ -96,7 +90,6 @@ export function useRestoreRevision() {
       restore,
       discardLocal = false,
       quiet = false,
-      entryPath,
       keepUndoHistory = false,
       discardUnpushed = false,
       chainForward = false,
@@ -112,7 +105,6 @@ export function useRestoreRevision() {
         restore,
         // Never waived for a View, whatever the caller passed.
         discardLocal: restore && discardLocal,
-        entryPath: entryPath ?? null,
         // [#303] Likewise only meaningful for a Restore: a View leaves the project
         // read-only, so there would be nothing to undo with the history it kept.
         keepUndoHistory: restore && keepUndoHistory,

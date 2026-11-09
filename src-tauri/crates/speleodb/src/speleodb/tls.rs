@@ -27,7 +27,6 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use http::Uri;
-use ureq::unversioned::resolver::DefaultResolver;
 
 use super::SpeleoDbError;
 
@@ -102,14 +101,11 @@ fn classify_v6(v6: Ipv6Addr) -> AddrClass {
 /// error on a missing authority or a resolution failure (fail closed).
 fn resolve_addrs(uri: &Uri) -> Result<Vec<IpAddr>, SpeleoDbError> {
     let endpoint = uri.to_string();
-    let (Some(scheme), Some(authority)) = (uri.scheme(), uri.authority()) else {
-        return Err(SpeleoDbError::InsecureEndpoint { endpoint });
-    };
-    let host_and_port = DefaultResolver::host_and_port(scheme, authority).ok_or_else(|| {
-        SpeleoDbError::InsecureEndpoint {
-            endpoint: endpoint.clone(),
-        }
+    let host = uri.host().ok_or_else(|| SpeleoDbError::InsecureEndpoint {
+        endpoint: endpoint.clone(),
     })?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let host_and_port = (host, uri.port_u16().unwrap_or(80));
     let addrs = host_and_port
         .to_socket_addrs()
         .map_err(|_| SpeleoDbError::InsecureEndpoint { endpoint })?;

@@ -35,37 +35,19 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 ts-rs = { workspace = true, features = ["no-serde-warnings"] }
-# Pinned exact (in the workspace table): the seed upload (#183) uses
-# `unversioned::multipart`, whose API is explicitly not semver-stable (see
-# #185). `multipart` adds to the existing default features (rustls, gzip).
-ureq = { workspace = true, features = ["multipart"] }
 http = { workspace = true }
-# Percent-encode the user-typed substring for the collaborator autocomplete query
-# param (#215). Already in the tree transitively; promoted to a direct dep.
-percent-encoding = { workspace = true }
-zip = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
-# SpeleoDB auth token at rest (#183, full tiering in #188). Per-OS native secret
-# store. On Linux, Secret Service (gnome-keyring / KWallet) is persistent across
-# sessions - unlike the session-scoped `linux-native` keyutils. `crypto-rust`
-# avoids a system OpenSSL dependency, and `vendored` statically builds libdbus
-# (keyring → dbus-secret-service → dbus → libdbus-sys) so there is no
-# `libdbus-1-dev` system build dependency to install on a clean box or in CI.
-# Headless CI has no secret service at runtime, so the client falls back to an
-# in-memory session token (see speleodb::auth).
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }
+speleodb-api = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+futures-util = { workspace = true }
+tempfile = { workspace = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3", default-features = false, features = ["apple-native"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 [dev-dependencies]
-# Test-only and acyclic: the env-gated live tests in mod.rs seed a real server
-# round trip - exporting a project to `.tml` and opening the extracted `.stalx`.
-stalagmight-export = { path = "../export" }
+dotenvy = { workspace = true }
+# Synthetic native SQLite files for API round-trip tests.
 stalagmight-persistence = { path = "../persistence" }
 tempfile = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

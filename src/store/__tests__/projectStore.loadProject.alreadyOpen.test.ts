@@ -143,3 +143,90 @@ describe('loadProject ALREADY_OPEN re-resolves the SpeleoDB gate (#270)', () => 
     expect(link?.hasUnpushedEdits).toBe(true);
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((yes) => { resolve = yes; });
+  return { promise, resolve };
+}
+
+it('deduplicates current paths but selects the last A in A-B-A', async () => {
+  const probe = deferred<null>();
+  let probes = 0;
+  invokeIpcMock.mockImplementation(async (command: string) => {
+    if (command === 'speleodb_project_access_at' && ++probes === 1) return probe.promise;
+    if (command === 'list_recent_projects') return [];
+    return undefined;
+  });
+  const store = useProjectStore.getState();
+  const first = store.loadProject('/A.stalx');
+  expect(store.loadProject('/A.stalx')).toBe(first);
+  await vi.waitFor(() => expect(probes).toBe(1));
+  const second = store.loadProject('/B.stalx');
+  const final = store.loadProject('/A.stalx');
+  expect(final).not.toBe(first);
+  expect(store.loadProject('/A.stalx')).toBe(final);
+  expect(await final).toEqual({ success: true });
+  probe.resolve(null);
+  expect(await first).toEqual({ success: false, superseded: true });
+  expect(await second).toEqual({ success: false, superseded: true });
+  expect(loadBinaryMock).toHaveBeenCalledExactlyOnceWith('/A.stalx');
+});
+
+it('does not allocate an operation ID or reset B after A cancellation completes late', async () => {
+  const cancellation = deferred<void>();
+  const entered = deferred<void>();
+  let cancellations = 0;
+  invokeIpcMock.mockImplementation(async (command: string) => {
+    if (command === 'cancel_loading' && ++cancellations === 1) {
+      entered.resolve();
+      await cancellation.promise;
+    }
+    if (command === 'list_recent_projects') return [];
+    return undefined;
+  });
+  const store = useProjectStore.getState();
+  const a = store.loadProject('/A.stalx', { accessConfirmed: true });
+  await entered.promise;
+  await store.loadProject('/B.stalx', { accessConfirmed: true });
+  const loading = useProjectStore.getState().loading;
+  cancellation.resolve();
+  expect(await a).toEqual({ success: false, superseded: true });
+  expect(useProjectStore.getState().loading).toBe(loading);
+  expect(loadBinaryMock).toHaveBeenCalledExactlyOnceWith('/B.stalx');
+});
+
+it.each(['close', 'create'])('a newer %s invalidates an open waiting for access', async (kind) => {
+  const probe = deferred<null>();
+  const entered = deferred<void>();
+  invokeIpcMock.mockImplementation(async (command: string) => {
+    if (command === 'speleodb_project_access_at') { entered.resolve(); return probe.promise; }
+    if (command === 'close_project') return { success: true };
+    if (command === 'create_project_full') throw new Error('synthetic create failure');
+    return undefined;
+  });
+  const store = useProjectStore.getState();
+  const open = store.loadProject('/A.stalx');
+  await entered.promise;
+  if (kind === 'close') await store.closeProject();
+  else await store.createProject('Synthetic');
+  probe.resolve(null);
+  expect(await open).toEqual({ success: false, superseded: true });
+  expect(loadBinaryMock).not.toHaveBeenCalled();
+});
+
+it('reports superseded if a newer request arrives during already-open reconciliation', async () => {
+  const undo = deferred<void>();
+  const entered = deferred<void>();
+  useProjectStore.setState({ refreshUndoState: vi.fn().mockImplementationOnce(async () => {
+    entered.resolve();
+    await undo.promise;
+  }).mockResolvedValue(undefined) });
+  const store = useProjectStore.getState();
+  const a = store.loadProject('/A.stalx');
+  await entered.promise;
+  expect(await store.loadProject('/B.stalx')).toEqual({ success: true });
+  undo.resolve();
+  expect(await a).toEqual({ success: false, superseded: true });
+  expect(refreshLinkStatusMock).toHaveBeenCalledOnce();
+});

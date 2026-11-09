@@ -4,16 +4,10 @@ import { Button } from '../common/Button';
 import { AlertDialog } from './AlertDialog';
 import { useUIStore } from '../../store/uiStore';
 import {
-  speleoProjectSessionIssuedFor,
-  speleoProjectSessionStillCurrent,
-  useSpeleoStore,
 } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useRestoreRevision } from '../../hooks/useRestoreRevision';
-import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../../utils/speleoError';
-
-/** Names this flow to `openDumpPicker` - see the revert dialog for why. */
-const DUMP_PICKER_OWNER = 'speleodb-restore';
+import { humanizeSpeleoError, unpushedLocalEdits, } from '../../utils/speleoError';
 
 /**
  * [#218] Restore-revision confirm. Opened from the Project Settings revision
@@ -32,7 +26,6 @@ export default function SpeleoRestoreDialog() {
   const dialogData = useUIStore((s) => s.dialogData);
   const isDirty = useProjectStore((s) => s.isDirty);
   const restoreRevision = useRestoreRevision();
-  const openDumpPicker = useSpeleoStore((s) => s.openDumpPicker);
 
   const projectId = typeof dialogData.projectId === 'string' ? dialogData.projectId : '';
   const projectName = typeof dialogData.projectName === 'string' ? dialogData.projectName : '';
@@ -69,13 +62,12 @@ export default function SpeleoRestoreDialog() {
     if (needsDiscard) cancelRef.current?.focus();
   }, [needsDiscard]);
 
-  const run = async (discardLocal: boolean, entryPath?: string) => {
+  const run = async (discardLocal: boolean) => {
     if (!projectId || !hexsha) return;
     setBusy(true);
     setError(null);
     // Captured BEFORE the request, so the ambiguity catch can tell whether the session
     // that issued it is still the one signed in - and whether the project still is.
-    const issuedFor = speleoProjectSessionIssuedFor(projectId);
     try {
       // Restore mode: the backend reopens the swapped tree with editing re-enabled
       // and the hook pulls it into the view. Close the confirm only on success so a
@@ -87,7 +79,6 @@ export default function SpeleoRestoreDialog() {
         shortSha,
         restore: true,
         discardLocal,
-        ...(entryPath ? { entryPath } : {}),
       });
       if (!applied) {
         closeDialog();
@@ -95,29 +86,6 @@ export default function SpeleoRestoreDialog() {
       }
       closeDialog();
     } catch (e) {
-      // [#258] The write lock is held for this whole call and is NOT touched here, so
-      // unlike the revert composite the retry is just this attempt again. Cancelling
-      // returns the dialog to its opening state with the lock still held - the user
-      // is still in an edit session, and the edit bar still says so.
-      const candidates = dumpCandidates(e);
-      // [#258 review] Same issuing-session guard the open verbs use: this download is
-      // unbounded, and a concurrent 401 can tear the surface down while it is out. Plus
-      // the project one, which the open verbs must NOT use - a restore binds to whatever
-      // is open, so a picker raised for a project that is no longer it offers a choice
-      // the backend will refuse.
-      if (candidates && speleoProjectSessionStillCurrent(issuedFor)) {
-        openDumpPicker(
-          candidates,
-          'stalx',
-          (chosen) => run(discardLocal, chosen),
-          () => setBusy(false),
-          // Suspends on the answer like the revert does, so it names itself for the
-          // same reason: its own re-raise must not fire the cancel that releases it,
-          // and anything else's raise must.
-          DUMP_PICKER_OWNER,
-        );
-        return;
-      }
       // A refusal over un-pushed edits is not a dead end: arm the explicit
       // discard step instead of showing the raw "local edits never pushed" line
       // about changes this dialog is already about to replace.

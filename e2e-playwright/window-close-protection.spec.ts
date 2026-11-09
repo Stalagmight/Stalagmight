@@ -333,7 +333,7 @@ test.describe('Window Close Protection', () => {
     await expect(page.getByTestId('single-system-view')).toBeVisible();
   });
 
-  test('window X on an UNWOUND copy hands the default to keeping the lock', async ({
+  test('window X on an UNWOUND copy defaults to keeping the lock', async ({
     page,
   }) => {
     // [#303] The state the whole feature is built around, and until now unreachable from a
@@ -373,7 +373,7 @@ test.describe('Window Close Protection', () => {
 
     const dialog = page.getByTestId('speleodb-quit-dialog');
     await expect(dialog).toBeVisible({ timeout: 5000 });
-    // The roles swap: keeping the lock changes nothing on the server, so THAT is what a
+    // The roles swap: leaving without uploading preserves the server survey, so THAT is what a
     // stray Enter reaches, and pushing is reachable but no longer the default.
     await expect(dialog.getByTestId('speleodb-quit-keep-lock')).toHaveAttribute(
       'data-primary-action',
@@ -422,21 +422,16 @@ test.describe('Window Close Protection', () => {
 
     const dialog = page.getByTestId('speleodb-quit-dialog');
     await expect(dialog).toBeVisible({ timeout: 5000 });
-    // All three choices, with the safe one primary and the destructive one neither
-    // primary nor armed on the first press.
-    await expect(dialog.getByTestId('speleodb-quit-push-release')).toHaveAttribute(
-      'data-primary-action',
-      ''
-    );
-    await expect(dialog.getByTestId('speleodb-quit-keep-lock')).toBeVisible();
-    await expect(dialog.getByTestId('speleodb-quit-discard-release')).not.toHaveAttribute(
-      'data-primary-action',
-      ''
-    );
-    await expect(page.getByTestId('speleodb-quit-discard-warning')).toBeHidden();
-
-    await dialog.getByTestId('speleodb-quit-discard-release').click();
-    await expect(page.getByTestId('speleodb-quit-discard-warning')).toBeVisible();
+    // Keeping the lock is the default local action, including when offline.
+    await expect(dialog.getByTestId('speleodb-quit-keep-lock')).toHaveAttribute('data-primary-action', '');
+    await expect(dialog.getByTestId('speleodb-quit-release')).toBeVisible();
+    await expect(dialog.getByTestId('speleodb-quit-release')).not.toHaveAttribute('data-primary-action', '');
+    await expect(dialog.getByTestId('speleodb-quit-push-release')).not.toHaveAttribute('data-primary-action', '');
+    await dialog.getByTestId('speleodb-quit-keep-lock').click();
+    await expect.poll(() => windowTeardownCounts(page)).toMatchObject({ close: 1 });
+    // The mock records close(); explicitly deliver the event the native backend emits.
+    await pressWindowCloseButton(page);
+    await expect.poll(() => windowTeardownCounts(page)).toMatchObject({ destroy: 1 });
   });
 
   /** Window teardown calls the mocked IPC layer has seen so far. */

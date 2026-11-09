@@ -15,6 +15,58 @@ The directory is Tauri's per-app config dir, named for the bundle identifier
 | macOS | `~/Library/Application Support/com.stalagmight.desktop/config.toml` |
 | Windows | `%APPDATA%\com.stalagmight.desktop\config.toml` |
 
+## SpeleoDB configuration
+
+All SpeleoDB settings and the API token are stored in a separate TOML file:
+
+| Platform | Path |
+|----------|------|
+| Linux | `~/.config/com.stalagmight.desktop/speleodb/speleodb.conf` |
+| macOS | `~/Library/Application Support/com.stalagmight.desktop/speleodb/speleodb.conf` |
+| Windows | `%APPDATA%\com.stalagmight.desktop\speleodb\speleodb.conf` |
+
+```toml
+endpoint = "https://www.speleodb.org"
+email = "you@example.com"
+token = "<API token>"
+insecure_http = false
+allow_force_edit = false
+poll_interval_seconds = 60
+undo_mode = "full"
+```
+
+The endpoint and email are optional until configured. The token is optional until
+sign-in and is removed on sign-out or when changing instances. There is one
+instance and one saved account. Tokens are plaintext, with atomic replacement and
+owner-only file permissions (0600) on Unix; Windows uses the user's profile ACLs.
+Passwords are never saved. Tokens remain backend-only and are omitted from IPC
+settings payloads and debug output.
+
+A malformed or unreadable SpeleoDB file leaves general preferences intact and the
+app signed out, with a redacted diagnostic in the log. Unrelated preference saves
+preserve that file; signing in or explicitly changing SpeleoDB settings can replace
+it. If saving general preferences fails after writing the SpeleoDB file, the old
+credential bytes (or prior absence) are restored with private permissions. A failed
+rollback is reported explicitly; two files cannot provide crash-atomic updates.
+
+When `speleodb/speleodb.conf` is genuinely absent, the legacy `[speleodb]` table
+supplies endpoint, email, `insecure_http`, `allow_force_edit`,
+`poll_interval_seconds` and `undo_mode`. Normalization still applies, including the
+polling floor. Passwords, tokens and obsolete credential-storage options are ignored;
+sign in again to store a token. The separate file always takes precedence, including
+when damaged or unreadable. Malformed legacy preferences are logged without source
+values and retained on unrelated saves for recovery. A successful two-file save
+persists migrated preferences and removes the legacy table; a failed general save
+restores the prior separate file or its absence.
+Signing out also deletes the current account's obsolete app-owned plaintext token
+file from `speleodb/tokens`, without reading or importing it. Other accounts are
+untouched; cleanup failures are reported. No keychain access is restored.
+`DEV_SPELEODB_URL` still overrides the instance for development, but a saved token
+is restored only when the resolved instance matches its configured endpoint.
+Reloading configuration applies a changed endpoint, account or token to the live
+session and resets its edit gate; unrelated preference reloads retain the session.
+The poll interval is clamped to at least 30 seconds on load.
+
 ## Key Config Options
 
 ```toml
@@ -264,15 +316,6 @@ stage_reserve_bar = 30.0            # Gas held back in each stage under Half-Min
 all_thirds_safety_margin_bar = 0.0  # Extra bar held back from every cylinder under All-thirds
 recalc_hold_stage2_bar = 100.0      # Back-gas held pressures for the Phase-2 return-leg
 recalc_hold_stage1_bar = 70.0       # recalc (carried now; that path is not implemented yet)
-
-[speleodb]
-# The auth token is never stored here (OS keychain, or the fallback below).
-# endpoint = "https://www.speleodb.org"   # Unset by default; DEV_SPELEODB_URL overrides at runtime
-# email = "you@example.com"               # Last-used account, prefills the login dialog
-token_fallback = "session_only"     # Without a keychain: "session_only" (memory) or "plaintext" (0600 file)
-insecure_http = false               # Allow an http:// endpoint to a public host; never relaxes TLS verification
-allow_force_edit = false            # Allow editing a remote project without holding the server write lock
-poll_interval_seconds = 60          # Remote-state poll cadence; raised to 30 on load if set lower
 
 [debug.map]
 show_hitboxes = false               # Show red overlay for interaction hitbox areas

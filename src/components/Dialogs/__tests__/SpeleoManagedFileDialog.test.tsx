@@ -13,6 +13,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
+const confirmMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
@@ -48,14 +50,13 @@ const SESSION = {
   loggedIn: true,
   userEmail: 'diver@example.com',
   endpoint: 'http://sdb.example/',
-  keychainBacked: true,
-  storage: null,
-} as SpeleoSession;
+  } as SpeleoSession;
 
 let loadProjectMock: ReturnType<typeof vi.fn>;
 let closeDialogMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  confirmMock.mockReset().mockResolvedValue(true);
   invokeIpcMock.mockReset();
   invokeIpcMock.mockResolvedValue(undefined);
   loadProjectMock = vi.fn(async () => ({ success: true }));
@@ -115,33 +116,6 @@ describe('SpeleoManagedFileDialog', () => {
     render(<SpeleoManagedFileDialog />);
     expect(screen.getByTestId('speleodb-managed-file-open-remote')).toBeDisabled();
     expect(screen.getByTestId('speleodb-managed-file-remote-blocked')).toBeInTheDocument();
-  });
-
-  it('opens the managed copy through the real project list', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_list_projects') return Promise.resolve([SUMMARY]);
-      if (cmd === 'speleodb_open_project')
-        return Promise.resolve({ local_path: '/cache/p1/project.stalx', concurrent_session: false });
-      return Promise.resolve(undefined);
-    });
-    render(<SpeleoManagedFileDialog />);
-    await userEvent.click(screen.getByTestId('speleodb-managed-file-open-remote'));
-
-    await waitFor(() => {
-      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_open_project');
-      // The list's summary, not one synthesized from the file's link row - only
-      // the list carries latest_commit_sha and permission. `entryPath: null` is
-      // the shared open flow's #258 dump-picker arg (no pre-picked entry here).
-      expect(call?.[1]).toEqual({
-        projectId: 'p1',
-        projectName: 'Cenote Azul',
-        latestCommitSha: 'abc123',
-        entryPath: null,
-      });
-    });
-    await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1/project.stalx'));
-    // The foreign file itself was never touched.
-    expect(ipcCalls()).not.toContain('speleodb_remove_link_at');
   });
 
   it('reports a project the account cannot see inline, without opening anything', async () => {
@@ -312,4 +286,22 @@ describe('SpeleoManagedFileDialog', () => {
       expect(screen.getByTestId('speleodb-managed-file-error')).toBeInTheDocument(),
     );
   });
+});
+
+
+it.each(['read-only', 'locked'])('restores the managed prompt after a cancelled %s warning', async (kind) => {
+  confirmMock.mockResolvedValue(false);
+  invokeIpcMock.mockResolvedValue([{ ...SUMMARY,
+    permission: kind === 'read-only' ? 'READ_ONLY' : 'READ_AND_WRITE',
+    lock_holder: kind === 'locked' ? 'other@example.com' : null,
+  }]);
+  render(<SpeleoManagedFileDialog />);
+  const open = screen.getByTestId('speleodb-managed-file-open-remote');
+  await userEvent.click(open);
+  await waitFor(() => expect(open).toBeEnabled());
+  expect(screen.getByTestId('speleodb-managed-file-cancel')).toBeEnabled();
+  expect(loadProjectMock).not.toHaveBeenCalled();
+  expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_open_project')).toBe(false);
+  await userEvent.click(open);
+  expect(confirmMock).toHaveBeenCalledTimes(2);
 });

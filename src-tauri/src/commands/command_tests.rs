@@ -4405,15 +4405,9 @@ fn test_clear_tile_cache_provider_only_clears() {
     assert!(stats.providers.contains_key("other"));
 }
 
-// FIXME: This test is not hermetic and currently cannot pass. The default
-// CacheConfig disables offline caching for "esri" (the only registered
-// provider), so fetch_tile always bypasses the cache and makes a live network
-// request to ESRI instead of returning the seeded bytes. The cache-hit path is
-// never reached for esri under default config. Re-enable once there is a test
-// seam to exercise a cache hit without enabling esri caching or hitting the
-// network (e.g. a fake provider / injectable fetcher).
+// A fresh tile with a server cache grant is returned before any tilemap or
+// imagery request. This also exercises the command's default cache config.
 #[test]
-#[ignore = "not hermetic: esri caching is disabled by default, so fetch_tile hits the network"]
 fn test_fetch_tile_cache_hit_returns_data() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
@@ -5571,7 +5565,12 @@ fn test_update_config_persists_and_reload_restores() {
             let updated = config::get_config(state(&app));
             assert_eq!(updated.general.auto_save, !original_auto_save);
 
-            let reloaded = config::reload_config(state(&app)).expect("reload config");
+            let (reloaded, auth_changed) =
+                config::reload_config(state(&app)).expect("reload config");
+            assert!(
+                !auth_changed,
+                "ordinary preference reload preserves the session"
+            );
             assert_eq!(reloaded.general.auto_save, !original_auto_save);
         });
     });
@@ -5586,7 +5585,12 @@ fn test_reload_config_syncs_undo_history_limit() {
             cfg.general.undo_history_limit = 42;
             config::update_config(state(&app), cfg).expect("update config");
 
-            let reloaded = config::reload_config(state(&app)).expect("reload config");
+            let (reloaded, auth_changed) =
+                config::reload_config(state(&app)).expect("reload config");
+            assert!(
+                !auth_changed,
+                "ordinary preference reload preserves the session"
+            );
             assert_eq!(reloaded.general.undo_history_limit, 42);
 
             // Verify the in-memory config also reflects the reloaded limit

@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
+import { peekProjectActionSource, setProjectActionSource } from '../../utils/telemetry';
+import { reserveProjectRequest, runTreeReplacement } from '../../utils/projectTransition';
 import type { DisplaySettings } from '../../types/loading';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -144,4 +146,71 @@ describe('projectStore.createProject', () => {
     expect(ui.moveCommentSource).toBeNull();
     expect(ui.mergeStationA).toBeNull();
   });
+
+  it('does not dispatch an older create after its cancellation finishes late', async () => {
+    let finishCancel!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>((yes) => { started = yes; });
+    const normalInvoke = invokeIpcMock.getMockImplementation()!;
+    invokeIpcMock.mockImplementation(async (command, ...args) => {
+      if (command === 'cancel_loading') { started(); await new Promise<void>((yes) => { finishCancel = yes; }); return; }
+      return normalInvoke(command, ...args);
+    });
+    const pending = useProjectStore.getState().createProject('Obsolete');
+    await entered;
+    reserveProjectRequest();
+    const newerOp = useProjectStore.getState().startLoading('Newer', '/newer.stalx');
+    setProjectActionSource('recent-list');
+    finishCancel();
+    expect((await pending).success).toBe(false);
+    expect(invokeIpcMock.mock.calls.some(([command]) => command === 'create_project_full')).toBe(false);
+    expect(useProjectStore.getState().loading.clientOpId).toBe(newerOp);
+    expect(useProjectStore.getState().loading.isLoading).toBe(true);
+    expect(peekProjectActionSource()).toBe('recent-list');
+  });
+
+  it.each(['success', 'error', 'recents'])('does not consume a stale create %s', async (stage) => {
+    let finish!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>((yes) => { started = yes; });
+    const gate = new Promise<void>((yes) => { finish = yes; });
+    const normalInvoke = invokeIpcMock.getMockImplementation()!;
+    invokeIpcMock.mockImplementation(async (command, ...args) => {
+      if (command === (stage === 'recents' ? 'list_recent_projects' : 'create_project_full')) {
+        started(); await gate;
+        if (stage === 'error') throw new Error('obsolete create failure');
+      }
+      return normalInvoke(command, ...args);
+    });
+    const pending = useProjectStore.getState().createProject('Obsolete');
+    await entered;
+    reserveProjectRequest();
+    const replacement = { name: 'Newer', file_path: '/newer.stalx' };
+    useProjectStore.setState({ project: replacement as never });
+    const newerOp = useProjectStore.getState().startLoading('Newer', '/newer.stalx');
+    setProjectActionSource('recent-list');
+    finish();
+    expect((await pending).success).toBe(false);
+    expect(useProjectStore.getState().project).toBe(replacement);
+    expect(useProjectStore.getState().loading.clientOpId).toBe(newerOp);
+    expect(useProjectStore.getState().loading.isLoading).toBe(true);
+    expect(useProjectStore.getState().loading.error).toBeUndefined();
+    expect(peekProjectActionSource()).toBe('recent-list');
+  });
+
+  it('checks queued create ownership before cancelling a newer load', async () => {
+    let finish!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>((yes) => { started = yes; });
+    const gate = new Promise<void>((yes) => { finish = yes; });
+    const replacement = runTreeReplacement(async () => { started(); await gate; });
+    await entered;
+    const create = useProjectStore.getState().createProject('Obsolete');
+    reserveProjectRequest();
+    finish();
+    await replacement;
+    expect((await create).success).toBe(false);
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+  });
+
 });

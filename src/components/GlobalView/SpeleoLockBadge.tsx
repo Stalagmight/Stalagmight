@@ -1,3 +1,4 @@
+import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import { useTranslation } from 'react-i18next';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { SpeleoBadgedIcon, HourglassGlyph, PenGlyph } from '../common/SpeleoBadgedIcon';
@@ -15,6 +16,7 @@ export interface SpeleoLockInfo {
   /** Holder email, `null` = free, `undefined` = not scanned (logged out / offline). */
   lockHolder: string | null | undefined;
   lockedByMe: boolean;
+  readOnly?: boolean;
   /** The SpeleoDB project's server-side name, if the scan resolved it (`undefined`
       when logged out / offline / not scanned). May differ from the local name. */
   speleoName: string | undefined;
@@ -40,6 +42,7 @@ export function resolveSpeleoLock(
   myEmail: string | null,
   remoteProjects: Record<string, string> = {},
   localStates: SpeleoLocalStateMap = {},
+  summaries: Record<string, SpeleoProjectSummary> = {},
 ): SpeleoLockInfo {
   const pid = project.speleodb_project_id ?? undefined;
   const lockHolder = pid !== undefined && pid in remoteLocks ? remoteLocks[pid] : undefined;
@@ -49,6 +52,7 @@ export function resolveSpeleoLock(
   const lockedByMe = emailsMatch(lockHolder, myEmail);
   return {
     isRemote: project.is_remote,
+    ...(pid && summaries[pid]?.permission === 'READ_ONLY' ? { readOnly: true } : {}),
     lockHolder,
     lockedByMe,
     speleoName,
@@ -286,6 +290,7 @@ export function SpeleoRecentInfo({
       data-testid={`${testIdPrefix}-info`}
     >
       <SpeleoLockBadge {...info} size={size} testIdPrefix={testIdPrefix} />
+      {info.readOnly && <span className="px-1.5 py-0.5 rounded bg-warning-20 text-warning" data-testid={`${testIdPrefix}-read-only`}>{t('speleodb.browser.readOnly')}</span>}
       <span className="truncate">
         {t('speleodb.recentInfo.prefix', { name: info.speleoName ?? name })}
         {/* The middot + lock detail sit a shade back from the project name. */}

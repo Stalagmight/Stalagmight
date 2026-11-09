@@ -722,7 +722,7 @@ interface UIStore {
 
   // Screen-occupancy registry (#445 review): a count of independent top-layer
   // overlays that render OUTSIDE `activeDialog` (TelemetryOptInDialog,
-  // HeldLockResumeDialog, SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog) and
+  // HeldLockResumeDialog, SpeleoDumpPickerDialog) and
   // are currently actually on screen. Register via `useScreenOccupant` from the
   // overlay itself; check via `isScreenBusy()`. A counter, not a boolean, because
   // more than one can be mounted at once (e.g. a login made from inside Settings

@@ -81,8 +81,7 @@ export function resetLaunchFileQueueForTest(): void {
 
 /**
  * Is the screen occupied - the single dialog slot, a placement flow, or an
- * independent top-layer overlay (TelemetryOptInDialog, HeldLockResumeDialog,
- * SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog) registered via
+ * independent top-layer overlay (TelemetryOptInDialog, HeldLockResumeDialog) registered via
  * `useScreenOccupant`?
  *
  * Used to be `activeDialog`/`placementMode` only, which left those overlays

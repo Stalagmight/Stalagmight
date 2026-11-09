@@ -186,7 +186,7 @@ prevents timer resets from redundant calls.
 ### SpeleoDB traffic - `speleodb-api.<kind>.*` (#210, F1)
 
 Every SpeleoDB HTTP call is instrumented at the Rust client's single choke
-points (`client::with_retry` and `client::send_json_request`) so we can size the
+point (`SdkClient::call`) so we can size the
 server load Stalagmight causes and spot a runaway poll/retry loop *before* it
 reaches the server. Recorded **per HTTP attempt** (a retried idempotent 5xx
 really re-hits the server, so a retry storm shows up as inflated counts +
@@ -198,10 +198,8 @@ outcome class, and a latency bucket - never a host, project id, email, token, or
 file bytes. That is all sizing load / flagging abuse needs.
 
 `<kind>` is one of the `speleodb::metrics::Endpoint` labels: `login`,
-`list-projects`, `get-project`, `get-revisions`, `fetch-user`, `download-dump`,
-`upload`, `acquire`, `release`, `release-all`, `patch-project`, `create-project`,
-`delete-project`, `list-permissions`, `mutate-permission`, `list-teams`,
-`autocomplete`.
+`list-projects`, `get-project`, `get-revisions`, `fetch-user`, `download-stalx`,
+`upload`, `acquire`, `release`, `patch-project`, and `create-project`.
 
 ```
 speleodb-api.<kind>.ok                  - completed exchange (2xx/3xx, incl. 304)

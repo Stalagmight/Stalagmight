@@ -6,6 +6,7 @@ import {
   waitForDrawnStations,
   waitForMapIdle,
   getStationScreenPositions,
+  getMapCenter,
   readCanvasPixel,
   readCanvasPixelBlock,
   selectDropdownOption,
@@ -255,8 +256,27 @@ async function stationCenter(page: Page, stationIndex: number): Promise<PixelRgb
   return readCanvasPixel(page, x, y);
 }
 
+/** Wait for panel transitions and MapLibre's trailing canvas resize before screen-coordinate probes. */
+async function waitForMapLayout(page: Page): Promise<void> {
+  await page.evaluate(() => Promise.all(
+    document.getAnimations().map((animation) => animation.finished.catch(() => undefined)),
+  ));
+  // MapLibre's debounced resize can trail the CSS transition. Wait until
+  // its canvas matches the container before comparing antialiased pixels.
+  await page.waitForFunction(() => {
+    const map = (window as unknown as { __stalagmight_map__?: {
+      getCanvas: () => HTMLCanvasElement;
+      getContainer: () => HTMLElement;
+    } }).__stalagmight_map__;
+    return map && map.getCanvas().clientHeight === map.getContainer().clientHeight
+      && map.getCanvas().clientWidth === map.getContainer().clientWidth;
+  });
+  await waitForMapIdle(page);
+}
+
 async function enterMode(page: Page, mode: 'survey' | 'plan' | 'export'): Promise<void> {
   await page.locator(`[data-testid="mode-${mode}"]`).click();
+  await waitForMapLayout(page);
 }
 
 /**
@@ -276,6 +296,7 @@ async function chooseEntrance(page: Page): Promise<void> {
 async function enterPlanMode(page: Page): Promise<void> {
   await enterMode(page, 'plan');
   await chooseEntrance(page);
+  await waitForMapLayout(page);
 }
 
 /** Enter Plan, add a stage, select + acknowledge the 1-stage strategy → one ▼ drop marker + route. */
@@ -1704,7 +1725,10 @@ test.describe('Gas planning', () => {
     // The last station inside the budget is painted an interior ramp color, the
     // beyond-range one dimmed (not grey), the unconnected one grey. Snapshot the
     // reachable one's whole footprint so "still ramp-painted after the rebuild" can
-    // be asserted byte-for-byte.
+    // be compared across the rebuild.
+    await waitForMapLayout(page);
+    await setMapZoom(page, zoom);
+    const centerBefore = await getMapCenter(page);
     const reachableBefore = await stationBlock(page, LAST_REACHABLE);
     const reachableColors = await stationColors(page, LAST_REACHABLE);
     expect(reachableColors.has(sectionKey)).toBe(false);
@@ -1726,16 +1750,30 @@ test.describe('Gas planning', () => {
         shots: [{ azimuth_in: 0, azimuth_out: 180, length: 5, depth_in: -3, depth_out: -9 }],
       },
     ]);
-    // The rebuild can re-fit the view, so re-pin the calibrated zoom.
-    await setMapZoom(page, zoom);
+    // Pin the full camera: recentering shifts antialiased station edges by a
+    // fraction of a pixel even at the same zoom.
+    await page.evaluate(({ center, zoom }) => {
+      const map = (window as unknown as { __stalagmight_map__: {
+        jumpTo: (options: { center: [number, number]; zoom: number }) => void;
+      } }).__stalagmight_map__;
+      map.jumpTo({ center: [center.lng, center.lat], zoom });
+    }, { center: centerBefore, zoom });
+    await waitForMapIdle(page);
     await waitForDrawnStations(page, 1);
 
-    // The rebuilt stations are painted exactly what they were: the ramp re-applied.
+    // The rebuilt stations retain the same ramp colors.
     // (Probed on the first section's far stations, which the new section does not
     // overlap: the mock lays every section out along the same axis and never bumps
     // `modified_at` on create_section, the field's refetch key, so the new section's
     // stations paint grey where they land on top of the first two of this one.)
-    await expect.poll(() => stationBlock(page, LAST_REACHABLE), { timeout: 3000 }).toEqual(reachableBefore);
+    // Rebuilding identical WebGL geometry can round a blended channel by one
+    // 8-bit step. Keep the entire footprint comparison, with only that rounding
+    // allowance; losing the ramp or dimming changes channels by much more.
+    await expect.poll(async () => {
+      const after = await stationBlock(page, LAST_REACHABLE);
+      if (after.length !== reachableBefore.length) return Infinity;
+      return Math.max(...after.map((channel, i) => Math.abs(channel - reachableBefore[i]!)));
+    }, { timeout: 3000 }).toBeLessThanOrEqual(1);
     const beyondRangeAfter = await stationColors(page, BEYOND_RANGE);
     expect(beyondRangeAfter.has(grey)).toBe(false);
     expect(beyondRangeAfter.has(GAS_FAR_KEY)).toBe(false);

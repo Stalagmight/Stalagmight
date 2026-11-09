@@ -1,3 +1,5 @@
+import { requestTopDialogClose } from '../utils/dialogStack';
+import { useSpeleoStore } from '../store/speleoStore';
 import { useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
@@ -412,7 +414,7 @@ export function useKeyboardShortcuts() {
         const { activeDialog, closeDialog } = useUIStore.getState();
         if (activeDialog) {
           event.preventDefault();
-          closeDialog();
+          if (!requestTopDialogClose()) closeDialog();
           // IMPORTANT: Don't return - continue to clear tool state
         } else if (dataTableFullScreen) {
           // Fullscreen data table: with no dialog to close, Escape exits the
@@ -709,6 +711,10 @@ export function useKeyboardShortcuts() {
 
         case 'save':
           event.preventDefault();
+          if (useSpeleoStore.getState().link?.editState === 'editing' && !useSpeleoStore.getState().link?.forceEditing) {
+            openDialog('speleodb-done', { mode: 'push' });
+            break;
+          }
           if (project) {
             void saveProject().then((result) => {
               if (result && !result.success) {

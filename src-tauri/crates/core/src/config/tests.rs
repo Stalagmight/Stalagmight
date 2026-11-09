@@ -3162,89 +3162,8 @@ fn test_panels_config_deserializes_legacy_table_without_reveal_fields() {
 }
 
 // ========================================================================
-// [Track C] (#188) SpeleoDbConfig: token_fallback + insecure_http
+// SpeleoDB connection settings
 // ========================================================================
-
-#[test]
-fn token_fallback_unknown_normalizes_to_session_only() {
-    // An unrecognized TOML value parses to the #[serde(other)] sentinel, then
-    // normalize() coerces it back to the safe default (mirrors ThemeMode).
-    let sdb: SpeleoDbConfig = toml::from_str("token_fallback = \"definitely_not_a_real_value\"")
-        .expect("unknown value must not block loading");
-    assert_eq!(sdb.token_fallback, TokenFallback::Unknown);
-
-    // The coercion is reachable through the top-level Config::normalize too.
-    let mut config = Config::default();
-    config.speleodb.token_fallback = TokenFallback::Unknown;
-    config.normalize();
-    assert_eq!(config.speleodb.token_fallback, TokenFallback::SessionOnly);
-}
-
-#[test]
-fn speleodb_config_defaults_are_safe() {
-    // Defaults: session-only fallback and the insecure-http override OFF.
-    let config = SpeleoDbConfig::default();
-    assert_eq!(config.token_fallback, TokenFallback::SessionOnly);
-    assert!(!config.insecure_http);
-    // An empty [speleodb] table (no fields) loads the same safe defaults, since
-    // both new fields are #[serde(default)] - existing configs load unchanged.
-    let sdb: SpeleoDbConfig = toml::from_str("").expect("empty table loads");
-    assert_eq!(sdb.token_fallback, TokenFallback::SessionOnly);
-    assert!(!sdb.insecure_http);
-    // Only the legacy endpoint/email present (pre-Track-C config) still defaults
-    // the new fields safely.
-    let sdb: SpeleoDbConfig =
-        toml::from_str("endpoint = \"https://x\"\nemail = \"u@x\"").expect("legacy table loads");
-    assert_eq!(sdb.token_fallback, TokenFallback::SessionOnly);
-    assert!(!sdb.insecure_http);
-    // And the keyring belief a config from before the account STAMP existed carries:
-    // the flag, with nothing naming whose entry it is about. It has to load - the
-    // stamp is `#[serde(default)]` - and the pair it forms is the one
-    // `keychain_belief_applies_to` reads as "about the persisted email".
-    let sdb: SpeleoDbConfig =
-        toml::from_str("endpoint = \"https://x\"\nemail = \"u@x\"\nkeychain_has_token = true")
-            .expect("a pre-stamp config loads");
-    assert!(sdb.keychain_has_token);
-    assert_eq!(sdb.keychain_token_account, None);
-}
-
-#[test]
-fn speleodb_config_round_trips_new_fields() {
-    let mut config = Config::default();
-    config.speleodb.token_fallback = TokenFallback::Plaintext;
-    config.speleodb.insecure_http = true;
-    config.speleodb.endpoint = Some("http://10.10.0.220:8000".to_string());
-    config.speleodb.email = Some("u@x".to_string());
-    config.speleodb.keychain_has_token = true;
-    config.speleodb.keychain_token_account = Some("http://10.10.0.220:8000|u@x".to_string());
-
-    let serialized = toml::to_string_pretty(&config).expect("Config should serialize");
-    let deserialized: Config = toml::from_str(&serialized).expect("round-trip parse");
-    assert_eq!(
-        deserialized.speleodb.token_fallback,
-        TokenFallback::Plaintext
-    );
-    assert!(deserialized.speleodb.insecure_http);
-    assert_eq!(
-        deserialized.speleodb.endpoint.as_deref(),
-        Some("http://10.10.0.220:8000")
-    );
-    assert_eq!(deserialized.speleodb.email.as_deref(), Some("u@x"));
-    // The keyring belief and the account key it is stamped with round-trip as the
-    // pair they are: a stamp that did not survive a save would leave the belief
-    // reading as an unstamped one, which is scoped by the email alone.
-    assert!(deserialized.speleodb.keychain_has_token);
-    assert_eq!(
-        deserialized.speleodb.keychain_token_account.as_deref(),
-        Some("http://10.10.0.220:8000|u@x")
-    );
-
-    // Snake-case wire form: token_fallback serializes as "plaintext".
-    assert!(
-        serialized.contains("token_fallback = \"plaintext\""),
-        "expected snake_case token_fallback in:\n{serialized}"
-    );
-}
 
 #[test]
 fn speleodb_poll_interval_defaults_to_60_and_clamps_up_to_floor() {
@@ -3686,7 +3605,7 @@ fn test_write_retries_past_an_occupied_temp_name() {
 fn test_save_preserves_the_config_files_own_mode() {
     // A user who tightened their config must keep it. Saves fire on every
     // project open, create and save, so the regression republished the file -
-    // which names the keychain account and every recent project's absolute path
+    // which names the SpeleoDB account and every recent project's absolute path
     // - at the process umask within seconds of a `chmod`.
     //
     // The modes under test are deliberately NOT 0600. The temp file is created

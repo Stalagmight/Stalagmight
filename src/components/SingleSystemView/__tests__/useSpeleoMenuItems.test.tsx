@@ -47,7 +47,7 @@ beforeEach(() => {
   useSpeleoStore.setState({
     link: null,
     remoteProjectId: 'p1',
-    session: { loggedIn: true, userEmail: 'me@x', endpoint: 'https://x/', keychainBacked: true, storage: 'keychain', keychain: 'available' },
+    session: { loggedIn: true, userEmail: 'me@x', endpoint: 'https://x/', },
   });
 });
 

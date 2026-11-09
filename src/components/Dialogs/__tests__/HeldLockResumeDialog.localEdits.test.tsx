@@ -75,7 +75,7 @@ beforeEach(() => {
       { projectId: CLEAN, projectName: 'Clean Cave' },
     ],
     heldLockPromptOpen: true,
-    session: { loggedIn: true, userEmail: 'me@example.com', endpoint: null, keychainBacked: true, storage: 'keychain', keychain: 'available' },
+    session: { loggedIn: true, userEmail: 'me@example.com', endpoint: null, },
   });
   useProjectStore.setState({
     loadProject: loadProjectMock,

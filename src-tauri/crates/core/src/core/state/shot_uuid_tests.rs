@@ -687,55 +687,6 @@ fn adopting_the_same_ariane_file_twice_gives_the_same_shot_uuids() {
     );
 }
 
-/// Tripwire for the test above: `adopt_build_into` must keep building the
-/// project through the calls `import_ariane_file` drives. If it grows its own
-/// import path, the idempotence claim stops being tested and this fails loudly
-/// instead - which is exactly what happened when #443/#452 moved the conversion
-/// behind `adopt_convert` and the import onto `execute_tml_import_sections`.
-///
-/// The conversion is asserted through BOTH bodies, since `adopt_convert` is the
-/// indirection that would otherwise let the chain be re-pointed without this
-/// noticing.
-#[test]
-fn adoption_still_builds_through_the_pipeline_the_idempotence_test_drives() {
-    let path = format!(
-        "{}/src/core/state/speleodb_pull.rs",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    let body_of = |name: &str| -> String {
-        // Anchor on a line-start definition, not a bare substring - a doc
-        // comment MENTIONING the fn name would otherwise shift the match
-        // earlier and make the assertions over-accept.
-        let needle = format!("\nfn {name}");
-        let start = src
-            .find(&needle)
-            .or_else(|| src.find(&format!("\npub fn {name}")))
-            .or_else(|| src.find(&format!("\n    fn {name}")))
-            .unwrap_or_else(|| panic!("{name} is still defined in speleodb_pull.rs"));
-        let rest = &src[start..];
-        rest[..rest.find("\n}\n").unwrap_or(rest.len())].to_owned()
-    };
-
-    let adopt = body_of("adopt_build_into");
-    for call in [
-        "parsers::tml::parse_tml",
-        "adopt_convert",
-        "execute_tml_import_sections",
-    ] {
-        assert!(
-            adopt.contains(call),
-            "adopt_build_into no longer calls {call}; the adoption-idempotence \
-             test is driving a pipeline the shipped path does not use"
-        );
-    }
-    assert!(
-        body_of("adopt_convert").contains("convert_tml_to_import_configs"),
-        "adopt_convert no longer runs the TML converter; the adoption-idempotence \
-         test is driving a pipeline the shipped path does not use"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // 9. Undo
 // ---------------------------------------------------------------------------

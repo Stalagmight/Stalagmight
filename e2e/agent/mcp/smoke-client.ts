@@ -105,17 +105,30 @@ async function main(): Promise<void> {
     const wait = parseText(await call('wait_for', { condition: 'app-ready', timeoutMs: 5000 })) as { met?: boolean };
     check('wait_for app-ready', wait?.met === true);
 
-    const telemetryPrompt = parseText(
-      await call('element_state', { testid: 'telemetry-opt-in-dialog' }),
-    ) as { elements?: Array<{ displayed?: boolean }> };
-    if (telemetryPrompt?.elements?.some((element) => element.displayed)) {
-      await call('click', { testid: 'telemetry-opt-in-no' });
-      await call('wait_for', {
-        condition: 'hidden',
-        selector: '[data-testid="telemetry-opt-in-dialog"]',
-        timeoutMs: 5000,
-      });
-    }
+    const dismissTelemetryPrompt = async () => {
+      const telemetryPrompt = parseText(
+        await call('element_state', { testid: 'telemetry-opt-in-dialog' }),
+      ) as { value?: { elements?: Array<{ displayed?: boolean }> } };
+      if (telemetryPrompt?.value?.elements?.some((element) => element.displayed)) {
+        // This is setup, like the scenario harness's first-run dismissal. The
+        // macOS driver cannot run WebdriverIO's element actionability helpers.
+        const hidden = parseText(await call('eval', {
+          script: `
+            const button = document.querySelector('[data-testid="telemetry-opt-in-no"]');
+            if (!(button instanceof HTMLElement)) throw new Error('telemetry decline button missing');
+            button.click();
+            const deadline = Date.now() + 5000;
+            while (document.querySelector('[data-testid="telemetry-opt-in-dialog"]')) {
+              if (Date.now() >= deadline) throw new Error('telemetry prompt did not close');
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+            return true;
+          `,
+        })) as { value?: boolean };
+        check('telemetry prompt dismissed', hidden?.value === true, hidden);
+      }
+    };
+    await dismissTelemetryPrompt();
 
     // Oracle self-test (harness doctor): a deliberate backend thread panic (app
     // survives) must surface as a fatal crash-marker finding from check_problems.
@@ -138,12 +151,7 @@ async function main(): Promise<void> {
     check('seed opens an isolated copy of the default fixture', seeded?.mode === 'fixture', seeded);
     const seededView = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
     check('seed switched to single view', seededView?.value === 'single', seededView?.value);
-    await call('click', { testid: 'telemetry-opt-in-no' });
-    await call('wait_for', {
-      condition: 'hidden',
-      selector: '[data-testid="telemetry-opt-in-dialog"]',
-      timeoutMs: 5000,
-    });
+    await dismissTelemetryPrompt();
     await call('wait_for', { condition: 'map-idle', timeoutMs: 10000 });
     const featureIdentity = parseText(
       await call('eval', {

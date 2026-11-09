@@ -53,7 +53,7 @@ beforeEach(() => {
     link: null,
     banner: null,
     busy: false,
-    session: { loggedIn: true, userEmail: 'me@example.com', endpoint: null, keychainBacked: true, storage: 'keychain', keychain: 'available' },
+    session: { loggedIn: true, userEmail: 'me@example.com', endpoint: null, },
   });
   useUIStore.setState({ activeDialog: null, dialogData: {}, appMode: 'survey' });
 });
@@ -122,7 +122,7 @@ describe('SpeleoStatusButton un-pushed local edits (#270)', () => {
     // Logged out, no lock, work only here: the most important time to say so, even
     // though the button itself is inert.
     useSpeleoStore.setState({
-      session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false, storage: null, keychain: 'not_attempted' },
+      session: { loggedIn: false, userEmail: null, endpoint: null, },
     });
     seed({ hasUnpushedEdits: true });
     render(<SpeleoStatusButton />);

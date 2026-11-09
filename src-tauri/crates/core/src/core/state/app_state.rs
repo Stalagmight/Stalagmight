@@ -461,6 +461,13 @@ impl AppState {
 
     /// Cancel any active loading operation (idempotent - safe to call anytime)
     pub fn cancel_loading(&self) {
+        // A confirmed frontend transition (including one that later fails) must
+        // invalidate older downloads before it probes or reads another cache.
+        let _project = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.bump_speleodb_session();
         if let Ok(guard) = self.active_loading.lock() {
             if let Some(token) = guard.as_ref() {
                 token.store(true, std::sync::atomic::Ordering::SeqCst);

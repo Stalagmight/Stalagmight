@@ -1,13 +1,11 @@
 import type { StoreApi } from 'zustand';
-import i18n from '../i18n';
 import { invokeIpc } from '../utils/ipc';
-import { useUIStore } from './uiStore';
+import { endpointsMatch } from '../utils/speleoEndpoint';
+import { useSpeleoStore } from './speleoStore';
 import type { Config } from '../types/config';
 import type { GasConfig } from '../types/ipc.generated';
 import type { CommandResult } from '../types/commands';
-import type { ConfigSaveReport } from '../types/ipc/ConfigSaveReport';
 import { emptyCommandResult, type ProjectStore } from './projectStore';
-import { TOAST_KEYS } from '../utils/toastKeys';
 
 /**
  * Split out of `projectStore.ts` rather than rebaselined (#157: split at an API
@@ -50,52 +48,21 @@ export function createProjectConfigActions(
 
     updateConfig: async (config: Config) => {
       try {
+        const sessionGeneration = useSpeleoStore.getState().sessionGeneration;
         const routingBefore = get().config?.gas.include_reference_legs;
-        // Rust command returns Result<ConfigSaveReport, String> - an error throws; the
-        // report carries the one thing a save can half-do (see below).
-        const report = await invokeIpc<ConfigSaveReport | null>(
+        await invokeIpc<void>(
           'update_config',
           { config },
           { purpose: 'persist user settings' },
         );
-        // Turning the "never use the OS keychain" switch on EVICTS the API key an
-        // earlier login left in the keyring, and a locked or read-only keyring can
-        // refuse that delete. The settings are saved either way (the eviction runs
-        // before the write precisely so a partial failure lands in the recoverable
-        // direction), so this cannot be an error - but it must not pass as unqualified
-        // success either: Settings would be telling the user their key is not in the
-        // OS keychain while a working bearer token sits in it. The backend reports
-        // only a residue that may GENUINELY have survived, so this does not fire on
-        // the headless box that has no keychain to strand anything in.
-        if (report?.keychain_residue) {
-          useUIStore
-            .getState()
-            .showToast(
-              i18n.t('settings.speleodb.disableKeychain.evictionFailed', {
-                reason: report.keychain_residue,
-              }),
-              TOAST_KEYS.SPELEODB_KEYCHAIN_RESIDUE,
-              'warning',
-            );
-        }
-        // The other half of that same move: the key is re-landed wherever the closed
-        // gate allows, which under the default "this session only" preference is
-        // memory - and the sweep that makes that true has to remove any copy an
-        // earlier storage choice wrote to disk. When it cannot, the saved settings say
-        // the key is gone when the app closes while the next launch reads the survivor
-        // straight back and signs the user in. Deliberately does not name the keyring:
-        // the backend cannot tell which store stranded it, and it is mutually
-        // exclusive with the message above, which can.
-        if (report?.persistent_residue) {
-          useUIStore
-            .getState()
-            .showToast(
-              i18n.t('settings.speleodb.disableKeychain.sweepFailed', {
-                reason: report.persistent_residue,
-              }),
-              TOAST_KEYS.SPELEODB_TOKEN_RESIDUE,
-              'warning',
-            );
+        // "Log in now" updates the live session before this settings snapshot is
+        // refreshed. Compare that identity, and do not erase a newer login when
+        // an older settings request finishes after it.
+        const speleo = useSpeleoStore.getState();
+        if (speleo.sessionGeneration === sessionGeneration &&
+            speleo.session?.loggedIn &&
+            !endpointsMatch(speleo.session.endpoint, config.speleodb.endpoint)) {
+          speleo.clearSession();
         }
         // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
         await get().loadConfig();

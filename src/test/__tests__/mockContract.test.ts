@@ -257,10 +257,6 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
   parse_compass: 'no mocked spec drives the compass parse+execute two-step import flow',
   execute_compass_import: 'no mocked spec drives the compass parse+execute two-step import flow',
   parse_walls: 'walls-import-dialog.spec.ts uses execute_walls_import directly; parse_walls is not called',
-
-  // SpeleoDB collaborative write-workflow: exercised only by the env-gated
-  // live-server tests (docs/speleodb-dev-testing.md), not mocked Playwright specs.
-  speleodb_adopt_ariane: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_done: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_force_edit: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_get_revisions: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
@@ -269,9 +265,6 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
     'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_push: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_restore_revision: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-  speleodb_dump_candidates:
-    'Read-only #258 probe: downloads a dump and reports whether it holds more than one ' +
-    'openable file. Same live-server dependency as the write-workflow commands below.',
   speleodb_start_editing: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_update: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
 

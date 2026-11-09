@@ -168,10 +168,7 @@ describe('useSpeleoActions - a failed push/unlock raises the persistent banner (
         loggedIn: true,
         userEmail: 'me@example.com',
         endpoint: 'https://cave.example.internal:8443/',
-        keychainBacked: true,
-        storage: 'keychain',
-        keychain: 'available',
-      },
+        },
     });
     invokeIpcMock.mockRejectedValue({
       message: 'Network error talking to SpeleoDB: Invalid argument',
@@ -899,4 +896,45 @@ describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)',
 
     expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push', { message: null });
   });
+});
+
+it('does not apply or flush a done result after its close operation loses ownership', async () => {
+  let resolve!: (value: unknown) => void;
+  invokeIpcMock.mockReturnValue(new Promise((yes) => { resolve = yes; }));
+  const { result } = renderHook(() => useSpeleoActions());
+  let current = true;
+  let pending!: Promise<unknown>;
+  act(() => { pending = result.current.done('Synthetic update', { isCurrent: () => current }); });
+  current = false;
+  await act(async () => { resolve({ kind: 'released' }); await pending; });
+  expect(useSpeleoStore.getState().applyDone).not.toHaveBeenCalled();
+  expect(saveProjectMock).not.toHaveBeenCalled();
+  expect(useSpeleoStore.getState().busy).toBe(false);
+});
+
+it('keeps edits made during an upload unpushed even if its reply says pushed', async () => {
+  useSpeleoStore.setState({ link: null, session: null, remoteProjectId: 'synthetic' });
+  let finish!: (value: { kind: 'pushed' }) => void;
+  invokeIpcMock.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  const { result } = renderHook(() => useSpeleoActions());
+  let operation!: ReturnType<typeof result.current.push>;
+  act(() => { operation = result.current.push('Synthetic snapshot'); });
+  useProjectStore.setState((state) => ({ projectTreeGeneration: state.projectTreeGeneration + 1 }));
+  let outcome;
+  await act(async () => { finish({ kind: 'pushed' }); outcome = await operation; });
+  expect(outcome).toEqual({ kind: 'push_unconfirmed' });
+  expect(saveProjectMock).not.toHaveBeenCalled();
+});
+it('ignores a successful upload response after the project changes', async () => {
+  useSpeleoStore.setState({ link: null, session: null, remoteProjectId: 'synthetic' });
+  let finish!: (value: { kind: 'pushed' }) => void;
+  invokeIpcMock.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  const { result } = renderHook(() => useSpeleoActions());
+  let operation!: ReturnType<typeof result.current.push>;
+  act(() => { operation = result.current.push('Synthetic snapshot'); });
+  useSpeleoStore.setState({ remoteProjectId: 'replacement' });
+  let outcome;
+  await act(async () => { finish({ kind: 'pushed' }); outcome = await operation; });
+  expect(outcome).toBeNull();
+  expect(saveProjectMock).not.toHaveBeenCalled();
 });

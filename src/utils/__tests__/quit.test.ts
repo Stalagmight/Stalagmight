@@ -123,10 +123,10 @@ describe('guardQuit', () => {
     expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
   });
 
-  it('does NOT block while holding the lock with nothing unpushed', () => {
+  it('offers keep-lock exit while holding the lock with nothing unpushed', () => {
     useSpeleoStore.setState({ link: link({ hasUnpushedEdits: false }) });
-    expect(guardQuit()).toBe(false);
-    expect(openDialog).not.toHaveBeenCalled();
+    expect(guardQuit()).toBe(true);
+    expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
   });
 
   // The guard keys off the WORK AT RISK, not the lock: edits the server has never

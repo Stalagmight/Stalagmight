@@ -1,22 +1,20 @@
 //! Orchestration tying the `crate::speleodb` primitives (HTTP client, token
-//! store, dump handling) to `AppState`, config, and the app cache directory.
+//! store, native SQLite transfer) to `AppState`, config, and the app cache directory.
 //!
 //! The `commands::speleodb` IPC layer is a thin wrapper over these methods.
 //!
 //! What lives here (the whole single-writer hand-off, #182):
 //! - **session**: login / logout / status, the lazy silent rehydration that
-//!   revives a keychain token after a restart, and the centralized 401 auto-drop.
-//! - **pull**: list projects, download + classify a dump, extract the `.stalx`
-//!   into the app cache (see `speleodb_cache` for the replace chokepoint), adopt
-//!   an Ariane-only project.
+//!   revives a saved token after a restart, and the centralized 401 auto-drop.
+//! - **pull**: list STALAGMIGHT projects and download native SQLite files into
+//!   the app cache (see `speleodb_cache` for the replacement boundary).
 //! - **lock + edit gate**: acquire on Start editing (with the reconcile verdict),
 //!   optimistic force-edit without a lock, periodic re-verify, and the
-//!   release paths (Done / logout / close / app-exit / "release all").
+//!   release paths (Done / logout / close / app-exit).
 //! - **take-remote**: abandoning local work for the server's copy.
 //! - **persistence**: the `speleo_link` row that makes a project remote (and
 //!   `speleodb_unlink`, which makes it plain again).
-//! - **project admin**: metadata PATCH, publish (create-on-SDB), collaborators /
-//!   teams, and project delete.
+//! - **project settings**: metadata PATCH, publish and lock release.
 //!
 //! Split out along this same axis, and no longer here: the **push** half - the
 //! BASE-SHA fence, snapshot sanitize, upload, the divergence / unconfirmed
@@ -30,9 +28,9 @@ use super::speleodb_cache::LocalEditsPolicy;
 // [#275] The push half (fence, snapshot, upload, Done/Push/Update) lives in
 // `speleodb_push`; the lock + edit gate here still consults its outcome type and
 // its empty-tip-tolerant head read.
-use super::speleodb_push::{head_with_empty_retry, PushOutcome};
+use super::speleodb_push::head_with_empty_retry;
 use super::AppState;
-use crate::speleodb::auth::{account_key, SecretStoreError, TokenStore, TokenTier};
+use crate::speleodb::auth::{normalize_endpoint, TokenStore};
 use crate::speleodb::client;
 // [Track A] #186/D-B2: typed Endpoint + map_status + SpeleoDbError→SpeleoErrorDto
 // conversion. [Integration] map_status/SpeleoDbAction also drive Track C's C5
@@ -41,12 +39,12 @@ use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::sync::{self, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
-    KeychainReport, RemoteState, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus,
-    SpeleoLoginResult, SpeleoSessionStatus, StartEditingResult, TokenStorage,
+    RemoteState, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus, SpeleoSessionStatus,
+    StartEditingResult,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
-/// inside [`TokenStore`] (keychain / plaintext / in-memory tiers) and is never
+/// inside the backend token cache and is never
 /// exposed to the webview.
 #[derive(Debug, Default)]
 pub(crate) struct SpeleoDbSession {
@@ -55,8 +53,8 @@ pub(crate) struct SpeleoDbSession {
     pub(super) token_store: TokenStore,
     /// [Track C] (#188, C4): set once per process after the lazy silent startup
     /// rehydration runs (whether it found a token or not), so an empty/failed
-    /// `load()` doesn't re-hit the keychain on every authed call.
-    rehydrate_attempted: bool,
+    /// the saved token is restored at most once.
+    pub(super) rehydrate_attempted: bool,
     /// Every write lock THIS process took and has not handed back: the acquisition
     /// provenance the authorship shortcut in [`AppState::speleodb_remote_state`]
     /// hangs on. Deliberately process-local and never persisted - a lock left over
@@ -107,78 +105,6 @@ pub(crate) struct SpeleoDbSession {
     /// already held mints nothing and leaves this alone, which is what makes the
     /// unwind's promised no-op on an inherited lock real.
     pub(super) acquired_by_this_flow: Option<super::speleodb_session::LockClaim>,
-    /// [#258] Which dump entry the user picked, per project, for THIS session.
-    ///
-    /// Deliberately process-local and never persisted. The chosen entry is a
-    /// property of the SERVER TREE at a commit, not of the local project, so a
-    /// stored name can vanish under you and the re-ask path is needed regardless -
-    /// persisting it would add a schema surface that buys nothing.
-    ///
-    /// It exists so the fast-forward verbs (Start editing / Update / Take remote)
-    /// can honour a choice already made. They take no `entryPath` of their own, so
-    /// without this a user who resolved the picker at open time would meet a dead
-    /// end the moment they tried to edit - the very thing the picker exists to
-    /// remove. A miss falls back to failing closed, which is safe: it never guesses.
-    chosen_dump_entries: std::collections::HashMap<(String, String), String>,
-    /// [#258] Which revision this project's candidate list was last OFFERED for.
-    ///
-    /// The sibling of `chosen_dump_entries`, and it closes that field's blind spot.
-    /// Dating the REMEMBERED answer stops a choice being reused across a revision it
-    /// never described - but an EXPLICIT `entryPath` skipped the check entirely, and
-    /// that is the one the user just made. The picker shows a per-candidate size and
-    /// timestamp precisely so the choice can be informed; it is a question about one
-    /// tree, and the confirmation replays the verb, which resolves the tip again. So
-    /// the answer to A was being applied to B, with only path membership between them
-    /// - and membership is exactly what a surviving backup copy passes.
-    ///
-    /// Recorded here rather than round-tripped through the DTO because it need not
-    /// leave the process: the offer and the reply are the same session, so the client
-    /// never has to be trusted to hand it back, and no IPC surface widens.
-    offered_dump_at: std::collections::HashMap<String, Option<String>>,
-}
-
-/// [#258] Why the remembered dump choices are keyed by REVISION as well as project.
-///
-/// The revision is half the answer, not decoration. A push uploads under the server's
-/// canonical wire name and leaves every other `.stalx` in the tree alone, so a choice
-/// that named any OTHER entry describes pre-push bytes the moment a revision lands -
-/// and it does not matter whose push landed it. Ours is handled by
-/// [`AppState::speleodb_revision_landed`]; a collaborator's was not, and that is the
-/// dangerous half, because their work is what the stale entry would replace.
-///
-/// It lived in the VALUE first, one slot per project, and that quietly broke the
-/// documented "a View is a non-destructive peek" contract: answering a viewed
-/// revision's picker evicted the tip's answer, so the next Update fast-forwarded,
-/// found the recall dated elsewhere, and - having no picker of its own - dead-ended on
-/// "re-open the project". In the key the two answers coexist, and a choice can no
-/// longer be dated wrongly because there is nowhere to put an undated one.
-///
-/// Keyed by revision rather than rebound to the upload target, because rebinding is
-/// not available: the upload response carries the commit sha and the project, never
-/// the stored path. Re-asking costs one more question, and only for someone whose
-/// project is ambiguous at all.
-
-/// [#258] Which revision a dump being classified came from, as far as the caller can
-/// establish - the yardstick a [`DumpChoice`] is measured against.
-///
-/// `Unknown` is a real answer and it fails CLOSED: a choice that cannot be dated
-/// cannot be shown to still apply, so nothing is recalled and nothing is recorded.
-/// The cost is a question; the alternative is honouring a name on the strength of
-/// nothing, which is the bug this type exists to close.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DumpAt<'a> {
-    /// This dump is the tree at `sha`.
-    Revision(&'a str),
-    /// The revision could not be resolved (a best-effort history fetch that failed,
-    /// or a caller with nothing authoritative to offer).
-    Unknown,
-}
-
-impl<'a> DumpAt<'a> {
-    /// The usual spelling at a call site: an optional sha straight from the caller.
-    pub(super) fn from_sha(sha: Option<&'a str>) -> Self {
-        sha.map_or(Self::Unknown, Self::Revision)
-    }
 }
 
 /// Pure endpoint-precedence resolver (extracted so it is unit-testable without
@@ -305,7 +231,7 @@ impl SpeleoDbSession {
     /// logic is testable without a full `AppState`.
     ///
     /// `&mut self` because [`TokenStore::load`] caches its result + updates the
-    /// active tier ([Track C] #188: keychain-first read populates the cache).
+    /// cached session credential.
     fn active_token(&mut self) -> Result<(String, String), SpeleoDbError> {
         let endpoint = self
             .endpoint
@@ -319,137 +245,52 @@ impl SpeleoDbSession {
         Ok((endpoint, token))
     }
 
-    /// Current session status for the dialog. `logged_in` means a usable token is
-    /// held *locally* - it is not re-validated against the server here (a token
-    /// revoked server-side is caught on the next real call by the 401 auto-drop
-    /// handler, [Track C] #188 C5). When not logged in, neither the email nor the
-    /// keychain flag is surfaced, so the status can never claim a keychain-backed
-    /// token while reporting logged-out.
-    ///
-    /// `&mut self` because resolving the token may rehydrate + cache it.
+    /// Local session status. The token never crosses IPC.
     fn status(&mut self) -> SpeleoSessionStatus {
         let logged_in = self.active_token().is_ok();
         SpeleoSessionStatus {
             user_email: logged_in.then(|| self.email.clone()).flatten(),
             endpoint: logged_in.then(|| self.endpoint.clone()).flatten(),
-            keychain_backed: logged_in && self.token_store.keychain_backed(),
-            // Reporting only - reading these never touches the keychain, which is
-            // what lets Settings show where the key lives without re-raising a
-            // desktop unlock prompt every time it is opened.
-            storage: logged_in
-                .then(|| self.token_store.active_tier())
-                .flatten()
-                .map(TokenStorage::from),
-            keychain: self.token_store.keychain_state().into(),
             logged_in,
         }
     }
 
-    /// Best-effort form of [`Self::forget_reporting`]: the 401-drop sink ([Track C]
-    /// #188, C5). A dead token must leave the session even when the keychain is
-    /// flaky, so a delete failure is logged (inside the token store) and dropped
-    /// here rather than propagated (#270).
-    fn forget(&mut self) {
-        let _ = self.forget_reporting();
-    }
-
-    /// Forget the local token (every tier: keychain + plaintext + in-memory) and
-    /// clear the session, **reporting** a persistent-tier delete failure. No
-    /// server-side call - logout is purely local (the DRF token is not revoked).
-    ///
-    /// The session is dropped unconditionally, including on the error path: the
-    /// user asked to log out, so an `Err` means "logged out, but a credential may
-    /// still be stored on this machine" - never "still logged in" (#270).
-    pub(super) fn forget_reporting(&mut self) -> Result<(), SecretStoreError> {
-        let cleared = match (self.endpoint.clone(), self.email.clone()) {
-            (Some(endpoint), Some(email)) => self.token_store.clear(&endpoint, &email),
-            _ => Ok(()),
-        };
+    pub(super) fn forget(&mut self) {
+        self.token_store.clear();
         self.endpoint = None;
         self.email = None;
-        // The recorded "the keyring holds a token for us" belief is about the account
-        // that just left, so it leaves with it - see
-        // [`TokenStore::forget_keychain_belief`]. After the sweep above, which needs
-        // it. This is what stops a login as a DIFFERENT account inheriting it through
-        // the store the switch reuses.
-        self.token_store.forget_keychain_belief();
-        // [#258] The remembered dump picks belong to the account that just left: a
-        // different user may not even be able to see those entries, and the next
-        // session must re-derive the choice from what the server actually holds.
-        self.chosen_dump_entries.clear();
-        self.offered_dump_at.clear();
-        cleared
+        self.rehydrate_attempted = true;
     }
 
-    /// [Track C] (#188, C4): lazy **silent** startup rehydration, run once on the
-    /// first authed/session call. Seeds `endpoint`/`email` from config (resolved
-    /// through the same precedence as login so `DEV_SPELEODB_URL` still wins) and
-    /// wires `TokenStore::load` for the **first time** so a prior-run keychain (or
-    /// plaintext) token survives an app restart. **No network, no prompt.**
-    ///
-    /// Idempotent: marks `rehydrate_attempted` so a failed/empty load doesn't
-    /// re-hit the keychain every call, and short-circuits if a session is already
-    /// established this run.
-    ///
-    /// `keychain_has_token` is the persisted belief ALREADY SCOPED to
-    /// `(resolved_endpoint, config_email)` by the caller
-    /// (`SpeleoDbConfig::keychain_belief_applies_to`) - never the raw config flag,
-    /// which says nothing about whose entry it is until it is paired with the stamp.
-    fn rehydrate(
-        &mut self,
-        resolved_endpoint: Option<String>,
-        config_email: Option<String>,
-        keychain_declined: bool,
-        keychain_disabled: bool,
-        keychain_has_token: bool,
-    ) {
+    pub(super) fn reload_credentials(&mut self) {
+        self.forget();
+        self.rehydrate_attempted = false;
+    }
+
+    /// Restore only a token saved for this server. Environment overrides must
+    /// never send a production token to a different instance.
+    fn rehydrate(&mut self, endpoint: Option<String>, config: &crate::config::SpeleoDbConfig) {
         if self.rehydrate_attempted || self.endpoint.is_some() {
             return;
         }
         self.rehydrate_attempted = true;
-        // Apply the persisted refusal BEFORE the load below. This is the launch-time
-        // nag fix: startup rehydration is what re-raised the desktop unlock prompt on
-        // every single launch for someone who had already dismissed it once.
-        self.token_store.set_keychain_declined(keychain_declined);
-        self.token_store.set_keychain_disabled(keychain_disabled);
-        // Do not OPEN the keyring to find out whether it has anything for us. On
-        // Linux that read is the desktop unlock prompt, so a signed-out launch was
-        // raising one purely to discover there was nothing to find. What the
-        // keychain holds is recorded when we put it there, so the answer is already
-        // on disk. A stale `true` costs ONE prompt and self-corrects on the miss -
-        // durably: the load below lowers the store's belief on an `Ok(None)`, and
-        // `AppState::speleodb_ensure_rehydrated` writes that correction back to the
-        // config afterwards. Without that write-back the same stale `true` would be
-        // re-read and the same prompt raised on every launch.
-        if !keychain_has_token {
-            self.token_store.set_keychain_declined(true);
-        }
-        // The same flag, read the other way round and for a different question. A
-        // `true` here is a PREVIOUS login's successful keychain store, which is the
-        // one thing that separates a keyring that is merely locked this launch from
-        // a box that has no secret service at all - both fail every op and both
-        // record `Unavailable`. Without it, turning the keyring off over a locked
-        // keyring reported the entry emptied and cleared this very flag, sending the
-        // next launch past a live bearer token that is still in there. See
-        // `TokenStore::unreadable_keychain_may_hold`.
-        self.token_store.note_keychain_has_token(keychain_has_token);
-
-        let (Some(endpoint), Some(email)) = (resolved_endpoint, config_email) else {
-            // No persisted account → stay logged-out (no keychain probe).
+        let (Some(endpoint), Some(email), Some(token), Some(saved_endpoint)) = (
+            endpoint,
+            config.email.as_deref(),
+            config.token.0.as_deref(),
+            config.endpoint.as_deref(),
+        ) else {
             return;
         };
-        let endpoint = endpoint.trim().to_owned();
-        let email = email.trim().to_owned();
-        if endpoint.is_empty() || email.is_empty() {
+        if normalize_endpoint(&endpoint) != normalize_endpoint(saved_endpoint)
+            || email.trim().is_empty()
+            || token.trim().is_empty()
+        {
             return;
         }
-
-        self.endpoint = Some(endpoint.clone());
-        self.email = Some(email.clone());
-        // First wiring of load(): keychain-first read (then plaintext). On a hit
-        // the token is cached + the active tier set; on a miss the session stays
-        // seeded-but-unauthenticated and the next call surfaces NotAuthenticated.
-        let _ = self.token_store.load(&endpoint, &email);
+        self.token_store.store(&endpoint, email, token);
+        self.endpoint = Some(endpoint);
+        self.email = Some(email.to_owned());
     }
 }
 
@@ -459,7 +300,7 @@ impl SpeleoDbSession {
 ///
 /// SpeleoDB generates a project's map only for types it has an exporter for, and
 /// `stalagmight` is the one it maps from the `.stalx` (via `stalx-reader`, #593).
-pub(super) const MANAGED_PROJECT_TYPE: &str = "stalagmight";
+pub(super) const MANAGED_PROJECT_TYPE: &str = "STALAGMIGHT";
 
 /// The managed type before SpeleoDB had a Stalagmight type. SpeleoDB never maps
 /// an `other` project, so it is NOT treated as managed: the next landed push
@@ -469,17 +310,6 @@ const LEGACY_MANAGED_PROJECT_TYPE: &str = "other";
 /// The PATCH body that labels a project as Stalagmight-managed.
 pub(super) fn managed_type_patch() -> String {
     serde_json::json!({ "type": MANAGED_PROJECT_TYPE }).to_string()
-}
-
-/// Is the server already calling this a project we manage?
-///
-/// Only [`MANAGED_PROJECT_TYPE`] counts: the legacy `other` still needs the
-/// relabel. Deliberately NOT `!type_still_says_ariane`, which answers "yes" for
-/// `compass`, `therion` and anything the API grows next. Adoption used that
-/// inverse to decide it had nothing to do, so a project re-typed under it mid-run
-/// was reported as flipped with the server left untouched.
-pub(super) fn type_says_managed(server_kind: Option<&str>) -> bool {
-    server_kind.is_some_and(|kind| kind.trim().eq_ignore_ascii_case(MANAGED_PROJECT_TYPE))
 }
 
 /// Should a push that just landed rewrite the server type to
@@ -496,7 +326,10 @@ pub(super) fn type_needs_managed_label(server_kind: Option<&str>) -> bool {
 impl AppState {
     /// Resolve the effective endpoint. Precedence: explicit dialog override →
     /// `DEV_SPELEODB_URL` env (dev default) → persisted `config.speleodb.endpoint`.
-    fn speleodb_resolve_endpoint(&self, override_endpoint: Option<&str>) -> Option<String> {
+    pub(super) fn speleodb_resolve_endpoint(
+        &self,
+        override_endpoint: Option<&str>,
+    ) -> Option<String> {
         let env = std::env::var("DEV_SPELEODB_URL").ok();
         let config_endpoint = self
             .config
@@ -539,85 +372,15 @@ impl AppState {
             .map_err(|_| SpeleoDbError::Io("SpeleoDB session lock poisoned".to_owned()))
     }
 
-    /// [Track C] (#188, C4): lazy silent startup rehydration. Resolve the config
-    /// endpoint (same precedence as login, sans a dialog override) + email
-    /// **outside** the session lock to avoid a config↔session lock-order hazard,
-    /// then let [`SpeleoDbSession::rehydrate`] seed + wire `load()` once. Called
-    /// before locking in the authed/session entry points. No network, no prompt.
-    ///
-    /// It makes exactly ONE config write, and only in one direction: the
-    /// keychain-belief write-back at the end, when the rehydrate read PROVED the
-    /// keyring holds nothing for this account. See there for why it cannot be left
-    /// to the live store alone, and why it is a compare-and-set rather than a write.
+    /// Restore a locally saved token once, without network access.
     pub(super) fn speleodb_ensure_rehydrated(&self) {
-        // Cheap idempotency check first: if rehydration already ran (or a session
-        // is live), skip the config read entirely.
-        if let Ok(session) = self.speleodb_session_lock() {
-            if session.rehydrate_attempted || session.endpoint.is_some() {
-                return;
-            }
-        } else {
-            return;
-        }
-
         let resolved_endpoint = self.speleodb_resolve_endpoint(None);
-        // The whole block, not four fields: the write-back below compares what it is
-        // about to overwrite against exactly what was read here, so the snapshot has
-        // to BE the read.
-        let persisted = self
+        let config = self
             .config
             .lock()
-            .ok()
-            .map_or_else(Default::default, |c| c.speleodb.clone());
-        // Whether the recorded belief is a fact about the account this rehydrate is
-        // going to key the keychain read by - the endpoint as well as the email, since
-        // that is what the entry is keyed by. Signing in to a second server with the
-        // same address used to inherit the first server's record here.
-        let believed = match (resolved_endpoint.as_deref(), persisted.email.as_deref()) {
-            (Some(endpoint), Some(email)) => {
-                persisted.keychain_belief_applies_to(endpoint.trim(), email.trim())
-            }
-            // No account to key an entry by, so nothing recorded can be about one.
-            _ => false,
-        };
-
-        let Ok(mut session) = self.speleodb_session_lock() else {
-            return;
-        };
-        session.rehydrate(
-            resolved_endpoint,
-            persisted.email.clone(),
-            persisted.keychain_declined,
-            persisted.keychain_disabled,
-            believed,
-        );
-        let disproved = !session.token_store.keychain_has_token();
-        // Released before the write-back: the writer takes the config lock, and the
-        // documented order is config-then-session.
-        drop(session);
-
-        // The read `rehydrate` just wired is the one keychain access that can PROVE
-        // the entry is gone - `TokenStore::load`'s `Ok(None)`, which is what an entry
-        // removed outside the app (seahorse, a reinstall) answers with. The store
-        // lowers its own belief on it, but only the CONFIG survives the process, so
-        // without this the next launch reads the stale `true` back and opens the
-        // keyring again - on Linux that read IS the desktop unlock prompt - for the
-        // same miss, every launch, forever. `rehydrate`'s "a stale `true` costs one
-        // prompt and self-corrects on the miss" is true only because of this line.
-        //
-        // Written HERE rather than inside `TokenStore`, which is deliberately
-        // config-agnostic (the 401 auto-drop reaches it with no config in hand). This
-        // is the one place that already holds both halves: it read the persisted
-        // belief to hand to `rehydrate`, and it owns the lock order.
-        //
-        // ONLY a lowering, and only from a belief actually read off the config and
-        // found to be about THIS account. A failed config read hands `false` down, and
-        // re-persisting that would record a removal nothing observed - the exact
-        // mistake the flag was fixed for. And only under the compare-and-set the
-        // writer makes against `persisted`: the lock was released above, so a login
-        // can have landed a NEWER fact in between.
-        if believed && disproved {
-            self.speleodb_lower_keychain_belief_after_proof(&persisted);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Ok(mut session) = self.speleodb_session_lock() {
+            session.rehydrate(resolved_endpoint, &config.speleodb);
         }
     }
 
@@ -660,8 +423,6 @@ impl AppState {
     /// restore the project list on reopen instead of forcing a re-login. The
     /// token itself never leaves the backend.
     pub fn speleodb_session_status(&self) -> Result<SpeleoSessionStatus, SpeleoErrorDto> {
-        // [Track C] (#188): rehydrate first so a restart with a stored keychain
-        // token reports logged_in:true without a re-login (the headline fix).
         self.speleodb_ensure_rehydrated();
         // No network call - only the (local) session-lock error can surface here.
         Ok(self.speleodb_session_lock().map_err(local_dto)?.status())
@@ -1141,214 +902,9 @@ impl AppState {
         self.speleodb_release_lock(project_id)
     }
 
-    /// [#258] Record which dump entry resolved this project's ambiguity, so the
-    /// verbs that carry no `entryPath` can honour the choice for the rest of the
-    /// session. Best-effort: a poisoned lock costs the memory, not the pull.
-    ///
-    /// `at` is stored with the entry and is what later decides whether the answer
-    /// still describes anything (see [`DumpChoice`]). An undatable dump records
-    /// NOTHING: a choice with no revision on it could never be shown to still apply,
-    /// so keeping it would only be a name waiting to be trusted on no evidence.
-    pub(super) fn speleodb_remember_dump_entry(
-        &self,
-        project_id: &str,
-        entry: &str,
-        at: DumpAt<'_>,
-    ) {
-        let DumpAt::Revision(sha) = at else { return };
-        if let Ok(mut session) = self.speleodb_session_lock() {
-            session
-                .chosen_dump_entries
-                .insert((project_id.to_owned(), sha.to_owned()), entry.to_owned());
-        }
-    }
-
-    /// The entry [`Self::speleodb_remember_dump_entry`] recorded, if it was an answer
-    /// about the revision now being classified.
-    ///
-    /// Two independent checks, and both are needed. THIS one asks whether the answer
-    /// is about the right tree at all; a hit is then still validated for membership
-    /// against the archive being extracted, because remembering a name is not
-    /// trusting it. Membership alone was the whole guard and it is far too weak on
-    /// its own - the entry a stale choice names is usually still present (a
-    /// collaborator's push updates the canonical file and leaves a backup copy exactly
-    /// where it was), so it sails through, and the pre-push bytes it points at get
-    /// extracted and stamped with the new tip.
-    ///
-    /// A mismatch is left in place rather than evicted. It cannot be honoured while
-    /// the revision differs, the next answer overwrites it, and both logout and a
-    /// landing clear it outright - so evicting from a `&self` read would buy nothing
-    /// but a surprising write on a path that only meant to ask a question.
-    pub(super) fn speleodb_recalled_dump_entry(
-        &self,
-        project_id: &str,
-        at: DumpAt<'_>,
-    ) -> Option<String> {
-        let DumpAt::Revision(sha) = at else {
-            return None;
-        };
-        let session = self.speleodb_session_lock().ok()?;
-        session
-            .chosen_dump_entries
-            .get(&(project_id.to_owned(), sha.to_owned()))
-            .cloned()
-    }
-
-    /// [#258] Record that this project's candidate list was offered for `at`.
-    ///
-    /// Called wherever an ambiguity is about to be REPORTED - never where it is
-    /// refused, because a caller with no picker offers nothing. An undatable dump
-    /// records nothing, which is what keeps [`Self::speleodb_dump_offer_answers`]
-    /// permissive in that case rather than looping.
-    pub(super) fn speleodb_note_dump_offer(&self, project_id: &str, at: DumpAt<'_>) {
-        // Recorded even when the dump could not be DATED. "Nothing was asked" and "a
-        // question was asked about a tree we could not name" are different states, and
-        // collapsing them let a reply to the second be accepted against any revision -
-        // so a collaborator pushing while the picker was open could have the user's
-        // pick pass membership against a tree whose size and timestamp they never saw.
-        let dated = match at {
-            DumpAt::Revision(sha) => Some(sha.to_owned()),
-            DumpAt::Unknown => None,
-        };
-        if let Ok(mut session) = self.speleodb_session_lock() {
-            session.offered_dump_at.insert(project_id.to_owned(), dated);
-        }
-    }
-
-    /// Whether an explicit pick arriving now is an answer to the question we asked.
-    ///
-    /// True unless we can positively show otherwise, and the two permissive cases are
-    /// deliberate rather than lax:
-    ///
-    /// - **No offer recorded.** Nothing was asked, so nothing can be contradicted. The
-    ///   pick is still membership-checked against the archive being extracted, which is
-    ///   the check that was always doing the real work for a hand-authored `entryPath`.
-    /// - **An undatable dump.** There is no revision to disagree with. Refusing here
-    ///   would be worse than useless: the re-offer would be undatable too, so the
-    ///   picker would ask the same unanswerable question forever.
-    ///
-    /// A mismatch, though, is positive evidence - the tree moved between the offer and
-    /// the reply - and the answer is discarded so the flow re-offers what the dump
-    /// holds NOW. That re-offer records the new revision, so the next reply matches and
-    /// the loop terminates.
-    pub(super) fn speleodb_dump_offer_answers(&self, project_id: &str, at: DumpAt<'_>) -> bool {
-        let Ok(session) = self.speleodb_session_lock() else {
-            return true;
-        };
-        match (session.offered_dump_at.get(project_id), at) {
-            // Nothing was asked, so nothing can be contradicted. The pick is still
-            // membership-checked, which is what has always carried a hand-authored
-            // `entryPath`.
-            (None, _) => true,
-            // Both dated: the ordinary case, and the one the whole mechanism is for.
-            (Some(Some(offered)), DumpAt::Revision(sha)) => offered == sha,
-            // The offer was dated and this dump is not. We cannot show the reply
-            // answers that question, and undatable is the failing side here - refuse
-            // and let the flow re-offer.
-            (Some(Some(_)), DumpAt::Unknown) => false,
-            // The OFFER was undatable and the reply is dated. Positive evidence they
-            // are not about the same thing: the candidates described a tree we could
-            // not name, and this one we can. Refuse; the re-offer will be datable too,
-            // so this converges instead of looping.
-            (Some(None), DumpAt::Revision(_)) => false,
-            // Neither is datable. Nothing distinguishes them, and refusing would
-            // re-offer an equally undatable question forever - the one case where
-            // membership has to carry it alone.
-            (Some(None), DumpAt::Unknown) => true,
-        }
-    }
-
-    /// [#258] Forget this project's remembered dump entry.
-    ///
-    /// A push uploads under the canonical wire name and leaves every other `.stalx`
-    /// in the tree untouched. The recall is per SESSION, so a user who chose, say,
-    /// `backup/old.stalx` held a name that was correct when they answered and is
-    /// PRE-PUSH data the moment their push lands - and the next open or fast-forward
-    /// extracted that stale database, then stamped it with the new server revision.
-    /// A silent rollback of their own work, published under a commit that claims to
-    /// contain it.
-    ///
-    /// UNCONDITIONAL, and that is the whole point. Sparing a choice whose basename
-    /// is canonical looks safe and is not: a basename can only say the path COULD be
-    /// the upload target, never that it is - the folder is the server's
-    /// `TARGET_FOLDER` and not part of the contract, so `backup/project.stalx` and
-    /// `misc/project.stalx` can both exist and someone who picked the backup was
-    /// spared on the strength of a name that proves nothing. The push then updates
-    /// the real target and leaves their pick stale, which is the exact rollback this
-    /// is here to prevent. `Dump::entry_details` reaches the same conclusion about
-    /// the same predicate and declines to badge either entry as canonical.
-    ///
-    /// Rebinding to the target would be better than forgetting and is not available:
-    /// the upload response carries the commit sha and the project, never the stored
-    /// path. Forgetting costs one more question, and only for someone whose project
-    /// is ambiguous at all.
-    ///
-    /// Still worth its own call even though [`DumpChoice`] now carries the revision
-    /// it answered about, which already retires a choice the moment the tree moves
-    /// under it - by whoever's hand. The two are not redundant: this one runs on OUR
-    /// push, where the sha we would compare against is the one we just created, so
-    /// the recall is stale and datable at the same instant. Dropping it outright is
-    /// simply the earliest correct moment, and it keeps the invalidation legible at
-    /// the point the staleness is caused rather than deferred to whoever reads next.
-    pub(super) fn speleodb_forget_dump_entry(&self, project_id: &str) {
-        if let Ok(mut session) = self.speleodb_session_lock() {
-            // EVERY revision's answer for this project, not one slot: a landing makes
-            // any non-canonical pick stale whichever tree it was about.
-            session
-                .chosen_dump_entries
-                .retain(|(project, _), _| project != project_id);
-        }
-    }
-
-    /// Conclude that a push landed a revision on the server, invalidating anything
-    /// this session remembered about which file to read (#258).
-    ///
-    /// One helper rather than an invalidation call beside each arm, so producing the
-    /// outcome and dropping the recall cannot be done separately. Every arm that
-    /// concludes an upload landed goes through it - including the two that conclude
-    /// it landed EARLIER rather than just now: the adopted prior push, and the 304
-    /// that proves our content is already the server's.
-    ///
-    /// NOT every `PushOutcome::Confirmed`: the dirty-bit gate also reports Confirmed
-    /// when there was nothing to push, and no upload means nothing has moved.
-    ///
-    /// CALL IT BEFORE THE LOCAL BOOKKEEPING, not after. Every arm records the landing
-    /// into the link row, and every one of those writes can fail; a `?` between the
-    /// upload and this call returns with a choice we already know is stale still
-    /// standing, and the next verb that honours the recall extracts that pre-push
-    /// entry and stamps it with the new tip. The landing is a fact about the SERVER
-    /// the moment the upload returns - nothing local can un-land it, so nothing local
-    /// belongs in front of it. Each arm therefore binds the outcome here and returns
-    /// it unchanged after its write, which keeps concluding and invalidating together
-    /// while putting both ahead of anything fallible.
-    pub(super) fn speleodb_revision_landed(&self, project_id: &str) -> PushOutcome {
-        self.speleodb_note_prior_push_landed(project_id);
-        PushOutcome::Confirmed
-    }
-
-    /// The invalidation on its own, for the arm that concludes a landing WITHOUT
-    /// producing an outcome (#258).
-    ///
-    /// `AdoptThenUpload` is that arm, and it is the reachable one of the two adoption
-    /// plans - `AdoptConfirmed` is documented as forward-compatible only while
-    /// push-start is unpersisted. It establishes exactly what the others do, that a
-    /// prior upload landed, and then keeps going to push on top of it, so it has no
-    /// `PushOutcome` to hand back and cannot use the wrapper above. Routing it through
-    /// the wrapper's `Confirmed` and discarding that would be worse than this split:
-    /// it would read as if the arm had finished.
-    ///
-    /// Leaving it out was a real hole, not a stylistic one. Its own `mutate_link` can
-    /// fail, and the upload it continues into can come back ambiguous - and on either
-    /// path the function returns having proved a revision exists that our remembered
-    /// choice predates, with the choice still standing.
-    pub(super) fn speleodb_note_prior_push_landed(&self, project_id: &str) {
-        self.speleodb_forget_dump_entry(project_id);
-    }
-
     /// [Track C] (#188, C5): centralized session-level 401 auto-drop handler.
     /// Every **established-session** authed call (list/open) routes its `Result`
-    /// through this; a **genuine 401** fully clears the token (keychain +
-    /// plaintext + memory) via `forget()`. A 403 is **never** a drop (D-B4:
+    /// through this; a **genuine 401** clears the saved and cached token via `forget()`. A 403 is **never** a drop (D-B4:
     /// per-endpoint read-only / fence semantics, robust to a DRF 401→403
     /// downgrade); 2xx/5xx pass through untouched.
     ///
@@ -1368,60 +924,6 @@ impl AppState {
             self.speleodb_forget();
         }
         result
-    }
-
-    /// Full local token clear (keychain + plaintext + memory) + session reset -
-    /// the shared sink for the C5 auto-drop paths. Also drops the transient edit
-    /// gate AND the #213 force-edit flag: `guard_mutation` reads only
-    /// `edit_enabled`, so leaving it open after the token is gone would let the user
-    /// keep editing a remote project that can no longer be pushed. The server lock
-    /// is intentionally NOT released here - a 401 may be transient, and surrendering
-    /// the single-writer claim on a flaky blip is worse than holding it; a re-login
-    /// reconciles. (This is the AppState auto-drop sink; `Session::forget` is left
-    /// untouched so the login switch-account path does not spuriously close the
-    /// gate.)
-    pub(super) fn speleodb_forget(&self) {
-        // Drop the transient edit gate for a remote edit session. A dead token
-        // surfaces as a 401 on ANY SpeleoDB call (e.g. a background list_projects /
-        // refresh), and this is the auto-drop sink for all of them - so an
-        // unconditional drop would silently turn an open LOCAL project read-only.
-        // Mirror speleodb_logout's remote-gated, fail-SAFE drop exactly (#197
-        // review): only a confirmed local-only project (NoRemoteProject) keeps the
-        // gate; an undeterminable load (e.g. a poisoned database Mutex) fails safe to
-        // read-only rather than leaving a token-less session able to edit.
-        if self.edit_enabled() {
-            match self.speleodb_open_link() {
-                Ok(_) => self.set_edit_enabled(false),
-                Err(SpeleoDbError::NoRemoteProject) => {}
-                Err(_) => self.set_edit_enabled(false),
-            }
-        }
-        // #213: and the force-edit flag with it. Unconditional, unlike the gate
-        // above, because it can only ever be set on a remote force-edit session
-        // (`speleodb_force_edit` requires an open remote link) - so there is no local
-        // project for it to affect, and a dead token ends that session by definition.
-        //
-        // Left set, it OUTLIVED the gate it rides on: `speleodb_link_status` reports
-        // it on every poll, so the frontend re-seeded `forceEditing: true` right after
-        // clearing it, and its big-red force-edit banner then pre-empted the durable
-        // "your changes are only on this computer" push-failure banner - hiding the
-        // Retry and the typed commit message behind a banner whose only control
-        // (Reconnect) 401s again, while `guard_mutation` refused every edit. It
-        // self-healed only on close, or on a start_editing / unlink / restore that a
-        // dead token cannot reach.
-        self.set_force_editing(false);
-        if let Ok(mut session) = self.speleodb_session_lock() {
-            session.forget();
-        }
-        // No belief at all, not the token store's, and one of the two places that is
-        // deliberate (see `speleodb_persist_keychain_belief`). The sweep
-        // above may well have failed against a locked keyring, so an entry can
-        // survive - but the token in it is the one the server just rejected, and the
-        // seed that would find it is still on disk. Opening the keyring on the next
-        // launch to recover a dead token is a desktop unlock prompt spent on nothing;
-        // the next successful login overwrites the entry anyway (this path sets no
-        // refusal flag, so `store` still reaches the keyring).
-        self.speleodb_persist_keychain_belief(None);
     }
 
     /// Disambiguate a resource/write **403** (D-B4 + the live-verified DRF 401→403
@@ -1461,222 +963,6 @@ impl AppState {
         };
         let insecure_http = self.speleodb_insecure_http();
         whoami_indicates_dead_token(&client::fetch_user_email(&endpoint, &token, insecure_http))
-    }
-
-    // The account-record writer (`speleodb_write_account_record` - the email and the
-    // keyring belief stamped with it, in one save) lives in `speleodb_logout`: the
-    // email is the rehydrate SEED, so clearing it is a logout obligation and its
-    // failure is part of logout's report. `speleodb_login` only writes it.
-
-    /// Log in: exchange email+password for a token (or accept a pasted `token`),
-    /// store it backend-side, and record the session. The token never crosses
-    /// back to the webview - only the email + whether the keychain was used.
-    pub fn speleodb_login(
-        &self,
-        override_endpoint: Option<String>,
-        email: Option<String>,
-        password: Option<String>,
-        token: Option<String>,
-    ) -> Result<SpeleoLoginResult, SpeleoErrorDto> {
-        let endpoint = self
-            .speleodb_resolve_endpoint(override_endpoint.as_deref())
-            .ok_or(SpeleoDbError::NoEndpoint)
-            .map_err(local_dto)?;
-        // [Track A] #187: read the override and thread it into every client call.
-        let insecure_http = self.speleodb_insecure_http();
-
-        // Two login modes, each yielding both the token and the *authoritative*
-        // account email used for the session/keychain key:
-        // - Pasted token: the email is NOT typed (it can't be trusted), so derive
-        //   it from `GET /user/`. That call also validates the token (a bad token
-        //   401s here instead of silently slipping through to the first list call).
-        // - Email + password: the auth-token exchange verifies the pair, so the
-        //   typed email is authoritative by construction.
-        let (token, email) =
-            if let Some(t) = token.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()) {
-                let email = client::fetch_user_email(&endpoint, &t, insecure_http)
-                    .map_err(|e| dto_for_error(Endpoint::User, &e))?;
-                (t, email)
-            } else {
-                let email = email.map(|e| e.trim().to_owned()).unwrap_or_default();
-                let password = password.unwrap_or_default();
-                // Reject blank credentials at the boundary rather than POSTing them
-                // and relying on the server to 400.
-                if email.is_empty() || password.is_empty() {
-                    return Err(local_dto(SpeleoDbError::MissingCredentials));
-                }
-                let token = client::login(&endpoint, insecure_http, &email, &password)
-                    .map_err(|e| dto_for_error(Endpoint::Login, &e))?;
-                (token, email)
-            };
-
-        // [Track C] (#188, C6) Gate 1 of the two-gate plaintext opt-in: the
-        // persisted `token_fallback == Plaintext` preference (read under the
-        // config lock). Gate 2 (the keychain failed this session) is intrinsic to
-        // TokenStore::store, which only reaches plaintext in the keychain-Err
-        // branch.
-        //
-        // Gate 1 requires a SETTLED preference, not merely a recorded one. Reading
-        // `token_fallback` alone wrote the key to a cleartext file BEFORE
-        // `needs_storage_choice` below had asked the user anything - a login whose
-        // keychain fails would land the token on disk and only then raise the
-        // question, so answering "this session only" (or dismissing with "Decide
-        // later") left a file the user never agreed to. An unsettled login lands in
-        // memory instead, and the answer moves it - which costs nothing, because
-        // the key is still in hand (`TokenStore::restore`).
-        let (previously_declined, keychain_disabled, prefers_plaintext, config_has_token) = self
-            .config
-            .lock()
-            .ok()
-            .map(|c| {
-                (
-                    c.speleodb.keychain_declined,
-                    c.speleodb.keychain_disabled,
-                    c.speleodb.token_fallback == crate::config::TokenFallback::Plaintext,
-                    // Scoped to the account the belief is ABOUT - by the same
-                    // (endpoint, email) the keyring entry itself is keyed by, so a
-                    // different account's entry, on this server or another one, is not
-                    // even reachable under this login's key. See the re-assert below
-                    // for what carrying it across would claim.
-                    c.speleodb.keychain_belief_applies_to(&endpoint, &email),
-                )
-            })
-            .unwrap_or((false, false, false, false));
-        // A standing "never use the keychain" outranks the per-login question: it is
-        // not asked, not retried, and signing in does not clear it.
-        let previously_declined = previously_declined || keychain_disabled;
-        let allow_plaintext = previously_declined && prefers_plaintext;
-
-        // The ACCOUNT SWAP below is a lock operation in everything but name: every
-        // decision about who may release or edit under a mutex is made from the
-        // session this is about to replace. Taken here rather than at the top of
-        // the verb, so the guard covers the swap and everything after it without
-        // holding lock operations behind the two network round trips above.
-        //
-        // What it closes: the status poll's inherited-lock gate reopen reads the
-        // account, re-reads the holder and opens the gate, all inside this same
-        // guard. Without it here, a sign-in as somebody else landed mid-poll and
-        // the gate opened for the NEW account on the strength of the OLD one's
-        // lock - free to mutate a project whose mutex their credentials do not
-        // hold. Logout takes the guard for the same reason (see
-        // `speleodb_logout`); a login is the same event in the other direction.
-        let _lock_ops = self.speleodb_lock_ops_guard();
-        let (tier, keychain_state, has_token) = {
-            let mut session = self.speleodb_session_lock().map_err(local_dto)?;
-            // If a *different* account is already active, forget it first so its
-            // keychain entry isn't orphaned. (The UI logs out before re-login, but
-            // the backend shouldn't depend on that; a same-account re-login just
-            // overwrites the existing entry.)
-            let switching = session.endpoint.as_deref() != Some(endpoint.as_str())
-                || session.email.as_deref() != Some(email.as_str());
-            if switching {
-                session.forget();
-            }
-            // Signing in is the one moment the user has opted back into being
-            // asked, so a previous refusal is cleared here and the keychain gets
-            // another go. Everywhere else the refusal is honoured silently.
-            session.token_store.set_keychain_disabled(keychain_disabled);
-            session.token_store.set_keychain_declined(keychain_disabled);
-            // Re-assert what the config already knows about the keyring's contents,
-            // the same way `speleodb_disable_keychain` does and for the same reason:
-            // the live store learns it at rehydrate, but a session established by a
-            // login this run never rehydrates, so without this the store would come
-            // to the write below believing the keyring holds nothing - and the
-            // write-back after it would then record that as fact. Evidence only, and
-            // only ever raised.
-            //
-            // Evidence about THIS account only - see where `config_has_token` is
-            // read. Signing in as somebody else, or as the same person on a second
-            // server, used to import the previous account's record into a store about
-            // to be keyed by the new one: the write below fails against a locked
-            // keyring without lowering it, and the new email and the old account's
-            // `true` were then persisted together, so every later launch opened the
-            // keyring for the new account and the keyring switch reported a residue
-            // for a credential that is not theirs and that no operation keyed by them
-            // can find or remove. Worse on the warm path: the `switching` sweep above
-            // may have just PROVED the old entry gone, and re-asserting raised the
-            // belief back over that proof.
-            //
-            // What this does NOT do is rescue the old account's entry. Once the email
-            // on disk moves, nothing can key an operation by the old one anyway (the
-            // same reason logout records `false` after clearing the seed), so the
-            // entry is left where the account switch left it - and the honest record
-            // for the account that IS signed in is what this login can still write.
-            session
-                .token_store
-                .note_keychain_has_token(config_has_token);
-            let tier = session
-                .token_store
-                .store(&endpoint, &email, &token, allow_plaintext);
-            session.endpoint = Some(endpoint.clone());
-            session.email = Some(email.clone());
-            // A fresh login established a session this run; don't let a later lazy
-            // rehydration clobber it.
-            session.rehydrate_attempted = true;
-            (
-                tier,
-                session.token_store.keychain_state(),
-                session.token_store.keychain_has_token(),
-            )
-        };
-
-        // ONE save for the account and what the keyring is believed to hold FOR it.
-        //
-        // The belief is read off the token store, NOT computed as `tier ==
-        // TokenTier::Keychain`. The landing tier answers "where did this login's key
-        // go", which is a different question and the wrong one: when an earlier login
-        // stored to the keyring and the keyring is merely LOCKED today, this login
-        // falls back to memory or plaintext WITHOUT removing that entry, so recording
-        // "nothing" here erased the only record that it exists. What that record buys
-        // is the discrimination in `TokenStore::unreadable_keychain_may_hold` - a
-        // locked keyring and a box with no secret service both fail every op and both
-        // record `Unavailable` - so losing it meant the next launch skipped the
-        // keyring, and turning the keyring off classified the failed eviction and its
-        // failed probe as "nothing was in there" and reported success over a live
-        // bearer token. The store's own field raises on a keychain write/read that
-        // proved an entry is there and falls only on a delete or probe that proved one
-        // is not, which is exactly the rule this needs. No belief here therefore still
-        // means the keychain-less box (nothing ever landed) and still keeps its
-        // startup skip.
-        //
-        // Stamped with the SAME `account_key` the entry is stored under, and written
-        // in the same save as the email it is about: written apart, a crash - or just
-        // a failed second save - left this account's email standing over the previous
-        // account's `true`, which the next launch read as this one's.
-        let _ = self.speleodb_write_account_record(
-            Some(email.clone()),
-            has_token.then(|| account_key(&endpoint, &email)),
-        );
-        // Clear the persisted refusal ONLY once the keychain has actually taken the
-        // key. The in-session flag above lets this login retry a keychain the user
-        // previously refused, but writing `false` to disk unconditionally REVOKED
-        // that refusal before the retry had proved anything: when the keychain
-        // failed again, the storage prompt's "Decide later" deliberately persists
-        // nothing, so the config was left saying "not declined" and the next launch
-        // rehydrated through the keychain - bringing back the very unlock prompt the
-        // flag was introduced to stop (#259). On a failure the earlier answer stands
-        // until the user replaces it through `speleodb_set_token_storage`.
-        if tier == TokenTier::Keychain {
-            self.speleodb_persist_keychain_declined(false);
-        }
-
-        let keychain = KeychainReport::from(keychain_state);
-        Ok(SpeleoLoginResult {
-            user_email: email,
-            endpoint,
-            keychain_backed: tier == TokenTier::Keychain,
-            storage: tier.into(),
-            keychain,
-            // Ask ONLY when this login actually hit a broken keychain AND the
-            // question is not already settled. A working keychain needs no
-            // question, and a user who already answered it has settled where the
-            // key goes - re-asking on every login would be the same nag in a new
-            // costume. `previously_declined` is what carries that answer across a
-            // restart; the in-session flag was cleared above to give the keychain
-            // another go, so `Declined` cannot appear in `keychain` here and the
-            // check is on the failure itself.
-            needs_storage_choice: keychain == KeychainReport::Unavailable && !previously_declined,
-        })
     }
 
     // `speleodb_logout` lives in `speleodb_logout`: it is three independently
@@ -2020,7 +1306,7 @@ impl AppState {
                 Ok(StartEditingResult::Editing)
             }
             ReconcileVerdict::FastForward => {
-                // A failure here (e.g. a corrupt re-pulled dump) leaves us holding
+                // A failure here (e.g. a corrupt re-pulled file) leaves us holding
                 // the lock with a closed project - release it before surfacing the
                 // error so it isn't stranded (mirrors the divergence arm), and on the
                 // same terms: `release_unless_kept`, never a bare release. This arm
@@ -2238,62 +1524,6 @@ impl AppState {
         result.map_err(local_dto)
     }
 
-    /// Release EVERY write lock this user holds across all projects (#201, B1):
-    /// the "Release all" choice on the held-lock resume prompt, resolving locks a
-    /// crashed/abandoned session left behind (SpeleoDB has no server-side TTL).
-    /// Idempotent server-side (releasing when none are held is a no-op).
-    ///
-    /// DANGER, and the reason this is documented rather than quietly kept around:
-    /// it is the bluntest verb in the module. It BYPASSES the un-pushed-edits veto
-    /// entirely - not per project, but for every project at once, including ones
-    /// this machine holds a dirty local copy of and ones it has never seen - and it
-    /// asks the local cache nothing at all. A single call can therefore free N
-    /// projects for other editors to lock and push over, leaving N piles of local
-    /// survey reachable only through a divergence. `speleodb_release_lock`
-    /// (per-project, after the frontend has joined the held-lock scan against
-    /// `speleodb_local_project_states`) is what a user-facing button should reach
-    /// for.
-    ///
-    /// Kept registered (`lib.rs` + `telemetry::registry`) even as its in-app caller
-    /// is retired: unregistering it would also mean rebalancing the registry's
-    /// command count, and the verb is still the only recovery for an account whose
-    /// locks are scattered across projects this machine has no copy of.
-    pub fn speleodb_release_all_locks(&self) -> Result<(), SpeleoErrorDto> {
-        // Guarded for the same reason as `speleodb_release_lock`, and more so:
-        // this frees EVERY lock the account holds, so an acquire slipping
-        // between the POST and the cleanup leaves a mutex this call already
-        // released re-taken and then un-recorded.
-        let _lock_ops = self.speleodb_lock_ops_guard();
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
-        self.speleodb_handle_auth(
-            Endpoint::Release,
-            client::release_all_locks(&endpoint, &token, insecure_http),
-        )
-        .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
-        // If the OPEN project is a remote one we were editing UNDER THE LOCK, its lock
-        // is gone too: drop the edit gate so the shell falls back to read-only. A
-        // local project's always-true gate is left untouched (open_link fails → no
-        // reset). The FE refreshes link status afterwards to re-seed the indicator.
-        //
-        // A force-editor (#213) is exempt, matching the gate check in
-        // `speleodb_release_current_lock`: they hold NO server lock, so this call
-        // released a stale or someone else's claim, not theirs, and ending an editing
-        // session the release had nothing to do with is both wrong and the way the
-        // invalid `edit_enabled == false && force_editing == true` state was reached -
-        // a read-only project still reporting the big-red force-edit banner. The
-        // frontend already models the two as independent (`holdsWriteLock` is
-        // `editing && !forceEditing`).
-        if self.edit_enabled() && !self.force_editing() && self.speleodb_open_link().is_ok() {
-            self.set_edit_enabled(false);
-        }
-        // Unconditional, unlike the gate above: this frees every lock the account
-        // holds, so any acquisition this process recorded - for the open project or
-        // one it has since navigated away from - is over.
-        self.speleodb_note_lock_acquired(None);
-        Ok(())
-    }
-
     /// Release the write lock on ONE project by id (#201 per-project "Release" in
     /// the held-lock resume prompt). Unlike [`Self::speleodb_done`] this targets an
     /// arbitrary held project (not necessarily the open one) and neither pushes nor
@@ -2504,31 +1734,6 @@ impl AppState {
         Ok(())
     }
 
-    /// Persist `link` onto the OPEN project's database, creating the row when the
-    /// project has never had one. The insert-side twin of
-    /// [`Self::speleodb_mutate_link`], which can only edit a link that already
-    /// exists.
-    ///
-    /// For adoption, which is the one flow that mints a link for a project it just
-    /// built. It used to stamp through a SECOND `Database::open_existing` over the
-    /// same file, which worked only because nothing then read the link back through
-    /// the live handle - and the hand-over does exactly that (`speleodb_done` reads
-    /// `has_unpushed_edits` to decide whether to push at all). Writing through the
-    /// handle the rest of the flow reads from removes the question, and with it the
-    /// "could not reopen the adopted .stalx" arm that had no recovery behind it.
-    pub(super) fn speleodb_set_open_link(
-        &self,
-        link: &crate::models::SpeleoLink,
-    ) -> Result<(), SpeleoDbError> {
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| SpeleoDbError::Io("database lock poisoned".to_owned()))?;
-        let db = db_guard.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
-        db.save_speleo_link(Some(link))
-            .map_err(|e| SpeleoDbError::Io(e.to_string()))
-    }
-
     /// #202 lazy lock re-verify: when EDITING a remote project with a real held
     /// lock, at most once per [`REVERIFY_INTERVAL_SECS`], re-GET the project before
     /// applying an edit and confirm we STILL HOLD the write lock. Called from the
@@ -2619,28 +1824,28 @@ impl AppState {
     reason = "one test POISONS a mutex, which requires panicking while its guard is held"
 )]
 mod tests {
+    use super::AppState;
     use super::{
         auth_error_drops_token, is_local_edits_refusal, local_dto, lock_held_by_me,
         managed_type_patch, resolve_endpoint, reverify_due, type_needs_managed_label,
-        type_says_managed, validate_project_id, whoami_indicates_dead_token, Endpoint,
-        SpeleoDbSession, REVERIFY_INTERVAL_SECS,
+        validate_project_id, whoami_indicates_dead_token, Endpoint, SpeleoDbSession,
+        REVERIFY_INTERVAL_SECS,
     };
+    use crate::speleodb::StartEditingResult;
+    use std::path::Path;
     // [#275] The push half now lives in `speleodb_push`; these tests still exercise it
     // from here (they share this module's fixtures), so they reach it by its new path.
     use crate::core::state::speleodb_cache::{
         preserved_display_settings, restore_display_settings, InheritedUndo,
     };
-    use crate::core::state::speleodb_pull::classify_dump_entry;
     use crate::core::state::speleodb_push::{
-        clear_snapshot_dirty, head_with_empty_retry, type_still_says_ariane, PushOutcome,
+        clear_snapshot_dirty, head_with_empty_retry, type_still_says_ariane,
     };
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
-    use crate::speleodb::auth::{account_key, InMemoryStore, SecretStore, TokenStore};
-    use crate::speleodb::{
-        DoneResult, KeychainReport, PushResult, RemoteState, SpeleoDbError, TransportCause,
-    };
+    use crate::speleodb::auth::TokenStore;
+    use crate::speleodb::{DoneResult, PushResult, RemoteState, SpeleoDbError, TransportCause};
     use tempfile::TempDir;
 
     /// A `.stalx` on the server means the project is Stalagmight-managed, so the type
@@ -2674,46 +1879,6 @@ mod tests {
         );
     }
 
-    /// The half `type_still_says_ariane` cannot answer: "is this project ALREADY the
-    /// thing adoption is trying to make it?"
-    ///
-    /// Adoption asked that with `!type_still_says_ariane`, which is a different
-    /// question - it says yes for every label that is not `ariane`. A project re-typed
-    /// under a running adoption (someone editing metadata in SpeleoDB's own UI) then
-    /// took the "the heal got there first" short-circuit: no PATCH issued, and
-    /// `type_flipped: true` reported over a server left on the other type, so the UI
-    /// showed the green finished toast for a `.stalx` still advertising itself as
-    /// somebody else's format.
-    #[test]
-    fn only_the_managed_type_counts_as_already_adopted() {
-        assert!(type_says_managed(Some("stalagmight")));
-        // Same case-insensitivity the Ariane side needs, and for the same reason.
-        assert!(type_says_managed(Some("STALAGMIGHT")));
-        assert!(type_says_managed(Some(" Stalagmight ")));
-        assert!(
-            !type_says_managed(Some("other")),
-            "the legacy type is never mapped, so adoption's finalize must relabel it"
-        );
-
-        assert!(
-            !type_says_managed(Some("ariane")),
-            "the state adoption exists to leave behind, not one it may skip"
-        );
-        assert!(
-            !type_says_managed(Some("compass")),
-            "NOT managed - this is the case the old `!still_ariane` test got wrong"
-        );
-        assert!(!type_says_managed(Some("therion")), "likewise");
-        assert!(
-            !type_says_managed(Some("")),
-            "an absent type field is not a claim that it is managed"
-        );
-        assert!(
-            !type_says_managed(None),
-            "a type we could not read is not a type we may call finished"
-        );
-    }
-
     /// What a landed push relabels to `stalagmight`: an unfinished adoption
     /// (`ariane`) and the legacy managed type (`other`, which SpeleoDB never maps).
     /// Already `stalagmight`, somebody else's format, or an unreadable type: no write.
@@ -2743,7 +1908,7 @@ mod tests {
     /// The PATCH body names the managed type and nothing else.
     #[test]
     fn the_managed_type_patch_is_exactly_the_type_field() {
-        assert_eq!(managed_type_patch(), r#"{"type":"stalagmight"}"#);
+        assert_eq!(managed_type_patch(), r#"{"type":"STALAGMIGHT"}"#);
     }
 
     /// The predicate and body above only matter if the writers use them. The heal
@@ -2765,8 +1930,8 @@ mod tests {
         assert!(heal_body.contains("&managed_type_patch()"));
         assert_eq!(
             speleodb_prod_matches("&managed_type_patch()", &[]),
-            2,
-            "the heal and adoption's finalize both PATCH through the helper"
+            1,
+            "the type repair PATCHes through the helper"
         );
         assert_eq!(
             speleodb_prod_matches(r#"{"type":"#, &[]),
@@ -2814,7 +1979,7 @@ mod tests {
         );
         let body = &src[upload..helper];
         let landings: Vec<_> = body
-            .match_indices("let landed = self.speleodb_revision_landed(")
+            .match_indices("let landed = PushOutcome::Confirmed")
             .map(|(at, _)| at)
             .collect();
         let heals: Vec<_> = body
@@ -2945,7 +2110,7 @@ mod tests {
                 .expect("save color_mode");
         }
 
-        // Snapshot the prefs, then simulate the server dump landing (a fresh file
+        // Snapshot the prefs, then simulate the server file landing (a fresh file
         // with NO display_settings, as stripped on push).
         let preserved = preserved_display_settings(&dest);
         assert_eq!(preserved.len(), 2, "both local prefs captured");
@@ -3147,20 +2312,13 @@ mod tests {
             db.save_display_setting("grid", "off").expect("save grid");
         }
 
-        let zip = server_dump_zip();
+        let native = server_stalx();
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(dest.clone()).success, "open the cache");
 
-        let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
         let preserved = state
-            .replace_cache_stalx(
-                &mut dump,
-                "misc/project.stalx",
-                &dest,
-                GUARD_ID,
-                InheritedUndo::Drop,
-            )
+            .replace_cache_stalx(native.path(), &dest, GUARD_ID, InheritedUndo::Drop)
             .expect("replace the cache file");
 
         assert_eq!(
@@ -3217,23 +2375,15 @@ mod tests {
         .expect("save link");
     }
 
-    /// A one-entry server dump whose `.stalx` payload is recognisable on disk.
-    fn server_dump_zip() -> Vec<u8> {
-        use std::io::Write as _;
+    /// A native server project whose `.stalx` payload is recognisable on disk.
+    fn server_stalx() -> tempfile::NamedTempFile {
         let temp = TempDir::new().expect("server project temp dir");
         let project = temp.path().join("server.stalx");
         seed_stalx(&project, "Server Copy");
-        let bytes = std::fs::read(project).expect("read server project");
-        let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
-        let opts = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
-        writer
-            .start_file("misc/project.stalx", opts)
-            .expect("start_file");
-        writer.write_all(&bytes).expect("write entry");
-        writer.finish().expect("finish zip").into_inner()
+        let native = tempfile::NamedTempFile::new().expect("native file");
+        std::fs::copy(&project, native.path()).expect("copy native file");
+        native
     }
-
     /// [#303] The discard verb destroys un-pushed work with no way back, and until now it
     /// validated nothing but a link and a token - so the backend could not tell a
     /// confirmed discard from a stray call. `acknowledged` is the caller reporting that it
@@ -3398,17 +2548,14 @@ mod tests {
         let dest = temp.path().join("project.stalx");
         seed_linked_stalx(&dest, GUARD_ID, false);
         let before = std::fs::read(&dest).expect("read seeded cache");
-        let zip = server_dump_zip();
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(dest.clone()).success, "open the cache");
         assert!(project_is_open(&state));
 
-        let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
         let err = state
             .replace_cache_stalx_abandoning(
-                &mut dump,
-                "no/such/entry.stalx",
+                &temp.path().join("missing.stalx"),
                 &dest,
                 InheritedUndo::Drop,
             )
@@ -3484,18 +2631,11 @@ mod tests {
         let dest = temp.path().join("project.stalx");
         seed_linked_stalx(&dest, GUARD_ID, true);
         let before = std::fs::read(&dest).expect("read seeded cache");
-        let zip = server_dump_zip();
+        let native = server_stalx();
         let state = AppState::new().expect("state");
 
-        let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
         let refused = state
-            .replace_cache_stalx(
-                &mut dump,
-                "misc/project.stalx",
-                &dest,
-                GUARD_ID,
-                InheritedUndo::Drop,
-            )
+            .replace_cache_stalx(native.path(), &dest, GUARD_ID, InheritedUndo::Drop)
             .expect_err("the guarded verb must refuse");
         assert!(matches!(
             refused,
@@ -3507,14 +2647,8 @@ mod tests {
             "a refused replace must not touch the file at all"
         );
 
-        let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("reopen dump");
         state
-            .replace_cache_stalx_abandoning(
-                &mut dump,
-                "misc/project.stalx",
-                &dest,
-                InheritedUndo::Drop,
-            )
+            .replace_cache_stalx_abandoning(native.path(), &dest, InheritedUndo::Drop)
             .expect("the abandoning verb still discards on purpose");
         let replaced = Database::open_existing(&dest).expect("open replaced file");
         assert_eq!(
@@ -3682,8 +2816,8 @@ mod tests {
         );
         assert_eq!(
             speleodb_prod_matches("base_commit_sha:", &[]),
-            5,
-            "unexpected BASE stamp count (sanctioned: open-on-pull, fast-forward restamp, publish-create, adopt-ariane, revision-restore)"
+            4,
+            "unexpected BASE stamp count (sanctioned: open-on-pull, fast-forward restamp, publish-create, revision-restore)"
         );
     }
 
@@ -3692,7 +2826,7 @@ mod tests {
         // #195 quiescent-point invariant: the push must flush in-memory edits to the
         // live .stalx (save_project) BEFORE taking the VACUUM snapshot, or the
         // uploaded snapshot would miss the last edit (data loss). The snapshot - NOT
-        // the live bytes - is then what upload_auto streams. The ordering can't be
+        // the live bytes - is then what upload_stalx streams. The ordering can't be
         // observed without a client seam, so pin it structurally (like the
         // BASE-advance tripwire); the live round-trips prove the behaviour itself.
         let src = push_prod_source();
@@ -3708,15 +2842,15 @@ mod tests {
             .find("vacuum_snapshot(")
             .expect("push snapshots via vacuum_snapshot");
         let upload_call = upload
-            .find("upload_auto(")
-            .expect("push streams via upload_auto");
+            .find("upload_stalx(")
+            .expect("push streams via upload_stalx");
         assert!(
             save < vacuum,
             "save_project (flush) must precede vacuum_snapshot - the snapshot must be quiescent (#195)"
         );
         assert!(
             vacuum < upload_call,
-            "the VACUUM snapshot must be taken before upload_auto streams it (#195)"
+            "the VACUUM snapshot must be taken before upload_stalx streams it (#195)"
         );
     }
 
@@ -3985,8 +3119,8 @@ mod tests {
     /// An authenticated session pointed at `endpoint` (the loopback stub below, or
     /// any unreachable host), so the release paths get past `speleodb_active_token`.
     fn authed_session_at(endpoint: &str) -> SpeleoDbSession {
-        let mut token_store = TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
-        token_store.store(endpoint, "u@x", "tok-1", false);
+        let mut token_store = TokenStore::default();
+        token_store.store(endpoint, "u@x", "tok-1");
         SpeleoDbSession {
             endpoint: Some(endpoint.to_owned()),
             email: Some("u@x".to_owned()),
@@ -3994,8 +3128,6 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
-            chosen_dump_entries: std::collections::HashMap::new(),
-            offered_dump_at: std::collections::HashMap::new(),
         }
     }
 
@@ -4014,6 +3146,16 @@ mod tests {
     fn editing_fixture(endpoint: &str) -> (TempDir, AppState) {
         let (temp, state) = remote_readonly_fixture();
         *state.speleodb.lock().expect("session lock") = authed_session_at(endpoint);
+        let mut link = state.speleodb_open_link().expect("link");
+        link.endpoint = endpoint.to_owned();
+        state
+            .database
+            .lock()
+            .expect("database")
+            .as_ref()
+            .expect("open")
+            .save_speleo_link(Some(&link))
+            .expect("save link");
         state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
         (temp, state)
@@ -4038,8 +3180,9 @@ mod tests {
                     break;
                 }
             }
+            let body = crate::core::state::tests_support::sdk_fixture(&body);
             let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
             let _ = stream.write_all(resp.as_bytes());
@@ -4129,48 +3272,165 @@ mod tests {
     }
 
     #[test]
-    fn a_release_leaves_a_force_edit_session_alone() {
-        // #213: a force-editor holds NO server lock - that is the definition of
-        // force-edit - so neither release verb is surrendering anything of theirs.
-        // Both used to drop the edit gate anyway (they tested `edit_enabled` alone),
-        // which ended an editing session the release had nothing to do with AND left
-        // the invalid `edit_enabled == false && force_editing == true` pair: a
-        // read-only project still reporting the big-red force-edit banner through
-        // `speleodb_link_status`. Reachable from the held-lock resume prompt, whose
-        // scan lists a STALE lock from an earlier session on the very project the
-        // user is now force-editing.
-        //
-        // All three release verbs now ask the same pair (`edit_enabled() &&
-        // !force_editing()`), which `speleodb_release_current_lock` had right all
-        // along; the frontend already models the two as independent
-        // (`holdsWriteLock` is `editing && !forceEditing`).
-        let link_id = "11111111-1111-1111-1111-111111111111";
-        for per_project in [true, false] {
-            let (base, handle) = release_stub(link_id);
-            let (_temp, state) = editing_fixture(&base);
-            state.set_force_editing(true);
+    fn successful_login_invalidates_pending_downloads_without_closing_the_project() {
+        let (base, _listener, _seen) = recording_stub(r#"{"email":"u@x"}"#);
+        let (_temp, state) = editing_fixture(&base);
+        let generation = state.reserve_download_generation();
+        state
+            .speleodb_login(Some(base), None, None, Some("replacement-token".into()))
+            .expect("login");
+        assert_ne!(generation, state.speleodb_session_generation());
+        assert!(state.get_project_state().is_some());
+    }
 
-            if per_project {
-                state
-                    .speleodb_release_lock(link_id.to_owned())
-                    .expect("the release itself still goes through");
+    #[test]
+    fn release_requires_scoped_unpushed_consent_before_network() {
+        let (base, _listener, seen) = recording_stub(
+            r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","active_mutex":{"user":"u@x"}}"#,
+        );
+        let (_temp, state) = editing_fixture(&base);
+        state.mark_remote_dirty();
+        assert!(state
+            .speleodb_release_current_lock(true, false, None)
+            .is_err());
+        assert!(state
+            .speleodb_release_current_lock(true, true, None)
+            .is_err());
+        let context = |id: &str, email: &str| crate::speleodb::SpeleoReleaseContext {
+            session_generation: state.speleodb_session_generation().to_string(),
+            project_id: id.into(),
+            endpoint: base.clone(),
+            user_email: email.into(),
+        };
+        assert!(state
+            .speleodb_release_current_lock(
+                true,
+                true,
+                Some(context("22222222-2222-2222-2222-222222222222", "u@x"))
+            )
+            .is_err());
+        assert!(state
+            .speleodb_release_current_lock(true, true, Some(context(REMOTE_ID, "another@x")))
+            .is_err());
+        let mut stale = context(REMOTE_ID, "u@x");
+        stale.session_generation = "stale".into();
+        assert!(state
+            .speleodb_release_current_lock(true, true, Some(stale))
+            .is_err());
+        assert!(seen.lock().expect("requests").is_empty());
+        state
+            .speleodb_release_current_lock(true, true, Some(context(REMOTE_ID, "u@x")))
+            .expect("acknowledged release");
+        assert!(seen
+            .lock()
+            .expect("requests")
+            .iter()
+            .any(|line| line.starts_with("POST ")));
+        assert!(
+            state
+                .speleodb_open_link()
+                .expect("local link")
+                .has_unpushed_edits
+        );
+    }
+
+    #[test]
+    fn local_only_access_inspection_never_contacts_the_current_server() {
+        let (base, _listener, seen) = recording_stub("{}");
+        let (temp, state) = editing_fixture(&base);
+        let result = state
+            .speleodb_project_access_at(
+                temp.path()
+                    .join("remote.stalx")
+                    .to_string_lossy()
+                    .into_owned(),
+                true,
+            )
+            .expect("inspection")
+            .expect("linked");
+        assert!(matches!(
+            result.verification,
+            crate::speleodb::SpeleoAccessVerification::Unavailable
+        ));
+        assert!(result.project.permission.is_none());
+        assert!(seen.lock().expect("requests").is_empty());
+        assert!(state.edit_enabled());
+    }
+
+    #[test]
+    fn automatic_release_only_releases_our_current_lock_and_clears_its_claim() {
+        for (holder, posts) in [("u@x", 1), ("other@x", 0)] {
+            let body = if holder == "u@x" {
+                r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","permission":"ADMIN","active_mutex":{"user":"u@x"}}"#
             } else {
-                state
-                    .speleodb_release_all_locks()
-                    .expect("the release itself still goes through");
-            }
-
-            assert!(
-                state.edit_enabled(),
-                "a force-edit session survives the release (per_project={per_project})"
+                r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","permission":"ADMIN","active_mutex":{"user":"other@x"}}"#
+            };
+            let (base, _listener, seen) = recording_stub(body);
+            let (_temp, state) = editing_fixture(&base);
+            state
+                .speleodb_release_current_lock(true, false, None)
+                .expect("release own lock only");
+            assert!(!state.edit_enabled());
+            assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
+            assert_eq!(
+                seen.lock()
+                    .expect("requests")
+                    .iter()
+                    .filter(|line| line.starts_with("POST "))
+                    .count(),
+                posts
             );
-            assert!(
-                state.force_editing(),
-                "and stays flagged as force-editing, so the two gates never disagree \
-                 (per_project={per_project})"
-            );
-            let _ = handle.join();
         }
+    }
+
+    #[test]
+    fn manual_release_still_allows_admin_recovery_and_rejects_another_endpoint() {
+        let (base, _listener, seen) = recording_stub(
+            r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","active_mutex":{"user":"other@x"}}"#,
+        );
+        let (_temp, state) = editing_fixture(&base);
+        state
+            .speleodb_release_current_lock(false, false, None)
+            .expect("manual release");
+        assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
+        assert!(seen.lock().expect("requests")[0].starts_with("POST "));
+        *state.speleodb.lock().expect("session") = authed_session_at("https://another.example");
+        assert!(state
+            .speleodb_release_current_lock(true, false, None)
+            .is_err());
+        assert_eq!(seen.lock().expect("requests").len(), 1);
+    }
+
+    #[test]
+    fn cold_file_open_preflight_reads_link_and_remote_access_without_switching() {
+        let (base, _listener, seen) = recording_stub(
+            r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Restricted","permission":"READ_ONLY","active_mutex":{"user":"other@x"}}"#,
+        );
+        let (temp, state) = editing_fixture(&base);
+        let access = state
+            .speleodb_project_access_at(
+                temp.path()
+                    .join("remote.stalx")
+                    .to_string_lossy()
+                    .into_owned(),
+                false,
+            )
+            .expect("preflight")
+            .expect("linked");
+        assert_eq!(
+            access.project.permission,
+            Some(crate::speleodb::Permission::ReadOnly)
+        );
+        assert_eq!(access.project.lock_holder.as_deref(), Some("other@x"));
+        assert!(
+            state.edit_enabled(),
+            "preflight must not close the current project"
+        );
+        assert!(seen
+            .lock()
+            .expect("requests")
+            .iter()
+            .all(|line| line.starts_with("GET ")));
     }
 
     #[test]
@@ -4211,8 +3471,13 @@ mod tests {
                     }
                 }
                 drop(listener);
+                assert!(
+                    state.speleodb_lock_ops.try_lock().is_err(),
+                    "release must serialize polling and acquisition"
+                );
                 state.speleodb_unlink().expect("unlink mid-flight");
                 let body = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote"}"#;
+                let body = crate::core::state::tests_support::sdk_fixture(&body);
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -4222,7 +3487,7 @@ mod tests {
                 let _ = stream.flush();
             });
             state
-                .speleodb_release_current_lock()
+                .speleodb_release_current_lock(false, false, None)
                 .expect("the release itself succeeds");
         });
 
@@ -5025,6 +4290,7 @@ mod tests {
                         break;
                     }
                 }
+                let body = crate::core::state::tests_support::sdk_fixture(&body);
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -5052,7 +4318,7 @@ mod tests {
         // The stub answers every call with an empty revision history: enough for the
         // head fetch (twice - a recorded BASE meeting an empty tip re-fetches once)
         // and for take-remote's multi-head check to pass, after which the fast-forward
-        // receives that same JSON where it expects a ZIP and fails at `Dump::open`.
+        // receives that same JSON where it expects a SQLite file and fails at native SQLite validation.
         // The force-editor holds no lock, so the abandoning release in between is a
         // no-op and makes no request of its own.
         let (base, _listener) = always_answering_stub(r#"{"commits":[]}"#);
@@ -5110,6 +4376,7 @@ mod tests {
                 if let Ok(mut lines) = log.lock() {
                     lines.push(text.lines().next().unwrap_or_default().to_owned());
                 }
+                let body = crate::core::state::tests_support::sdk_fixture(&body);
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -5169,6 +4436,7 @@ mod tests {
                         .split_whitespace()
                         .nth(1)
                         .is_some_and(|path| path.ends_with(&probe_path));
+                let body = crate::core::state::tests_support::sdk_fixture(&body);
                 let resp = if is_probe {
                     "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\
                      Connection: close\r\n\r\n"
@@ -5288,8 +4556,8 @@ mod tests {
         //
         // Also the reach test for that arm: `FREE_MUTEX_DIVERGED_BODY`'s history over
         // a CLEAN fixture fences to FastForward rather than Diverged (dirty is the only
-        // difference), and the stub answers the dump download with JSON, so the
-        // fast-forward fails inside `Dump::open` - a corrupt-dump failure, not the
+        // difference), and the stub answers the native-file download with JSON, so the
+        // fast-forward fails inside native SQLite validation - a corrupt-file failure, not the
         // local-edits refusal. So the arm really does run to its unwind here, and the
         // release below is that unwind's doing.
         let (base, _listener, seen) = recording_stub(FREE_MUTEX_DIVERGED_BODY);
@@ -5303,7 +4571,7 @@ mod tests {
         let seen = seen.lock().expect("request log").clone();
         assert!(
             seen.iter()
-                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/download/dump/"))),
+                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/download/stalagmight/"))),
             "precondition: the flow reached the fast-forward arm and tried the download, \
              so the release below is that arm's unwind; saw {seen:?}"
         );
@@ -5319,7 +4587,7 @@ mod tests {
     fn only_the_local_edits_refusal_makes_an_unwind_keep_the_lock() {
         // What the fast-forward unwind keys on, fed the REAL errors rather than a
         // hand-built variant: both of `guard_local_edits`' refusals must keep the lock,
-        // and a corrupt dump must not.
+        // and a corrupt native file must not.
         //
         // The unreadable case matters as much as the dirty one. The guard cannot rule
         // out un-pushed work in a file it could not read (a hot journal a read-write
@@ -5350,12 +4618,10 @@ mod tests {
             "a copy that could not be read fails closed to the same keep, got {unknown:?}"
         );
 
-        let corrupt = crate::speleodb::dump::Dump::open(b"{\"not\":\"a zip\"}")
-            .err()
-            .expect("a JSON body is not a ZIP");
+        let corrupt = SpeleoDbError::Parse("invalid SQLite project".to_owned());
         assert!(
             !is_local_edits_refusal(&corrupt),
-            "a corrupt dump has nothing local at stake, so a lock we took is still \
+            "a corrupt native file has nothing local at stake, so a lock we took is still \
              handed back, got {corrupt:?}"
         );
     }
@@ -5546,8 +4812,9 @@ mod tests {
                         break;
                     }
                 }
+                let body = crate::core::state::tests_support::sdk_fixture(&body);
                 let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 let _ = stream.write_all(resp.as_bytes());
@@ -5602,8 +4869,9 @@ mod tests {
                 } else {
                     later.clone()
                 };
+                let body = crate::core::state::tests_support::sdk_fixture(&body);
                 let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 let _ = stream.write_all(resp.as_bytes());
@@ -6032,7 +5300,7 @@ mod tests {
         );
     }
 
-    /// A session seeded with an in-memory token (no real keychain). Marked
+    /// A session seeded with an in-memory token (synthetic credentials). Marked
     /// already-rehydrated so it behaves like a live, established session.
     fn authed_session() -> SpeleoDbSession {
         SpeleoDbSession {
@@ -6042,27 +5310,18 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
-            chosen_dump_entries: std::collections::HashMap::new(),
-            offered_dump_at: std::collections::HashMap::new(),
         }
     }
 
     #[test]
-    fn session_status_reflects_auth_and_gates_keychain_flag() {
-        // Authenticated: email surfaced; keychain flag reflects the store (an
-        // in-memory token is not keychain-backed).
+    fn session_status_reflects_auth() {
         let status = authed_session().status();
         assert!(status.logged_in);
         assert_eq!(status.user_email.as_deref(), Some("u@x"));
-        assert!(!status.keychain_backed);
 
-        // Not authenticated: no email leaks and keychain_backed is forced false
-        // (it is gated on logged_in, so it can't claim a keychain token while
-        // reporting logged-out).
         let status = SpeleoDbSession::default().status();
         assert!(!status.logged_in);
         assert_eq!(status.user_email, None);
-        assert!(!status.keychain_backed);
     }
 
     #[test]
@@ -6074,1068 +5333,6 @@ mod tests {
         assert!(!status.logged_in);
         assert_eq!(status.user_email, None);
         assert!(session.active_token().is_err());
-    }
-
-    /// A [`SecretStore`] that stores/loads fine but whose DELETE always fails -
-    /// the flaky-keychain seam for the #270 logout paths.
-    ///
-    /// `store`/`load` are REAL (an inner `InMemoryStore`), not stubs: `TokenStore::clear`
-    /// now decides whether a failed keychain delete is worth reporting by PROBING the
-    /// keychain for an entry, so a fake that accepted `store` and then answered `load`
-    /// with `Ok(None)` claimed to hold nothing while modelling a store that had just
-    /// been written to - and the delete failure it exists to raise was correctly (given
-    /// that claim) suppressed.
-    struct FailingDeleteStore(InMemoryStore);
-
-    impl FailingDeleteStore {
-        fn new() -> Self {
-            Self(InMemoryStore::new())
-        }
-    }
-
-    impl SecretStore for FailingDeleteStore {
-        fn kind(&self) -> &'static str {
-            "failing-delete"
-        }
-        fn store(
-            &self,
-            account_key: &str,
-            token: &str,
-        ) -> Result<(), crate::speleodb::auth::SecretStoreError> {
-            self.0.store(account_key, token)
-        }
-        fn load(
-            &self,
-            account_key: &str,
-        ) -> Result<Option<String>, crate::speleodb::auth::SecretStoreError> {
-            self.0.load(account_key)
-        }
-        fn delete(&self, _: &str) -> Result<(), crate::speleodb::auth::SecretStoreError> {
-            Err(crate::speleodb::auth::SecretStoreError::for_test(
-                "keychain unavailable",
-            ))
-        }
-    }
-
-    /// An authed session whose token was written through `keychain`, so a later
-    /// clear really exercises that backend's `delete`.
-    fn authed_session_with(keychain: Box<dyn SecretStore>) -> SpeleoDbSession {
-        let mut token_store = TokenStore::from_stores(keychain, None);
-        token_store.store("https://x/", "u@x", "tok-1", false);
-        SpeleoDbSession {
-            endpoint: Some("https://x/".to_owned()),
-            email: Some("u@x".to_owned()),
-            token_store,
-            rehydrate_attempted: true,
-            locks_acquired_here: Vec::new(),
-            acquired_by_this_flow: None,
-            chosen_dump_entries: std::collections::HashMap::new(),
-            offered_dump_at: std::collections::HashMap::new(),
-        }
-    }
-
-    #[test]
-    fn forget_reporting_surfaces_a_failed_delete_but_still_drops_the_session() {
-        // #270: logout's fallible form REPORTS a keychain delete failure - and the
-        // session is gone regardless (the user asked to log out; the Err is a warning
-        // that a credential may survive on this machine).
-        let mut session = authed_session_with(Box::new(FailingDeleteStore::new()));
-        assert!(session.status().logged_in);
-        assert!(
-            session.forget_reporting().is_err(),
-            "a failed credential delete must be reported to the logout caller"
-        );
-        assert!(!session.status().logged_in);
-    }
-
-    #[test]
-    fn forget_stays_best_effort_for_the_401_auto_drop() {
-        // The 401 auto-drop sink must NOT fail closed: a dead token leaves the
-        // session even when the keychain refuses the delete. `forget` returns `()`,
-        // so no error can reach `speleodb_handle_auth`'s callers.
-        let mut session = authed_session_with(Box::new(FailingDeleteStore::new()));
-        session.forget();
-        assert!(!session.status().logged_in);
-        assert!(session.active_token().is_err());
-    }
-
-    #[test]
-    fn auto_drop_path_does_not_propagate_a_keychain_failure() {
-        // End-to-end through the AppState sink: `speleodb_handle_auth` routes the
-        // 401 through `speleodb_forget`, which returns nothing - the original
-        // result is handed back untouched, never replaced by a keychain error.
-        crate::test_helpers::with_isolated_config(|| {
-            let state = AppState::new().expect("state");
-            *state.speleodb.lock().expect("session lock") =
-                authed_session_with(Box::new(FailingDeleteStore::new()));
-
-            let result: Result<(), SpeleoDbError> = Err(SpeleoDbError::Status {
-                status: 401,
-                message: "unauthorized".to_owned(),
-            });
-            let out = state.speleodb_handle_auth(Endpoint::ListProjects, result);
-            assert!(
-                matches!(out, Err(SpeleoDbError::Status { status: 401, .. })),
-                "the caller still sees its own 401, not a keychain error"
-            );
-            assert!(
-                !state
-                    .speleodb
-                    .lock()
-                    .expect("session lock")
-                    .status()
-                    .logged_in,
-                "the dead token is dropped even though the keychain delete failed"
-            );
-        });
-    }
-
-    #[test]
-    fn logout_clears_the_persisted_rehydrate_email() {
-        // #270: the config email is the rehydrate SEED - leaving it behind lets a
-        // surviving keychain entry silently re-authenticate on the next launch.
-        crate::test_helpers::with_isolated_config(|| {
-            let state = AppState::new().expect("state");
-            state
-                .speleodb_write_account_record(Some("u@x".to_owned()), None)
-                .expect("seed the persisted account");
-            *state.speleodb.lock().expect("session lock") =
-                authed_session_with(Box::new(InMemoryStore::new()));
-
-            state.speleodb_logout().expect("a clean logout succeeds");
-            assert_eq!(
-                state.config.lock().expect("config lock").speleodb.email,
-                None,
-                "logout must clear the persisted account email"
-            );
-            // The endpoint is a Settings preference and is deliberately untouched.
-        });
-    }
-
-    #[test]
-    fn logout_reports_a_failed_delete_but_still_logs_out() {
-        // Even when the credential delete fails, logout drops the session AND the
-        // rehydrate seed first, THEN reports - a keychain blip must never leave the
-        // user logged in.
-        crate::test_helpers::with_isolated_config(|| {
-            let state = AppState::new().expect("state");
-            state
-                .speleodb_write_account_record(Some("u@x".to_owned()), None)
-                .expect("seed the persisted account");
-            *state.speleodb.lock().expect("session lock") =
-                authed_session_with(Box::new(FailingDeleteStore::new()));
-
-            let err = state
-                .speleodb_logout()
-                .expect_err("a failed credential delete is surfaced");
-            assert!(
-                err.message.contains("Logged out"),
-                "the message must read as a warning about a leftover credential: {}",
-                err.message
-            );
-            assert_eq!(
-                state.config.lock().expect("config lock").speleodb.email,
-                None,
-                "the rehydrate seed is cleared even on the error path"
-            );
-            assert!(
-                !state
-                    .speleodb
-                    .lock()
-                    .expect("session lock")
-                    .status()
-                    .logged_in,
-                "the session is dropped even on the error path"
-            );
-        });
-    }
-
-    #[test]
-    fn logout_clears_the_rehydrate_seed_through_a_poisoned_config_lock() {
-        // `speleodb_write_config_email` used to bail on a poisoned config mutex
-        // (`let Ok(..) = self.config.lock() else { return; }`) - silently, and while
-        // logout went on to report success. The email is the REHYDRATE SEED
-        // (`speleodb_ensure_rehydrated` keys the keychain lookup by it), so skipping the
-        // clear left the session re-authenticating itself on the next launch after the
-        // user had been told the logout worked.
-        //
-        // A poisoned lock means another thread panicked mid-mutation; that is a reason
-        // to be careful with what is in there, not a reason to leave a live rehydrate
-        // seed behind - so it is recovered with `into_inner`, exactly as the save
-        // pipeline does with the project lock.
-        crate::test_helpers::with_isolated_config(|| {
-            let state = AppState::new().expect("state");
-            state
-                .speleodb_write_account_record(Some("u@x".to_owned()), None)
-                .expect("seed the persisted account");
-            *state.speleodb.lock().expect("session lock") =
-                authed_session_with(Box::new(InMemoryStore::new()));
-
-            let cfg = &state.config;
-            let _ = std::thread::scope(|s| {
-                s.spawn(|| {
-                    let _guard = cfg.lock().expect("lock to poison");
-                    panic!("poison the config mutex on purpose");
-                })
-                .join()
-            });
-            assert!(
-                state.config.is_poisoned(),
-                "precondition: the config mutex is poisoned"
-            );
-
-            state
-                .speleodb_logout()
-                .expect("logout still succeeds through a poisoned config lock");
-            assert_eq!(
-                state
-                    .config
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .speleodb
-                    .email,
-                None,
-                "the rehydrate seed must be cleared, not skipped, on a poisoned lock"
-            );
-        });
-    }
-
-    #[test]
-    fn logout_reports_a_seed_that_could_not_be_cleared() {
-        // The other half of #270's residue: a credential that outlived a failed delete
-        // is only dangerous because the SEED finds it again, so a seed that could not be
-        // cleared is its own warning - and a run that fails both must report both rather
-        // than hiding one behind the first.
-        //
-        // Failure is injected by squatting the config FILE's path with a DIRECTORY, so
-        // the write cannot land no matter how the save is spelled.
-        crate::test_helpers::with_isolated_config(|| {
-            let config_dir =
-                crate::test_helpers::current_config_dir().expect("this thread is isolated");
-            std::fs::create_dir_all(config_dir.join("config.toml"))
-                .expect("squat the config file path with a directory");
-
-            let state = AppState::new().expect("state");
-            *state.speleodb.lock().expect("session lock") =
-                authed_session_with(Box::new(InMemoryStore::new()));
-
-            let err = state
-                .speleodb_logout()
-                .expect_err("an unwritable config must be reported");
-            assert!(
-                err.message.contains("Logged out") && err.message.contains("sign in again"),
-                "the warning must name the resurrection risk, not just fail: {}",
-                err.message
-            );
-            assert!(
-                !state
-                    .speleodb
-                    .lock()
-                    .expect("session lock")
-                    .status()
-                    .logged_in,
-                "and the logout itself still happened"
-            );
-        });
-    }
-
-    /// A keyring that refuses EVERY op - the locked or absent secret service. The
-    /// two are indistinguishable from here, which is the whole reason
-    /// `config.speleodb.keychain_has_token` exists.
-    struct LockedKeyringStore;
-
-    impl SecretStore for LockedKeyringStore {
-        fn kind(&self) -> &'static str {
-            "locked"
-        }
-        fn store(&self, _: &str, _: &str) -> Result<(), crate::speleodb::auth::SecretStoreError> {
-            Err(crate::speleodb::auth::SecretStoreError::for_test(
-                "the keyring is locked",
-            ))
-        }
-        fn load(&self, _: &str) -> Result<Option<String>, crate::speleodb::auth::SecretStoreError> {
-            Err(crate::speleodb::auth::SecretStoreError::for_test(
-                "the keyring is locked",
-            ))
-        }
-        fn delete(&self, _: &str) -> Result<(), crate::speleodb::auth::SecretStoreError> {
-            Err(crate::speleodb::auth::SecretStoreError::for_test(
-                "the keyring is locked",
-            ))
-        }
-    }
-
-    /// Put a locked keyring under a state's COLD session, leaving
-    /// `rehydrate_attempted` false so the next authed call still runs the startup
-    /// rehydrate through it.
-    fn lock_the_keyring(state: &AppState) {
-        state.speleodb.lock().expect("session lock").token_store =
-            TokenStore::from_stores(Box::new(LockedKeyringStore), None);
-    }
-
-    #[test]
-    fn a_login_the_keyring_refuses_does_not_erase_an_earlier_logins_entry() {
-        // The persisted `keychain_has_token` answers "what is in the keyring", and it
-        // used to be written as `tier == TokenTier::Keychain` - "where did THIS login's
-        // key go". Those come apart on exactly one machine, and it is the interesting
-        // one: a keyring that took a token on Monday and is merely LOCKED today. The
-        // login falls back to memory WITHOUT removing Monday's entry, so `false` was
-        // recorded over a live bearer token that is still in there.
-        //
-        // That flag is also the only thing separating a locked keyring from a box with
-        // no secret service - both fail every op and both record `Unavailable` - so
-        // losing it is not just a missed prompt. Turning the keyring off on the next
-        // launch then classified the failed eviction AND its failed probe as "nothing
-        // was in there", reported success, and sent every later launch past the entry.
-        crate::test_helpers::with_isolated_config(|| {
-            let (base, _listener) = always_answering_stub(r#"{"email":"u@x"}"#);
-            let state = AppState::new().expect("state");
-            {
-                // What Monday's successful keychain login left on disk. The endpoint is
-                // the Settings preference (login never writes it), and it has to be
-                // here or the restart below has no account key to evict by.
-                let mut config = state.config.lock().expect("config lock");
-                config.speleodb.endpoint = Some(base.clone());
-                config.save().expect("seed the previous launch's endpoint");
-            }
-            // The account and the belief stamped with it, through the writer that
-            // login uses.
-            state
-                .speleodb_write_account_record(
-                    Some("u@x".to_owned()),
-                    Some(account_key(&base, "u@x")),
-                )
-                .expect("seed the previous launch's record");
-            lock_the_keyring(&state);
-            // Today's startup: the rehydrate read fails, recording `Unavailable` - the
-            // verdict a keychain-less box records too.
-            state.speleodb_session_status().expect("status");
-
-            let result = state
-                .speleodb_login(Some(base), None, None, Some("tok-today".to_owned()))
-                .expect("the paste login succeeds; only the keychain write fails");
-
-            assert_eq!(
-                result.storage,
-                crate::speleodb::TokenStorage::Memory,
-                "the locked keyring refused the write, so the key is session-only"
-            );
-            assert_eq!(result.keychain, KeychainReport::Unavailable);
-            assert!(
-                state.get_config().speleodb.keychain_has_token,
-                "and Monday's entry is still in there - nothing removed it, so the record \
-                 of it must not be overwritten with where TODAY's key happened to land"
-            );
-
-            // The next launch, reading the config this login just wrote.
-            let restarted = AppState::new().expect("restarted state");
-            lock_the_keyring(&restarted);
-            let mut settings = restarted.get_config();
-            settings.speleodb.keychain_disabled = true;
-            let report = restarted
-                .update_config(settings)
-                .expect("the settings still save - the residue is reported, not refused");
-
-            assert!(
-                report.keychain_residue.is_some(),
-                "turning the keyring off must still report the entry it could not remove"
-            );
-            assert!(
-                restarted.get_config().speleodb.keychain_has_token,
-                "and must not record a removal that did not happen"
-            );
-        });
-    }
-
-    /// A keyring that ANSWERS and holds nothing for anybody, under a state's COLD
-    /// session with `rehydrate_attempted` still false. The opposite fixture to
-    /// [`lock_the_keyring`]: this one can give the startup read the one answer that
-    /// PROVES an entry is gone.
-    fn empty_the_keyring(state: &AppState) {
-        state.speleodb.lock().expect("session lock").token_store =
-            TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
-    }
-
-    #[test]
-    fn a_keyring_that_answered_empty_is_not_opened_again_after_a_restart() {
-        // The self-correction the whole "a stale `true` costs ONE prompt" argument
-        // rests on. An entry removed outside the app - seahorse, a reinstall - leaves
-        // `config.speleodb.keychain_has_token = true` over a keyring that no longer
-        // holds anything, and the startup read is what finds that out: `Ok(None)` is
-        // the one proof of absence a read can give, and the live store lowers its
-        // belief on it.
-        //
-        // The live store is not what the next launch reads. Lowering it there and
-        // stopping meant the config kept saying `true`, so every launch re-opened the
-        // keyring - which on Linux IS the desktop unlock prompt - to be told the same
-        // thing again, forever. The correction has to reach disk to be a correction.
-        crate::test_helpers::with_isolated_config(|| {
-            let state = AppState::new().expect("state");
-            {
-                // What a previous launch's successful keychain login left on disk,
-                // and an account to key the startup read by.
-                let mut config = state.config.lock().expect("config lock");
-                config.speleodb.endpoint = Some("https://sdb.example".to_owned());
-                config.save().expect("seed the previous launch's endpoint");
-            }
-            state
-                .speleodb_write_account_record(
-                    Some("u@x".to_owned()),
-                    Some(account_key("https://sdb.example", "u@x")),
-                )
-                .expect("seed the previous launch's record");
-            empty_the_keyring(&state);
-
-            // The startup rehydrate: no network, and the keyring answers empty.
-            state.speleodb_session_status().expect("status");
-
-            assert!(
-                !state
-                    .speleodb
-                    .lock()
-                    .expect("session lock")
-                    .token_store
-                    .keychain_has_token(),
-                "premise: the read proved the keyring holds nothing for this account"
-            );
-            assert!(
-                !state.get_config().speleodb.keychain_has_token,
-                "and the correction has to reach the config, not just the live store"
-            );
-
-            // The next launch, reading the config off disk.
-            let restarted = AppState::new().expect("restarted state");
-            assert!(
-                !restarted.get_config().speleodb.keychain_has_token,
-                "or the same stale `true` opens the keyring again on every launch"
-            );
-        });
-    }
-
-    #[test]
-    fn one_accounts_keyring_entry_is_not_reported_to_the_next_account() {
-        // The account switch, on the machine the recorded belief exists for. The
-        // config's `keychain_has_token` is written by the same login that writes
-        // `speleodb.email`, so it is a fact ABOUT that account - and a keyring entry
-        // is keyed by (endpoint, email), so the previous account's entry is not even
-        // reachable under this one's key.
-        //
-        // Signing in as somebody else used to inherit it twice over: re-asserted from
-        // the config, and carried in the live store the switch reuses. The new
-        // login's keychain write fails against the locked keyring without lowering
-        // it, so the NEW email and the OLD account's `true` were persisted together -
-        // after which every launch opened the keyring for an account it holds nothing
-        // for, and turning the keyring off reported a residue belonging to somebody
-        // else, which no operation keyed by this account can find or remove.
-        crate::test_helpers::with_isolated_config(|| {
-            let (base, _listener) = always_answering_stub(r#"{"email":"new@x"}"#);
-            let state = AppState::new().expect("state");
-            {
-                // The PREVIOUS account's launch: its entry is in the keyring and the
-                // config records it.
-                let mut config = state.config.lock().expect("config lock");
-                config.speleodb.endpoint = Some(base.clone());
-                config.save().expect("seed the previous account's endpoint");
-            }
-            state
-                .speleodb_write_account_record(
-                    Some("old@x".to_owned()),
-                    Some(account_key(&base, "old@x")),
-                )
-                .expect("seed the previous account's record");
-            lock_the_keyring(&state);
-            // Today's startup, as the previous account: the read fails, so the belief
-            // it mirrored in stands - about `old@x`.
-            state.speleodb_session_status().expect("status");
-
-            let result = state
-                .speleodb_login(Some(base), None, None, Some("tok-new".to_owned()))
-                .expect("the paste login succeeds; only the keychain write fails");
-
-            assert_eq!(
-                result.storage,
-                crate::speleodb::TokenStorage::Memory,
-                "the locked keyring refused the write, so the key is session-only"
-            );
-            assert_eq!(
-                state.get_config().speleodb.email.as_deref(),
-                Some("new@x"),
-                "premise: the persisted account is now somebody else"
-            );
-            assert!(
-                !state.get_config().speleodb.keychain_has_token,
-                "and what the keyring held for the PREVIOUS account is not a record \
-                 about this one - the two are keyed apart"
-            );
-
-            // The next launch, reading the config this login just wrote, on the same
-            // keyring that still will not answer.
-            let restarted = AppState::new().expect("restarted state");
-            lock_the_keyring(&restarted);
-            let mut settings = restarted.get_config();
-            settings.speleodb.keychain_disabled = true;
-            let report = restarted
-                .update_config(settings)
-                .expect("the settings still save");
-
-            assert_eq!(
-                report.keychain_residue, None,
-                "warning this account about a credential of somebody else's - one its \
-                 own eviction could never have removed - is the false alarm"
-            );
-        });
-    }
-
-    #[test]
-    fn the_same_address_on_a_second_server_does_not_inherit_the_first_ones_record() {
-        // The account switch nobody thinks of as one: the SAME person signing in to a
-        // second server (a dev box, a migrated host, a club's own instance). A keyring
-        // entry is keyed by `account_key(endpoint, email)`, so the first server's entry
-        // is not reachable under the second's key and there is usually none there at
-        // all - but the recorded belief used to be scoped by the EMAIL alone, so it was
-        // inherited whole.
-        //
-        // With the keyring locked during the switch - the case where it matters,
-        // because then nothing can correct it - the clear and the store both fail, so
-        // the first server's `true` was re-asserted and persisted under the second
-        // server's account. Every later launch opened the keyring for an entry that is
-        // not there, and turning the keyring off warned about a residue no operation
-        // keyed by the new endpoint can find or remove.
-        crate::test_helpers::with_isolated_config(|| {
-            const FIRST: &str = "https://sdb.example";
-            let (second, _listener) = always_answering_stub(r#"{"email":"u@x"}"#);
-            let state = AppState::new().expect("state");
-            {
-                // The FIRST server is the persisted Settings endpoint, so the startup
-                // below keys by it.
-                let mut config = state.config.lock().expect("config lock");
-                config.speleodb.endpoint = Some(FIRST.to_owned());
-                config.save().expect("seed the previous launch's endpoint");
-            }
-            // And what the login on that server left: the account, and the belief
-            // stamped with the key its entry is stored under.
-            state
-                .speleodb_write_account_record(
-                    Some("u@x".to_owned()),
-                    Some(account_key(FIRST, "u@x")),
-                )
-                .expect("seed the first server's record");
-            lock_the_keyring(&state);
-            // Today's startup, still pointed at the first server: the read fails, so
-            // the belief it mirrored in stands - about the entry on THAT server.
-            state.speleodb_session_status().expect("status");
-
-            // The same person, signing in to the second server.
-            let result = state
-                .speleodb_login(Some(second), None, None, Some("tok-2".to_owned()))
-                .expect("the paste login succeeds; only the keychain write fails");
-
-            assert_eq!(
-                result.storage,
-                crate::speleodb::TokenStorage::Memory,
-                "the locked keyring refused the write, so the key is session-only"
-            );
-            assert_eq!(
-                state.get_config().speleodb.email.as_deref(),
-                Some("u@x"),
-                "premise: the address is the same one - the EMAIL alone cannot tell \
-                 these two accounts apart"
-            );
-            assert!(
-                !state.get_config().speleodb.keychain_has_token,
-                "and what the first server's keyring holds is not a record about the \
-                 second one - the two are keyed apart by endpoint as well as email"
-            );
-
-            // The next launch, on the same keyring that still will not answer.
-            let restarted = AppState::new().expect("restarted state");
-            lock_the_keyring(&restarted);
-            let mut settings = restarted.get_config();
-            settings.speleodb.keychain_disabled = true;
-            let report = restarted
-                .update_config(settings)
-                .expect("the settings still save");
-
-            assert_eq!(
-                report.keychain_residue, None,
-                "warning about a credential on another server - one this account's own \
-                 eviction could never have removed - is the false alarm"
-            );
-        });
-    }
-
-    #[test]
-    fn a_belief_written_before_the_stamp_existed_is_kept_for_the_account_it_names() {
-        // The upgrade path. Every config written before the belief carried an account
-        // key has the flag and no stamp, and the reading rule for that pair decides
-        // what happens on the first launch after the update.
-        //
-        // It is read as a belief about the persisted email, which is the strongest
-        // scoping that config could express - the flag and the email were written by
-        // the same login. Reading it as nobody's would be the strict answer and the
-        // dangerous one: it would strand a real token on every upgraded user with a
-        // keychain login (startup stops opening the keyring, `clear` stops sweeping it,
-        // and turning the keyring off reports "nothing was in there" over it) to spare
-        // the rare same-address-second-server case one unlock prompt. Being wrong the
-        // other way costs that one prompt, and the read it pays for is what disproves
-        // the belief and writes the correction back.
-        crate::test_helpers::with_isolated_config(|| {
-            const EP: &str = "https://sdb.example";
-            let state = AppState::new().expect("state");
-            {
-                // A config from before the stamp: the flag, the account email, and
-                // nothing naming the two together.
-                let mut config = state.config.lock().expect("config lock");
-                config.speleodb.endpoint = Some(EP.to_owned());
-                config.speleodb.email = Some("u@x".to_owned());
-                config.speleodb.keychain_has_token = true;
-                assert_eq!(config.speleodb.keychain_token_account, None);
-                config.save().expect("seed the pre-upgrade config");
-            }
-            lock_the_keyring(&state);
-            state.speleodb_session_status().expect("status");
-
-            assert!(
-                state
-                    .speleodb
-                    .lock()
-                    .expect("session lock")
-                    .token_store
-                    .keychain_has_token(),
-                "the unstamped belief still names this account, so it is mirrored in - \
-                 dropping it here is what strands the token on the upgrade launch"
-            );
-            let mut settings = state.get_config();
-            settings.speleodb.keychain_disabled = true;
-            let report = state.update_config(settings).expect("the settings save");
-            assert!(
-                report.keychain_residue.is_some(),
-                "and the user is still warned about the entry the locked keyring would \
-                 not give up, which is the whole point of keeping it"
-            );
-
-            // Kept for the account it names, and only that one.
-            let pre_upgrade = crate::config::SpeleoDbConfig {
-                email: Some("u@x".to_owned()),
-                keychain_has_token: true,
-                keychain_token_account: None,
-                ..Default::default()
-            };
-            assert!(pre_upgrade.keychain_belief_applies_to(EP, "u@x"));
-            assert!(
-                !pre_upgrade.keychain_belief_applies_to(EP, "someone@else"),
-                "an unstamped belief is still scoped - it is the endpoint it cannot \
-                 speak for, not the account entirely"
-            );
-        });
-    }
-
-    #[test]
-    fn a_newer_logins_record_survives_the_rehydrate_write_back() {
-        // DO NOT REGRESS. `speleodb_ensure_rehydrated` releases the SESSION lock before
-        // it writes the proof back, deliberately: the writer takes the CONFIG lock and
-        // the documented order is config-then-session. SpeleoDB commands run
-        // concurrently on `spawn_blocking` threads, and the keychain read that produced
-        // the proof can sit on a desktop unlock prompt for as long as the user leaves
-        // it there, so a whole login fits in that window.
-        //
-        // Writing unconditionally then overwrote a fact newer than the one being
-        // corrected, and the launch after that skipped a keyring entry the login had
-        // genuinely just put there: signed out, with the token still in the keyring and
-        // a `clear` that would no longer sweep it.
-        //
-        // The window is driven DIRECTLY here rather than raced: the interleaving needs
-        // the login to land between the session-lock release and the config write, and
-        // there is no hook to hold it there, so a genuine thread would be timing-
-        // dependent. What is exercised is the compare-and-set itself, with the config
-        // and the live store in exactly the state that login would have left them.
-        crate::test_helpers::with_isolated_config(|| {
-            const EP: &str = "https://sdb.example";
-            let state = AppState::new().expect("state");
-            state
-                .speleodb_write_account_record(Some("a@x".to_owned()), Some(account_key(EP, "a@x")))
-                .expect("what the previous launch recorded");
-            // The snapshot the rehydrate read, and the proof it got back: the keyring
-            // answered `Ok(None)` for a@x, so the live store lowered its belief and the
-            // write-back is armed.
-            let read = state.get_config().speleodb;
-            empty_the_keyring(&state);
-
-            // The login that lands in the window - as SOMEBODY ELSE, over a keyring
-            // that takes the key: it records its own account and its own belief. The
-            // live store is left believing nothing on purpose, which is the harder
-            // half: `SpeleoDbSession::forget_reporting` drops the store's belief the
-            // moment an account leaves the session, so between one login and the next
-            // account switch the persisted record and the live store genuinely
-            // disagree. What has to hold this write back there is the persisted pair,
-            // not the store.
-            state
-                .speleodb_write_account_record(Some("b@x".to_owned()), Some(account_key(EP, "b@x")))
-                .expect("the newer login's record");
-
-            state.speleodb_lower_keychain_belief_after_proof(&read);
-
-            let after = state.get_config().speleodb;
-            assert_eq!(
-                after.email.as_deref(),
-                Some("b@x"),
-                "premise: the newer login is the one on disk"
-            );
-            assert!(
-                after.keychain_has_token,
-                "a proof about the PREVIOUS account must not lower a belief the newer \
-                 login raised - the next launch would skip the entry it just stored"
-            );
-            assert_eq!(
-                after.keychain_token_account,
-                Some(account_key(EP, "b@x")),
-                "and the record left standing is the newer login's, whole"
-            );
-        });
-    }
-
-    #[test]
-    fn a_relogin_that_refilled_the_keyring_survives_the_rehydrate_write_back() {
-        // The half of that window a value comparison cannot see. When the login in the
-        // window is the SAME account, it re-asserts the config's own belief, so a
-        // successful keychain write leaves the persisted record byte-identical to the
-        // snapshot the rehydrate read - while the keyring now really does hold an entry
-        // that was not there when the read proved it absent.
-        //
-        // `TokenStore::keychain_has_token` is the authoritative copy and that write
-        // raised it, so the write-back asks it before lowering. Driven directly for the
-        // reason the sibling test above gives.
-        crate::test_helpers::with_isolated_config(|| {
-            const EP: &str = "https://sdb.example";
-            let state = AppState::new().expect("state");
-            state
-                .speleodb_write_account_record(Some("a@x".to_owned()), Some(account_key(EP, "a@x")))
-                .expect("what the previous launch recorded");
-            let read = state.get_config().speleodb;
-            empty_the_keyring(&state);
-
-            // The same account, signing in again over a keyring that takes the key.
-            // Nothing about the persisted record changes; the keyring's contents do.
-            state
-                .speleodb
-                .lock()
-                .expect("session lock")
-                .token_store
-                .note_keychain_has_token(true);
-            assert_eq!(
-                state.get_config().speleodb.keychain_token_account,
-                read.keychain_token_account,
-                "premise: the persisted record is untouched, so comparing it to the \
-                 snapshot cannot tell that anything happened"
-            );
-
-            state.speleodb_lower_keychain_belief_after_proof(&read);
-
-            assert!(
-                state.get_config().speleodb.keychain_has_token,
-                "the keyring holds an entry again, and a proof that predates it must \
-                 not be written over the login that put it there"
-            );
-        });
-    }
-
-    #[test]
-    fn the_account_and_the_belief_stamped_with_it_land_in_one_save() {
-        // A login writes two facts that are only meaningful together: WHO is signed in,
-        // and what the keyring is believed to hold FOR them. Written as two saves, the
-        // email landed first, and a belief save that then failed - or a process that
-        // exited between them - left the new account's email standing over the previous
-        // account's `true`. Nothing ever repairs that pair: the next launch reads the
-        // old account's evidence as the new one's, opens the keyring for an entry that
-        // is not there, and warns about a residue nothing keyed by them can remove.
-        //
-        // Failure is injected by squatting the config FILE's path with a DIRECTORY, so
-        // no save can land however it is spelled. The pair the process is left running
-        // on is what this asserts: with one save it is coherent whether the save landed
-        // or not; with two, the half that succeeded (or the half that rolled back)
-        // leaves them describing different accounts.
-        crate::test_helpers::with_isolated_config(|| {
-            let squatted = crate::test_helpers::current_config_dir()
-                .expect("this thread is isolated")
-                .join("config.toml");
-            std::fs::create_dir_all(&squatted).expect("squat the config file path");
-
-            let (base, _listener) = always_answering_stub(r#"{"email":"new@x"}"#);
-            let state = AppState::new().expect("state");
-            {
-                // The previous account's record, seeded coherently by hand because the
-                // squat is already in place and no writer can reach the disk.
-                let mut config = state.config.lock().expect("config lock");
-                config.speleodb.endpoint = Some(base.clone());
-                config.speleodb.email = Some("old@x".to_owned());
-                config.speleodb.keychain_has_token = true;
-                config.speleodb.keychain_token_account = Some(account_key(&base, "old@x"));
-            }
-            lock_the_keyring(&state);
-            state.speleodb_session_status().expect("status");
-
-            state
-                .speleodb_login(Some(base.clone()), None, None, Some("tok-new".to_owned()))
-                .expect("the paste login succeeds; only the keychain write and the save fail");
-
-            let pair = state.get_config().speleodb;
-            assert_eq!(
-                pair.email.as_deref(),
-                Some("new@x"),
-                "premise: the account this process is running as has moved"
-            );
-            assert!(
-                !pair.keychain_has_token
-                    || pair.keychain_belief_applies_to(&base, pair.email.as_deref().unwrap_or("")),
-                "a recorded belief has to be about the recorded account, whichever half \
-                 of the write failed: email {:?} against stamp {:?}",
-                pair.email,
-                pair.keychain_token_account
-            );
-
-            // And the record that did NOT move, because nothing could be written, is
-            // the previous account's - coherent in its own right rather than half of
-            // each.
-            std::fs::remove_dir(&squatted).expect("unblock the config file");
-            let on_disk = crate::config::Config::load()
-                .expect("read the config back off disk")
-                .speleodb;
-            assert!(
-                !on_disk.keychain_has_token
-                    || on_disk
-                        .keychain_belief_applies_to(&base, on_disk.email.as_deref().unwrap_or("")),
-                "the pair on disk is coherent too: email {:?} against stamp {:?}",
-                on_disk.email,
-                on_disk.keychain_token_account
-            );
-        });
-    }
-
-    // ── [Track C] (#188) C4 rehydration + C5 401-drop unit tests ────────────
-
-    /// A logged-out session whose token store has a keychain (and optional
-    /// plaintext) backend pre-seeded, so `rehydrate` can find a token.
-    fn fresh_session_with_stores(
-        keychain: Box<dyn SecretStore>,
-        plaintext: Option<Box<dyn SecretStore>>,
-    ) -> SpeleoDbSession {
-        SpeleoDbSession {
-            endpoint: None,
-            email: None,
-            token_store: TokenStore::from_stores(keychain, plaintext),
-            rehydrate_attempted: false,
-            locks_acquired_here: Vec::new(),
-            acquired_by_this_flow: None,
-            chosen_dump_entries: std::collections::HashMap::new(),
-            offered_dump_at: std::collections::HashMap::new(),
-        }
-    }
-
-    /// A `SecretStore` that shares one `InMemoryStore` behind an `Arc`, so a test
-    /// can keep a handle to seed/inspect the store *after* it has been boxed into
-    /// a `TokenStore`. `InMemoryStore` is interior-mutable (`Mutex<HashMap>`), so
-    /// every op delegates straight through the shared backend.
-    struct SharedStore(std::sync::Arc<InMemoryStore>);
-
-    impl SecretStore for SharedStore {
-        fn kind(&self) -> &'static str {
-            self.0.kind()
-        }
-        fn store(
-            &self,
-            account_key: &str,
-            token: &str,
-        ) -> Result<(), crate::speleodb::auth::SecretStoreError> {
-            self.0.store(account_key, token)
-        }
-        fn load(
-            &self,
-            account_key: &str,
-        ) -> Result<Option<String>, crate::speleodb::auth::SecretStoreError> {
-            self.0.load(account_key)
-        }
-        fn delete(&self, account_key: &str) -> Result<(), crate::speleodb::auth::SecretStoreError> {
-            self.0.delete(account_key)
-        }
-    }
-
-    #[test]
-    fn rehydration_seeds_session_from_config_and_keychain() {
-        // A keychain holds a prior-run token; rehydrate seeds endpoint+email from
-        // "config" and the first load() finds + caches it (the restart fix).
-        let endpoint = "https://x/";
-        let email = "u@x";
-        let keychain = InMemoryStore::new();
-        keychain
-            .store(&account_key(endpoint, email), "kc-tok")
-            .expect("seed keychain");
-
-        let mut session = fresh_session_with_stores(Box::new(keychain), None);
-        session.rehydrate(
-            Some(endpoint.to_owned()),
-            Some(email.to_owned()),
-            false,
-            false,
-            true,
-        );
-
-        let status = session.status();
-        assert!(status.logged_in, "a stored keychain token survives restart");
-        assert!(status.keychain_backed);
-        assert_eq!(status.user_email.as_deref(), Some(email));
-        // The active token resolves to the keychain value.
-        let (ep, tok) = session
-            .active_token()
-            .expect("authenticated after rehydrate");
-        assert_eq!(ep, endpoint);
-        assert_eq!(tok, "kc-tok");
-    }
-
-    #[test]
-    fn rehydration_leaves_a_declined_keychain_alone() {
-        // Item 12: the launch-time nag. A user who dismissed the desktop unlock
-        // prompt once was asked again on EVERY launch, because rehydration read the
-        // keychain unconditionally. With the refusal persisted, startup must not go
-        // near it - even though a token is sitting right there.
-        let endpoint = "https://x/";
-        let email = "u@x";
-        let keychain = InMemoryStore::new();
-        keychain
-            .store(&account_key(endpoint, email), "kc-tok")
-            .expect("seed keychain");
-
-        let mut session = fresh_session_with_stores(Box::new(keychain), None);
-        session.rehydrate(
-            Some(endpoint.to_owned()),
-            Some(email.to_owned()),
-            true,
-            false,
-            true,
-        );
-
-        let status = session.status();
-        assert!(
-            !status.logged_in,
-            "a declined keychain must not be read on startup, even holding a token"
-        );
-        assert_eq!(
-            status.keychain,
-            KeychainReport::Declined,
-            "and the reason is reported as a choice, not as a broken keychain"
-        );
-    }
-
-    #[test]
-    fn startup_does_not_open_the_keyring_when_we_recorded_no_token_in_it() {
-        // The launch-time nag in its remaining form: we used to READ the keychain to
-        // find out whether it had anything for us, and on Linux that read IS the
-        // desktop unlock prompt - so a launch after a sign-out raised one purely to
-        // discover there was nothing to find. What the keychain holds is recorded
-        // when we put it there, so the question is answered from disk.
-        let endpoint = "https://x/";
-        let email = "u@x";
-        // A keychain that DOES hold a usable token: if startup probed it, the
-        // session would come back signed in, so staying signed out is the proof
-        // that it was never opened.
-        let keychain = InMemoryStore::new();
-        keychain
-            .store(&account_key(endpoint, email), "tok")
-            .expect("seed keychain");
-
-        let mut session = fresh_session_with_stores(Box::new(keychain), None);
-        session.rehydrate(
-            Some(endpoint.to_owned()),
-            Some(email.to_owned()),
-            false, // not declined
-            false, // not disabled
-            false, // ...but we have no record of a token being in there
-        );
-
-        assert!(
-            !session.status().logged_in,
-            "startup must not open the keyring to answer a question already on disk"
-        );
-    }
-
-    #[test]
-    fn rehydration_noop_without_config_account() {
-        // No persisted account → stays logged-out, and the keychain is NOT probed
-        // (no endpoint/email to key it). rehydrate_attempted is still latched so
-        // it won't retry every call.
-        let mut session = fresh_session_with_stores(Box::new(InMemoryStore::new()), None);
-        session.rehydrate(None, None, false, false, true);
-        assert!(!session.status().logged_in);
-        assert!(session.rehydrate_attempted);
-
-        // A blank endpoint/email also yields a logged-out no-op.
-        let mut session = fresh_session_with_stores(Box::new(InMemoryStore::new()), None);
-        session.rehydrate(
-            Some("   ".to_owned()),
-            Some(String::new()),
-            false,
-            false,
-            true,
-        );
-        assert!(!session.status().logged_in);
-    }
-
-    #[test]
-    fn rehydration_is_idempotent_and_skips_live_session() {
-        // Once attempted, a second rehydrate (even with a now-seeded keychain) is
-        // a no-op - it won't clobber or re-probe. The `Arc<InMemoryStore>` handle
-        // (via the `SharedStore` delegating wrapper below) lets the test seed the
-        // keychain *after* the latch is set, proving the latch - not an empty
-        // store - is what keeps the second rehydrate logged-out.
-        let endpoint = "https://x/";
-        let email = "u@x";
-        let keychain = std::sync::Arc::new(InMemoryStore::new());
-
-        // First rehydrate with no account: latches `rehydrate_attempted`, probes
-        // nothing, stays logged-out.
-        let mut session = fresh_session_with_stores(
-            Box::new(SharedStore(std::sync::Arc::clone(&keychain))),
-            None,
-        );
-        session.rehydrate(None, None, false, false, true); // marks attempted, finds nothing
-        assert!(session.rehydrate_attempted);
-        assert!(!session.status().logged_in);
-
-        // Now seed the SAME keychain store (shared via the Arc) with a usable
-        // token for this account. A naive re-probe would find it and log in.
-        keychain
-            .store(&account_key(endpoint, email), "kc-tok")
-            .expect("seed keychain after the latch is set");
-
-        // Second rehydrate, this time WITH the account: the latch short-circuits
-        // before any seed/probe, so the session stays logged-out and never adopts
-        // endpoint/email despite the now-present token. This is the idempotency
-        // invariant: `rehydrate_attempted` gates the keychain probe to once.
-        session.rehydrate(
-            Some(endpoint.to_owned()),
-            Some(email.to_owned()),
-            false,
-            false,
-            true,
-        );
-        assert!(
-            !session.status().logged_in,
-            "the latch must block the re-probe even with a now-seeded keychain"
-        );
-        assert_eq!(
-            session.endpoint, None,
-            "a latched rehydrate must not adopt the account or probe the token"
-        );
-
-        // A live session (endpoint set) is also skipped.
-        let mut live = authed_session();
-        live.rehydrate(
-            Some("https://other/".to_owned()),
-            Some("z@z".to_owned()),
-            false,
-            false,
-            true,
-        );
-        assert_eq!(live.endpoint.as_deref(), Some("https://x/"));
     }
 
     /// Apply the 401 auto-drop decision to a session the way
@@ -7302,25 +5499,18 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
-            chosen_dump_entries: std::collections::HashMap::new(),
-            offered_dump_at: std::collections::HashMap::new(),
         };
         let (endpoint, token) = session.active_token().expect("authenticated session");
         assert_eq!(endpoint, "https://x/");
         assert_eq!(token, "tok-1");
 
-        // Each missing field independently yields NotAuthenticated. The empty
-        // in-memory keychain (NOT TokenStore::default(), which would probe the
-        // real OS keychain) keeps this hermetic.
         let mut no_token = SpeleoDbSession {
             endpoint: Some("https://x/".to_owned()),
             email: Some("u@x".to_owned()),
-            token_store: TokenStore::from_stores(Box::new(InMemoryStore::new()), None),
+            token_store: TokenStore::default(),
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
-            chosen_dump_entries: std::collections::HashMap::new(),
-            offered_dump_at: std::collections::HashMap::new(),
         };
         assert!(matches!(
             no_token.active_token(),
@@ -7334,8 +5524,6 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
-            chosen_dump_entries: std::collections::HashMap::new(),
-            offered_dump_at: std::collections::HashMap::new(),
         };
         assert!(matches!(
             no_email.active_token(),
@@ -7349,1210 +5537,10 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
-            chosen_dump_entries: std::collections::HashMap::new(),
-            offered_dump_at: std::collections::HashMap::new(),
         };
         assert!(matches!(
             no_endpoint.active_token(),
             Err(SpeleoDbError::NotAuthenticated)
         ));
-    }
-
-    // ===================== Live orchestration round-trips (#194/#197) =========
-    // AppState driven against the REAL dev box: the full wiring (acquire ->
-    // server_head -> fence -> edit gate / fast-forward / push / release) with real
-    // server responses - what the offline LoopbackStub cannot reproduce. Gated on
-    // DEV_SPELEODB_* + #[ignore]; run with `--ignored --test-threads=1`.
-
-    use crate::core::{AppState, Command};
-    use crate::models::ShotData;
-    use crate::speleodb::client;
-    use crate::speleodb::{StartEditingResult, UpdateResult};
-    use std::path::{Path, PathBuf};
-
-    // Fixture paths are relative to THIS member's manifest dir
-    // (src-tauri/crates/core), two levels below the old root crate's.
-    const ORCH_SEED: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../e2e/fixtures/fractal_plant_iter2.stalx"
-    );
-    const ORCH_SEED_V2: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../e2e/fixtures/fractal_plant_iter3.stalx"
-    );
-    const ORCH_TML: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/test_simple.tml"
-    );
-
-    fn orch_env() -> Option<(String, String, String)> {
-        Some((
-            std::env::var("DEV_SPELEODB_URL").ok()?,
-            std::env::var("DEV_SPELEODB_EMAIL").ok()?,
-            std::env::var("DEV_SPELEODB_PASSWORD").ok()?,
-        ))
-    }
-
-    /// The second pre-provisioned collaborator account (email + password). `None`
-    /// when `DEV_SPELEODB_EMAIL2`/`_PASSWORD2` are unset - the two-account tests
-    /// skip rather than fail. (That account can't be created over HTTP; see
-    /// docs/speleodb-dev-testing.md.)
-    fn orch_env2() -> Option<(String, String)> {
-        Some((
-            std::env::var("DEV_SPELEODB_EMAIL2").ok()?,
-            std::env::var("DEV_SPELEODB_PASSWORD2").ok()?,
-        ))
-    }
-
-    /// Deletes the per-test project on drop (even on panic), so live runs don't leak.
-    struct OrchCleanup {
-        url: String,
-        token: String,
-        id: String,
-    }
-    impl Drop for OrchCleanup {
-        fn drop(&mut self) {
-            let _ = client::delete_project(&self.url, &self.token, false, &self.id);
-        }
-    }
-
-    /// Create a fresh remote project seeded with `stalx` (lock released), returning
-    /// its id. The token owner is ADMIN on the new project.
-    fn orch_seed(url: &str, token: &str, name: &str, stalx: &str) -> String {
-        let id = client::create_project(url, token, false, name)
-            .expect("create project")
-            .id;
-        client::acquire_lock(url, token, false, &id).expect("acquire seed lock");
-        client::upload_auto(
-            url,
-            token,
-            false,
-            &id,
-            Path::new(stalx),
-            Path::new(ORCH_TML),
-            "seed",
-        )
-        .expect("seed upload");
-        client::release_lock(url, token, false, &id).expect("release seed lock");
-        id
-    }
-
-    /// Advance the remote tip with a DISTINCT upload (a different fixture → a new
-    /// commit), simulating another writer moving HEAD forward after our open.
-    fn orch_advance_tip(url: &str, token: &str, id: &str, stalx: &str) {
-        client::acquire_lock(url, token, false, id).expect("acquire advance lock");
-        client::upload_auto(
-            url,
-            token,
-            false,
-            id,
-            Path::new(stalx),
-            Path::new(ORCH_TML),
-            "advance tip",
-        )
-        .expect("advance upload");
-        client::release_lock(url, token, false, id).expect("release advance lock");
-    }
-
-    /// A fresh `AppState` whose SpeleoDB session carries a REAL dev-box token.
-    fn orch_state(url: &str, email: &str, token: &str) -> AppState {
-        // The pull/open path needs a resolved cache dir; without a Tauri runtime
-        // point it at a throwaway temp tree.
-        crate::app_dirs::init_for_test();
-        let state = AppState::new().expect("AppState::new");
-        *state.speleodb.lock().expect("session lock") = SpeleoDbSession {
-            endpoint: Some(url.to_owned()),
-            email: Some(email.to_owned()),
-            token_store: TokenStore::from_in_memory_token(token),
-            rehydrate_attempted: true,
-            locks_acquired_here: Vec::new(),
-            acquired_by_this_flow: None,
-            chosen_dump_entries: std::collections::HashMap::new(),
-            offered_dump_at: std::collections::HashMap::new(),
-        };
-        state
-    }
-
-    /// Read the speleo_link straight from the open project DB.
-    fn orch_link(state: &AppState) -> SpeleoLink {
-        state
-            .database
-            .lock()
-            .expect("db lock")
-            .as_ref()
-            .expect("db open")
-            .load_speleo_link()
-            .expect("load link")
-            .expect("link present")
-    }
-
-    /// Open a remote project INTO this AppState: run the REAL download + BASE-stamp
-    /// pull (`speleodb_open_project`), then load the extracted `.stalx` into state.
-    /// The production load (`do_load_project_full`) needs a Wry `AppHandle` we can't
-    /// build headless, so we do its essential work directly - open the db + project
-    /// and drop the edit gate (a freshly pulled remote project is read-only until
-    /// Start editing). The push path reads the same `speleodb_cache_path`, so the
-    /// `file_path` we stamp here matches the live `.stalx` the upload snapshots.
-    fn orch_open(state: &AppState, id: &str, name: &str) {
-        let res = state
-            .speleodb_open_project(id.to_owned(), name.to_owned(), None, None)
-            .expect("pull + stamp");
-        let path = PathBuf::from(res.local_path);
-        let db = Database::open_existing(&path).expect("open extracted .stalx");
-        let mut project = db.load_project().expect("load pulled project");
-        project.file_path = Some(path);
-        *state.database.lock().expect("db lock") = Some(db);
-        *state.project.lock().expect("project lock") = Some(project);
-        state.set_edit_enabled(false);
-    }
-
-    /// A real survey edit (a new section with one shot), which both changes the
-    /// pushed content and sets the dirty bit through the normal mutation path.
-    fn orch_edit(state: &AppState, name: &str, length: f64) {
-        assert!(
-            state
-                .execute(Command::CreateSection {
-                    name: Some(name.to_owned()),
-                    surveyor: None,
-                    date: None,
-                    color: "#abcdef".to_owned(),
-                    direction: None,
-                    shots: vec![ShotData {
-                        length,
-                        ..Default::default()
-                    }],
-                })
-                .success,
-            "edit succeeds while editing"
-        );
-    }
-
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_start_editing_edit_done_advances_base() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-roundtrip", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-        orch_open(&state, &id, "orch-roundtrip");
-        assert!(
-            !state.edit_enabled(),
-            "a freshly pulled remote project is read-only until Start editing"
-        );
-        let base_before = orch_link(&state).base_commit_sha;
-
-        // Start editing: clean reconcile -> editable, lock held.
-        let started = state.speleodb_start_editing().expect("start_editing");
-        assert!(
-            matches!(started, StartEditingResult::Editing),
-            "clean reconcile should enable editing, got {started:?}"
-        );
-        assert!(
-            state.edit_enabled(),
-            "editing enabled after a clean Start editing"
-        );
-        // #194 b1: acquire takes the mutex only; a clean (UpToDate) reconcile must
-        // NOT move BASE. Only a confirmed push (below) advances it.
-        assert_eq!(
-            orch_link(&state).base_commit_sha,
-            base_before,
-            "acquire + clean reconcile must not move BASE"
-        );
-
-        // A real survey edit (new section) -> dirty bit set + content changed.
-        assert!(
-            state
-                .execute(Command::CreateSection {
-                    name: Some("orch-edit".to_owned()),
-                    surveyor: None,
-                    date: None,
-                    color: "#abcdef".to_owned(),
-                    direction: None,
-                    shots: vec![ShotData {
-                        length: 5.0,
-                        ..Default::default()
-                    }],
-                })
-                .success,
-            "edit succeeds while editing"
-        );
-        assert!(
-            orch_link(&state).has_unpushed_edits,
-            "edit marks the project dirty"
-        );
-
-        // Done: push (200, new content) + release -> base advances, dirty cleared,
-        // read-only again.
-        let done = state.speleodb_done(None).expect("done");
-        assert!(
-            matches!(done, DoneResult::Released),
-            "a confirmed push then release should report Released, got {done:?}"
-        );
-        assert!(!state.edit_enabled(), "read-only again after Done");
-        let after = orch_link(&state);
-        assert!(
-            !after.has_unpushed_edits,
-            "dirty cleared after a confirmed push"
-        );
-        assert!(
-            after.base_commit_sha.is_some(),
-            "BASE is the adopted hexsha"
-        );
-        assert_ne!(
-            after.base_commit_sha, base_before,
-            "BASE advanced to the new commit after a 200 push"
-        );
-    }
-
-    /// Push, edit again, then Done - WITHOUT releasing the lock in between.
-    ///
-    /// The user-reported self-conflict: a second push against your own first one
-    /// raises the divergence ("merge conflict") prompt. Nobody else touched the
-    /// project, so every step here must stay on the happy path. This test pins the
-    /// BACKEND half of that, which is also what discriminates the candidate causes:
-    /// if it goes red, the fault is in the push/fence machinery; if it stays green,
-    /// the fault is in the frontend (a status poll that captured the pre-push link
-    /// row landing after the push and repainting the button `Conflict`).
-    ///
-    /// The mid-flight `speleodb_link_status` assertion is the important one: it is
-    /// exactly what the status button polls, and `speleodb_remote_state` fences BASE
-    /// against the tip with NO ancestry recovery, unlike the push path's `plan_push`.
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_push_then_edit_then_done_does_not_self_conflict() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-push-twice", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-        orch_open(&state, &id, "orch-push-twice");
-        let base_at_open = orch_link(&state).base_commit_sha;
-
-        assert!(
-            matches!(
-                state.speleodb_start_editing().expect("start_editing"),
-                StartEditingResult::Editing
-            ),
-            "clean reconcile should enable editing"
-        );
-
-        // --- first edit, then Push WITHOUT releasing (the hamburger's "Push (keep
-        // the lock)") -------------------------------------------------------------
-        orch_edit(&state, "orch-edit-1", 5.0);
-        let pushed = state.speleodb_push_only(None).expect("first push");
-        assert!(
-            matches!(pushed, PushResult::Pushed),
-            "the first push should land cleanly, got {pushed:?}"
-        );
-        assert!(
-            state.edit_enabled(),
-            "push-without-release keeps the edit session open"
-        );
-        let after_push = orch_link(&state);
-        assert!(
-            !after_push.has_unpushed_edits,
-            "a confirmed push clears the dirty bit"
-        );
-        assert_ne!(
-            after_push.base_commit_sha, base_at_open,
-            "BASE must advance to the commit the push created - leaving it behind (or \
-             wiping it to None) is what makes the NEXT push read as a divergence"
-        );
-        assert!(
-            after_push.base_commit_sha.is_some(),
-            "BASE must never be wiped to the empty-repo sentinel by a successful push"
-        );
-
-        // The BASE we now hold must be the server's real tip, resolved from the
-        // parent-id topology rather than the unreliable `latest_commit` field.
-        let (tip_after_push, _) = state
-            .speleodb_server_head(&url, &token, false, &id)
-            .expect("server head after the first push");
-        assert_eq!(
-            after_push.base_commit_sha, tip_after_push,
-            "BASE after a push must equal the topological server tip"
-        );
-
-        // --- second edit: the state the user is in when they press the button -----
-        orch_edit(&state, "orch-edit-2", 7.0);
-        assert!(
-            orch_link(&state).has_unpushed_edits,
-            "the second edit marks the project dirty again"
-        );
-
-        // What the status button polls. `Conflict` here is what flips the button red
-        // and routes the click to the divergence dialog instead of push & release.
-        let status = state.speleodb_link_status().expect("link status");
-        assert!(
-            !matches!(status.remote_state, RemoteState::Conflict),
-            "our own just-pushed commit must not read as a conflict, got {:?}",
-            status.remote_state
-        );
-
-        // --- Done: push & release, the step the user reported as conflicting ------
-        let done = state.speleodb_done(None).expect("done");
-        assert!(
-            matches!(done, DoneResult::Released),
-            "pushing again over our OWN previous push must release cleanly, not raise \
-             a divergence - got {done:?}"
-        );
-        assert!(!state.edit_enabled(), "read-only again after Done");
-        let after_done = orch_link(&state);
-        assert!(
-            !after_done.has_unpushed_edits,
-            "dirty cleared after the second confirmed push"
-        );
-        assert_ne!(
-            after_done.base_commit_sha, after_push.base_commit_sha,
-            "BASE advanced again for the second commit"
-        );
-    }
-
-    /// The self-conflict, reproduced deterministically at the layer it actually
-    /// happens in: a status poll that read the link row BEFORE a push and resolves
-    /// the server tip AFTER it.
-    ///
-    /// `speleodb_link_status` loads the link, releases the DB lock, and only then
-    /// makes its two network round trips; `run_blocking` holds no command-level
-    /// lock, so a push can land in that window. The poll then fences a BASE that is
-    /// behind the tip by exactly one commit - OUR OWN - and `speleodb_remote_state`
-    /// applies a bare `sync::fence` with none of the ancestry recovery `plan_push`
-    /// has, so it answers `Conflict`. That verdict paints the status button red and
-    /// routes the next click to the divergence dialog.
-    ///
-    /// Passing `link_before_push` here is not a contrivance: it is byte-for-byte the
-    /// snapshot the in-flight poll is holding.
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_stale_poll_snapshot_does_not_report_our_own_push_as_conflict() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-stale-poll", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-        orch_open(&state, &id, "orch-stale-poll");
-        assert!(matches!(
-            state.speleodb_start_editing().expect("start_editing"),
-            StartEditingResult::Editing
-        ));
-        orch_edit(&state, "orch-stale-edit", 5.0);
-
-        // What a poll issued a moment before the push is holding: BASE at the
-        // pre-push commit, dirty still set.
-        let link_before_push = orch_link(&state);
-        assert!(link_before_push.has_unpushed_edits);
-
-        // The push lands while that poll is still waiting on the network.
-        assert!(matches!(
-            state.speleodb_push_only(None).expect("push"),
-            PushResult::Pushed
-        ));
-
-        // Now the poll's revisions GET returns - resolving a tip that has moved on
-        // by our own commit. Nobody else has touched this project, and we are still
-        // the lock holder (push_only keeps the session editing), which is what
-        // licenses the authorship recovery.
-        let verdict =
-            state.speleodb_remote_state(&url, &token, false, &link_before_push, Some(&email));
-        assert!(
-            !matches!(verdict, RemoteState::Conflict),
-            "a tip that moved ahead of a stale BASE by OUR OWN commit must not read as \
-             a conflict - this is the self-conflict the user reported, got {verdict:?}"
-        );
-    }
-
-    /// Releasing our own write lock from the admin surface must also close the local
-    /// edit gate.
-    ///
-    /// The gate is what `guard_mutation` reads, and the status poll only ever OPENS
-    /// it, so leaving it set left the shell editable over a lock that no longer
-    /// exists - an unflagged lockless edit session. The revert flow (#8) hands a
-    /// lock back through this path, so it has to be true.
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_release_current_lock_closes_the_edit_gate() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-release-gate", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-        orch_open(&state, &id, "orch-release-gate");
-        assert!(matches!(
-            state.speleodb_start_editing().expect("start_editing"),
-            StartEditingResult::Editing
-        ));
-        assert!(state.edit_enabled(), "editing after a clean Start editing");
-
-        state
-            .speleodb_release_current_lock()
-            .expect("release our own lock");
-
-        assert!(
-            !state.edit_enabled(),
-            "releasing our own write lock must close the edit gate - otherwise the shell \
-             stays editable over a lock that is gone"
-        );
-    }
-
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_update_up_to_date_on_fresh_open() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-update-utd", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-        orch_open(&state, &id, "orch-update-utd");
-        // Freshly opened at the tip -> Update is a no-op.
-        let r = state.speleodb_update().expect("update");
-        assert!(
-            matches!(r, UpdateResult::UpToDate),
-            "a fresh open is up to date, got {r:?}"
-        );
-    }
-
-    // NOTE on fast-forward coverage: the FF *decision* (clean local + moved tip ->
-    // FastForward) is exhaustively unit-tested in `sync.rs` (fence/ancestry). Its
-    // *execution* re-pulls and reloads via `do_load_project_full`, which hard-requires
-    // a Wry `AppHandle` (progress events) that can't be built in a headless test -
-    // so a live FF orchestration test is intentionally omitted here rather than
-    // asserting a test-environment artifact.
-
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_update_diverges_when_dirty_and_tip_moved() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-diverge", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-        orch_open(&state, &id, "orch-diverge");
-        // Local un-pushed edits...
-        state.mark_remote_dirty();
-        // ...AND the tip moved underneath us -> a genuine fork, never an overwrite.
-        orch_advance_tip(&url, &token, &id, ORCH_SEED_V2);
-
-        let r = state.speleodb_update().expect("update");
-        assert!(
-            matches!(r, UpdateResult::DivergenceNeeded),
-            "dirty + moved tip must route to divergence, got {r:?}"
-        );
-        // Update never overwrites: the dirty bit is still set, awaiting resolution.
-        assert!(
-            orch_link(&state).has_unpushed_edits,
-            "divergence keeps local edits (no blind overwrite)"
-        );
-    }
-
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_open_flags_concurrent_same_account_lock() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-concurrent", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-
-        // No lock held at open -> no concurrent-session notice (#193 b8).
-        let unlocked = state
-            .speleodb_open_project(id.clone(), "orch-concurrent".to_owned(), None, None)
-            .expect("open (unlocked)");
-        assert!(
-            !unlocked.concurrent_session,
-            "no lock held -> no concurrent-session notice"
-        );
-
-        // Our OWN account now holds the lock (a second same-account session): the
-        // next open must warn, because the ancestry self-heal can't tell that
-        // session's commits from ours.
-        client::acquire_lock(&url, &token, false, &id).expect("acquire as same account");
-        let locked = state
-            .speleodb_open_project(id.clone(), "orch-concurrent".to_owned(), None, None)
-            .expect("reopen (same-account lock held)");
-        assert!(
-            locked.concurrent_session,
-            "a same-account lock-hold at open must raise the notice"
-        );
-        client::release_lock(&url, &token, false, &id).expect("release");
-    }
-
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_start_editing_diverges_on_unreconcilable_base() {
-        // The dev server's history is structurally linear, so it can't produce a
-        // merge / multi-root. A BASE that is not an ancestor of the tip drives the
-        // SAME "can't reconcile -> divergence" routing (#193 b2): Start editing must
-        // surface the divergence PROMPT (never a hard error) and release the lock it
-        // just took, not strand it.
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-se-diverge", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-        orch_open(&state, &id, "orch-se-diverge");
-        // Forge an un-reconcilable BASE: a real-shaped SHA absent from history, so
-        // base_is_ancestor_of_tip() is false and the verdict is Diverged.
-        state
-            .speleodb_mutate_link(|l| l.base_commit_sha = Some("0".repeat(40)))
-            .expect("forge stale base");
-
-        let r = state.speleodb_start_editing().expect("start_editing");
-        assert!(
-            matches!(r, StartEditingResult::DivergenceNeeded),
-            "an unreconcilable base must route to the divergence prompt, got {r:?}"
-        );
-        assert!(!state.edit_enabled(), "divergence must not enable editing");
-        // The lock taken during Start editing must be released on divergence.
-        let holder = client::get_project(&url, &token, false, &id)
-            .ok()
-            .and_then(|p| p.active_mutex.map(|m| m.user));
-        assert!(
-            holder.is_none(),
-            "the freshly-taken lock must be released on divergence, still held by {holder:?}"
-        );
-    }
-
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_pushed_snapshot_carries_the_undo_history_since_the_last_commit() {
-        // [#303] The end-to-end shape of the hybrid stack, against the real server. This
-        // test used to assert the OPPOSITE (`..._carries_no_undo_history`, #194 b3) and
-        // is inverted deliberately - three assertions, all of which flipped:
-        //
-        // 1. the pushed snapshot DOES carry the undo history (Full mode is the default),
-        //    which is what gives undo cross-commit reach;
-        // 2. it carries NO redo, in any mode (clarification #1); and
-        // 3. the LOCAL stack is EMPTY after the push (clear-on-push, q8): those
-        //    operations are in the commit now, so keeping them would duplicate them in
-        //    the next one.
-        //
-        // The #194 b3 hazard the first assertion relaxes is contained elsewhere now: a
-        // pulled stack is cleared on every implicit adopt path, and is only handed back
-        // through the explicit, confirmed, lock-held Unwind.
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-undo", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-        orch_open(&state, &id, "orch-undo");
-        let live_path = state
-            .project
-            .lock()
-            .expect("project lock")
-            .as_ref()
-            .and_then(|p| p.file_path.clone())
-            .expect("open project has a file path");
-
-        state.speleodb_start_editing().expect("start_editing");
-        assert!(
-            state
-                .execute(Command::CreateSection {
-                    name: Some("undo-edit".to_owned()),
-                    surveyor: None,
-                    date: None,
-                    color: "#abcdef".to_owned(),
-                    direction: None,
-                    shots: vec![ShotData {
-                        length: 5.0,
-                        ..Default::default()
-                    }],
-                })
-                .success,
-            "edit succeeds while editing"
-        );
-        state.speleodb_done(None).expect("done");
-
-        // [#303] Clear-on-push, in memory: the operation that push carried is gone, so
-        // the next commit cannot duplicate it.
-        assert_eq!(
-            state.undo_stack.lock().expect("undo stack lock").len(),
-            0,
-            "a confirmed push clears the undo entries it uploaded (q8)"
-        );
-
-        // Re-download the SERVER's copy and read what the commit actually stored.
-        let server = state
-            .speleodb_open_project(id.clone(), "orch-undo".to_owned(), None, None)
-            .expect("re-download server copy");
-        let server_db =
-            Database::open_existing(Path::new(&server.local_path)).expect("open server copy");
-        assert!(
-            !server_db
-                .load_undo_stack_with_timestamps()
-                .expect("load server undo")
-                .is_empty(),
-            "Full mode must ship the undo history since the last commit (#303) - this is \
-             what lets a later Unwind fetch it back and keep undoing past the commit"
-        );
-        assert!(
-            server_db
-                .load_redo_stack_with_timestamps()
-                .expect("load server redo")
-                .is_empty(),
-            "redo is never uploaded, in any mode (clarification #1)"
-        );
-
-        // And the second push carries ONLY the second edit - the point of the whole
-        // exercise (no duplication across commits). Re-acquire, edit, Done again.
-        state
-            .speleodb_start_editing()
-            .expect("start_editing for the second push");
-        assert!(
-            state
-                .execute(Command::CreateSection {
-                    name: Some("undo-edit-2".to_owned()),
-                    surveyor: None,
-                    date: None,
-                    color: "#123456".to_owned(),
-                    direction: None,
-                    shots: vec![ShotData {
-                        length: 7.0,
-                        ..Default::default()
-                    }],
-                })
-                .success,
-            "second edit succeeds while editing"
-        );
-        state.speleodb_done(None).expect("second done");
-
-        let server2 = state
-            .speleodb_open_project(id.clone(), "orch-undo".to_owned(), None, None)
-            .expect("re-download after the second push");
-        let commit2 = Database::open_existing(Path::new(&server2.local_path))
-            .expect("open second server copy")
-            .load_undo_stack_with_timestamps()
-            .expect("load second server undo");
-        assert_eq!(
-            commit2.len(),
-            1,
-            "commit 2 must carry ONLY the operations made after commit 1, not the whole \
-             session again - got {commit2:?}"
-        );
-        assert!(
-            commit2
-                .iter()
-                .all(|(_, command_json, ..)| command_json.contains("undo-edit-2")),
-            "and specifically the SECOND edit, not the first: {commit2:?}"
-        );
-
-        // `live_path` is the same cache file throughout; naming it keeps the re-download
-        // assertions above honestly about the SERVER's copy rather than this one.
-        assert!(live_path.exists(), "the local cache file is still there");
-    }
-
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored --test-threads=1)"]
-    fn live_orch_start_editing_reports_locked_by_other_account() {
-        // #194 b5: a contended acquire (HTTP 400 - lock held by someone else) maps
-        // to StartEditingResult::LockedBy{email}, surfacing WHO holds it, not an
-        // error. Needs the second collaborator account.
-        let (Some((url, owner_email, owner_pw)), Some((email2, pw2))) = (orch_env(), orch_env2())
-        else {
-            return;
-        };
-        let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
-        let id = orch_seed(&url, &owner, "orch-lockedby", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: owner.clone(),
-            id: id.clone(),
-        };
-        client::grant_permission(&url, &owner, &id, &email2, "READ_AND_WRITE")
-            .expect("grant collaborator write access");
-
-        // The owner opens the project read-only...
-        let state = orch_state(&url, &owner_email, &owner);
-        orch_open(&state, &id, "orch-lockedby");
-
-        // ...meanwhile the OTHER account takes the lock.
-        let collab = client::login(&url, false, &email2, &pw2).expect("collaborator login");
-        client::acquire_lock(&url, &collab, false, &id).expect("collaborator acquires the mutex");
-
-        // The owner's Start editing now contends -> LockedBy{the collaborator}.
-        let r = state.speleodb_start_editing().expect("start_editing");
-        assert!(
-            matches!(&r, StartEditingResult::LockedBy { email } if email.as_deref() == Some(email2.as_str())),
-            "expected LockedBy{{{email2}}}, got {r:?}"
-        );
-        assert!(
-            !state.edit_enabled(),
-            "a contended Start editing must not enable editing"
-        );
-
-        // Release the collaborator's lock so cleanup's delete isn't fighting it.
-        let _ = client::release_lock(&url, &collab, false, &id);
-    }
-
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_pushed_dump_is_self_contained_without_sidecars() {
-        // #195 end-to-end against the real server: after a Done push, the dump the
-        // server STORED must be exactly the VACUUM snapshot - one self-contained
-        // `.stalx` (opens via open_existing with the pushed edit) co-pushed with the
-        // `ariane.tml`, and NO `-wal`/`-journal`/`-shm` sidecar ever rode along
-        // (bullets 1/2/3). The cache `.stalx` is default DELETE journal mode, so this
-        // also exercises the push pipeline under DELETE (bullet 4 DELETE); the WAL
-        // case is a client-local vacuum concern covered by vacuum_snapshot_under_wal_mode.
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-dump", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-        orch_open(&state, &id, "orch-dump");
-        state.speleodb_start_editing().expect("start_editing");
-        assert!(
-            state
-                .execute(Command::CreateSection {
-                    name: Some("dump-edit".to_owned()),
-                    surveyor: None,
-                    date: None,
-                    color: "#abcdef".to_owned(),
-                    direction: None,
-                    shots: vec![ShotData {
-                        length: 5.0,
-                        ..Default::default()
-                    }],
-                })
-                .success,
-            "edit succeeds while editing"
-        );
-        state.speleodb_done(None).expect("done");
-
-        // Inspect the archive the server now holds.
-        let zip = client::download_dump(&url, &token, false, &id).expect("download dump");
-        let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open server dump");
-        let entries = dump.entry_paths().expect("dump entry paths");
-
-        // (3) no SQLite journal sidecar ever left the client.
-        for entry in &entries {
-            for suffix in ["-wal", "-journal", "-shm"] {
-                assert!(
-                    !entry.ends_with(suffix),
-                    "no sqlite sidecar may ride to the server: {entry} in {entries:?}"
-                );
-            }
-        }
-        // Exactly one `.stalx` (the snapshot) - never the ambiguous multi-.stalx shape.
-        let stalx_count = entries.iter().filter(|e| e.ends_with(".stalx")).count();
-        assert_eq!(
-            stalx_count, 1,
-            "the server dump must hold exactly one .stalx, got {entries:?}"
-        );
-        // (#196 b2/b3/b5) the .tml is co-pushed, lands as `ariane.tml`, and is the
-        // ONLY .tml - no Ariane-collab sibling rode along.
-        assert!(
-            entries.iter().any(|e| e.ends_with("ariane.tml")),
-            "the render must be co-pushed as ariane.tml, got {entries:?}"
-        );
-        let tml_count = entries.iter().filter(|e| e.ends_with(".tml")).count();
-        assert_eq!(
-            tml_count, 1,
-            "exactly one .tml (ariane.tml) - no collab sibling rode along, got {entries:?}"
-        );
-
-        // (1/2) it extracts + opens as a SELF-CONTAINED DB carrying the pushed edit.
-        let entry = classify_dump_entry(&entries).expect("classify the dump");
-        let temp = TempDir::new().expect("temp dir");
-        let out = temp.path().join("server_snap.stalx");
-        dump.extract_entry_to(&entry, &out).expect("extract .stalx");
-        for suffix in ["-wal", "-journal", "-shm"] {
-            let sidecar = PathBuf::from(format!("{}{suffix}", out.to_string_lossy()));
-            assert!(
-                !sidecar.exists(),
-                "the extracted snapshot must be self-contained: {sidecar:?} must not exist"
-            );
-        }
-        let server_db =
-            Database::open_existing(&out).expect("server snapshot opens self-contained");
-        let project = server_db
-            .load_project()
-            .expect("load project from server snapshot");
-        assert!(
-            project
-                .sections
-                .iter()
-                .any(|s| s.name.as_deref() == Some("dump-edit")),
-            "the pushed edit must be present in the server's self-contained snapshot"
-        );
-    }
-
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_pushed_tml_byte_stable_vs_rerender() {
-        // #196 b4 end-to-end: the ariane.tml the server STORED must be byte-identical
-        // to a fresh local re-render of the same (UUID-minted) project. The render is
-        // deterministic - the one-time shot-UUID pass ran on push - so re-pushing
-        // unchanged content never churns the .tml. (The offline byte-stability test
-        // proves the render is deterministic; this proves the bytes the server holds
-        // are exactly that deterministic render, intact through the round-trip.)
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-tmlstable", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-        orch_open(&state, &id, "orch-tmlstable");
-        state.speleodb_start_editing().expect("start_editing");
-        assert!(
-            state
-                .execute(Command::CreateSection {
-                    name: Some("tml-edit".to_owned()),
-                    surveyor: None,
-                    date: None,
-                    color: "#abcdef".to_owned(),
-                    direction: None,
-                    shots: vec![ShotData {
-                        length: 5.0,
-                        ..Default::default()
-                    }],
-                })
-                .success,
-            "edit succeeds while editing"
-        );
-        state.speleodb_done(None).expect("done");
-
-        // Pull the ariane.tml the server now holds.
-        let zip = client::download_dump(&url, &token, false, &id).expect("download dump");
-        let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open server dump");
-        let entries = dump.entry_paths().expect("dump entry paths");
-        let tml_entry = entries
-            .iter()
-            .find(|e| e.ends_with("ariane.tml"))
-            .expect("ariane.tml present in the dump");
-        let temp = TempDir::new().expect("temp dir");
-        let server_tml = temp.path().join("server.tml");
-        dump.extract_entry_to(tml_entry, &server_tml)
-            .expect("extract server ariane.tml");
-
-        // Re-render the same in-memory project (UUIDs were minted + persisted on push).
-        let project = state
-            .project
-            .lock()
-            .expect("project lock")
-            .as_ref()
-            .expect("open project")
-            .clone();
-        let rerender = temp.path().join("rerender.tml");
-        crate::export::tml::export_tml_for_speleodb(&project, &rerender).expect("re-render .tml");
-
-        assert_eq!(
-            std::fs::read(&server_tml).expect("read server ariane.tml"),
-            std::fs::read(&rerender).expect("read re-rendered .tml"),
-            "the stored ariane.tml must be byte-identical to a fresh re-render (#196 b4)"
-        );
-    }
-
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_done_without_edits_skips_push_and_releases() {
-        // #197 b1: a non-dirty Done must push NOTHING (the dirty-bit gate skips the
-        // upload) yet still release the lock back to read-only - no empty commit.
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-noedit", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-        orch_open(&state, &id, "orch-noedit");
-        let started = state.speleodb_start_editing().expect("start_editing");
-        assert!(
-            matches!(started, StartEditingResult::Editing),
-            "clean reconcile should enable editing, got {started:?}"
-        );
-        assert!(
-            !orch_link(&state).has_unpushed_edits,
-            "no edits made yet → the session is not dirty"
-        );
-        let base_before = orch_link(&state).base_commit_sha;
-
-        // Commit count BEFORE the no-op Done.
-        let (_, before) = state
-            .speleodb_server_head(&url, &token, false, &id)
-            .expect("revisions before Done");
-
-        let done = state.speleodb_done(None).expect("done");
-        assert!(
-            matches!(done, DoneResult::Released),
-            "a non-dirty Done releases (push skipped), got {done:?}"
-        );
-        assert!(!state.edit_enabled(), "read-only again after Done");
-        assert_eq!(
-            orch_link(&state).base_commit_sha,
-            base_before,
-            "a skipped push must not advance BASE"
-        );
-
-        // No commit was pushed.
-        let (_, after) = state
-            .speleodb_server_head(&url, &token, false, &id)
-            .expect("revisions after Done");
-        assert_eq!(
-            before.len(),
-            after.len(),
-            "a non-dirty Done must push no commit (got {} -> {})",
-            before.len(),
-            after.len()
-        );
-    }
-
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_ambiguous_upload_preserves_dirty_bit() {
-        // #197 b5: an ambiguous push (transport drop / exhausted 5xx - we never learn
-        // whether it landed) must NOT clear the dirty bit or advance BASE; the
-        // un-pushed edits survive for ancestry recovery (g7) on the next Done. Forced
-        // by pointing the UPLOAD at a dead port (connection refused -> Transport ->
-        // StayDirty) while reusing a live-opened project for the real flush/snapshot.
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
-        let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-ambig", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: token.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &email, &token);
-        orch_open(&state, &id, "orch-ambig");
-
-        // Make the session dirty (simulate an un-pushed edit): mark_remote_dirty stamps
-        // the bit + last_edit_at together, exactly as a real edit would.
-        state
-            .speleodb_mutate_link(|l| {
-                l.has_unpushed_edits = true;
-                l.last_edit_at = Some("2020-01-01T00:00:00+00:00".to_owned());
-            })
-            .expect("mark dirty");
-        let link = orch_link(&state);
-        let base_before = link.base_commit_sha.clone();
-        assert!(
-            link.has_unpushed_edits,
-            "precondition: the session is dirty"
-        );
-
-        // Upload to a dead endpoint -> transport failure -> ambiguous outcome.
-        // (fold_metadata=false keeps the test on the upload path, not the #216 GET.)
-        let outcome = state
-            .speleodb_upload("http://127.0.0.1:1/", &token, false, &link, None, false)
-            .expect("an ambiguous upload returns an outcome, not a hard error");
-        assert!(
-            matches!(outcome, PushOutcome::Unconfirmed),
-            "an ambiguous push must report Unconfirmed, got {outcome:?}"
-        );
-
-        // The dirty bit + BASE survive untouched, so the edits aren't dropped.
-        let after = orch_link(&state);
-        assert!(
-            after.has_unpushed_edits,
-            "an ambiguous push must leave the file dirty (#197 b5)"
-        );
-        assert_eq!(
-            after.base_commit_sha, base_before,
-            "an ambiguous push must not advance BASE (#197 b5)"
-        );
-    }
-
-    #[test]
-    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored --test-threads=1)"]
-    fn live_orch_admin_collaborators_teams_and_delete_unlink() {
-        // [#215] The Project Settings admin surface end-to-end against the live box:
-        // add/change/remove a collaborator (asserting the roster + is_self mapping),
-        // add/remove a team (asserting the UUID -> display-name resolution), and
-        // delete-the-project (asserting the backend unlinks locally). The offline
-        // LoopbackStub can't reproduce a real project pull, so this is a live test,
-        // like the rest of the orchestration suite. Needs the second account as the
-        // collaborator target (the server rejects granting a non-existent user).
-        use crate::speleodb::Permission;
-        let (Some((url, owner_email, owner_pw)), Some((email2, _pw2))) = (orch_env(), orch_env2())
-        else {
-            return;
-        };
-        let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
-        let id = orch_seed(&url, &owner, "orch-admin", ORCH_SEED);
-        let _cleanup = OrchCleanup {
-            url: url.clone(),
-            token: owner.clone(),
-            id: id.clone(),
-        };
-
-        let state = orch_state(&url, &owner_email, &owner);
-        orch_open(&state, &id, "orch-admin");
-
-        // Grant the collaborator READ_ONLY; the returned roster is server truth.
-        let roster = state
-            .speleodb_add_collaborator(email2.clone(), Permission::ReadOnly)
-            .expect("add collaborator");
-        let added = roster
-            .users
-            .iter()
-            .find(|u| u.email.eq_ignore_ascii_case(&email2))
-            .expect("the new collaborator appears in the roster");
-        assert_eq!(added.permission, Permission::ReadOnly);
-        assert!(!added.is_self, "the collaborator is not the signed-in user");
-        // The owner's own row is flagged is_self (case-folded email match).
-        let me = roster
-            .users
-            .iter()
-            .find(|u| u.email.eq_ignore_ascii_case(&owner_email))
-            .expect("the owner appears in the roster");
-        assert!(me.is_self, "the owner's row is flagged is_self");
-
-        // Change the level: PUT reflects in the refreshed roster.
-        let roster = state
-            .speleodb_set_collaborator(email2.clone(), Permission::ReadAndWrite)
-            .expect("change collaborator level");
-        assert_eq!(
-            roster
-                .users
-                .iter()
-                .find(|u| u.email.eq_ignore_ascii_case(&email2))
-                .expect("collaborator still present")
-                .permission,
-            Permission::ReadAndWrite,
-        );
-
-        // Teams are optional (the owner may belong to none); when present, the
-        // UUID -> name resolution must produce the picker's display name.
-        if let Some(team) = state.speleodb_list_teams().expect("list teams").first() {
-            let roster = state
-                .speleodb_add_team(team.id.clone(), Permission::ReadOnly)
-                .expect("add team");
-            let grant = roster
-                .teams
-                .iter()
-                .find(|g| g.team_id == team.id)
-                .expect("the granted team appears in the roster");
-            assert_eq!(
-                grant.team_name, team.name,
-                "the team UUID resolves to its display name, not the raw id"
-            );
-            let roster = state
-                .speleodb_remove_team(team.id.clone())
-                .expect("remove team");
-            assert!(
-                !roster.teams.iter().any(|g| g.team_id == team.id),
-                "the team grant is gone after remove"
-            );
-        }
-
-        // Remove the collaborator: the row is gone from the refreshed roster.
-        let roster = state
-            .speleodb_remove_collaborator(email2.clone())
-            .expect("remove collaborator");
-        assert!(
-            !roster
-                .users
-                .iter()
-                .any(|u| u.email.eq_ignore_ascii_case(&email2)),
-            "the collaborator is gone after remove"
-        );
-
-        // Delete the project. The open project is still read-only (we never started
-        // editing), so this also proves the unlink REOPENS the local edit gate.
-        assert!(!state.edit_enabled(), "precondition: opened read-only");
-        state
-            .speleodb_delete_project()
-            .expect("delete + local unlink");
-        let link_after = state
-            .database
-            .lock()
-            .expect("db lock")
-            .as_ref()
-            .expect("db still open")
-            .load_speleo_link()
-            .expect("load link");
-        assert!(
-            link_after.is_none(),
-            "delete unlinks the project locally (no persisted speleo_link)"
-        );
-        assert!(
-            state.edit_enabled(),
-            "unlink reopens the local edit gate (now a plain local project)"
-        );
     }
 }

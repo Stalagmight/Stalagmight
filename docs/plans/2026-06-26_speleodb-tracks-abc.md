@@ -2,7 +2,7 @@
 
 ## Summary & status
 
-This plan turns the merged read-only SpeleoDB spike (#183) into the full single-writer hand-off backend across **three parallel tracks**: **Track A** (transport/contract - #185 production `ureq` client + multipart upload/auto + retry/backoff, #186 status→action contract, #187 `http://` TLS/private-network policy); **Track B** (persistence/edit-state - #189 `speleo_link` table + `SCHEMA_VERSION` 8→9 + stamp-on-pull, #190 carry-forward fence, #191 read-only edit gate + dirty bit + `execute()` chokepoint refactor); and **Track C** (auth - #188 keyring-rs v3 lifecycle + token fallback tiers + `SecretStore` trait + startup rehydration + 401 auto-drop + guardrail 6, plus the config-shaped slice of #187: persisted `insecure_http`). The data model is: the per-project `.stalx` (sqlite) is canonical; the derived `ariane.tml` rides along only for the server's web-render. **None of the three tracks needs the #184 render gate.** Only **#183 is landed** (it shipped `src-tauri/src/speleodb/{mod,client,auth,dump,models}.rs`, `core/state/speleodb.rs` with `SpeleoDbSession` on `AppState`, `commands/speleodb.rs`, config bits, the telemetry registry with `EVENT_NAMES` pinned at **418**, and a temporary `SpeleoDbSpikeDialog.tsx`). Everything below is unbuilt work.
+This plan turns the merged read-only SpeleoDB spike (#183) into the full single-writer hand-off backend across **three parallel tracks**: **Track A** (transport/contract - #185 production `ureq` client + multipart upload/auto + retry/backoff, #186 status→action contract, #187 `http://` TLS/private-network policy); **Track B** (persistence/edit-state - #189 `speleo_link` table + `SCHEMA_VERSION` 8→9 + stamp-on-pull, #190 carry-forward fence, #191 read-only edit gate + dirty bit + `execute()` chokepoint refactor); and **Track C** (the retired authentication design; see [Configuration](../configuration.md) for its replacement). The data model is: the per-project `.stalx` (sqlite) is canonical; the derived `ariane.tml` rides along only for the server's web-render. **None of the three tracks needs the #184 render gate.** Only **#183 is landed** (it shipped `src-tauri/src/speleodb/{mod,client,auth,dump,models}.rs`, `core/state/speleodb.rs` with `SpeleoDbSession` on `AppState`, `commands/speleodb.rs`, config bits, the telemetry registry with `EVENT_NAMES` pinned at **418**, and a temporary `SpeleoDbSpikeDialog.tsx`). Everything below is unbuilt work.
 
 ---
 
@@ -27,7 +27,6 @@ Every `D-*` decision is the authority for resolving any cross-section conflict. 
 | **D-B14** | `is_remote` | DERIVED from `EXISTS(SELECT 1 FROM speleo_link)`; a `ProjectMetadata` field probed like `collab_enabled` (read.rs:145), NOT a stored column; tolerant of missing table on read-only open (`.ok().unwrap_or(false)`). |
 | **D-B15** | HTTP test seam | PURE-FN SEAMS + NARROW LOOPBACK `TcpListener` STUB - extract `map_status`, the `UploadParts` descriptor, the IP-classifier as pure fns; tiny loopback stub only for retry-count/backoff + multipart name/MIME; doubles as #187 127.0.0.1 fixture; NO httpmock/wiremock, NO custom ureq Transport. |
 | **D-B16** | Test posture | INVARIANT-AS-UNIT / BEHAVIOR-AS-LIVE - every load-bearing invariant is an always-run CI unit via seams; live `#[ignore]` proves wire reality; `edit_enabled` TRANSIENT/DEFAULT-TRUE/never-persisted; dirty bit flips on SUCCESS in the undo-push epilogue, idempotent, set-only; Save/Open/Close/Create/MergeProjects pass through; gate is a no-op for local-only. |
-| **D-B17** | Keychain testability | INTRODUCE `SecretStore` trait + in-memory fake + tempdir; CI-tests tier precedence, 0600, delete-on-401/logout, rehydration, never-override-keychain (guardrail 6); `from_in_memory_token` shows the codebase favors this seam. |
 | **D-B18** | Plaintext perms | UNIX `0o600` at create; Windows relies on per-user profile-dir ACL (documented gap); plaintext is primarily a Linux-headless escape hatch; no new platform dep. |
 | **D-B19** | Endpoint scheme | REQUIRE EXPLICIT http/https; https unconditional; http runs the #187 IP policy; missing/unknown scheme rejected with a clear error; never silently rewrite. |
 | **D-A-retry** | Retry defaults | `MAX_RETRIES=2`, `RETRY_DELAYS=[200ms,500ms]` (existing); reads add idempotent-5xx retry per D-B3; writes stay `idempotent=false` (run once). |
@@ -36,7 +35,6 @@ Every `D-*` decision is the authority for resolving any cross-section conflict. 
 | **D-A-methods** | Methods | promote `acquire_lock`/`release_lock`/`upload_auto`/`create_project` to production (each returns the parsed `Project`); keep `delete_project`/`grant_permission` `#[cfg(test)]`; add `get_project`; `#[serde(default)] exclude_geojson: bool` on `Project`; reject blank commit message at the prod boundary; dedicated `UPLOAD_TIMEOUT` (~120s); do NOT build the blob path; per-endpoint telemetry OUT (#210); `EVENT_NAMES` stays 418. |
 | **D-186** | Status→action | one pure `map_status(endpoint, status) -> SpeleoDbAction`, per-row unit tests; unmapped FAILS CLOSED; 422 distinct fatal row; upload-200 → adopt-hexsha + CONDITIONAL clear-dirty (hand off to #191); `parse_error_message` stays DISPLAY-only; NO first-class 423/409/412/429 rows; new `SpeleoDbError::InsecureEndpoint{endpoint}`; extend the display-string-stability test. |
 | **D-187** | TLS policy | block http unless EVERY resolved addr is loopback/private/link-local; empty/all-filtered fails closed; IPv4 127/8,10/8,172.16/12,192.168/16,169.254/16; IPv6 ::1,fc00::/7,fe80::/10; IPv4-mapped stripped; localhost/*.localhost→loopback; TOCTOU/DNS-rebinding ACCEPTED not mitigated; enforce every-request via `tls.rs::enforce` at the top of `with_retry`; https short-circuits before resolve; reuse ureq `DefaultResolver::resolve`, fall back to `ToSocketAddrs`; `insecure_http` bypasses ONLY the public-http block. |
-| **D-188** | Auth lifecycle | `token_fallback` 2-value `{SessionOnly default, Plaintext}`, `#[serde(other)]→SessionOnly`; lazy silent rehydration on first authed call (no prompt/network); 401-drop = full `clear()` gated to GENUINE 401; centralized session-level handler fed by #186 enum; two-gate plaintext (Plaintext AND keychain-failed-this-session); keychain-first read + self-heal delete of plaintext; single active account; per-(endpoint,email) account key; URL-parse endpoint normalization. |
 | **D-T-tiers** | Two-tier convention | always-run pure-fn/unit (inline `#[cfg(test)]`) + env-gated `#[ignore]` live in `speleodb/mod.rs::live_tests`; CI bar = `cargo test --features telemetry` + `TELEMETRY_ENDPOINT`; live never runs in CI. |
 | **D-T-live** | Live facts | bad-creds→400; missing-header→403 vs dead-token→401; acquire-contended→400 vs no-perm→403; upload-200 hexsha+project; upload-304 unchanged; WEB_VIEWER download→403; READ_ONLY label parses; lock_holder=other-user email; `.stalx` round-trips through AUTO; permission FIELD ABSENT (not null) when no access; each fact gets a mocked/seam twin. |
 | **D-T-unit** | Always-run units | #186 rows; #187 `classify_addr` over pinned literals + localhost branch; #185 multipart name/MIME + bare-`.file()`-impossible; #190 4-cell + HEAD guard; #188 precedence + 0600 + delete-on-401/logout + rehydration; #191 rejection + dirty-bit flip; retry/backoff pure unit + idempotent gating + loopback transient-then-success + write-once. |
@@ -49,7 +47,7 @@ Every `D-*` decision is the authority for resolving any cross-section conflict. 
 | **OPEN-3** | Integrity banner vs Repair | CONFIRM the banner does not hard-require Repair to dismiss before gating Repair (D-B5). **(Resolved by code-read: non-blocking banner is dismissable; blocking banner is not - see Track B.)** |
 | **OPEN-4** | `registry.ts` message | CORRECT the misleading `telemetry-worker/src/registry.ts` test message when `registry.rs` is touched. |
 
-> **Confirmed facts (from code):** `SCHEMA_VERSION = 8` (`persistence/sqlite.rs:30`). `with_retry` retries ONLY transport `Err`s; `http_status_as_error(false)` makes HTTP 500 a normal `Response`, so today NOTHING retries a 5xx. Writes run exactly-once (`idempotent=false ⇒ max_retries=0`, `client.rs:61`). `EVENT_NAMES.len() == 418` (`registry.rs:560`). `ureq = "=3.1.4"` + `multipart` (`Cargo.toml:61`). Production client methods: `login`, `list_projects`, `download_dump`; `#[cfg(test)]`-only: `upload_auto_single`, `acquire_lock`, `release_lock`, `create_project` (+ `delete_project`, `grant_permission`). `auth.rs` `TokenStore` has `save`/`load`; `load()` IS called (`speleodb.rs:81`) but never reads the keychain across restarts (`keychain_backed` defaults false on a cold session, so a keychain-stored token is written but never re-read). `models.rs` `Permission` is a STRING label, ABSENT (not null) when no access, enum ordered for `>=` checks. The per-project `.stalx` is the ONLY app sqlite store (+ unrelated `tile_cache.db`); NO global app DB. `collab_state` is the DDL/upsert/clear/load quartet to mirror; `read.rs:145` `collab_enabled` `json_extract` is the probe pattern to mirror for `is_remote`.
+> **Confirmed facts (from code):** `SCHEMA_VERSION = 8` (`persistence/sqlite.rs:30`). `with_retry` retries ONLY transport `Err`s; `http_status_as_error(false)` makes HTTP 500 a normal `Response`, so today NOTHING retries a 5xx. Writes run exactly-once (`idempotent=false ⇒ max_retries=0`, `client.rs:61`). `EVENT_NAMES.len() == 418` (`registry.rs:560`). `ureq = "=3.1.4"` + `multipart` (`Cargo.toml:61`). Production client methods: `login`, `list_projects`, `download_dump`; `#[cfg(test)]`-only: `upload_auto_single`, `acquire_lock`, `release_lock`, `create_project` (+ `delete_project`, `grant_permission`). `models.rs` `Permission` is a STRING label, ABSENT (not null) when no access, enum ordered for `>=` checks. The per-project `.stalx` is the ONLY app sqlite store (+ unrelated `tile_cache.db`); NO global app DB. `collab_state` is the DDL/upsert/clear/load quartet to mirror; `read.rs:145` `collab_enabled` `json_extract` is the probe pattern to mirror for `is_remote`.
 
 ---
 
@@ -69,7 +67,6 @@ Track A: #187 tls ─┐                         Track B: #189 ─→ #190 ─�
 
 - **Track A:** `#187 tls.rs` + `#186 contract.rs` land first (parallel, both pure additions; #186 adds the `InsecureEndpoint` variant #187 surfaces - pin the merge so #187 can reference it) → `#185 client.rs` (consumes both: `with_retry` calls `tls::enforce`, the 5xx-retry read-side of D-B3 pairs with #186's `map_status` write-side) → **D-B2 IPC rework** last (reshapes `run_blocking` into the typed `SpeleoErrorDto`, regen ts-rs).
 - **Track B:** `#189` (table + quartet + `is_remote` + stamp-on-pull + a populated fixture) → `#190` (fence tests over the #189 schema - nothing to fence until the columns exist; its HEAD-guard must include the `speleo_link` columns) → `#191` (needs `is_remote` to scope the gate and `has_unpushed_edits` to flip; needs #190 green so the dirty bit survives the next bump). `#191` splits into **191-B6** (mechanical chokepoint re-routing, no behavior change) then **191-A** (gate + dirty-bit logic).
-- **Track C:** strict chain `C1` (`SecretStore` trait + impls) → `C2` (`TokenStore` onto `SecretStore`, keychain-first + self-heal + 0600) → `C3` (config `insecure_http` + `token_fallback`, can land in parallel) → `C4` (lazy rehydration wiring `load()`) → `C5` (401 auto-drop, **the gated step**) → `C6` (two-gate plaintext write).
 
 ### Cross-track seams (the load-bearing integration points)
 
@@ -621,252 +618,11 @@ Precondition: `DEV_SPELEODB_URL` + a verified account; dev build (`./scripts/dev
 
 ---
 
-# Track C - Auth (#188): keyring-rs v3 + token fallback tiers + `SecretStore` trait + startup rehydration + 401 auto-drop + guardrail 6 + persisted `insecure_http`
+# Track C - Auth (retired design)
 
-## C.1 Overview & internal build order
-
-Track C hardens the spike's write-only token store (`src-tauri/src/speleodb/auth.rs`) into a real auth lifecycle. Today the store has the right *shape* but three holes the ledger closes: (a) `TokenStore::load` is **never called on startup** (`auth.rs:9-14`, `:117-125` - the keychain branch only fires if `keychain_backed` was already set *this session*, so a keychain token is written but never read back across restarts); (b) no plaintext fallback for headless Linux; (c) no 401 auto-drop (`speleodb.rs:88-91` documents the gap: *"a token revoked server-side is only caught on the next real call; 401 auto-drop is #188"*).
-
-This track has **one issue, #188**, plus the config-shaped slice of **#187** (`insecure_http`, D-B10/D-B19). Strict internal chain:
-
-```
-C1  SecretStore trait + KeyringStore + InMemoryStore + PlaintextStore (D-B17/D-B18)
-      ▼
-C2  TokenStore refactored onto SecretStore; keychain-first read + plaintext self-heal + 0600 (D-188 precedence)
-      ▼
-C3  Config: SpeleoDbConfig.insecure_http + token_fallback (TokenFallback enum) + ts-rs typegen (D-B10/D-188)
-      ▼   (independent of C1/C2 - can land in parallel, but C4 needs it)
-C4  Startup rehydration: wire load() lazily on first authed call (seed endpoint+email from config, silent, no network) (D-188)
-      ▼
-C5  401 auto-drop handler: one session-level handler fed by #186 SpeleoDbAction::ReLogin → full clear() (D-188/D-B4)
-      ▼   ◀── consumes Track A #186 map_status / SpeleoDbAction (a hard cross-track dep)
-C6  Two-gate plaintext opt-in write (token_fallback==Plaintext AND keychain-failed-this-session) (D-188)
-```
-
-**Dependency edges out of this track:** C5 **depends on Track A #186**. C1-C4 and C6 have **no** cross-track dependency. The handler is written so that, pre-#186, it keys off the bare `SpeleoDbError::Status { status: 401, .. }` and is re-pointed at `SpeleoDbAction::ReLogin` when #186 lands (a one-line swap). C3's `insecure_http` is **consumed by Track A #187** (`tls.rs::enforce`); Track C *adds and persists* it.
-
-> NOTE: "keyring-rs v3" is **already satisfied** - `auth.rs` uses `keyring::Entry::new`, `set_password`, `get_password`, `delete_credential`, and matches `keyring::Error::NoEntry` (`auth.rs:26-47`), the v3 surface. #188 is the *lifecycle* work, not a crate bump; no `Cargo.toml` change required for keyring.
-
-## C.2 Per-issue implementation steps
-
-### C1 - `SecretStore` trait + three implementations (D-B17, D-B18)
-
-**File: `src-tauri/src/speleodb/auth.rs`** - new trait + impls (replaces the free fns `keychain_store`/`_load`/`_delete` at `auth.rs:30-47`).
-
-1. Backend-agnostic trait operating on the existing `account_key(endpoint, email)` string (`auth.rs:21-24`, kept verbatim; covered by `account_key_normalizes_endpoint` at `:156-167`):
-   ```rust
-   pub(crate) trait SecretStore: Send + Sync {
-       fn kind(&self) -> &'static str;                       // "keychain" | "plaintext" | "memory"
-       fn store(&self, account_key: &str, token: &str) -> Result<(), SecretStoreError>;
-       fn load(&self, account_key: &str) -> Result<Option<String>, SecretStoreError>;
-       fn delete(&self, account_key: &str) -> Result<(), SecretStoreError>;
-   }
-   ```
-
-2. Error newtype unifying `keyring::Error` and `io::Error` behind the trait:
-   ```rust
-   #[derive(Debug, thiserror::Error)]
-   #[error("secret store error: {0}")]
-   pub(crate) struct SecretStoreError(String);
-   ```
-   `From` for both; **never** include the token (mirrors the redacted `Debug` at `auth.rs:65-75`).
-
-3. **`KeyringStore`** - zero-field unit struct moving the bodies of `keychain_store`/`_load`/`_delete` verbatim, preserving `NoEntry → Ok(None)` in `load` and `NoEntry → Ok(())` in `delete` (idempotent delete). `kind() == "keychain"`.
-
-4. **`InMemoryStore`** - `Mutex<HashMap<String, String>>`. The **always-run-CI seam** (D-B17). Not `#[cfg(test)]`-gated at the trait level (the impls compile in production); only the *constructor wiring* that selects it is test-only. Generalizes `from_in_memory_token` (`auth.rs:139-150`).
-
-5. **`PlaintextStore`** - one file per account key under `<config_dir>/speleodb/tokens/<sanitized_account_key>`. On `store`: create parent dirs; **Unix** create with mode `0o600` via `OpenOptions::new().write(true).create(true).truncate(true).mode(0o600)` (`std::os::unix::fs::OpenOptionsExt`), and `fs::set_permissions(path, from_mode(0o600))` if the file pre-existed looser (the **0600-at-create** invariant, D-B18, D-T-unit); **Windows** plain write + a `// SECURITY: Windows relies on profile-dir ACL; no 0600 equivalent (D-B18)` comment. The directory root is injectable (constructor takes a `PathBuf`) so tests use `tempfile::tempdir()`.
-
-### C2 - `TokenStore` refactored onto `SecretStore` (D-188, D-B17)
-
-**File: `src-tauri/src/speleodb/auth.rs`** - rework `TokenStore` (`:53-150`).
-
-1. Change the fields from `{ in_memory, keychain_backed }` to the ordered tier list + session cache:
-   ```rust
-   pub(crate) struct TokenStore {
-       in_memory: Option<String>,            // live session token (cache; preserves auth.rs:84-88)
-       active_tier: Option<TokenTier>,       // None = session-only
-       keychain: Box<dyn SecretStore>,       // first precedence
-       plaintext: Option<Box<dyn SecretStore>>, // only if the escape hatch is enabled this session
-   }
-   #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-   pub(crate) enum TokenTier { Keychain, Plaintext, Memory }
-   ```
-   Keep the hand-written `Debug` (`auth.rs:65-75`) - redact `in_memory`, print `active_tier`. Update `keychain_backed()` (`:106-108`, consumed by `status()` at `speleodb.rs:96`, surfaced in `SpeleoLoginResult.keychain_backed`) to `self.active_tier == Some(TokenTier::Keychain)`.
-
-2. **`store(endpoint, email, token, allow_plaintext) -> TokenTier`** (extends `:81`; `allow_plaintext` is the first gate of the two-gate opt-in, C6): try `keychain.store(...)`; on `Ok` cache `in_memory`, set `Keychain`, **self-heal** (`plaintext.delete(key)` best-effort), return `Keychain`. On keychain `Err`: log the warning (`:92-95`), then the **two-gate** (C6): if `allow_plaintext && plaintext.is_some()` write plaintext → `Plaintext`; else → `Memory`. All branches cache `in_memory = Some(token)`.
-
-3. **`load(endpoint, email) -> Option<String>`** (rework `:117-125`) - **keychain-first precedence with self-heal**: if `in_memory` set, return it (session cache, preserves `:118-120`); else `keychain.load(key)` first - on `Some` hit, delete the plaintext copy, cache, set `Keychain`, return; on keychain miss/error, `plaintext.load(key)` if present - on hit, cache, set `Plaintext`, return; all-miss → `None` (callers → `NotAuthenticated`, preserving `speleodb.rs:79-82`).
-
-4. **`clear(endpoint, email)`** (rework `:128-136`) - full clear (D-188 401-drop): delete from **both** keychain **and** plaintext (best-effort each), null `in_memory` + `active_tier`. Single sink the 401 handler (C5) and logout (`forget()`, `speleodb.rs:103-109`) both call.
-
-5. Generalize the test ctor: keep `from_in_memory_token` (`:144-149`) on the new fields (`in_memory = Some`, `active_tier = Some(Memory)`, `keychain = InMemoryStore`, `plaintext = None`); add a sibling `from_stores(keychain, plaintext)` so tier-precedence tests inject two `InMemoryStore`s. Both `#[cfg(test)]`.
-
-6. **Production constructor** `TokenStore::new(plaintext_root: Option<PathBuf>) -> Self`: `keychain = Box::new(KeyringStore)`; `plaintext = plaintext_root.map(|r| Box::new(PlaintextStore::new(r)) as _)`. Replace the `#[derive(Default)]` (`auth.rs:53`) with an explicit `Default` calling `TokenStore::new(Some(<config_dir>/speleodb/tokens))` so plaintext is *available* but only *written* when the two-gate passes (C6). Config-dir resolution reuses `crate::app_dirs::config_dir()` (same source `Config::config_path` uses).
-
-> Signature change: `load` becomes `&mut self` (updates the session cache + `active_tier`). Update the call site in `SpeleoDbSession::active_token` (`speleodb.rs:80`) - the session is already held mutably via the `Mutex` guard.
-
-### C3 - Config: `insecure_http` + `token_fallback` + ts-rs typegen (D-B10, D-188, D-B19)
-
-**File: `src-tauri/src/config/types.rs`** - extend `SpeleoDbConfig` (`:53-62`).
-
-1. Add `TokenFallback`, mirroring the `ThemeMode` `#[serde(other)]` idiom (`:500-511`):
-   ```rust
-   #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
-   #[serde(rename_all = "snake_case")]
-   #[ts(rename_all = "snake_case")]
-   pub enum TokenFallback {
-       #[default] SessionOnly,
-       Plaintext,
-       #[serde(other, rename = "unknown")] Unknown,   // serde sentinel, normalized → SessionOnly
-   }
-   ```
-   The ledger's "2-value" is the user-facing surface; `Unknown` is the serde sentinel (same as `ThemeMode::Unknown`), normalized back.
-
-2. Add the two fields to `SpeleoDbConfig` (`:54-62`), both `#[serde(default)]` so existing configs load unchanged:
-   ```rust
-   #[serde(default)] pub token_fallback: TokenFallback,   // opt-in plaintext fallback
-   /// Allow an http:// endpoint to a PUBLIC host. Off by default; relaxes ONLY
-   /// the public-http scheme block (#187), NOT TLS cert verification. Pre-wired for #205.
-   #[serde(default)] pub insecure_http: bool,
-   ```
-
-3. Add `SpeleoDbConfig::normalize` coercing `Unknown → SessionOnly` (mirroring `AppearanceConfig::normalize` at `:563-568`) and call it from `Config::normalize` (`:1811-1829`, which today doesn't touch `speleodb`). `insecure_http` needs no normalization.
-
-4. **ts-rs typegen** - `SpeleoDbConfig` is already exported (`gen_ipc_types.rs:23`); add `TokenFallback` to the list + `export::<…>`. Run `pnpm gen:ipc-types`; commit the regenerated `src/types/ipc/SpeleoDbConfig.ts` (now `token_fallback` + `insecure_http`) and new `TokenFallback.ts`. **Do not hand-edit.**
-
-> NOTE: D-B19 ("require explicit http/https; reject otherwise") is enforced in **#187's `tls.rs`**, not in config. Track C only persists `insecure_http`. No scheme validation in `config/types.rs` - don't implement it twice.
-
-### C4 - Startup rehydration: wire `load()` lazily on first authed call (D-188)
-
-**File: `src-tauri/src/core/state/speleodb.rs`** (gap documented at `auth.rs:9-14`, `speleodb.rs:88-91`).
-
-1. Rehydration is **lazy silent on first session/authed call**, *not* an eager startup read. **Do not** add a hook in `lib.rs:1200-1225` setup. Add a private `speleodb_ensure_rehydrated()` called before locking in `speleodb_active_token` (`:139-141`) and `speleodb_session_status` (`:146-148`):
-   - Take the session lock; if `session.endpoint.is_some()` → return (idempotent this run).
-   - Else read `config.speleodb.endpoint` through the **same precedence** as `speleodb_resolve_endpoint` (`:115-127`, so `DEV_SPELEODB_URL` still wins) and `config.speleodb.email`. If either blank → return (stays logged-out).
-   - Seed `session.endpoint`/`session.email`.
-   - Call `session.token_store.load(&endpoint, &email)` - the **first time `load()` is wired** (closes `auth.rs:9-14`). With C2's keychain-first read, a prior-run keychain token is found, `active_tier` set, `in_memory` cached. **No network, no prompt** (D-188).
-   - Mark `rehydrate_attempted` (a `bool` on `SpeleoDbSession`) so a failed/empty load doesn't re-hit the keychain on every call.
-
-2. `status()` (`:92-99`) logic unchanged - but rehydration now populates `in_memory`/`active_tier` first, so a restart with a keychain token reports `logged_in: true` + `keychain_backed: true` without re-login. The FE `speleodb_session` call on dialog open (`SpeleoDbSpikeDialog.tsx:54`) now restores the session across app restarts.
-
-3. **No config write** during rehydration (read-only). `speleodb_persist_account` (`:155-166`) stays the only writer, on explicit login.
-
-### C5 - 401 auto-drop handler consuming `#186 SpeleoDbAction` (D-188, D-B4)
-
-**File: `src-tauri/src/core/state/speleodb.rs`** - centralized session-level handler.
-
-1. One centralized handler every authed orchestration call routes its `Result` through:
-   ```rust
-   fn speleodb_handle_auth<T>(&self, endpoint: &str, status_endpoint: Endpoint,
-       result: Result<T, SpeleoDbError>) -> Result<T, SpeleoDbError> {
-       if let Err(SpeleoDbError::Status { status, .. }) = &result {
-           // #186: ReLogin is the ONLY action that drops the token (D-B4).
-           if map_status(status_endpoint, *status) == SpeleoDbAction::ReLogin {
-               if let Ok(mut s) = self.speleodb_session_lock() { s.forget(); } // full clear()
-           }
-       }
-       result
-   }
-   ```
-
-2. Route the production authed calls through it: `speleodb_list_projects` (`:239-248`) wraps `client::list_projects`; `speleodb_open_project` (`:253-274`) wraps `client::download_dump`. **Do not** auto-drop on the login path - login's 401 is a pasted-dead-token (`MissingCredentials`-class), not a drop of an *established* session; only list/open feed the handler. Document the asymmetry.
-
-3. **`forget()`** (`:103-109`) already nulls endpoint/email and calls `token_store.clear()` - with C2, a full clear of keychain + plaintext + memory (self-consistent with "401-drop = full clear()").
-
-4. **Cross-track coupling / pre-#186 fallback:** `map_status`/`SpeleoDbAction`/`Endpoint` are introduced by **Track A #186**. If #188 lands first, key the handler off `SpeleoDbError::Status { status: 401, .. }` with `// TODO(#186): replace bare-401 with map_status(...) == ReLogin`. Behavior is identical (401→ReLogin is an explicit #186 row; unmapped fails closed), so C5's unit tests are stable across the swap.
-
-5. 403 is **never** a drop (D-B4) - the handler only matches `ReLogin`/bare-401. A `Status { 403 }` flows through untouched, preserving the per-endpoint domain meaning `live_web_viewer_cannot_download` asserts (`mod.rs:331-362`).
-
-### C6 - Two-gate plaintext opt-in write (D-188)
-
-**File: `src-tauri/src/core/state/speleodb.rs` + `auth.rs`.**
-
-1. The two gates: **Gate 1 (preference)** `config.speleodb.token_fallback == TokenFallback::Plaintext`; **Gate 2 (keychain-failed-this-session)** intrinsic to C2's `store()` (plaintext is only reached in the keychain-`Err` branch).
-2. In `speleodb_login` (`:213-228`), compute `allow_plaintext = config.speleodb.token_fallback == TokenFallback::Plaintext` (read under the config lock, `:117-121` pattern) and pass it to `store(..., allow_plaintext)`. C2's `store` enforces Gate 2. Plaintext is written **iff both gates hold**.
-3. The **warned confirmation** (toggling `token_fallback` to `Plaintext`) is **#205 Settings**, out of scope; Track C only *consumes* + *honors* the persisted preference. Add a code comment pointing at #205.
-4. `keychain_backed` in `SpeleoLoginResult` (`models.rs:104-110`) stays `false` when the active tier is `Plaintext` *or* `Memory` (only `Keychain` is "backed"), so the FE "won't survive a restart" note (`SpeleoDbSpikeDialog.tsx:57,90`) stays honest. Do not add a plaintext-vs-memory distinguishing field here (avoids bumping the IPC DTO surface; #205 owns surfacing it).
-
-## C.3 New / changed types & signatures
-
-```rust
-// src-tauri/src/speleodb/auth.rs:
-pub(crate) trait SecretStore: Send + Sync { fn kind(&self)->&'static str; fn store(..); fn load(..); fn delete(..); }
-pub(crate) struct SecretStoreError(String);                 // thiserror, token-free
-pub(crate) struct KeyringStore;                             // wraps keyring v3 Entry
-pub(crate) struct InMemoryStore { map: Mutex<HashMap<String, String>> }
-pub(crate) struct PlaintextStore { root: PathBuf }          // 0600 on unix
-pub(crate) enum TokenTier { Keychain, Plaintext, Memory }
-impl TokenStore {
-    pub(crate) fn new(plaintext_root: Option<PathBuf>) -> Self;
-    pub(crate) fn store(&mut self, endpoint, email, token, allow_plaintext: bool) -> TokenTier;
-    pub(crate) fn load(&mut self, endpoint, email) -> Option<String>;   // &mut: caches; keychain-first + self-heal
-    pub(crate) fn clear(&mut self, endpoint, email);                    // wipes keychain + plaintext + memory
-    pub(crate) fn keychain_backed(&self) -> bool;                       // active_tier == Keychain
-    #[cfg(test)] fn from_in_memory_token(token: &str) -> Self;
-    #[cfg(test)] fn from_stores(keychain: Box<dyn SecretStore>, plaintext: Option<Box<dyn SecretStore>>) -> Self;
-}
-
-// src-tauri/src/core/state/speleodb.rs:
-struct SpeleoDbSession { endpoint, email, token_store, rehydrate_attempted: bool /* NEW */ }
-impl AppState {
-    fn speleodb_ensure_rehydrated(&self);                                                 // C4
-    fn speleodb_handle_auth<T>(&self, endpoint: &str, ep: Endpoint,
-        r: Result<T, SpeleoDbError>) -> Result<T, SpeleoDbError>;                          // C5
-}
-
-// src-tauri/src/config/types.rs:
-pub enum TokenFallback { SessionOnly /*default*/, Plaintext, Unknown }
-pub struct SpeleoDbConfig { endpoint, email, token_fallback: TokenFallback /*NEW*/, insecure_http: bool /*NEW*/ }
-impl SpeleoDbConfig { pub fn normalize(&mut self); }   // Unknown -> SessionOnly
-
-// ts-rs (regenerated): src/types/ipc/SpeleoDbConfig.ts (+token_fallback,+insecure_http), src/types/ipc/TokenFallback.ts
-// No new IPC command → EVENT_NAMES stays 418. SpeleoDbAction/Endpoint are Track A #186's contribution, not Track C's.
-```
-
-## C.4 Deliverables checklist
-
-- [ ] **`SecretStore` trait** + `KeyringStore` (OS keychain, keyring v3), `InMemoryStore` (CI fake), `PlaintextStore` (0600 file, Linux-headless escape hatch). (D-B17/D-B18)
-- [ ] **`TokenStore` lifecycle** complete: store → load → clear all route through `SecretStore`; **keychain-first read** with **plaintext self-heal** (a keychain hit deletes the plaintext copy). (D-188)
-- [ ] **Startup rehydration wired** - `TokenStore::load` finally called (lazily, silently, no network) on the first authed/session call, seeding endpoint+email from config; a keychain token now **survives an app restart** (closes the `auth.rs:9-14` gap). (D-188)
-- [ ] **401 auto-drop** - a genuine 401 on an established-session call (list/open) fully clears the token from keychain + plaintext + memory via one centralized handler; 403 never drops. (D-188/D-B4)
-- [ ] **Guardrail 6 (never-override-keychain)** - a successful keychain read/write supersedes and removes plaintext; plaintext never written when the keychain is usable. (D-188; unit-tested.)
-- [ ] **Two-gate plaintext opt-in** - written **iff** `token_fallback == Plaintext` **and** the keychain failed this session. (D-188)
-- [ ] **`SpeleoDbConfig.insecure_http: bool`** persisted (default false), ts-rs-exported, pre-wired for #205 and consumed by #187 (relaxes only the public-http scheme block, never cert verification). (D-B10/D-B19)
-- [ ] **`SpeleoDbConfig.token_fallback`** persisted (default `SessionOnly`, `#[serde(other)]`→`SessionOnly`), ts-rs-exported. (D-188)
-- [ ] Regenerated `SpeleoDbConfig.ts` + new `TokenFallback.ts` (committed).
-- [ ] **No new IPC command, no `EVENT_NAMES` bump** (stays 418). (D-T-telemetry)
-- [ ] Full unit coverage of every load-bearing invariant (tier precedence, 0600, delete-on-401/logout, rehydration, never-override-keychain) via the `SecretStore` fake. (D-B16/D-T-unit)
-- [ ] Live `#[ignore]` twins: dead-token→401, missing-header→403. (D-T-live)
-
-## C.5 Manual-test steps (human)
-
-> Run the dev box per `docs/speleodb-dev-testing.md`. Launch with `./scripts/dev.sh`.
-
-**A. Keychain rehydration across restart (the headline fix):** log in on a desktop with an OS keychain → project list appears, no "won't survive a restart" warning. Fully **quit** and relaunch → reopen the dialog → it restores logged-in state **without** re-prompting (rehydration read the keychain token on first call).
-
-**B. 401 auto-drop:** log in, then revoke/rotate the token server-side → click refresh (`speleodb_list_projects`) → the call surfaces an auth error AND the session is dropped (reopening the dialog shows logged-out).
-
-**C. 403 is NOT a drop:** with a `WEB_VIEWER` second account, list projects (succeeds) then attempt **Open** on a view-only project → Open fails 403-class but the session stays logged in.
-
-**D. Plaintext escape hatch (Linux headless):** on a box with no secret service, set `[speleodb] token_fallback = "plaintext"`, launch + log in → succeeds, "won't survive an OS-keychain restart" note; `<config_dir>/speleodb/tokens/` has a `-rw-------` (0600) file; restart → still logged in (rehydrated from plaintext). Set `token_fallback = "session_only"`, delete the file, log in → succeeds but **no** file written; after restart you must re-login.
-
-**E. `insecure_http` gate (verifies #187 honors the field):** with `insecure_http = false` and an `http://<public-host>` endpoint → login rejected (insecure-endpoint). With `insecure_http = true` → the public-http scheme block is relaxed (request proceeds; cert verification unaffected). `http://10.10.0.220:8000` is allowed regardless of the flag.
-
-## C.6 Files this track touches (repo-relative)
-
-- `src-tauri/src/speleodb/auth.rs` - `SecretStore` trait + 3 impls, `TokenStore` rework, tier precedence, self-heal, two-gate store, 0600 plaintext.
-- `src-tauri/src/core/state/speleodb.rs` - `rehydrate_attempted`, `speleodb_ensure_rehydrated`, `speleodb_handle_auth` (401-drop), two-gate `allow_plaintext` plumbing.
-- `src-tauri/src/config/types.rs` - `TokenFallback`, `SpeleoDbConfig.{token_fallback,insecure_http}`, `SpeleoDbConfig::normalize` wired into `Config::normalize`.
-- `src-tauri/examples/gen_ipc_types.rs` - register `TokenFallback` for ts-rs export.
-- `src/types/ipc/SpeleoDbConfig.ts`, `src/types/ipc/TokenFallback.ts` - regenerated.
-- `src-tauri/src/core/state/app_state.rs` - `SpeleoDbSession::default()` resolves the plaintext root.
-
-## C.7 Cross-track contracts Track C relies on (do not implement here)
-
-- **#186** (`map_status`/`SpeleoDbAction`/`Endpoint`, Track A): consumed by C5 (the only gated step); pre-#186 fallback = bare-`Status{401}` guard.
-- **#187** (`tls.rs::enforce`, Track A): *reads* `insecure_http` (added in C3); D-B19 scheme reject lives there, not in config.
-- **#205** (Settings, later): *writes* `token_fallback` with the warned confirmation; Track C only honors the persisted value.
+The former credential-storage design was retired. Current storage and authentication
+are documented in [Configuration](../configuration.md) and
+[SpeleoDB integration](../SpeleoDB.md).
 
 ---
 
@@ -902,10 +658,6 @@ No new HTTP-mock dependency (no httpmock/wiremock) and no custom `ureq` `Transpo
 **The loopback stub (the only socket I/O in CI):** `TcpListener::bind("127.0.0.1:0")`, accepts one connection, returns a scripted status sequence (e.g. `503,503,200`), records the raw request bytes. Three purposes a pure fn cannot serve: (1) **retry timing/count** over a real socket (read retries `503→503→200`; write attempted *exactly once* by counting connections); (2) **multipart wire assertions** (capture the raw `PUT …/upload/auto/` body, assert both `Content-Disposition: …name="artifact"` parts + their `Content-Type`); (3) **the #187 `127.0.0.1` fixture** (a real loopback `enforce` must allow, plus a public host blocked via resolver injection).
 
 > NOTE (OPEN-2, RESOLVED): the spike already uses `ureq::unversioned::multipart::{Form, Part}` (`client.rs:235`) - the unstable surface the pin fences. The `Form`/`Part` builder there is *write-only* (`Form::new().part(…).text(…)` then `send(form)` consumes it); no public accessor enumerates a built `Form`'s parts. **The `UploadParts` descriptor struct is MANDATORY** - CI asserts against the pre-build descriptor; the loopback stub asserts the post-build wire bytes. Do not attempt to introspect a `ureq::Form`.
-
-### T.1.3 The `SecretStore` fake (D-B17 / D-B18)
-
-`#188` introduces `SecretStore` so the keychain tiers are CI-testable without a real OS secret service (the existing `from_in_memory_token` at `auth.rs:144` signals the codebase favors this seam). Three impls: **`KeyringStore`** (real `keyring::Entry`); **`InMemoryStore`** (`Mutex<HashMap>`, drives tier precedence, delete-on-401, rehydration, never-override-keychain with no env dependency); **`FailingSecretStore`** (every op `Err`, simulating headless Linux; drives the plaintext two-gate + the `0o600`-at-create check against a `tempfile::tempdir()`). The plaintext `0o600` perms are asserted on Unix via `PermissionsExt`; Windows relies on the per-user profile-dir ACL (documented gap, no new platform dep).
 
 ## T.2 Dev-instance live test matrix (EXHAUSTIVE - D-T-live + retry/backoff/exactly-once/.stalx canary)
 
@@ -952,7 +704,6 @@ Every row runs against the real box (server-truth). The **CI twin** names the al
 
 **Track B - #191 (`core/state/tests.rs`, stamped-remote in-memory fixture):** `edit_enabled_defaults_true_and_local_project_passes`; `remote_open_without_lock_disables_edit`; `gate_rejects_every_mutation_entrypoint_with_edit_disabled_code` (the enumeration tripwire - all 12 + 4 entries); `lifecycle_commands_pass_through_gate`; `dirty_bit_flips_false_to_true_on_successful_remote_edit`; `dirty_bit_is_idempotent_and_set_only`; `dirty_bit_noop_for_local_only_project`; `edit_disabled_code_prefix_is_distinct`; `repair_and_settings_gated_on_locked_remote`.
 
-**Track C - #188 (`auth.rs` inline + `core/state/speleodb.rs` tests, `SecretStore` fake + tempdir):** `✓ account_key_normalizes_endpoint`, `✓ in_memory_fallback_round_trips_without_keychain`, `✓ clear_forgets_in_memory_token`; `tier_precedence_keychain_first`; `keychain_read_self_heals_plaintext`; `store_keychain_success_deletes_stale_plaintext`; `plaintext_written_only_when_both_gates_pass`; `plaintext_file_is_0600_on_unix` (`#[cfg(unix)]`); `clear_deletes_from_all_tiers`; `load_misses_yield_none`; `token_fallback_unknown_normalizes_to_session_only`; `speleodb_config_defaults_are_safe`; `speleodb_config_round_trips_new_fields`; `rehydration_seeds_session_from_config_and_keychain`; `rehydration_noop_without_config_account`; `auth_handler_drops_token_on_401`; `auth_handler_keeps_token_on_403`; `auth_handler_keeps_token_on_2xx_and_5xx`; `endpoint_normalization_url_parse`; `never_override_keychain_guardrail6`. (The 401/403 handler tests are written against the bare-`Status{401}` guard so they're stable across the #186 swap.)
 
 > NOTE (D-B6 assumption, confirm at review): collab toggles (`set_collab_enabled`/`_for_path`) and TML imports (`execute_import_sections`) are treated as **mutations** and ARE gated on an unlocked remote project - flag for explicit sign-off.
 
@@ -960,7 +711,6 @@ Every row runs against the real box (server-truth). The **CI twin** names the al
 
 Prereqs: built dev app (`./scripts/dev.sh`), the dev box reachable, the `.env` values to hand. The temporary `SpeleoDbSpikeDialog.tsx` is the entry surface until #195/#205.
 
-**M1 - Login across the three credential tiers:** (1) keychain (desktop with a secret service) → log in `http://10.10.0.220:8000/` / `dab@dab.com` / `dab` → list appears, no "won't survive restart" note; quit + relaunch → list restores without re-prompting (#188). (2) session-only (headless/no secret service) → login shows the warning; relaunch → must log in again. (3) plaintext (opt-in) → set `token_fallback = Plaintext`, log in on a no-keychain box → warned confirmation, `0o600` file written; relaunch → rehydrated; then make a keychain available + log in → the plaintext file is deleted (self-heal). (4) token-paste → email derived from `GET /user/`; junk token rejected at login. (5) bad password → clear "invalid credentials" (server 400, not 401).
 
 **M2 - Open a remote project → `is_remote` badge + read-only gate:** log in, open a non-locked project → `.stalx` downloads/extracts/opens; project shows an `is_remote` badge (derived from `speleo_link`, #189/#190; recent-projects panel shows it too); project is read-only (`edit_enabled == false`).
 
@@ -1039,5 +789,4 @@ The four OPEN UNKNOWNS from the ledger, as explicit pre-merge checks:
 
 1. **The `execute()` chokepoint refactor blast radius (#191/D-B6).** Routing ~8 `execute_*` bypass paths + `execute`/`undo`/`redo`/`undo_to`/`redo_to` through one `guard_mutation` chokepoint touches the hottest mutation paths in the app. Mitigations: split #191 into **191-B6** (mechanical re-routing, no behavior change, tests stay green) before **191-A** (gate logic); the `is_lifecycle_passthrough` exhaustive `match` forces a deliberate choice for every new `Command` variant (anti-fail-open, like `command_integrity`); the `chokepoint_enumeration_test` (a behavioral tripwire over a read-only remote fixture) fails the moment a new mutation path forgets the guard. The two awkward seams - `set_collab_enabled_for_path` (operates by path, not the open project) and `repair_open_project_integrity` (returns `IntegrityRepairResult`, not `CommandResult`, so it can't carry the coded failure and instead returns `changed:false`) - are documented in-place to avoid a future direct caller bypassing the gate.
 2. **DNS-rebinding / TOCTOU accepted, NOT mitigated (#187/D-187).** `tls.rs::enforce` resolves and classifies addresses per-request at the top of `with_retry`, but a hostname that resolves to a private address at check-time and a public one at connect-time (DNS rebinding) is **explicitly accepted** as out of scope. The policy is a guard against accidental plaintext-to-public misconfiguration, not an adversarial SSRF defense. `insecure_http` further widens this by design (public-http allowed when set). Documented so no reviewer mistakes the IP policy for a hardened SSRF boundary.
-3. **Plaintext-on-Windows gap (#188/D-B18).** The plaintext escape hatch enforces `0o600` only on Unix; on Windows it relies on the per-user profile-dir ACL with **no `0600` equivalent and no new platform dep**. This is a documented gap accepted because Windows/macOS always have a native keychain, so plaintext is primarily a Linux-headless escape hatch - a Windows user hitting the plaintext tier would already be in an unusual no-keychain state. The risk is a plaintext token readable by other processes running as a different user on a shared Windows profile; mitigated only by the profile-dir ACL.
 4. **`.stalx` catch-all coupling (D-T-stalx).** The hand-off relies on the SpeleoDB server's AUTO catch-all (`BaseFileProcessor`) storing the `.stalx` verbatim and the dump locating it **by suffix** (`dump.rs:58`), not by a hard-coded path. If the server ever starts *rejecting* unknown extensions, every push/pull breaks silently. Mitigations: an explicit live round-trip assertion (L15) + a SKIPPED drift canary (L16, `live_auto_rejects_unknown_extension_CANARY`) that flags the moment AUTO changes behavior; the dump locator never hard-codes `misc/project.stalx`. Note the explicit-MIME robustness rule (D-A-mime) does **not** by itself protect against extension-rejection - the catch-all routing on *extension*, not MIME, is the real coupling.

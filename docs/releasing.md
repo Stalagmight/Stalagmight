@@ -320,16 +320,6 @@ but the tag: no version files, no changelog, no push.
   to reject. If a future dependency needs JIT, a loadable plugin, or a spawned
   helper, that assumption has to be revisited - either add entitlements or set
   `"hardenedRuntime": false` explicitly rather than discovering it in a crash.
-- **An ad-hoc signature changes identity every build, which the keychain notices.**
-  The SpeleoDB token is stored via the OS keychain (`src-tauri/crates/speleodb/src/speleodb/auth.rs`),
-  and a keychain item's ACL is bound to the creating app's code identity. An ad-hoc
-  signature's designated requirement is its cdhash, which differs for every build,
-  so each release is a different app as far as the keychain is concerned and users
-  may be re-prompted for their token after updating. A real Developer ID gives a
-  stable identity and would remove this; it is another argument for #226. A denial
-  is handled safely rather than silently - the token degrades to session-only
-  memory and is never written to disk unless plaintext storage was explicitly
-  opted into.
 - The release notes get an "Installing" footer telling recipients how to get past
   Gatekeeper and SmartScreen. Because those steps talk people through overriding
   a security warning, the release also ships a `SHA256SUMS` generated on the

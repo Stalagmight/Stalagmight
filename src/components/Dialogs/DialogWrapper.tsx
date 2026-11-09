@@ -382,6 +382,7 @@ export function DialogWrapper({
             icon={<CloseIcon size={14} />}
             size="sm"
             variant="ghost"
+            data-dialog-close=""
             aria-label="Close dialog"
             className="text-text-secondary hover:text-text-primary"
           />

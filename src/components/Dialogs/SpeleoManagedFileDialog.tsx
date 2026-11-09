@@ -10,7 +10,6 @@ import { endpointsMatch } from '../../utils/speleoEndpoint';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import { SpeleoAdoptConfirm } from './SpeleoAdoptConfirm';
 import type { SpeleoManagedFile, SpeleoProjectSummary } from '../../types/ipc.generated';
 
 /**
@@ -21,7 +20,7 @@ import type { SpeleoManagedFile, SpeleoProjectSummary } from '../../types/ipc.ge
  *
  * - Open from SpeleoDB: open the MANAGED copy through the shared
  *   `useOpenRemoteProject` flow, with all its guards (permission seeding, the
- *   Ariane adopt route, the unpushed-local prompt, the hand-back refusal). The
+ *   access warning, the unpushed-local prompt, the hand-back refusal). The
  *   foreign file is left untouched - reopening it raises this prompt again.
  *   Looked up in `speleodb_list_projects` rather than synthesized from the
  *   file's link row, because only the list carries `latest_commit_sha` and
@@ -46,13 +45,10 @@ export default function SpeleoManagedFileDialog() {
   const dialogData = useUIStore((s) => s.dialogData);
   const session = useSpeleoStore((s) => s.session);
   // Close the prompt right before loadProject so its progress is visible.
-  const { openRemote, adoptRemote } = useOpenRemoteProject({ onBeforeLoad: closeDialog });
+  const { openRemote } = useOpenRemoteProject({ onBeforeLoad: closeDialog });
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // The managed copy turned out to be an Ariane (.tml-only) project - offer the
-  // adopt inline, the same shape SpeleoUnpushedLocalDialog renders.
-  const [pendingAdopt, setPendingAdopt] = useState<SpeleoProjectSummary | null>(null);
 
   const managed = dialogData.managed as SpeleoManagedFile | undefined;
   const cancelReturnsTo =
@@ -76,7 +72,6 @@ export default function SpeleoManagedFileDialog() {
   useEffect(() => {
     setBusy(false);
     setError(null);
-    setPendingAdopt(null);
   }, [identity]);
 
   if (!managed) return null;
@@ -150,10 +145,8 @@ export default function SpeleoManagedFileDialog() {
     }
     const outcome = await openRemote(summary);
     if (!stillPrompting(managed)) return;
-    if (outcome.status === 'adopt') {
-      setPendingAdopt(summary);
-      setBusy(false);
-    } else if (outcome.status === 'error') {
+    if (outcome.status === 'cancelled') setBusy(false);
+    if (outcome.status === 'error') {
       setError(outcome.message);
       setBusy(false);
     }
@@ -186,30 +179,6 @@ export default function SpeleoManagedFileDialog() {
     // failed load surfaces its own error through loadProject.
     await useProjectStore.getState().loadProject(managed.path);
   };
-
-  const handleConfirmAdopt = async (summary: SpeleoProjectSummary) => {
-    setPendingAdopt(null);
-    setBusy(true);
-    setError(null);
-    const outcome = await adoptRemote(summary);
-    if (!stillPrompting(managed)) return;
-    if (outcome.status === 'error') {
-      setError(outcome.message);
-      setBusy(false);
-    }
-  };
-
-  if (pendingAdopt) {
-    const summary = pendingAdopt;
-    return (
-      <SpeleoAdoptConfirm
-        projectName={summary.name}
-        busy={busy}
-        onCancel={() => setPendingAdopt(null)}
-        onConfirm={() => void handleConfirmAdopt(summary)}
-      />
-    );
-  }
 
   return (
     <DialogWrapper

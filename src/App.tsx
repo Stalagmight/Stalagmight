@@ -29,7 +29,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoUnwindDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, SpeleoDbProjectDialog, SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog, ImportReceiptDialog, ImportAsNewProjectDialog, LaunchOpenConfirmDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoUnwindDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, SpeleoDbProjectDialog, ImportReceiptDialog, ImportAsNewProjectDialog, LaunchOpenConfirmDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu, ToastStack } from './components/common';
 import { UpdateBanner } from './components/UpdateBanner';
@@ -117,8 +117,6 @@ function App() {
   // The credential-storage question is raised by the same event, from the same
   // place, and so gets the same treatment: an independent overlay, because the
   // login that raises it is usually made from inside the Settings account panel.
-  const storageChoiceOpen = useSpeleoStore((s) => s.storageChoiceOpen);
-  const dumpPickerOpen = useSpeleoStore((s) => s.dumpPickerOpen);
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
   useTheme();
@@ -1072,18 +1070,13 @@ function App() {
           OVER that dialog instead of replacing it, leaving Settings intact. */}
       {heldLockPromptOpen && <HeldLockResumeDialog />}
 
-      {/* "Where should your API key go?" - raised by a login whose keychain write
-          failed. Also an independent top-layer overlay, and for the same reason:
-          the login is usually made from the Settings account panel, which must
-          survive the question with its other staged edits intact. */}
-      {storageChoiceOpen && <SpeleoStorageChoiceDialog />}
 
       {/* [#258] "Which file is the survey?" - raised when a SpeleoDB dump holds
           more than one openable file. Independent and mounted LAST so it layers
           over whichever surface asked: this question comes from the Open-from-
           SpeleoDB browser, GlobalView, the refused-open prompt and the revision
           history alike, and three of those already hold the single dialog slot. */}
-      {dumpPickerOpen && <SpeleoDumpPickerDialog />}
+
 
       {/* Toast stack (portals itself for z-index reliability). Mounted
           unconditionally: its screen-reader live regions must exist before their

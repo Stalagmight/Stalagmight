@@ -69,7 +69,7 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 - Multi-project workspace (Global View)
 - Export: PNG, SVG, PDF (map images), CSV, JSON, Ariane `.tml` (data)
 - Dive and gas planning as the Plan workspace mode, persisted to a `.plnx` sidecar
-- SpeleoDB integration - remote project hand-off; still under active development
+- SpeleoDB integration - remote project hand-off; see [the native-file and lock contract](SpeleoDB.md) for Save + Push, local autosave, keep-lock exits and access verification
 - SQLite project storage, undo/redo with persistence
 - An Android tablet build, sideload-only and not in CI, with partial touch
   support ([touch-support.md](touch-support.md))

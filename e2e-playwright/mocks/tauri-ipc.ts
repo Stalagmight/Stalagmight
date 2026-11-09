@@ -4138,7 +4138,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               speleodb: {
                 endpoint: null,
                 email: null,
-                token_fallback: 'session_only',
                 insecure_http: false,
                 poll_interval_seconds: 60,
               },
@@ -4147,12 +4146,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
 
           case 'update_config':
-            // Mock update_config - store config and return the real command's shape:
-            // a ConfigSaveReport whose only field is the keyring residue a "never use
-            // the OS keychain" save could not evict. `null` is the ordinary answer.
             console.log('[Mock IPC] update_config called with:', args);
             savedConfig = args?.config as Record<string, unknown> | undefined ?? null;
-            return { keychain_residue: null };
+            return null;
 
           case 'update_gas_config': {
             // Partial update of the `[gas]` block only, mirroring the Rust impl.
@@ -4284,7 +4280,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // otherwise treats as persisted, and a reload-after-save test would
             // have asserted against the wrong baseline.
             if (savedConfig) {
-              return {
+              return [{
                 ...savedConfig,
                 panels: {
                   ...((savedConfig.panels as Record<string, unknown> | undefined) ?? {}),
@@ -4295,7 +4291,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockImportShotsView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
-              };
+              }, false];
             }
             // Return mock config with any test overrides applied
             // This allows tests to modify config values via __MOCK_SET_CONFIG_OVERRIDES__
@@ -4558,7 +4554,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // mockDataTableView above.)
               ...(mockGasConfig ? { gas: mockGasConfig } : {}),
             };
-            return baseConfig;
+            return [baseConfig, false];
           }
 
           case 'get_recent_projects':
@@ -5592,25 +5588,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               logged_in: false,
               user_email: null,
               endpoint: null,
-              keychain_backed: false,
-              // No login this session, so nothing has touched the keychain - which
-              // is exactly what the UI must be able to say without probing.
-              storage: null,
-              keychain: 'not_attempted',
-            };
-          // The credential-storage verbs both answer with a refreshed session. A
-          // mocked run is signed out, so they echo the logged-out shape above
-          // rather than inventing a session the rest of the mock does not have.
-          case 'speleodb_set_token_storage':
-          case 'speleodb_retry_keychain':
-            return {
-              logged_in: false,
-              user_email: null,
-              endpoint: null,
-              keychain_backed: false,
-              storage: null,
-              keychain: 'not_attempted',
-            };
+              };
           case 'speleodb_link_status':
             // Full SpeleoLinkStatus shape (remote_state / access_denied / server_error
             // included) so a spec that flips is_remote:true still matches the DTO.
@@ -5657,7 +5635,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // Strip half of the managed-file prompt: deletes a foreign copy's
           // speleo_link row. No payload; specs assert the invocation itself.
           case 'speleodb_remove_link_at':
-          case 'speleodb_release_all_locks':
           case 'speleodb_release_lock':
           // [#258 review] The provenance-scoped unwind. No payload, and no argument:
           // it releases whatever THIS process recorded acquiring, or nothing.
@@ -5667,9 +5644,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // re-reads `speleodb_link_status` afterwards for the new value.
           case 'speleodb_set_undo_mode':
           // #215 lock release + delete: no payload.
+          case 'speleodb_project_access_at':
           case 'speleodb_release_current_lock':
-          case 'speleodb_delete_project':
-            return null;
           // [#303] Which revision a chain step would load, backward and forward. `null`
           // by default - a mocked project has no revision history to walk - so neither
           // dropdown shows its step entry unless a spec overrides this.
@@ -5681,20 +5657,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // state, not about the download it does on the way.
           case 'speleodb_discard_changes':
             return { kind: 'editing' };
-          // #215 collaborator management: the roster (users + teams). The mutating
-          // commands echo the refreshed roster; the picker lists no teams by default.
-          case 'speleodb_list_collaborators':
-          case 'speleodb_add_collaborator':
-          case 'speleodb_set_collaborator':
-          case 'speleodb_remove_collaborator':
-          case 'speleodb_add_team':
-          case 'speleodb_set_team':
-          case 'speleodb_remove_team':
-            return { users: [], teams: [] };
-          case 'speleodb_list_teams':
-            return [];
-          case 'speleodb_search_users':
-            return [];
           case 'speleodb_get_project_metadata':
           case 'speleodb_patch_project':
             // Deterministic project metadata for the #206 settings tab. patch echoes
@@ -5719,10 +5681,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return {
               user_email: 'test@example.com',
               endpoint: 'https://speleodb.example',
-              keychain_backed: true,
-              storage: 'keychain',
-              keychain: 'available',
-              needs_storage_choice: false,
             };
 
           default:

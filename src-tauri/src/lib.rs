@@ -1832,11 +1832,8 @@ pub fn run() {
             commands::speleodb::speleodb_list_projects,
             commands::speleodb::speleodb_open_project,
             commands::speleodb::speleodb_open_project_discarding_local,
-            commands::speleodb::speleodb_adopt_ariane,
             commands::speleodb::speleodb_logout,
             commands::speleodb::speleodb_session,
-            commands::speleodb::speleodb_set_token_storage,
-            commands::speleodb::speleodb_retry_keychain,
             // SpeleoDB linked-project status for the action shell (#204)
             commands::speleodb::speleodb_link_status,
             commands::speleodb::speleodb_unlink,
@@ -1850,7 +1847,6 @@ pub fn run() {
             // SpeleoDB divergence resolution - take remote (#198)
             commands::speleodb::speleodb_take_remote,
             // SpeleoDB held-lock resume/release prompt - release all + per-project (#201)
-            commands::speleodb::speleodb_release_all_locks,
             commands::speleodb::speleodb_release_lock,
             commands::speleodb::speleodb_release_lock_acquired_here,
             // SpeleoDB per-project LOCAL state (cached copy + un-pushed edits), the
@@ -1859,7 +1855,6 @@ pub fn run() {
             // SpeleoDB revision-history read + restore (#218)
             commands::speleodb::speleodb_get_revisions,
             commands::speleodb::speleodb_restore_revision,
-            commands::speleodb::speleodb_dump_candidates,
             // SpeleoDB hybrid undo stack: the Unwind target + the per-project policy (#303)
             commands::speleodb::speleodb_unwind_target,
             commands::speleodb::speleodb_rewind_target,
@@ -1871,18 +1866,9 @@ pub fn run() {
             commands::speleodb::speleodb_get_project_metadata,
             commands::speleodb::speleodb_patch_project,
             commands::speleodb::speleodb_publish,
-            // SpeleoDB full Project Settings: collaborators + lock release + delete (#215)
-            commands::speleodb::speleodb_list_collaborators,
-            commands::speleodb::speleodb_add_collaborator,
-            commands::speleodb::speleodb_set_collaborator,
-            commands::speleodb::speleodb_remove_collaborator,
-            commands::speleodb::speleodb_add_team,
-            commands::speleodb::speleodb_set_team,
-            commands::speleodb::speleodb_remove_team,
-            commands::speleodb::speleodb_list_teams,
-            commands::speleodb::speleodb_search_users,
+            // SpeleoDB project settings: release the open project lock
             commands::speleodb::speleodb_release_current_lock,
-            commands::speleodb::speleodb_delete_project,
+            commands::speleodb::speleodb_project_access_at,
             // Section commands
             commands::section::create_section,
             commands::section::update_section,

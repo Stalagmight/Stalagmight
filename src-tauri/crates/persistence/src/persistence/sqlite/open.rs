@@ -111,7 +111,29 @@ impl Database {
         conn.pragma_update(None, "mmap_size", 0i64)?;
         conn.pragma_update(None, "cell_size_check", true)?;
         conn.pragma_update(None, "temp_store", "FILE")?;
-        Self::finish_open_existing(conn, true)
+        let db = Self::finish_open_existing(conn, true)?;
+        // Quick-check validates page structure without materializing stored values.
+        // Walk every permitted table while the connection limits are active so a
+        // large dormant blob cannot enter the cache and be read later without them.
+        let tables: Vec<String> = db
+            .conn
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table'")?
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for table in tables {
+            let quoted = table.replace('"', "\"\"");
+            let mut statement = db.conn.prepare(&format!("SELECT * FROM \"{quoted}\""))?;
+            let mut rows = statement.query([])?;
+            while rows.next()?.is_some() {
+                if std::time::Instant::now() > expires {
+                    anyhow::bail!("Downloaded SQLite processing deadline exceeded");
+                }
+            }
+        }
+        if std::time::Instant::now() > expires {
+            anyhow::bail!("Downloaded SQLite processing deadline exceeded");
+        }
+        Ok(db)
     }
 
     /// The checks and migrations every existing-file open runs on `conn`.

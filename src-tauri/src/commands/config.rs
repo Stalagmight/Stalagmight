@@ -3,9 +3,7 @@ use tauri::State;
 
 use std::collections::BTreeMap;
 
-use crate::config::{
-    normalize_column_widths, Config, ConfigSaveReport, GasConfig, DATA_TABLE_ANGLE_MODES,
-};
+use crate::config::{normalize_column_widths, Config, GasConfig, DATA_TABLE_ANGLE_MODES};
 use crate::core::AppState;
 
 /// Get the current configuration
@@ -19,26 +17,19 @@ pub(crate) fn get_config_impl(state: &AppState) -> Config {
 }
 
 /// Update the configuration.
-///
-/// The [`ConfigSaveReport`] is the whole answer, not decoration: a save that wrote
-/// every setting can still have failed to evict the API key from the OS keyring it
-/// was just told to stop using, and `Ok(())` reported that as unqualified success.
 #[tauri::command]
-pub fn update_config(state: State<AppState>, config: Config) -> Result<ConfigSaveReport, String> {
+pub fn update_config(state: State<AppState>, config: Config) -> Result<(), String> {
     update_config_impl(state.inner(), config)
 }
 
-pub(crate) fn update_config_impl(
-    state: &AppState,
-    config: Config,
-) -> Result<ConfigSaveReport, String> {
+pub(crate) fn update_config_impl(state: &AppState, config: Config) -> Result<(), String> {
     state.update_config(config).map_err(|e| e.to_string())
 }
 
 /// Reload configuration from disk without persisting any changes
-/// This re-reads the config file and updates the in-memory state
+/// Returns the reloaded config and whether the SpeleoDB credential identity changed.
 #[tauri::command]
-pub fn reload_config(state: State<AppState>) -> Result<Config, String> {
+pub fn reload_config(state: State<AppState>) -> Result<(Config, bool), String> {
     state.reload_config().map_err(|e| e.to_string())
 }
 

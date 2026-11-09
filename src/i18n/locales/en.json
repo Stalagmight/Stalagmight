@@ -657,7 +657,7 @@
       },
       "endpoint": {
         "label": "Server endpoint",
-        "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/). This only applies to future logins - your current session stays on the server it signed in to.",
+        "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/). Saving a different server signs you out. Log in now connects to the server entered here immediately.",
         "aria": "SpeleoDB server endpoint"
       },
       "insecureHttp": {
@@ -666,20 +666,7 @@
         "aria": "Allow insecure HTTP endpoints",
         "warning": "Allowing plain HTTP to a public address sends your token unencrypted. Only enable this for a trusted local server."
       },
-      "disableKeychain": {
-      "label": "Never use the OS keychain",
-      "help": "Stops Stalagmight touching the system keyring entirely. Turn this on if your keyring is locked or unavailable and you do not want to be asked about it again.",
-      "aria": "Never use the OS keychain",
-      "warning": "Your API key will not be stored in the OS keychain. It will be kept wherever the credential-storage setting above says - which may mean signing in again each time Stalagmight starts.",
-      "evictionFailed": "Your settings were saved, but an older copy of your API key could not be removed from this computer's keychain ({{reason}}), so it may sign you back in the next time you open the app.",
-      "sweepFailed": "Your settings were saved, but an older copy of your API key could not be removed from this computer ({{reason}}), so it may sign you back in the next time you open the app."
-    },
-    "allowForceEdit": {
-        "label": "Allow editing without the write lock",
-        "help": "Adds an \"Edit without the write lock\" option for remote projects, so you can survey offline or while someone else holds it.",
-        "aria": "Allow editing SpeleoDB projects without the write lock",
-        "warning": "Changes made without the write lock cannot be merged to SpeleoDB until you reconnect and acquire it. If someone else edits meanwhile you may have to reconcile or keep your work as a separate local file."
-      },
+
       "account": {
         "appliesOnSave": "Sign in and sign out apply when you press Save.",
         "signedInAs": "Signed in as {{email}}",
@@ -696,30 +683,14 @@
         "tryLogin": "Log in now",
         "tryingLogin": "Logging in…"
       },
+      "allowForceEdit": {
+        "label": "Allow editing without the write lock",
+        "help": "Adds an \"Edit without the write lock\" option for remote projects, so you can survey offline or while someone else holds it.",
+        "aria": "Allow editing SpeleoDB projects without the write lock",
+        "warning": "Changes made without the write lock cannot be merged to SpeleoDB until you reconnect and acquire it. If someone else edits meanwhile you may have to reconcile or keep your work as a separate local file."
+      },
       "credentials": {
-        "title": "Credential storage",
-        "storedIn": "Stored in: {{where}}",
-        "keyring": "Keyring: {{state}}",
-        "keyOnly": "Only your API key is stored here - never your password.",
-        "where": {
-          "keychain": "OS keychain (survives a restart)",
-          "plaintext": "a plaintext file on this computer (less secure)",
-          "memory": "this session only - you will be signed out when the app closes"
-        },
-        "keychainState": {
-          "notAttempted": "not checked yet",
-          "available": "available",
-          "unavailable": "not working on this computer",
-          "declined": "not in use - you chose to keep the key elsewhere",
-        "disabled": "switched off in these settings"
-        },
-        "retry": "Try again",
-        "retrying": "Trying…",
-        "retryFailed": "Could not move your API key into the OS keychain.",
-      "plaintextWarning": "Your API key is in a plaintext file on this computer. Anyone who can read your files can read it.",
-      "moveFailed": "Could not change where your API key is kept.",
-      "useSessionOnly": "Keep it in this session only",
-      "usePlaintext": "Keep it in a file on this computer"
+        "fileStorage": "SpeleoDB settings and your API token are saved in speleodb/speleodb.conf in the app configuration folder. The token is stored as plaintext."
       },
       "pollInterval": {
         "label": "Remote refresh interval",
@@ -3224,32 +3195,6 @@
     "map": {
       "readOnlyBadge": "SpeleoDB · read-only"
     },
-    "storageChoice": {
-      "title": "Where should your API key be kept?",
-      "intro": "You are signed in, but this computer's keychain would not accept your SpeleoDB API key. Choose where it should be kept instead.",
-      "keyOnly": "Only your API key is stored - never your password. Either way you will not have to type your password again: \"this session only\" just means signing in again the next time you open the app.",
-      "session": {
-        "title": "This session only (recommended)",
-        "detail": "The key is held in memory and never written to disk. You will be signed out when the app closes.",
-        "action": "Keep it for this session"
-      },
-      "file": {
-        "title": "A file on this computer",
-        "detail": "The key survives a restart, but it is stored unencrypted and can be read by anything running as you.",
-        "action": "Save it to a file"
-      },
-      "decideLater": "Decide later",
-      "failed": "Could not save where your API key should be kept.",
-      "toasts": {
-        "session_only": "Your API key is kept for this session only.",
-        "plaintext": "Your API key is saved to a file on this computer."
-      },
-      "landedElsewhere": {
-        "memory": "Your API key could not be written to a file, so it is kept for this session only. You will be signed out when the app closes.",
-        "plaintext": "Your API key was saved to a file on this computer instead of being kept for this session only.",
-        "keychain": "This computer's keychain accepted your API key after all, so it is stored there."
-      }
-    },
     "button": {
       "unlocked": "Read-only - click to start editing (take the write lock)",
       "editingUnwound": "This copy is at an older version of the survey - click to choose what to do with it",
@@ -3275,24 +3220,24 @@
       "unlock": "Finish editing (push & release)",
       "push": "Push (keep the write lock)",
       "refresh": "Refresh from SpeleoDB",
-      "discardChanges": "Discard changes\u2026",
+      "discardChanges": "Discard changes…",
       "editWithoutLock": "Edit without the write lock…"
     },
     "close": {
       "title": "Close SpeleoDB project",
       "message": "You still hold the SpeleoDB write lock. Release it so others can edit?",
       "dirtyMessage": "You have unpushed changes and still hold the SpeleoDB write lock. Push your changes and release it before closing?",
-      "keepLock": "Close & keep the write lock",
       "release": "Release & close",
       "pushRelease": "Push, release & close",
       "unwoundMessage": "This copy is at an older version of the survey - you stepped back through its history and have not changed anything. Uploading it would record that older survey over the newer one for everyone.",
-      "pushOlderVersion": "Push this older version\u2026",
+      "pushOlderVersion": "Push this older version…",
       "saveLocally": "Save changes locally before closing",
       "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet.",
       "messageNoLock": "You have changes that have not been uploaded to SpeleoDB, and you no longer hold the write lock - so they cannot be uploaded right now. They stay on this computer and will still be here next time you open the project.",
       "closeAnyway": "Close anyway",
       "thenOpen": "Once this project is closed, the project you chose opens.",
-      "thenNew": "Once this project is closed, the new-project dialog opens."
+      "thenNew": "Once this project is closed, the new-project dialog opens.",
+      "releaseWithoutUpload": "Release & close without uploading"
     },
     "quit": {
       "title": "Quit with changes not on SpeleoDB",
@@ -3302,15 +3247,15 @@
       "quitAnyway": "Quit anyway",
       "saveLocally": "Save changes locally before quitting",
       "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet.",
-      "keepLockHint": "Keeping the write lock is safe: your changes stay on this computer and nobody else can edit from the older version on the server. Pick it if you want to carry on later.",
-      "keepLockHintUnwound": "Keeping the write lock is safe: nothing is uploaded, the newer survey on SpeleoDB is left alone, and this older copy is still here next time you open the project.",
       "pushRelease": "Push, release & quit",
-      "pushOlderVersion": "Push this older version\u2026",
-      "keepLock": "Keep the write lock & quit",
+      "pushOlderVersion": "Push this older version…",
       "discardRelease": "Discard & release the write lock",
       "discardWarning": "Releasing the write lock without uploading leaves your changes on this computer only, and lets anyone else start editing from the older version on SpeleoDB. Quit anyway?",
       "discardWarningUnwound": "Releasing the write lock lets anyone else start editing straight away. Nothing of yours is lost - this copy is an older version you stepped back to, not work you made. Quit anyway?",
-      "discardConfirm": "Yes, release & quit"
+      "discardConfirm": "Yes, release & quit",
+      "releaseWithoutUploadHint": "Your changes can stay on this computer. Leaving without uploading releases the lock so others can edit the server version.",
+      "releaseWithoutUploadHintUnwound": "Leaving without uploading releases the lock. The newer survey on SpeleoDB stays unchanged, and this older copy stays on this computer.",
+      "releaseWithoutUpload": "Release & quit without uploading"
     },
     "divergence": {
       "title": "Resolve SpeleoDB conflict",
@@ -3341,33 +3286,10 @@
       "loginFailed": "Login to SpeleoDB failed",
       "openFailed": "Unable to open the project",
       "listFailed": "Could not load projects",
-      "adoptFailed": "Could not adopt the Ariane project",
       "openBlockedUnpushed": "Hand the open project back to SpeleoDB first - it still has work that has not been uploaded, and opening {{name}} would close it and leave that work only on this computer.",
       "openBlockedUnsaved": "Save or discard the changes in the open project first - opening {{name}} would close it and lose them.",
       "saveFailedTitle": "Save Failed",
       "saveFailedMessage": "Failed to save project"
-    },
-    "adopt": {
-      "confirmTitle": "Adopt this Ariane project?",
-      "confirmBody": "\"{{name}}\" is an Ariane (.tml) project. Adopting it imports its survey into a new Stalagmight file, uploads that file to SpeleoDB, and links it to this project. Adopting takes the write lock for as long as it runs, and hands it back when the upload is done.",
-      "confirmConsequence": "The project type on SpeleoDB is changed to \"Stalagmight\", and from now on only Stalagmight edits are recognized - later Ariane (.tml) edits are disregarded. To undo this, you will have to manually roll back to the Ariane-only version and change the project type in the SpeleoDB interface.",
-      "confirmButton": "Adopt",
-      "doneToast": "Project adopted and uploaded to SpeleoDB.",
-      "doneToastNoTypeFlip": "Project adopted and uploaded, but its SpeleoDB type could not be changed to \"Stalagmight\" (you may not have write access).",
-      "doneToastLocalOnly": "Project adopted on this machine only - it could not be uploaded. Use Start editing, then Done, to push it to SpeleoDB.",
-      "doneToastLockHeld": "Project adopted and uploaded to SpeleoDB, but handing the write lock back could not be confirmed. Your survey is safe on the server; check the SpeleoDB menu and release the lock if you still hold it, so others can edit.",
-      "doneToastLockHeldNoTypeFlip": "Project adopted and uploaded to SpeleoDB, but two things are unfinished: handing the write lock back could not be confirmed, and its SpeleoDB type could not be changed to \"Stalagmight\". Your survey is safe on the server; check the SpeleoDB menu and release the lock if you still hold it, and change the type in SpeleoDB so the project stops offering to be adopted."
-    },
-    "dumpPicker": {
-      "titleStalx": "Choose which file to open",
-      "titleAriane": "Choose which file to adopt",
-      "body": "This SpeleoDB project holds more than one openable file, so Stalagmight cannot tell which one is the survey. Pick the one you want.",
-      "consequence": "The file you choose becomes the project. The next time you push, it replaces the project file on SpeleoDB - so if you are not sure which one is current, check the sizes and dates below, or ask whoever uploaded them. To stop being asked, remove the extra file(s) on SpeleoDB, leaving a single one.",
-      "columnFile": "File",
-      "columnSize": "Size",
-      "columnModified": "Modified",
-      "confirmStalx": "Open",
-      "confirmAriane": "Adopt"
     },
     "forceEdit": {
       "reconnect": "Reconnect to sync",
@@ -3442,8 +3364,8 @@
       "warning": "Uploading it would record that older survey over the newer one, for everyone working on this project.",
       "discardHint": "Discarding brings this computer back to the latest version and keeps the write lock, so you can carry on editing from there.",
       "discardAndLock": "Discard and take the latest",
-      "pushAnyway": "Upload this older version\u2026",
-      "working": "Working\u2026",
+      "pushAnyway": "Upload this older version…",
+      "working": "Working…",
       "discardedToast": "Back at the latest version from SpeleoDB, and you still hold the write lock.",
       "discardFailedTitle": "Could not get the latest version",
       "discardFailedMessage": "The local copy was left as it was."
@@ -3455,7 +3377,7 @@
       "lockQuestion": "Keep the write lock to carry on editing from the latest version, or release it so someone else can.",
       "discardAndKeep": "Discard and keep editing",
       "discardAndRelease": "Discard and release the lock",
-      "working": "Working\u2026",
+      "working": "Working…",
       "doneKeptToast": "Back at the latest version from SpeleoDB, and you still hold the write lock.",
       "doneReleasedToast": "Back at the latest version from SpeleoDB, and the write lock is released.",
       "failedTitle": "Could not get the latest version",
@@ -3528,7 +3450,7 @@
       "description": "Upload your changes to SpeleoDB and release the write lock.",
       "pushTitle": "Push changes",
       "pushDescription": "Upload your changes to SpeleoDB and keep the write lock so you can carry on editing.",
-      "messageLabel": "Commit message (optional)",
+      "messageLabel": "Commit message",
       "messagePlaceholder": "Describe your changes…",
       "confirm": "Upload & release",
       "pushConfirm": "Upload & keep editing",
@@ -3633,7 +3555,10 @@
       "listUnavailable": "Your projects could not be loaded. Check your connection and use Refresh to try again.",
       "noMatches": "No projects match your filter.",
       "noAccess": "NO ACCESS",
-      "lockedBy": "Write-locked by {{email}}",
+      "lockedBy": "Locked by {{email}}",
+      "readOnly": "Read-only",
+      "readOnlyWarning": "This project will open read-only. Uploading changes requires write access and the project lock.",
+      "lockedWarning": "This project is locked by {{email}}. It will open read-only. Editing requires the write lock.",
       "open": "Open",
       "refresh": "Refresh",
       "signedInAs": "Signed in as {{email}}",
@@ -3648,20 +3573,18 @@
       "projectChanged": "Closed the SpeleoDB project window - another project was opened, so any details you had not saved were discarded.",
       "tabs": {
         "general": "General",
-        "collaborators": "Collaborators",
         "history": "History",
         "admin": "Admin"
       },
       "stub": {
         "note": "This project is managed by SpeleoDB.",
-        "detail": "Its name, collaborators, revision history and deletion live on SpeleoDB, not in this file.",
+        "detail": "Its metadata and revision history live on SpeleoDB.",
         "open": "Open SpeleoDB settings"
       }
     },
     "web": {
       "openProject": "Open project on the web",
       "openRevisions": "Open revision history on the web",
-      "openCollaborators": "Open collaborators on the web",
       "unavailable": "Sign in to SpeleoDB to open this project on the web.",
       "failed": "Could not open your browser"
     },
@@ -3709,46 +3632,7 @@
       "success": "Project published to SpeleoDB.",
       "failed": "Could not publish to SpeleoDB",
       "reloadFailed": "Published to SpeleoDB, but the project could not be reopened. Reopen it from SpeleoDB.",
-      "reloadFailedWithCollaborators": "Published to SpeleoDB, but the project could not be reopened, so the collaborators were not added. Reopen it from SpeleoDB and add them from Project Settings.",
-      "descriptionRequired": "A description is required to publish.",
-      "collaborators": "Collaborators",
-      "collaboratorsHint": "Optionally grant others access. They are added once the project is published.",
-      "collaboratorsPartial": "Published, but these collaborators could not be added: {{emails}}. Add them from Project Settings."
-    },
-    "collaborators": {
-      "title": "Collaborators",
-      "loading": "Loading collaborators…",
-      "loadFailed": "Could not load collaborators",
-      "retry": "Retry",
-      "readOnlyBadge": "View only. You need admin access to change collaborators.",
-      "changesConfirmNote": "Each change is applied on SpeleoDB the moment you confirm it - there is no separate save step.",
-      "you": "(you)",
-      "teamTag": "(team)",
-      "remove": "Remove",
-      "removeConfirm": "Confirm remove",
-      "removeFor": "Remove {{name}}",
-      "removeConfirmFor": "Confirm removing {{name}} from this project",
-      "levelPending": "Not applied yet",
-      "applyLevelFor": "Apply the access level change for {{name}}",
-      "cancelLevelFor": "Discard the access level change for {{name}}",
-      "add": "Add",
-      "addUser": "Add collaborator",
-      "addLevel": "Access level",
-      "addTeam": "Add team",
-      "addTeamLevel": "Team access level",
-      "emailPlaceholder": "collaborator@email.com",
-      "teamPlaceholder": "Select a team…",
-      "levelFor": "Access level for {{name}}",
-      "levels": {
-        "WEB_VIEWER": "Web Viewer",
-        "READ_ONLY": "Read only",
-        "READ_AND_WRITE": "Read & write",
-        "ADMIN": "Admin"
-      },
-      "addFailed": "Could not add the collaborator",
-      "addTeamFailed": "Could not add the team",
-      "changeFailed": "Could not change the access level",
-      "removeFailed": "Could not remove"
+      "descriptionRequired": "A description is required to publish."
     },
     "lock": {
       "title": "Write lock",
@@ -3760,15 +3644,6 @@
       "releasing": "Releasing…",
       "released": "Write lock released.",
       "releaseFailed": "Could not release the write lock"
-    },
-    "delete": {
-      "title": "Delete project",
-      "warning": "This soft-deletes the project on SpeleoDB (an admin can recover it for about 30 days). Your local copy stays on disk as a plain project.",
-      "confirmLabel": "Type the project name ({{name}}) to confirm:",
-      "deleteButton": "Delete from SpeleoDB",
-      "deleting": "Deleting…",
-      "deleted": "Project deleted from SpeleoDB. Your local copy is now a plain project.",
-      "deleteFailed": "Could not delete the project"
     }
   },
   "shotKind": {

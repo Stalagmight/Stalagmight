@@ -12,6 +12,7 @@ import { isFieldChanged, createNumericHandler, createToggleHandler, createSelect
 import { defaultConfig } from '../../../types/config';
 import type { Config, PlacementSuggestionConfig } from '../../../types/config';
 import { useProjectStore } from '../../../store/projectStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import { PANEL_SIZE_BOUNDS, DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from '../../SingleSystemView/layoutConstants';
 
 /** Reusable row for placement suggestion numeric fields. */
@@ -306,7 +307,11 @@ export function AdvancedSettings({
     setIsReloading(true);
     setReloadMessage(null);
     try {
-      const newConfig = await invokeIpc<Config>('reload_config', undefined, { purpose: 'reload config from disk' });
+      const [newConfig, authChanged] = await invokeIpc<[Config, boolean]>('reload_config', undefined, { purpose: 'reload config from disk' });
+      if (authChanged) {
+        useSpeleoStore.getState().clearSession();
+        await useSpeleoStore.getState().refreshSession();
+      }
 
       if (!mountedRef.current) return;
 

@@ -1,4 +1,5 @@
 import { type MouseEvent } from 'react';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { useTranslation } from 'react-i18next';
 import {
   formatDate as formatDateIntl,
@@ -113,6 +114,7 @@ export function SystemTable({
   busy = false,
 }: SystemTableProps) {
   const { t } = useTranslation();
+  const remoteSummaries = useSpeleoStore((s) => s.remoteSummaries);
   const { formatLength } = useProjectStatFormatters();
 
   const headerClass = 'text-xs font-medium text-text-secondary px-3 py-2 sticky top-0 bg-background z-10';
@@ -202,6 +204,7 @@ export function SystemTable({
               myEmail,
               remoteProjects,
               localStates,
+              { [item.projectId]: item.summary },
             );
             return (
               <tr
@@ -267,7 +270,7 @@ export function SystemTable({
           }
 
           const { project } = item;
-          const lock = resolveSpeleoLock(project, remoteLocks, myEmail, remoteProjects, localStates);
+          const lock = resolveSpeleoLock(project, remoteLocks, myEmail, remoteProjects, localStates, remoteSummaries);
           const isSelected =
             multiSelectedIds.has(item.filePath) || selectedProjectId === item.filePath;
 

@@ -6,6 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import SystemTable from '../SystemTable';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import type { RecentListItem } from '../recentListItems';
 import type { SpeleoProjectSummary } from '../../../types/ipc.generated';
 
@@ -18,15 +19,16 @@ const SUMMARY: SpeleoProjectSummary = {
   latest_commit_sha: null,
 };
 
-const REMOTE_ITEM: RecentListItem = { kind: 'remote', projectId: 'p1', summary: SUMMARY };
+const REMOTE_ITEM: Extract<RecentListItem, { kind: 'remote' }> = { kind: 'remote', projectId: 'p1', summary: SUMMARY };
 
 function renderTable(
-  overrides: { onOpenRemote?: ReturnType<typeof vi.fn>; busy?: boolean } = {},
+  overrides: { onOpenRemote?: ReturnType<typeof vi.fn>; busy?: boolean; summary?: SpeleoProjectSummary; cached?: SpeleoProjectSummary } = {},
 ) {
   const onOpenRemote = overrides.onOpenRemote ?? vi.fn();
+  useSpeleoStore.setState({ remoteSummaries: overrides.cached ? { p1: overrides.cached } : {} });
   render(
     <SystemTable
-      items={[REMOTE_ITEM]}
+      items={[{ ...REMOTE_ITEM, summary: overrides.summary ?? SUMMARY }]}
       selectedProjectId={null}
       multiSelectedIds={new Set()}
       sortField="name"
@@ -68,4 +70,12 @@ describe('SystemTable remote row (#218)', () => {
     await userEvent.click(screen.getByTestId('system-row-remote-p1'));
     expect(onOpenRemote).not.toHaveBeenCalled();
   });
+});
+
+
+it.each(['READ_ONLY', 'READ_AND_WRITE'] as const)('uses the remote row permission %s over a conflicting cache', (permission) => {
+  renderTable({ summary: { ...SUMMARY, permission }, cached: { ...SUMMARY,
+    permission: permission === 'READ_ONLY' ? 'READ_AND_WRITE' : 'READ_ONLY',
+  } });
+  expect(screen.queryByTestId('system-row-remote-p1-speleo-read-only') !== null).toBe(permission === 'READ_ONLY');
 });

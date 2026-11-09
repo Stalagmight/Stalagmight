@@ -17,10 +17,9 @@ workspace = true
 # test setters in `core::state::tests_support`, and the config-path override
 # hook `Config::config_path` consults): the root crate's tests still call
 # them, and a dependency's `cfg(test)` items are invisible to a dependent's
-# test build. `dep:tempfile` rides along because `test_helpers` backs its
-# isolated dirs with it. Enabled only via the root crate's [dev-dependencies]
-# entry, so production builds compile exactly what they did before the split.
-test-support = ["dep:tempfile"]
+# test build. Enabled only via the root crate's [dev-dependencies] entry.
+# tempfile also backs production-owned cache staging files.
+test-support = []
 
 [dependencies]
 stalagmight-export = { path = "../export" }
@@ -52,7 +51,7 @@ zip = { workspace = true }
 # compilation.
 rmp-serde = { workspace = true }
 serde_bytes = { workspace = true }
-tempfile = { workspace = true, optional = true }
+tempfile = { workspace = true }
 
 # `trash` has no Android platform module, and the app ships desktop-only - gate it
 # off the Android `cdylib` target so `tauri android build` keeps compiling.

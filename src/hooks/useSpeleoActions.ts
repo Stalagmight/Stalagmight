@@ -55,12 +55,12 @@ export interface SpeleoActions {
       worked. */
   forceEdit: () => Promise<boolean>;
   update: () => Promise<void>;
-  /** Push edits without releasing the lock (T2d) - collects an optional message.
+  /** Push edits without releasing the lock (T2d); uploading UI requires a message.
       Returns the backend outcome (or `null` if the call threw) so callers can keep
       a dialog open on a `divergence_needed` / `push_unconfirmed` result. */
   push: (
     message?: string | null,
-    opts?: { acceptOlderVersion?: boolean },
+    opts?: { acceptOlderVersion?: boolean; isCurrent?: () => boolean },
   ) => Promise<PushResult | null>;
   /** The backend outcome, or `null` if the call threw. Callers key off `.kind`
       (e.g. the close flow only leaves once the lock is actually `released`).
@@ -75,7 +75,7 @@ export interface SpeleoActions {
       confirmation finish it. */
   done: (
     message?: string | null,
-    opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit },
+    opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit; isCurrent?: () => boolean },
   ) => Promise<DoneResult | null>;
   /** #198 "Take remote": DISCARD local unpushed edits and reset to the server
       tip. Returns `true` once the tree is reloaded, `false` if the call threw.
@@ -330,12 +330,15 @@ export function useSpeleoActions(): SpeleoActions {
   const push = useCallback(
     async (
       message?: string | null,
-      opts?: { acceptOlderVersion?: boolean },
+      opts?: { acceptOlderVersion?: boolean; isCurrent?: () => boolean },
     ): Promise<PushResult | null> => {
       if (!opts?.acceptOlderVersion && isUnwoundNotEdited(useSpeleoStore.getState().link)) {
         openDialog('speleodb-unwound-push', { message: message ?? null, mode: 'push' });
         return null;
       }
+      const issuedFor = speleoProjectSessionIssuedFor(useSpeleoStore.getState().remoteProjectId);
+      const current = () => speleoProjectSessionStillCurrent(issuedFor) && (opts?.isCurrent?.() ?? true);
+      const treeGeneration = useProjectStore.getState().projectTreeGeneration;
       const busyToken = beginBusy();
       // A fresh attempt supersedes the previous failure banner (#260); a landed
       // push clears the whole slot via applyPush, and any outcome that leaves the
@@ -343,10 +346,16 @@ export function useSpeleoActions(): SpeleoActions {
       // arm, which neither lands nor throws.
       clearPushFailedBanner();
       try {
-        const result = await invokeIpc<PushResult>('speleodb_push', {
+        let result = await invokeIpc<PushResult>('speleodb_push', {
           message: message ?? null,
           acceptOlderVersion: opts?.acceptOlderVersion ?? false,
         });
+        if (!current()) return null;
+        // An edit can land after the backend decides the snapshot is clean but
+        // before this reply arrives. Keep those edits pending in the frontend too.
+        if (result.kind === 'pushed' && useProjectStore.getState().projectTreeGeneration !== treeGeneration) {
+          result = { kind: 'push_unconfirmed' };
+        }
         applyPush(result);
         const kind = asPushKind(result.kind);
         if (kind === 'pushed') {
@@ -378,6 +387,7 @@ export function useSpeleoActions(): SpeleoActions {
         // the returned kind lets the dialog stay open to resolve them.
         return result;
       } catch (e) {
+        if (!current()) return null;
         // Banner only (durable; inline notice inside the Speleo dialogs while
         // one is open). The old extra toast was pre-#260 redundancy.
         const humanized = humanizeError(e, 'speleodb.editBar.toasts.pushFailed');
@@ -411,7 +421,7 @@ export function useSpeleoActions(): SpeleoActions {
   const done = useCallback(
     async (
       message?: string | null,
-      opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit },
+      opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit; isCurrent?: () => boolean },
     ): Promise<DoneResult | null> => {
       // [#303] The copy is dirty ONLY because a chain step walked it back to an older
       // version - the user has edited nothing. Pushing here does not save anyone's work,
@@ -454,6 +464,7 @@ export function useSpeleoActions(): SpeleoActions {
           message: message ?? null,
           acceptOlderVersion: opts?.acceptOlderVersion ?? false,
         });
+        if (opts?.isCurrent && !opts.isCurrent()) return null;
         applyDone(result);
         switch (asDoneKind(result.kind)) {
           case 'released':
@@ -492,6 +503,7 @@ export function useSpeleoActions(): SpeleoActions {
         }
         return result;
       } catch (e) {
+        if (opts?.isCurrent && !opts.isCurrent()) return null;
         const humanized = humanizeError(e, 'speleodb.editBar.toasts.doneFailed');
         raisePushFailedBanner({
           message: humanized,

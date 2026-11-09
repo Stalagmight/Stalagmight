@@ -1,11 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import { SpeleoAdoptConfirm } from './SpeleoAdoptConfirm';
 import type { SpeleoProjectSummary, UnpushedLocalEdits } from '../../types/ipc.generated';
 
 /**
@@ -40,28 +39,20 @@ export default function SpeleoUnpushedLocalDialog() {
   const clearSession = useSpeleoStore((s) => s.clearSession);
   // Close the prompt right before loadProject so its progress is visible (the same
   // hand-off the browser dialog makes).
-  const { keepLocalCopy, takeRemoteDiscardingLocal, adoptRemote } = useOpenRemoteProject({
+  const { keepLocalCopy, takeRemoteDiscardingLocal } = useOpenRemoteProject({
     onBeforeLoad: closeDialog,
-    // [#258] The discarding open can hit an ambiguous dump too - it is in fact the
-    // only route that reaches one with un-pushed edits - and an Ariane pick there
-    // still needs its confirmation.
-    onAdoptAfterPick: () => {
-      setPendingAdopt(true);
-      setBusy(false);
-    },
   });
 
   const [busy, setBusy] = useState(false);
   const [discardArmed, setDiscardArmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // #214/#270: the server copy turned out to be an Ariane (.tml-only) project, so
-  // taking it means ADOPTING it. Reachable for real: an adopt stamps the cache copy
-  // un-pushed and the server `type` flip is best-effort, so an adopt without write
-  // access leaves a project that is both dirty locally (which is why this prompt is
-  // up) and still Ariane. The confirm is rendered inline here, exactly as the two
-  // other hosts of this flow do, rather than dead-ending on the raw "this project is
-  // an Ariane project" error.
-  const [pendingAdopt, setPendingAdopt] = useState(false);
+  useEffect(() => {
+    setBusy(false);
+    setDiscardArmed(false);
+    setError(null);
+  }, [dialogData]);
+  const stillPrompting = () => useUIStore.getState().activeDialog === 'speleodb-unpushed-local' &&
+    useUIStore.getState().dialogData === dialogData;
 
   const summary = dialogData.summary as SpeleoProjectSummary | undefined;
   const unpushedLocal = dialogData.unpushedLocal as UnpushedLocalEdits | undefined;
@@ -95,6 +86,8 @@ export default function SpeleoUnpushedLocalDialog() {
     setBusy(true);
     setError(null);
     const outcome = await keepLocalCopy(summary, unpushedLocal.local_path);
+    if (!stillPrompting()) return;
+    if (outcome.status === 'cancelled') setBusy(false);
     if (outcome.status === 'error') {
       setError(outcome.message);
       setBusy(false);
@@ -108,18 +101,8 @@ export default function SpeleoUnpushedLocalDialog() {
     setBusy(true);
     setError(null);
     const outcome = await takeRemoteDiscardingLocal(summary);
-    if (outcome.status === 'adopt') {
-      // Nothing has been destroyed yet - the dump is classified before any replace -
-      // so this is still a question we may ask. The discard the user already
-      // confirmed carries into the adopt itself (see `adoptRemote` below), so it is
-      // asked once, not twice.
-      setPendingAdopt(true);
-      setBusy(false);
-    } else if (outcome.status === 'ambiguous') {
-      // [#258] The hook raised the file picker over this prompt, which stays mounted
-      // underneath. Releasing `busy` is not cosmetic here: it gates `onClose` and
-      // every button, so holding it while the user cancels the picker left this
-      // dialog with no way out at all.
+    if (!stillPrompting()) return;
+    if (outcome.status === 'cancelled') {
       setBusy(false);
     } else if (outcome.status === 'error') {
       setError(outcome.message);
@@ -129,42 +112,6 @@ export default function SpeleoUnpushedLocalDialog() {
       setBusy(false);
     }
   };
-
-  // The adopt itself. `discardLocal` is the waiver for the backend's own
-  // un-pushed-edits guard, and it is honest here and only here: this path is
-  // reachable only through the armed take-remote above.
-  const handleConfirmAdopt = async () => {
-    setPendingAdopt(false);
-    setBusy(true);
-    setError(null);
-    const outcome = await adoptRemote(summary, { discardLocal: true });
-    if (outcome.status === 'ambiguous') {
-      // [#258] Adoption raises the picker on its own account, not only by inheriting
-      // one: the Ariane tree can change while the confirm above sits open, and the
-      // backend then answers with a fresh candidate set. Same release as
-      // `handleTakeRemote`, and it matters more here - this branch has ALSO just
-      // cleared `pendingAdopt`, so a held `busy` left a prompt with no confirm on it
-      // and no way out, and the picker's cancel had nothing to hand back to.
-      setBusy(false);
-    } else if (outcome.status === 'error') {
-      setError(outcome.message);
-      if (outcome.reLogin) clearSession();
-      setBusy(false);
-    }
-  };
-
-  if (pendingAdopt) {
-    return (
-      <SpeleoAdoptConfirm
-        projectName={summary.name}
-        busy={busy}
-        // Backing out of the adopt returns to this prompt with the discard still
-        // armed, rather than closing on a project that never opened.
-        onCancel={() => setPendingAdopt(false)}
-        onConfirm={() => void handleConfirmAdopt()}
-      />
-    );
-  }
 
   return (
     <DialogWrapper

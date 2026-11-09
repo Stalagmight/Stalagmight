@@ -2,7 +2,6 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoDbGeneralTab } from './settings/SpeleoDbGeneralTab';
-import { SpeleoCollaboratorsTab } from './settings/SpeleoCollaboratorsTab';
 import { SpeleoAdminTab } from './settings/SpeleoAdminTab';
 import { SpeleoRevisionHistory } from './settings/SpeleoRevisionHistory';
 import { Button } from '../common/Button';
@@ -12,8 +11,8 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoProjectMetadata } from '../../hooks/useSpeleoProjectMetadata';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 
-type SpeleoProjectTab = 'general' | 'collaborators' | 'history' | 'admin';
-const TABS: readonly SpeleoProjectTab[] = ['general', 'collaborators', 'history', 'admin'];
+type SpeleoProjectTab = 'general' | 'history' | 'admin';
+const TABS: readonly SpeleoProjectTab[] = ['general', 'history', 'admin'];
 
 function isTab(value: unknown): value is SpeleoProjectTab {
   return typeof value === 'string' && (TABS as readonly string[]).includes(value);
@@ -21,7 +20,7 @@ function isTab(value: unknown): value is SpeleoProjectTab {
 
 /**
  * Server-side administration of the open remote project: its SpeleoDB details,
- * collaborators, revision history and the admin/danger actions.
+ * metadata, revision history and lock release.
  *
  * Split out of the local Project Settings dialog, where all of this used to sit
  * behind one "SpeleoDB" tab: none of it is stored in the .stalx, none of it honors
@@ -45,7 +44,7 @@ export function SpeleoDbProjectDialog() {
   // the roster, the revision list, the admin actions - describes the project that was
   // open when it mounted, but not one of the server verbs behind them carries a
   // project id: `speleodb_patch_project`, `speleodb_delete_project`,
-  // `speleodb_release_current_lock` and the collaborator/revision calls are each
+  // `speleodb_release_current_lock` and the metadata/revision calls are each
   // addressed backend-side via `speleodb_validated_link()`, i.e. to whatever project
   // is open NOW.
   //
@@ -143,15 +142,7 @@ export function SpeleoDbProjectDialog() {
                 <SpeleoDbGeneralTab metadata={metadata} />
               </div>
             )}
-            {tab === 'collaborators' && (
-              <div
-                role="tabpanel"
-                id={panelId('collaborators')}
-                aria-labelledby={tabId('collaborators')}
-              >
-                <SpeleoCollaboratorsTab />
-              </div>
-            )}
+
             {tab === 'history' && (
               <div role="tabpanel" id={panelId('history')} aria-labelledby={tabId('history')}>
                 <SpeleoRevisionHistory />

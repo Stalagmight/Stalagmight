@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::models::{DumpCandidateKind, SpeleoErrorDto, UnpushedLocalEdits};
+use super::models::{SpeleoErrorDto, UnpushedLocalEdits};
 use super::SpeleoDbError;
 
 /// The decision the caller should take after a SpeleoDB call, derived from the
@@ -43,12 +43,6 @@ pub enum SpeleoDbAction {
     /// An idempotent 5xx that the transport already retried + exhausted; the FE
     /// may offer a manual retry.
     Retry,
-    /// The opened project is an Ariane (`.tml`-only) project with no `.stalx`: the
-    /// FE should offer the one-time C2 adoption flow (#214) instead of surfacing a
-    /// hard error. NOT derived from an HTTP status - it is the local
-    /// [`SpeleoDbError::AdoptAriane`] dump classification crossing the same typed
-    /// action channel so the FE never branches on message text.
-    Adopt,
     /// The re-pull was REFUSED because the local copy still holds edits the server
     /// has never seen. Like [`SpeleoDbAction::Adopt`] this is a routing signal, not
     /// a failure, and it is NOT derived from an HTTP status - it is the local
@@ -56,16 +50,6 @@ pub enum SpeleoDbAction {
     /// channel. The FE offers the binary choice described on
     /// [`super::models::UnpushedLocalEdits`], which the error carries.
     UnpushedLocalEdits,
-    /// [#258] The dump held more than one openable file, so there is nothing to
-    /// guess. A routing signal like [`SpeleoDbAction::Adopt`], not a failure, and
-    /// not status-derived: the FE reads
-    /// [`super::models::SpeleoErrorDto::dump_candidates`] and offers a picker, then
-    /// re-calls the same command with the chosen `entryPath`.
-    ///
-    /// The paths that cannot resolve (the fast-forward verbs take no `entryPath`)
-    /// still receive this action; having no candidates to act on, the FE falls back
-    /// to showing the error's own message, which names the remedy.
-    Ambiguous,
     /// Unmapped / 422 / 4xx we do not model - surface, fail closed.
     Fatal,
 }
@@ -111,13 +95,13 @@ pub enum Endpoint {
     // they are dead in the non-test lib build until those callers land.
     // [P1] #197 maps get_project / get_revisions errors via GetProject.
     GetProject,
-    DownloadDump,
+    DownloadStalx,
     // [P1] #194 start_editing constructs Acquire (auth handler + dto_for_error).
     Acquire,
     // [P1] #197 done maps release errors via Release.
     Release,
     // [P1] #197 done maps upload errors via UploadAuto.
-    UploadAuto,
+    UploadStalx,
     // [P1] #207 speleodb_publish constructs CreateProject (auth handler + dto_for_error).
     CreateProject,
     // [#215] Collaborator/team permission writes + project delete. A write (not
@@ -138,7 +122,7 @@ impl Endpoint {
                 | Endpoint::User
                 | Endpoint::ListProjects
                 | Endpoint::GetProject
-                | Endpoint::DownloadDump
+                | Endpoint::DownloadStalx
         )
     }
 
@@ -147,7 +131,7 @@ impl Endpoint {
     fn is_read(self) -> bool {
         matches!(
             self,
-            Endpoint::ListProjects | Endpoint::GetProject | Endpoint::DownloadDump
+            Endpoint::ListProjects | Endpoint::GetProject | Endpoint::DownloadStalx
         )
     }
 }
@@ -179,7 +163,7 @@ pub fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
         403 => SpeleoDbAction::Fence, // UploadAuto / Acquire / Release / CreateProject / Login
         // Upload-304: the remote tree already matches - benign, dirty bit
         // unchanged. Without this row 304 would fall to the Fatal default.
-        304 if matches!(endpoint, Endpoint::UploadAuto) => SpeleoDbAction::UpToDate,
+        304 if matches!(endpoint, Endpoint::UploadStalx) => SpeleoDbAction::UpToDate,
         // 422: defensive unprocessable fatal row. NOTE (verified live): the box
         // answers a malformed/missing-artifact upload with 400, NOT 422 - that 400
         // has no first-class row and correctly falls to the fail-closed default
@@ -227,22 +211,6 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         }),
         _ => None,
     };
-    // [#258] Same discipline as `unpushed_local`: only the two ambiguity errors
-    // carry candidates, so the field stays a sound discriminant on the FE side.
-    // Built from the SAME match so the pair cannot drift: a kind without candidates
-    // (or the reverse) would be a picker with nothing to show, or one that has to
-    // guess which verb it is offering.
-    let (dump_candidates, dump_candidate_kind) = match err {
-        SpeleoDbError::AmbiguousDump(candidates) => {
-            (Some(candidates.clone()), Some(DumpCandidateKind::Stalx))
-        }
-        SpeleoDbError::AmbiguousAriane(candidates) => {
-            (Some(candidates.clone()), Some(DumpCandidateKind::Ariane))
-        }
-        _ => (None, None),
-    };
-    // [#649] Same discipline again: only the newer-schema refusal carries it, so the
-    // frontend renders that refusal from the shared `newerSchema.message` string.
     let newer_schema = match err {
         SpeleoDbError::NewerSchema(newer) => Some(newer.clone()),
         _ => None,
@@ -261,21 +229,10 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         // surface. The FE renders `transport` instead of it (#270).
         SpeleoDbError::Transport { .. } => (SpeleoDbAction::Retry, None, err.to_string()),
         SpeleoDbError::NotAuthenticated => (SpeleoDbAction::ReLogin, None, err.to_string()),
-        // Ariane (`.tml`-only) project: not a failure, a routing signal. The FE
-        // offers the one-time C2 adoption flow (#214) on `action == Adopt` rather
-        // than toasting the message.
-        SpeleoDbError::AdoptAriane => (SpeleoDbAction::Adopt, None, err.to_string()),
         // A refused re-pull: also a routing signal, not a failure. The FE reads
         // `unpushed_local` (built above) and offers keep-local vs take-remote.
         SpeleoDbError::WouldDiscardLocalEdits { .. } => {
             (SpeleoDbAction::UnpushedLocalEdits, None, err.to_string())
-        }
-        // [#258] More than one openable file: also a routing signal. The FE reads
-        // `dump_candidates` (built above) and offers the choice. Where it cannot
-        // resolve, the Display already names the remedy, so this is never worse
-        // than the `Fatal` it replaces.
-        SpeleoDbError::AmbiguousDump(_) | SpeleoDbError::AmbiguousAriane(_) => {
-            (SpeleoDbAction::Ambiguous, None, err.to_string())
         }
         // The session-moved refusal from Start Editing's commit guard: the world it
         // was started in is gone (delete / close / switch / logout landed inside
@@ -293,9 +250,8 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         // the build until someone decides which side of that line it is on.
         SpeleoDbError::NoEndpoint
         | SpeleoDbError::MissingCredentials
-        | SpeleoDbError::Parse(_)
         | SpeleoDbError::NewerSchema(_)
-        | SpeleoDbError::EmptyDump
+        | SpeleoDbError::Parse(_)
         | SpeleoDbError::Io(_)
         | SpeleoDbError::InvalidProjectId
         | SpeleoDbError::InvalidRevision
@@ -308,8 +264,6 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         status,
         transport,
         unpushed_local,
-        dump_candidates,
-        dump_candidate_kind,
         newer_schema,
     }
 }
@@ -320,8 +274,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
-    use super::{dto_for_error, map_status, Endpoint, SpeleoDbAction, TransportCause};
-    use crate::speleodb::SpeleoDbError;
+    use super::{dto_for_error, map_status, Endpoint, SpeleoDbAction, SpeleoDbError};
 
     #[test]
     fn map_status_per_row() {
@@ -339,13 +292,16 @@ mod tests {
             SpeleoDbAction::ReadOnly
         );
         assert_eq!(
-            map_status(Endpoint::DownloadDump, 403),
+            map_status(Endpoint::DownloadStalx, 403),
             SpeleoDbAction::ReadOnly
         );
         // acquire-400 (lock held) is NOT a first-class row → Fatal (deferred to #194).
         assert_eq!(map_status(Endpoint::Acquire, 400), SpeleoDbAction::Fatal);
         assert_eq!(map_status(Endpoint::Acquire, 403), SpeleoDbAction::Fence);
-        assert_eq!(map_status(Endpoint::UploadAuto, 403), SpeleoDbAction::Fence);
+        assert_eq!(
+            map_status(Endpoint::UploadStalx, 403),
+            SpeleoDbAction::Fence
+        );
         // [#215] The admin writes (collaborator/team perms + delete) are write-shaped:
         // 403 = Fence (no write/admin grant), 5xx = StayDirty (non-idempotent, never
         // auto-retried) - NOT ReadOnly/Retry (which GetProject, a read, would give).
@@ -358,15 +314,21 @@ mod tests {
             SpeleoDbAction::StayDirty
         );
         assert_eq!(
-            map_status(Endpoint::UploadAuto, 304),
+            map_status(Endpoint::UploadStalx, 304),
             SpeleoDbAction::UpToDate
         );
-        assert_eq!(map_status(Endpoint::UploadAuto, 422), SpeleoDbAction::Fatal);
+        assert_eq!(
+            map_status(Endpoint::UploadStalx, 422),
+            SpeleoDbAction::Fatal
+        );
         // Verified live: a malformed / missing-artifact upload is 400, which has
         // no first-class row and must fail closed to Fatal.
-        assert_eq!(map_status(Endpoint::UploadAuto, 400), SpeleoDbAction::Fatal);
         assert_eq!(
-            map_status(Endpoint::UploadAuto, 503),
+            map_status(Endpoint::UploadStalx, 400),
+            SpeleoDbAction::Fatal
+        );
+        assert_eq!(
+            map_status(Endpoint::UploadStalx, 503),
             SpeleoDbAction::StayDirty
         );
     }
@@ -392,7 +354,7 @@ mod tests {
     fn map_status_422_is_distinct_fatal() {
         // 422 is Fatal on every endpoint (no retry, no dirty change).
         for ep in [
-            Endpoint::UploadAuto,
+            Endpoint::UploadStalx,
             Endpoint::Acquire,
             Endpoint::ListProjects,
             Endpoint::CreateProject,
@@ -404,12 +366,12 @@ mod tests {
     #[test]
     fn map_status_upload_304_is_uptodate() {
         assert_eq!(
-            map_status(Endpoint::UploadAuto, 304),
+            map_status(Endpoint::UploadStalx, 304),
             SpeleoDbAction::UpToDate
         );
         // 304 elsewhere is NOT UpToDate.
         assert_ne!(
-            map_status(Endpoint::DownloadDump, 304),
+            map_status(Endpoint::DownloadStalx, 304),
             SpeleoDbAction::UpToDate
         );
     }
@@ -421,7 +383,7 @@ mod tests {
             Endpoint::User,
             Endpoint::ListProjects,
             Endpoint::GetProject,
-            Endpoint::DownloadDump,
+            Endpoint::DownloadStalx,
         ] {
             for status in [500, 502, 503, 599] {
                 assert_eq!(
@@ -436,7 +398,7 @@ mod tests {
     #[test]
     fn map_status_write_5xx_stay_dirty() {
         for ep in [
-            Endpoint::UploadAuto,
+            Endpoint::UploadStalx,
             Endpoint::Acquire,
             Endpoint::Release,
             Endpoint::CreateProject,
@@ -465,10 +427,13 @@ mod tests {
             SpeleoDbAction::ReadOnly
         );
         assert_eq!(
-            map_status(Endpoint::DownloadDump, 403),
+            map_status(Endpoint::DownloadStalx, 403),
             SpeleoDbAction::ReadOnly
         );
-        assert_eq!(map_status(Endpoint::UploadAuto, 403), SpeleoDbAction::Fence);
+        assert_eq!(
+            map_status(Endpoint::UploadStalx, 403),
+            SpeleoDbAction::Fence
+        );
         assert_eq!(map_status(Endpoint::Acquire, 403), SpeleoDbAction::Fence);
     }
 
@@ -481,134 +446,6 @@ mod tests {
     }
 
     #[test]
-    fn speleo_error_dto_maps_status_to_action() {
-        // A 401 Status on an authed endpoint → ReLogin, status carried through.
-        let dto = dto_for_error(
-            Endpoint::User,
-            &SpeleoDbError::Status {
-                status: 401,
-                message: "invalid".to_owned(),
-            },
-        );
-        assert_eq!(dto.action, SpeleoDbAction::ReLogin);
-        assert_eq!(dto.status, Some(401));
-
-        // A 403 on a read endpoint → ReadOnly.
-        let dto = dto_for_error(
-            Endpoint::ListProjects,
-            &SpeleoDbError::Status {
-                status: 403,
-                message: "forbidden".to_owned(),
-            },
-        );
-        assert_eq!(dto.action, SpeleoDbAction::ReadOnly);
-        assert_eq!(dto.status, Some(403));
-
-        // Transport → Retry, no status.
-        let dto = dto_for_error(
-            Endpoint::DownloadDump,
-            &SpeleoDbError::Transport {
-                cause: TransportCause::Timeout,
-                detail: "timed out".to_owned(),
-            },
-        );
-        assert_eq!(dto.action, SpeleoDbAction::Retry);
-        assert_eq!(dto.status, None);
-        // [#270] and it carries the typed cause, so the FE renders a translated
-        // "could not reach <endpoint>" line instead of the raw errno in `message`.
-        assert_eq!(dto.transport, Some(TransportCause::Timeout));
-        assert!(
-            dto.message.contains("timed out"),
-            "the raw cause stays on the message for the log: {}",
-            dto.message
-        );
-
-        // Every non-transport error leaves `transport` unset - that is what makes
-        // it a sound discriminant on the frontend side.
-        for err in [
-            SpeleoDbError::Status {
-                status: 500,
-                message: "boom".to_owned(),
-            },
-            SpeleoDbError::NotAuthenticated,
-            SpeleoDbError::AdoptAriane,
-            SpeleoDbError::NoRemoteProject,
-        ] {
-            assert_eq!(
-                dto_for_error(Endpoint::UploadAuto, &err).transport,
-                None,
-                "{err:?} must not look like a transport failure"
-            );
-        }
-
-        // NotAuthenticated → ReLogin; InsecureEndpoint / local → Fatal.
-        assert_eq!(
-            dto_for_error(Endpoint::User, &SpeleoDbError::NotAuthenticated).action,
-            SpeleoDbAction::ReLogin
-        );
-        assert_eq!(
-            dto_for_error(
-                Endpoint::Login,
-                &SpeleoDbError::InsecureEndpoint {
-                    endpoint: "http://x".to_owned()
-                }
-            )
-            .action,
-            SpeleoDbAction::Fatal
-        );
-        assert_eq!(
-            dto_for_error(Endpoint::User, &SpeleoDbError::InvalidProjectId).action,
-            SpeleoDbAction::Fatal
-        );
-        // AdoptAriane is a routing signal, not a failure: it must map to the typed
-        // `Adopt` action (never `Fatal`) so the FE offers the C2 adoption flow (#214)
-        // instead of toasting the message. Carries no HTTP status.
-        let adopt = dto_for_error(Endpoint::DownloadDump, &SpeleoDbError::AdoptAriane);
-        assert_eq!(adopt.action, SpeleoDbAction::Adopt);
-        assert_eq!(adopt.status, None);
-    }
-
-    #[test]
-    fn the_action_match_is_exhaustive_so_a_new_variant_cannot_default_to_fatal() {
-        // The fail-closed arm used to be `_ =>`, sitting directly under two arms that
-        // exist precisely because a ROUTING signal must not reach the user as `Fatal`
-        // (`AdoptAriane` → Adopt, `WouldDiscardLocalEdits` → UnpushedLocalEdits). A
-        // wildcard is what silently routes the NEXT such variant wrongly: it compiles
-        // clean, lands in Fatal, and the frontend toasts a dead end instead of offering
-        // the choice the variant was added to offer.
-        //
-        // Guarded at the source, because "this match has no wildcard" is not observable
-        // from its results - and rustc's own exhaustiveness check is the real enforcement
-        // the moment the wildcard is gone.
-        let src = include_str!("contract.rs");
-        let start = src
-            .find("let (action, status, message) = match err {")
-            .expect("the action match is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    };\n").expect("the match terminates")];
-        // Anchor the slice before trusting the absence check below. `!contains` passes
-        // vacuously on an empty or short body, so a `cargo fmt` reflow that moves the
-        // `\n    };\n` terminator would turn this test green while guarding nothing -
-        // the one failure mode a source-level tripwire must not have. These two arms
-        // are the routing signals the wildcard used to swallow, so requiring them
-        // proves we sliced the right match.
-        for arm in ["AdoptAriane", "WouldDiscardLocalEdits"] {
-            assert!(
-                body.contains(arm),
-                "sliced the wrong region: the action match must contain the `{arm}` arm"
-            );
-        }
-        assert!(
-            !body.contains("_ =>"),
-            "the action match must stay exhaustive - a wildcard lets a new SpeleoDbError \
-             variant default to Fatal without anyone deciding that it should"
-        );
-    }
-
-    /// [#649] A newer-schema refusal is a dead end this build cannot route around,
-    /// so it is `Fatal`, and it carries its payload so the frontend can say it in
-    /// the open dialog's words; no other error carries one.
-    #[test]
     fn a_newer_schema_refusal_is_fatal_and_carries_its_payload() {
         let newer = crate::models::NewerSchema {
             file: "project.stalx".to_owned(),
@@ -620,7 +457,7 @@ mod tests {
         assert_eq!(dto.message, newer.to_string());
         assert_eq!(dto.newer_schema, Some(newer));
         assert_eq!(
-            dto_for_error(Endpoint::User, &SpeleoDbError::EmptyDump).newer_schema,
+            dto_for_error(Endpoint::User, &SpeleoDbError::NotAuthenticated).newer_schema,
             None
         );
     }

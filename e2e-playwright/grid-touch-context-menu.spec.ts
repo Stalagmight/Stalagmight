@@ -65,7 +65,11 @@ async function touch(
 
 /** Where to put a finger: the middle of an element, in viewport coordinates. */
 async function centerOf(page: Page, testId: string): Promise<TouchPoint> {
-  const box = await page.getByTestId(testId).boundingBox();
+  const target = page.getByTestId(testId);
+  // CDP bypasses Playwright's actionability checks. Wait for the sliding panel
+  // to settle so the finger lands on the cell instead of the map behind it.
+  await target.click({ trial: true });
+  const box = await target.boundingBox();
   expect(box, `${testId} has a bounding box`).not.toBeNull();
   return { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2, id: 1 };
 }

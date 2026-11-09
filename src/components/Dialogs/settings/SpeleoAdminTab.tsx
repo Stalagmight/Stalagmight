@@ -4,43 +4,38 @@ import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
+import { releaseSpeleoLock } from '../../../utils/releaseSpeleoLock';
 import { useProjectStore } from '../../../store/projectStore';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
-import { permissionAtLeast } from '../../../utils/speleoPermission';
 import { holdsWriteLock } from '../../../utils/quit';
 import { TOAST_KEYS } from '../../../utils/toastKeys';
 
-const inputClass =
-  'w-full px-2 py-1 bg-background border border-border rounded text-sm disabled:opacity-60';
-
 /**
- * [#215] The Admin tab of the SpeleoDB project dialog: in-app lock release and the
- * danger-zone project delete.
- *
- * The tab itself is NOT gated on ADMIN, only the delete section is: releasing your
- * own stuck lock is the one in-app recovery a write-tier user has, so hiding the tab
- * from non-admins would strand them.
+ * Explicit lock recovery, available to write-tier users for their own locks and
+ * to administrators for locks held by another account.
  */
 export function SpeleoAdminTab() {
   const { t } = useTranslation();
   const showToast = useUIStore((s) => s.showToast);
-  const closeDialog = useUIStore((s) => s.closeDialog);
   const link = useSpeleoStore((s) => s.link);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
-  const syncProjectLink = useSpeleoStore((s) => s.syncProjectLink);
-  const projectName = useProjectStore((s) => s.project?.name ?? '');
-
-  const canManage = permissionAtLeast(link?.permission, 'ADMIN');
 
   const [releasing, setReleasing] = useState(false);
-  const [confirmName, setConfirmName] = useState('');
-  const [deleting, setDeleting] = useState(false);
 
   const handleRelease = useCallback(async () => {
     setReleasing(true);
     try {
-      await invokeIpc('speleodb_release_current_lock');
+      const session = useSpeleoStore.getState().sessionGeneration;
+      const path = useProjectStore.getState().project?.file_path;
+      const current = () => useSpeleoStore.getState().sessionGeneration === session &&
+        useProjectStore.getState().project?.file_path === path;
+      if (useSpeleoStore.getState().link?.hasUnpushedEdits) {
+        if (!await releaseSpeleoLock(current, false)) return;
+      } else {
+        await invokeIpc('speleodb_release_current_lock');
+      }
+      if (!current()) return;
       await refreshLinkStatus();
       showToast(t('speleodb.lock.released'), TOAST_KEYS.SPELEODB_LOCK, 'success');
     } catch (e) {
@@ -49,28 +44,6 @@ export function SpeleoAdminTab() {
       setReleasing(false);
     }
   }, [refreshLinkStatus, showToast, t]);
-
-  const handleDelete = useCallback(async () => {
-    setDeleting(true);
-    try {
-      await invokeIpc('speleodb_delete_project');
-      // The server soft-deleted it and the backend already unlinked locally, so
-      // the still-open project is now a plain LOCAL one - say that, rather than
-      // just dropping the link.
-      //
-      // `clearLink()` would leave `projectLinkKind: 'unknown'`, and
-      // `selectSpeleoReadOnly` reads unresolved-as-read-only (#270). With the
-      // project still open and nothing left to re-resolve it - the status poll
-      // arms on `link !== null`, which delete just falsified - that stranded the
-      // now-local project permanently read-only until close/reopen.
-      syncProjectLink(false);
-      showToast(t('speleodb.delete.deleted'), TOAST_KEYS.SPELEODB_DELETE, 'success');
-      closeDialog();
-    } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.delete.deleteFailed')), TOAST_KEYS.SPELEODB_DELETE, 'error');
-      setDeleting(false);
-    }
-  }, [syncProjectLink, closeDialog, showToast, t]);
 
   const holder = link?.lockHolder ?? null;
   // Shared predicate, and the force-edit exclusion is load-bearing here: a #213
@@ -116,36 +89,6 @@ export function SpeleoAdminTab() {
         )}
       </SettingsSection>
 
-      {/* Danger zone: delete */}
-      {canManage && (
-        <SettingsSection title={t('speleodb.delete.title')}>
-          <p className="text-text-secondary text-xs mb-2" data-testid="speleodb-delete-warning">
-            {t('speleodb.delete.warning')}
-          </p>
-          <label className="block text-sm mb-1" htmlFor="speleodb-delete-confirm">
-            {t('speleodb.delete.confirmLabel', { name: projectName })}
-          </label>
-          <input
-            id="speleodb-delete-confirm"
-            type="text"
-            value={confirmName}
-            disabled={deleting}
-            onChange={(e) => setConfirmName(e.target.value)}
-            className={inputClass}
-            data-testid="speleodb-delete-confirm-input"
-          />
-          <div className="mt-2">
-            <Button
-              variant="danger"
-              disabled={deleting || confirmName.trim() !== projectName.trim() || projectName === ''}
-              onClick={() => void handleDelete()}
-              data-testid="speleodb-delete-button"
-            >
-              {deleting ? t('speleodb.delete.deleting') : t('speleodb.delete.deleteButton')}
-            </Button>
-          </div>
-        </SettingsSection>
-      )}
     </div>
   );
 }

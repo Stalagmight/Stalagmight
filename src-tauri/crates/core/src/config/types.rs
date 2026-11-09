@@ -1460,15 +1460,24 @@ impl Config {
 
         if path.exists() {
             let contents = std::fs::read_to_string(path).context("Failed to read config file")?;
-            let mut config: Config =
+            let mut document: toml::Value =
                 toml::from_str(&contents).context("Failed to parse config file")?;
+            let legacy = document
+                .as_table_mut()
+                .and_then(|table| table.remove("speleodb"));
+            let mut config: Config = document.try_into().context("Failed to parse config file")?;
+            super::speleodb_file::load_legacy(&mut config.speleodb, path, legacy);
+            super::speleodb_file::load_or_preserve(&mut config.speleodb, path);
             config.migrate_legacy();
             config.normalize();
             tracing::info!(config_path = ?path, "Loaded config from file");
             Ok(config)
         } else {
             tracing::info!(config_path = ?path, "Using default config");
-            Ok(Self::default())
+            let mut config = Self::default();
+            super::speleodb_file::load_or_preserve(&mut config.speleodb, path);
+            config.normalize();
+            Ok(config)
         }
     }
 
@@ -1478,7 +1487,12 @@ impl Config {
             std::fs::create_dir_all(parent).context("Failed to create config directory")?;
         }
 
-        let mut contents = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        let mut document = toml::Value::try_from(self).context("Failed to serialize config")?;
+        if let Some(table) = document.as_table_mut() {
+            table.remove("speleodb");
+        }
+        let mut contents =
+            toml::to_string_pretty(&document).context("Failed to serialize config")?;
         // `webkit_memory` is `#[serde(skip_serializing)]` (backend-only, kept out
         // of the frontend types and payload), so `to_string_pretty` above omits
         // it. Re-append it as a top-level `[webkit_memory]` table whenever it
@@ -1502,9 +1516,14 @@ impl Config {
             contents.push('\n');
             contents.push_str(&section);
         }
-        super::atomic_write::write_atomically(path, &contents)?;
+        super::speleodb_file::save_with_general(&self.speleodb, path, &contents)?;
         tracing::info!(config_path = ?path, "Saved config to file");
         Ok(())
+    }
+
+    /// Persist only SpeleoDB settings and the backend token.
+    pub(crate) fn save_speleodb(&self) -> Result<()> {
+        super::speleodb_file::save(&self.speleodb, &Self::config_path()?)
     }
 
     /// Get the config file path
@@ -1580,7 +1599,7 @@ impl Config {
         self.panels.normalize();
         self.global_view.normalize();
         self.appearance.normalize();
-        // [Track C] (#188): coerce token_fallback's #[serde(other)] sentinel.
+        // Normalize SpeleoDB polling settings.
         self.speleodb.normalize();
         self.closure_adjustment.normalize();
         self.placement_suggestion.normalize();

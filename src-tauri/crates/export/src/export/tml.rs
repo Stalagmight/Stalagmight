@@ -698,6 +698,7 @@ fn remint_duplicate_uuids(shots: &mut [ExportShot]) {
 
 /// The shot list alone; see [`build_export_shots_with_report`] for the variant
 /// `build_xml` uses to surface unwritten GPS anchors as an export note.
+#[cfg(test)]
 fn build_export_shots(
     project: &Project,
     profile: TmlProfile,

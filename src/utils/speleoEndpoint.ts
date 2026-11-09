@@ -4,7 +4,7 @@
  *
  * `src-tauri/src/speleodb/auth.rs::normalize_endpoint` collapses a trailing
  * slash, host case and a default port so that one server entered several ways
- * resolves to one keychain entry. Anywhere the UI compares an endpoint it has to
+ * resolves to one server identity. Anywhere the UI compares an endpoint it has to
  * collapse the same forms, or it reports a mismatch between two names for the
  * one server the user is already signed in to - and, in the managed-file prompt,
  * refuses to open a canonical copy that is sitting right there.

@@ -11,25 +11,35 @@
 //! away. Both replace the cache `.stalx` and reload the project - a View is not
 //! ephemeral, only reversible.
 
-use super::speleodb::{local_dto, validate_project_id, DumpAt};
-use super::speleodb_cache::{
-    preserved_undo_mode, restore_display_settings, InheritedUndo, LocalEditsPolicy,
-};
-use super::speleodb_pull::{ArianeRoute, StalxAmbiguity};
+use super::speleodb::{local_dto, validate_project_id};
+use super::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
 use super::AppState;
 use crate::models::UndoMode;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::{SpeleoRevision, SpeleoRewindTarget, SpeleoUnwindTarget};
-use crate::speleodb::{client, dump, sync};
+use crate::speleodb::{client, sync};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
 
 /// Read one downloaded revision's effective undo mode without installing it over the
 /// working copy. Revision metadata does not carry this policy, so a forward chain step
 /// has to inspect the child `.stalx` it would load.
 fn downloaded_revision_undo_mode(
-    dump: &mut dump::Dump<'_>,
-    entry: &str,
+    source: &std::path::Path,
     scratch_base: &std::path::Path,
+) -> Result<UndoMode, SpeleoDbError> {
+    downloaded_revision_undo_mode_with_limits(
+        source,
+        scratch_base,
+        super::speleodb_pull::DOWNLOADED_VALUE_LIMIT,
+        super::speleodb_pull::DOWNLOADED_PROCESSING_DEADLINE,
+    )
+}
+
+fn downloaded_revision_undo_mode_with_limits(
+    source: &std::path::Path,
+    scratch_base: &std::path::Path,
+    value_limit: i32,
+    deadline: std::time::Duration,
 ) -> Result<UndoMode, SpeleoDbError> {
     let mut name = scratch_base
         .file_name()
@@ -42,12 +52,10 @@ fn downloaded_revision_undo_mode(
     let probe = scratch_base.with_file_name(name);
 
     let result = (|| {
-        dump.extract_entry_to(entry, &probe)?;
-        let db = crate::persistence::Database::open_for_metadata(&probe).map_err(|e| {
-            SpeleoDbError::Io(format!(
-                "could not open the downloaded revision to read its undo policy: {e}"
-            ))
-        })?;
+        std::fs::copy(source, &probe).map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+        let db =
+            crate::persistence::Database::open_existing_untrusted(&probe, value_limit, deadline)
+                .map_err(super::speleodb_cache_install::downloaded_file_error)?;
         let stored_mode = db
             .load_speleo_link()
             .map_err(|e| {
@@ -464,10 +472,10 @@ impl AppState {
             return Ok(None);
         };
 
-        let zip = self
+        let native = self
             .speleodb_handle_auth(
-                Endpoint::DownloadDump,
-                client::download_dump_at_hash(
+                Endpoint::DownloadStalx,
+                client::download_stalx_at_hash(
                     &candidate.endpoint,
                     &candidate.token,
                     candidate.insecure_http,
@@ -475,27 +483,15 @@ impl AppState {
                     &candidate.target.hexsha,
                 ),
             )
-            .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
-        let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
-        let entry = self
-            .speleodb_resolve_entry_remembering(
-                &candidate.project_id,
-                &mut dump,
-                None,
-                ArianeRoute::Refuse,
-                DumpAt::Revision(&candidate.target.hexsha),
-                StalxAmbiguity::Refuse,
-            )
-            .map_err(local_dto)?;
+            .map_err(|e| dto_for_error(Endpoint::DownloadStalx, &e))?;
         let scratch_base = self
             .speleodb_cache_path(&candidate.project_id)
             .map_err(local_dto)?;
         let target_mode =
-            downloaded_revision_undo_mode(&mut dump, &entry, &scratch_base).map_err(local_dto)?;
+            downloaded_revision_undo_mode(native.path(), &scratch_base).map_err(local_dto)?;
 
         Ok(target_mode.pushes_history().then_some(candidate.target))
     }
-
     /// [#218] The project's revision history for the read-only history view:
     /// `GET /projects/{id}/revisions/`, projected to [`SpeleoRevision`] DTOs (no
     /// token, only the display fields). Takes an arbitrary project id (a GlobalView
@@ -555,7 +551,6 @@ impl AppState {
         hexsha: String,
         restore: bool,
         discard_local: bool,
-        entry_path: Option<String>,
         keep_undo_history: bool,
         discard_unpushed: bool,
         chain_forward: bool,
@@ -563,72 +558,38 @@ impl AppState {
         validate_project_id(&project_id).map_err(local_dto)?;
         validate_hexsha(&hexsha).map_err(local_dto)?;
 
-        // Bind to the OPEN project. A revision swap replaces the whole tree in place,
-        // so a stale / mismatched FE project_id must never close the open project and
-        // swap in a DIFFERENT cached one behind the unsaved-changes guard - every other
-        // edit verb goes through the open link, and so does this.
         let open_link = self.speleodb_open_link().map_err(local_dto)?;
         if open_link.project_id != project_id {
             return Err(local_dto(SpeleoDbError::NoRemoteProject));
         }
-        // [#213] A force-edit session holds unsaved edits with NO lock protecting them.
-        // Swapping the tree (View OR Restore) would silently clobber that work, and
-        // clearing force_editing below would hide the big-red "no lock held" warning.
-        // Refuse both until the user finishes or discards the force-edit session.
         if self.force_editing() {
             return Err(local_dto(SpeleoDbError::Io(
                 "finish or discard force-editing before viewing or restoring a revision".to_owned(),
             )));
         }
-        // Restore (editable) additionally requires the write lock genuinely held (with
-        // force-editing already excluded above, edit_enabled here means a real lock).
-        // View is a read-only peek and needs no lock.
         if restore && !self.edit_enabled() {
             return Err(local_dto(SpeleoDbError::Io(
                 "acquire the write lock before restoring a revision".to_owned(),
             )));
         }
-        // [#303] Keeping the downloaded copy's undo history is a LOCK-HELD RESTORE or
-        // nothing. (Spelled "the Keep variant" rather than in full: the
-        // `undo_history_keep_is_unwind_only` tripwire counts raw occurrences of that
-        // literal across the production sources, prose included, so writing it here would
-        // read as a second waiver site.)
-        // The Keep variant hands a server tree's history to a stack the user
-        // can then push from, and writes the chain pointer and the inherited watermark that
-        // decide what the next upload cuts - which is why `repair.rs` and the
-        // `InheritedUndo` docs both describe it as reachable only through an explicit,
-        // confirmed, lock-held Unwind. Nothing in the backend made that true: the gate above
-        // asks about `restore` alone, so `keep_undo_history: true` with `restore: false`
-        // took the Keep branch, stamped the watermark and wrote the pointer with no lock
-        // held. Only `useRestoreRevision.ts`'s clamp stood in the way, and an invariant the
-        // whole push path is written against cannot live in one frontend caller.
-        //
-        // Spelled as the full precondition rather than `!restore`, so it does not quietly
-        // depend on the gate above running first: this refusal has to hold on its own.
         if keep_undo_history && !(restore && self.edit_enabled()) {
             return Err(local_dto(SpeleoDbError::Io(
                 "loading a revision's undo history needs a restore with the write lock held"
                     .to_owned(),
             )));
         }
-        // [#303] The Unwind flavour: keeping the downloaded copy's undo history is a
-        // waiver of the #194 b3 guard, so its preconditions are checked HERE and never
-        // taken on trust from the frontend. `discard_unpushed` is not a decision the FE
-        // gets to make either - it only reports that the dialog showed the user what this
-        // throws away; the guard still decides whether that matters.
         if keep_undo_history {
             self.speleodb_guard_unwind(&open_link, discard_unpushed, chain_forward)?;
-            // ...and check the direction the guard just branched on was the truth.
             self.speleodb_verify_chain_target(&hexsha, chain_forward)?;
         }
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
-        let zip = self
+        let native = self
             .speleodb_handle_auth(
-                Endpoint::DownloadDump,
-                client::download_dump_at_hash(
+                Endpoint::DownloadStalx,
+                client::download_stalx_at_hash(
                     &endpoint,
                     &token,
                     insecure_http,
@@ -636,50 +597,12 @@ impl AppState {
                     &hexsha,
                 ),
             )
-            .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
-
-        // Open the dump once: list entries (to classify) and extract the chosen
-        // `.stalx` from the same parsed archive (identical to the pull path).
-        let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
-        // [#258] Consults the session's existing answer, so a user who resolved the
-        // ambiguity when they OPENED the project - before any lock existed - is not
-        // asked again here, where asking costs a lock round trip.
-        // Ariane data REFUSES here rather than routing to adoption: adoption imports
-        // the project's tip, so on a revision swap it would answer a question about
-        // `hexsha` with today's contents, and there is no import-at-hash path to do
-        // otherwise. The resolver records the user's pick itself when it honours one;
-        // re-recording it here would also record an entry nobody chose, turning an
-        // unambiguous revision's sole `.stalx` into a standing session answer.
-        //
-        // `hexsha` dates the dump, and it is the revision being checked out - so a
-        // session answer given at the TIP correctly does not apply here, and the
-        // restore falls through to asking. That is not a regression on the sentence
-        // above: the probe in front of this flow is what puts the question before the
-        // lock, and it now asks about this same revision for the same reason. Where an
-        // answer WAS given for this revision (the picker's replay, which arrives as
-        // `entry_path`) it is honoured and recorded against it.
-        let entry = self
-            .speleodb_resolve_entry_remembering(
-                &project_id,
-                &mut dump,
-                entry_path.as_deref(),
-                ArianeRoute::Refuse,
-                DumpAt::Revision(&hexsha),
-                // Both hosts of this verb raise the picker on the candidates:
-                // `SpeleoRestoreDialog` and the revert composite.
-                StalxAmbiguity::Ask,
-            )
-            .map_err(local_dto)?;
+            .map_err(|e| dto_for_error(Endpoint::DownloadStalx, &e))?;
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
-        // A forward step loads the CHILD revision's stack. Its policy is therefore the
-        // one that decides whether there is any published history to continue with -
-        // the currently loaded parent may have the opposite setting. The affordance
-        // checks this too, but the backend repeats it against the exact dump and entry
-        // it is about to install so a stale or direct IPC call cannot bypass the rule.
         if keep_undo_history && chain_forward {
             let target_mode =
-                downloaded_revision_undo_mode(&mut dump, &entry, &dest).map_err(local_dto)?;
+                downloaded_revision_undo_mode(native.path(), &dest).map_err(local_dto)?;
             if !target_mode.pushes_history() {
                 return Err(local_dto(SpeleoDbError::Io(
                     "the next revision did not publish undo history, so there is no forward \
@@ -688,54 +611,12 @@ impl AppState {
                 )));
             }
         }
-        // Carry the user's local view toggles across the download-replace, same as a
-        // re-pull (display_settings are stripped from the server copy), and drop the
-        // live handle to this file first - the reload below re-opens it anyway, so
-        // hoisting the close ahead of the extract costs nothing and keeps the swap
-        // off a mmap'd/locked destination.
-        //
-        // GUARDED BY DEFAULT: a revision swap replaces the whole working tree, so
-        // with un-pushed edits present it destroys them - for View just as much as
-        // for Restore, which makes the documented "non-destructive peek" untrue in
-        // exactly the case where the user has most to lose.
-        //
-        // `discard_local` is the ONE waiver, and only a Restore may carry it, after
-        // the frontend's second confirmation has named the edits being discarded
-        // (`SpeleoRestoreDialog`'s armed discard step). It exists because a restore
-        // STAMPS the working copy as un-pushed itself, so the guard otherwise made
-        // Restore single-use: restoring a second revision - or reverting a restore
-        // the user disliked - refused over edits the previous restore had just
-        // created, reported as "local edits never pushed". A View can never waive
-        // it: a read-only peek has no confirmation surface and must stay
-        // non-destructive.
         let policy = if restore && discard_local {
             LocalEditsPolicy::Discard
         } else {
             LocalEditsPolicy::Protect
         };
-        let preserved_view = self
-            .replace_cache_stalx_with(
-                &mut dump,
-                &entry,
-                &dest,
-                &project_id,
-                policy,
-                // [#303] A View/Restore adopts a server tree like any other download, so
-                // its undo history is not inherited implicitly. The Unwind is the ONE
-                // caller that asks to keep it - that history is what it came for.
-                if keep_undo_history {
-                    InheritedUndo::Keep
-                } else {
-                    InheritedUndo::Drop
-                },
-            )
-            .map_err(local_dto)?;
 
-        // Restore rides ON TOP of the current server HEAD (BASE = tip, dirty SET).
-        // Resolve HEAD from the revision topology; if that blips, fall back to the open
-        // link's last-known BASE rather than `None` - a None BASE + dirty makes the next
-        // fence read `Diverged` and forces a spurious divergence prompt after a simple
-        // restore. View pins BASE to the viewed revision (see `revision_swap_base`).
         let server_tip = if restore {
             match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
                 Ok(history) => sync::tip_of(&history.commits)
@@ -755,74 +636,32 @@ impl AppState {
             None
         };
         let (base_sha, has_unpushed_edits) = revision_swap_base(restore, &hexsha, server_tip);
-        // `last_edit_at = now` on a Restore that changed something, so the g7 push-start
-        // comparison treats it as an edit. A View - and a Restore of the tip itself,
-        // which changed nothing - stays clean and carries no edit timestamp.
         let last_edit_at = has_unpushed_edits.then(|| chrono::Utc::now().to_rfc3339());
 
-        match crate::persistence::Database::open_existing(&dest) {
-            Ok(db) => {
-                restore_display_settings(&db, &preserved_view);
-                // [#303] The checked-out revision's own undo policy, read before this
-                // stamp overwrites the row. A revision swap answers "what did the project
-                // look like then", and the policy is part of the project file, so the
-                // swapped-in file speaks for itself rather than inheriting today's value.
-                let swapped_undo_mode = preserved_undo_mode(&db);
-                let link = crate::models::SpeleoLink {
-                    endpoint,
-                    project_id: project_id.clone(),
-                    project_name,
-                    base_commit_sha: base_sha,
-                    has_unpushed_edits,
-                    last_edit_at,
-                    last_verify_at: None,
-                    undo_mode: Some(self.effective_undo_mode(swapped_undo_mode)),
-                };
-                if let Err(e) = db.save_speleo_link(Some(&link)) {
-                    tracing::warn!(
-                        error = %e,
-                        project_id = %project_id,
-                        purpose = "stamp SpeleoDB hand-off link on restore",
-                        "speleodb_restore_revision: failed to stamp speleo_link; project may open local-only"
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    project_id = %project_id,
-                    purpose = "stamp SpeleoDB hand-off link on restore",
-                    "speleodb_restore_revision: could not reopen extracted .stalx to stamp speleo_link"
-                );
-            }
-        }
+        let link = crate::models::SpeleoLink {
+            endpoint,
+            project_id: project_id.clone(),
+            project_name,
+            base_commit_sha: base_sha,
+            has_unpushed_edits,
+            last_edit_at,
+            last_verify_at: None,
+            undo_mode: None,
+        };
+        self.install_linked_download(
+            native.path(),
+            &dest,
+            link,
+            policy,
+            if keep_undo_history {
+                InheritedUndo::Keep
+            } else {
+                InheritedUndo::Drop
+            },
+        )
+        .map_err(local_dto)?;
 
         let local_path = dest.to_string_lossy().into_owned();
-        // Reopen the swapped tree in place. close_project drops the live handle to
-        // `dest` so do_load_project_full's "already open" guard won't reject the same
-        // path (and the reopened connection reads the overwritten file, not a stale
-        // page cache). A fresh load of a remote project defaults to read-only (#191):
-        // for Restore the user holds the lock, so re-enable editing (the restored tree
-        // is a pushable unpushed edit); for View leave it read-only (a peek that Update
-        // fast-forwards away). Mirrors the fast-forward reload (#193); the FE then
-        // pulls the swapped geometry via refreshProjectState.
-        //
-        // `replace_cache_stalx` above already closed the project when it WAS this
-        // file, and replaced it atomically (temp + rename), so the reopen below reads
-        // a whole file rather than a possibly-torn one. This close stays because it
-        // is not guaranteed to have fired (a stale/never-opened cache path) and it is
-        // a cheap no-op when it did.
-        //
-        // Captured BEFORE the reload, which shuts the gate: a status poll landing in
-        // that window clears the acquisition record for a lock we still genuinely
-        // hold, and the `if restore` block below reopens the GATE without it - so the
-        // record would be gone for good and our own landed push would later read as a
-        // conflict. The third in-place reload site, alongside both fast-forward arms.
-        //
-        // Unlike `speleodb_update`'s arm this needs no gate/force PAIR: Restore's
-        // entry guards above already refused a force-editor and already required an
-        // open gate, so the record alone cannot mint - it is only ever handed back to
-        // a session that demonstrably had one on the way in.
         let had_lock_record = self.speleodb_lock_acquired_here(&project_id);
         self.close_project();
         self.do_load_project_full(dest).map_err(|e| {
@@ -838,27 +677,11 @@ impl AppState {
         }
         self.set_force_editing(false);
 
-        // [#303] Record where the Unwind chain now stands - AFTER the reload, because the
-        // reload replaced the file this writes into (and its `speleo_undo_chain` table
-        // came from the server copy, i.e. empty). The next Unwind reads this and walks to
-        // this revision's first parent.
-        //
-        // A plain View / Restore CLEARS it instead: the working copy is no longer where
-        // the chain thought it was, so the next Unwind must restart from BASE rather than
-        // continue a walk that no longer describes anything.
         if keep_undo_history {
             self.speleodb_set_unwound_from(Some(&hexsha));
-            // ...and mark the stack that just came back as INHERITED. Everything in it was
-            // authored in a commit the server already holds, so the next push must not
-            // record those operations again on top of whatever the user does from here.
-            // Stamped after the reload for the same reason as the pointer: the reload is
-            // what put these entries in the stack being measured.
             self.speleodb_stamp_inherited_watermark();
         } else {
             self.speleodb_set_unwound_from(None);
-            // A plain View / Restore dropped the downloaded history (`InheritedUndo::Drop`),
-            // so nothing in the stack is inherited any more and a stale watermark here
-            // would cut the user's own work out of the next push.
             self.speleodb_set_inherited_through(None);
         }
 
@@ -873,12 +696,12 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        downloaded_revision_undo_mode, revision_swap_base, unwind_discards_unpushed,
-        validate_hexsha, AppState,
+        downloaded_revision_undo_mode, downloaded_revision_undo_mode_with_limits,
+        revision_swap_base, unwind_discards_unpushed, validate_hexsha, AppState,
     };
     use crate::models::{Project, SpeleoLink, UndoMode};
     use crate::persistence::Database;
-    use crate::speleodb::{dump::Dump, SpeleoDbError};
+    use crate::speleodb::SpeleoDbError;
 
     /// The project id every fixture here is stamped with; `validate_project_id` requires
     /// a UUID, so it cannot be an arbitrary string.
@@ -914,9 +737,7 @@ mod tests {
         linked_state_with_undo_mode(None)
     }
 
-    fn revision_dump_with_undo_mode(mode: Option<UndoMode>) -> Vec<u8> {
-        use std::io::Write as _;
-
+    fn revision_stalx_with_undo_mode(mode: Option<UndoMode>) -> tempfile::NamedTempFile {
         let temp = tempfile::TempDir::new().expect("revision temp dir");
         let path = temp.path().join("revision.stalx");
         {
@@ -936,19 +757,10 @@ mod tests {
             .expect("stamp revision policy");
         }
 
-        let bytes = std::fs::read(path).expect("read revision fixture");
-        let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
-        writer
-            .start_file(
-                "misc/project.stalx",
-                zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Stored),
-            )
-            .expect("start revision entry");
-        writer.write_all(&bytes).expect("write revision entry");
-        writer.finish().expect("finish revision dump").into_inner()
+        let native = tempfile::NamedTempFile::new().expect("native file");
+        std::fs::copy(&path, native.path()).expect("copy native file");
+        native
     }
-
     /// A forward step loads the child revision's stack, so the child policy wins even
     /// when the older working copy says the exact opposite.
     #[test]
@@ -964,11 +776,9 @@ mod tests {
                     current,
                     "sanity: the open older revision carries the opposite policy"
                 );
-                let zip = revision_dump_with_undo_mode(Some(child));
-                let mut dump = Dump::open(&zip).expect("open revision dump");
+                let native = revision_stalx_with_undo_mode(Some(child));
                 let mode = downloaded_revision_undo_mode(
-                    &mut dump,
-                    "misc/project.stalx",
+                    native.path(),
                     &temp.path().join("project.stalx"),
                 )
                 .expect("read child policy");
@@ -987,19 +797,48 @@ mod tests {
     }
 
     #[test]
+    fn downloaded_policy_probe_rejects_oversized_values_and_expired_deadlines() {
+        let native = revision_stalx_with_undo_mode(Some(UndoMode::Full));
+        let temp = tempfile::tempdir().expect("temp");
+        let scratch = temp.path().join("project.stalx");
+        rusqlite::Connection::open(native.path())
+            .expect("database")
+            .execute(
+                "UPDATE speleo_link SET project_name = ?1",
+                ["X".repeat(8192)],
+            )
+            .expect("oversized synthetic name");
+        assert!(downloaded_revision_undo_mode_with_limits(
+            native.path(),
+            &scratch,
+            1024,
+            std::time::Duration::from_secs(30)
+        )
+        .is_err());
+        assert!(downloaded_revision_undo_mode_with_limits(
+            native.path(),
+            &scratch,
+            64 * 1024 * 1024,
+            std::time::Duration::ZERO
+        )
+        .is_err());
+        assert_eq!(
+            std::fs::read_dir(temp.path()).expect("directory").count(),
+            0,
+            "both failed probes clean up their private copies"
+        );
+    }
+
+    #[test]
     fn legacy_null_revision_does_not_inherit_the_current_global_default() {
         crate::test_helpers::with_isolated_config(|| {
             let (state, temp) = linked_state_with_undo_mode(Some(UndoMode::Full));
             state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Full;
-            let zip = revision_dump_with_undo_mode(None);
-            let mut dump = Dump::open(&zip).expect("open revision dump");
+            let native = revision_stalx_with_undo_mode(None);
 
-            let mode = downloaded_revision_undo_mode(
-                &mut dump,
-                "misc/project.stalx",
-                &temp.path().join("project.stalx"),
-            )
-            .expect("read legacy policy");
+            let mode =
+                downloaded_revision_undo_mode(native.path(), &temp.path().join("project.stalx"))
+                    .expect("read legacy policy");
 
             assert_eq!(mode, UndoMode::Disabled);
         });
@@ -1014,7 +853,6 @@ mod tests {
                 "deadbeefcafe".to_owned(),
                 restore,
                 false,
-                None,
                 true,
                 false,
                 false,
@@ -1094,7 +932,7 @@ mod tests {
             .find("self.speleodb_guard_unwind(")
             .expect("the swap verb must call the Unwind guard");
         let download = restore
-            .find("client::download_dump_at_hash(")
+            .find("client::download_stalx_at_hash(")
             .expect("the swap verb downloads the revision");
         assert!(
             guard < download,
@@ -1162,7 +1000,7 @@ mod tests {
             .find("if keep_undo_history && chain_forward")
             .expect("the forward restore must re-check the downloaded child policy");
         let replace = restore
-            .find(".replace_cache_stalx_with(")
+            .find(".install_linked_download(")
             .expect("the restore replaces the working copy");
         assert!(
             policy < replace,

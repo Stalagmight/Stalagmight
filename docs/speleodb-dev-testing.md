@@ -1,445 +1,160 @@
-# SpeleoDB dev/integration testing
+# SpeleoDB testing
 
-How the SpeleoDB client (`src-tauri/crates/speleodb/src/speleodb/`) is tested against a **real**
-SpeleoDB server, and how to design future multi-account / permission /
-collaboration tests against the dev box.
+Stalagmight uses the published `speleodb-api` dependency declared in
+`src-tauri/Cargo.toml`. Its own Cargo workspace and lockfile remain independent.
+The API adapter and its tests are in
+`src-tauri/crates/speleodb/src/speleodb/client/` and `client.rs`.
 
-The API contract notes below were verified against a local checkout of the SpeleoDB
-server source, not against the (sometimes stale) GitHub issue text.
+## Configuration
 
-## The dev box
+Copy `.env.example` to `.env` at the Stalagmight repository root. The live Rust
+suite loads this file automatically with dotenvy. An explicitly exported
+variable takes precedence. These variables configure tests only; the desktop
+application continues to use its saved endpoint and credential storage.
 
-A throwaway SpeleoDB instance on the lab network. Connection details live in the
-**gitignored** `.env` at the repo root (never committed):
+| Variable | Purpose |
+| --- | --- |
+| `SPELEODB_INSTANCE_URL` | Test server base URL |
+| `SPELEODB_OAUTH_TOKEN` | Existing bearer token, validated independently |
+| `SPELEODB_EMAIL`, `SPELEODB_PASSWORD` | Email login, followed by profile validation |
+| `SPELEODB_API_TIMEOUT_MS` | Per-request timeout, including file transfers; defaults to `20000` |
+| `SPELEODB_API_RETRY_COUNT` | Additional attempts for safe reads and token exchange; defaults to `3` |
+| `SPELEODB_API_TEST_ENABLED` | Exactly `true` enables live requests; defaults to `false` |
 
-| Env var | Meaning |
-|---------|---------|
-| `DEV_SPELEODB_URL` | Base URL of the dev box (e.g. `http://10.10.0.220:8000/`). The client appends the `/api/v2/...` paths. |
-| `DEV_SPELEODB_EMAIL` | Login email for the primary (superuser) test account. |
-| `DEV_SPELEODB_PASSWORD` | Login password for the primary test account. |
-| `DEV_SPELEODB_EMAIL2` | Login email for a **second**, email-verified collaborator (for the two-account tests). Optional - those tests skip if unset. |
-| `DEV_SPELEODB_PASSWORD2` | Login password for the second account. |
+Defaults apply when neither the exported variable nor `.env` supplies a value.
+Set `SPELEODB_API_TEST_ENABLED=false` to disable live requests explicitly.
+Both authentication paths are required when live testing is enabled. Missing,
+blank or placeholder credentials skip before any network operation, naming only the
+missing variable names. Diagnostics distinguish disabled, incomplete configuration,
+and execution; authentication/API/assertion/cleanup failures after validation fail
+the test. Credentials are never printed.
+Set a timeout long enough for the test server's native-file processing; a process
+override can be used without editing `.env`.
 
-> `cargo test` does **not** auto-load `.env`. The live tests read these from the
-> process environment, so pass them on the command line (see "Running the live
-> tests"). `.env` is just the local record of the values for the running app and
-> for copy-pasting into a test command.
+## Commands
 
-### The configured account is a Django superuser
+Run from the standalone Stalagmight checkout:
 
-The account in `DEV_SPELEODB_EMAIL` (`dab@dab.com` on the current box) is a Django
-**superuser**. That matters for test design: a superuser can provision *additional*
-accounts, so future tests that need more than one user (permission tiers,
-collaboration hand-off, lock contention) don't have to share the one login.
+```sh
+# Offline SDK contracts and all application regression tests.
+TELEMETRY_ENDPOINT=http://localhost/dummy SPELEODB_API_TEST_ENABLED=false \
+  cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry
 
-Provisioning caveat - **email verification is mandatory**. The server sets
-`ACCOUNT_EMAIL_VERIFICATION = "mandatory"` (`config/settings/base.py`), and the
-auth-token endpoint rejects accounts whose email is unverified. So a plain
-allauth headless self-signup (the headless routes are mounted under
-`/api/v2/auth/`) yields an account that **cannot** obtain a token until its email
-is verified. To mint a usable test
-account, the superuser must create it *and mark its email verified* - via the
-Django admin (`/admin/`), a `manage.py shell` snippet, or a management command -
-rather than relying on the self-signup flow alone.
+# Live native-file round trips using BOTH email login and the provided token.
+SPELEODB_API_TEST_ENABLED=true TELEMETRY_ENDPOINT=http://localhost/dummy \
+  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb \
+  --features telemetry live_used_api_calls_with_email_and_token -- --nocapture
 
-Server-side cleanup tooling that exists for tests (run on the box, not from here):
-`manage.py wipe_test_user_projects` and `manage.py wipe_test_gitlab`.
-
-### The second account (for multi-user tests)
-
-Some live tests need **two** identities - a project owner and a collaborator - to
-exercise permission tiers and cross-user locks. That second account
-(`DEV_SPELEODB_EMAIL2`/`_PASSWORD2`, `user2@dab.com` on the current box) must be
-**pre-provisioned with a verified email**, because (per the caveat above) a
-verified user cannot be created over HTTP with just the superuser bearer token.
-Create it once, box-side, e.g.:
-
-```bash
-python manage.py shell -c "from django.contrib.auth import get_user_model; from allauth.account.models import EmailAddress; U=get_user_model(); u=U.objects.create_user(email='user2@dab.com', password='ChangeMe123!'); EmailAddress.objects.create(user=u, email='user2@dab.com', verified=True, primary=True)"
+pnpm typecheck
+pnpm exec vitest run
+pnpm test:mock-contract
+pnpm typecheck:playwright
 ```
 
-The two-account tests then **self-seed** the rest over HTTP: the superuser creates
-a throwaway project, grants `user2` a permission level
-(`POST /api/v2/projects/{id}/permission/user/detail/` `{"user","level"}`), and/or
-has `user2` hold the mutex - then deletes the project on the way out. They **skip
-cleanly** when `DEV_SPELEODB_EMAIL2`/`_PASSWORD2` are absent, so a box without the
-second account still runs the single-account suite.
+When checking registry resolution from inside an enclosing checkout with a Cargo
+path override, run Cargo from an external temporary directory and pass the
+absolute Stalagmight manifest path. For a standalone reproduction, copy this
+checkout outside that enclosing tree and run its locked build there. Do not add
+Stalagmight to the enclosing repository's workspace, overrides or submodules.
 
-## Test layers
+## GitHub Actions
 
-The client follows a two-layer convention (see the plan for #183 and the epic #182):
+Offline workspace tests run on every applicable PR and push, without credential
+secrets. Both workflows set `SPELEODB_API_TEST_ENABLED=false` and explicitly skip
+`speleodb::client::tests::live_used_api_calls_with_email_and_token`:
 
-1. **Always-run unit tests** - pure functions, no network. `dump::classify`, DTO
-   parsing, Bearer/URL construction, the in-memory `TokenStore` fallback. These run
-   in normal `cargo test` and in CI.
-2. **Env-gated live tests** - real HTTP against the dev box. Marked `#[ignore]` so
-   they never run in normal `cargo test` or CI, and they early-return (skip) if the
-   `DEV_SPELEODB_*` env vars are absent. They live in the `live_tests` module of
-   `src-tauri/crates/speleodb/src/speleodb/mod.rs`.
-
-### Self-seeding, self-cleaning (no shared fixtures)
-
-The live round-trip owns all of its own state - there is **no** pre-seeded
-`DEV_SPELEODB_PROJECT_ID` to keep alive:
-
-- Each run **creates a throwaway project** with a UUID-suffixed name
-  (`stalagmight-spike-<uuid>`) via `client::create_project`.
-- A `ProjectCleanup` guard (`Drop`) **soft-deletes** that project on the way out -
-  even if an assertion panics partway through - so runs don't leak projects.
-- Seeding a known-good `.stalx` goes through the real single-writer dance:
-  `acquire_lock → upload_auto → release_lock`. (Upload requires holding the
-  project mutex; the server enforces `UserOwnsProjectMutex`.)
-- The pull half then exercises `download_dump → classify → extract →
-  Database::open_existing`, proving the dump opens self-contained.
-
-This is the pattern to copy for new live tests: **one project per run, created and
-destroyed by the test**, keyed by a UUID so parallel/repeat runs never collide.
-For multi-user scenarios, have the superuser provision the extra accounts (see
-above), grant them the project permission under test, and tear everything down in a
-`Drop` guard the same way.
-
-### Poking at the cache: linked files open only from their cache path
-
-A `.stalx` that carries a `speleo_link` row can only be opened from
-`<cache>/speleodb/<project_id>/project.stalx` (canonical storage - see
-`core/state/speleodb_foreign.rs`). Copy one elsewhere and the open is refused
-with the managed-file dialog, which offers exactly two ways forward: open the
-managed copy from SpeleoDB, or strip the file's link
-(`speleodb_remove_link_at`) and open it as a plain local project. To hand-craft
-a foreign-file repro, copy `<cache>/speleodb/<id>/project.stalx` to any other
-path and open it.
-
-## Running the live tests
-
-```bash
-DEV_SPELEODB_URL=http://10.10.0.220:8000/ \
-DEV_SPELEODB_EMAIL=dab@dab.com \
-DEV_SPELEODB_PASSWORD=dab \
-TELEMETRY_ENDPOINT=http://localhost/dummy \
-cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb --features telemetry \
-  speleodb::live_tests -- --ignored
+```sh
+SPELEODB_API_TEST_ENABLED=false TELEMETRY_ENDPOINT=http://localhost/dummy \
+  cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry \
+  -- --skip speleodb::client::tests::live_used_api_calls_with_email_and_token
 ```
 
-- `--ignored` is required - the live tests are `#[ignore]`d by default.
-- `TELEMETRY_ENDPOINT` is needed because the telemetry member's `build.rs`
-  (`src-tauri/crates/telemetry/build.rs`) requires it under
-  `--features telemetry` (which the project's test command uses anyway).
-- Drop the `DEV_SPELEODB_*` vars and the tests skip cleanly (they print a skip line
-  and pass), so this command is safe to leave in a script.
-- `live_bad_credentials_returns_400` needs only `DEV_SPELEODB_URL` (it sends junk
-  credentials and asserts the 400 contract); the full round-trip needs all three.
+The separate "SpeleoDB live API tests" step runs after all deterministic checks in its job, including
+release-profile compilation and CI's generated-bindings/clippy checks. Its condition is
+`github.event_name != 'pull_request'`:
 
-## Verified API contract (for writing more tests)
+| Event | Offline tests | Live tests |
+|-------|---------------|------------|
+| Fork, same-repository, or Dependabot PR | Required | Skipped |
+| Master push | Required | Required |
+| Release tag or manual rehearsal | Required | Required |
 
-Checked against the SpeleoDB server source; these override the stale issue text:
+Only the live step receives `SPELEODB_INSTANCE_URL`, `SPELEODB_OAUTH_TOKEN`,
+`SPELEODB_EMAIL`, and `SPELEODB_PASSWORD` from repository/organization secrets.
+It sets `SPELEODB_API_TEST_ENABLED=true`, preserves telemetry and isolated config,
+and runs exactly the test exercising both EMAIL and TOKEN authentication:
 
-- **Base path `/api/v2/`** (`api_router.py`); v1 is a deprecated alias. v2 responses
-  are **bare** JSON (the `DRFWrapResponseMiddleware` only wraps `/api/v1/`).
-- **Auth header `Authorization: Bearer <token>`** (not `Token`); the token is
-  non-rotating (`get_or_create`).
-- **Bad credentials → HTTP 400** (`{"errors":{"non_field_errors":[…]}}`), *not* 401.
-  A `401` means "not authenticated" on a protected endpoint (e.g. listing with a
-  dead token); a missing auth header yields `403`.
-- **`permission` is a STRING label** - `"WEB_VIEWER" | "READ_ONLY" |
-  "READ_AND_WRITE" | "ADMIN"` - and the field is **absent** (not null) when the user
-  has no permission. (Issues #188/#203 say "parse the integer" - wrong.)
-- **Project `type`** is a string enum: `ariane | compass | stalagmight | stickmaps |
-  therion | walls | other` (`stalagmight` confirmed in the production `/api/schema/`,
-  2026-11-03). Stalagmight writes `stalagmight`; `other` is the legacy managed type.
-- **The `.stalx` lands at `misc/project.stalx`** in the dump ZIP. Locate it by the
-  `.stalx` **suffix**, never the hard-coded `misc/` path (survives a server
-  `TARGET_FOLDER` change).
-- **Upload requires the mutex** - `PUT /projects/{id}/upload/auto/` is gated by
-  `UserOwnsProjectMutex`, so seed via `acquire_lock` first, then `release_lock`.
+```sh
+SPELEODB_API_TEST_ENABLED=true TELEMETRY_ENDPOINT=http://localhost/dummy \
+  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb --lib \
+  --features telemetry speleodb::client::tests::live_used_api_calls_with_email_and_token \
+  -- --exact --nocapture
+```
 
-## Concurrency model - one same-account session at a time (#193)
+Missing credentials visibly skip enabled verification; `--nocapture` exposes the
+diagnostic. A skipped run is not live API validation. Live failures fail the job.
+The manual runner benchmark stays offline. Each live run deletes its two synthetic projects.
+Deterministic frontend regressions cover request supersession, warning cancellation,
+and close-operation ownership using synthetic data and deferred promises.
 
-The single-writer lock (mutex) is the only concurrency control; the server itself
-is last-writer-wins. The ambiguous-push self-heal (guardrail 7, `sync::classify_ancestry`)
-recovers a lost push confirmation by asking *"is the commit now on top of BASE
-authored by me?"* - it identifies our own landed commits **purely** by
-`author_email == my_email`.
+## Coverage and cleanup
 
-**Constraint:** edit a given project from **one session per account at a time.**
-A *second* session under the **same account** editing the same project
-concurrently is unsupported: its commit also reads as `author_email == me`, so the
-self-heal could mistake it for our own landed push and wrongly clear the dirty bit
-(dropping un-pushed edits). The single-writer lock makes this rare in practice, but
-nothing stops a determined user from running two app instances logged in as the
-same account.
+Only operations used by the application are exercised: token exchange, profile,
+project list/detail/create/update, revisions, individual lock acquire/release,
+and native upload/download at HEAD and at a revision. There are no collaborator,
+team, release-all or archive endpoints in the suite. The SDK deletion endpoint is
+used only by test cleanup.
 
-**Mitigation (the notice):** `speleodb_open_project` checks the project's
-`active_mutex` at open time; if the lock is already held by **our own** account, a
-concurrent same-account session is live, and the open result carries
-`concurrent_session = true` (`sync::concurrent_session_notice`) so the UI warns the
-user. A lock held by a *different* account is an ordinary contended-lock case, not
-this notice. (Detection is verified by the `live_orch_open_flags_concurrent_*`
-tests; the pure predicate by `concurrent_session_flagged_only_for_a_same_account_lock_hold`.)
+Offline HTTP tests check request methods, paths, bearer headers, login payloads,
+permission and mutex projection, nullable metadata patches, one multipart
+`project.stalx` artifact, commit messages, upload SHA selection, status errors,
+malformed successful responses, retry boundaries and bounded streamed downloads.
+Core tests keep the existing local-edit fences, atomic cache replacement, SQLite
+schema checks, undo sanitization, revision fencing and lock-ownership races.
+Credential-file tests cover malformed/unreadable input without resetting general
+preferences, preservation during unrelated saves, rollback after a failed settings
+write, owner-only permissions and token-safe diagnostics. Native installation tests
+refuse a failed link write before replacing the cache.
 
-## Render-compat verification (#184 - the P0.5 gate)
+The live test generates synthetic SQLite databases in temporary directories. For
+each authentication path it creates a unique private `STALAGMIGHT` project, verifies
+metadata and locking, uploads two native revisions, checks the unchanged-file
+response, and compares downloaded bytes at HEAD and at the first revision. It
+attempts lock release and deletion of only IDs returned by this run, after success,
+returned failure or an assertion panic. Both cleanup operations are attempted even
+if release fails; cleanup failures fail the test and are reported separately from
+the original failure. It never sweeps by name/prefix. If creation completes remotely
+but its response is lost, the project ID is unknown and cannot safely be deleted
+automatically. All test content is synthetic; no private cave fixtures are used.
 
-The premise of the whole `.tml` render sidecar is that SpeleoDB's `openspeleo_lib`
-accepts **our exporter's** `.tml` and regenerates a `ProjectGeoJSON`. #184 proves
-that against the live box. Three `#[ignore]` tests live in `speleodb::live_tests`
-(single-account tier):
+UI regression coverage must include:
 
-- `live_render_compat_georef_generates_geojson` - **the gate.** Builds an in-memory
-  georeferenced project (a `ZeroDatum` with real lat/long), `export_tml`s it, pushes
-  it via the production two-`artifact` `upload/auto`, then **reads the render back**
-  and asserts features exist.
-- `live_render_compat_no_anchor_records_geojson_state` - pushes an un-georeferenced
-  project (0/0 START) and records that no new render is generated (the D2 path).
-- `live_open1_bare_tml_mime_outcome` - resolves OPEN-1 (below).
+- Only Stalagmight projects appear; read-only permission and lock ownership remain
+  distinct and visible. Remote opens warn before downloading; cold recents and
+  direct file opens inspect SQLite metadata and warn before replacing the project.
+- Cancelling an open warning performs no download, lock release or project
+  replacement, including a switch initiated through the close dialog.
+- Deferred open/create setup, remote downloads, and reconciliation cannot replay
+  older selections over newer mutations. Cancelling a newer preflight warning does
+  not strand an older already-dispatched load; it reconciles and settles loading.
+  Stale successes and failures leave the newer loading state, link, dialog and
+  telemetry intact. Backend session fences prevent late downloads from closing
+  a newer same-cache open.
+- Routine session refreshes do not abort close operations. Login/logout, project
+  replacement, and dialog replacement invalidate close and older-version confirmation
+  continuations before further side effects. Cancelled or superseded remote opens
+  restore the owning prompt's controls without resetting replacement prompts.
+- Manual SpeleoDB Save and publishing collect a commit message. Autosave remains
+  local; failures keep the message and local edits available for retry.
+- Switching projects or closing the app warns about unsaved/unuploaded work.
+  Cancelling preserves the current project and lock. Keep-lock exits close locally without contacting the current server. Confirmed
+  release exits check the current owner; a different holder is not released.
+  Local release/acquire/poll operations are serialized. A failed upload or explicit
+  release keeps the exit dialog open.
+- Read-only users cannot acquire or upload; another user's mutex does not become
+  a lock owned by this process. Offline/failed metadata checks never grant editing.
 
-Key server facts these depend on (checked against the SpeleoDB server source):
-
-- **A 200 upload does NOT prove a render.** `survey_to_geojson` runs best-effort
-  *after* the commit; `api/v2/views/file.py` catches `NoKnownAnchorError` /
-  `EmptySurveyError` / any `Exception` and `continue`s, so the push still 200s with
-  no `ProjectGeoJSON`. The render must be read back to be verified.
-- **Read the render back via OGC API - Features** (no `Authorization` header - the
-  token authenticates via the URL path; the `user_token` converter requires a
-  **40-hex** key, which the DRF token is):
-
-  ```
-  GET /api/v2/gis-ogc/user/<token>/collections/<commit_sha>_points/items
-  GET /api/v2/gis-ogc/user/<token>/collections/<commit_sha>_lines/items
-  ```
-
-  Returns a **bare** `FeatureCollection` (`{"type":"FeatureCollection","features":[…],
-  "numberMatched":N,…}`, a `StreamingHttpResponse`) on 200, and **404** when no
-  `ProjectGeoJSON` exists for that commit + geometry group. The collection id is
-  `<sha>_(points|lines)` (`ogc_typed_id` converter). A lighter
-  `GET /api/v2/projects/{id}/geojson/` (Bearer, ≥ READ_ONLY) lists the commits that
-  have a render.
-- **No-anchor → "may be stale", not blank.** On `NoKnownAnchorError` the server keeps
-  the previous commit's `ProjectGeoJSON` row (it only skips generating a *new* one),
-  which is why the D2 banner copy says the map *may be stale* rather than missing.
-
-### OPEN-1 - is explicit per-part MIME required for the `.tml`?
-
-The server selects the upload processor by **extension** (`processors/auto_selector.py`:
-`.tml` → `ArianeTMLFileProcessor`), then validates the multipart part's `Content-Type`
-against `ArianeTMLFileProcessor.ALLOWED_MIMETYPES = ["application/octet-stream",
-"application/zip"]` (enforced in `processors/artifact.py::assert_valid`). **`text/plain`
-is not allowed**, so a part whose Content-Type is `text/plain` (the multipart default
-when none is set, or `mime_guess` on the unknown `.tml` extension) is rejected →
-`ValidationError` → `ATOMIC_REQUESTS` rollback → **400**. Our production
-`client::upload_auto` always sends `application/octet-stream`, so it passes. This means
-the `client.rs::mime_for` comment ("explicit MIME is robustness, not a hard
-requirement") is **wrong on the server contract**: an `octet-stream`/`zip` Content-Type
-is genuinely required for the `.tml` part. `live_open1_bare_tml_mime_outcome` confirms
-empirically what Content-Type `ureq`'s bare `Part::file()` actually sends (and thus
-whether *our client specifically* could omit the explicit MIME); it prints the verdict.
-
-### Live-run results (2026-06-27, box `http://10.10.0.220:8000/`)
-
-Ran `live_render_compat_georef_generates_geojson`, `live_render_compat_no_anchor_records_geojson_state`,
-and `live_open1_bare_tml_mime_outcome` against the box - all pass:
-
-- **🟢 GATE GREEN.** A Stalagmight-exported **georeferenced** `.tml` regenerated a
-  `ProjectGeoJSON`: the OGC `<sha>_points` layer returned HTTP 200 with **1** feature
-  and `<sha>_lines` returned 200 with **2** features (the 2 shot segments). So
-  `openspeleo_lib` accepts our exporter output - the P1 render/push half is de-risked;
-  no exporter fix / #219 fast-track is needed to proceed.
-- **No-anchor → no render.** A push of the same project with **no** zero datum (0/0
-  START) still 200'd, but both `<sha>_points` and `<sha>_lines` returned **404** - i.e.
-  no new `ProjectGeoJSON` for that commit (the D2 "may be stale" banner path). 0/0 IS
-  treated as "no known anchor".
-- **OPEN-1 resolved → explicit MIME REQUIRED.** A `.tml` part sent **without** an
-  explicit `Content-Type` (bare `ureq` `Part::file()`) was rejected with **HTTP 400** -
-  ureq's default part Content-Type is not in `ArianeTMLFileProcessor`'s
-  `{octet-stream, zip}` allow-list. So `client::mime_for`'s explicit
-  `application/octet-stream` for `.tml` is load-bearing, not defensive (the old "not a
-  hard requirement" comment was wrong and has been corrected).
-
-## Self-conflict coverage (#260)
-
-Three `#[ignore]` orchestration tests in `core::state::speleodb`, added while
-tracing the "pushing twice conflicts with yourself" report. The middle one is the
-repro; the other two guard the routes found alongside it.
-
-- `live_orch_push_then_edit_then_done_does_not_self_conflict` - the user's exact
-  sequence (start editing -> edit -> push keeping the lock -> edit -> Done). It
-  passed from the start, which is what **ruled the push path out** and pointed at
-  the passive poll instead. Keep it: it pins that BASE advances to the topological
-  tip at each push and never to the empty-repo sentinel.
-- `live_orch_stale_poll_snapshot_does_not_report_our_own_push_as_conflict` - the
-  actual reproduction. It hands `speleodb_remote_state` the exact link snapshot an
-  in-flight poll is holding (BASE captured before a push, resolved after it) and
-  asserts the verdict is not `Conflict`. It failed with "got Conflict" before the
-  fix. There is no command-level lock, so that interleaving is ordinary, not
-  exotic.
-- `live_orch_release_current_lock_closes_the_edit_gate` - releasing your own write
-  lock from the admin surface must also drop the local edit gate, or the shell
-  stays editable over a lock that no longer exists. Confirmed to fail without the
-  fix; the revert flow (#8) hands a lock back through this path.
-
-The pure half is offline in `speleodb::sync::poll_verdict` (five arms), so CI
-covers the policy without the box.
-
-## Loop-UI client coverage (#198/#200/#201/#202)
-
-The single-writer loop UI added three client methods that had no live coverage.
-Each now has a `#[ignore]` single-account live test in `speleodb::live_tests`:
-
-- `live_get_project_reflects_holder_and_tip` (**#202**) - pins the two fields the
-  lazy re-verify (`speleodb_verify_lock_if_expired`) branches on: while we hold the
-  mutex `client::get_project` reports `active_mutex.user == me` and carries a
-  `latest_commit`; after `release_lock`, `active_mutex` goes **absent** (the
-  lost-lock signal that routes to the divergence prompt). It deliberately does NOT
-  assert `latest_commit.id` equals the pushed hexsha - that field is
-  `max(authored_date)` and documented unreliable as a tip, which is why #202's
-  tip-moved check is best-effort.
-- `live_release_all_locks_releases_held` (**#201**) - `client::release_all_locks`
-  (`DELETE /user/release_all_locks/`) drops **every** lock the token holds in one
-  request; the test locks two throwaway projects, releases all, asserts both are
-  freed, then re-calls to confirm the empty-handed no-op still 2xxes (idempotent).
-  Caveat: it clears **all** locks for the configured account, so run it only against
-  the throwaway box.
-- `live_patch_exclude_geojson_roundtrips` (**#200**) - `client::patch_project`
-  (`PATCH /projects/{id}/`, write permission, no lock) round-trips
-  `exclude_geojson`: flip to `true`, confirm the PATCH response and a follow-up GET
-  both report `true`, then flip back to `false` (the shipped Enable-rendering
-  action) and confirm the cleared state.
-
-### Live-run results (2026-07-02, box `http://10.10.0.220:8000/`)
-
-Full suite green: `cargo test … speleodb::live_tests -- --ignored --test-threads=1`
-ran **all 25** live tests (22 existing + the 3 above) against the box - **25 passed,
-0 failed** in ~50s, with both `DEV_SPELEODB_EMAIL2`/`_PASSWORD2` set (so the
-two-account tier ran too). This also confirms the loop-UI DTO additions
-(`Project.exclude_geojson`, `ProjectMetadata.speleodb_project_id`) still parse real
-server responses. Run single-threaded because `live_release_all_locks_releases_held`
-clears account-wide locks and must not race lock-holding tests.
-
-## F2 live-suite acceptance coverage (#212)
-
-The env-gated live round-trip / render-compat / negative suite (F2) is the
-`#[ignore]` + `DEV_SPELEODB_*` model above (the issue's `SPELEODB_TEST_URL` name
-predates the adopted `DEV_SPELEODB_URL` convention; the CI/offline-green
-guarantee comes from `#[ignore]`, so those runs never touch the box). Each #212
-acceptance item maps to concrete tests across `speleodb::live_tests` (client) and
-`core::state::speleodb` orchestration live tests:
-
-| #212 criterion | Covering test(s) |
-|----------------|------------------|
-| Skips when the box is absent; CI/offline stay green | `#[ignore]` on every live test + `live_env()`/`orch_env()` early-return when `DEV_SPELEODB_*` is unset |
-| Round-trip tree shape + 2nd-checkout pull matches | `live_round_trip_seed_pull_open` (seed → pull a fresh checkout → open self-contained), `live_orch_start_editing_edit_done_advances_base` (full start→edit→done loop, BASE advances), `live_orch_pushed_dump_is_self_contained_without_sidecars` (server dump = one `.stalx` located by suffix + `ariane.tml` at root + no sqlite sidecar; re-opens carrying the pushed edit) |
-| Render-compat: `ProjectGeoJSON` + OGC feature counts; no-anchor → no render + D2 | `live_render_compat_georef_generates_geojson` (OGC `<sha>_points`=1 / `<sha>_lines`=2), `live_render_compat_no_anchor_records_geojson_state` (0/0 START → 404 render → D2 "may be stale") |
-| Negative: 403-no-mutex | `live_upload_without_mutex_returns_403` (push while `active_mutex` is unheld → `UserOwnsProjectMutex` → 403) |
-| Negative: 400-contended, locked-by via re-GET (not string parse) | `live_acquire_contended_returns_400`, `live_lock_holder_reflects_other_user`, `live_orch_start_editing_reports_locked_by_other_account` |
-| Negative: stale push → fence trips, no clobber | `live_orch_update_diverges_when_dirty_and_tip_moved` (dirty + moved tip → `DivergenceNeeded`, dirty bit preserved), `live_orch_start_editing_diverges_on_unreconcilable_base` (unreconcilable BASE → divergence prompt + lock released, no overwrite) |
-
-Note on "regenerated GeoJSON": the render is a server-side `ProjectGeoJSON`
-served via the **OGC API** (`gis-ogc/.../collections/<sha>_(points\|lines)/items`),
-**not** a file committed to the dump tree - so it is asserted by the render-compat
-tests reading the render back, not by inspecting the ZIP. (This is the mechanism
-#219/#220 aim to retire.) The self-contained-dump test locates the `.stalx` by its
-suffix, never the hard-coded `misc/project.stalx` path, per the verified contract.
-
-## Adopting a `.tml`-only project (C2, #214)
-
-When a SpeleoDB project's dump holds **exactly one** `ariane.tml` and **no
-`.stalx`**, opening it routes to the one-time adoption bootstrap (the single
-sanctioned server-`.tml` read; never an ongoing reconcile). Two or more
-`ariane.tml` is an *ambiguity* rather than an adoption (#258): nothing in the
-archive says which file is the project, so it routes to the dump picker, as more
-than one `.stalx` does. The verbs that can neither ask nor replay an answer -
-Start editing, Update, Take remote - refuse with directions instead. `speleodb_open_project` surfaces the typed
-`SpeleoDbAction::Adopt` (not a hard error); the browser then offers a confirm
-dialog, and on confirm `speleodb_adopt_ariane` runs the whole hand-over:
-
-1. **Lock first.** The write mutex is taken before the head resolve and the
-   download, so no other writer can land a revision while the `.tml` is being
-   converted - the import is the slow part, and it used to sit in an open window.
-   The pre-read lock holder decides this: a mutex held by anybody, including our
-   own account in another window, stops the push (never the adoption).
-2. **Convert.** The `ariane.tml` is imported through the normal TML importer
-   (`include_excluded=false`, `comments_on_stations=true` - the same settings a
-   plain `.tml` import/export round-trip uses) and saved as a new `.stalx` at the
-   pull cache path, with the `speleo_link` stamped (`base = server tip`,
-   `has_unpushed_edits = true`) through the live handle.
-3. **Push.** The ordinary Start-editing → Done pair uploads the `.stalx` with the
-   `export_tml_for_speleodb` sidecar and releases the lock, which clears the dirty
-   bit and advances `base` to the new commit.
-4. **Flip the type**, ariane→stalagmight, and only once the `.stalx` has landed - a
-   project typed `stalagmight` whose only file is the Ariane one that type says to
-   disregard is openable by nobody.
-5. **Close**, so the frontend's `loadProject` is a real load. Leaving it open made
-   the backend answer that load with `ALREADY_OPEN`, which the frontend reads as
-   "already on screen" - true after a re-open, false after an adopt, so adoption
-   finished with the view flipped and nothing rendered.
-
-Every step after the lock is best-effort in one direction only: a lock that cannot
-be taken, or a push that does not land, still leaves the project adopted on disk
-and stamped dirty. `AdoptUpload` reports which happened, and an `AdoptLockGuard`
-hands the mutex back if the conversion fails before the push can use it.
-
-Offline coverage: the typed-signal seams are unit-tested (`dto_for_error(
-AdoptAriane) → Adopt`; the dump classifier's adopt arm carries the `ariane.tml`
-path), the ordering above is pinned by source tripwires in `speleodb_pull.rs`
-(lock before read, guard spanning the conversion, flip after push, close last),
-the guard's arm/disarm behaviour is a unit test, and the FE
-confirm→adopt→reload flow has a component test
-(`OpenFromSpeleoDbDialog.test.tsx`). The full create→import→push orchestration
-needs an app handle + a live box, so it is verified manually on the dev box:
-
-1. Seed / pick an `ariane`-type project whose dump contains only `ariane.tml`.
-2. Open-from-SpeleoDB → pick it → the confirm dialog spells out the consequences,
-   including that adopting uploads and briefly takes the write lock.
-3. Confirm → the survey imports, a `.stalx` lands in the cache **and on the
-   server**, and the UI opens it **read-only** (remote, lock already handed back);
-   the success toast says it was uploaded.
-4. DB-inspect the cached `.stalx`: one `speleo_link` row, `base` = the commit the
-   adoption just pushed, `has_unpushed_edits = 0`.
-5. On the server the project `type` is now `stalagmight`, the repo holds both
-   `ariane.tml` and `misc/project.stalx`, and a GeoJSON row exists for the new
-   commit when the survey carries a GPS zero datum.
-6. A later fresh pull classifies as `Stalx` (normal open), confirming the
-   bootstrap is one-time.
-7. Negative: with a READ_ONLY account the lock cannot be taken, so adoption still
-   opens the project locally, stamped `has_unpushed_edits = 1`, the server `type`
-   stays `ariane`, and the toast says it was not uploaded.
-8. Negative: with the write lock held by another account, same as (7) - the
-   adoption never pushes through somebody else's mutex.
-
-## Optimistic force-edit - editing without the lock (E2, #213)
-
-Force-edit lets an **opted-in** user edit a remote project **without** the write
-lock (to survey offline, or while someone else holds it), behind a persistent
-big-red "this `.stalx` cannot be merged" warning. It introduces a transient
-`force_editing` flag distinct from `edit_enabled`: `edit_enabled && force_editing`
-= editing WITHOUT the lock; `edit_enabled && !force_editing` = the normal lock-held
-mode. Force-edit changes nothing else in the state model - edits set the existing
-dirty bit, BASE never moves (no acquire), and reconnect runs the SAME acquire+fence
-as Start-editing (it folds into `speleodb_start_editing`, no new verb).
-
-The opt-in is `SpeleoDbConfig.allow_force_edit` (default false); without it the
-"Edit without the write lock" affordance stays hidden and `speleodb_force_edit` refuses.
-
-Offline coverage is the pure-state seam (no network): `speleodb_force_edit` flips
-both gates only when opted-in + remote + read-only; with `force_editing` set,
-`speleodb_held_lock_release_params` returns `None` (close/exit/switch never release
-a non-existent lock), `speleodb_verify_lock_if_expired` is a no-op (#202 exempt),
-`speleodb_done`/`speleodb_push_only` return the coded reconnect error, and
-`speleodb_logout` drops both gates without a release. FE coverage: the confirm
-dialog, banner + Reconnect, the settings toggle, and the menu gating each have a
-Vitest test. The reconnect handshake needs a live box, so verify manually:
-
-1. Settings → enable "Allow editing without the write lock"; open a remote project
-   (opens read-only).
-2. Menu (or the status button) → "Edit without the write lock" → confirm the big-red dialog →
-   the persistent red banner appears and the survey becomes editable; make an edit.
-3. DB-inspect the cached `.stalx`: `speleo_link.base_commit_sha` is **unchanged**
-   (no acquire) and `has_unpushed_edits = 1`.
-4. Confirm the #202 re-verify never fires while force-editing (no 20-min lock check).
-5. Close + reopen → opens read-only again (force-edit is transient; the edits
-   persist via the `.stalx` + dirty bit - re-enter force-edit to continue).
-6. Reconnect (the banner action, = Start-editing) while the server is unchanged →
-   UpToDate → normal lock-held editing (banner clears, Done available).
-7. Reconnect while another account holds the lock → 400 → "locked by {holder}", and
-   the force-edit banner persists (keep editing offline).
-8. Reconnect after the server tip moved with local edits → the divergence prompt.
-9. Opt-out account: no "Edit without the write lock" affordance; only read-only + the existing
-   "Save a local copy" detach.
+Use selected Playwright cases for the affected workflows, including
+`window-close-protection.spec.ts` and `speleodb-managed-file.spec.ts`. The tests
+mock IPC and therefore complement, rather than replace, the Rust HTTP contracts
+and live round trips.

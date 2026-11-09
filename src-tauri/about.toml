@@ -30,4 +30,6 @@ accepted = [
     # The generator drops first-party crates from the output, so this entry only
     # stops resolution failing, it does not put AGPL text in the bundle.
     "AGPL-3.0-or-later",
+    # The published SpeleoDB SDK.
+    "AGPL-3.0-only",
 ]

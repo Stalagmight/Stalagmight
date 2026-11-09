@@ -4,7 +4,7 @@
  * rows. The rows' own gating is covered by `useSpeleoMenuItems.test.tsx`.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 
 vi.mock('../../../utils/ipc', () => ({
   invokeIpc: vi.fn(),
@@ -12,6 +12,8 @@ vi.mock('../../../utils/ipc', () => ({
 }));
 
 import { useProjectMenuItems } from '../useProjectMenuItems';
+import { useProject } from '../../../hooks/useProject';
+import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
 
 const LINK: SpeleoLinkState = {
@@ -40,7 +42,7 @@ beforeEach(() => {
   useSpeleoStore.setState({
     link: null,
     remoteProjectId: 'p1',
-    session: { loggedIn: true, userEmail: 'me@x', endpoint: 'https://x/', keychainBacked: true, storage: 'keychain', keychain: 'available' },
+    session: { loggedIn: true, userEmail: 'me@x', endpoint: 'https://x/', },
   });
 });
 
@@ -54,5 +56,28 @@ describe('useProjectMenuItems SpeleoDB row', () => {
 
   it('is absent for a local project', () => {
     expect(speleoRow()).toBeUndefined();
+  });
+});
+
+
+describe('SpeleoDB manual save intent', () => {
+  it.each([
+    [false, 'speleodb-done'],
+    [true, 'speleodb-close'],
+  ] as const)('preserves closeAfterSave=%s while collecting the commit message', async (closeAfterSave, dialog) => {
+    useSpeleoStore.setState({ link: { ...LINK, editState: 'editing', hasUnpushedEdits: true } });
+    const openDialog = vi.spyOn(useUIStore.getState(), 'openDialog').mockImplementation(() => {});
+    const { result } = renderHook(() => useProject());
+    try {
+      await act(async () => {
+        await result.current.handleSaveProject({ closeAfterSave });
+      });
+      await waitFor(() => expect(openDialog).toHaveBeenCalledWith(
+        dialog,
+        ...(closeAfterSave ? [] : [{ mode: 'push' }]),
+      ));
+    } finally {
+      openDialog.mockRestore();
+    }
   });
 });

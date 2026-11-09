@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useSpeleoStore } from '../../store/speleoStore';
+import { useProjectStore } from '../../store/projectStore';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { getErrorMessage } from '../../utils/ipc';
+import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
@@ -14,7 +18,7 @@ import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
  * - **push** (T2d, fix 8): `speleodb_push` - the same push WITHOUT releasing the
  *   lock, so editing continues.
  *
- * Both collect an optional message then route through `useSpeleoActions`. Closes
+ * Both collect a required message when uploading changes then route through `useSpeleoActions`. Closes
  * only when the verb actually LANDED (released / pushed). A `divergence_needed`
  * keeps the dialog's typed message alive and lets the App-level effect open the
  * resolution dialog over it (fix 3); a `push_unconfirmed` keeps it open for a retry
@@ -30,33 +34,63 @@ import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 export default function SpeleoDoneDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
-  const mode = useUIStore((s) => s.dialogData.mode) === 'push' ? 'push' : 'release';
+  const dialogData = useUIStore((s) => s.dialogData);
+  const mode = dialogData.mode === 'push' ? 'push' : 'release';
   const { busy, push, done } = useSpeleoActions();
   const [message, setMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [saveFailure, setSaveFailure] = useState<string | null>(null);
+  const attempt = useRef(false);
+  const busyAny = busy || submitting;
+  const unpushed = useSpeleoStore((s) => s.link?.hasUnpushedEdits);
+  const unsaved = useProjectStore((s) => s.isDirty);
+  const needsMessage = mode === 'push' || unpushed || unsaved;
 
   const handleConfirm = async () => {
-    const text = message.trim() || null;
-    if (mode === 'push') {
-      // Close only when the push actually LANDED. On divergence_needed /
-      // push_unconfirmed the store records the outcome and the App-level effect
-      // opens the resolution dialog; closing here unconditionally would discard the
-      // typed message and drop the user onto the crimson button with no next step
-      // (fix 3). A thrown (network) error returns null - keep the dialog for a retry.
-      const resolved = await push(text);
-      if (resolved?.kind === 'pushed') closeDialog();
-    } else {
-      // Same for release: only leave once the lock is RELEASED. A divergence_needed
-      // result is truthy but must NOT close the dialog - the divergence dialog takes
-      // over (fix 3); a thrown error returns null and keeps this dialog open.
-      const resolved = await done(text);
-      if (resolved?.kind === 'released') closeDialog();
-    }
+    const text = message.trim();
+    if (attempt.current || busy || (needsMessage && !text)) return;
+    attempt.current = true;
+    setSubmitting(true);
+    setSaveFailure(null);
+    const state = useProjectStore.getState();
+    const path = state.project?.file_path;
+    const op = state.loading.clientOpId;
+    const generation = useSpeleoStore.getState().sessionGeneration;
+    const current = () => useProjectStore.getState().project?.file_path === path &&
+      useProjectStore.getState().loading.clientOpId === op &&
+      useSpeleoStore.getState().sessionGeneration === generation &&
+      useUIStore.getState().activeDialog === 'speleodb-done' &&
+      useUIStore.getState().dialogData === dialogData;
+    try {
+      if (mode === 'push') {
+        let saved;
+        try { saved = await state.saveProject(); }
+        catch (error) {
+          if (current()) surfaceSaveFailure(getErrorMessage(error), useUIStore.getState().openDialog);
+          return;
+        }
+        if (!current()) return;
+        if (!saved?.success || saved.unlinked_copy_path) {
+          surfaceSaveFailure(saved?.error ?? 'Could not save the linked project', useUIStore.getState().openDialog);
+          return;
+        }
+        const resolved = await push(text, { isCurrent: current });
+        if (!current()) return;
+        if (resolved?.kind === 'pushed') closeDialog();
+        else setSaveFailure(resolved === null || resolved.kind === 'push_unconfirmed'
+          ? 'Saved locally; upload could not be confirmed.'
+          : 'Saved locally, but not uploaded to SpeleoDB.');
+      } else {
+        const resolved = await done(text, { isCurrent: current });
+        if (current() && resolved?.kind === 'released') closeDialog();
+      }
+    } finally { attempt.current = false; setSubmitting(false); }
   };
 
   return (
     <DialogWrapper
       title={mode === 'push' ? t('speleodb.done.pushTitle') : t('speleodb.done.title')}
-      onClose={closeDialog}
+      onClose={busyAny ? () => {} : closeDialog}
       size="md"
       data-testid="speleodb-done-dialog"
       data-mode={mode}
@@ -66,12 +100,15 @@ export default function SpeleoDoneDialog() {
           {mode === 'push' ? t('speleodb.done.pushDescription') : t('speleodb.done.description')}
         </p>
         <div>
-          <label className="block text-sm text-text-secondary mb-1">
+          <label htmlFor="speleodb-done-message" className="block text-sm text-text-secondary mb-1">
             {t('speleodb.done.messageLabel')}
           </label>
           <textarea
+            id="speleodb-done-message"
+            disabled={busyAny}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
+            required
             rows={3}
             className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
             placeholder={t('speleodb.done.messagePlaceholder')}
@@ -81,18 +118,19 @@ export default function SpeleoDoneDialog() {
         {/* #260: the failure of the LAST attempt, right above the button that made
             it - the shell banner is unreachable behind this dialog's scrim. The
             same button below is the retry; re-pressing it clears this first. */}
+        {saveFailure && <p role="alert" data-testid="speleodb-save-upload-failure">{saveFailure}</p>}
         <SpeleoPushFailureNotice />
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={closeDialog} disabled={busy} data-testid="speleodb-done-cancel">
+          <Button onClick={closeDialog} disabled={busyAny} data-testid="speleodb-done-cancel">
             {t('common.actions.cancel')}
           </Button>
           <Button
             variant="primary"
             onClick={() => void handleConfirm()}
-            disabled={busy}
+            disabled={busyAny || (needsMessage && !message.trim())}
             data-testid="speleodb-done-confirm"
           >
-            {busy
+            {busyAny
               ? t('speleodb.done.pushing')
               : mode === 'push'
                 ? t('speleodb.done.pushConfirm')

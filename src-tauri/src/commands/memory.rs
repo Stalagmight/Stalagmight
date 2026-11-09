@@ -11,7 +11,10 @@ use serde::Serialize;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../src/types/ipc/")]
+// Only gen_ipc_types writes these frontend types, using its compile-time
+// manifest directory. Automatic export tests use the runtime manifest directory,
+// which can point at the app root and put files outside Stalagmight.
+#[ts(export_to = "../src/types/ipc/")]
 pub struct ProcessMemory {
     pub pid: u32,
     pub name: String,
@@ -26,7 +29,7 @@ pub struct ProcessMemory {
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../src/types/ipc/")]
+#[ts(export_to = "../src/types/ipc/")]
 pub struct MemoryStats {
     pub backend: ProcessMemory,
     pub webkit_processes: Vec<ProcessMemory>,

@@ -1,3 +1,4 @@
+import { useSpeleoStore } from '../../store/speleoStore';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useOnboardingStep } from '../../hooks/useOnboardingStep';
@@ -152,15 +153,8 @@ export default function SingleSystemView() {
   const exportPreviewType = useExportStore((s) => s.exportType);
   const exportImageOptions = useExportStore((s) => s.imageOptions);
 
-  // Depend on the stable cancelPending useCallback (not the whole autoSave object,
-  // which is a fresh object each render) so handleSaveProject keeps a stable
-  // identity - otherwise useProjectMenuItems' useMemo rebuilds the menu array on
-  // every render (incl. ~60×/s during a resize drag).
-  const cancelPending = autoSave.cancelPending;
-  const handleSaveProject = useCallback(async (opts?: { closeAfterSave?: boolean }) => {
-    cancelPending();
-    return rawSave(opts);
-  }, [cancelPending, rawSave]);
+  // Opening the message dialog leaves local autosave running.
+  const handleSaveProject = rawSave;
 
   // Toolbar "Import" button - `.dmp` only (#508), matching the hamburger Import
   // row and Ctrl+I: with a project open, Import means adding mNemo data to it.
@@ -932,6 +926,7 @@ function SaveStatus({
   onSave: () => void;
 }) {
   const { t } = useTranslation();
+  const linked = useSpeleoStore((s) => s.remoteProjectId !== null);
 
   let text: string;
   let className = '';
@@ -941,7 +936,7 @@ function SaveStatus({
       text = t('singleView.status.saving');
       break;
     case 'saved':
-      text = t('singleView.status.saved');
+      text = linked ? 'Saved locally' : t('singleView.status.saved');
       break;
     case 'pending':
       text = t('singleView.status.autoSaveCountdown', { seconds: countdown });
@@ -954,7 +949,7 @@ function SaveStatus({
     default:
       text = isDirty
         ? t('singleView.status.unsavedChanges')
-        : t('singleView.status.saved');
+        : linked ? 'Saved locally' : t('singleView.status.saved');
       if (isDirty) className = 'text-yellow-400';
       break;
   }

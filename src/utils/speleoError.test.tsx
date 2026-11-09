@@ -17,7 +17,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 
-import { dumpCandidateKind, humanizeSpeleoError, unpushedLocalEdits } from './speleoError';
+import { humanizeSpeleoError, unpushedLocalEdits } from './speleoError';
 import { useSpeleoStore } from '../store/speleoStore';
 import type { SpeleoErrorDto } from '../types/ipc.generated';
 
@@ -30,8 +30,6 @@ const dto = (over: Partial<SpeleoErrorDto> = {}): SpeleoErrorDto => ({
   status: null,
   transport: 'Unknown',
   unpushed_local: null,
-  dump_candidate_kind: null,
-  dump_candidates: null,
   newer_schema: null,
   ...over,
 });
@@ -42,10 +40,7 @@ beforeEach(() => {
       loggedIn: true,
       userEmail: 'me@example.com',
       endpoint: ENDPOINT,
-      keychainBacked: true,
-      storage: 'keychain',
-      keychain: 'available',
-    },
+      },
   });
 });
 
@@ -184,47 +179,5 @@ describe('unpushedLocalEdits payload guards (#270)', () => {
   it('tolerates a missing last_edit_at (the prompt has its own unknown wording)', () => {
     const payload = { project_id: 'p1', local_path: '/cache/p1.stalx', last_edit_at: null };
     expect(unpushedLocalEdits(refusal(payload))).toEqual(payload);
-  });
-});
-
-/**
- * [#258] The picker's verb comes from the DTO, not from the candidates' file
- * extensions. Extracting a `.stalx` and adopting an `ariane.tml` are different
- * operations, so reading this wrong shows the wrong dialog - and hard-coding it
- * left the Adopt copy with no production caller at all.
- */
-describe('dumpCandidateKind (#258)', () => {
-  const ambiguous = (kind: unknown) =>
-    dto({
-      action: 'Ambiguous',
-      dump_candidates: [{ entry_path: 'a', size_bytes: 1, modified: null }],
-      dump_candidate_kind: kind as SpeleoErrorDto['dump_candidate_kind'],
-    });
-
-  it('reads the kind the classifier decided', () => {
-    expect(dumpCandidateKind(ambiguous('ariane'))).toBe('ariane');
-    expect(dumpCandidateKind(ambiguous('stalx'))).toBe('stalx');
-  });
-
-  it('falls back to stalx when no kind is carried', () => {
-    // An older backend, or any error that is not an ambiguity at all. `stalx` is
-    // both the commoner ambiguity and the flow that works without adoption, so it
-    // is the safe default - never a silent switch INTO the adopt verb.
-    expect(dumpCandidateKind(ambiguous(null))).toBe('stalx');
-    expect(dumpCandidateKind(ambiguous(undefined))).toBe('stalx');
-    expect(dumpCandidateKind(new Error('plain'))).toBe('stalx');
-    expect(dumpCandidateKind('a string rejection')).toBe('stalx');
-  });
-
-  it('never infers the kind from the candidates themselves', () => {
-    // A set of `.tml` paths with no kind stays `stalx`: the extension is not the
-    // discriminant, precisely so the two copies of that rule cannot disagree.
-    const tmlish = dto({
-      action: 'Ambiguous',
-      dump_candidates: [
-        { entry_path: 'one/ariane.tml', size_bytes: 1, modified: null },
-      ],
-    });
-    expect(dumpCandidateKind(tmlish)).toBe('stalx');
   });
 });

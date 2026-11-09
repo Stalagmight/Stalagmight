@@ -3,7 +3,7 @@
 //!
 //! Split out of `speleodb.rs` along the axis that module's own doc declares, and
 //! the one the #275 plan names for this module: the BASE-SHA fence, the quiescent
-//! VACUUM snapshot, the `ariane.tml` co-render, the upload itself, and the
+//! VACUUM snapshot, the native SQLite upload, and the
 //! Done / Push / Update verdicts built on their outcomes.
 //!
 //! What holds this together rather than being a grab bag: every path here decides
@@ -148,56 +148,12 @@ where
 }
 
 impl AppState {
-    /// Render the open remote project to a scratch `ariane.tml` at `dest` for
-    /// co-push (#196). Mints a stable UUID for any shot still missing one - a
-    /// no-op for modern files; for legacy pre-v6 shots it mints AND persists so
-    /// the canonical `.stalx` (hence its push snapshot) shares the identity the
-    /// `.tml` carries. Renders via `export_tml_for_speleodb` into a throwaway
-    /// sidecar - the same document as the user-facing export, hardened for the
-    /// server's GeoJSON conversion.
-    fn speleodb_render_tml(&self, dest: &Path) -> Result<(), SpeleoDbError> {
-        // Snapshot the in-memory project so the UUID-persist + render run without
-        // holding the project lock across the database lock.
-        let (project, minted) = {
-            let mut proj_guard = self
-                .project
-                .lock()
-                .map_err(|_| SpeleoDbError::Io("project lock poisoned".to_owned()))?;
-            let project = proj_guard.as_mut().ok_or(SpeleoDbError::NoRemoteProject)?;
-            let minted = project.sections.iter().any(|s| {
-                s.shots
-                    .iter()
-                    .any(|sh| sh.uuid.as_deref().map_or(true, str::is_empty))
-            });
-            project.ensure_shot_uuids();
-            (project.clone(), minted)
-        };
-        // Persist freshly-minted UUIDs so the snapshot .stalx matches the .tml.
-        // save_project does NOT clear the SpeleoDB dirty bit (speleo_link is
-        // excluded), so this is safe to call inside the push pipeline.
-        if minted {
-            if let Ok(mut db_guard) = self.database.lock() {
-                if let Some(db) = db_guard.as_mut() {
-                    if let Err(e) = db.save_project(&project) {
-                        tracing::warn!(
-                            error = %e,
-                            purpose = "persist freshly-minted shot UUIDs before push",
-                            "speleodb_render_tml: failed to persist minted UUIDs"
-                        );
-                    }
-                }
-            }
-        }
-        crate::export::tml::export_tml_for_speleodb(&project, dest)
-            .map_err(|e| SpeleoDbError::Io(format!("render .tml failed: {e}")))?;
-        Ok(())
-    }
-
     /// Push the open project's edits (if any) and release the write lock,
     /// returning to read-only (#197). On a confirmed push (or nothing to push) the
     /// lock is released and the edit gate dropped; on divergence or an ambiguous
     /// push, the lock + dirty bit are retained so no edits are lost. `message` is
     /// the commit message (a generic default is used when blank).
+    #[cfg(test)]
     pub(crate) fn speleodb_done(
         &self,
         message: Option<String>,
@@ -477,7 +433,7 @@ impl AppState {
         if !keep_lock {
             // Hand it back. `None` rather than a fabricated editing result, so no caller
             // can mistake a released project for one it may still write to.
-            self.speleodb_release_current_lock()?;
+            self.speleodb_release_current_lock(true, false, None)?;
             return Ok(None);
         }
         // Re-acquire through the ordinary verb rather than by hand, so the fence, the
@@ -670,13 +626,6 @@ impl AppState {
             // Our prior (ambiguous) push landed; adopt the tip as BASE, then push the
             // current state on top (a 304 if nothing changed since).
             PushPlan::AdoptThenUpload => {
-                // [#258] This arm PROVES a prior upload landed, so the remembered
-                // choice is stale here just as surely as in the arms that return
-                // Confirmed - and it is the reachable one of the two adoption plans.
-                // Ahead of the fallible write for the usual reason, and ahead of the
-                // upload below because that upload can come back ambiguous and return
-                // without concluding anything.
-                self.speleodb_note_prior_push_landed(project_id);
                 self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone())
                     .map_err(local_dto)?;
             }
@@ -688,7 +637,7 @@ impl AppState {
                 // ahead of the fallible link write, like the 200 and 304 arms: the
                 // recall went stale when that upload landed, so a failure to record
                 // the adoption locally must not be what leaves it standing.
-                let landed = self.speleodb_revision_landed(project_id);
+                let landed = PushOutcome::Confirmed;
                 self.speleodb_mutate_link(|l| {
                     l.base_commit_sha = tip.clone();
                     l.has_unpushed_edits = false;
@@ -771,7 +720,6 @@ impl AppState {
             .parent()
             .ok_or_else(|| local_dto(SpeleoDbError::Io("cache path has no parent".to_owned())))?;
         let snapshot = dir.join("snapshot.stalx");
-        let tml = dir.join("ariane.tml");
 
         // Push-start fence (#197): capture the instant BEFORE the flush/snapshot.
         // Any edit recorded after this (last_edit_at > push_start) is NOT in the
@@ -782,19 +730,14 @@ impl AppState {
         // a real dirty bit here.)
         let push_start = chrono::Utc::now().to_rfc3339();
 
-        // Flush in-memory state to the live `.stalx` FIRST, THEN render the `.tml`.
-        // save_project heals the in-memory project (mints + DEDUPS shot UUIDs and
-        // sanitizes non-finite geometry); rendering the `.tml` after that heal is
-        // what guarantees the co-pushed `.tml` and the `.stalx` snapshot agree on
-        // shot identity + geometry. Rendering first would ship a `.tml` built from
-        // the un-healed project for a legacy file carrying within-section duplicate
-        // UUIDs or non-finite values (#196).
+        // Flush in-memory state before taking the native SQLite snapshot.
+        // save_project also heals duplicate shot UUIDs and non-finite geometry,
+        // so the upload carries the same normalized data as the local file.
         if !self.save_project(None).success {
             return Err(local_dto(SpeleoDbError::Io(
                 "failed to flush project before push".to_owned(),
             )));
         }
-        self.speleodb_render_tml(&tml).map_err(local_dto)?;
 
         // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in
         // the COPY so it never rides to the server.
@@ -831,14 +774,13 @@ impl AppState {
             .map_err(local_dto)?;
 
         let result = self.speleodb_handle_auth(
-            Endpoint::UploadAuto,
-            client::upload_auto(
+            Endpoint::UploadStalx,
+            client::upload_stalx(
                 endpoint,
                 token,
                 insecure_http,
                 project_id,
                 &snapshot,
-                &tml,
                 &commit_message,
             ),
         );
@@ -858,7 +800,7 @@ impl AppState {
                 // with the new tip, which is the exact rollback the recall drop is
                 // here to prevent. The outcome is held and returned unchanged, so the
                 // "landed" conclusion and the invalidation still cannot drift apart.
-                let landed = self.speleodb_revision_landed(project_id);
+                let landed = PushOutcome::Confirmed;
                 self.speleodb_heal_managed_type(
                     endpoint,
                     token,
@@ -878,7 +820,7 @@ impl AppState {
                     // the same guard the revision-restore path already applies.
                     //
                     // Presence is a sufficient test only because
-                    // `parse_upload_auto_response` now populates `latest_commit`
+                    // the SDK upload response now populates `latest_commit`
                     // SOLELY from the 200 envelope's authoritative top-level
                     // `hexsha`. It used to fall back to the response's own
                     // eventually-consistent `latest_commit`, which is documented (and
@@ -913,7 +855,7 @@ impl AppState {
                     // identical content - and it is THAT upload which made the recall
                     // stale, whatever this attempt returns. Concluded ahead of the
                     // fallible link write for the same reason as the 200 arm.
-                    let landed = self.speleodb_revision_landed(project_id);
+                    let landed = PushOutcome::Confirmed;
                     self.speleodb_heal_managed_type(
                         endpoint,
                         token,
@@ -939,7 +881,7 @@ impl AppState {
                 // on the next attempt.
                 let ambiguous = match &e {
                     SpeleoDbError::Status { status, .. } => {
-                        map_status(Endpoint::UploadAuto, *status) == SpeleoDbAction::StayDirty
+                        map_status(Endpoint::UploadStalx, *status) == SpeleoDbAction::StayDirty
                     }
                     SpeleoDbError::Transport { .. } => true,
                     _ => false,
@@ -953,7 +895,7 @@ impl AppState {
                     return Ok(PushOutcome::Unconfirmed);
                 }
                 // A hard rejection (403 fence, 4xx, parse): surface it.
-                Err(dto_for_error(Endpoint::UploadAuto, &e))
+                Err(dto_for_error(Endpoint::UploadStalx, &e))
             }
         }
     }
@@ -991,7 +933,7 @@ impl AppState {
     ///
     /// Called directly rather than through the auth handler, like adoption's own flip
     /// and for the same reason: this is a swallowed best-effort call at the end of a
-    /// successful push, so a spurious 401 here would drop the session - keychain entry
+    /// successful push, so a spurious 401 here would drop the session - saved token
     /// included - over work that already landed.
     fn speleodb_heal_managed_type(
         &self,

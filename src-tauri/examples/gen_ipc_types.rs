@@ -18,14 +18,13 @@ use stalagmight_lib::commands::survey_geometry::{
 };
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
-    ConfigSaveReport, DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, DpvRig,
-    DpvUnit, ExportConfig, GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin,
-    ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig,
-    MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig, PlacementSuggestionConfig,
-    ProviderCacheConfig, ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback,
-    ShortcutsConfig, ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel,
-    SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode, TokenFallback, UnitsConfig,
-    UpdateTrack, ValidationConfig,
+    DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, DpvRig, DpvUnit,
+    ExportConfig, GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig,
+    LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig,
+    MapSnapConfig, OverlapMode, PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig,
+    ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig,
+    ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset,
+    SyntacticHighlightingConfig, ThemeMode, UnitsConfig, UpdateTrack, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
@@ -67,14 +66,12 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    AdoptUpload, DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult,
-    RemoteState, SpeleoAdoptResult, SpeleoCollaborator, SpeleoCollaborators, SpeleoDbAction,
-    SpeleoDumpCandidate, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
-    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
-    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
-    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUnwindTarget,
-    SpeleoUserSuggestion, StartEditingResult, TokenStorage, TransportCause, UnpushedLocalEdits,
-    UpdateResult, Visibility,
+    DoneResult, Permission, PushResult, RemoteState, SpeleoAccessVerification, SpeleoDbAction,
+    SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult,
+    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoReleaseContext, SpeleoRevision,
+    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult,
+    TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -136,6 +133,32 @@ fn flatten_import_paths(file: &Path) {
 fn main() {
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/types/ipc");
     fs::create_dir_all(&out_dir).expect("Failed to create ipc types directory");
+    // Remove generated files whose source types were retired with native transfer.
+    for name in [
+        "KeychainReport",
+        "TokenFallback",
+        "TokenStorage",
+        "ConfigSaveReport",
+        "AdoptUpload",
+        "SpeleoAdoptResult",
+        "DumpCandidateKind",
+        "SpeleoDumpCandidate",
+        "SpeleoCollaborator",
+        "SpeleoCollaborators",
+        "SpeleoTeamGrant",
+        "SpeleoTeamOption",
+        "SpeleoUserSuggestion",
+    ] {
+        for directory in [
+            &out_dir,
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bindings"),
+        ] {
+            let path = directory.join(format!("{name}.ts"));
+            if path.exists() {
+                fs::remove_file(path).expect("remove retired generated type");
+            }
+        }
+    }
 
     // Core command/result types
     export::<CommandResult>(&out_dir);
@@ -359,8 +382,6 @@ fn main() {
     export::<ThemeMode>(&out_dir);
     export::<ColorTheme>(&out_dir);
     export::<SpeleoDbConfig>(&out_dir);
-    export::<TokenFallback>(&out_dir);
-    export::<ConfigSaveReport>(&out_dir);
     // In-app updater (#579): the check answer, its status union, and the
     // download-progress event payload.
     export::<AppUpdateCheck>(&out_dir);
@@ -369,14 +390,13 @@ fn main() {
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
-    export::<TokenStorage>(&out_dir);
-    export::<KeychainReport>(&out_dir);
+    export::<SpeleoFileAccess>(&out_dir);
+    export::<SpeleoAccessVerification>(&out_dir);
+    export::<SpeleoReleaseContext>(&out_dir);
     export::<SpeleoLoginResult>(&out_dir);
     export::<SpeleoOpenResult>(&out_dir);
     // #214 adopt-Ariane result (import + link + type-flip outcome), and what the
     // adoption's own hand-over to the server managed to do
-    export::<AdoptUpload>(&out_dir);
-    export::<SpeleoAdoptResult>(&out_dir);
     // #218 revision-history view: one projected commit
     export::<SpeleoRevision>(&out_dir);
     // [#303] The hybrid undo stack: which revision the next Unwind would load, and the
@@ -393,10 +413,8 @@ fn main() {
     export::<TransportCause>(&out_dir);
     // The un-pushed local work a refused re-pull would have destroyed, carried on
     // SpeleoErrorDto so the FE can offer keep-local vs take-remote-and-discard.
-    export::<SpeleoDumpCandidate>(&out_dir);
     // [#258] Which ambiguity the candidates describe, so the picker offers the right
     // verb instead of inferring it from their extensions.
-    export::<DumpCandidateKind>(&out_dir);
     export::<UnpushedLocalEdits>(&out_dir);
     // SpeleoDB linked-project status for the action shell (#204) + remote-state (T2c)
     export::<SpeleoLinkStatus>(&out_dir);
@@ -416,11 +434,6 @@ fn main() {
     export::<SpeleoPublishParams>(&out_dir);
     export::<SpeleoPublishResult>(&out_dir);
     // #215 full Project Settings: collaborator roster (users + teams) + team picker
-    export::<SpeleoCollaborator>(&out_dir);
-    export::<SpeleoTeamGrant>(&out_dir);
-    export::<SpeleoCollaborators>(&out_dir);
-    export::<SpeleoTeamOption>(&out_dir);
-    export::<SpeleoUserSuggestion>(&out_dir);
 
     let export_list = [
         "CommandResult",
@@ -602,19 +615,16 @@ fn main() {
         "ThemeMode",
         "ColorTheme",
         "SpeleoDbConfig",
-        "TokenFallback",
-        "ConfigSaveReport",
         "AppUpdateCheck",
         "AppUpdateStatus",
         "AppUpdateProgress",
         "Permission",
         "SpeleoProjectSummary",
-        "TokenStorage",
-        "KeychainReport",
+        "SpeleoFileAccess",
+        "SpeleoAccessVerification",
+        "SpeleoReleaseContext",
         "SpeleoLoginResult",
         "SpeleoOpenResult",
-        "AdoptUpload",
-        "SpeleoAdoptResult",
         "SpeleoRevision",
         "SpeleoUnwindTarget",
         "SpeleoRewindTarget",
@@ -623,8 +633,6 @@ fn main() {
         "SpeleoDbAction",
         "SpeleoErrorDto",
         "TransportCause",
-        "SpeleoDumpCandidate",
-        "DumpCandidateKind",
         "UnpushedLocalEdits",
         "SpeleoLinkStatus",
         "RemoteState",
@@ -638,11 +646,6 @@ fn main() {
         "SpeleoProjectMetadataPatch",
         "SpeleoPublishParams",
         "SpeleoPublishResult",
-        "SpeleoCollaborator",
-        "SpeleoTeamGrant",
-        "SpeleoCollaborators",
-        "SpeleoTeamOption",
-        "SpeleoUserSuggestion",
     ];
 
     let mut generated =

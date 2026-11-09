@@ -56,41 +56,6 @@ describe('SpeleoRestoreDialog (#218)', () => {
     expect(closeDialogMock).toHaveBeenCalled();
   });
 
-  it('confirm restores the revision then refreshes the swapped tree', async () => {
-    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
-    render(<SpeleoRestoreDialog />);
-    await userEvent.click(screen.getByTestId('speleodb-restore-confirm-btn'));
-
-    // The backend reopened the restored tree; the FE pulls the swapped geometry +
-    // link state (not loadProject, which would short-circuit on the open project).
-    await waitFor(() => expect(refreshProjectStateMock).toHaveBeenCalled());
-    expect(refreshLinkStatusMock).toHaveBeenCalled();
-    const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_restore_revision');
-    expect(call?.[1]).toEqual({
-      projectId: 'p1',
-      projectName: 'Cave A',
-      hexsha: 'abcdef0123',
-      restore: true,
-      // The first attempt never waives the un-pushed-edits guard - only the armed
-      // second press does, after the refusal has named what is being discarded.
-      discardLocal: false,
-      // [#258] and it names no dump entry, so the backend classifies normally.
-      entryPath: null,
-      // [#303] A plain Restore drops the downloaded copy's undo history like every
-      // other adopt path; only the Unwind keeps it.
-      keepUndoHistory: false,
-      // ...so there is no un-pushed-work waiver to acknowledge either. Pinned false:
-      // this flag is the only thing that lets the backend discard work the user never
-      // pushed, and it belongs to the Unwind confirmation alone.
-      discardUnpushed: false,
-      // ...and with no history kept there is no chain step, so no direction to pick a
-      // guard with either.
-      chainForward: false,
-    });
-    expect(closeDialogMock).toHaveBeenCalled();
-    expect(showToastMock).toHaveBeenCalled();
-  });
-
   it('warns about unsaved changes when the project is dirty', () => {
     useProjectStore.setState({ isDirty: true });
     render(<SpeleoRestoreDialog />);

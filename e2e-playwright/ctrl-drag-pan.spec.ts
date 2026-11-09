@@ -103,7 +103,7 @@ async function clickStationWith(
   page: Page,
   box: { x: number; y: number },
   station: StationScreenPos,
-  modifier: 'Shift' | 'Control',
+  modifier: 'Shift' | 'ControlOrMeta',
 ): Promise<void> {
   await page.keyboard.down(modifier);
   await page.mouse.click(box.x + station.x, box.y + station.y);
@@ -306,7 +306,7 @@ test.describe('Ctrl+Drag Panning', () => {
    * now only WATCHED until it travels past MapLibre's click tolerance.
    */
   test.describe('Ctrl+Click Selection Toggle', () => {
-    test('Ctrl+click removes a selected station and adds an unselected one', async ({ page }) => {
+    test('Ctrl/Cmd+click removes a selected station and adds an unselected one', async ({ page }) => {
       await seedProjectWithSections(page, SELECTION_SEEDS);
       await page.keyboard.press('s');
       await waitForActiveTool(page, 'select');
@@ -337,12 +337,13 @@ test.describe('Ctrl+Drag Panning', () => {
       await clickStationWith(page, box, b!, 'Shift');
       await expect.poll(() => getMultiSelectionKeys(page)).toEqual([key(a!), key(b!)]);
 
-      // Toggle OFF: Ctrl+click a station already in the selection.
-      await clickStationWith(page, box, b!, 'Control');
+      // macOS reserves Ctrl+click for its context menu; Command is its toggle modifier.
+      // Toggle OFF a station already in the selection.
+      await clickStationWith(page, box, b!, 'ControlOrMeta');
       await expect.poll(() => getMultiSelectionKeys(page)).toEqual([key(a!)]);
 
-      // Toggle ON: Ctrl+click one that is not.
-      await clickStationWith(page, box, c!, 'Control');
+      // Toggle ON one that is not.
+      await clickStationWith(page, box, c!, 'ControlOrMeta');
       await expect.poll(() => getMultiSelectionKeys(page)).toEqual([key(a!), key(c!)]);
     });
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { endpointsMatch } from '../speleoEndpoint';
 
-// The forms `auth.rs::normalize_endpoint` collapses into one keychain entry.
+// The forms `auth.rs::normalize_endpoint` collapses into one server identity.
 // The UI has to collapse the same ones, or it tells a user their file belongs
 // to a different server than the one they are demonstrably signed in to.
 describe('endpointsMatch', () => {

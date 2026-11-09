@@ -55,6 +55,7 @@ describe('PublishToSpeleoDbDialog', () => {
       local_path: '/cache/p1/project.stalx',
     });
     render(<PublishToSpeleoDbDialog />);
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-message'), { target: { value: 'First survey' } });
 
     // Name prefilled from the project; country still unchosen -> Publish disabled.
     expect(screen.getByTestId('publish-to-speleodb-dialog-name')).toHaveValue('My Cave');
@@ -78,6 +79,7 @@ describe('PublishToSpeleoDbDialog', () => {
         params: {
           name: 'My Cave',
           description: 'Main line survey',
+          message: 'First survey',
           country: 'US',
           visibility: 'PRIVATE',
           latitude: null,
@@ -98,6 +100,7 @@ describe('PublishToSpeleoDbDialog', () => {
     });
     loadProjectMock.mockResolvedValue({ success: false });
     render(<PublishToSpeleoDbDialog />);
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-message'), { target: { value: 'First survey' } });
 
     await pickOption('publish-to-speleodb-dialog-country', 'US');
     fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
@@ -109,6 +112,7 @@ describe('PublishToSpeleoDbDialog', () => {
 
   it('blocks submit on an out-of-range coordinate pair', async () => {
     render(<PublishToSpeleoDbDialog />);
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-message'), { target: { value: 'First survey' } });
     await pickOption('publish-to-speleodb-dialog-country', 'US');
     await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-latitude'), '999');
     await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-longitude'), '0');
@@ -126,6 +130,7 @@ describe('PublishToSpeleoDbDialog', () => {
       loadProject: loadProjectMock,
     });
     render(<PublishToSpeleoDbDialog />);
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-message'), { target: { value: 'First survey' } });
     expect(screen.getByTestId('publish-to-speleodb-dialog-country')).toHaveTextContent('Mexico');
     expect(screen.getByTestId('publish-to-speleodb-dialog-latitude')).toHaveValue(20.21);
     expect(screen.getByTestId('publish-to-speleodb-dialog-longitude')).toHaveValue(-87.46);
@@ -147,119 +152,7 @@ describe('PublishToSpeleoDbDialog', () => {
       loadProject: loadProjectMock,
     });
     render(<PublishToSpeleoDbDialog />);
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-message'), { target: { value: 'First survey' } });
     expect(screen.getByTestId('publish-to-speleodb-dialog-country')).toHaveTextContent('Select a country');
-  });
-
-  it('autocompletes a collaborator, then grants it after the project is published', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_search_users') {
-        return Promise.resolve([{ email: 'alice@x.com', label: 'Alice Diver <alice@x.com>' }]);
-      }
-      if (cmd === 'speleodb_publish') {
-        return Promise.resolve({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
-      }
-      // speleodb_add_collaborator -> the (unused-here) refreshed roster.
-      return Promise.resolve({ users: [], teams: [] });
-    });
-    render(<PublishToSpeleoDbDialog />);
-    await pickOption('publish-to-speleodb-dialog-country', 'US');
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
-
-    // Pick a suggestion from the debounced typeahead, choose a level, and queue it.
-    await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), 'ali');
-    await userEvent.click(await screen.findByTestId('publish-to-speleodb-dialog-collab-suggestion-alice@x.com'));
-    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-email')).toHaveValue('alice@x.com');
-    await pickOption('publish-to-speleodb-dialog-collab-add-level', 'READ_AND_WRITE');
-    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
-    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-alice@x.com')).toBeInTheDocument();
-
-    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
-
-    // The grant lands only after the create, with the queued email + level.
-    await waitFor(() => {
-      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_add_collaborator');
-      expect(call).toBeTruthy();
-      expect(call![1]).toEqual({ email: 'alice@x.com', permission: 'READ_AND_WRITE' });
-    });
-    await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
-  });
-
-  it('still closes but warns when a queued collaborator cannot be granted', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_publish') {
-        return Promise.resolve({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
-      }
-      if (cmd === 'speleodb_add_collaborator') return Promise.reject(new Error('403'));
-      return Promise.resolve({ users: [], teams: [] });
-    });
-    render(<PublishToSpeleoDbDialog />);
-    await pickOption('publish-to-speleodb-dialog-country', 'US');
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
-    await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), 'bob@x.com');
-    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
-    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
-
-    await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
-    // The failure surfaced as the partial-warning toast, not the plain success one.
-    const toasts = showToastMock.mock.calls.map((c) => String(c[0]));
-    expect(toasts.some((m) => m.includes('bob@x.com'))).toBe(true);
-    expect(toasts).not.toContain('Project published to SpeleoDB.');
-  });
-
-  it('grants the FINAL queued level after changing a collaborator row in place', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_publish') {
-        return Promise.resolve({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
-      }
-      // speleodb_search_users (unused - added by typing) + add_collaborator roster.
-      return Promise.resolve({ users: [], teams: [] });
-    });
-    render(<PublishToSpeleoDbDialog />);
-    await pickOption('publish-to-speleodb-dialog-country', 'US');
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
-
-    // Queue carol at the default level, then change the QUEUED row's level.
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), {
-      target: { value: 'carol@x.com' },
-    });
-    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
-    await pickOption('publish-to-speleodb-dialog-collab-level-carol@x.com', 'ADMIN');
-
-    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
-
-    await waitFor(() => {
-      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_add_collaborator');
-      expect(call).toBeTruthy();
-      expect(call![1]).toEqual({ email: 'carol@x.com', permission: 'ADMIN' });
-    });
-  });
-
-  it('removes a queued collaborator so it is never granted', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_publish') {
-        return Promise.resolve({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
-      }
-      return Promise.resolve({ users: [], teams: [] });
-    });
-    render(<PublishToSpeleoDbDialog />);
-    await pickOption('publish-to-speleodb-dialog-country', 'US');
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
-
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), {
-      target: { value: 'dave@x.com' },
-    });
-    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
-    expect(screen.getByTestId('publish-to-speleodb-dialog-collab-dave@x.com')).toBeInTheDocument();
-
-    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-remove-dave@x.com'));
-    expect(screen.queryByTestId('publish-to-speleodb-dialog-collab-dave@x.com')).toBeNull();
-
-    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
-
-    await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
-    // Nothing queued -> no grant call, and the plain success toast (not the partial one).
-    expect(invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_add_collaborator')).toBeUndefined();
-    const toasts = showToastMock.mock.calls.map((c) => String(c[0]));
-    expect(toasts).toContain('Project published to SpeleoDB.');
   });
 });

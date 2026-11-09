@@ -101,18 +101,11 @@ impl AppState {
         // #213: a force-editor is edit-enabled but holds NO lock, so there is nothing
         // to release on close / app-exit / project-switch.
         //
-        // The edit gate is a UI state, and there IS one flow where it reads false over a
-        // mutex that is still ours: adoption's `PushedLockHeld` closes the project and
-        // has the frontend reload it, and a fresh load starts with the gate shut. Quit
-        // inside that window and this returns `None` over a held lock. Deliberately not
-        // special-cased. `scanLocksOnOpen` asks the SERVER who holds what on every app
-        // open and login - `speleodb_list_projects` -> `lock_holder` -> the held-lock
-        // resume prompt - so recovery does not depend on this gate, on `edit_enabled`,
-        // or on the local claim. A lock outliving a session is a supported state here,
-        // not an anomaly: the close dialog offers "Keep lock" outright, which is what
-        // `LockClaim::kept` exists to protect. And the window only opens once a release
-        // has ALREADY failed, so retrying it a second later on the same connectivity
-        // buys little.
+        // A lock can survive a failed release or a fresh load with its edit gate
+        // still shut. `scanLocksOnOpen` checks the server on app open and login,
+        // so recovery does not depend on the gate or a local claim. Deliberately
+        // retained internal claims and the un-pushed-edits veto are protected by
+        // `LockClaim::kept`; normal user-facing close and quit release the lock.
         if !self.edit_enabled() || self.force_editing() {
             return None;
         }
@@ -189,8 +182,7 @@ impl AppState {
         })
     }
 
-    /// Record that the OPEN project's lock is being held past this close ON
-    /// PURPOSE - the close dialog's "Keep lock".
+    /// Record an internal close that deliberately retains the open project's lock.
     ///
     /// Called INSTEAD of a release, and before the teardown, because it reads
     /// the link row the teardown is about to drop the handle on. A no-op when
@@ -206,7 +198,7 @@ impl AppState {
         if let Ok(link) = self.speleodb_open_link() {
             tracing::info!(
                 project_id = %link.project_id,
-                purpose = "honour the user's Keep lock choice past the close",
+                purpose = "preserve an explicitly retained lock across an internal close",
                 "speleodb: keeping the write lock held after closing the project"
             );
             self.speleodb_keep_lock_deliberately(&link.project_id);
@@ -315,32 +307,6 @@ impl AppState {
         project_id: &str,
     ) -> Option<super::speleodb_session::LockClaim> {
         self.speleodb_forget_lock_acquired_inner(project_id, None)
-    }
-
-    /// [`Self::speleodb_forget_lock_acquired_for`] for a caller that knows the
-    /// account whose credentials took the mutex, and must not ask the live session
-    /// who that was.
-    ///
-    /// The sibling resolves the identity from whoever is signed in at call time,
-    /// which is right for every caller that released a moment ago with those same
-    /// credentials. It is wrong for one that CAPTURED a token earlier and may be
-    /// running after a sign-out or an account switch: the live session then names
-    /// nobody, or somebody else, so the claim the caller means to end is not the
-    /// one the filter looks for and survives untouched.
-    ///
-    /// That survival is not inert. The reclaim check
-    /// ([`AppState::speleodb_claim_on_deployment`]) is deliberately account-blind -
-    /// a captured release may outlive the sign-in that captured it, so its question
-    /// is "has any session in this process claimed this mutex?" - which means a
-    /// stale claim is exactly the shape that stands a later detached close or
-    /// delete release down, leaving a mutex held that nothing will now free.
-    pub(super) fn speleodb_forget_lock_acquired_as(
-        &self,
-        project_id: &str,
-        endpoint: &str,
-        email: &str,
-    ) -> Option<super::speleodb_session::LockClaim> {
-        self.speleodb_forget_lock_acquired_inner(project_id, Some((endpoint, email)))
     }
 
     /// Shared body of the two above. `as_account` overrides the identity the claim

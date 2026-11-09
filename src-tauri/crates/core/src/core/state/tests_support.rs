@@ -39,11 +39,15 @@ impl AppState {
 /// spread across the family - a scan that stops seeing a file stops guarding it, and
 /// an absence assertion goes on passing while it does.
 #[cfg(test)]
-fn speleodb_prod_sources() -> [(&'static str, &'static str); 13] {
+fn speleodb_prod_sources() -> [(&'static str, &'static str); 14] {
     [
         ("speleodb.rs", include_str!("speleodb.rs")),
         ("speleodb_admin.rs", include_str!("speleodb_admin.rs")),
         ("speleodb_cache.rs", include_str!("speleodb_cache.rs")),
+        (
+            "speleodb_cache_install.rs",
+            include_str!("speleodb_cache_install.rs"),
+        ),
         (
             "speleodb_credentials.rs",
             include_str!("speleodb_credentials.rs"),
@@ -141,4 +145,70 @@ mod tests {
             .collect();
         assert!(stale.is_empty(), "registered but not on disk: {stale:?}");
     }
+}
+
+/// Complete the synthetic HTTP fixtures to the SDK's full response schema.
+/// Older orchestration tests specify only fields relevant to the race they exercise.
+#[cfg(test)]
+pub(super) fn sdk_fixture(body: &str) -> String {
+    use serde_json::{json, Value};
+    let Ok(mut value) = serde_json::from_str::<Value>(body) else {
+        return body.to_owned();
+    };
+    let Some(obj) = value.as_object_mut() else {
+        return body.to_owned();
+    };
+    if obj.contains_key("id") {
+        let defaults = json!({"color":"#123456", "commit_count":0,"country":"US", "created_by":"test@example.com", "creation_date":"2026-01-01T00:00:00Z", "modified_date":"2026-01-01T00:00:00Z", "description":"Synthetic test", "exclude_geojson":false, "fork_from":null, "is_active":true,"latest_commit":null,"active_mutex":null,"type":"STALAGMIGHT","visibility":"PRIVATE"});
+        if let Some(defaults) = defaults.as_object() {
+            for (key, value) in defaults {
+                obj.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+        for (field, key) in [("active_mutex", "user"), ("latest_commit", "id")] {
+            if let Some(text) = obj
+                .get(field)
+                .and_then(|v| v.get(key))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+            {
+                obj.insert(field.into(), Value::String(text));
+            }
+        }
+    }
+    if obj.contains_key("email") {
+        for (key, value) in [
+            ("country", json!("US")),
+            ("name", json!("Test")),
+            ("email_on_projects_updates", json!(false)),
+            ("email_on_speleodb_updates", json!(false)),
+        ] {
+            obj.entry(key).or_insert(value);
+        }
+    }
+    if let Some(Value::Array(commits)) = obj.get_mut("commits") {
+        for commit in commits {
+            if let Some(commit) = commit.as_object_mut() {
+                for (key, value) in [
+                    ("author_email", json!("test@example.com")),
+                    ("author_name", json!("Test")),
+                    ("authored_date", json!("2026/01/01 00:00")),
+                    ("dt_since", json!("now")),
+                    ("formats", json!([])),
+                    ("message", json!("Test")),
+                    ("parent_ids", json!([])),
+                    ("tree", json!([])),
+                    ("url", Value::Null),
+                ] {
+                    commit.entry(key).or_insert(value);
+                }
+            }
+        }
+        let project =
+            sdk_fixture(r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Synthetic"}"#);
+        if let Ok(project) = serde_json::from_str::<Value>(&project) {
+            obj.entry("project").or_insert(project);
+        }
+    }
+    value.to_string()
 }

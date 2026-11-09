@@ -28,11 +28,8 @@ use std::time::Duration;
 
 use crate::telemetry::TelemetryCollector;
 
-/// The SpeleoDB API endpoint kinds, one label per traffic class. Every
-/// `client::*` method maps to exactly one variant when it calls `with_retry`;
-/// several low-frequency admin methods intentionally share a coarser kind
-/// (e.g. every permission mutation is `mutate-permission`) so the vocabulary
-/// stays legible while still separating the endpoints that actually drive load.
+/// The SpeleoDB API endpoint kinds, one label per traffic class. Every SDK
+/// operation records its outcome through `SdkClient::call`.
 ///
 /// [`Endpoint::ALL`] backs the `every_speleodb_endpoint_has_traffic_events`
 /// registry coverage test: add a variant here and CI fails until its ten event
@@ -44,18 +41,12 @@ pub(crate) enum Endpoint {
     GetProject,
     GetRevisions,
     FetchUser,
-    DownloadDump,
+    DownloadStalx,
     Upload,
     Acquire,
     Release,
-    ReleaseAll,
     PatchProject,
     CreateProject,
-    DeleteProject,
-    ListPermissions,
-    MutatePermission,
-    ListTeams,
-    Autocomplete,
 }
 
 impl Endpoint {
@@ -73,18 +64,12 @@ impl Endpoint {
         Endpoint::GetProject,
         Endpoint::GetRevisions,
         Endpoint::FetchUser,
-        Endpoint::DownloadDump,
+        Endpoint::DownloadStalx,
         Endpoint::Upload,
         Endpoint::Acquire,
         Endpoint::Release,
-        Endpoint::ReleaseAll,
         Endpoint::PatchProject,
         Endpoint::CreateProject,
-        Endpoint::DeleteProject,
-        Endpoint::ListPermissions,
-        Endpoint::MutatePermission,
-        Endpoint::ListTeams,
-        Endpoint::Autocomplete,
     ];
 
     /// The stable wire label for this endpoint (the `<kind>` in the event name).
@@ -96,18 +81,12 @@ impl Endpoint {
             Endpoint::GetProject => "get-project",
             Endpoint::GetRevisions => "get-revisions",
             Endpoint::FetchUser => "fetch-user",
-            Endpoint::DownloadDump => "download-dump",
+            Endpoint::DownloadStalx => "download-stalx",
             Endpoint::Upload => "upload",
             Endpoint::Acquire => "acquire",
             Endpoint::Release => "release",
-            Endpoint::ReleaseAll => "release-all",
             Endpoint::PatchProject => "patch-project",
             Endpoint::CreateProject => "create-project",
-            Endpoint::DeleteProject => "delete-project",
-            Endpoint::ListPermissions => "list-permissions",
-            Endpoint::MutatePermission => "mutate-permission",
-            Endpoint::ListTeams => "list-teams",
-            Endpoint::Autocomplete => "autocomplete",
         }
     }
 }

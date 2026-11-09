@@ -15,7 +15,7 @@ crates sit under `src-tauri/crates/`:
 | `stalagmight-parsers` | Import parsers: DMP, Ariane TML/TMLU, Compass, Walls, GPX | models |
 | `stalagmight-persistence` | `.stalx` SQLite store + `.plnx` dive-plan store (`persistence/`), tile caches (`cache/`, `tilemap_cache`) | models |
 | `stalagmight-export` | CSV / JSON / image (SVG->PNG/PDF) / TML export, dive profile | models, parsers |
-| `stalagmight-speleodb` | SpeleoDB client: HTTP surface, auth/token storage, dump handling, sync, TLS policy, metrics | models, telemetry |
+| `stalagmight-speleodb` | SpeleoDB client: HTTP surface, auth/token storage, native SQLite transfer, sync, TLS policy, metrics | models, telemetry |
 | `stalagmight-core` | `AppState`, the command executors, undo/redo, project I/O orchestration, config I/O (`config/`), `tile_providers`; shared test helpers behind the `test-support` feature | export, models, parsers, persistence, speleodb |
 | `stalx-reader` | Read-only `.stalx` reader for external consumers (SpeleoDB server-side maps, #593); nothing in the app depends on it | models, persistence |
 | `stalagmight` (app, at `src-tauri/`) | The thin Tauri layer: `commands/` (IPC handlers), `lib.rs` (the single `generate_handler!`), `main.rs`, `tile_attribution.rs`, `webkit_memory.rs`, `examples/`, `tests/` | all of the above except stalx-reader |
@@ -114,14 +114,14 @@ interaction state, not survey size. Global View is custom-only too
 -> [map-renderer.md](map-renderer.md)
 
 **SpeleoDB.** `src-tauri/crates/speleodb/src/speleodb/` holds the client half: HTTP surface, token storage
-(OS keychain with an in-memory fallback), ZIP-dump classification and `.stalx` extraction,
+in the backend, native SQLite `.stalx` transfer through `speleodb-api`,
 the base-SHA fence and ancestry recovery. Orchestration against `AppState` lives in
 `core/state/speleodb.rs`, the IPC commands in `commands/speleodb.rs`. The model is a
 single-writer hand-off: a pulled project is read-only until the write lock is acquired, and
 unlike the mode-driven read-only above, that one has a real backend backstop -
 `AppState::guard_mutation` refuses every gated mutation while the lock is missing.
-No subsystem page yet; the closest thing is the test-setup + verified-API-contract
-guide -> [speleodb-dev-testing.md](speleodb-dev-testing.md)
+See [SpeleoDB.md](SpeleoDB.md) for the integration contract and
+[speleodb-dev-testing.md](speleodb-dev-testing.md) for API test setup.
 
 **Telemetry.** `src-tauri/crates/telemetry/src/telemetry/` is always compiled but real only behind the
 `telemetry` Cargo feature; with it off every method is an empty no-op. Anonymous
@@ -143,7 +143,7 @@ in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 | `src-tauri/crates/models/src/project.rs` | Project model with merge/offset logic |
 | `src-tauri/crates/models/src/project/gas.rs` | Gas-weighted reachability engine (`compute_gas_reach_field`) |
 | `src-tauri/crates/models/src/geo.rs` | GPS-to-local coordinate transformation (WGS84 → ENU) |
-| `src-tauri/crates/speleodb/src/speleodb/mod.rs` | SpeleoDB client module root (HTTP, auth, dump, sync, TLS policy) |
+| `src-tauri/crates/speleodb/src/speleodb/mod.rs` | SpeleoDB client module root (HTTP, auth, native files, sync, TLS policy) |
 | `src-tauri/crates/persistence/src/cache/tiles.rs` | Satellite tile cache (SQLite-based) |
 | `src-tauri/crates/core/src/tile_providers.rs` | Tile provider registry (provider metadata, URL expansion) |
 | `src-tauri/src/commands/cache.rs` | Cache IPC commands (stats, clear, fetch) |
