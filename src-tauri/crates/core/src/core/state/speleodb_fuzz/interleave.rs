@@ -430,9 +430,16 @@ pub(super) fn run(
             ));
         }
     }
-    let second_ok = second_out
-        .as_ref()
-        .is_some_and(|o| o.refusals.is_empty() && o.panicked.is_none());
+    // The second verb moved the session only if it did what it set out to: a
+    // refused edit (a read-only project) invalidates nothing.
+    let second_ok = second_out.as_ref().is_some_and(|o| {
+        o.refusals.is_empty()
+            && o.panicked.is_none()
+            && (!matches!(second, Act::Edit)
+                || o.claims
+                    .iter()
+                    .any(|c| matches!(c, super::app::Claim::Edited(_))))
+    });
     if let Some(o) = second_out {
         out.merge(o);
     }

@@ -80,6 +80,9 @@ pub(super) enum Claim {
     LongMessage { project_id: String },
     /// A crash left a hot rollback journal next to this project's cache file.
     Residue { project_id: String },
+    /// Take remote returned with the edit gate still open (before the status
+    /// refresh that follows it in the frontend).
+    EditableAfterTakeRemote { project_id: String },
 }
 
 /// One refusal a verb returned: what the UI is handed.

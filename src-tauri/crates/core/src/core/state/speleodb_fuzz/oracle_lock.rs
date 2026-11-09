@@ -22,7 +22,9 @@
 //!   signed-in account holding P with write permission. Excused while P is
 //!   unverified (a fault or the second client touched it since the app last
 //!   confirmed P without a fault: the documented transient-offline case).
-//!   **P2-take-remote-editable** when the step was Take remote.
+//! - **P2-take-remote-editable** Take remote (which releases the lock) returned
+//!   with the edit gate open; only the status refresh that follows it in the
+//!   frontend shuts the gate again.
 //! - **LK-OPEN** the gate went from shut to open in this step without the server
 //!   showing the signed-in account holding P with write permission (no excuse:
 //!   only a verified acquisition may open it).
@@ -162,6 +164,15 @@ pub(super) fn check(ghost: &Ghost, cx: &StepCtx<'_>, v: &mut Vec<Violation>) {
                     ));
                 }
             }
+            Claim::EditableAfterTakeRemote { project_id } => {
+                let email = cx.before.app.email.as_deref().unwrap_or_default();
+                if !holder_is(cx, project_id, email) {
+                    v.push(violation(
+                        "P2-take-remote-editable",
+                        format!("{project_id}: Take remote released the lock and returned with the edit gate open"),
+                    ));
+                }
+            }
             _ => {}
         }
     }
@@ -184,11 +195,7 @@ pub(super) fn check(ghost: &Ghost, cx: &StepCtx<'_>, v: &mut Vec<Violation>) {
                     format!("{pid}: the edit gate opened in this step but {why}"),
                 ));
             } else if !ghost.unverified.contains(pid) && !cx.fault_touched(pid) {
-                let id = if matches!(cx.act, Act::TakeRemote) {
-                    "P2-take-remote-editable"
-                } else {
-                    "LK-GATE"
-                };
+                let id = "LK-GATE";
                 v.push(violation(
                     id,
                     format!("{pid}: the app is editing but {why}"),

@@ -692,9 +692,15 @@ pub(super) fn take_remote(app: &App, out: &mut Outcome) {
     }
     out.claims.push(Claim::DiscardedUnsaved);
     out.claims.push(Claim::DiscardedLocal);
+    let project_id = app.open_link().map(|l| l.project_id).unwrap_or_default();
     match app.st().speleodb_take_remote() {
         Ok(path) => {
-            out.note("take_remote -> Ok");
+            let gate = app.st().edit_enabled();
+            out.note(format!("take_remote -> Ok (edit gate {gate})"));
+            if gate {
+                out.claims
+                    .push(Claim::EditableAfterTakeRemote { project_id });
+            }
             app.front().unsaved = false;
             load(app, Path::new(&path), false, true, out);
         }
