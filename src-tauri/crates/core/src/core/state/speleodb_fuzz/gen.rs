@@ -151,7 +151,20 @@ fn pick_interleave(rng: &mut Rng, hint: Hint, p: u8, q: u8) -> Act {
         let i = rng.below(items.len() as u64) as usize;
         items.get(i).cloned().unwrap_or(Act::Refresh)
     };
-    let (first, held, second) = match rng.below(10) {
+    // Only the templates whose first verb can reach its request in this state.
+    let usable: Vec<u64> = (0..10)
+        .filter(|t| match t {
+            0 | 6 | 9 => hint.editing,
+            1 | 3 | 4 | 8 => hint.linked,
+            7 => hint.open && !hint.linked,
+            _ => true,
+        })
+        .collect();
+    let template = usable
+        .get(rng.below(usable.len() as u64) as usize)
+        .copied()
+        .unwrap_or(5);
+    let (first, held, second) = match template {
         // A held upload against an account move, a switch, a close, a quit.
         0 => (
             Act::SaveChanges {
@@ -278,7 +291,6 @@ fn pick_interleave(rng: &mut Rng, hint: Hint, p: u8, q: u8) -> Act {
             },
         ),
     };
-    let _ = hint;
     Act::Interleave {
         first: Box::new(first),
         hold: held,

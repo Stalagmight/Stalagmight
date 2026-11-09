@@ -313,6 +313,10 @@ pub(super) fn run(
             break false;
         }
     };
+    if !engaged {
+        // Disarm the unfired hold, or the second verb's own request parks on it.
+        proxy.clear();
+    }
     out.note(format!(
         "hold {} {} engaged: {engaged}",
         hold.method, hold.path
