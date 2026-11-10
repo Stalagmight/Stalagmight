@@ -162,6 +162,40 @@ function projectMeters(
 }
 
 /**
+ * Whether an anchor lies inside `viewport`, or inside any rect of a list. A list
+ * is bucketed by a grid as coarse as its widest rect, so each anchor checks only
+ * the few rects around it, however many there are.
+ */
+function anchorFilter(viewport: ViewportRel | readonly ViewportRel[]): (x: number, y: number) => boolean {
+  const within = (r: ViewportRel, x: number, y: number): boolean =>
+    x >= r.minX && x <= r.maxX && y >= r.minY && y <= r.maxY;
+  if (!Array.isArray(viewport)) {
+    const r = viewport as ViewportRel;
+    return (x, y) => within(r, x, y);
+  }
+  const rects = viewport as readonly ViewportRel[];
+  if (rects.length === 0) return () => false;
+  let cell = 0;
+  for (const r of rects) cell = Math.max(cell, r.maxX - r.minX, r.maxY - r.minY);
+  if (!(cell > 0)) return (x, y) => rects.some((r) => within(r, x, y));
+  const buckets = new Map<string, ViewportRel[]>();
+  for (const r of rects) {
+    for (let cx = Math.floor(r.minX / cell); cx <= Math.floor(r.maxX / cell); cx++) {
+      for (let cy = Math.floor(r.minY / cell); cy <= Math.floor(r.maxY / cell); cy++) {
+        const key = `${cx},${cy}`;
+        const list = buckets.get(key);
+        if (list) list.push(r);
+        else buckets.set(key, [r]);
+      }
+    }
+  }
+  return (x, y) => {
+    const list = buckets.get(`${Math.floor(x / cell)},${Math.floor(y / cell)}`);
+    return list !== undefined && list.some((r) => within(r, x, y));
+  };
+}
+
+/**
  * Walk the SoA once and emit a {@link LabelDescriptor} for every label the stock
  * layers would build: shot labels (+ shot comments), station labels (+ station
  * comments), and section names. Reproduces `features.ts`' anchor placement,
@@ -188,11 +222,7 @@ export function buildLabelDescriptors(
   // what is on screen, so decimation parity holds) - only the `push` is gated.
   // A list of rects keeps anchors inside ANY of them (the reservations around
   // each jump / reference section name, see labelReveal's `reserved`).
-  const rects: readonly ViewportRel[] | undefined =
-    viewport === undefined ? undefined : 'minX' in viewport ? [viewport] : viewport;
-  const inView = (x: number, y: number): boolean =>
-    rects === undefined ||
-    rects.some((r) => x >= r.minX && x <= r.maxX && y >= r.minY && y <= r.maxY);
+  const inView = viewport === undefined ? () => true : anchorFilter(viewport);
   const lookup = buildStationLookup(data);
   // allRef[g] is the per-station kind mask (#27): 0 = a Normal shot touches it,
   // 1 = only Jumps, 2 = only References, 3 = both / no legs. Carried into the

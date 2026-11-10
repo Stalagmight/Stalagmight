@@ -1504,14 +1504,22 @@ describe('SurveyLabelController jump section names below the label band', () => 
     expect(Math.max(...jumpNameReveals(layer))).toBeLessThan(13.5);
 
     // Station labels on: A's station label (drawn from the band up) outranks
-    // J's name, so the name is not shown below the band either.
+    // J's name, so the name is not shown below the band either. It stays in the
+    // buffer, hidden at every zoom the map reaches, so a reveal-only rerun
+    // still sees the slot it holds.
+    const hidden = (r: number[]) => r.length > 0 && r.every((z) => z > REVEAL_CEILING);
     c.setStationLabelsVisible(true);
-    expect(jumpNameReveals(layer)).toEqual([]);
+    expect(hidden(jumpNameReveals(layer))).toBe(true);
+    // A rerun (jumps hidden, then shown again) leaves it hidden.
+    c.setJumpShotsVisible(false);
+    c.setJumpShotsVisible(true);
+    expect(hidden(jumpNameReveals(layer))).toBe(true);
 
     // Past the band, the full build agrees: the name never shows there.
     cam.state.zoom = 14;
     c.sync(tiedJumpParams());
-    expect(jumpNameReveals(h.layerState.last!)).toEqual([]);
+    const full = jumpNameReveals(h.layerState.last!);
+    expect(full.every((z) => z > REVEAL_CEILING)).toBe(true);
   });
 });
 

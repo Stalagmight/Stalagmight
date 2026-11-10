@@ -2013,8 +2013,8 @@ Only labels are thinned by zoom: each label carries a baked reveal zoom that fol
 the collision declutter together with a nested decimation band
 (`labelReveal.ts` / `labelDecimation.ts`), and the shader draws a label only at or
 above that zoom - see [map-renderer.md](map-renderer.md). Where labels compete for
-the same space, a real-line label always wins over a label that belongs only to
-jump or reference shots, and a jump label wins over a reference one. Shot
+the same space, a real-line label wins over a label that belongs only to jump or
+reference shots, and a jump label wins over a reference one. Shot
 geometry itself is not simplified: no path simplification, no station merging,
 no zoom-based hiding.
 

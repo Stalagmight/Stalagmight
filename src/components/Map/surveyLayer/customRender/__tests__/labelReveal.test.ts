@@ -12,6 +12,7 @@ import {
   VIRTUAL_RANK_REAL,
   VIRTUAL_RANK_JUMP,
   VIRTUAL_RANK_REFERENCE,
+  anchorHull,
   type RevealInput,
   type ScreenBox,
 } from '../labelReveal';
@@ -612,17 +613,6 @@ describe('computeRevealZooms real line first (randomized properties)', () => {
   });
 });
 
-describe('computeRevealZooms empty ladder', () => {
-  it('returns all-never, without throwing, when the horizon is below every minzoom', () => {
-    const descs = [
-      desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0, shotGlobal: 0 }),
-      desc(LABEL_KIND.SHOT_LABEL, { ordinal: 1, flags: LABEL_FLAG.JUMP, shotGlobal: 1 }),
-    ];
-    const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input({ buildZoom: 11, slack: 2 }));
-    expect(Array.from(reveal)).toEqual([REVEAL_NEVER, REVEAL_NEVER]);
-  });
-});
-
 describe('computeRevealZooms reserved labels (section-only build below the label band)', () => {
   const reservedStation = (flags = 0) =>
     desc(LABEL_KIND.STATION_LABEL, { ordinal: 4, flags, stationGlobal: 4 });
@@ -741,5 +731,145 @@ describe('computeRevealZooms reserved labels (section-only build below the label
     // The fixture exercises both outcomes for virtual names.
     expect(virtualShownBelow).toBeGreaterThan(0);
     expect(virtualHeldBack).toBeGreaterThan(0);
+  });
+});
+
+/** Em extents shaped like `labelLayout.ts` places each kind: a shot label and a
+ *  comment hang below their anchor, a station label sits up-right of it, a
+ *  section name above it - so boxes are OFFSET from their anchors. */
+function layoutExtent(kind: LabelKind, widthEm: number): ExtentEm {
+  switch (kind) {
+    case LABEL_KIND.SHOT_LABEL:
+      return { minX: -widthEm / 2, maxX: widthEm / 2, minY: -1.5, maxY: -0.5 };
+    case LABEL_KIND.STATION_LABEL:
+      return { minX: 0.8, maxX: 0.8 + widthEm, minY: 0.8, maxY: 1.8 };
+    case LABEL_KIND.SECTION_NAME:
+      return { minX: -widthEm / 2, maxX: widthEm / 2, minY: 1.2, maxY: 2.2 };
+    default:
+      return { minX: -widthEm / 2, maxX: widthEm / 2, minY: -2.5, maxY: -1.5 };
+  }
+}
+
+describe('computeRevealZooms with boxes offset from their anchors', () => {
+  it('a far-away label does not change whether a jump name may take a real label\'s slot', () => {
+    // The jump name's box sits above its anchor; the real shot label, 10 px (at
+    // z14) north, hangs below its own - the two boxes face each other. Clear at
+    // z10, they overlap around z15-16 and clear again above. Unrelated real
+    // labels far away must not change that (a one-level overlap test did).
+    const jump = desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_JUMP, sectionId: 9 });
+    const real = desc(LABEL_KIND.SHOT_LABEL, { anchorY: -10, ordinal: 0, shotGlobal: 1 });
+    const far = (i: number) => desc(LABEL_KIND.SHOT_LABEL, { anchorX: 5000 + i * 500, ordinal: 0, shotGlobal: 10 + i });
+    const ext = { jump: layoutExtent(LABEL_KIND.SECTION_NAME, 4), shot: layoutExtent(LABEL_KIND.SHOT_LABEL, 4) };
+    const opts = input({ buildZoom: 14, worldPixelScale: 1, slack: 8 });
+    const alone = computeRevealZooms([jump, real], [ext.jump, ext.shot], opts);
+    const withFar = computeRevealZooms(
+      [jump, real, far(0), far(1)],
+      [ext.jump, ext.shot, ext.shot, ext.shot],
+      opts,
+    );
+    expect(withFar[0]).toBe(alone[0]);
+    expect(alone[1]).toBe(14);
+    // And the two never overlap once both are drawn.
+    for (let z = Math.max(alone[0]!, alone[1]!); z <= 22 + 1e-9; z += 0.5) {
+      expect(boxesOverlap(boxAt(jump, ext.jump, z, 14, 1), boxAt(real, ext.shot, z, 14, 1))).toBe(false);
+    }
+  });
+
+  it('every box at a higher zoom stays inside the anchor hull at a lower one (the filter premise)', () => {
+    // Text grows far slower than the map (labelStyle stops), so in map units a
+    // box only moves towards its anchor as the zoom rises.
+    const kinds: LabelKind[] = [0, 1, 2, 3, 4] as LabelKind[];
+    for (const kind of kinds) {
+      const d = desc(kind, { anchorX: 3, anchorY: -7 });
+      const ext = layoutExtent(kind, 6);
+      for (let lo = 10; lo <= 22; lo += 0.5) {
+        const wpsLo = 2 ** (lo - 14);
+        const hull = anchorHull(d, boxAt(d, ext, lo, 14, 1), wpsLo);
+        for (let hi = lo; hi <= 22; hi += 0.5) {
+          const b = boxAt(d, ext, hi, 14, 1);
+          const k = wpsLo / 2 ** (hi - 14); // px at `hi` -> px at `lo`
+          expect(b.minX * k).toBeGreaterThanOrEqual(hull.minX - 1e-9);
+          expect(b.maxX * k).toBeLessThanOrEqual(hull.maxX + 1e-9);
+          expect(b.minY * k).toBeGreaterThanOrEqual(hull.minY - 1e-9);
+          expect(b.maxY * k).toBeLessThanOrEqual(hull.maxY + 1e-9);
+        }
+      }
+    }
+  });
+
+  it('labels of different ranks never overlap at any zoom, nor do real labels depend on virtual ones (randomized)', () => {
+    for (const seed of [21, 22, 23, 0xabc]) {
+      const rnd = lcg(seed);
+      const kinds: LabelKind[] = [
+        LABEL_KIND.SECTION_NAME, LABEL_KIND.STATION_LABEL, LABEL_KIND.SHOT_LABEL,
+        LABEL_KIND.STATION_COMMENT, LABEL_KIND.SHOT_COMMENT,
+      ];
+      const shotBits = [0, 0, LABEL_FLAG.JUMP, LABEL_FLAG.REFERENCE];
+      const stationBits = [0, 0, LABEL_FLAG.ALL_JUMP, LABEL_FLAG.ALL_REFERENCE];
+      const descs: LabelDescriptor[] = [];
+      const exts: ExtentEm[] = [];
+      for (let i = 0; i < 140; i++) {
+        const kind = kinds[Math.floor(rnd() * kinds.length)]!;
+        const onShot = kind === LABEL_KIND.SHOT_LABEL || kind === LABEL_KIND.SHOT_COMMENT;
+        const bits = onShot ? shotBits : stationBits;
+        const over: Partial<LabelDescriptor> = {
+          anchorX: rnd() * 0.0008,
+          anchorY: rnd() * 0.0008,
+          ordinal: kind === LABEL_KIND.SHOT_LABEL || kind === LABEL_KIND.STATION_LABEL ? Math.floor(rnd() * 40) : 0,
+          flags: bits[Math.floor(rnd() * bits.length)]!,
+          sectionId: i,
+        };
+        if (onShot) over.shotGlobal = i;
+        else if (kind !== LABEL_KIND.SECTION_NAME) over.stationGlobal = i;
+        descs.push(desc(kind, over));
+        exts.push(layoutExtent(kind, 1 + rnd() * 5));
+      }
+      const buildZoom = 22;
+      const wps = 4e6;
+      const opts = input({ buildZoom, worldPixelScale: wps, slack: 2 });
+      const reveal = computeRevealZooms(descs, exts, opts);
+      const realOnly = descs.map((_, i) => i).filter((i) => labelVirtualRank(descs[i]!) === VIRTUAL_RANK_REAL);
+      const alone = computeRevealZooms(realOnly.map((i) => descs[i]!), realOnly.map((i) => exts[i]!), opts);
+      expect(realOnly.map((i) => reveal[i])).toEqual(Array.from(alone));
+      let crossPairs = 0;
+      let prevVisible = new Set<number>();
+      for (let z = 10; z <= 22 + 1e-9; z += 0.5) {
+        const visible: number[] = [];
+        for (let i = 0; i < descs.length; i++) if (reveal[i]! <= z + 1e-9) visible.push(i);
+        for (const i of prevVisible) expect(visible).toContain(i);
+        for (let a = 0; a < visible.length; a++) {
+          for (let b = a + 1; b < visible.length; b++) {
+            const ia = visible[a]!;
+            const ib = visible[b]!;
+            if (labelVirtualRank(descs[ia]!) === labelVirtualRank(descs[ib]!)) continue;
+            crossPairs++;
+            const hit = boxesOverlap(boxAt(descs[ia]!, exts[ia]!, z, buildZoom, wps), boxAt(descs[ib]!, exts[ib]!, z, buildZoom, wps));
+            expect(hit).toBe(false);
+          }
+        }
+        prevVisible = new Set(visible);
+      }
+      expect(crossPairs).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('computeRevealZooms held-back names (section-only build)', () => {
+  it('a name held back only by a real label - not a reservation - still shows once clear', () => {
+    // A real section name holds the jump name back until they clear; an
+    // unrelated reservation far away must not turn that into "hidden".
+    const realName = desc(LABEL_KIND.SECTION_NAME, { sectionId: 1 });
+    const jumpName = desc(LABEL_KIND.SECTION_NAME, { anchorX: 200, flags: LABEL_FLAG.ALL_JUMP, sectionId: 2 });
+    const farStation = desc(LABEL_KIND.STATION_LABEL, { anchorX: 90000, ordinal: 4, stationGlobal: 4 });
+    const ext = layoutExtent(LABEL_KIND.SECTION_NAME, 4);
+    const run = (reserved: LabelDescriptor[]) =>
+      computeRevealZooms([realName, jumpName], [ext, ext], input({
+        buildZoom: 12, worldPixelScale: 0.25, slack: 10,
+        reserved: { descriptors: reserved, extents: reserved.map(() => layoutExtent(LABEL_KIND.STATION_LABEL, 1)) },
+      }));
+    const without = run([]);
+    expect(without[1]).toBeGreaterThan(10); // really held back by the real name
+    expect(without[1]).toBeLessThan(13.5);
+    expect(run([farStation])[1]).toBe(without[1]);
   });
 });

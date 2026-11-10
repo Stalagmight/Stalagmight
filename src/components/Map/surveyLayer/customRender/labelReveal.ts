@@ -45,9 +45,11 @@
  * {@link labelVirtualRank} (real 0, jump 1, reference 2), best rank first, and a
  * later pass RESERVES every earlier-rank winner's slot, including the ones that
  * only reveal at a higher zoom: a lower-rank label J may reveal at `z` only if it
- * clears each earlier-rank winner R (reveal `zR`) at `max(z, zR)`, the first zoom
- * at which both are drawn. Otherwise J could take a slot at z14 that a real label
- * needs at z18, and since neither may vanish the two would then overlap. So a real
+ * clears each earlier-rank winner R (reveal `zR`) at every zoom from `max(z, zR)`
+ * up, the zooms at which both are drawn - checked level by level, since offset
+ * boxes need not clear for good once they clear (see `nearVirtual`). Otherwise J
+ * could take a slot at z14 that a real label needs at z18, and since neither may
+ * vanish the two would then overlap. So a real
  * label's reveal is exactly what it would be with no virtual labels at all, and a
  * jump label's likewise with no reference labels. The tier / kind / ordinal order
  * still decides WITHIN a rank. Below the label build band only section names are
@@ -492,22 +494,24 @@ export function computeRevealZooms(
   // label drawn there, boxed at that level's zoom: a winner goes into its own
   // level and every one above it. A virtual candidate thus sees the slot a
   // better-rank label takes further up the ladder, not just the ones drawn at
-  // the level it is trying.
+  // the level it is trying. Reserved labels ({@link RevealInput.reserved}) get
+  // grids of their own, so a candidate can tell a slot that is certainly taken
+  // from one that only might be.
   const virtual = passes.slice(VIRTUAL_RANK_REAL + 1).flat();
   if (virtual.length === 0) return reveal;
   const phantoms = reservedPhantoms(input, levelAt, levelCount);
-  const pessimistic = phantoms.some((p) => p.length > 0);
+  const reserving = phantoms.some((p) => p.length > 0);
   const grids = levels.map((): BoxGrid => new Map());
-  const occupy = (c: Candidate): void => {
-    for (let m = c.level; m < levelCount; m++) insertBox(grids[m]!, boxAt(c, levels[m]!), cellSize);
+  const reservedGrids = levels.map((): BoxGrid => new Map());
+  const occupy = (into: BoxGrid[], c: Candidate): void => {
+    for (let m = c.level; m < levelCount; m++) insertBox(into[m]!, boxAt(c, levels[m]!), cellSize);
   };
-  for (const w of nearVirtual([...realWinners, ...phantoms[VIRTUAL_RANK_REAL]!], virtual, levelAt, levels, boxAt, cellSize)) {
-    occupy(w);
-  }
+  for (const w of nearVirtual(realWinners, virtual, levelAt, levels, boxAt, cellSize)) occupy(grids, w);
+  for (const w of phantoms[VIRTUAL_RANK_REAL]!) occupy(reservedGrids, w);
   for (let rank = VIRTUAL_RANK_REAL + 1; rank < VIRTUAL_RANK_COUNT; rank++) {
-    // Reserved better-rank labels this build does not draw (a jump-rank one
-    // outranks a reference label) join just before the pass they outrank.
-    if (rank > VIRTUAL_RANK_JUMP) for (const w of phantoms[rank - 1]!) occupy(w);
+    // Reserved better-rank labels (a jump-rank one outranks a reference label)
+    // join just before the pass they outrank.
+    if (rank > VIRTUAL_RANK_JUMP) for (const w of phantoms[rank - 1]!) occupy(reservedGrids, w);
     const pass = passes[rank]!;
     // The first level each candidate may reveal at (-1 until computed, at its
     // first admitted level).
@@ -519,19 +523,23 @@ export function computeRevealZooms(
         if (c.level >= 0) continue; // already revealed
         if (lv.z + 1e-9 < c.admitZoom) continue; // decimation not yet admitted
         if (earliest[j]! < 0) {
-          earliest[j] = firstClearLevel(c, l, grids, levels, boxAt, cellSize);
-          if (pessimistic && earliest[j]! > l) {
-            // Held back by a reserved label that the full build may never show,
-            // in which case it shows there instead: keep its slot now, so the
-            // labels it would block there are not shown here only to vanish.
-            occupy({ ...c, level: l });
+          const placedClear = firstClearLevel(c, l, grids, levels, boxAt, cellSize);
+          const reservedClear = reserving ? firstClearLevel(c, l, reservedGrids, levels, boxAt, cellSize) : l;
+          if (reservedClear > placedClear) {
+            // Only a reserved label holds it back - one a build that draws it
+            // may never show, so this label's own fate there is open. Hide it
+            // here but keep its slot, so the labels it would block there are
+            // not shown here only to vanish.
+            occupy(grids, { ...c, level: l });
             earliest[j] = levelCount;
+          } else {
+            earliest[j] = placedClear;
           }
         }
         if (l < earliest[j]!) continue; // would overlap a better-rank label once both show
         if (fits(grids[l]!, boxAt(c, lv), cellSize)) {
           place(c, l);
-          occupy(c);
+          occupy(grids, c);
         }
       }
     }
@@ -579,12 +587,18 @@ function reservedPhantoms(input: RevealInput, levelAt: (zoom: number) => number,
 
 /**
  * The placed labels that could ever overlap a virtual candidate - a filter that
- * keeps the shared grids small when, as usual, the virtual labels are few. All
- * are tested at ONE level, the lowest a virtual candidate is admitted at: no two
- * of them can both be drawn below it, and overlap only shrinks with zoom (module
- * header), so a label clear of every virtual box there stays clear of them at
- * every level either could be drawn. When the virtual labels outnumber the
- * placed ones the test costs more than it saves, so every placed label is kept.
+ * keeps the shared grids small when, as usual, the virtual labels are few.
+ *
+ * Overlap does NOT simply shrink with zoom: every kind's box is offset from its
+ * anchor (`labelLayout.ts`), so two boxes facing each other can clear, overlap
+ * further up, and clear again. What does hold is that each box only moves
+ * TOWARDS its anchor, in map units, as the zoom rises - the text grows far
+ * slower than the map (`labelStyle.ts` stops) and the halo not at all. So a
+ * label's boxes at every level from `L` up stay inside its HULL at `L`: the
+ * box there stretched to cover its anchor. Labels whose hulls are apart at the
+ * lowest level a virtual candidate is admitted at - none of them can be drawn
+ * below it - never overlap. When the virtual labels outnumber the placed ones
+ * the test costs more than it saves, so every placed label is kept.
  */
 function nearVirtual(
   placed: readonly Candidate[],
@@ -598,9 +612,24 @@ function nearVirtual(
   let lowest = levels.length - 1;
   for (const c of virtual) lowest = Math.min(lowest, levelAt(c.admitZoom));
   const at = levels[lowest]!;
+  const hull = (c: Candidate): ScreenBox => anchorHull(c.desc, boxAt(c, at), at.wps);
   const grid: BoxGrid = new Map();
-  for (const c of virtual) insertBox(grid, boxAt(c, at), cellSize);
-  return placed.filter((w) => !fits(grid, boxAt(w, at), cellSize));
+  for (const c of virtual) insertBox(grid, hull(c), cellSize);
+  return placed.filter((w) => !fits(grid, hull(w), cellSize));
+}
+
+/** `box` stretched to cover its label's anchor (plus the kind's halo) - the
+ *  region every box of that label at this zoom or above stays inside. */
+export function anchorHull(desc: LabelDescriptor, box: ScreenBox, wps: number): ScreenBox {
+  const ax = desc.anchorX * wps;
+  const ay = desc.anchorY * wps;
+  const h = LABEL_KIND_STYLE[desc.kind].haloWidth;
+  return {
+    minX: Math.min(box.minX, ax - h),
+    maxX: Math.max(box.maxX, ax + h),
+    minY: Math.min(box.minY, ay - h),
+    maxY: Math.max(box.maxY, ay + h),
+  };
 }
 
 /** One rung of the zoom ladder, with its world-pixel scale and per-kind sizes. */
@@ -612,13 +641,13 @@ interface LadderLevel {
 
 /**
  * The first level at or above `from` at which `c` may reveal without ever
- * overlapping a label already placed, i.e. one above the highest level where its
- * box hits one (`levels.length` if that is the top: it never may). Below that
- * level it would overlap that label once both are drawn - including a
- * better-rank one that only reveals further up; from it on it is clear of all of
- * them, since overlap only shrinks with zoom. Scanning down from the top stops
- * at the first hit. A same-pass winner placed after this runs is drawn at or
- * below the level being tried, so the per-level fit check covers it.
+ * overlapping a label in `grids`: one above the highest level where its box hits
+ * one (`levels.length` if that is the top: it never may). Every level above the
+ * returned one is checked, so this does not lean on overlap shrinking with zoom
+ * - which it need not (see {@link nearVirtual}). Below that level `c` would
+ * overlap that label once both are drawn, even a better-rank one that only
+ * reveals further up. A same-pass winner placed after this runs is drawn at or
+ * below the level being tried; the per-level fit check covers it there.
  */
 function firstClearLevel(
   c: Candidate,

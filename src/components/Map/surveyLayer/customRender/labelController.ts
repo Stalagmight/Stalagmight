@@ -77,7 +77,7 @@ import {
   type RevealReservation,
 } from './labelReveal';
 import { labelColorContextFrom } from './labelText';
-import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
+import { LABEL_KIND, LABEL_KIND_COUNT, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { LABEL_KIND_STYLE, interpolateStops } from './labelStyle';
 import { packCssColor, type Rgba8 } from './colorPack';
 import type { CustomDimState } from './controller';
@@ -142,12 +142,10 @@ const SECTION_ONLY_KINDS: ReadonlySet<LabelKind> = new Set([LABEL_KIND.SECTION_N
 /** Below section minzoom: nothing builds. */
 const NO_KINDS: ReadonlySet<LabelKind> = new Set();
 /** The kinds the section-only build leaves out (only built past the band). */
-const EXPENSIVE_KINDS: readonly LabelKind[] = [
-  LABEL_KIND.SHOT_LABEL,
-  LABEL_KIND.STATION_LABEL,
-  LABEL_KIND.STATION_COMMENT,
-  LABEL_KIND.SHOT_COMMENT,
-];
+const EXPENSIVE_KINDS: readonly LabelKind[] = Array.from(
+  { length: LABEL_KIND_COUNT },
+  (_, k) => k as LabelKind,
+).filter((k) => !SECTION_ONLY_KINDS.has(k));
 /** How far (CSS px at the expensive kinds' minzoom, where a label's reach in
  *  map units is largest) past a jump / reference section name's own box the
  *  section-only build looks for labels whose slots the name must leave free:
@@ -618,17 +616,22 @@ export class SurveyLabelController {
         slack: emitSlack,
         reserved,
       });
-      // Emit only labels that clear within the horizon (finite reveal).
+      // Emit only labels that clear within the horizon (finite reveal) - except
+      // in a section-only build that reserves slots: there a name hidden now may
+      // still hold a slot (labelReveal's held-back rule), so keep every name,
+      // hidden ones at an unreachable reveal, and the reveal-only rerun replays
+      // it. Section names are few, so this costs nothing.
       const keptDesc: LabelDescriptor[] = [];
       const keptShaped: ShapedLabel[] = [];
       const keptExtents: (ExtentEm | null)[] = [];
       const keptReveal: number[] = [];
       for (let i = 0; i < descriptors.length; i++) {
-        if (full[i]! === REVEAL_NEVER) continue;
+        const never = full[i]! === REVEAL_NEVER;
+        if (never && reserved === undefined) continue;
         keptDesc.push(descriptors[i]!);
         keptShaped.push(shaped[i]!);
         keptExtents.push(extents[i]!);
-        keptReveal.push(full[i]!);
+        keptReveal.push(never ? REVEAL_UNREACHABLE : full[i]!);
       }
       descriptors = keptDesc;
       shaped = keptShaped;
