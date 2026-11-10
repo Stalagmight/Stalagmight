@@ -17,8 +17,13 @@
 //     LICENSE/NOTICE file read from node_modules. devDependencies are excluded
 //     on purpose: they never reach the built app.
 //
-// The output embeds sha256 hashes of Cargo.lock, pnpm-lock.yaml, and its own
-// body; scripts/check-third-party-licenses.mjs (leak-scan workflow) compares
+//   - Vendored data: files under third_party/ that ship inside the app but come
+//     from no package manager (the matplotlib-derived colormap tables). Each
+//     notice is listed in VENDORED_NOTICES below; a file in third_party/ that
+//     the list does not account for is a hard failure.
+//
+// The output embeds sha256 hashes of Cargo.lock, pnpm-lock.yaml, the
+// third_party/ tree, and its own body; scripts/check-third-party-licenses.mjs (leak-scan workflow) compares
 // them so the committed bundle cannot silently drift from the dependency set
 // or be hand-edited unnoticed. Regenerate with `pnpm gen:third-party` after
 // any dependency change (needs cargo-about, pinned so harvested texts do not
@@ -72,6 +77,63 @@ const HASHED_INPUTS = [
   'pnpm-lock.yaml',
   'scripts/gen-third-party-licenses.mjs',
   'src-tauri/about.toml',
+];
+
+// Every file under third_party/, hashed as one unit (sorted relative path +
+// CRLF-normalised content), so editing a vendored notice without regenerating
+// fails the gate. Must stay in lockstep with vendoredHash in
+// check-third-party-licenses.mjs.
+const VENDORED_ROOT = 'third_party';
+function vendoredFiles(root) {
+  const dir = path.join(root, VENDORED_ROOT);
+  const out = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile()) out.push(path.relative(root, p).split(path.sep).join('/'));
+    }
+  };
+  if (fs.existsSync(dir)) walk(dir);
+  return out.sort();
+}
+function vendoredHash(root) {
+  const h = createHash('sha256');
+  for (const rel of vendoredFiles(root)) {
+    h.update(rel + '\0' + fs.readFileSync(path.join(root, rel), 'utf8').replace(/\r\n/g, '\n') + '\0');
+  }
+  return h.digest('hex');
+}
+
+// Vendored data shipped in the app, and the notice each part carries. The
+// README in each third_party/ subdirectory documents provenance and is not
+// itself a notice.
+const VENDORED_NOTICES = [
+  {
+    licenseName: 'Matplotlib License (colormap tables derived from matplotlib 3.10.7)',
+    file: 'third_party/palettes/LICENSE-matplotlib',
+    appliesTo: '`src/utils/palettes/catalog.generated.ts` (every map in it)',
+  },
+  {
+    licenseName: 'Apache-2.0 (ColorBrewer color schemes)',
+    file: 'third_party/palettes/LICENSE-colorbrewer',
+    appliesTo: 'the ColorBrewer maps in `src/utils/palettes/catalog.generated.ts`',
+  },
+  {
+    licenseName: 'BSD-like (Yorick colormaps)',
+    file: 'third_party/palettes/LICENSE-yorick',
+    appliesTo: 'the gist_* maps in `src/utils/palettes/catalog.generated.ts`',
+  },
+  {
+    licenseName: 'MIT (Wistia heatmap palette)',
+    file: 'third_party/palettes/LICENSE-wistia',
+    appliesTo: 'the Wistia map in `src/utils/palettes/catalog.generated.ts`',
+  },
+  {
+    licenseName: 'Apache-2.0 notice (Turbo colormap)',
+    file: 'third_party/palettes/NOTICE-turbo',
+    appliesTo: 'the turbo map in `src/utils/palettes/catalog.generated.ts`',
+  },
 ];
 
 // CRLF-normalise but otherwise keep license text verbatim - the notices are
@@ -305,6 +367,28 @@ function renderSection(title, intro, groups) {
   return parts.join('\n');
 }
 
+function renderVendored() {
+  const listed = new Set(VENDORED_NOTICES.map((n) => n.file));
+  const unlisted = vendoredFiles(REPO_ROOT).filter(
+    (rel) => !listed.has(rel) && path.posix.basename(rel) !== 'README.md',
+  );
+  if (unlisted.length > 0) {
+    throw new Error(
+      `refusing to generate: these ${VENDORED_ROOT}/ files have no VENDORED_NOTICES entry:\n  ${unlisted.join('\n  ')}`,
+    );
+  }
+  const parts = [
+    '## Vendored data\n',
+    'Data bundled into the frontend that comes from no package manager. Provenance for each part is in the README beside its notice under `third_party/`.\n',
+  ];
+  for (const n of VENDORED_NOTICES) {
+    parts.push(`### ${n.licenseName}\n`);
+    parts.push(`Applies to: ${n.appliesTo}\n`);
+    parts.push('````text\n' + normalise(fs.readFileSync(path.join(REPO_ROOT, n.file), 'utf8')) + '````\n');
+  }
+  return parts.join('\n');
+}
+
 function main() {
   const rust = dedupe(collectRust());
   const js = dedupe(collectJs());
@@ -322,6 +406,7 @@ function main() {
       'The dependency graph of the release binary (telemetry features included, dev-dependencies excluded), as harvested by cargo-about.',
       rust,
     ),
+    renderVendored(),
   ].join('\n');
 
   // The body hash covers every byte after the comment's closing marker, so
@@ -330,8 +415,9 @@ function main() {
   const header = `# Third-party licenses
 
 Stalagmight's shipped binaries include the open-source packages listed below:
-${rustCount} Rust crates and ${jsCount} npm packages. Each distinct license
-text is reproduced verbatim, as those licenses require. Stalagmight itself is
+${rustCount} Rust crates and ${jsCount} npm packages, plus the vendored data
+listed at the end. Each distinct license text is reproduced verbatim, as those
+licenses require. Stalagmight itself is
 licensed AGPL-3.0-or-later; see [LICENSE](LICENSE).
 
 Generated by \`pnpm gen:third-party\` (scripts/gen-third-party-licenses.mjs)
@@ -340,6 +426,7 @@ stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
 ${HASHED_INPUTS.map((rel) => `${path.posix.basename(rel)}=${inputHash(rel)}`).join('\n')}
+vendored-data=${vendoredHash(REPO_ROOT)}
 bundle-body=${hashNormalised(tail)}
 -->
 `;

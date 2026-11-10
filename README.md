@@ -120,7 +120,9 @@ later** (AGPL-3.0-or-later). See [LICENSE](LICENSE).
 It bundles a locally-patched copy of
 [`compass_data`](https://github.com/zheylmun/compass_data) by Zach Heylmun
 (MIT OR Apache-2.0) under `src-tauri/vendor/compass_data/`; changes are recorded
-in that directory's `MODIFICATIONS.md`. Third-party dependency licenses are
+in that directory's `MODIFICATIONS.md`. The map's colour palettes include
+tables derived from matplotlib's colormaps; their licences are in
+`third_party/palettes/`. Third-party dependency licenses are
 permissive (MIT / Apache-2.0 / BSD / ISC / MPL-2.0) and compatible with the
 AGPL; every shipped package's license text is reproduced in
 [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md), which is bundled with the
