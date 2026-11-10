@@ -248,7 +248,7 @@ describe('SurveyLabelController error state (no stock fallback)', () => {
     const fatals: string[] = [];
     const { map, removed } = makeFakeMap();
     const c = makeController(map, { onFatal: (r: string) => fatals.push(r) });
-    c.setStationLabelsVisible(true);
+    c.setStationLabelMode('id');
     c.sync(makeParams());
     expect(c.isActive()).toBe(false);
     expect(removed).toContain(CUSTOM_ID);
@@ -270,7 +270,7 @@ describe('SurveyLabelController error state (no stock fallback)', () => {
         holder.scheduled += 1;
       },
     });
-    c.setStationLabelsVisible(true);
+    c.setStationLabelMode('id');
     c.sync(makeParams());
 
     const layer = h.layerState.last;
@@ -320,7 +320,7 @@ describe('SurveyLabelController error state (no stock fallback)', () => {
   it('stays inert after destroy: a stray late sync does not resurrect the layer', () => {
     const { map, removed } = makeFakeMap();
     const c = makeController(map);
-    c.setStationLabelsVisible(true); // desired visible so destroy restores stock to visible
+    c.setStationLabelMode('id'); // desired visible so destroy restores stock to visible
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
     c.destroy();
@@ -369,9 +369,9 @@ describe('SurveyLabelController style wiring', () => {
     const layer = h.layerState.last!;
     const updatesBefore = layer.updateCalls;
 
-    c.setStationLabelsVisible(true);
+    c.setStationLabelMode('id');
     expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_LABEL]).toBe(true);
-    c.setStationLabelsVisible(false);
+    c.setStationLabelMode('off');
     expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_LABEL]).toBe(false);
     // A toggle is a uniform flip, not a buffer rebuild.
     expect(layer.updateCalls).toBe(updatesBefore);
@@ -530,7 +530,7 @@ describe('SurveyLabelController teardown', () => {
   it('destroy() removes the layer and restores the stock label visibility', () => {
     const { map, removed } = makeFakeMap();
     const c = makeController(map);
-    c.setStationLabelsVisible(true);
+    c.setStationLabelMode('id');
     c.sync(makeParams());
     c.destroy();
     expect(removed).toContain(CUSTOM_ID);

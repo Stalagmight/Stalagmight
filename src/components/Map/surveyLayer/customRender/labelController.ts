@@ -388,16 +388,12 @@ export class SurveyLabelController {
     }
   }
 
-  /** Mirror the five setShow* toggles: drive the kind's uniform when active
-   *  (stock stays suppressed); store the desired state either way so a later
-   *  enable / stock restore reproduces it. */
+  /** Mirror the setShow* toggles (station labels: setStationLabelMode below):
+   *  drive the kind's uniform when active (stock stays suppressed); store the
+   *  desired state either way so a later enable / stock restore reproduces it. */
   setShotLabelsVisible(visible: boolean): void {
     this.setKindVisible(LABEL_KIND.SHOT_LABEL, visible);
   }
-  setStationLabelsVisible(visible: boolean): void {
-    this.setKindVisible(LABEL_KIND.STATION_LABEL, visible);
-  }
-
   /**
    * Station labels off, as IDs, or as names (the Display menu's exclusive
    * Station IDs / Station names pair). Showing or hiding the current text is

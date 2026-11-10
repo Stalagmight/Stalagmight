@@ -227,8 +227,10 @@ export function drawImageOptions(ctx: ScenarioContext, format: 'png' | 'svg' | '
     show_station_labels,
     // Station names are derived, not drawn, so existing seeds keep their rng
     // sequence; and never together with the IDs, which the UI route cannot
-    // reach (the two checkboxes are one choice).
-    show_station_names: !show_station_labels && show_section_names,
+    // reach (the two checkboxes are one choice). The XOR keeps them independent
+    // of each of those two draws, so names are fuzzed with and without section
+    // names and penetration labels.
+    show_station_names: !show_station_labels && show_penetration_labels !== show_section_names,
     show_section_names,
     show_station_comments: ctx.rng() < 0.5,
     show_shot_comments: ctx.rng() < 0.5,

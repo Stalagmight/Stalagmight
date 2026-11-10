@@ -174,4 +174,13 @@ describe('hasStationNames', () => {
     d.stationNames = new Map([[3, '12']]);
     expect(hasStationNames(d)).toBe(true);
   });
+
+  it('ignores names that would draw nothing (whitespace, control and bidi characters)', () => {
+    const d = emptySurveyData();
+    d.stationNames = new Map([[0, '   '], [1, '\u202e\u2066'], [2, '\n\ufeff']]);
+    expect(hasStationNames(d)).toBe(false);
+    // A new names map (a refreshed project) is evaluated afresh.
+    d.stationNames = new Map([[0, '   '], [5, '7']]);
+    expect(hasStationNames(d)).toBe(true);
+  });
 });

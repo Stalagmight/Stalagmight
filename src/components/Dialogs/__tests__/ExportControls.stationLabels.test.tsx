@@ -105,7 +105,7 @@ describe('ExportControls station label checkboxes', () => {
     await renderOpen();
     const names = screen.getByTestId(NAMES);
     expect(names).toBeDisabled();
-    expect(names.closest('label')!.getAttribute('title')).toBe('This project has no station names');
+    expect(names.closest('label')!.getAttribute('title')).toBe('displayMenu.descriptions.stationNamesUnavailable');
     expect(screen.getByTestId(IDS)).toBeEnabled();
   });
 

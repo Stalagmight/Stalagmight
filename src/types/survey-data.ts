@@ -34,6 +34,7 @@ import type { ClosureRef } from './ipc/ClosureRef';
 import type { GpsCoordinates } from './ipc/GpsCoordinates';
 import type { AzimuthReference } from './ipc/AzimuthReference';
 import type { SurveyDirection } from './ipc/SurveyDirection';
+import { displayStationName } from '../utils/formatters';
 
 /** Section metadata kept as small structured objects. ~14k items for
  *  92.stalx; total memory is tiny compared to the shot payload. The
@@ -292,13 +293,32 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
   return station;
 }
 
+/** {@link hasStationNames} per names map: a SurveyData's map is replaced, never
+ *  mutated, when the project changes, so the answer is computed once per map. */
+const showableNamesCache = new WeakMap<Map<number, string>, boolean>();
+
 /**
- * Whether any station has a name (e.g. the mNemo station numbers a DMP import
- * records). The Display menu and the image export offer the "Station names"
- * labels only when this holds, because with no names they would label nothing.
+ * Whether any station has a name that would be drawn as a label (e.g. the mNemo
+ * station numbers a DMP import records): non-empty once control and bidi
+ * characters are stripped and it is trimmed - the rule the map label and the
+ * image export apply. The Display menu and the export offer the "Station names"
+ * labels only when this holds, because otherwise they would label nothing.
  */
 export function hasStationNames(data: Pick<SurveyData, 'stationNames'> | null | undefined): boolean {
-  return (data?.stationNames.size ?? 0) > 0;
+  const names = data?.stationNames;
+  if (!names || names.size === 0) return false;
+  let cached = showableNamesCache.get(names);
+  if (cached === undefined) {
+    cached = false;
+    for (const name of names.values()) {
+      if (displayStationName(name).trim() !== '') {
+        cached = true;
+        break;
+      }
+    }
+    showableNamesCache.set(names, cached);
+  }
+  return cached;
 }
 
 /**

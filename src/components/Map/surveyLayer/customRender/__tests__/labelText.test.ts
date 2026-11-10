@@ -64,6 +64,10 @@ describe('labelText helpers (units)', () => {
     expect(formatStationNameLabel('')).toBeNull();
     expect(formatStationNameLabel('   ')).toBeNull();
     expect(formatStationNameLabel('\u202e\u2066\u0007')).toBeNull();
+    // Same rules as the image export (image.rs station_name_label): the Arabic
+    // letter mark goes, and a byte-order mark trims like whitespace.
+    expect(formatStationNameLabel('\ufeff\u061c17\ufeff')).toBe('17');
+    expect(formatStationNameLabel('\ufeff')).toBeNull();
   });
 
   it('caps a long station name by code point and ends it with an ellipsis', () => {

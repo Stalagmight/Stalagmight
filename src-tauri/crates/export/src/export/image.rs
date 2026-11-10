@@ -107,9 +107,14 @@ const STATION_NAME_LABEL_MAX_CHARS: usize = 24;
 /// overrides dropped (names come from the file, so they are untrusted text),
 /// trimmed, and capped at [`STATION_NAME_LABEL_MAX_CHARS`]. `None` when nothing
 /// is left, so an unnamed station gets no label rather than its index.
+///
+/// Mirrors the live map's `formatStationNameLabel` (`labelText.ts`), so the
+/// preview and the file say the same thing: it also drops the Arabic letter
+/// mark (U+061C) that `sanitize_display_text` keeps, and trims a byte-order
+/// mark (U+FEFF) the way JavaScript's `trim` does.
 fn station_name_label(name: Option<&str>) -> Option<String> {
-    let clean = crate::models::sanitize_display_text(name?, usize::MAX);
-    let clean = clean.trim();
+    let clean = crate::models::sanitize_display_text(name?, usize::MAX).replace('\u{061c}', "");
+    let clean = clean.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
     if clean.is_empty() {
         return None;
     }
@@ -1440,21 +1445,27 @@ pub fn generate_svg_string_with_stations(
         // and a named station still shows the name, and a point with no
         // named station gets no label.
         if options.show_station_labels || show_station_names {
-            let mut rep: HashMap<usize, (usize, String)> = HashMap::new();
-            for (i, station) in stations.iter().enumerate() {
-                let text = if show_station_names {
-                    station_name_label(station.name.as_deref())
+            let label_for = |i: usize| -> Option<String> {
+                if show_station_names {
+                    station_name_label(stations[i].name.as_deref())
                 } else {
-                    Some(station.station_ref.station_index.to_string())
-                };
-                let Some(text) = text else { continue };
+                    Some(stations[i].station_ref.station_index.to_string())
+                }
+            };
+            let mut rep: HashMap<usize, usize> = HashMap::new();
+            for i in 0..n {
+                if show_station_names && label_for(i).is_none() {
+                    continue;
+                }
                 // Ascending `i`: the first entry per point is its smallest.
-                rep.entry(point_uf.find(i)).or_insert((i, text));
+                rep.entry(point_uf.find(i)).or_insert(i);
             }
+            // Only the chosen stations' text is built.
             let mut selected: Vec<(usize, String)> = degree
                 .iter()
                 .filter(|&(_, &deg)| deg >= 1)
-                .filter_map(|(root, _)| rep.remove(root))
+                .filter_map(|(root, _)| rep.get(root).copied())
+                .filter_map(|si| label_for(si).map(|text| (si, text)))
                 .collect();
             selected.sort_unstable_by_key(|&(si, _)| si);
 
@@ -4075,6 +4086,13 @@ mod tests {
             station_name_label(Some(" 1\u{202e}7\n ")).as_deref(),
             Some("17")
         );
+        // The same rules as the live map's label: the Arabic letter mark goes,
+        // and a byte-order mark is trimmed like whitespace.
+        assert_eq!(
+            station_name_label(Some("\u{feff}\u{061c}17\u{feff}")).as_deref(),
+            Some("17")
+        );
+        assert_eq!(station_name_label(Some("\u{feff}")), None);
 
         let exact = "b".repeat(STATION_NAME_LABEL_MAX_CHARS);
         assert_eq!(

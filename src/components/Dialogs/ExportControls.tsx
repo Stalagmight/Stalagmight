@@ -483,7 +483,7 @@ export default function ExportControls({
                         ticked, so it can always be unticked. */}
                     <label
                       className={`flex items-center gap-2 text-sm${stationNamesUnavailable ? ' opacity-50' : ''}`}
-                      title={stationNamesUnavailable ? 'This project has no station names' : undefined}
+                      title={stationNamesUnavailable ? t('displayMenu.descriptions.stationNamesUnavailable') : undefined}
                     >
                       <input
                         type="checkbox"
